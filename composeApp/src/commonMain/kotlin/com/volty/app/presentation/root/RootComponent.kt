@@ -149,7 +149,7 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     onConnectedKnown = { nav.replaceAll(Config.Dashboard) },
-                    onConnectedGuestForSave = { _ -> nav.replaceAll(Config.VehicleEdit(null)) }, // Plan 2 Task 13 will refine to pass device info
+                    onConnectedForEdit = { vehicleId -> nav.replaceAll(Config.VehicleEdit(vehicleId)) },
                     onConnectedGuestNoSave = { nav.replaceAll(Config.Dashboard) },
                     onAddNewBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
                     onCancelled = { nav.pop() }
