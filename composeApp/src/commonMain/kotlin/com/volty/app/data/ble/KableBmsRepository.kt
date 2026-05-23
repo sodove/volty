@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
@@ -143,13 +144,23 @@ class KableBmsRepository(
             )
 
             observeJob = scope.launch {
-                p.observe(notifyChar).collect { data ->
-                    proto.onNotification(data)
-                    proto.latestData()?.let { bms ->
-                        val sample = bms.copy(timestamp = Clock.System.now())
-                        _activeData.value = sample
-                        ringBuffer.push(sample)
+                try {
+                    // Wait for service discovery to complete before subscribing.
+                    // peripheral.services is StateFlow<List<DiscoveredService>?> — null until discovered.
+                    p.services.filterNotNull().first()
+                    p.observe(notifyChar).collect { data ->
+                        proto.onNotification(data)
+                        proto.latestData()?.let { bms ->
+                            val sample = bms.copy(timestamp = Clock.System.now())
+                            _activeData.value = sample
+                            ringBuffer.push(sample)
+                        }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Service not yet available, peripheral torn down, etc. — log silently
+                    // and let connection state flip via the state observer.
                 }
             }
 
@@ -185,13 +196,19 @@ class KableBmsRepository(
 
             stateJob?.cancel()
             stateJob = scope.launch {
-                p.state.collect { st ->
-                    if (st is State.Disconnected) {
-                        if (_connectionState.value is ConnectionState.Connected) {
-                            _connectionState.value = ConnectionState.Failed("BLE link lost")
-                            attemptReconnect(vehicle, address, type)
+                try {
+                    p.state.collect { st ->
+                        if (st is State.Disconnected) {
+                            if (_connectionState.value is ConnectionState.Connected) {
+                                _connectionState.value = ConnectionState.Failed("BLE link lost")
+                                attemptReconnect(vehicle, address, type)
+                            }
                         }
                     }
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Peripheral torn down during disconnect — ignore.
                 }
             }
 

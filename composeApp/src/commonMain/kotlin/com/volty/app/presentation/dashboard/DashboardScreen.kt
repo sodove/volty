@@ -24,6 +24,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -187,9 +188,14 @@ private fun HeroCard(state: DashboardComponent.State) {
     val data = state.data
     val v = state.vehicle
     val isCharging = state.isCharging
-    val containerColor = if (isCharging) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer
-    val onColor = if (isCharging) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
-    val barColor = if (isCharging) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
+    // Fixed darker-green palette for the charging hero so dynamic-color wallpapers
+    // can't wash the card out. Other UI keeps the dynamic palette.
+    val chargingContainer = Color(0xFF184D24) // dark forest green
+    val chargingOn = Color(0xFFE8F5EA)        // near-white on-container
+    val chargingAccent = Color(0xFF7FCB8A)    // mid green for bar + SOC %
+    val containerColor = if (isCharging) chargingContainer else MaterialTheme.colorScheme.primaryContainer
+    val onColor = if (isCharging) chargingOn else MaterialTheme.colorScheme.onPrimaryContainer
+    val barColor = if (isCharging) chargingAccent else MaterialTheme.colorScheme.primary
     val nominalV = v?.cellCount?.let { count -> count * v.chemistry.nominalCellV }
         ?: data.voltage.coerceAtLeast(1f)
     val eta = timeRemainingDescription(
