@@ -85,6 +85,7 @@ fun CellsScreen(component: CellsComponent) {
                 } else {
                     // 3 columns, fill order
                     val rows = (state.cells.size + 2) / 3
+                    val highlightSpread = state.deltaMv >= 10
                     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         for (r in 0 until rows) {
                             Row(
@@ -96,8 +97,8 @@ fun CellsScreen(component: CellsComponent) {
                                     if (idx < state.cells.size) {
                                         CellRow(
                                             cell = state.cells[idx],
-                                            isMax = idx == state.maxIdx,
-                                            isMin = idx == state.minIdx,
+                                            isMax = highlightSpread && idx == state.maxIdx,
+                                            isMin = highlightSpread && idx == state.minIdx,
                                             modifier = Modifier.weight(1f)
                                         )
                                     } else {

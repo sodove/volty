@@ -43,6 +43,9 @@ interface RootComponent {
     val stack: Value<ChildStack<*, Child>>
 
     fun onBack()
+    fun onTab(tab: Tab)
+
+    enum class Tab { Live, Cells, Graph, Settings }
 
     sealed interface Child {
         data class Welcome(val component: WelcomeComponent) : Child
@@ -90,6 +93,16 @@ class DefaultRootComponent(
     )
 
     override fun onBack() { nav.pop() }
+
+    override fun onTab(tab: RootComponent.Tab) {
+        val target = when (tab) {
+            RootComponent.Tab.Live -> Config.Dashboard
+            RootComponent.Tab.Cells -> Config.Cells
+            RootComponent.Tab.Graph -> Config.Graph
+            RootComponent.Tab.Settings -> Config.Settings
+        }
+        nav.replaceAll(target)
+    }
 
     private fun computeInitialConfig(): Config {
         if (permissionsChecker.missingPermissions().isNotEmpty()) return Config.Permissions

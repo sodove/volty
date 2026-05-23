@@ -1,12 +1,12 @@
 package com.volty.app.presentation.dashboard
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -21,7 +21,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -33,6 +32,7 @@ import com.volty.app.presentation.common.VehiclePill
 import kotlin.math.abs
 import kotlin.math.round
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(component: DashboardComponent) {
     val state by component.state.collectAsState()
@@ -108,7 +108,10 @@ fun DashboardScreen(component: DashboardComponent) {
                 value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.first())}° C",
                 modifier = Modifier.weight(1f),
                 extra = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
                         data.temperatures.forEachIndexed { i, t ->
                             Box(
                                 modifier = Modifier
@@ -149,22 +152,6 @@ fun DashboardScreen(component: DashboardComponent) {
             )
         }
 
-        Spacer(Modifier.weight(1f))
-
-        // Bottom tab group
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .clip(RoundedCornerShape(24.dp))
-                .background(MaterialTheme.colorScheme.surfaceContainer)
-                .padding(4.dp),
-            horizontalArrangement = Arrangement.spacedBy(4.dp)
-        ) {
-            TabButton("Live", true) { component.onTabClicked(DashboardComponent.Tab.Live) }
-            TabButton("Cells", false) { component.onTabClicked(DashboardComponent.Tab.Cells) }
-            TabButton("Graph", false) { component.onTabClicked(DashboardComponent.Tab.Graph) }
-            TabButton("⚙", false) { component.onTabClicked(DashboardComponent.Tab.Settings) }
-        }
     }
 
     if (state.sheetOpen) {
@@ -176,30 +163,6 @@ fun DashboardScreen(component: DashboardComponent) {
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
         )
-    }
-}
-
-@Composable
-private fun RowScope.TabButton(label: String, active: Boolean, onClick: () -> Unit) {
-    val bg = if (active) MaterialTheme.colorScheme.primary else Color.Transparent
-    val fg = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .clip(
-                RoundedCornerShape(
-                    if (active) 16.dp else 20.dp,
-                    if (active) 24.dp else 20.dp,
-                    if (active) 16.dp else 20.dp,
-                    if (active) 24.dp else 20.dp
-                )
-            )
-            .background(bg)
-            .clickable(onClick = onClick)
-            .padding(vertical = 10.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        Text(label, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = fg)
     }
 }
 

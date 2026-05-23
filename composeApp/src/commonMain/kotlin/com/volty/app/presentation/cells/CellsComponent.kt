@@ -52,20 +52,19 @@ class DefaultCellsComponent(
         if (volts.isEmpty()) return CellsComponent.State()
         val min = volts.min()
         val max = volts.max()
-        val range = (max - min).takeIf { it > 0f } ?: 1f
+        val rawRange = max - min
+        val healthy = rawRange < 0.01f   // Spread under 10 mV → consider balanced
+        val range = rawRange.takeIf { it > 0f } ?: 1f
         val cells = volts.mapIndexed { i, v ->
-            CellsComponent.Cell(
-                index = i + 1,
-                voltageV = v,
-                rangeFraction = ((v - min) / range).coerceIn(0f, 1f)
-            )
+            val frac = if (healthy) 1f else ((v - min) / range).coerceIn(0f, 1f)
+            CellsComponent.Cell(index = i + 1, voltageV = v, rangeFraction = frac)
         }
         return CellsComponent.State(
             cells = cells,
             maxIdx = volts.indexOf(max),
             minIdx = volts.indexOf(min),
             avgV = volts.average().toFloat(),
-            deltaMv = ((max - min) * 1000f).toInt()
+            deltaMv = (rawRange * 1000f).toInt()
         )
     }
 
