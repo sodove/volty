@@ -1,0 +1,49 @@
+-- Vehicle profile table. One row per saved BMS. Named VehicleRow to avoid
+-- collision with the domain class com.volty.app.domain.model.Vehicle.
+
+CREATE TABLE VehicleRow (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    iconKey                  TEXT NOT NULL,
+    bmsType                  TEXT NOT NULL,   -- enum name: JK_BMS | JBD_BMS | ANT_BMS | DALY_BMS
+    bmsAddress               TEXT NOT NULL,
+    chemistry                TEXT NOT NULL,   -- enum name: LI_ION_NMC | LIFEPO4 | LEAD_ACID
+    cellCount                INTEGER,
+    averagingWindowMin       INTEGER NOT NULL DEFAULT 5,
+    cellHighV                REAL,
+    cellLowV                 REAL,
+    cellDeltaMv              INTEGER,
+    temperatureHighC         REAL,
+    socLowPercent            INTEGER,
+    socCutoffPercent         INTEGER,
+    disconnectNotify         INTEGER NOT NULL DEFAULT 1,
+    chargeCompleteNotify     INTEGER NOT NULL DEFAULT 1,
+    createdAt                TEXT NOT NULL,    -- ISO-8601
+    lastConnectedAt          TEXT,             -- ISO-8601 or NULL
+    isPinned                 INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
+
+selectAll:
+SELECT * FROM VehicleRow ORDER BY isPinned DESC, COALESCE(lastConnectedAt, createdAt) DESC;
+
+selectById:
+SELECT * FROM VehicleRow WHERE id = :id;
+
+upsert:
+INSERT OR REPLACE INTO VehicleRow(
+    id, name, iconKey, bmsType, bmsAddress, chemistry, cellCount, averagingWindowMin,
+    cellHighV, cellLowV, cellDeltaMv, temperatureHighC, socLowPercent, socCutoffPercent,
+    disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned
+) VALUES (
+    :id, :name, :iconKey, :bmsType, :bmsAddress, :chemistry, :cellCount, :averagingWindowMin,
+    :cellHighV, :cellLowV, :cellDeltaMv, :temperatureHighC, :socLowPercent, :socCutoffPercent,
+    :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned
+);
+
+delete:
+DELETE FROM VehicleRow WHERE id = :id;
+
+touch:
+UPDATE VehicleRow SET lastConnectedAt = :now WHERE id = :id;
