@@ -176,7 +176,9 @@ class AntBmsProtocol : BmsProtocol() {
         pos += 2
 
         // Current: i16 LE * 0.1
-        val current = if (pos + 1 < frameLen) buf.i16LE(pos) * 0.1f else 0f
+        // ANT native sign convention is opposite to ours: their +current means discharge.
+        // Negate so that our domain model's '+ = charging' convention holds.
+        val current = if (pos + 1 < frameLen) -(buf.i16LE(pos) * 0.1f) else 0f
         pos += 2
 
         // SOC: u16 LE

@@ -184,8 +184,9 @@ class AntBmsProtocolTest {
 
         // voltage: 5050 * 0.01 = 50.50 V
         assertEquals(50.50f, data.voltage, 0.001f)
-        // current: -123 * 0.1 = -12.3 A (sign mirrors parser: i16LE * 0.1, no negation)
-        assertEquals(-12.30f, data.current, 0.001f)
+        // current: raw -123 * 0.1 = -12.3, negated to +12.3 A
+        // (ANT native sign is opposite to ours; parser negates so + = charging in our domain)
+        assertEquals(12.30f, data.current, 0.001f)
         assertEquals(80f, data.soc)
         assertTrue(data.chargeEnabled)
         assertTrue(data.dischargeEnabled)
@@ -206,7 +207,7 @@ class AntBmsProtocolTest {
         assertEquals(80.0f, data.charge, 0.001f)
 
         // power = voltage * current
-        assertEquals(50.50f * -12.30f, data.power, 0.01f)
+        assertEquals(50.50f * 12.30f, data.power, 0.01f)
 
         assertTrue(data.isConnected)
     }

@@ -36,23 +36,19 @@ class BmsTypeDetectorTest {
     }
 
     @Test
-    fun `JBD detected by unique service UUID when name is missing`() {
-        assertEquals(BmsType.JBD_BMS, BmsTypeDetector.detect(name = null, serviceUuids = listOf(JBD_SERVICE)))
+    fun `returns null when name is missing even with known service UUID`() {
+        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(JBD_SERVICE)))
+        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(DALY_SERVICE)))
     }
 
     @Test
-    fun `Daly detected by unique service UUID when name is missing`() {
-        assertEquals(BmsType.DALY_BMS, BmsTypeDetector.detect(name = null, serviceUuids = listOf(DALY_SERVICE)))
+    fun `returns null for unknown name even with known service UUID`() {
+        // DJI cameras advertise service fff0 but their name doesn't match
+        assertNull(BmsTypeDetector.detect(name = "OsmoSodovaya", serviceUuids = listOf(DALY_SERVICE)))
     }
 
     @Test
-    fun `JK_OR_ANT service uuid returns null when name is missing`() {
-        // ffe0 is shared by JK and ANT - cannot disambiguate from UUID alone
-        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(JK_OR_ANT_SERVICE)))
-    }
-
-    @Test
-    fun `name prefix wins over service uuid for shared ffe0`() {
+    fun `name detection works regardless of service UUIDs`() {
         assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = "JK-001", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
         assertEquals(BmsType.ANT_BMS, BmsTypeDetector.detect(name = "ANT-001", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
     }
