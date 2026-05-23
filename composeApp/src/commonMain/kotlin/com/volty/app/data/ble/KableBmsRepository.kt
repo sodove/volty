@@ -24,6 +24,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -208,5 +209,9 @@ class KableBmsRepository(
         BmsType.JBD_BMS -> JbdBmsProtocol()
         BmsType.ANT_BMS -> AntBmsProtocol()
         BmsType.DALY_BMS -> DalyBmsProtocol()
+    }
+
+    fun close() {
+        runCatching { scope.cancel() }
     }
 }

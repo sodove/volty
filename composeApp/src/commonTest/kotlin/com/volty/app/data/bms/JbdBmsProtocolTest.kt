@@ -67,6 +67,29 @@ class JbdBmsProtocolTest {
     }
 
     @Test
+    fun `frame end detected via len field handles 0x77 inside payload`() {
+        val proto = JbdBmsProtocol()
+        // Force a cell payload that contains a 0x77 byte BEFORE the real terminator.
+        // Cell at 0x7700 mV would be unrealistically high (>5V) so the parser sanity-filter
+        // would reject it; pick a more realistic value.
+        // Cell #1 = 0x0C77 = 3191 mV (3.191 V). Big-endian bytes: 0x0C 0x77.
+        // The 0x77 in byte 2 of the cell payload sits at frame index 5 (header DD cmd 00 len 0C 77 ...).
+        val cellsPayload = byteArrayOf(0x0C.toByte(), 0x77.toByte(), 0x0C.toByte(), 0x80.toByte())
+        val frame = byteArrayOf(0xDD.toByte(), 0x04.toByte(), 0x00, cellsPayload.size.toByte()) +
+            cellsPayload +
+            byteArrayOf(0x00, 0x00, 0x77)
+
+        // Must also feed main data first so the merge logic surfaces BmsData
+        proto.onNotification(byteArrayOf(0xDD.toByte(), 0x03.toByte(), 0x00, 23) + ByteArray(23) + byteArrayOf(0x00, 0x00, 0x77))
+        proto.onNotification(frame)
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(2, data.cellVoltages.size)
+        assertEquals(3.191f, data.cellVoltages[0], 0.001f)
+        assertEquals(3.200f, data.cellVoltages[1], 0.001f)
+    }
+
+    @Test
     fun `main data then cell data assembles complete BmsData`() {
         val proto = JbdBmsProtocol()
         proto.onNotification(jbdFrame(0x03, mainDataPayload()))

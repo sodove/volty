@@ -7,27 +7,25 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
 /**
- * Time-windowed FIFO buffer of [BmsData] samples. Thread-safe (synchronized).
+ * Time-windowed FIFO buffer of [BmsData] samples. Thread-safe via internal monitor.
  *
  * @param capacity max samples retained; oldest is evicted when full.
  */
 @OptIn(ExperimentalTime::class)
 class SampleRingBuffer(private val capacity: Int = 1800) {
 
+    private val lock = Any()
     private val items = ArrayDeque<BmsData>(capacity)
 
-    @Synchronized
-    fun push(sample: BmsData) {
+    fun push(sample: BmsData) = synchronized(lock) {
         if (items.size >= capacity) items.removeFirst()
         items.addLast(sample)
     }
 
-    @Synchronized
-    fun within(window: Duration, now: Instant = Clock.System.now()): List<BmsData> {
+    fun within(window: Duration, now: Instant = Clock.System.now()): List<BmsData> = synchronized(lock) {
         val cutoff = now - window
-        return items.filter { it.timestamp >= cutoff }
+        items.filter { it.timestamp >= cutoff }
     }
 
-    @Synchronized
-    fun clear() { items.clear() }
+    fun clear() = synchronized(lock) { items.clear() }
 }

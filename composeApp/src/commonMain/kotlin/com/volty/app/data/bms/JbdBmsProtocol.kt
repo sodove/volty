@@ -97,21 +97,27 @@ class JbdBmsProtocol : BmsProtocol() {
             if (startIdx > 0) buffer.trimLeading(startIdx)
 
             val current = buffer.toByteArray()
+            // Need at least: DD cmd status len ... csum_hi csum_lo 77 = 7 bytes minimum
+            if (current.size < 7) return
 
-            // Find end marker 0x77
-            val endIdx = current.indexOfLast { (it.toInt() and 0xFF) == 0x77 }
-            if (endIdx < 0 || endIdx < 6) return // Need more data
+            // Declared data length at byte 3
+            val dataLen = current[3].toInt() and 0xFF
+            // Total expected frame length: header(4) + data(dataLen) + checksum(2) + terminator(1)
+            val expectedLen = 4 + dataLen + 3
+            if (current.size < expectedLen) return // wait for more bytes
 
-            // Extract complete frame
-            val frame = current.copyOfRange(0, endIdx + 1)
-
-            if (frame.size >= 7) {
-                val cmd = frame[1].toInt() and 0xFF
-                parseResponse(cmd, frame)
+            // Validate end terminator at expected position
+            if ((current[expectedLen - 1].toInt() and 0xFF) != 0x77) {
+                // Bad frame — advance past this DD and try again
+                buffer.trimLeading(1)
+                continue
             }
 
-            // Consume
-            buffer.trimLeading(endIdx + 1)
+            val frame = current.copyOfRange(0, expectedLen)
+            val cmd = frame[1].toInt() and 0xFF
+            parseResponse(cmd, frame)
+
+            buffer.trimLeading(expectedLen)
         }
     }
 
