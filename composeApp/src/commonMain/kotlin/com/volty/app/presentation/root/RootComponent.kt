@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.decompose.DelicateDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
+import com.arkivanov.decompose.router.stack.bringToFront
 import com.arkivanov.decompose.router.stack.childStack
 import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
@@ -92,7 +93,13 @@ class DefaultRootComponent(
         childFactory = ::createChild
     )
 
-    override fun onBack() { nav.pop() }
+    override fun onBack() {
+        val current = stack.value.active.configuration
+        when (current) {
+            is Config.Cells, is Config.Graph, is Config.Settings -> nav.replaceAll(Config.Dashboard)
+            else -> nav.pop()
+        }
+    }
 
     override fun onTab(tab: RootComponent.Tab) {
         val target = when (tab) {
@@ -101,7 +108,7 @@ class DefaultRootComponent(
             RootComponent.Tab.Graph -> Config.Graph
             RootComponent.Tab.Settings -> Config.Settings
         }
-        nav.replaceAll(target)
+        nav.bringToFront(target)
     }
 
     private fun computeInitialConfig(): Config {

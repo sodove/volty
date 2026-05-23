@@ -46,7 +46,14 @@ class DefaultSettingsComponent(
 ) : SettingsComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(SettingsComponent.State())
+    private val _state = MutableStateFlow(
+        SettingsComponent.State(
+            themeMode = appPrefs.themeMode.value,
+            dynamicColor = appPrefs.dynamicColorEnabled.value,
+            scanTimeoutSec = appPrefs.scanTimeoutSec.value,
+            autoConnectCountdownSec = appPrefs.autoConnectCountdownSec.value
+        )
+    )
     override val state: StateFlow<SettingsComponent.State> = _state.asStateFlow()
 
     init {

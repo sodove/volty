@@ -217,7 +217,7 @@ private fun HeroCard(state: DashboardComponent.State) {
         )
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(fmt0(data.soc), fontSize = 80.sp, fontWeight = FontWeight.Medium, color = barColor)
+                Text(fmt0(data.soc), fontSize = 80.sp, fontWeight = FontWeight.Medium, color = onColor)
                 Text("%", fontSize = 24.sp, color = onColor.copy(alpha = 0.65f))
             }
             Spacer(Modifier.weight(1f))

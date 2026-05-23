@@ -58,12 +58,27 @@ class DefaultDashboardComponent(
 ) : DashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(
-        DashboardComponent.State(
-            data = bmsRepository.activeData.value,
-            vehicle = bmsRepository.activeVehicle.value
+    private val _state: MutableStateFlow<DashboardComponent.State> = run {
+        val initialData = bmsRepository.activeData.value
+        val initialVehicle = bmsRepository.activeVehicle.value
+        val window = (initialVehicle?.averagingWindowMin ?: 5).minutes
+        val initialAvg = bmsRepository.movingAverage(window).value
+        val cells = initialData.cellVoltages
+        val minV = if (cells.isEmpty()) 0f else cells.min()
+        val maxV = if (cells.isEmpty()) 0f else cells.max()
+        MutableStateFlow(
+            DashboardComponent.State(
+                data = initialData,
+                vehicle = initialVehicle,
+                avgPowerW = initialAvg.avgPowerW,
+                avgCurrentA = initialAvg.avgCurrentA,
+                cellsMinV = minV,
+                cellsMaxV = maxV,
+                cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
+                isCharging = initialData.current > 0.05f
+            )
         )
-    )
+    }
     override val state: StateFlow<DashboardComponent.State> = _state.asStateFlow()
 
     init {

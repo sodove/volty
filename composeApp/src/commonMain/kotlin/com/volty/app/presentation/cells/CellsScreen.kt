@@ -139,7 +139,8 @@ private fun CellRow(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
-            .padding(horizontal = 8.dp, vertical = 4.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalArrangement = Arrangement.Center
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,

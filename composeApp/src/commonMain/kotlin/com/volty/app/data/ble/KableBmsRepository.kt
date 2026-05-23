@@ -2,6 +2,7 @@ package com.volty.app.data.ble
 
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
+import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import com.volty.app.data.bms.AntBmsProtocol
@@ -66,6 +67,7 @@ class KableBmsRepository(
     private var protocol: BmsProtocol? = null
     private var observeJob: Job? = null
     private var pollingJob: Job? = null
+    private var stateJob: Job? = null
 
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
 
@@ -181,6 +183,18 @@ class KableBmsRepository(
                 }
             }
 
+            stateJob?.cancel()
+            stateJob = scope.launch {
+                p.state.collect { st ->
+                    if (st is State.Disconnected) {
+                        if (_connectionState.value is ConnectionState.Connected) {
+                            _connectionState.value = ConnectionState.Failed("BLE link lost")
+                            attemptReconnect(vehicle, address, type)
+                        }
+                    }
+                }
+            }
+
             _connectionState.value = ConnectionState.Connected(vehicle)
             serviceController.start()
             if (vehicle != null) vehicleRepository.touch(vehicle.id)
@@ -193,9 +207,22 @@ class KableBmsRepository(
         }
     }
 
+    private suspend fun attemptReconnect(vehicle: Vehicle?, address: String, type: BmsType) {
+        val delays = listOf(2_000L, 5_000L, 10_000L)
+        for (d in delays) {
+            delay(d)
+            if (_connectionState.value is ConnectionState.Connected) return
+            _connectionState.value = ConnectionState.Connecting(vehicle)
+            val r = doConnect(address, type, vehicle)
+            if (r.isSuccess) return
+        }
+        _connectionState.value = ConnectionState.Disconnected
+    }
+
     override suspend fun disconnect() {
         pollingJob?.cancel(); pollingJob = null
         observeJob?.cancel(); observeJob = null
+        stateJob?.cancel(); stateJob = null
         serviceController.stop()
         try { peripheral?.disconnect() } catch (_: Exception) {}
         peripheral = null

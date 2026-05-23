@@ -14,8 +14,8 @@ import org.koin.compose.koinInject
 @Composable
 fun VoltyTheme(content: @Composable () -> Unit) {
     val appPrefs: AppPrefs = koinInject()
-    val themeMode by appPrefs.themeMode.collectAsState(initial = "system")
-    val dynamicColorEnabled by appPrefs.dynamicColorEnabled.collectAsState(initial = true)
+    val themeMode by appPrefs.themeMode.collectAsState()
+    val dynamicColorEnabled by appPrefs.dynamicColorEnabled.collectAsState()
     val systemDark = isSystemInDarkTheme()
     val darkTheme = when (themeMode) {
         "light" -> false
