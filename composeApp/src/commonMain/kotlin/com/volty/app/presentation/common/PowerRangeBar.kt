@@ -1,7 +1,10 @@
 package com.volty.app.presentation.common
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -20,7 +23,12 @@ fun PowerRangeBar(
 ) {
     if (peak <= min) return
     val nowClamped = now.coerceIn(min, peak)
-    val nowFraction = ((nowClamped - min) / (peak - min)).coerceIn(0f, 1f)
+    val rawFraction = ((nowClamped - min) / (peak - min)).coerceIn(0f, 1f)
+    val nowFraction by animateFloatAsState(
+        targetValue = rawFraction,
+        animationSpec = tween(durationMillis = 400),
+        label = "powerRange"
+    )
 
     Canvas(modifier = modifier) {
         val h = 4.dp.toPx()

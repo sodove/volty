@@ -29,13 +29,17 @@ fun MetricCard(
     modifier: Modifier = Modifier,
     variant: MetricCardVariant = MetricCardVariant.Default,
     sub: String? = null,
-    extra: @Composable (() -> Unit)? = null
+    extra: @Composable (() -> Unit)? = null,
+    containerColor: Color? = null,
+    onColor: Color? = null
 ) {
-    val (bg, fg) = when (variant) {
+    val (defaultBg, defaultFg) = when (variant) {
         MetricCardVariant.Default -> MaterialTheme.colorScheme.surfaceContainer to MaterialTheme.colorScheme.onSurface
         MetricCardVariant.Tertiary -> MaterialTheme.colorScheme.tertiaryContainer to MaterialTheme.colorScheme.onTertiaryContainer
         MetricCardVariant.Primary -> MaterialTheme.colorScheme.primaryContainer to MaterialTheme.colorScheme.onPrimaryContainer
     }
+    val bg = containerColor ?: defaultBg
+    val fg = onColor ?: defaultFg
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))

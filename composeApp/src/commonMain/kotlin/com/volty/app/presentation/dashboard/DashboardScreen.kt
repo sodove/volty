@@ -33,7 +33,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.presentation.common.MetricCard
-import com.volty.app.presentation.common.MetricCardVariant
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
 import com.volty.app.presentation.common.VehiclePill
@@ -75,21 +74,30 @@ fun DashboardScreen(component: DashboardComponent) {
                     "${data.cellVoltages.size}s · ${fmt2(data.voltage / data.cellVoltages.size)} V/cell"
                 } else null
             )
+            val powerCharging = data.current > 0.05f
+            // Fixed dark-green palette matches the hero card while charging so the
+            // two cards visually agree regardless of dynamic-color wallpaper.
+            val powerChargingContainer = Color(0xFF184D24)
+            val powerChargingOn = Color(0xFFE8F5EA)
+            val powerSubColor = if (powerCharging) powerChargingOn.copy(alpha = 0.7f)
+            else MaterialTheme.colorScheme.onSurfaceVariant
             MetricCard(
                 label = "Power",
                 value = "${fmt0(data.power)} W",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                variant = MetricCardVariant.Tertiary,
+                containerColor = if (powerCharging) powerChargingContainer else null,
+                onColor = if (powerCharging) powerChargingOn else null,
                 extra = {
                     Column {
                         PowerRangeBar(
                             min = state.powerMin, peak = state.powerPeak, now = data.power,
-                            modifier = Modifier.fillMaxWidth().height(12.dp)
+                            modifier = Modifier.fillMaxWidth().height(12.dp),
+                            marker = if (powerCharging) powerChargingOn else Color.White
                         )
                         Spacer(Modifier.height(2.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${state.powerMin.toInt()} W", fontSize = 10.sp, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f))
-                            Text("peak ${state.powerPeak.toInt()} W", fontSize = 10.sp, color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.7f))
+                            Text("${state.powerMin.toInt()} W", fontSize = 10.sp, color = powerSubColor)
+                            Text("peak ${state.powerPeak.toInt()} W", fontSize = 10.sp, color = powerSubColor)
                         }
                     }
                 }
@@ -157,8 +165,15 @@ fun DashboardScreen(component: DashboardComponent) {
                         val max = state.cellsMaxV
                         val range = (max - min).takeIf { it > 0f } ?: 1f
                         cells.forEach { v ->
-                            val frac = ((v - min) / range).coerceIn(0f, 1f)
-                            val barH = (4 + (frac * 14)).dp
+                            val rawFrac = ((v - min) / range).coerceIn(0f, 1f)
+                            // animateFloatAsState is call-site-keyed, so each per-cell
+                            // call in this forEach gets its own animation state.
+                            val animFrac by animateFloatAsState(
+                                targetValue = rawFrac,
+                                animationSpec = tween(durationMillis = 400),
+                                label = "cellMini"
+                            )
+                            val barH = (4 + (animFrac * 14)).dp
                             Box(
                                 modifier = Modifier
                                     .weight(1f)
@@ -191,7 +206,16 @@ fun DashboardScreen(component: DashboardComponent) {
 private fun HeroCard(state: DashboardComponent.State) {
     val data = state.data
     val v = state.vehicle
-    val isCharging = state.isCharging
+    // Use signed moving-average power as the source of truth for direction.
+    // Brief regen blips during discharge won't flip the label, and brief loads
+    // during charging won't flip it the other way. Falls back to instantaneous
+    // power only when the moving average is near zero.
+    val avg = state.avgPowerW
+    val isCharging = when {
+        avg > 1f -> true
+        avg < -1f -> false
+        else -> data.power > 0.05f
+    }
     // Fixed darker-green palette for the charging hero so dynamic-color wallpapers
     // can't wash the card out. Other UI keeps the dynamic palette.
     val chargingContainer = Color(0xFF184D24) // dark forest green

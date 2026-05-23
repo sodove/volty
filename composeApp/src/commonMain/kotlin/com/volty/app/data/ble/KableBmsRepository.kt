@@ -70,6 +70,11 @@ class KableBmsRepository(
     private var pollingJob: Job? = null
     private var stateJob: Job? = null
     private var reconnectJob: Job? = null
+    private var watchdogJob: Job? = null
+
+    // Wall-clock epoch ms of the last successful sample. Used by the watchdog
+    // to detect a silent link drop earlier than BLE supervision timeout.
+    private var lastSampleAtMs: Long = 0L
 
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
 
@@ -155,6 +160,9 @@ class KableBmsRepository(
                             val sample = bms.copy(timestamp = Clock.System.now())
                             _activeData.value = sample
                             ringBuffer.push(sample)
+                            // kotlin.time.Clock works in commonMain (System.currentTimeMillis
+                            // is JVM-only). Class is already opted in via @OptIn at the top.
+                            lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
                         }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
@@ -213,6 +221,25 @@ class KableBmsRepository(
                 }
             }
 
+            // Stale-sample watchdog. BLE supervision timeout (15-30 s) is too slow
+            // for our UX, so if no notification arrives within 7 s while we're
+            // nominally Connected, force a reconnect.
+            watchdogJob?.cancel()
+            watchdogJob = scope.launch {
+                delay(2_000L) // grace period for initial handshake / first sample
+                while (isActive) {
+                    delay(2_000L)
+                    if (_connectionState.value is ConnectionState.Connected) {
+                        val nowMs = Clock.System.now().toEpochMilliseconds()
+                        if (lastSampleAtMs > 0 && nowMs - lastSampleAtMs > 7_000L) {
+                            _connectionState.value = ConnectionState.Failed("Reconnecting…")
+                            startReconnectLoop(vehicle, address, type)
+                            return@launch
+                        }
+                    }
+                }
+            }
+
             _connectionState.value = ConnectionState.Connected(vehicle)
             serviceController.start()
             if (vehicle != null) vehicleRepository.touch(vehicle.id)
@@ -253,6 +280,9 @@ class KableBmsRepository(
         pollingJob?.cancel(); pollingJob = null
         observeJob?.cancel(); observeJob = null
         stateJob?.cancel(); stateJob = null
+        watchdogJob?.cancel(); watchdogJob = null
+        // Reset sample-age tracker so a fresh connect gets a clean grace period.
+        lastSampleAtMs = 0L
         try { peripheral?.disconnect() } catch (_: Exception) {}
         peripheral = null
         protocol?.reset(); protocol = null
