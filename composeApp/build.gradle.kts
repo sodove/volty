@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.compose.multiplatform)
     alias(libs.plugins.compose.compiler)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.sqldelight)
 }
 
 kotlin {
@@ -28,18 +29,23 @@ kotlin {
             implementation(libs.serialization.json)
             implementation(libs.kable.core)
             implementation(libs.datetime)
+            implementation(libs.sqldelight.runtime)
+            implementation(libs.sqldelight.coroutines)
         }
 
         commonTest.dependencies {
             implementation(libs.kotlin.test)
             implementation(libs.coroutines.test)
             implementation(libs.turbine)
+            implementation(libs.sqldelight.jvm)
         }
 
         androidMain.dependencies {
             implementation(libs.activity.compose)
             implementation(libs.koin.android)
             implementation(libs.coroutines.android)
+            implementation(libs.sqldelight.android)
+            implementation(libs.datastore.preferences)
         }
     }
 }
@@ -59,5 +65,14 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+}
+
+sqldelight {
+    databases {
+        create("VoltyDatabase") {
+            packageName.set("com.volty.app.data.db")
+            generateAsync.set(false)
+        }
     }
 }
