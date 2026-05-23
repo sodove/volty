@@ -45,7 +45,8 @@ import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalUuidApi::class, ExperimentalTime::class)
 class KableBmsRepository(
-    private val vehicleRepository: VehicleRepository
+    private val vehicleRepository: VehicleRepository,
+    private val serviceController: com.volty.app.service.ServiceController
 ) : BmsRepository {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
@@ -169,6 +170,7 @@ class KableBmsRepository(
             }
 
             _connectionState.value = ConnectionState.Connected(vehicle)
+            serviceController.start()
             if (vehicle != null) vehicleRepository.touch(vehicle.id)
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -182,6 +184,7 @@ class KableBmsRepository(
     override suspend fun disconnect() {
         pollingJob?.cancel(); pollingJob = null
         observeJob?.cancel(); observeJob = null
+        serviceController.stop()
         try { peripheral?.disconnect() } catch (_: Exception) {}
         peripheral = null
         protocol?.reset(); protocol = null
