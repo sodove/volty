@@ -10,6 +10,8 @@ import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.volty.app.data.prefs.AppPrefs
 import com.volty.app.permissions.PermissionsChecker
+import com.volty.app.presentation.autoconnect.AutoConnectComponent
+import com.volty.app.presentation.autoconnect.DefaultAutoConnectComponent
 import com.volty.app.presentation.debug.DebugComponent
 import com.volty.app.presentation.debug.DefaultDebugComponent
 import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
@@ -31,7 +33,7 @@ interface RootComponent {
         data class Welcome(val component: WelcomeComponent) : Child
         data class Permissions(val component: PermissionsGateComponent) : Child
         data class Scanning(val component: ScanningComponent) : Child
-        data class AutoConnect(val component: AutoConnectStubComponent) : Child
+        data class AutoConnect(val component: AutoConnectComponent) : Child
         data class Picker(val component: PickerStubComponent) : Child
         data class Dashboard(val component: DebugComponent) : Child
         data class VehicleEdit(val component: VehicleEditStubComponent) : Child
@@ -91,7 +93,17 @@ class DefaultRootComponent(
                     onMultipleOrNone = { nav.replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
-            is Config.AutoConnect -> RootComponent.Child.AutoConnect(AutoConnectStubComponent(context, config.vehicleId))
+            is Config.AutoConnect -> RootComponent.Child.AutoConnect(
+                DefaultAutoConnectComponent(
+                    componentContext = context,
+                    vehicleId = config.vehicleId,
+                    bmsRepository = get(),
+                    vehicleRepository = get(),
+                    appPrefs = get<AppPrefs>(),
+                    onConnected = { nav.replaceAll(Config.Dashboard) },
+                    onCancelled = { nav.replaceAll(Config.Picker(mode = "cold")) }
+                )
+            )
             is Config.Picker -> RootComponent.Child.Picker(PickerStubComponent(context, config.mode))
             is Config.Dashboard -> RootComponent.Child.Dashboard(
                 DefaultDebugComponent(
@@ -105,10 +117,6 @@ class DefaultRootComponent(
 }
 
 // Stub components — replaced in Tasks 8..13
-interface AutoConnectStubComponent { val label: String }
-class AutoConnectStubComponentImpl(val vehicleId: String) : AutoConnectStubComponent { override val label = "AutoConnect[$vehicleId] — not implemented yet" }
-@Suppress("FunctionName") fun AutoConnectStubComponent(ctx: ComponentContext, vehicleId: String): AutoConnectStubComponent = AutoConnectStubComponentImpl(vehicleId)
-
 interface PickerStubComponent { val label: String }
 class PickerStubComponentImpl(val mode: String) : PickerStubComponent { override val label = "Picker[$mode] — not implemented yet" }
 @Suppress("FunctionName") fun PickerStubComponent(ctx: ComponentContext, mode: String): PickerStubComponent = PickerStubComponentImpl(mode)
