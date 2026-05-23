@@ -9,6 +9,7 @@ import androidx.compose.ui.Modifier
 import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.volty.app.presentation.debug.DebugScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
+import com.volty.app.presentation.scanning.ScanningScreen
 import com.volty.app.presentation.welcome.WelcomeScreen
 
 @Composable
@@ -17,7 +18,7 @@ fun RootScreen(component: RootComponent) {
         when (val instance = child.instance) {
             is RootComponent.Child.Welcome -> WelcomeScreen(instance.component)
             is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
-            is RootComponent.Child.Scanning -> Stub(instance.component.label)
+            is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
             is RootComponent.Child.AutoConnect -> Stub(instance.component.label)
             is RootComponent.Child.Picker -> Stub(instance.component.label)
             is RootComponent.Child.Dashboard -> DebugScreen(instance.component)
