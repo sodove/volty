@@ -2,12 +2,13 @@ package com.volty.app
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import com.volty.app.presentation.debug.DebugScreen
+import com.volty.app.presentation.root.RootComponent
 
 @Composable
-fun App() {
+fun App(root: RootComponent) {
     MaterialTheme {
-        Surface { Text("Volty placeholder") }
+        Surface { DebugScreen(root.debug) }
     }
 }
