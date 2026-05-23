@@ -10,6 +10,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
+import com.volty.app.presentation.cells.CellsScreen
 import com.volty.app.presentation.dashboard.DashboardScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
 import com.volty.app.presentation.picker.PickerScreen
@@ -28,7 +29,7 @@ fun RootScreen(component: RootComponent) {
             is RootComponent.Child.Picker -> PickerScreen(instance.component)
             is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
             is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
-            RootComponent.Child.Cells -> StubScreen("Cells coming in T5")
+            is RootComponent.Child.Cells -> CellsScreen(instance.component)
             RootComponent.Child.Graph -> StubScreen("Graph coming in T6")
             RootComponent.Child.Settings -> StubScreen("Settings coming in T7")
         }

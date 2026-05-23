@@ -14,6 +14,8 @@ import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.autoconnect.AutoConnectComponent
 import com.volty.app.presentation.autoconnect.DefaultAutoConnectComponent
+import com.volty.app.presentation.cells.CellsComponent
+import com.volty.app.presentation.cells.DefaultCellsComponent
 import com.volty.app.presentation.dashboard.DashboardComponent
 import com.volty.app.presentation.dashboard.DefaultDashboardComponent
 import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
@@ -46,7 +48,7 @@ interface RootComponent {
         data class Picker(val component: PickerComponent) : Child
         data class Dashboard(val component: DashboardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
-        data object Cells : Child
+        data class Cells(val component: CellsComponent) : Child
         data object Graph : Child
         data object Settings : Child
     }
@@ -171,7 +173,13 @@ class DefaultRootComponent(
                     onDeleted = { nav.pop() }
                 )
             )
-            is Config.Cells -> RootComponent.Child.Cells
+            is Config.Cells -> RootComponent.Child.Cells(
+                DefaultCellsComponent(
+                    componentContext = context,
+                    bmsRepository = get(),
+                    onBackRequested = { nav.pop() }
+                )
+            )
             is Config.Graph -> RootComponent.Child.Graph
             is Config.Settings -> RootComponent.Child.Settings
         }
