@@ -141,12 +141,20 @@ class DefaultDashboardComponent(
     }
 }
 
-// Helper math: time-to-empty
-fun timeToEmptyDescription(remainingAh: Float, avgPowerW: Float, nominalV: Float): String {
-    if (avgPowerW <= 0f || nominalV <= 0f) return "—"
-    val avgCurrentA = avgPowerW / nominalV
-    val hoursLeft = remainingAh / avgCurrentA
-    if (hoursLeft <= 0f) return "—"
+// Helper math: time remaining (to-empty when discharging, to-full when charging)
+fun timeRemainingDescription(
+    isCharging: Boolean,
+    remainingAh: Float,
+    capacityAh: Float,
+    avgPowerW: Float,
+    nominalV: Float
+): String {
+    val power = kotlin.math.abs(avgPowerW)
+    if (power < 1f || nominalV <= 0f) return "—"
+    val avgCurrentA = power / nominalV
+    val targetAh = if (isCharging) (capacityAh - remainingAh) else remainingAh
+    if (targetAh <= 0f) return "—"
+    val hoursLeft = targetAh / avgCurrentA
     val totalMinutes = (hoursLeft * 60).toInt()
     val h = totalMinutes / 60
     val m = totalMinutes % 60

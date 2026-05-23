@@ -69,6 +69,18 @@ class KableBmsRepository(
 
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
 
+    init {
+        scope.launch {
+            vehicleRepository.vehicles.collect { list ->
+                val current = _activeVehicle.value ?: return@collect
+                val updated = list.firstOrNull { it.id == current.id }
+                if (updated != null && updated != current) {
+                    _activeVehicle.value = updated
+                }
+            }
+        }
+    }
+
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         val knownAddresses: Map<String, Vehicle> =
             vehicleRepository.vehicles.first().associateBy { it.bmsAddress }

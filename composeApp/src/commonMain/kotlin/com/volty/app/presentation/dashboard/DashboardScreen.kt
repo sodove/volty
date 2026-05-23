@@ -175,7 +175,14 @@ private fun HeroCard(state: DashboardComponent.State) {
     val onColor = if (isCharging) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
     val barColor = if (isCharging) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
     val nominalV = v?.let { (v.cellCount ?: 1) * v.chemistry.nominalCellV } ?: data.voltage.coerceAtLeast(1f)
-    val eta = timeToEmptyDescription(data.charge, state.avgPowerW, nominalV)
+    val eta = timeRemainingDescription(
+        isCharging = isCharging,
+        remainingAh = data.charge,
+        capacityAh = data.capacity,
+        avgPowerW = state.avgPowerW,
+        nominalV = nominalV
+    )
+    val etaLabel = if (isCharging) "to full" else "to empty"
     val socFraction = (data.soc / 100f).coerceIn(0f, 1f)
 
     Column(
@@ -224,7 +231,7 @@ private fun HeroCard(state: DashboardComponent.State) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
                 Text("≈ $eta", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = onColor)
-                Text("to empty · avg ${state.avgPowerW.toInt()} W", fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
+                Text("$etaLabel · avg ${abs(state.avgPowerW).toInt()} W", fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text("${fmtSigned1(data.current)} A", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = onColor)

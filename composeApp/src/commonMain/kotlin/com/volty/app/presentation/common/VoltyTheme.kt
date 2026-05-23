@@ -5,16 +5,25 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import com.volty.app.data.prefs.AppPrefs
+import org.koin.compose.koinInject
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
-fun VoltyTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
-    dynamicColor: Boolean = true,
-    content: @Composable () -> Unit
-) {
+fun VoltyTheme(content: @Composable () -> Unit) {
+    val appPrefs: AppPrefs = koinInject()
+    val themeMode by appPrefs.themeMode.collectAsState(initial = "system")
+    val dynamicColorEnabled by appPrefs.dynamicColorEnabled.collectAsState(initial = true)
+    val systemDark = isSystemInDarkTheme()
+    val darkTheme = when (themeMode) {
+        "light" -> false
+        "dark" -> true
+        else -> systemDark
+    }
     val colors = when {
-        dynamicColor && supportsDynamicColor() -> dynamicVoltyColors(darkTheme)
+        dynamicColorEnabled && supportsDynamicColor() -> dynamicVoltyColors(darkTheme)
         darkTheme -> voltyDarkColors
         else -> voltyLightColors
     }
