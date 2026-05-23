@@ -69,6 +69,7 @@ class KableBmsRepository(
     private var observeJob: Job? = null
     private var pollingJob: Job? = null
     private var stateJob: Job? = null
+    private var reconnectJob: Job? = null
 
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
 
@@ -115,7 +116,7 @@ class KableBmsRepository(
 
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
         return try {
-            disconnect()
+            cleanupConnection()
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
 
@@ -200,8 +201,8 @@ class KableBmsRepository(
                     p.state.collect { st ->
                         if (st is State.Disconnected) {
                             if (_connectionState.value is ConnectionState.Connected) {
-                                _connectionState.value = ConnectionState.Failed("BLE link lost")
-                                attemptReconnect(vehicle, address, type)
+                                _connectionState.value = ConnectionState.Failed("Reconnecting…")
+                                startReconnectLoop(vehicle, address, type)
                             }
                         }
                     }
@@ -224,30 +225,47 @@ class KableBmsRepository(
         }
     }
 
-    private suspend fun attemptReconnect(vehicle: Vehicle?, address: String, type: BmsType) {
-        val delays = listOf(2_000L, 5_000L, 10_000L)
-        for (d in delays) {
-            delay(d)
-            if (_connectionState.value is ConnectionState.Connected) return
-            _connectionState.value = ConnectionState.Connecting(vehicle)
-            val r = doConnect(address, type, vehicle)
-            if (r.isSuccess) return
+    private fun startReconnectLoop(vehicle: Vehicle?, address: String, type: BmsType) {
+        reconnectJob?.cancel()
+        reconnectJob = scope.launch {
+            var attempt = 0
+            while (isActive) {
+                // Stop if user explicitly disconnected (vehicle was cleared)
+                if (_activeVehicle.value == null) return@launch
+                // Stop if we're already connected (a parallel reconnect succeeded)
+                if (_connectionState.value is ConnectionState.Connected) return@launch
+
+                attempt++
+                _connectionState.value = ConnectionState.Connecting(vehicle)
+                val result = doConnect(address, type, vehicle)
+                if (result.isSuccess) return@launch
+
+                // Wait before next try. Short fixed delay so reconnect is responsive
+                // when the BMS comes back in range. After ~10 attempts grow to 10s
+                // to avoid hammering when the device is far away.
+                val delayMs = if (attempt < 10) 3_000L else 10_000L
+                delay(delayMs)
+            }
         }
-        _connectionState.value = ConnectionState.Disconnected
     }
 
-    override suspend fun disconnect() {
+    private suspend fun cleanupConnection() {
         pollingJob?.cancel(); pollingJob = null
         observeJob?.cancel(); observeJob = null
         stateJob?.cancel(); stateJob = null
-        serviceController.stop()
         try { peripheral?.disconnect() } catch (_: Exception) {}
         peripheral = null
         protocol?.reset(); protocol = null
+    }
+
+    override suspend fun disconnect() {
+        reconnectJob?.cancel(); reconnectJob = null
+        cleanupConnection()
         _activeData.value = BmsData()
         _activeVehicle.value = null
         ringBuffer.clear()
         _connectionState.value = ConnectionState.Disconnected
+        serviceController.stop()
     }
 
     override fun samples(window: Duration): Flow<List<BmsData>> =
