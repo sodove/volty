@@ -18,6 +18,8 @@ import com.volty.app.presentation.cells.CellsComponent
 import com.volty.app.presentation.cells.DefaultCellsComponent
 import com.volty.app.presentation.dashboard.DashboardComponent
 import com.volty.app.presentation.dashboard.DefaultDashboardComponent
+import com.volty.app.presentation.graph.DefaultGraphComponent
+import com.volty.app.presentation.graph.GraphComponent
 import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
 import com.volty.app.presentation.permissions.PermissionsGateComponent
 import com.volty.app.presentation.picker.DefaultPickerComponent
@@ -49,7 +51,7 @@ interface RootComponent {
         data class Dashboard(val component: DashboardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class Cells(val component: CellsComponent) : Child
-        data object Graph : Child
+        data class Graph(val component: GraphComponent) : Child
         data object Settings : Child
     }
 }
@@ -180,7 +182,13 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
-            is Config.Graph -> RootComponent.Child.Graph
+            is Config.Graph -> RootComponent.Child.Graph(
+                DefaultGraphComponent(
+                    componentContext = context,
+                    bmsRepository = get(),
+                    onBackRequested = { nav.pop() }
+                )
+            )
             is Config.Settings -> RootComponent.Child.Settings
         }
 }

@@ -12,6 +12,7 @@ import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
 import com.volty.app.presentation.cells.CellsScreen
 import com.volty.app.presentation.dashboard.DashboardScreen
+import com.volty.app.presentation.graph.GraphScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
 import com.volty.app.presentation.picker.PickerScreen
 import com.volty.app.presentation.scanning.ScanningScreen
@@ -30,7 +31,7 @@ fun RootScreen(component: RootComponent) {
             is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
             is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
             is RootComponent.Child.Cells -> CellsScreen(instance.component)
-            RootComponent.Child.Graph -> StubScreen("Graph coming in T6")
+            is RootComponent.Child.Graph -> GraphScreen(instance.component)
             RootComponent.Child.Settings -> StubScreen("Settings coming in T7")
         }
     }
