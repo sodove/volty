@@ -8,8 +8,11 @@ import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
+import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.debug.DebugComponent
 import com.volty.app.presentation.debug.DefaultDebugComponent
+import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
+import com.volty.app.presentation.permissions.PermissionsGateComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
 import com.volty.app.presentation.welcome.WelcomeComponent
 import kotlinx.serialization.Serializable
@@ -23,7 +26,7 @@ interface RootComponent {
 
     sealed interface Child {
         data class Welcome(val component: WelcomeComponent) : Child
-        data class Permissions(val component: PermissionsStubComponent) : Child
+        data class Permissions(val component: PermissionsGateComponent) : Child
         data class Scanning(val component: ScanningStubComponent) : Child
         data class AutoConnect(val component: AutoConnectStubComponent) : Child
         data class Picker(val component: PickerStubComponent) : Child
@@ -68,7 +71,13 @@ class DefaultRootComponent(
                     onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) }
                 )
             )
-            is Config.Permissions -> RootComponent.Child.Permissions(PermissionsStubComponent(context))
+            is Config.Permissions -> RootComponent.Child.Permissions(
+                DefaultPermissionsGateComponent(
+                    componentContext = context,
+                    checker = get<PermissionsChecker>(),
+                    onAllGrantedRequested = { nav.replaceAll(Config.Scanning) }
+                )
+            )
             is Config.Scanning -> RootComponent.Child.Scanning(ScanningStubComponent(context))
             is Config.AutoConnect -> RootComponent.Child.AutoConnect(AutoConnectStubComponent(context, config.vehicleId))
             is Config.Picker -> RootComponent.Child.Picker(PickerStubComponent(context, config.mode))
@@ -84,10 +93,6 @@ class DefaultRootComponent(
 }
 
 // Stub components — replaced in Tasks 8..13
-interface PermissionsStubComponent { val label: String }
-class PermissionsStubComponentImpl : PermissionsStubComponent { override val label = "Permissions — not implemented yet" }
-@Suppress("FunctionName") fun PermissionsStubComponent(ctx: ComponentContext): PermissionsStubComponent = PermissionsStubComponentImpl()
-
 interface ScanningStubComponent { val label: String }
 class ScanningStubComponentImpl : ScanningStubComponent { override val label = "Scanning — not implemented yet" }
 @Suppress("FunctionName") fun ScanningStubComponent(ctx: ComponentContext): ScanningStubComponent = ScanningStubComponentImpl()
