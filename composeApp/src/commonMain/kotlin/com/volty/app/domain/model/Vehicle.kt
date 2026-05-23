@@ -1,7 +1,9 @@
 package com.volty.app.domain.model
 
-import kotlinx.datetime.Instant
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
+@OptIn(ExperimentalTime::class)
 data class Vehicle(
     val id: String,
     val name: String,

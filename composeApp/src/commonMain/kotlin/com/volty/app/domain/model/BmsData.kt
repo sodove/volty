@@ -2,10 +2,9 @@ package com.volty.app.domain.model
 
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
-import kotlinx.datetime.Instant
+import kotlin.time.Instant
 
 @OptIn(ExperimentalTime::class)
-
 data class BmsData(
     val voltage: Float = 0f,
     val current: Float = 0f,
