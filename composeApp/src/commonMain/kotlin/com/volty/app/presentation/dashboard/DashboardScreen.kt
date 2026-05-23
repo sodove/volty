@@ -37,6 +37,7 @@ import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
 import com.volty.app.presentation.common.VehiclePill
+import com.volty.app.presentation.common.iconKeyToEmoji
 import kotlin.math.abs
 import kotlin.math.round
 
@@ -66,6 +67,7 @@ fun DashboardScreen(component: DashboardComponent) {
             name = vehicle?.name ?: "No battery",
             statusText = statusLabel,
             statusColor = statusColor,
+            iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
             onClick = component::onPillClicked
         )
 
@@ -74,7 +76,10 @@ fun DashboardScreen(component: DashboardComponent) {
         // 2-col metric grid
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .animateContentSize()
         ) {
             MetricCard(
                 label = "Voltage",
@@ -121,6 +126,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 .clip(RoundedCornerShape(20.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
                 .padding(12.dp)
+                .animateContentSize()
         ) {
             Column {
                 Text(
@@ -140,7 +146,10 @@ fun DashboardScreen(component: DashboardComponent) {
 
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(IntrinsicSize.Min)
+                .animateContentSize()
         ) {
             MetricCard(
                 label = "Temperature",

@@ -46,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.presentation.common.iconKeyToEmoji
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -183,7 +184,7 @@ private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit, onDelete: () -> Uni
                 .background(MaterialTheme.colorScheme.primary),
             contentAlignment = Alignment.Center
         ) {
-            Text("⚡", color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+            Text(iconKeyToEmoji(vehicle.iconKey), color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.Bold)
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)

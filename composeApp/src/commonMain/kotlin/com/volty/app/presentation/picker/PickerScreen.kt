@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Vehicle
 import com.volty.app.domain.repository.DiscoveredDevice
+import com.volty.app.presentation.common.iconKeyToEmoji
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -157,7 +158,7 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        Avatar(letter = "⚡", bg = MaterialTheme.colorScheme.primary)
+        Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.primary)
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
             Text("${vehicle.bmsType.label}  ·  saved", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))

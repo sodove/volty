@@ -45,6 +45,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Chemistry
+import com.volty.app.presentation.common.iconKeyToEmoji
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
@@ -103,7 +104,7 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
-                            text = iconEmoji(key),
+                            text = iconKeyToEmoji(key),
                             color = if (selected) Color.White else MaterialTheme.colorScheme.onSurfaceVariant,
                             fontSize = 16.sp
                         )
@@ -225,14 +226,3 @@ private fun IntField(label: String, value: Int?, onChange: (Int?) -> Unit) {
     )
 }
 
-private fun iconEmoji(key: String): String = when (key) {
-    "skateboard" -> "🛹"
-    "ebike" -> "🚲"
-    "scooter" -> "🛵"
-    "moto" -> "🏍"
-    "solar" -> "☀"
-    "ev" -> "🚗"
-    "boat" -> "⛵"
-    "rv" -> "🚐"
-    else -> "⚡"
-}

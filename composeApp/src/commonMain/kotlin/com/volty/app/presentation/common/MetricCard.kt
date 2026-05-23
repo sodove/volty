@@ -1,6 +1,5 @@
 package com.volty.app.presentation.common
 
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -45,8 +44,7 @@ fun MetricCard(
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
             .heightIn(min = 110.dp)
-            .padding(12.dp)
-            .animateContentSize(),
+            .padding(12.dp),
         verticalArrangement = Arrangement.SpaceBetween
     ) {
         Column {
