@@ -107,6 +107,7 @@ fun GraphScreen(component: GraphComponent) {
                 Spacer(Modifier.height(8.dp))
                 LineGraph(
                     values = state.values,
+                    minRange = minRangeFor(state.metric),
                     modifier = Modifier.fillMaxWidth().height(160.dp)
                 )
                 Spacer(Modifier.height(10.dp))
@@ -188,16 +189,19 @@ private fun WindowChip(label: String, active: Boolean, onClick: () -> Unit) {
 }
 
 @Composable
-private fun LineGraph(values: List<Float>, modifier: Modifier = Modifier) {
+private fun LineGraph(values: List<Float>, modifier: Modifier = Modifier, minRange: Float = 0f) {
     if (values.size < 2) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
             Text("No data yet", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
         return
     }
-    val min = values.min()
-    val max = values.max()
-    val range = (max - min).takeIf { it > 0f } ?: 1f
+    val rawMin = values.min()
+    val rawMax = values.max()
+    val center = (rawMin + rawMax) / 2f
+    val half = maxOf((rawMax - rawMin) / 2f, minRange / 2f, 0.001f)
+    val min = center - half
+    val range = 2 * half
     val lineColor = MaterialTheme.colorScheme.primary
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
 
@@ -248,6 +252,14 @@ private fun LineGraph(values: List<Float>, modifier: Modifier = Modifier) {
         )
         drawCircle(color = lineColor, center = Offset(lastX, lastY), radius = 4f)
     }
+}
+
+private fun minRangeFor(metric: GraphMetric): Float = when (metric) {
+    GraphMetric.POWER -> 100f
+    GraphMetric.CURRENT -> 2f
+    GraphMetric.VOLTAGE -> 1f
+    GraphMetric.SOC -> 5f
+    GraphMetric.TEMPERATURE -> 5f
 }
 
 private fun formatVal(v: Float, metric: GraphMetric): String {

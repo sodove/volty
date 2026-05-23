@@ -35,7 +35,7 @@ class DefaultCellsComponent(
 ) : CellsComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(CellsComponent.State())
+    private val _state = MutableStateFlow(compute(bmsRepository.activeData.value))
     override val state: StateFlow<CellsComponent.State> = _state.asStateFlow()
 
     init {
@@ -53,10 +53,10 @@ class DefaultCellsComponent(
         val min = volts.min()
         val max = volts.max()
         val rawRange = max - min
-        val healthy = rawRange < 0.01f   // Spread under 10 mV → consider balanced
+        val balanced = rawRange < 0.01f   // spread < 10 mV considered balanced
         val range = rawRange.takeIf { it > 0f } ?: 1f
         val cells = volts.mapIndexed { i, v ->
-            val frac = if (healthy) 1f else ((v - min) / range).coerceIn(0f, 1f)
+            val frac = if (balanced) 0.5f else ((v - min) / range).coerceIn(0f, 1f)
             CellsComponent.Cell(index = i + 1, voltageV = v, rangeFraction = frac)
         }
         return CellsComponent.State(

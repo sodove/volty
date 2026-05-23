@@ -60,7 +60,11 @@ class DefaultGraphComponent(
 ) : GraphComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(GraphComponent.State())
+    private val _state = MutableStateFlow(
+        GraphComponent.State(
+            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER)
+        )
+    )
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
 
     private var sampleJob: Job? = null
@@ -97,13 +101,7 @@ class DefaultGraphComponent(
         )
     }
 
-    private fun extractValue(d: BmsData, metric: GraphMetric): Float = when (metric) {
-        GraphMetric.SOC -> d.soc
-        GraphMetric.POWER -> d.power
-        GraphMetric.CURRENT -> d.current
-        GraphMetric.VOLTAGE -> d.voltage
-        GraphMetric.TEMPERATURE -> d.temperatures.firstOrNull() ?: 0f
-    }
+    private fun extractValue(d: BmsData, metric: GraphMetric): Float = extractValueOf(d, metric)
 
     private fun computeUsed(samples: List<BmsData>, metric: GraphMetric): Float {
         if (samples.size < 2) return 0f
@@ -131,4 +129,12 @@ class DefaultGraphComponent(
     }
 
     override fun onBack() { onBackRequested() }
+}
+
+private fun extractValueOf(d: BmsData, metric: GraphMetric): Float = when (metric) {
+    GraphMetric.SOC -> d.soc
+    GraphMetric.POWER -> d.power
+    GraphMetric.CURRENT -> d.current
+    GraphMetric.VOLTAGE -> d.voltage
+    GraphMetric.TEMPERATURE -> d.temperatures.firstOrNull() ?: 0f
 }

@@ -27,6 +27,7 @@ fun VoltyTheme(content: @Composable () -> Unit) {
         darkTheme -> voltyDarkColors
         else -> voltyLightColors
     }
+    SyncSystemBarsAppearance(darkTheme = darkTheme)
     MaterialExpressiveTheme(
         colorScheme = colors,
         motionScheme = MotionScheme.expressive(),

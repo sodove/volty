@@ -58,7 +58,12 @@ class DefaultDashboardComponent(
 ) : DashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(DashboardComponent.State())
+    private val _state = MutableStateFlow(
+        DashboardComponent.State(
+            data = bmsRepository.activeData.value,
+            vehicle = bmsRepository.activeVehicle.value
+        )
+    )
     override val state: StateFlow<DashboardComponent.State> = _state.asStateFlow()
 
     init {

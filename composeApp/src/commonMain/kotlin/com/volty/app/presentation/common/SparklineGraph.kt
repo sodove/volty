@@ -14,12 +14,16 @@ fun SparklineGraph(
     values: List<Float>,
     modifier: Modifier = Modifier,
     color: Color = MaterialTheme.colorScheme.primary,
-    glowAlpha: Float = 0.15f
+    glowAlpha: Float = 0.15f,
+    minRange: Float = 0f
 ) {
     if (values.size < 2) return
-    val min = values.min()
-    val max = values.max()
-    val range = (max - min).takeIf { it > 0f } ?: 1f
+    val rawMin = values.min()
+    val rawMax = values.max()
+    val center = (rawMin + rawMax) / 2f
+    val half = maxOf((rawMax - rawMin) / 2f, minRange / 2f, 0.001f)
+    val min = center - half
+    val range = 2 * half
 
     Canvas(modifier = modifier) {
         val w = size.width

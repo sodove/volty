@@ -109,7 +109,8 @@ fun DashboardScreen(component: DashboardComponent) {
                 Spacer(Modifier.height(6.dp))
                 SparklineGraph(
                     values = state.sparkline,
-                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                    minRange = 100f
                 )
             }
         }
@@ -189,7 +190,8 @@ private fun HeroCard(state: DashboardComponent.State) {
     val containerColor = if (isCharging) MaterialTheme.colorScheme.tertiaryContainer else MaterialTheme.colorScheme.primaryContainer
     val onColor = if (isCharging) MaterialTheme.colorScheme.onTertiaryContainer else MaterialTheme.colorScheme.onPrimaryContainer
     val barColor = if (isCharging) MaterialTheme.colorScheme.tertiary else MaterialTheme.colorScheme.primary
-    val nominalV = v?.let { (v.cellCount ?: 1) * v.chemistry.nominalCellV } ?: data.voltage.coerceAtLeast(1f)
+    val nominalV = v?.cellCount?.let { count -> count * v.chemistry.nominalCellV }
+        ?: data.voltage.coerceAtLeast(1f)
     val eta = timeRemainingDescription(
         isCharging = isCharging,
         remainingAh = data.charge,

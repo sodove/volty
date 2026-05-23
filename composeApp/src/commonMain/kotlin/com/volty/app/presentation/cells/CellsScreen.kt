@@ -106,7 +106,7 @@ fun CellsScreen(component: CellsComponent) {
                                             cell = state.cells[idx],
                                             isMax = highlightSpread && idx == state.maxIdx,
                                             isMin = highlightSpread && idx == state.minIdx,
-                                            showBar = highlightSpread,
+                                            showBar = true,
                                             modifier = Modifier.weight(1f)
                                         )
                                     } else {
