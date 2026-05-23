@@ -18,7 +18,9 @@ kotlin {
         commonMain.dependencies {
             implementation(compose.runtime)
             implementation(compose.foundation)
-            implementation(compose.material3)
+            implementation(compose.material3) {
+                version { strictly("1.10.0-alpha04") }
+            }
             implementation(compose.ui)
             implementation(compose.components.resources)
             implementation(libs.decompose.core)
@@ -46,6 +48,7 @@ kotlin {
             implementation(libs.coroutines.android)
             implementation(libs.sqldelight.android)
             implementation(libs.datastore.preferences)
+            implementation(libs.graphics.shapes)
         }
     }
 }
