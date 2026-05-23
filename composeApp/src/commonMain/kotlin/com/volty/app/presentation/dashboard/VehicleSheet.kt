@@ -27,7 +27,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.presentation.common.bmsTypeLabel
 import com.volty.app.presentation.common.iconKeyToEmoji
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.sheet_add_battery
+import volty.composeapp.generated.resources.sheet_disconnect
+import volty.composeapp.generated.resources.sheet_my_batteries
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -43,7 +49,7 @@ fun VehicleSheet(
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
         Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
             Text(
-                "My batteries",
+                stringResource(Res.string.sheet_my_batteries),
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
@@ -53,9 +59,9 @@ fun VehicleSheet(
                 VehicleRow(v = v, isActive = v.id == activeId, onClick = { onSwitch(v) })
             }
             Spacer(Modifier.height(8.dp))
-            TextButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text("+ Add battery") }
+            TextButton(onClick = onAdd, modifier = Modifier.fillMaxWidth()) { Text(stringResource(Res.string.sheet_add_battery)) }
             TextButton(onClick = onDisconnect, modifier = Modifier.fillMaxWidth()) {
-                Text("Disconnect", color = MaterialTheme.colorScheme.error)
+                Text(stringResource(Res.string.sheet_disconnect), color = MaterialTheme.colorScheme.error)
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -89,7 +95,7 @@ private fun VehicleRow(v: Vehicle, isActive: Boolean, onClick: () -> Unit) {
                 color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
             )
             Text(
-                v.bmsType.label,
+                bmsTypeLabel(v.bmsType),
                 fontSize = 11.sp,
                 color = (if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = 0.7f)
             )

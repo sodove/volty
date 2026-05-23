@@ -26,6 +26,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.welcome_add_battery
+import volty.composeapp.generated.resources.welcome_quick_connect
+import volty.composeapp.generated.resources.welcome_subtitle
+import volty.composeapp.generated.resources.welcome_title
 
 @Composable
 fun WelcomeScreen(component: WelcomeComponent) {
@@ -41,14 +47,14 @@ fun WelcomeScreen(component: WelcomeComponent) {
         VoltyLogoMark()
         Spacer(Modifier.height(24.dp))
         Text(
-            text = "Welcome to Volty",
+            text = stringResource(Res.string.welcome_title),
             fontSize = 26.sp,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Monitor your batteries via Bluetooth. Pick one to start.",
+            text = stringResource(Res.string.welcome_subtitle),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
@@ -58,14 +64,14 @@ fun WelcomeScreen(component: WelcomeComponent) {
             onClick = component::onAddBattery,
             contentPadding = PaddingValues(horizontal = 28.dp, vertical = 12.dp)
         ) {
-            Text("+ Add my battery")
+            Text(stringResource(Res.string.welcome_add_battery))
         }
         Spacer(Modifier.height(8.dp))
         OutlinedButton(
             onClick = component::onQuickConnect,
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
         ) {
-            Text("⚡ Quick connect (guest)")
+            Text(stringResource(Res.string.welcome_quick_connect))
         }
     }
 }

@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Volty</string>
+
+    <!-- Welcome -->
+    <string name="welcome_title">Welcome to Volty</string>
+    <string name="welcome_subtitle">Monitor your batteries via Bluetooth. Pick one to start.</string>
+    <string name="welcome_add_battery">+ Add my battery</string>
+    <string name="welcome_quick_connect">⚡ Quick connect (guest)</string>
+
+    <!-- Permissions -->
+    <string name="permissions_title">Permissions needed</string>
+    <string name="permissions_subtitle">Volty needs Bluetooth and notification access to scan for batteries and show alerts.</string>
+    <string name="permissions_missing">Missing: %1$d permission(s)</string>
+    <string name="permissions_grant">Grant permissions</string>
+
+    <!-- Scanning -->
+    <string name="scanning_title">Looking for your batteries</string>
+    <string name="scanning_subtitle">Make sure your BMS is on and in range.</string>
+    <string name="scanning_progress_one">Scanning for %1$d saved battery… %2$ds left</string>
+    <string name="scanning_progress_many">Scanning for %1$d saved batteries… %2$ds left</string>
+    <string name="scanning_skip">Skip → device list</string>
+
+    <!-- AutoConnect -->
+    <string name="autoconnect_found">%1$s found</string>
+    <string name="autoconnect_in_seconds">Auto-connecting in %1$d seconds.</string>
+    <string name="autoconnect_in_second">Auto-connecting in %1$d second.</string>
+    <string name="autoconnect_connect_now">Connect now</string>
+    <string name="autoconnect_cancel">Cancel</string>
+    <string name="autoconnect_try_again">Try again</string>
+    <string name="autoconnect_connecting">Connecting…</string>
+    <string name="autoconnect_connected">Connected</string>
+    <string name="autoconnect_failed">Connection failed</string>
+    <string name="autoconnect_unknown_error">Unknown error</string>
+
+    <!-- Picker -->
+    <string name="picker_add_title">Add new battery</string>
+    <string name="picker_guest_title">Quick connect</string>
+    <string name="picker_cold_title">Pick a battery</string>
+    <string name="picker_guest_subtitle">Guest mode — won\'t save</string>
+    <string name="picker_found_nearby">%1$d found nearby</string>
+    <string name="picker_my_in_range">My batteries · in range</string>
+    <string name="picker_other_nearby">Other BMS nearby</string>
+    <string name="picker_detected">BMS detected</string>
+    <string name="picker_add_new">+ Add new battery</string>
+    <string name="picker_scanning">Scanning…</string>
+    <string name="picker_error">Error: %1$s</string>
+
+    <!-- Dashboard -->
+    <string name="status_connected">Connected · %1$s</string>
+    <string name="status_disconnected">Disconnected</string>
+    <string name="status_reconnecting">%1$s</string>
+    <string name="status_connecting">Connecting…</string>
+    <string name="status_scanning">Scanning…</string>
+    <string name="status_idle">Idle</string>
+    <string name="no_battery">No battery</string>
+
+    <string name="hero_state_of_charge">STATE OF CHARGE</string>
+    <string name="hero_charging_to_full">CHARGING TO FULL</string>
+    <string name="hero_ah_remaining">AH REMAINING</string>
+    <string name="hero_to_empty">to empty · avg %1$d W</string>
+    <string name="hero_to_full">to full · avg %1$d W</string>
+    <string name="hero_now">now</string>
+
+    <string name="metric_voltage">Voltage</string>
+    <string name="metric_power">Power</string>
+    <string name="metric_temperature">Temperature</string>
+    <string name="metric_cells">Cells</string>
+    <string name="cells_delta_label">Cells · Δ %1$d mV</string>
+    <string name="cells_v_avg">%1$s V avg</string>
+    <string name="power_last_5_min">POWER · LAST 5 MIN</string>
+
+    <string name="tab_live">Live</string>
+    <string name="tab_cells">Cells</string>
+    <string name="tab_graph">Graph</string>
+
+    <string name="sheet_my_batteries">My batteries</string>
+    <string name="sheet_add_battery">+ Add battery</string>
+    <string name="sheet_disconnect">Disconnect</string>
+
+    <!-- Cells screen -->
+    <string name="cells_title">Cells · %1$ds</string>
+    <string name="cells_max">Max</string>
+    <string name="cells_min">Min</string>
+    <string name="cells_delta">Δ Delta</string>
+    <string name="cells_cell_n">Cell #%1$d</string>
+    <string name="cells_healthy">Healthy</string>
+    <string name="cells_ok">OK</string>
+    <string name="cells_imbalance">Imbalance</string>
+    <string name="cells_no_data">No cell data yet</string>
+
+    <!-- Graph screen -->
+    <string name="graph_title">Graph</string>
+    <string name="graph_soc">SOC</string>
+    <string name="graph_power">Power</string>
+    <string name="graph_current">Current</string>
+    <string name="graph_volt">Volt</string>
+    <string name="graph_temp">Temp</string>
+    <string name="graph_now">Now</string>
+    <string name="graph_avg_peak">avg / peak</string>
+    <string name="graph_avg">avg</string>
+    <string name="graph_peak">peak</string>
+    <string name="graph_min">min</string>
+    <string name="graph_used">used</string>
+    <string name="graph_no_data">No data yet</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Settings</string>
+    <string name="settings_theme">Theme</string>
+    <string name="settings_theme_system">System</string>
+    <string name="settings_theme_light">Light</string>
+    <string name="settings_theme_dark">Dark</string>
+    <string name="settings_dynamic_color">Dynamic color</string>
+    <string name="settings_dynamic_color_subtitle">Use the wallpaper palette on Android 12+</string>
+    <string name="settings_scan_timeout">Default scan timeout</string>
+    <string name="settings_auto_connect_countdown">Default auto-connect countdown</string>
+    <string name="settings_seconds">%1$d s</string>
+    <string name="settings_my_batteries">My batteries</string>
+    <string name="settings_add_new_battery">+ Add new battery</string>
+    <string name="settings_delete">Delete</string>
+    <string name="settings_delete_title">Delete \"%1$s\"?</string>
+    <string name="settings_delete_text">This will remove the saved profile.</string>
+    <string name="action_cancel">Cancel</string>
+
+    <!-- VehicleEdit -->
+    <string name="vehicle_edit_new">New battery</string>
+    <string name="vehicle_edit_edit">Edit battery</string>
+    <string name="vehicle_save">Save</string>
+    <string name="vehicle_field_name">Name</string>
+    <string name="vehicle_field_name_required">Name required</string>
+    <string name="vehicle_field_icon">Icon</string>
+    <string name="vehicle_field_bms_type">BMS type</string>
+    <string name="vehicle_field_bms_address">BMS address</string>
+    <string name="vehicle_field_chemistry">Chemistry</string>
+    <string name="vehicle_field_cell_count">Cell count (optional)</string>
+    <string name="vehicle_field_averaging_window">Averaging window</string>
+    <string name="vehicle_section_alerts">Alert thresholds</string>
+    <string name="vehicle_field_cell_high">Cell V high</string>
+    <string name="vehicle_field_cell_low">Cell V low</string>
+    <string name="vehicle_field_temp_high">Temperature high (°C)</string>
+    <string name="vehicle_field_soc_low">SOC low (%%)</string>
+    <string name="vehicle_delete">Delete battery</string>
+    <string name="vehicle_delete_confirm_title">Delete this battery?</string>
+    <string name="vehicle_delete_confirm_text">This cannot be undone.</string>
+    <string name="action_delete">Delete</string>
+
+    <!-- Chemistry labels -->
+    <string name="chemistry_li_ion_nmc">Li-ion (NMC)</string>
+    <string name="chemistry_lifepo4">LiFePO4</string>
+    <string name="chemistry_lead_acid">Lead-acid</string>
+
+    <!-- BMS type labels -->
+    <string name="bms_jk">JK BMS</string>
+    <string name="bms_jbd">JBD BMS</string>
+    <string name="bms_ant">Ant BMS</string>
+    <string name="bms_daly">Daly BMS</string>
+
+    <!-- Notifications -->
+    <string name="notif_monitoring_title">Volty · %1$s</string>
+    <string name="notif_starting">Starting…</string>
+    <string name="notif_action_disconnect">Disconnect</string>
+    <string name="notif_channel_live">Live monitoring</string>
+    <string name="notif_channel_live_desc">Volty is monitoring your battery</string>
+    <string name="notif_channel_critical">Critical alerts</string>
+    <string name="notif_channel_critical_desc">Battery is in a dangerous state</string>
+    <string name="notif_channel_warning">Warnings</string>
+    <string name="notif_channel_warning_desc">Things to keep an eye on</string>
+    <string name="notif_channel_info">Info</string>
+    <string name="notif_channel_info_desc">Charge complete, disconnects, etc.</string>
+
+    <!-- Alert events -->
+    <string name="alert_cell_high_title">Cell voltage high</string>
+    <string name="alert_cell_high_text">Max cell %1$s V on %2$s</string>
+    <string name="alert_cell_low_title">Cell voltage low</string>
+    <string name="alert_cell_low_text">Min cell %1$s V on %2$s</string>
+    <string name="alert_cell_delta_title">Cell imbalance</string>
+    <string name="alert_cell_delta_text">Δ %1$d mV on %2$s</string>
+    <string name="alert_temp_high_title">Temperature high</string>
+    <string name="alert_temp_high_text">%1$d°C on %2$s</string>
+    <string name="alert_soc_low_title">Battery low</string>
+    <string name="alert_soc_low_text">%1$d%% on %2$s</string>
+    <string name="alert_soc_cutoff_title">Discharge cutoff</string>
+    <string name="alert_soc_cutoff_text">%1$d%% — stop now (%2$s)</string>
+    <string name="alert_charge_complete_title">Charge complete</string>
+    <string name="alert_charge_complete_text">%1$s reached 100%%</string>
+</resources>

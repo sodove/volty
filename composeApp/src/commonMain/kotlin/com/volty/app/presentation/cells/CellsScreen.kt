@@ -37,6 +37,17 @@ import androidx.compose.ui.unit.sp
 import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.MetricCardVariant
 import kotlin.math.round
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.cells_cell_n
+import volty.composeapp.generated.resources.cells_delta
+import volty.composeapp.generated.resources.cells_healthy
+import volty.composeapp.generated.resources.cells_imbalance
+import volty.composeapp.generated.resources.cells_max
+import volty.composeapp.generated.resources.cells_min
+import volty.composeapp.generated.resources.cells_no_data
+import volty.composeapp.generated.resources.cells_ok
+import volty.composeapp.generated.resources.cells_title
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,7 +58,7 @@ fun CellsScreen(component: CellsComponent) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Cells · ${cellsCount}s", fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(Res.string.cells_title, cellsCount), fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = component::onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -63,22 +74,24 @@ fun CellsScreen(component: CellsComponent) {
                 modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
             ) {
                 MetricCard(
-                    label = "Max",
+                    label = stringResource(Res.string.cells_max),
                     value = formatVolts(state.cells.getOrNull(state.maxIdx)?.voltageV ?: 0f),
-                    sub = state.cells.getOrNull(state.maxIdx)?.let { "Cell #${it.index}" },
+                    sub = state.cells.getOrNull(state.maxIdx)?.let { stringResource(Res.string.cells_cell_n, it.index) },
                     variant = MetricCardVariant.Primary,
                     modifier = Modifier.weight(1f).fillMaxHeight()
                 )
                 MetricCard(
-                    label = "Min",
+                    label = stringResource(Res.string.cells_min),
                     value = formatVolts(state.cells.getOrNull(state.minIdx)?.voltageV ?: 0f),
-                    sub = state.cells.getOrNull(state.minIdx)?.let { "Cell #${it.index}" },
+                    sub = state.cells.getOrNull(state.minIdx)?.let { stringResource(Res.string.cells_cell_n, it.index) },
                     modifier = Modifier.weight(1f).fillMaxHeight()
                 )
                 MetricCard(
-                    label = "Δ Delta",
+                    label = stringResource(Res.string.cells_delta),
                     value = "${state.deltaMv} mV",
-                    sub = if (state.deltaMv < 50) "Healthy" else if (state.deltaMv < 200) "OK" else "Imbalance",
+                    sub = if (state.deltaMv < 50) stringResource(Res.string.cells_healthy)
+                        else if (state.deltaMv < 200) stringResource(Res.string.cells_ok)
+                        else stringResource(Res.string.cells_imbalance),
                     variant = MetricCardVariant.Tertiary,
                     modifier = Modifier.weight(1f).fillMaxHeight()
                 )
@@ -87,7 +100,7 @@ fun CellsScreen(component: CellsComponent) {
             Box(modifier = Modifier.padding(top = 8.dp).fillMaxSize()) {
                 if (state.cells.isEmpty()) {
                     Text(
-                        "No cell data yet",
+                        stringResource(Res.string.cells_no_data),
                         modifier = Modifier.align(Alignment.Center),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )

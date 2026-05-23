@@ -39,6 +39,20 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.volty.app.presentation.common.bmsTypeLabel
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.autoconnect_cancel
+import volty.composeapp.generated.resources.autoconnect_connect_now
+import volty.composeapp.generated.resources.autoconnect_connected
+import volty.composeapp.generated.resources.autoconnect_connecting
+import volty.composeapp.generated.resources.autoconnect_failed
+import volty.composeapp.generated.resources.autoconnect_found
+import volty.composeapp.generated.resources.autoconnect_in_second
+import volty.composeapp.generated.resources.autoconnect_in_seconds
+import volty.composeapp.generated.resources.autoconnect_try_again
+import volty.composeapp.generated.resources.autoconnect_unknown_error
+import volty.composeapp.generated.resources.no_battery
 
 @Composable
 fun AutoConnectScreen(component: AutoConnectComponent) {
@@ -57,49 +71,55 @@ fun AutoConnectScreen(component: AutoConnectComponent) {
                 CountdownRing(seconds = state.countdownSec)
                 Spacer(Modifier.height(20.dp))
                 Text(
-                    text = "${state.vehicle?.name ?: "Battery"} found",
+                    text = stringResource(
+                        Res.string.autoconnect_found,
+                        state.vehicle?.name ?: stringResource(Res.string.no_battery)
+                    ),
                     fontSize = 22.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurface
                 )
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "Auto-connecting in ${state.countdownSec} second${if (state.countdownSec == 1) "" else "s"}.",
+                    text = if (state.countdownSec == 1)
+                        stringResource(Res.string.autoconnect_in_second, state.countdownSec)
+                    else
+                        stringResource(Res.string.autoconnect_in_seconds, state.countdownSec),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
-                state.vehicle?.let { VehicleCard(name = it.name, bmsType = it.bmsType.label) }
+                state.vehicle?.let { VehicleCard(name = it.name, bmsType = bmsTypeLabel(it.bmsType)) }
                 Spacer(Modifier.height(20.dp))
-                Button(onClick = component::onConnectNow) { Text("Connect now") }
-                TextButton(onClick = component::onCancel) { Text("Cancel") }
+                Button(onClick = component::onConnectNow) { Text(stringResource(Res.string.autoconnect_connect_now)) }
+                TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.autoconnect_cancel)) }
             }
             AutoConnectComponent.Phase.Connecting -> {
                 CircularProgressIndicator(modifier = Modifier.size(80.dp))
                 Spacer(Modifier.height(20.dp))
-                Text("Connecting…", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
+                Text(stringResource(Res.string.autoconnect_connecting), fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
                 Spacer(Modifier.height(20.dp))
-                TextButton(onClick = component::onCancel) { Text("Cancel") }
+                TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.autoconnect_cancel)) }
             }
             AutoConnectComponent.Phase.Connected -> {
-                Text("Connected", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                Text(stringResource(Res.string.autoconnect_connected), fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
             }
             AutoConnectComponent.Phase.Failed -> {
                 Text(
-                    text = "Connection failed",
+                    text = stringResource(Res.string.autoconnect_failed),
                     fontSize = 20.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.error
                 )
                 Spacer(Modifier.height(8.dp))
                 Text(
-                    text = state.failure ?: "Unknown error",
+                    text = state.failure ?: stringResource(Res.string.autoconnect_unknown_error),
                     fontSize = 14.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(20.dp))
-                Button(onClick = component::onRetry) { Text("Try again") }
-                TextButton(onClick = component::onCancel) { Text("Cancel") }
+                Button(onClick = component::onRetry) { Text(stringResource(Res.string.autoconnect_try_again)) }
+                TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.autoconnect_cancel)) }
             }
         }
     }

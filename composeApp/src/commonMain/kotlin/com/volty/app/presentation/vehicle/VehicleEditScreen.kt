@@ -45,7 +45,32 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Chemistry
+import com.volty.app.presentation.common.bmsTypeLabel
+import com.volty.app.presentation.common.chemistryLabel
 import com.volty.app.presentation.common.iconKeyToEmoji
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.action_cancel
+import volty.composeapp.generated.resources.action_delete
+import volty.composeapp.generated.resources.vehicle_delete
+import volty.composeapp.generated.resources.vehicle_delete_confirm_text
+import volty.composeapp.generated.resources.vehicle_delete_confirm_title
+import volty.composeapp.generated.resources.vehicle_edit_edit
+import volty.composeapp.generated.resources.vehicle_edit_new
+import volty.composeapp.generated.resources.vehicle_field_averaging_window
+import volty.composeapp.generated.resources.vehicle_field_bms_address
+import volty.composeapp.generated.resources.vehicle_field_bms_type
+import volty.composeapp.generated.resources.vehicle_field_cell_count
+import volty.composeapp.generated.resources.vehicle_field_cell_high
+import volty.composeapp.generated.resources.vehicle_field_cell_low
+import volty.composeapp.generated.resources.vehicle_field_chemistry
+import volty.composeapp.generated.resources.vehicle_field_icon
+import volty.composeapp.generated.resources.vehicle_field_name
+import volty.composeapp.generated.resources.vehicle_field_name_required
+import volty.composeapp.generated.resources.vehicle_field_soc_low
+import volty.composeapp.generated.resources.vehicle_field_temp_high
+import volty.composeapp.generated.resources.vehicle_save
+import volty.composeapp.generated.resources.vehicle_section_alerts
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
@@ -58,14 +83,14 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(if (state.isEditing) "Edit battery" else "New battery") },
+                title = { Text(if (state.isEditing) stringResource(Res.string.vehicle_edit_edit) else stringResource(Res.string.vehicle_edit_new)) },
                 navigationIcon = {
-                    TextButton(onClick = component::onCancel) { Text("Cancel") }
+                    TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.action_cancel)) }
                 },
                 actions = {
                     TextButton(onClick = component::onSave, enabled = !state.saving) {
                         if (state.saving) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
-                        else Text("Save")
+                        else Text(stringResource(Res.string.vehicle_save))
                     }
                 }
             )
@@ -82,13 +107,13 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             OutlinedTextField(
                 value = state.name,
                 onValueChange = component::onNameChanged,
-                label = { Text("Name") },
-                isError = state.nameError != null,
-                supportingText = { state.nameError?.let { Text(it) } },
+                label = { Text(stringResource(Res.string.vehicle_field_name)) },
+                isError = state.nameError,
+                supportingText = { if (state.nameError) Text(stringResource(Res.string.vehicle_field_name_required)) },
                 modifier = Modifier.fillMaxWidth()
             )
 
-            SectionLabel("Icon")
+            SectionLabel(stringResource(Res.string.vehicle_field_icon))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -112,10 +137,10 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            ReadOnlyRow("BMS type", state.bmsType.label)
-            ReadOnlyRow("BMS address", state.bmsAddress.ifEmpty { "—" })
+            ReadOnlyRow(stringResource(Res.string.vehicle_field_bms_type), bmsTypeLabel(state.bmsType))
+            ReadOnlyRow(stringResource(Res.string.vehicle_field_bms_address), state.bmsAddress.ifEmpty { "—" })
 
-            SectionLabel("Chemistry")
+            SectionLabel(stringResource(Res.string.vehicle_field_chemistry))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 val chemistries = Chemistry.entries
                 chemistries.forEachIndexed { idx, c ->
@@ -123,19 +148,19 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                         selected = state.chemistry == c,
                         onClick = { component.onChemistryChanged(c) },
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = chemistries.size)
-                    ) { Text(c.label, fontSize = 12.sp) }
+                    ) { Text(chemistryLabel(c), fontSize = 12.sp) }
                 }
             }
 
             OutlinedTextField(
                 value = state.cellCount?.toString() ?: "",
                 onValueChange = { component.onCellCountChanged(it.toIntOrNull()) },
-                label = { Text("Cell count (optional)") },
+                label = { Text(stringResource(Res.string.vehicle_field_cell_count)) },
                 keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
                 modifier = Modifier.fillMaxWidth()
             )
 
-            SectionLabel("Averaging window")
+            SectionLabel(stringResource(Res.string.vehicle_field_averaging_window))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(1, 5, 10, 30).forEach { min ->
                     FilterChip(
@@ -147,18 +172,18 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             }
 
             HorizontalDivider()
-            SectionLabel("Alert thresholds")
-            FloatField("Cell V high", state.cellHighV, component::onCellHighVChanged)
-            FloatField("Cell V low", state.cellLowV, component::onCellLowVChanged)
-            FloatField("Temperature high (°C)", state.temperatureHighC, component::onTemperatureHighChanged)
-            IntField("SOC low (%)", state.socLowPercent, component::onSocLowChanged)
+            SectionLabel(stringResource(Res.string.vehicle_section_alerts))
+            FloatField(stringResource(Res.string.vehicle_field_cell_high), state.cellHighV, component::onCellHighVChanged)
+            FloatField(stringResource(Res.string.vehicle_field_cell_low), state.cellLowV, component::onCellLowVChanged)
+            FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
+            IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
 
             if (state.isEditing) {
                 Spacer(Modifier.height(8.dp))
                 TextButton(
                     onClick = { showDeleteConfirm = true }
                 ) {
-                    Text("Delete battery", color = MaterialTheme.colorScheme.error)
+                    Text(stringResource(Res.string.vehicle_delete), color = MaterialTheme.colorScheme.error)
                 }
             }
 
@@ -170,12 +195,12 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 onDismissRequest = { showDeleteConfirm = false },
                 confirmButton = {
                     TextButton(onClick = { showDeleteConfirm = false; component.onDelete() }) {
-                        Text("Delete", color = MaterialTheme.colorScheme.error)
+                        Text(stringResource(Res.string.action_delete), color = MaterialTheme.colorScheme.error)
                     }
                 },
-                dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text("Cancel") } },
-                title = { Text("Delete this battery?") },
-                text = { Text("This cannot be undone.") }
+                dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text(stringResource(Res.string.action_cancel)) } },
+                title = { Text(stringResource(Res.string.vehicle_delete_confirm_title)) },
+                text = { Text(stringResource(Res.string.vehicle_delete_confirm_text)) }
             )
         }
     }

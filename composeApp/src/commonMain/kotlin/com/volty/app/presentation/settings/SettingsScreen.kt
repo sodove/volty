@@ -46,7 +46,27 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.presentation.common.bmsTypeLabel
+import com.volty.app.presentation.common.chemistryLabel
 import com.volty.app.presentation.common.iconKeyToEmoji
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.action_cancel
+import volty.composeapp.generated.resources.settings_add_new_battery
+import volty.composeapp.generated.resources.settings_auto_connect_countdown
+import volty.composeapp.generated.resources.settings_delete
+import volty.composeapp.generated.resources.settings_delete_text
+import volty.composeapp.generated.resources.settings_delete_title
+import volty.composeapp.generated.resources.settings_dynamic_color
+import volty.composeapp.generated.resources.settings_dynamic_color_subtitle
+import volty.composeapp.generated.resources.settings_my_batteries
+import volty.composeapp.generated.resources.settings_scan_timeout
+import volty.composeapp.generated.resources.settings_seconds
+import volty.composeapp.generated.resources.settings_theme
+import volty.composeapp.generated.resources.settings_theme_dark
+import volty.composeapp.generated.resources.settings_theme_light
+import volty.composeapp.generated.resources.settings_theme_system
+import volty.composeapp.generated.resources.settings_title
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -57,7 +77,7 @@ fun SettingsScreen(component: SettingsComponent) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings", fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(Res.string.settings_title), fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = component::onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -75,15 +95,20 @@ fun SettingsScreen(component: SettingsComponent) {
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // THEME
-            SectionLabel("Theme")
+            SectionLabel(stringResource(Res.string.settings_theme))
             val themes = listOf("system", "light", "dark")
+            val themeLabels = mapOf(
+                "system" to stringResource(Res.string.settings_theme_system),
+                "light" to stringResource(Res.string.settings_theme_light),
+                "dark" to stringResource(Res.string.settings_theme_dark)
+            )
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 themes.forEachIndexed { idx, t ->
                     SegmentedButton(
                         selected = state.themeMode == t,
                         onClick = { component.onThemeChanged(t) },
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = themes.size)
-                    ) { Text(t.replaceFirstChar { it.uppercase() }) }
+                    ) { Text(themeLabels[t] ?: t) }
                 }
             }
 
@@ -94,8 +119,8 @@ fun SettingsScreen(component: SettingsComponent) {
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text("Dynamic color", fontSize = 14.sp, fontWeight = FontWeight.Medium)
-                    Text("Use the wallpaper palette on Android 12+", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(stringResource(Res.string.settings_dynamic_color), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(stringResource(Res.string.settings_dynamic_color_subtitle), fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
                 Switch(checked = state.dynamicColor, onCheckedChange = component::onDynamicColorChanged)
             }
@@ -103,8 +128,8 @@ fun SettingsScreen(component: SettingsComponent) {
             HorizontalDivider()
 
             // SCAN TIMEOUT
-            SectionLabel("Default scan timeout")
-            Text("${state.scanTimeoutSec} s", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SectionLabel(stringResource(Res.string.settings_scan_timeout))
+            Text(stringResource(Res.string.settings_seconds, state.scanTimeoutSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Slider(
                 value = state.scanTimeoutSec.toFloat(),
                 onValueChange = { component.onScanTimeoutChanged(it.toInt()) },
@@ -113,8 +138,8 @@ fun SettingsScreen(component: SettingsComponent) {
             )
 
             // AUTO CONNECT COUNTDOWN
-            SectionLabel("Default auto-connect countdown")
-            Text("${state.autoConnectCountdownSec} s", fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            SectionLabel(stringResource(Res.string.settings_auto_connect_countdown))
+            Text(stringResource(Res.string.settings_seconds, state.autoConnectCountdownSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Slider(
                 value = state.autoConnectCountdownSec.toFloat(),
                 onValueChange = { component.onAutoConnectCountdownChanged(it.toInt()) },
@@ -124,7 +149,7 @@ fun SettingsScreen(component: SettingsComponent) {
 
             HorizontalDivider()
 
-            SectionLabel("My batteries")
+            SectionLabel(stringResource(Res.string.settings_my_batteries))
             state.vehicles.forEach { v ->
                 VehicleRow(
                     vehicle = v,
@@ -133,7 +158,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 )
             }
             TextButton(onClick = component::onAddBattery, modifier = Modifier.fillMaxWidth()) {
-                Text("+ Add new battery")
+                Text(stringResource(Res.string.settings_add_new_battery))
             }
             Spacer(Modifier.height(24.dp))
         }
@@ -145,11 +170,11 @@ fun SettingsScreen(component: SettingsComponent) {
                     TextButton(onClick = {
                         component.onDeleteVehicle(v.id)
                         pendingDelete = null
-                    }) { Text("Delete", color = MaterialTheme.colorScheme.error) }
+                    }) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error) }
                 },
-                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text("Cancel") } },
-                title = { Text("Delete \"${v.name}\"?") },
-                text = { Text("This will remove the saved profile.") }
+                dismissButton = { TextButton(onClick = { pendingDelete = null }) { Text(stringResource(Res.string.action_cancel)) } },
+                title = { Text(stringResource(Res.string.settings_delete_title, v.name)) },
+                text = { Text(stringResource(Res.string.settings_delete_text)) }
             )
         }
     }
@@ -188,8 +213,8 @@ private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit, onDelete: () -> Uni
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("${vehicle.bmsType.label}  ·  ${vehicle.chemistry.label}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("${bmsTypeLabel(vehicle.bmsType)}  ·  ${chemistryLabel(vehicle.chemistry)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        TextButton(onClick = onDelete) { Text("Delete", color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
+        TextButton(onClick = onDelete) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
     }
 }

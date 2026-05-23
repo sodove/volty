@@ -49,7 +49,7 @@ interface VehicleEditComponent {
         val cellLowV: Float? = null,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
-        val nameError: String? = null,
+        val nameError: Boolean = false,
         val saving: Boolean = false
     )
 }
@@ -107,7 +107,7 @@ class DefaultVehicleEditComponent(
     }
 
     override fun onNameChanged(name: String) {
-        _state.update { it.copy(name = name, nameError = if (name.isBlank()) "Name required" else null) }
+        _state.update { it.copy(name = name, nameError = name.isBlank()) }
     }
     override fun onIconChanged(iconKey: String) { _state.update { it.copy(iconKey = iconKey) } }
     override fun onChemistryChanged(c: Chemistry) { _state.update { it.copy(chemistry = c) } }
@@ -120,7 +120,7 @@ class DefaultVehicleEditComponent(
 
     override fun onSave() {
         val s = _state.value
-        if (s.name.isBlank()) { _state.update { it.copy(nameError = "Name required") }; return }
+        if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
         scope.launch {
             _state.update { it.copy(saving = true) }
             val nowOrCreate = if (s.isEditing) vehicleRepository.get(vehicleId!!)?.createdAt ?: Clock.System.now()

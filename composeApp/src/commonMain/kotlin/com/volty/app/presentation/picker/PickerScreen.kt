@@ -37,20 +37,34 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Vehicle
 import com.volty.app.domain.repository.DiscoveredDevice
+import com.volty.app.presentation.common.bmsTypeLabel
 import com.volty.app.presentation.common.iconKeyToEmoji
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.picker_add_new
+import volty.composeapp.generated.resources.picker_add_title
+import volty.composeapp.generated.resources.picker_cold_title
+import volty.composeapp.generated.resources.picker_detected
+import volty.composeapp.generated.resources.picker_error
+import volty.composeapp.generated.resources.picker_found_nearby
+import volty.composeapp.generated.resources.picker_guest_subtitle
+import volty.composeapp.generated.resources.picker_guest_title
+import volty.composeapp.generated.resources.picker_my_in_range
+import volty.composeapp.generated.resources.picker_other_nearby
+import volty.composeapp.generated.resources.picker_scanning
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PickerScreen(component: PickerComponent) {
     val state by component.state.collectAsState()
     val title = when (state.mode) {
-        "add" -> "Add new battery"
-        "guest" -> "Quick connect"
-        else -> "Pick a battery"
+        "add" -> stringResource(Res.string.picker_add_title)
+        "guest" -> stringResource(Res.string.picker_guest_title)
+        else -> stringResource(Res.string.picker_cold_title)
     }
     val subtitle = when (state.mode) {
-        "guest" -> "Guest mode — won't save"
-        else -> "${state.myInRange.size + state.otherNearby.size} found nearby"
+        "guest" -> stringResource(Res.string.picker_guest_subtitle)
+        else -> stringResource(Res.string.picker_found_nearby, state.myInRange.size + state.otherNearby.size)
     }
 
     Scaffold(
@@ -75,7 +89,7 @@ fun PickerScreen(component: PickerComponent) {
         ) {
             if (state.error != null) {
                 Text(
-                    "Error: ${state.error}",
+                    stringResource(Res.string.picker_error, state.error ?: ""),
                     color = MaterialTheme.colorScheme.error,
                     modifier = Modifier.padding(vertical = 8.dp),
                     fontSize = 12.sp
@@ -84,7 +98,7 @@ fun PickerScreen(component: PickerComponent) {
 
             LazyColumn(modifier = Modifier.weight(1f)) {
                 if (state.mode == "cold" && state.myInRange.isNotEmpty()) {
-                    item { SectionHeader("My batteries · in range") }
+                    item { SectionHeader(stringResource(Res.string.picker_my_in_range)) }
                     items(state.myInRange, key = { "v-" + it.id }) { v ->
                         VehicleRow(
                             vehicle = v,
@@ -97,8 +111,9 @@ fun PickerScreen(component: PickerComponent) {
                 if (state.otherNearby.isNotEmpty()) {
                     item {
                         SectionHeader(
-                            if (state.mode == "guest" || (state.mode == "cold" && state.myInRange.isEmpty())) "BMS detected"
-                            else "Other BMS nearby"
+                            if (state.mode == "guest" || (state.mode == "cold" && state.myInRange.isEmpty()))
+                                stringResource(Res.string.picker_detected)
+                            else stringResource(Res.string.picker_other_nearby)
                         )
                     }
                     items(state.otherNearby, key = { "d-" + it.address }) { d ->
@@ -116,7 +131,7 @@ fun PickerScreen(component: PickerComponent) {
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
                             horizontalAlignment = Alignment.CenterHorizontally
                         ) {
-                            Text("Scanning…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            Text(stringResource(Res.string.picker_scanning), color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                     }
                 }
@@ -128,7 +143,7 @@ fun PickerScreen(component: PickerComponent) {
                     onClick = component::onAddNewBattery,
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                 ) {
-                    Text("+ Add new battery")
+                    Text(stringResource(Res.string.picker_add_new))
                 }
             }
         }
@@ -161,7 +176,7 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
         Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.primary)
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            Text("${vehicle.bmsType.label}  ·  saved", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+            Text("${bmsTypeLabel(vehicle.bmsType)}  ·  saved", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }
@@ -182,7 +197,7 @@ private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: 
         Avatar(letter = "?", bg = MaterialTheme.colorScheme.outline)
         Column(modifier = Modifier.weight(1f)) {
             Text(device.name ?: device.address, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${device.bmsType.label}  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+            Text("${bmsTypeLabel(device.bmsType)}  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }

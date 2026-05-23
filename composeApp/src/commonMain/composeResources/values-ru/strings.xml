@@ -1,0 +1,186 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Volty</string>
+
+    <!-- Welcome -->
+    <string name="welcome_title">Добро пожаловать в Volty</string>
+    <string name="welcome_subtitle">Мониторинг АКБ по Bluetooth. Выберите устройство.</string>
+    <string name="welcome_add_battery">+ Добавить батарею</string>
+    <string name="welcome_quick_connect">⚡ Быстрое подключение (гость)</string>
+
+    <!-- Permissions -->
+    <string name="permissions_title">Нужны разрешения</string>
+    <string name="permissions_subtitle">Volty нужен доступ к Bluetooth и уведомлениям, чтобы сканировать батареи и показывать алерты.</string>
+    <string name="permissions_missing">Не выдано: %1$d</string>
+    <string name="permissions_grant">Выдать разрешения</string>
+
+    <!-- Scanning -->
+    <string name="scanning_title">Ищем ваши батареи</string>
+    <string name="scanning_subtitle">Убедитесь, что BMS включена и рядом.</string>
+    <string name="scanning_progress_one">Ищем %1$d сохранённую батарею… осталось %2$dс</string>
+    <string name="scanning_progress_many">Ищем %1$d сохранённых батарей… осталось %2$dс</string>
+    <string name="scanning_skip">Пропустить → список устройств</string>
+
+    <!-- AutoConnect -->
+    <string name="autoconnect_found">%1$s найдена</string>
+    <string name="autoconnect_in_seconds">Автоподключение через %1$d секунд.</string>
+    <string name="autoconnect_in_second">Автоподключение через %1$d секунду.</string>
+    <string name="autoconnect_connect_now">Подключить сейчас</string>
+    <string name="autoconnect_cancel">Отмена</string>
+    <string name="autoconnect_try_again">Повторить</string>
+    <string name="autoconnect_connecting">Подключение…</string>
+    <string name="autoconnect_connected">Подключено</string>
+    <string name="autoconnect_failed">Не удалось подключиться</string>
+    <string name="autoconnect_unknown_error">Неизвестная ошибка</string>
+
+    <!-- Picker -->
+    <string name="picker_add_title">Новая батарея</string>
+    <string name="picker_guest_title">Быстрое подключение</string>
+    <string name="picker_cold_title">Выбор батареи</string>
+    <string name="picker_guest_subtitle">Гостевой режим — не сохраняется</string>
+    <string name="picker_found_nearby">найдено %1$d рядом</string>
+    <string name="picker_my_in_range">Мои батареи · рядом</string>
+    <string name="picker_other_nearby">Другие BMS рядом</string>
+    <string name="picker_detected">BMS обнаружено</string>
+    <string name="picker_add_new">+ Добавить новую батарею</string>
+    <string name="picker_scanning">Сканирование…</string>
+    <string name="picker_error">Ошибка: %1$s</string>
+
+    <!-- Dashboard -->
+    <string name="status_connected">Подключено · %1$s</string>
+    <string name="status_disconnected">Отключено</string>
+    <string name="status_reconnecting">%1$s</string>
+    <string name="status_connecting">Подключение…</string>
+    <string name="status_scanning">Сканирование…</string>
+    <string name="status_idle">Ожидание</string>
+    <string name="no_battery">Нет батареи</string>
+
+    <string name="hero_state_of_charge">УРОВЕНЬ ЗАРЯДА</string>
+    <string name="hero_charging_to_full">ЗАРЯЖАЕТСЯ ДО ПОЛНОЙ</string>
+    <string name="hero_ah_remaining">АЧ ОСТАЛОСЬ</string>
+    <string name="hero_to_empty">до разряда · средн. %1$d Вт</string>
+    <string name="hero_to_full">до полной · средн. %1$d Вт</string>
+    <string name="hero_now">сейчас</string>
+
+    <string name="metric_voltage">Напряжение</string>
+    <string name="metric_power">Мощность</string>
+    <string name="metric_temperature">Температура</string>
+    <string name="metric_cells">Ячейки</string>
+    <string name="cells_delta_label">Ячейки · Δ %1$d мВ</string>
+    <string name="cells_v_avg">%1$s В средн.</string>
+    <string name="power_last_5_min">МОЩНОСТЬ · ПОСЛЕДНИЕ 5 МИН</string>
+
+    <string name="tab_live">Сейчас</string>
+    <string name="tab_cells">Ячейки</string>
+    <string name="tab_graph">График</string>
+
+    <string name="sheet_my_batteries">Мои батареи</string>
+    <string name="sheet_add_battery">+ Добавить батарею</string>
+    <string name="sheet_disconnect">Отключить</string>
+
+    <!-- Cells screen -->
+    <string name="cells_title">Ячейки · %1$ds</string>
+    <string name="cells_max">Макс</string>
+    <string name="cells_min">Мин</string>
+    <string name="cells_delta">Δ Дельта</string>
+    <string name="cells_cell_n">Ячейка #%1$d</string>
+    <string name="cells_healthy">В норме</string>
+    <string name="cells_ok">OK</string>
+    <string name="cells_imbalance">Дисбаланс</string>
+    <string name="cells_no_data">Нет данных по ячейкам</string>
+
+    <!-- Graph screen -->
+    <string name="graph_title">График</string>
+    <string name="graph_soc">SOC</string>
+    <string name="graph_power">Мощн.</string>
+    <string name="graph_current">Ток</string>
+    <string name="graph_volt">Напр.</string>
+    <string name="graph_temp">Темп.</string>
+    <string name="graph_now">Сейчас</string>
+    <string name="graph_avg_peak">средн / пик</string>
+    <string name="graph_avg">средн</string>
+    <string name="graph_peak">пик</string>
+    <string name="graph_min">мин</string>
+    <string name="graph_used">расход</string>
+    <string name="graph_no_data">Нет данных</string>
+
+    <!-- Settings -->
+    <string name="settings_title">Настройки</string>
+    <string name="settings_theme">Тема</string>
+    <string name="settings_theme_system">Система</string>
+    <string name="settings_theme_light">Светлая</string>
+    <string name="settings_theme_dark">Тёмная</string>
+    <string name="settings_dynamic_color">Динамические цвета</string>
+    <string name="settings_dynamic_color_subtitle">Палитра из обоев на Android 12+</string>
+    <string name="settings_scan_timeout">Таймаут сканирования</string>
+    <string name="settings_auto_connect_countdown">Обратный отсчёт автоподключения</string>
+    <string name="settings_seconds">%1$d с</string>
+    <string name="settings_my_batteries">Мои батареи</string>
+    <string name="settings_add_new_battery">+ Добавить новую батарею</string>
+    <string name="settings_delete">Удалить</string>
+    <string name="settings_delete_title">Удалить «%1$s»?</string>
+    <string name="settings_delete_text">Профиль будет удалён.</string>
+    <string name="action_cancel">Отмена</string>
+
+    <!-- VehicleEdit -->
+    <string name="vehicle_edit_new">Новая батарея</string>
+    <string name="vehicle_edit_edit">Редактировать батарею</string>
+    <string name="vehicle_save">Сохранить</string>
+    <string name="vehicle_field_name">Название</string>
+    <string name="vehicle_field_name_required">Введите название</string>
+    <string name="vehicle_field_icon">Иконка</string>
+    <string name="vehicle_field_bms_type">Тип BMS</string>
+    <string name="vehicle_field_bms_address">Адрес BMS</string>
+    <string name="vehicle_field_chemistry">Химия</string>
+    <string name="vehicle_field_cell_count">Кол-во ячеек (опц.)</string>
+    <string name="vehicle_field_averaging_window">Окно усреднения</string>
+    <string name="vehicle_section_alerts">Пороги алертов</string>
+    <string name="vehicle_field_cell_high">Макс. напряжение ячейки</string>
+    <string name="vehicle_field_cell_low">Мин. напряжение ячейки</string>
+    <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
+    <string name="vehicle_field_soc_low">Низкий SOC (%%)</string>
+    <string name="vehicle_delete">Удалить батарею</string>
+    <string name="vehicle_delete_confirm_title">Удалить эту батарею?</string>
+    <string name="vehicle_delete_confirm_text">Это нельзя отменить.</string>
+    <string name="action_delete">Удалить</string>
+
+    <!-- Chemistry labels -->
+    <string name="chemistry_li_ion_nmc">Li-ion (NMC)</string>
+    <string name="chemistry_lifepo4">LiFePO4</string>
+    <string name="chemistry_lead_acid">Lead-acid</string>
+
+    <!-- BMS type labels -->
+    <string name="bms_jk">JK BMS</string>
+    <string name="bms_jbd">JBD BMS</string>
+    <string name="bms_ant">Ant BMS</string>
+    <string name="bms_daly">Daly BMS</string>
+
+    <!-- Notifications -->
+    <string name="notif_monitoring_title">Volty · %1$s</string>
+    <string name="notif_starting">Подключение…</string>
+    <string name="notif_action_disconnect">Отключить</string>
+    <string name="notif_channel_live">Текущее состояние</string>
+    <string name="notif_channel_live_desc">Volty отслеживает батарею</string>
+    <string name="notif_channel_critical">Критические алерты</string>
+    <string name="notif_channel_critical_desc">Батарея в опасном состоянии</string>
+    <string name="notif_channel_warning">Предупреждения</string>
+    <string name="notif_channel_warning_desc">На что обратить внимание</string>
+    <string name="notif_channel_info">Информация</string>
+    <string name="notif_channel_info_desc">Заряд завершён, отключения и пр.</string>
+
+    <!-- Alert events -->
+    <string name="alert_cell_high_title">Высокое напряжение ячейки</string>
+    <string name="alert_cell_high_text">Макс. ячейка %1$s В на %2$s</string>
+    <string name="alert_cell_low_title">Низкое напряжение ячейки</string>
+    <string name="alert_cell_low_text">Мин. ячейка %1$s В на %2$s</string>
+    <string name="alert_cell_delta_title">Дисбаланс ячеек</string>
+    <string name="alert_cell_delta_text">Δ %1$d мВ на %2$s</string>
+    <string name="alert_temp_high_title">Высокая температура</string>
+    <string name="alert_temp_high_text">%1$d°C на %2$s</string>
+    <string name="alert_soc_low_title">Низкий заряд</string>
+    <string name="alert_soc_low_text">%1$d%% на %2$s</string>
+    <string name="alert_soc_cutoff_title">Аварийное отключение</string>
+    <string name="alert_soc_cutoff_text">%1$d%% — остановитесь (%2$s)</string>
+    <string name="alert_charge_complete_title">Заряд завершён</string>
+    <string name="alert_charge_complete_text">%1$s достигла 100%%</string>
+</resources>

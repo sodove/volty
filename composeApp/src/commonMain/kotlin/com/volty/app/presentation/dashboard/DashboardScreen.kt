@@ -37,9 +37,31 @@ import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
 import com.volty.app.presentation.common.VehiclePill
+import com.volty.app.presentation.common.bmsTypeLabel
 import com.volty.app.presentation.common.iconKeyToEmoji
 import kotlin.math.abs
 import kotlin.math.round
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.cells_delta_label
+import volty.composeapp.generated.resources.cells_v_avg
+import volty.composeapp.generated.resources.hero_ah_remaining
+import volty.composeapp.generated.resources.hero_charging_to_full
+import volty.composeapp.generated.resources.hero_now
+import volty.composeapp.generated.resources.hero_state_of_charge
+import volty.composeapp.generated.resources.hero_to_empty
+import volty.composeapp.generated.resources.hero_to_full
+import volty.composeapp.generated.resources.metric_power
+import volty.composeapp.generated.resources.metric_temperature
+import volty.composeapp.generated.resources.metric_voltage
+import volty.composeapp.generated.resources.no_battery
+import volty.composeapp.generated.resources.power_last_5_min
+import volty.composeapp.generated.resources.status_connected
+import volty.composeapp.generated.resources.status_connecting
+import volty.composeapp.generated.resources.status_disconnected
+import volty.composeapp.generated.resources.status_idle
+import volty.composeapp.generated.resources.status_reconnecting
+import volty.composeapp.generated.resources.status_scanning
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -55,16 +77,17 @@ fun DashboardScreen(component: DashboardComponent) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        val bmsLabel = vehicle?.bmsType?.let { bmsTypeLabel(it) } ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
-            is ConnectionState.Connected -> "● Connected · ${vehicle?.bmsType?.label ?: "—"}" to MaterialTheme.colorScheme.tertiary
-            is ConnectionState.Connecting -> "● Connecting…" to MaterialTheme.colorScheme.secondary
-            is ConnectionState.Failed -> "● ${c.reason}" to MaterialTheme.colorScheme.error
-            ConnectionState.Disconnected -> "● Disconnected" to MaterialTheme.colorScheme.outline
-            ConnectionState.Scanning -> "● Scanning…" to MaterialTheme.colorScheme.secondary
-            ConnectionState.Idle -> "● Idle" to MaterialTheme.colorScheme.outline
+            is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to MaterialTheme.colorScheme.tertiary
+            is ConnectionState.Connecting -> ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
+            is ConnectionState.Failed -> ("● " + stringResource(Res.string.status_reconnecting, c.reason)) to MaterialTheme.colorScheme.error
+            ConnectionState.Disconnected -> ("● " + stringResource(Res.string.status_disconnected)) to MaterialTheme.colorScheme.outline
+            ConnectionState.Scanning -> ("● " + stringResource(Res.string.status_scanning)) to MaterialTheme.colorScheme.secondary
+            ConnectionState.Idle -> ("● " + stringResource(Res.string.status_idle)) to MaterialTheme.colorScheme.outline
         }
         VehiclePill(
-            name = vehicle?.name ?: "No battery",
+            name = vehicle?.name ?: stringResource(Res.string.no_battery),
             statusText = statusLabel,
             statusColor = statusColor,
             iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
@@ -82,7 +105,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 .animateContentSize()
         ) {
             MetricCard(
-                label = "Voltage",
+                label = stringResource(Res.string.metric_voltage),
                 value = "${fmt2(data.voltage)} V",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 sub = if (vehicle?.cellCount != null && data.cellVoltages.isNotEmpty()) {
@@ -97,7 +120,7 @@ fun DashboardScreen(component: DashboardComponent) {
             val powerSubColor = if (powerCharging) powerChargingOn.copy(alpha = 0.7f)
             else MaterialTheme.colorScheme.onSurfaceVariant
             MetricCard(
-                label = "Power",
+                label = stringResource(Res.string.metric_power),
                 value = "${fmt0(data.power)} W",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 containerColor = if (powerCharging) powerChargingContainer else null,
@@ -130,7 +153,7 @@ fun DashboardScreen(component: DashboardComponent) {
         ) {
             Column {
                 Text(
-                    "POWER · LAST 5 MIN",
+                    stringResource(Res.string.power_last_5_min),
                     fontSize = 10.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
@@ -152,7 +175,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 .animateContentSize()
         ) {
             MetricCard(
-                label = "Temperature",
+                label = stringResource(Res.string.metric_temperature),
                 value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.first())}° C",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
@@ -174,8 +197,8 @@ fun DashboardScreen(component: DashboardComponent) {
                 }
             )
             MetricCard(
-                label = "Cells · Δ ${state.cellsDeltaMv} mV",
-                value = if (data.cellVoltages.isEmpty()) "—" else "${fmt2(data.cellVoltages.average().toFloat())} V avg",
+                label = stringResource(Res.string.cells_delta_label, state.cellsDeltaMv),
+                value = if (data.cellVoltages.isEmpty()) "—" else stringResource(Res.string.cells_v_avg, fmt2(data.cellVoltages.average().toFloat())),
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.height(18.dp)) {
@@ -251,7 +274,10 @@ private fun HeroCard(state: DashboardComponent.State) {
         avgPowerW = state.avgPowerW,
         nominalV = nominalV
     )
-    val etaLabel = if (isCharging) "to full" else "to empty"
+    val etaLabel = if (isCharging)
+        stringResource(Res.string.hero_to_full, abs(state.avgPowerW).toInt())
+    else
+        stringResource(Res.string.hero_to_empty, abs(state.avgPowerW).toInt())
     val socFraction = (data.soc / 100f).coerceIn(0f, 1f)
     val animatedSoc by animateFloatAsState(
         targetValue = data.soc,
@@ -278,7 +304,7 @@ private fun HeroCard(state: DashboardComponent.State) {
             .animateContentSize()
     ) {
         Text(
-            text = if (isCharging) "CHARGING TO FULL" else "STATE OF CHARGE",
+            text = if (isCharging) stringResource(Res.string.hero_charging_to_full) else stringResource(Res.string.hero_state_of_charge),
             fontSize = 10.sp,
             fontWeight = FontWeight.SemiBold,
             color = onColor.copy(alpha = 0.7f)
@@ -292,7 +318,7 @@ private fun HeroCard(state: DashboardComponent.State) {
             Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 6.dp)) {
                 Text(fmt1(data.charge), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
                 Text(" / ${fmt1(data.capacity)}", fontSize = 12.sp, color = onColor.copy(alpha = 0.65f))
-                Text("AH REMAINING", fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
+                Text(stringResource(Res.string.hero_ah_remaining), fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
             }
         }
 
@@ -316,11 +342,11 @@ private fun HeroCard(state: DashboardComponent.State) {
         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
             Column {
                 Text("≈ $eta", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = onColor)
-                Text("$etaLabel · avg ${abs(state.avgPowerW).toInt()} W", fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
+                Text(etaLabel, fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
             }
             Column(horizontalAlignment = Alignment.End) {
                 Text("${fmtSigned1(data.current)} A", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = onColor)
-                Text("now", fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
+                Text(stringResource(Res.string.hero_now), fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
             }
         }
     }

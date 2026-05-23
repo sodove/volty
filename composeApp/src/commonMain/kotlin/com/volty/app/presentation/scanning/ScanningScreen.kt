@@ -31,6 +31,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.scanning_progress_many
+import volty.composeapp.generated.resources.scanning_progress_one
+import volty.composeapp.generated.resources.scanning_skip
+import volty.composeapp.generated.resources.scanning_subtitle
+import volty.composeapp.generated.resources.scanning_title
 
 @Composable
 fun ScanningScreen(component: ScanningComponent) {
@@ -47,7 +54,7 @@ fun ScanningScreen(component: ScanningComponent) {
         PulsingIcon()
         Spacer(Modifier.height(20.dp))
         Text(
-            "Looking for your batteries",
+            stringResource(Res.string.scanning_title),
             fontSize = 20.sp,
             fontWeight = FontWeight.SemiBold,
             textAlign = TextAlign.Center,
@@ -55,20 +62,23 @@ fun ScanningScreen(component: ScanningComponent) {
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            "Make sure your BMS is on and in range.",
+            stringResource(Res.string.scanning_subtitle),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(16.dp))
         Text(
-            "Scanning for ${state.savedCount} saved batter${if (state.savedCount == 1) "y" else "ies"}… ${state.secondsLeft}s left",
+            if (state.savedCount == 1)
+                stringResource(Res.string.scanning_progress_one, state.savedCount, state.secondsLeft)
+            else
+                stringResource(Res.string.scanning_progress_many, state.savedCount, state.secondsLeft),
             fontSize = 12.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.height(24.dp))
         TextButton(onClick = component::onSkipClicked) {
-            Text("Skip → device list")
+            Text(stringResource(Res.string.scanning_skip))
         }
     }
 }

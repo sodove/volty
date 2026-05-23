@@ -22,6 +22,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.permissions_grant
+import volty.composeapp.generated.resources.permissions_missing
+import volty.composeapp.generated.resources.permissions_subtitle
+import volty.composeapp.generated.resources.permissions_title
 
 @Composable
 fun PermissionsGateScreen(component: PermissionsGateComponent) {
@@ -40,23 +46,23 @@ fun PermissionsGateScreen(component: PermissionsGateComponent) {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            "Permissions needed",
+            stringResource(Res.string.permissions_title),
             fontSize = 22.sp,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.onSurface
         )
         Spacer(Modifier.height(8.dp))
         Text(
-            text = "Volty needs Bluetooth and notification access to scan for batteries and show alerts.",
+            text = stringResource(Res.string.permissions_subtitle),
             fontSize = 14.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
         Spacer(Modifier.height(24.dp))
-        Text("Missing: ${state.missing.size} permission(s)", fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(stringResource(Res.string.permissions_missing, state.missing.size), fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         Spacer(Modifier.height(16.dp))
         Button(onClick = { launcher.launch(component.requiredPermissions.toTypedArray()) }) {
-            Text("Grant permissions")
+            Text(stringResource(Res.string.permissions_grant))
         }
     }
 }

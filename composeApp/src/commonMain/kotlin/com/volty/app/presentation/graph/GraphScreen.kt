@@ -39,6 +39,21 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.presentation.common.MetricCard
 import kotlin.math.round
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.graph_avg
+import volty.composeapp.generated.resources.graph_avg_peak
+import volty.composeapp.generated.resources.graph_current
+import volty.composeapp.generated.resources.graph_min
+import volty.composeapp.generated.resources.graph_no_data
+import volty.composeapp.generated.resources.graph_now
+import volty.composeapp.generated.resources.graph_peak
+import volty.composeapp.generated.resources.graph_power
+import volty.composeapp.generated.resources.graph_soc
+import volty.composeapp.generated.resources.graph_temp
+import volty.composeapp.generated.resources.graph_title
+import volty.composeapp.generated.resources.graph_used
+import volty.composeapp.generated.resources.graph_volt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,7 +62,7 @@ fun GraphScreen(component: GraphComponent) {
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Graph", fontWeight = FontWeight.SemiBold) },
+                title = { Text(stringResource(Res.string.graph_title), fontWeight = FontWeight.SemiBold) },
                 navigationIcon = {
                     IconButton(onClick = component::onBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
@@ -70,7 +85,7 @@ fun GraphScreen(component: GraphComponent) {
                 horizontalArrangement = Arrangement.spacedBy(4.dp)
             ) {
                 GraphMetric.values().forEach { m ->
-                    MetricTab(m.label, state.metric == m) { component.onMetricSelected(m) }
+                    MetricTab(graphMetricLabel(m), state.metric == m) { component.onMetricSelected(m) }
                 }
             }
 
@@ -93,10 +108,10 @@ fun GraphScreen(component: GraphComponent) {
                             fontWeight = FontWeight.Medium,
                             color = MaterialTheme.colorScheme.onSurface
                         )
-                        Text("Now", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(Res.string.graph_now), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                     Column(horizontalAlignment = Alignment.End) {
-                        Text("avg / peak", fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Text(stringResource(Res.string.graph_avg_peak), fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(
                             "${formatVal(state.avg, state.metric)} / ${formatVal(state.peak, state.metric)} ${state.metric.unit}",
                             fontSize = 13.sp,
@@ -128,22 +143,22 @@ fun GraphScreen(component: GraphComponent) {
 
             Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MetricCard(
-                    label = "avg",
+                    label = stringResource(Res.string.graph_avg),
                     value = "${formatVal(state.avg, state.metric)} ${state.metric.unit}",
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    label = "peak",
+                    label = stringResource(Res.string.graph_peak),
                     value = "${formatVal(state.peak, state.metric)} ${state.metric.unit}",
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    label = "min",
+                    label = stringResource(Res.string.graph_min),
                     value = "${formatVal(state.min, state.metric)} ${state.metric.unit}",
                     modifier = Modifier.weight(1f)
                 )
                 MetricCard(
-                    label = "used",
+                    label = stringResource(Res.string.graph_used),
                     value = when (state.metric) {
                         GraphMetric.POWER -> "${formatVal(state.used, state.metric)} Wh"
                         GraphMetric.CURRENT -> "${formatVal(state.used, state.metric)} Ah"
@@ -192,7 +207,7 @@ private fun WindowChip(label: String, active: Boolean, onClick: () -> Unit) {
 private fun LineGraph(values: List<Float>, modifier: Modifier = Modifier, minRange: Float = 0f) {
     if (values.size < 2) {
         Box(modifier = modifier, contentAlignment = Alignment.Center) {
-            Text("No data yet", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+            Text(stringResource(Res.string.graph_no_data), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
         }
         return
     }
@@ -261,6 +276,17 @@ private fun minRangeFor(metric: GraphMetric): Float = when (metric) {
     GraphMetric.SOC -> 5f
     GraphMetric.TEMPERATURE -> 5f
 }
+
+@Composable
+private fun graphMetricLabel(metric: GraphMetric): String = stringResource(
+    when (metric) {
+        GraphMetric.SOC -> Res.string.graph_soc
+        GraphMetric.POWER -> Res.string.graph_power
+        GraphMetric.CURRENT -> Res.string.graph_current
+        GraphMetric.VOLTAGE -> Res.string.graph_volt
+        GraphMetric.TEMPERATURE -> Res.string.graph_temp
+    }
+)
 
 private fun formatVal(v: Float, metric: GraphMetric): String {
     val precision = when (metric) {
