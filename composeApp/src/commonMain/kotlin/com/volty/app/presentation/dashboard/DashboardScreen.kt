@@ -206,15 +206,14 @@ fun DashboardScreen(component: DashboardComponent) {
 private fun HeroCard(state: DashboardComponent.State) {
     val data = state.data
     val v = state.vehicle
-    // Use signed moving-average power as the source of truth for direction.
-    // Brief regen blips during discharge won't flip the label, and brief loads
-    // during charging won't flip it the other way. Falls back to instantaneous
-    // power only when the moving average is near zero.
-    val avg = state.avgPowerW
+    // Direction from short window (30 s) — switches fast on real flips, ignores
+    // brief regen blips during a long discharge. We keep the per-vehicle long
+    // window (state.avgPowerW) for the ETA magnitude below.
+    val dirAvg = state.recentAvgPowerW
     val isCharging = when {
-        avg > 1f -> true
-        avg < -1f -> false
-        else -> data.power > 0.05f
+        dirAvg > 1f -> true
+        dirAvg < -1f -> false
+        else -> data.power > 0.05f  // fallback when truly balanced
     }
     // Fixed darker-green palette for the charging hero so dynamic-color wallpapers
     // can't wash the card out. Other UI keeps the dynamic palette.

@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 interface DashboardComponent {
     val state: StateFlow<State>
@@ -34,6 +35,10 @@ interface DashboardComponent {
         val data: BmsData = BmsData(),
         val avgPowerW: Float = 0f,
         val avgCurrentA: Float = 0f,
+        // 30 s window — used only for the charge/discharge direction decision so
+        // brief regen bursts during a long discharge don't flip the label, but
+        // plugging in a charger flips it within ~30 s.
+        val recentAvgPowerW: Float = 0f,
         val powerMin: Float = 0f,
         val powerPeak: Float = 0f,
         val sparkline: List<Float> = emptyList(),
@@ -114,6 +119,16 @@ class DefaultDashboardComponent(
             val window = (_state.value.vehicle?.averagingWindowMin ?: 5).minutes
             bmsRepository.movingAverage(window).collect { avg ->
                 _state.update { it.copy(avgPowerW = avg.avgPowerW, avgCurrentA = avg.avgCurrentA) }
+            }
+        }
+
+        // Second moving-average subscription with a SHORT window. Drives only the
+        // charge/discharge direction decision in HeroCard — fast enough to flip
+        // within ~30 s of plugging in / unplugging, slow enough to ignore brief
+        // regen blips during a long discharge.
+        scope.launch {
+            bmsRepository.movingAverage(30.seconds).collect { avg ->
+                _state.update { it.copy(recentAvgPowerW = avg.avgPowerW) }
             }
         }
 

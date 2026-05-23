@@ -154,6 +154,7 @@ class KableBmsRepository(
                     // Wait for service discovery to complete before subscribing.
                     // peripheral.services is StateFlow<List<DiscoveredService>?> — null until discovered.
                     p.services.filterNotNull().first()
+                    var sampleCount = 0
                     p.observe(notifyChar).collect { data ->
                         proto.onNotification(data)
                         proto.latestData()?.let { bms ->
@@ -163,13 +164,18 @@ class KableBmsRepository(
                             // kotlin.time.Clock works in commonMain (System.currentTimeMillis
                             // is JVM-only). Class is already opted in via @OptIn at the top.
                             lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
+                            sampleCount++
+                            if (sampleCount % 50 == 0) {
+                                println("[VOLTY-BLE] sample #$sampleCount lastSampleAtMs=$lastSampleAtMs")
+                            }
                         }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     // Service not yet available, peripheral torn down, etc. — log silently
                     // and let connection state flip via the state observer.
+                    println("[VOLTY-BLE] observeJob: exception ${e::class.simpleName}: ${e.message}")
                 }
             }
 
@@ -208,30 +214,43 @@ class KableBmsRepository(
                 try {
                     p.state.collect { st ->
                         if (st is State.Disconnected) {
+                            println("[VOLTY-BLE] stateJob: Disconnected event received")
                             if (_connectionState.value is ConnectionState.Connected) {
                                 _connectionState.value = ConnectionState.Failed("Reconnecting…")
+                                println("[VOLTY-BLE] state -> Failed(Reconnecting…) via stateJob")
                                 startReconnectLoop(vehicle, address, type)
                             }
                         }
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (e: Exception) {
                     // Peripheral torn down during disconnect — ignore.
+                    println("[VOLTY-BLE] stateJob: exception ${e::class.simpleName}: ${e.message}")
                 }
             }
 
             // Stale-sample watchdog. BLE supervision timeout (15-30 s) is too slow
-            // for our UX, so if no notification arrives within 7 s while we're
-            // nominally Connected, force a reconnect.
+            // for our UX, so if no notification arrives within 5 s while we're
+            // nominally Connected, force a reconnect. Also triggers if 10 s
+            // elapses since connect with zero samples ever (initial-data starvation).
             watchdogJob?.cancel()
             watchdogJob = scope.launch {
+                val connectedAtMs = Clock.System.now().toEpochMilliseconds()
+                println("[VOLTY-BLE] watchdog: launched at $connectedAtMs, lastSampleAtMs=$lastSampleAtMs")
                 delay(2_000L) // grace period for initial handshake / first sample
                 while (isActive) {
-                    delay(2_000L)
-                    if (_connectionState.value is ConnectionState.Connected) {
-                        val nowMs = Clock.System.now().toEpochMilliseconds()
-                        if (lastSampleAtMs > 0 && nowMs - lastSampleAtMs > 7_000L) {
+                    delay(1_000L)
+                    val state = _connectionState.value
+                    val nowMs = Clock.System.now().toEpochMilliseconds()
+                    val timeSinceSample = nowMs - lastSampleAtMs
+                    val timeSinceConnect = nowMs - connectedAtMs
+                    println("[VOLTY-BLE] watchdog: tick state=${state::class.simpleName} lastSampleAtMs=$lastSampleAtMs deltaMs=$timeSinceSample")
+                    if (state is ConnectionState.Connected) {
+                        val stale = (lastSampleAtMs > 0 && timeSinceSample > 5_000L) ||
+                                    (lastSampleAtMs == 0L && timeSinceConnect > 10_000L)
+                        if (stale) {
+                            println("[VOLTY-BLE] watchdog: STALE — sample age=${timeSinceSample}ms — triggering reconnect")
                             _connectionState.value = ConnectionState.Failed("Reconnecting…")
                             startReconnectLoop(vehicle, address, type)
                             return@launch
@@ -241,6 +260,7 @@ class KableBmsRepository(
             }
 
             _connectionState.value = ConnectionState.Connected(vehicle)
+            println("[VOLTY-BLE] state -> Connected(${vehicle?.name ?: "guest"}) addr=$address")
             serviceController.start()
             if (vehicle != null) vehicleRepository.touch(vehicle.id)
             Result.success(Unit)
