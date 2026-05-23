@@ -16,6 +16,8 @@ import com.volty.app.presentation.debug.DebugComponent
 import com.volty.app.presentation.debug.DefaultDebugComponent
 import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
 import com.volty.app.presentation.permissions.PermissionsGateComponent
+import com.volty.app.presentation.picker.DefaultPickerComponent
+import com.volty.app.presentation.picker.PickerComponent
 import com.volty.app.presentation.scanning.DefaultScanningComponent
 import com.volty.app.presentation.scanning.ScanningComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
@@ -34,7 +36,7 @@ interface RootComponent {
         data class Permissions(val component: PermissionsGateComponent) : Child
         data class Scanning(val component: ScanningComponent) : Child
         data class AutoConnect(val component: AutoConnectComponent) : Child
-        data class Picker(val component: PickerStubComponent) : Child
+        data class Picker(val component: PickerComponent) : Child
         data class Dashboard(val component: DebugComponent) : Child
         data class VehicleEdit(val component: VehicleEditStubComponent) : Child
     }
@@ -104,7 +106,19 @@ class DefaultRootComponent(
                     onCancelled = { nav.replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
-            is Config.Picker -> RootComponent.Child.Picker(PickerStubComponent(context, config.mode))
+            is Config.Picker -> RootComponent.Child.Picker(
+                DefaultPickerComponent(
+                    componentContext = context,
+                    mode = config.mode,
+                    bmsRepository = get(),
+                    vehicleRepository = get(),
+                    onConnectedKnown = { nav.replaceAll(Config.Dashboard) },
+                    onConnectedGuestForSave = { _ -> nav.replaceAll(Config.VehicleEdit(null)) }, // Plan 2 Task 13 will refine to pass device info
+                    onConnectedGuestNoSave = { nav.replaceAll(Config.Dashboard) },
+                    onAddNewBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
+                    onCancelled = { nav.pop() }
+                )
+            )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
                 DefaultDebugComponent(
                     componentContext = context,
@@ -117,10 +131,6 @@ class DefaultRootComponent(
 }
 
 // Stub components — replaced in Tasks 8..13
-interface PickerStubComponent { val label: String }
-class PickerStubComponentImpl(val mode: String) : PickerStubComponent { override val label = "Picker[$mode] — not implemented yet" }
-@Suppress("FunctionName") fun PickerStubComponent(ctx: ComponentContext, mode: String): PickerStubComponent = PickerStubComponentImpl(mode)
-
 interface VehicleEditStubComponent { val label: String }
 class VehicleEditStubComponentImpl(val vehicleId: String?) : VehicleEditStubComponent { override val label = "VehicleEdit[${vehicleId ?: "new"}] — not implemented yet" }
 @Suppress("FunctionName") fun VehicleEditStubComponent(ctx: ComponentContext, vehicleId: String?): VehicleEditStubComponent = VehicleEditStubComponentImpl(vehicleId)

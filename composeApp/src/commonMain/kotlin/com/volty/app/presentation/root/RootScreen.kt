@@ -10,6 +10,7 @@ import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
 import com.volty.app.presentation.debug.DebugScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
+import com.volty.app.presentation.picker.PickerScreen
 import com.volty.app.presentation.scanning.ScanningScreen
 import com.volty.app.presentation.welcome.WelcomeScreen
 
@@ -21,7 +22,7 @@ fun RootScreen(component: RootComponent) {
             is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
             is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
             is RootComponent.Child.AutoConnect -> AutoConnectScreen(instance.component)
-            is RootComponent.Child.Picker -> Stub(instance.component.label)
+            is RootComponent.Child.Picker -> PickerScreen(instance.component)
             is RootComponent.Child.Dashboard -> DebugScreen(instance.component)
             is RootComponent.Child.VehicleEdit -> Stub(instance.component.label)
         }
