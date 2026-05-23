@@ -1,6 +1,7 @@
 package com.volty.app.presentation.root
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.decompose.DelicateDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
 import com.arkivanov.decompose.router.stack.childStack
@@ -13,8 +14,8 @@ import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.autoconnect.AutoConnectComponent
 import com.volty.app.presentation.autoconnect.DefaultAutoConnectComponent
-import com.volty.app.presentation.debug.DebugComponent
-import com.volty.app.presentation.debug.DefaultDebugComponent
+import com.volty.app.presentation.dashboard.DashboardComponent
+import com.volty.app.presentation.dashboard.DefaultDashboardComponent
 import com.volty.app.presentation.permissions.DefaultPermissionsGateComponent
 import com.volty.app.presentation.permissions.PermissionsGateComponent
 import com.volty.app.presentation.picker.DefaultPickerComponent
@@ -43,8 +44,11 @@ interface RootComponent {
         data class Scanning(val component: ScanningComponent) : Child
         data class AutoConnect(val component: AutoConnectComponent) : Child
         data class Picker(val component: PickerComponent) : Child
-        data class Dashboard(val component: DebugComponent) : Child
+        data class Dashboard(val component: DashboardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
+        data object Cells : Child
+        data object Graph : Child
+        data object Settings : Child
     }
 }
 
@@ -57,6 +61,9 @@ sealed class Config {
     @Serializable data class Picker(val mode: String) : Config()
     @Serializable data object Dashboard : Config()
     @Serializable data class VehicleEdit(val vehicleId: String?) : Config()
+    @Serializable data object Cells : Config()
+    @Serializable data object Graph : Config()
+    @Serializable data object Settings : Config()
 }
 
 class DefaultRootComponent(
@@ -84,6 +91,7 @@ class DefaultRootComponent(
         return if (savedCount == 0) Config.Welcome else Config.Scanning
     }
 
+    @OptIn(DelicateDecomposeApi::class)
     private fun createChild(config: Config, context: ComponentContext): RootComponent.Child =
         when (config) {
             is Config.Welcome -> RootComponent.Child.Welcome(
@@ -142,10 +150,15 @@ class DefaultRootComponent(
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
-                DefaultDebugComponent(
+                DefaultDashboardComponent(
                     componentContext = context,
                     bmsRepository = get(),
-                    vehicleRepository = get()
+                    vehicleRepository = get(),
+                    onOpenCells = { nav.push(Config.Cells) },
+                    onOpenGraph = { nav.push(Config.Graph) },
+                    onOpenSettings = { nav.push(Config.Settings) },
+                    onOpenAddBattery = { nav.push(Config.VehicleEdit(null)) },
+                    onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
                 )
             )
             is Config.VehicleEdit -> RootComponent.Child.VehicleEdit(
@@ -158,5 +171,8 @@ class DefaultRootComponent(
                     onDeleted = { nav.pop() }
                 )
             )
+            is Config.Cells -> RootComponent.Child.Cells
+            is Config.Graph -> RootComponent.Child.Graph
+            is Config.Settings -> RootComponent.Child.Settings
         }
 }

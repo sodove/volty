@@ -1,0 +1,154 @@
+package com.volty.app.presentation.dashboard
+
+import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.lifecycle.doOnDestroy
+import com.volty.app.domain.model.BmsData
+import com.volty.app.domain.model.Vehicle
+import com.volty.app.domain.repository.BmsRepository
+import com.volty.app.domain.repository.VehicleRepository
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlin.time.Duration.Companion.minutes
+
+interface DashboardComponent {
+    val state: StateFlow<State>
+    fun onPillClicked()
+    fun onSheetDismiss()
+    fun onSwitchVehicle(v: Vehicle)
+    fun onAddBattery()
+    fun onDisconnect()
+    fun onTabClicked(tab: Tab)
+
+    enum class Tab { Live, Cells, Graph, Settings }
+
+    data class State(
+        val vehicle: Vehicle? = null,
+        val data: BmsData = BmsData(),
+        val avgPowerW: Float = 0f,
+        val avgCurrentA: Float = 0f,
+        val powerMin: Float = 0f,
+        val powerPeak: Float = 0f,
+        val sparkline: List<Float> = emptyList(),
+        val cellsMinV: Float = 0f,
+        val cellsMaxV: Float = 0f,
+        val cellsDeltaMv: Int = 0,
+        val savedVehicles: List<Vehicle> = emptyList(),
+        val sheetOpen: Boolean = false,
+        val isCharging: Boolean = false
+    )
+}
+
+class DefaultDashboardComponent(
+    componentContext: ComponentContext,
+    private val bmsRepository: BmsRepository,
+    private val vehicleRepository: VehicleRepository,
+    private val onOpenCells: () -> Unit,
+    private val onOpenGraph: () -> Unit,
+    private val onOpenSettings: () -> Unit,
+    private val onOpenAddBattery: () -> Unit,
+    private val onDisconnectRequested: () -> Unit
+) : DashboardComponent, ComponentContext by componentContext {
+
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val _state = MutableStateFlow(DashboardComponent.State())
+    override val state: StateFlow<DashboardComponent.State> = _state.asStateFlow()
+
+    init {
+        lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+
+        scope.launch {
+            bmsRepository.activeData
+                .combine(bmsRepository.activeVehicle) { d, v -> d to v }
+                .collect { (data, vehicle) ->
+                    _state.update { current ->
+                        val cells = data.cellVoltages
+                        val minV = if (cells.isEmpty()) 0f else cells.min()
+                        val maxV = if (cells.isEmpty()) 0f else cells.max()
+                        current.copy(
+                            data = data,
+                            vehicle = vehicle,
+                            cellsMinV = minV,
+                            cellsMaxV = maxV,
+                            cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
+                            isCharging = data.current > 0.05f
+                        )
+                    }
+                }
+        }
+
+        scope.launch {
+            vehicleRepository.vehicles.collect { list ->
+                _state.update { it.copy(savedVehicles = list) }
+            }
+        }
+
+        scope.launch {
+            val window = (_state.value.vehicle?.averagingWindowMin ?: 5).minutes
+            bmsRepository.movingAverage(window).collect { avg ->
+                _state.update { it.copy(avgPowerW = avg.avgPowerW, avgCurrentA = avg.avgCurrentA) }
+            }
+        }
+
+        scope.launch {
+            bmsRepository.samples(5.minutes).collect { samples ->
+                val powers = samples.map { it.power }
+                _state.update {
+                    it.copy(
+                        sparkline = powers,
+                        powerMin = if (powers.isEmpty()) 0f else powers.min(),
+                        powerPeak = if (powers.isEmpty()) 0f else powers.max()
+                    )
+                }
+            }
+        }
+    }
+
+    override fun onPillClicked() { _state.update { it.copy(sheetOpen = !it.sheetOpen) } }
+    override fun onSheetDismiss() { _state.update { it.copy(sheetOpen = false) } }
+
+    override fun onSwitchVehicle(v: Vehicle) {
+        scope.launch {
+            _state.update { it.copy(sheetOpen = false) }
+            bmsRepository.disconnect()
+            bmsRepository.connect(v)
+        }
+    }
+
+    override fun onAddBattery() { onOpenAddBattery() }
+
+    override fun onDisconnect() {
+        scope.launch {
+            bmsRepository.disconnect()
+            onDisconnectRequested()
+        }
+    }
+
+    override fun onTabClicked(tab: DashboardComponent.Tab) {
+        when (tab) {
+            DashboardComponent.Tab.Live -> {} // already on Live
+            DashboardComponent.Tab.Cells -> onOpenCells()
+            DashboardComponent.Tab.Graph -> onOpenGraph()
+            DashboardComponent.Tab.Settings -> onOpenSettings()
+        }
+    }
+}
+
+// Helper math: time-to-empty
+fun timeToEmptyDescription(remainingAh: Float, avgPowerW: Float, nominalV: Float): String {
+    if (avgPowerW <= 0f || nominalV <= 0f) return "—"
+    val avgCurrentA = avgPowerW / nominalV
+    val hoursLeft = remainingAh / avgCurrentA
+    if (hoursLeft <= 0f) return "—"
+    val totalMinutes = (hoursLeft * 60).toInt()
+    val h = totalMinutes / 60
+    val m = totalMinutes % 60
+    return if (h > 0) "${h}h ${m}m" else "${m}m"
+}
