@@ -6,12 +6,15 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -39,7 +42,13 @@ fun DashboardScreen(component: DashboardComponent) {
     val data = state.data
     val vehicle = state.vehicle
 
-    Column(modifier = Modifier.fillMaxSize().padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .statusBarsPadding()
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
         VehiclePill(
             name = vehicle?.name ?: "No battery",
             statusText = if (data.isConnected) "● Connected · ${vehicle?.bmsType?.label ?: "—"}" else "● Disconnected",
@@ -49,11 +58,14 @@ fun DashboardScreen(component: DashboardComponent) {
         HeroCard(state)
 
         // 2-col metric grid
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+        ) {
             MetricCard(
                 label = "Voltage",
                 value = "${fmt2(data.voltage)} V",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 sub = if (vehicle?.cellCount != null && data.cellVoltages.isNotEmpty()) {
                     "${data.cellVoltages.size}s · ${fmt2(data.voltage / data.cellVoltages.size)} V/cell"
                 } else null
@@ -61,7 +73,7 @@ fun DashboardScreen(component: DashboardComponent) {
             MetricCard(
                 label = "Power",
                 value = "${fmt0(data.power)} W",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 variant = MetricCardVariant.Tertiary,
                 extra = {
                     Column {
@@ -102,11 +114,14 @@ fun DashboardScreen(component: DashboardComponent) {
             }
         }
 
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+        ) {
             MetricCard(
                 label = "Temperature",
                 value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.first())}° C",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
                     FlowRow(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
@@ -128,7 +143,7 @@ fun DashboardScreen(component: DashboardComponent) {
             MetricCard(
                 label = "Cells · Δ ${state.cellsDeltaMv} mV",
                 value = if (data.cellVoltages.isEmpty()) "—" else "${fmt2(data.cellVoltages.average().toFloat())} V avg",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.height(18.dp)) {
                         val cells = data.cellVoltages

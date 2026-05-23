@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
@@ -58,12 +59,20 @@ fun RootScreen(component: RootComponent) {
             }
         }
         // Persistent bottom tab bar — only for main destinations
-        BottomTabBar(active = active, onTab = { tab -> component.onTab(tab) })
+        BottomTabBar(
+            active = active,
+            onTab = { tab -> component.onTab(tab) },
+            modifier = Modifier.navigationBarsPadding()
+        )
     }
 }
 
 @Composable
-private fun BottomTabBar(active: RootComponent.Child, onTab: (RootComponent.Tab) -> Unit) {
+private fun BottomTabBar(
+    active: RootComponent.Child,
+    onTab: (RootComponent.Tab) -> Unit,
+    modifier: Modifier = Modifier
+) {
     val visible = active is RootComponent.Child.Dashboard ||
         active is RootComponent.Child.Cells ||
         active is RootComponent.Child.Graph ||
@@ -79,7 +88,7 @@ private fun BottomTabBar(active: RootComponent.Child, onTab: (RootComponent.Tab)
     }
 
     Row(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 12.dp, vertical = 8.dp)
             .clip(RoundedCornerShape(24.dp))

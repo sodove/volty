@@ -4,7 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -25,6 +28,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -52,26 +56,29 @@ fun CellsScreen(component: CellsComponent) {
     ) { padding ->
         Column(modifier = Modifier.padding(padding).fillMaxSize().padding(horizontal = 12.dp)) {
             // Summary row
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
+            ) {
                 MetricCard(
                     label = "Max",
                     value = formatVolts(state.cells.getOrNull(state.maxIdx)?.voltageV ?: 0f),
                     sub = state.cells.getOrNull(state.maxIdx)?.let { "Cell #${it.index}" },
                     variant = MetricCardVariant.Primary,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).fillMaxHeight()
                 )
                 MetricCard(
                     label = "Min",
                     value = formatVolts(state.cells.getOrNull(state.minIdx)?.voltageV ?: 0f),
                     sub = state.cells.getOrNull(state.minIdx)?.let { "Cell #${it.index}" },
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).fillMaxHeight()
                 )
                 MetricCard(
                     label = "Δ Delta",
                     value = "${state.deltaMv} mV",
                     sub = if (state.deltaMv < 50) "Healthy" else if (state.deltaMv < 200) "OK" else "Imbalance",
                     variant = MetricCardVariant.Tertiary,
-                    modifier = Modifier.weight(1f)
+                    modifier = Modifier.weight(1f).fillMaxHeight()
                 )
             }
 
@@ -99,6 +106,7 @@ fun CellsScreen(component: CellsComponent) {
                                             cell = state.cells[idx],
                                             isMax = highlightSpread && idx == state.maxIdx,
                                             isMin = highlightSpread && idx == state.minIdx,
+                                            showBar = highlightSpread,
                                             modifier = Modifier.weight(1f)
                                         )
                                     } else {
@@ -115,41 +123,57 @@ fun CellsScreen(component: CellsComponent) {
 }
 
 @Composable
-private fun CellRow(cell: CellsComponent.Cell, isMax: Boolean, isMin: Boolean, modifier: Modifier = Modifier) {
+private fun CellRow(
+    cell: CellsComponent.Cell,
+    isMax: Boolean,
+    isMin: Boolean,
+    showBar: Boolean,
+    modifier: Modifier = Modifier
+) {
     val bg = when {
         isMax -> MaterialTheme.colorScheme.primaryContainer
         isMin -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
         else -> MaterialTheme.colorScheme.surfaceContainer
     }
-    Row(
+    Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
             .background(bg)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(6.dp)
+            .padding(horizontal = 8.dp, vertical = 4.dp)
     ) {
-        Text(
-            "${cell.index}",
-            fontSize = 9.sp,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
-            modifier = Modifier.padding(end = 2.dp)
-        )
-        Text(formatVoltsThreeDecimals(cell.voltageV), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
-        Box(
-            modifier = Modifier
-                .weight(1f)
-                .height(3.dp)
-                .clip(RoundedCornerShape(1.5.dp))
-                .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
+            Text(
+                "${cell.index}",
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+            )
+            Text(
+                formatVoltsThreeDecimals(cell.voltageV),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                fontFamily = FontFamily.Monospace
+            )
+        }
+        if (showBar) {
+            Spacer(Modifier.height(2.dp))
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(cell.rangeFraction)
+                    .fillMaxWidth()
                     .height(3.dp)
                     .clip(RoundedCornerShape(1.5.dp))
-                    .background(MaterialTheme.colorScheme.primary)
-            )
+                    .background(MaterialTheme.colorScheme.onSurface.copy(alpha = 0.08f))
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(cell.rangeFraction)
+                        .height(3.dp)
+                        .clip(RoundedCornerShape(1.5.dp))
+                        .background(MaterialTheme.colorScheme.primary)
+                )
+            }
         }
     }
 }
