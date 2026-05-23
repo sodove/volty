@@ -20,6 +20,8 @@ import com.volty.app.presentation.picker.DefaultPickerComponent
 import com.volty.app.presentation.picker.PickerComponent
 import com.volty.app.presentation.scanning.DefaultScanningComponent
 import com.volty.app.presentation.scanning.ScanningComponent
+import com.volty.app.presentation.vehicle.DefaultVehicleEditComponent
+import com.volty.app.presentation.vehicle.VehicleEditComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
 import com.volty.app.presentation.welcome.WelcomeComponent
 import kotlinx.serialization.Serializable
@@ -38,7 +40,7 @@ interface RootComponent {
         data class AutoConnect(val component: AutoConnectComponent) : Child
         data class Picker(val component: PickerComponent) : Child
         data class Dashboard(val component: DebugComponent) : Child
-        data class VehicleEdit(val component: VehicleEditStubComponent) : Child
+        data class VehicleEdit(val component: VehicleEditComponent) : Child
     }
 }
 
@@ -126,11 +128,15 @@ class DefaultRootComponent(
                     vehicleRepository = get()
                 )
             )
-            is Config.VehicleEdit -> RootComponent.Child.VehicleEdit(VehicleEditStubComponent(context, config.vehicleId))
+            is Config.VehicleEdit -> RootComponent.Child.VehicleEdit(
+                DefaultVehicleEditComponent(
+                    componentContext = context,
+                    vehicleId = config.vehicleId,
+                    vehicleRepository = get(),
+                    onSaved = { nav.replaceAll(Config.Dashboard) },
+                    onCancelled = { nav.pop() },
+                    onDeleted = { nav.pop() }
+                )
+            )
         }
 }
-
-// Stub components — replaced in Tasks 8..13
-interface VehicleEditStubComponent { val label: String }
-class VehicleEditStubComponentImpl(val vehicleId: String?) : VehicleEditStubComponent { override val label = "VehicleEdit[${vehicleId ?: "new"}] — not implemented yet" }
-@Suppress("FunctionName") fun VehicleEditStubComponent(ctx: ComponentContext, vehicleId: String?): VehicleEditStubComponent = VehicleEditStubComponentImpl(vehicleId)
