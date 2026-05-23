@@ -10,6 +10,8 @@ import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.volty.app.presentation.debug.DebugComponent
 import com.volty.app.presentation.debug.DefaultDebugComponent
+import com.volty.app.presentation.welcome.DefaultWelcomeComponent
+import com.volty.app.presentation.welcome.WelcomeComponent
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
@@ -20,7 +22,7 @@ interface RootComponent {
     fun onBack()
 
     sealed interface Child {
-        data class Welcome(val component: WelcomeStubComponent) : Child
+        data class Welcome(val component: WelcomeComponent) : Child
         data class Permissions(val component: PermissionsStubComponent) : Child
         data class Scanning(val component: ScanningStubComponent) : Child
         data class AutoConnect(val component: AutoConnectStubComponent) : Child
@@ -59,7 +61,13 @@ class DefaultRootComponent(
 
     private fun createChild(config: Config, context: ComponentContext): RootComponent.Child =
         when (config) {
-            is Config.Welcome -> RootComponent.Child.Welcome(WelcomeStubComponent(context))
+            is Config.Welcome -> RootComponent.Child.Welcome(
+                DefaultWelcomeComponent(
+                    componentContext = context,
+                    onAddBatteryRequested = { nav.replaceAll(Config.Permissions) },   // Plan 2 Task 14 may refine to push Picker(add) after permissions
+                    onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) }
+                )
+            )
             is Config.Permissions -> RootComponent.Child.Permissions(PermissionsStubComponent(context))
             is Config.Scanning -> RootComponent.Child.Scanning(ScanningStubComponent(context))
             is Config.AutoConnect -> RootComponent.Child.AutoConnect(AutoConnectStubComponent(context, config.vehicleId))
@@ -76,10 +84,6 @@ class DefaultRootComponent(
 }
 
 // Stub components — replaced in Tasks 8..13
-interface WelcomeStubComponent { val label: String }
-class WelcomeStubComponentImpl : WelcomeStubComponent { override val label = "Welcome — not implemented yet" }
-@Suppress("FunctionName") fun WelcomeStubComponent(ctx: ComponentContext): WelcomeStubComponent = WelcomeStubComponentImpl()
-
 interface PermissionsStubComponent { val label: String }
 class PermissionsStubComponentImpl : PermissionsStubComponent { override val label = "Permissions — not implemented yet" }
 @Suppress("FunctionName") fun PermissionsStubComponent(ctx: ComponentContext): PermissionsStubComponent = PermissionsStubComponentImpl()
