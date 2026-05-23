@@ -80,14 +80,27 @@ fun DashboardScreen(component: DashboardComponent) {
         }
 
         // Wide sparkline
-        MetricCard(
-            label = "Power · last 5 min",
-            value = "",
-            modifier = Modifier.fillMaxWidth().height(60.dp),
-            extra = {
-                SparklineGraph(values = state.sparkline, modifier = Modifier.fillMaxWidth().height(34.dp))
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(20.dp))
+                .background(MaterialTheme.colorScheme.surfaceContainer)
+                .padding(12.dp)
+        ) {
+            Column {
+                Text(
+                    "POWER · LAST 5 MIN",
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                )
+                Spacer(Modifier.height(6.dp))
+                SparklineGraph(
+                    values = state.sparkline,
+                    modifier = Modifier.fillMaxWidth().height(40.dp)
+                )
             }
-        )
+        }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
             MetricCard(

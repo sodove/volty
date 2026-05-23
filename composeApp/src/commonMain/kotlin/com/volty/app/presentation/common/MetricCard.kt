@@ -1,6 +1,7 @@
 package com.volty.app.presentation.common
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -38,20 +39,23 @@ fun MetricCard(
         modifier = modifier
             .clip(RoundedCornerShape(20.dp))
             .background(bg)
-            .heightIn(min = 92.dp)
-            .padding(12.dp)
+            .heightIn(min = 110.dp)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.SpaceBetween
     ) {
-        Text(
-            text = label.uppercase(),
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = fg.copy(alpha = 0.65f)
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(text = value, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = fg)
-        if (sub != null) {
+        Column {
+            Text(
+                text = label.uppercase(),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = fg.copy(alpha = 0.65f)
+            )
             Spacer(Modifier.height(2.dp))
-            Text(text = sub, fontSize = 11.sp, color = fg.copy(alpha = 0.7f))
+            Text(text = value, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = fg)
+            if (sub != null) {
+                Spacer(Modifier.height(2.dp))
+                Text(text = sub, fontSize = 11.sp, color = fg.copy(alpha = 0.7f))
+            }
         }
         if (extra != null) {
             Spacer(Modifier.height(6.dp))

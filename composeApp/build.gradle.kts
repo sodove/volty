@@ -22,6 +22,7 @@ kotlin {
                 version { strictly("1.10.0-alpha04") }
             }
             implementation(compose.ui)
+            implementation(compose.materialIconsExtended)
             implementation(compose.components.resources)
             implementation(libs.decompose.core)
             implementation(libs.decompose.compose)
