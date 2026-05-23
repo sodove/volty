@@ -32,6 +32,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.volty.app.domain.model.ConnectionState
 import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
@@ -53,9 +54,18 @@ fun DashboardScreen(component: DashboardComponent) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        val (statusLabel, statusColor) = when (val c = state.connection) {
+            is ConnectionState.Connected -> "● Connected · ${vehicle?.bmsType?.label ?: "—"}" to MaterialTheme.colorScheme.tertiary
+            is ConnectionState.Connecting -> "● Connecting…" to MaterialTheme.colorScheme.secondary
+            is ConnectionState.Failed -> "● ${c.reason}" to MaterialTheme.colorScheme.error
+            ConnectionState.Disconnected -> "● Disconnected" to MaterialTheme.colorScheme.outline
+            ConnectionState.Scanning -> "● Scanning…" to MaterialTheme.colorScheme.secondary
+            ConnectionState.Idle -> "● Idle" to MaterialTheme.colorScheme.outline
+        }
         VehiclePill(
             name = vehicle?.name ?: "No battery",
-            statusText = if (data.isConnected) "● Connected · ${vehicle?.bmsType?.label ?: "—"}" else "● Disconnected",
+            statusText = statusLabel,
+            statusColor = statusColor,
             onClick = component::onPillClicked
         )
 

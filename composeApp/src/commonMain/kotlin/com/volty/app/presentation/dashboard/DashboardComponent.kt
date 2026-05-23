@@ -3,6 +3,7 @@ package com.volty.app.presentation.dashboard
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import com.volty.app.domain.model.BmsData
+import com.volty.app.domain.model.ConnectionState
 import com.volty.app.domain.model.Vehicle
 import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.VehicleRepository
@@ -47,7 +48,8 @@ interface DashboardComponent {
         val cellsDeltaMv: Int = 0,
         val savedVehicles: List<Vehicle> = emptyList(),
         val sheetOpen: Boolean = false,
-        val isCharging: Boolean = false
+        val isCharging: Boolean = false,
+        val connection: ConnectionState = ConnectionState.Idle
     )
 }
 
@@ -80,7 +82,8 @@ class DefaultDashboardComponent(
                 cellsMinV = minV,
                 cellsMaxV = maxV,
                 cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
-                isCharging = initialData.current > 0.05f
+                isCharging = initialData.current > 0.05f,
+                connection = bmsRepository.connectionState.value,
             )
         )
     }
@@ -112,6 +115,12 @@ class DefaultDashboardComponent(
         scope.launch {
             vehicleRepository.vehicles.collect { list ->
                 _state.update { it.copy(savedVehicles = list) }
+            }
+        }
+
+        scope.launch {
+            bmsRepository.connectionState.collect { c ->
+                _state.update { it.copy(connection = c) }
             }
         }
 

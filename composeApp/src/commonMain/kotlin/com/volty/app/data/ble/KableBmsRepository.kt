@@ -120,6 +120,7 @@ class KableBmsRepository(
         doConnect(address, type, vehicle = null)
 
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
+        println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
         return try {
             cleanupConnection()
             _connectionState.value = ConnectionState.Connecting(vehicle)
@@ -142,7 +143,16 @@ class KableBmsRepository(
 
             val p = Peripheral(advertisement)
             peripheral = p
-            p.connect()
+            val connectOk = withTimeoutOrNull(7_000L) {
+                p.connect()
+                true
+            }
+            if (connectOk == null) {
+                _connectionState.value = ConnectionState.Failed("Connect timeout")
+                println("[VOLTY-BLE] doConnect: connect timeout after 7s")
+                cleanupConnection()
+                return Result.failure(IllegalStateException("Connect timeout"))
+            }
 
             val notifyChar = characteristicOf(
                 service = Uuid.parse(proto.uuids.serviceUuid),
@@ -274,22 +284,27 @@ class KableBmsRepository(
 
     private fun startReconnectLoop(vehicle: Vehicle?, address: String, type: BmsType) {
         reconnectJob?.cancel()
+        println("[VOLTY-BLE] reconnect loop: starting")
         reconnectJob = scope.launch {
             var attempt = 0
             while (isActive) {
-                // Stop if user explicitly disconnected (vehicle was cleared)
-                if (_activeVehicle.value == null) return@launch
-                // Stop if we're already connected (a parallel reconnect succeeded)
-                if (_connectionState.value is ConnectionState.Connected) return@launch
-
+                if (_activeVehicle.value == null) {
+                    println("[VOLTY-BLE] reconnect loop: vehicle cleared, stopping")
+                    return@launch
+                }
+                if (_connectionState.value is ConnectionState.Connected) {
+                    println("[VOLTY-BLE] reconnect loop: already connected, stopping")
+                    return@launch
+                }
                 attempt++
+                println("[VOLTY-BLE] reconnect loop: attempt #$attempt")
                 _connectionState.value = ConnectionState.Connecting(vehicle)
                 val result = doConnect(address, type, vehicle)
-                if (result.isSuccess) return@launch
-
-                // Wait before next try. Short fixed delay so reconnect is responsive
-                // when the BMS comes back in range. After ~10 attempts grow to 10s
-                // to avoid hammering when the device is far away.
+                if (result.isSuccess) {
+                    println("[VOLTY-BLE] reconnect loop: attempt #$attempt succeeded")
+                    return@launch
+                }
+                println("[VOLTY-BLE] reconnect loop: attempt #$attempt failed — ${result.exceptionOrNull()?.message}")
                 val delayMs = if (attempt < 10) 3_000L else 10_000L
                 delay(delayMs)
             }
