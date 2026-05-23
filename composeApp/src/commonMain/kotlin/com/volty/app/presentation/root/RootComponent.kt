@@ -9,6 +9,7 @@ import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.volty.app.data.prefs.AppPrefs
+import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.autoconnect.AutoConnectComponent
 import com.volty.app.presentation.autoconnect.DefaultAutoConnectComponent
@@ -24,9 +25,12 @@ import com.volty.app.presentation.vehicle.DefaultVehicleEditComponent
 import com.volty.app.presentation.vehicle.VehicleEditComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
 import com.volty.app.presentation.welcome.WelcomeComponent
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
+import org.koin.core.component.inject
 
 interface RootComponent {
     val stack: Value<ChildStack<*, Child>>
@@ -61,22 +65,33 @@ class DefaultRootComponent(
 
     private val nav = StackNavigation<Config>()
 
+    private val vehicleRepository: VehicleRepository by inject()
+    private val permissionsChecker: PermissionsChecker by inject()
+
     override val stack: Value<ChildStack<*, RootComponent.Child>> = childStack(
         source = nav,
         serializer = Config.serializer(),
-        initialConfiguration = Config.Dashboard, // Plan 2 Task 14 will compute this from saved-vehicles + permissions state
+        initialConfiguration = computeInitialConfig(),
         handleBackButton = true,
         childFactory = ::createChild
     )
 
     override fun onBack() { nav.pop() }
 
+    private fun computeInitialConfig(): Config {
+        if (permissionsChecker.missingPermissions().isNotEmpty()) return Config.Permissions
+        val savedCount = runBlocking { vehicleRepository.vehicles.first().size }
+        return if (savedCount == 0) Config.Welcome else Config.Scanning
+    }
+
     private fun createChild(config: Config, context: ComponentContext): RootComponent.Child =
         when (config) {
             is Config.Welcome -> RootComponent.Child.Welcome(
                 DefaultWelcomeComponent(
                     componentContext = context,
-                    onAddBatteryRequested = { nav.replaceAll(Config.Permissions) },   // Plan 2 Task 14 may refine to push Picker(add) after permissions
+                    // Welcome is only ever shown when permissions are already granted (gated by computeInitialConfig),
+                    // so these buttons can route directly to the Picker without re-checking.
+                    onAddBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
                     onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) }
                 )
             )
@@ -84,7 +99,12 @@ class DefaultRootComponent(
                 DefaultPermissionsGateComponent(
                     componentContext = context,
                     checker = get<PermissionsChecker>(),
-                    onAllGrantedRequested = { nav.replaceAll(Config.Scanning) }
+                    onAllGrantedRequested = {
+                        // After granting, recompute the post-permissions initial route:
+                        // Welcome (0 saved vehicles) or Scanning (>=1 saved vehicle).
+                        val savedCount = runBlocking { vehicleRepository.vehicles.first().size }
+                        nav.replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
+                    }
                 )
             )
             is Config.Scanning -> RootComponent.Child.Scanning(
