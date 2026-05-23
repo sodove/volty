@@ -26,6 +26,8 @@ import com.volty.app.presentation.picker.DefaultPickerComponent
 import com.volty.app.presentation.picker.PickerComponent
 import com.volty.app.presentation.scanning.DefaultScanningComponent
 import com.volty.app.presentation.scanning.ScanningComponent
+import com.volty.app.presentation.settings.DefaultSettingsComponent
+import com.volty.app.presentation.settings.SettingsComponent
 import com.volty.app.presentation.vehicle.DefaultVehicleEditComponent
 import com.volty.app.presentation.vehicle.VehicleEditComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
@@ -52,7 +54,7 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class Cells(val component: CellsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
-        data object Settings : Child
+        data class Settings(val component: SettingsComponent) : Child
     }
 }
 
@@ -189,6 +191,15 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
-            is Config.Settings -> RootComponent.Child.Settings
+            is Config.Settings -> RootComponent.Child.Settings(
+                DefaultSettingsComponent(
+                    componentContext = context,
+                    appPrefs = get<AppPrefs>(),
+                    vehicleRepository = get(),
+                    onEditVehicleRequested = { id -> nav.push(Config.VehicleEdit(id)) },
+                    onAddBatteryRequested = { nav.push(Config.VehicleEdit(null)) },
+                    onBackRequested = { nav.pop() }
+                )
+            )
         }
 }

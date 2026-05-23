@@ -1,13 +1,6 @@
 package com.volty.app.presentation.root
 
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.unit.dp
 import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
 import com.volty.app.presentation.cells.CellsScreen
@@ -16,6 +9,7 @@ import com.volty.app.presentation.graph.GraphScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
 import com.volty.app.presentation.picker.PickerScreen
 import com.volty.app.presentation.scanning.ScanningScreen
+import com.volty.app.presentation.settings.SettingsScreen
 import com.volty.app.presentation.vehicle.VehicleEditScreen
 import com.volty.app.presentation.welcome.WelcomeScreen
 
@@ -32,14 +26,7 @@ fun RootScreen(component: RootComponent) {
             is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
             is RootComponent.Child.Cells -> CellsScreen(instance.component)
             is RootComponent.Child.Graph -> GraphScreen(instance.component)
-            RootComponent.Child.Settings -> StubScreen("Settings coming in T7")
+            is RootComponent.Child.Settings -> SettingsScreen(instance.component)
         }
-    }
-}
-
-@Composable
-private fun StubScreen(message: String) {
-    Box(modifier = Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-        Text(message)
     }
 }
