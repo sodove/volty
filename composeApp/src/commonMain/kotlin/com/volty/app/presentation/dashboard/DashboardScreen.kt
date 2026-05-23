@@ -1,5 +1,9 @@
 package com.volty.app.presentation.dashboard
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -207,13 +211,29 @@ private fun HeroCard(state: DashboardComponent.State) {
     )
     val etaLabel = if (isCharging) "to full" else "to empty"
     val socFraction = (data.soc / 100f).coerceIn(0f, 1f)
+    val animatedSoc by animateFloatAsState(
+        targetValue = data.soc,
+        animationSpec = tween(durationMillis = 600),
+        label = "soc"
+    )
+    val animatedSocFraction by animateFloatAsState(
+        targetValue = socFraction,
+        animationSpec = tween(durationMillis = 400),
+        label = "socFraction"
+    )
+    val animatedContainer by animateColorAsState(
+        targetValue = containerColor,
+        animationSpec = tween(durationMillis = 400),
+        label = "heroBg"
+    )
 
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(28.dp, 36.dp, 28.dp, 36.dp))
-            .background(containerColor)
+            .background(animatedContainer)
             .padding(horizontal = 20.dp, vertical = 16.dp)
+            .animateContentSize()
     ) {
         Text(
             text = if (isCharging) "CHARGING TO FULL" else "STATE OF CHARGE",
@@ -223,7 +243,7 @@ private fun HeroCard(state: DashboardComponent.State) {
         )
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(fmt0(data.soc), fontSize = 80.sp, fontWeight = FontWeight.Medium, color = onColor)
+                Text(fmt0(animatedSoc), fontSize = 80.sp, fontWeight = FontWeight.Medium, color = onColor)
                 Text("%", fontSize = 24.sp, color = onColor.copy(alpha = 0.65f))
             }
             Spacer(Modifier.weight(1f))
@@ -244,7 +264,7 @@ private fun HeroCard(state: DashboardComponent.State) {
         ) {
             Box(
                 modifier = Modifier
-                    .fillMaxWidth(socFraction)
+                    .fillMaxWidth(animatedSocFraction)
                     .height(8.dp)
                     .clip(RoundedCornerShape(4.dp))
                     .background(barColor)

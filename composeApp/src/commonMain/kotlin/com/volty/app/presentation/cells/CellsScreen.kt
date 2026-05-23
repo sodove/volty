@@ -1,5 +1,7 @@
 package com.volty.app.presentation.cells
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -135,6 +137,11 @@ private fun CellRow(
         isMin -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
         else -> MaterialTheme.colorScheme.surfaceContainer
     }
+    val animatedFraction by animateFloatAsState(
+        targetValue = cell.rangeFraction,
+        animationSpec = tween(durationMillis = 400),
+        label = "cellBar"
+    )
     Column(
         modifier = modifier
             .clip(RoundedCornerShape(12.dp))
@@ -169,7 +176,7 @@ private fun CellRow(
             ) {
                 Box(
                     modifier = Modifier
-                        .fillMaxWidth(cell.rangeFraction)
+                        .fillMaxWidth(animatedFraction)
                         .height(3.dp)
                         .clip(RoundedCornerShape(1.5.dp))
                         .background(MaterialTheme.colorScheme.primary)

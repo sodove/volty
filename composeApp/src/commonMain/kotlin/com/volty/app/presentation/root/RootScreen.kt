@@ -24,6 +24,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.stack.Children
+import com.arkivanov.decompose.extensions.compose.stack.animation.fade
+import com.arkivanov.decompose.extensions.compose.stack.animation.stackAnimation
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
 import com.volty.app.presentation.cells.CellsScreen
@@ -43,7 +45,10 @@ fun RootScreen(component: RootComponent) {
 
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
-            Children(stack = component.stack) { child ->
+            Children(
+                stack = component.stack,
+                animation = stackAnimation(fade())
+            ) { child ->
                 when (val instance = child.instance) {
                     is RootComponent.Child.Welcome -> WelcomeScreen(instance.component)
                     is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
