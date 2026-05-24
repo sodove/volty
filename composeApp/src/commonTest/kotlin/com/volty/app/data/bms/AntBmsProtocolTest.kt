@@ -241,14 +241,43 @@ class AntBmsProtocolTest {
     }
 
     @Test
-    fun `bmsFaults is empty until ANT alarm layout is reversed`() {
-        // ANT v3 splits ProtectInfo/WarningInfo into separate structures whose
-        // exact offsets are unknown; until we have ground-truth from real
-        // frames, the parser must not invent faults. See AntBmsProtocol.kt.
+    fun `MOS status On 1 emits no faults`() {
         val proto = AntBmsProtocol()
-        proto.onNotification(synthesizeStatusFrame(alarmFlags = 0xFFFFFF))
+        proto.onNotification(synthesizeStatusFrame(chargeEnabled = 1, dischargeEnabled = 1))
         val data = proto.latestData()
         assertNotNull(data)
         assertTrue(data.bmsFaults.isEmpty())
+    }
+
+    @Test
+    fun `MOS status Off 0 emits no faults`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame(chargeEnabled = 0, dischargeEnabled = 0))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertTrue(data.bmsFaults.isEmpty())
+    }
+
+    @Test
+    fun `charge MOS status 4 emits 'battery full' fault`() {
+        // Matches the official ANT app's "BatteryFull" warning shown when fully charged.
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame(chargeEnabled = 4, dischargeEnabled = 1))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("charge: battery full"), data.bmsFaults)
+        // And MOSFET chips should now read off, since 4 != 1.
+        assertEquals(false, data.chargeEnabled)
+        assertEquals(true, data.dischargeEnabled)
+    }
+
+    @Test
+    fun `charge MOS status 5 emits 'pack OV' fault matching UnitOverVProtect`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame(chargeEnabled = 5, dischargeEnabled = 1))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("charge: pack OV"), data.bmsFaults)
+        assertEquals(false, data.chargeEnabled)
     }
 }

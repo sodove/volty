@@ -192,10 +192,15 @@ class AntBmsProtocol : BmsProtocol() {
 
         pos += 2 // Skip SOH
 
-        // Switch states
-        val dischargeEnabled = if (pos < frameLen) buf.u8(pos) == 1 else false
+        // ANT MOS state bytes are u8 enums (NOT booleans). Values 0=Off, 1=On,
+        // 2..N = protection/fault reasons. Decoded from the syssi esphome-ant-bms
+        // reference (components/ant_bms_ble/ant_bms_ble.cpp). The official ANT
+        // app's ProtectInfo / WarningInfo strings (UnitOverVProtect, BatteryFull,
+        // ChargeMosOn, ...) are projections of these enums, not separate
+        // bitmasks — confirmed by checking batmon-ha, juamiso, syssi sources.
+        val dischargeStatus = if (pos < frameLen) buf.u8(pos) else 0
         pos += 1
-        val chargeEnabled = if (pos < frameLen) buf.u8(pos) == 1 else false
+        val chargeStatus = if (pos < frameLen) buf.u8(pos) else 0
         pos += 1
 
         pos += 2 // Skip balancer state + reserved
@@ -207,13 +212,16 @@ class AntBmsProtocol : BmsProtocol() {
         val charge = if (pos + 3 < frameLen) buf.u32LE(pos) * 0.000001f else 0f
         pos += 4
 
-        // ANT v3 ("BLE22AAUB") splits status into separate ProtectInfo /
-        // WarningInfo structures whose exact layout we have not yet reversed.
-        // The previous "u24 bitmap right after charge u32" guess produced
-        // ~7 phantom faults on a healthy pack (values drift between samples,
-        // suggesting we were reading cycle/runtime counters). Suppress until
-        // we have ground-truth from real frames.
-        val faults: List<String> = emptyList()
+        val chargeEnabled = chargeStatus == 1
+        val dischargeEnabled = dischargeStatus == 1
+
+        // Emit a fault entry whenever the MOS status enum says anything other
+        // than Off (0) or On (1). Each non-trivial enum value is a protection
+        // or anomaly reason worth surfacing to the user.
+        val faults = buildList {
+            chargeMosFaultName(chargeStatus)?.let { add("charge: $it") }
+            dischargeMosFaultName(dischargeStatus)?.let { add("discharge: $it") }
+        }
 
         lastData = BmsData(
             voltage = voltage,
@@ -229,6 +237,53 @@ class AntBmsProtocol : BmsProtocol() {
             bmsFaults = faults,
             isConnected = true
         )
+    }
+
+    /** Charge MOS status enum (21 values). null = state is uninteresting (Off/On). */
+    private fun chargeMosFaultName(code: Int): String? = when (code) {
+        0, 1 -> null
+        2 -> "overcharge"
+        3 -> "OC protect"
+        4 -> "battery full"
+        5 -> "pack OV"
+        6 -> "pack OT"
+        7 -> "MOS OT"
+        8 -> "current anomaly"
+        9 -> "balance wire dropped"
+        10 -> "PCB OT"
+        12 -> "open failed"
+        13 -> "MOS abnormal"
+        14 -> null // "waiting" — transient, not a fault
+        15 -> "manually off"
+        16 -> "2-level OV"
+        17 -> "low temp protect"
+        18 -> "V diff exceeded"
+        20 -> "self-test error"
+        else -> null
+    }
+
+    /** Discharge MOS status enum (20 values). null = state is uninteresting (Off/On). */
+    private fun dischargeMosFaultName(code: Int): String? = when (code) {
+        0, 1 -> null
+        2 -> "overdischarge"
+        3 -> "OC protect"
+        4 -> "2A exceeded"
+        5 -> "pack UV"
+        6 -> "pack OT"
+        7 -> "MOS OT"
+        8 -> "current anomaly"
+        9 -> "balance wire dropped"
+        10 -> "PCB OT"
+        11 -> null // "charge MOS on" — informational
+        12 -> "short circuit"
+        13 -> "MOS abnormal"
+        14 -> "open failed"
+        15 -> "manually off"
+        16 -> "2-level UV"
+        17 -> "low temp protect"
+        18 -> "V diff exceeded"
+        19 -> "self-test error"
+        else -> null
     }
 
     companion object {
