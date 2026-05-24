@@ -122,16 +122,17 @@ class DalyBmsProtocolTest {
     }
 
     @Test
-    fun `poll commands include voltage status cells temps and alarms`() {
+    fun `poll commands include voltage status cells and temps`() {
         val cmds = DalyBmsProtocol().pollCommands()
-        assertEquals(5, cmds.size)
+        // 0x98 is no longer polled — alarms now come from the BLE main-status
+        // frame (D2 03 ...) per syssi/esphome-daly-bms-ble.
+        assertEquals(4, cmds.size)
         // Each command frame: A5 80 [cmd] 08 ... ... [crc]
         // cmd byte lives at index 2.
         assertEquals(0x90.toByte(), cmds[0][2])
         assertEquals(0x93.toByte(), cmds[1][2])
         assertEquals(0x95.toByte(), cmds[2][2])
         assertEquals(0x96.toByte(), cmds[3][2])
-        assertEquals(0x98.toByte(), cmds[4][2])
 
         // Sanity: header + length byte
         for (cmd in cmds) {
@@ -228,27 +229,63 @@ class DalyBmsProtocolTest {
     }
 
     /**
-     * 0x98 alarm frame payload (8 bytes). Byte index = category, bit index inside
-     * the byte = severity / sub-flag per the parser's label table.
+     * Build a BLE main-status frame (`D2 03 [len] [payload] [crc16 LE]`) carrying
+     * the supplied 64-bit alarm bitmap at payload offset 119. The rest of the
+     * payload is zero-padded — only the alarm window matters for the fault
+     * decoder. CRC is MODBUS-style (poly 0xA001) over D2 03 LEN ... payload.
      */
-    private fun alarmFramePayload(bytes: IntArray): ByteArray {
-        require(bytes.size == 8) { "Daly 0x98 carries exactly 8 alarm bytes" }
-        val payload = ByteArray(8)
-        for (i in 0 until 8) payload[i] = bytes[i].toByte()
-        return payload
+    private fun bleMainStatusFrame(alarms64: Long, payloadLen: Int = 128): ByteArray {
+        require(payloadLen >= 119 + 8) {
+            "payload must be at least 127 bytes to fit alarm bitmap at offset 119"
+        }
+        val frame = ByteArray(3 + payloadLen + 2)
+        frame[0] = 0xD2.toByte()
+        frame[1] = 0x03
+        frame[2] = payloadLen.toByte()
+        // Write alarms64 as little-endian 8 bytes at absolute offset 3 + 119.
+        val alarmAbs = 3 + 119
+        for (i in 0 until 8) {
+            frame[alarmAbs + i] = ((alarms64 ushr (i * 8)) and 0xFF).toByte()
+        }
+        val crc = crc16Modbus(frame, 0, frame.size - 2)
+        frame[frame.size - 2] = (crc and 0xFF).toByte()
+        frame[frame.size - 1] = ((crc ushr 8) and 0xFF).toByte()
+        return frame
     }
 
     @Test
-    fun `alarm frame populates bmsFaults`() {
+    fun `BLE main status frame populates bmsFaults from 64-bit alarm bitmap`() {
         val proto = DalyBmsProtocol()
+        // Feed the basic 0x90 frame so the merge gate (hasBasicData) opens.
         proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
-        // Byte 0 bit 0 = "cell OV L1"
-        val alarms = IntArray(8)
-        alarms[0] = 1 shl 0
-        proto.onNotification(dalyFrame(0x98, alarmFramePayload(alarms)))
+        // Bit 16 = "MOS OT (chg)" per esphome-daly-bms-ble ERRORS[64].
+        proto.onNotification(bleMainStatusFrame(alarms64 = 1L shl 16))
         val data = proto.latestData()
         assertNotNull(data)
-        assertEquals(listOf("cell OV L1"), data.bmsFaults)
+        assertEquals(listOf("MOS OT (chg)"), data.bmsFaults)
+    }
+
+    @Test
+    fun `BLE main status frame decodes multiple alarm bits in ascending order`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
+        // Bit 17 = "MOS OT (dis)", bit 48 = "cell OV warn".
+        proto.onNotification(
+            bleMainStatusFrame(alarms64 = (1L shl 17) or (1L shl 48))
+        )
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("MOS OT (dis)", "cell OV warn"), data.bmsFaults)
+    }
+
+    @Test
+    fun `BLE main status frame with zero alarms yields empty bmsFaults`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
+        proto.onNotification(bleMainStatusFrame(alarms64 = 0L))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertTrue(data.bmsFaults.isEmpty())
     }
 
     @Test

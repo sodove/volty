@@ -150,12 +150,13 @@ class JbdBmsProtocol : BmsProtocol() {
         // SOC: byte at offset 19 from data start
         mainSoc = (frame[d + 19].toInt() and 0xFF).toFloat()
 
-        // Protection / alarm flags: u16 BE at offset 16 from data start
-        // (frame byte 20). Each bit is a specific protection condition.
-        mainFaults = parseFaults(frame.u16BE(d + 16))
+        // Protection / alarm flags: u16 BIG-ENDIAN at payload offset 16
+        // (frame byte 20). Mapping per syssi/esphome-jbd-bms ERRORS[16].
+        mainFaults = decodeJbdFaults(frame.u16BE(d + 16))
 
-        // MOS state: byte at offset 20
-        //   0 = both off, 1 = charge on, 2 = discharge on, 3 = both on
+        // MOS state: byte at payload offset 20 (frame byte 24). Per esphome
+        // jbd_bms.cpp this is a 2-bit field:
+        //   bit 0 = charge FET on, bit 1 = discharge FET on
         val mosState = frame[d + 20].toInt() and 0xFF
         mainChargeEnabled = (mosState and 0x01) != 0
         mainDischargeEnabled = (mosState and 0x02) != 0
@@ -216,27 +217,44 @@ class JbdBmsProtocol : BmsProtocol() {
         )
     }
 
-    private fun parseFaults(flags: Int): List<String> {
+    /**
+     * Decode the 16-bit JBD protection bitmask. Bit-to-name mapping mirrors
+     * syssi/esphome-jbd-bms ERRORS[16] (see jbd_bms.cpp). Names are shortened
+     * to keep the comma-joined fault banner readable. Bits 14 and 15 are
+     * undocumented ("Unknown" in esphome) and are intentionally skipped — we
+     * don't surface mystery labels to users.
+     */
+    private fun decodeJbdFaults(flags: Int): List<String> {
         if (flags == 0) return emptyList()
-        val names = listOf(
-            "cell OV",          // bit 0
-            "cell UV",          // bit 1
-            "pack OV",          // bit 2
-            "pack UV",          // bit 3
-            "charge OT",        // bit 4
-            "charge UT",        // bit 5
-            "discharge OT",     // bit 6
-            "discharge UT",     // bit 7
-            "charge OC",        // bit 8
-            "discharge OC",     // bit 9
-            "short circuit",    // bit 10
-            "front-end fault",  // bit 11
-            "software lock"     // bit 12
-        )
         val out = mutableListOf<String>()
-        for (i in names.indices) {
-            if ((flags ushr i) and 1 == 1) out.add(names[i])
+        for (i in JBD_FAULT_NAMES.indices) {
+            val name = JBD_FAULT_NAMES[i] ?: continue
+            if ((flags ushr i) and 1 == 1) out.add(name)
         }
         return out
+    }
+
+    companion object {
+        // Bit 0 → "Cell overvoltage", bit 13 → "Charge timeout Close".
+        // Source: syssi/esphome-jbd-bms components/jbd_bms/jbd_bms.cpp ERRORS[16].
+        // null = bit position present in esphome but labelled "Unknown" — skip.
+        private val JBD_FAULT_NAMES: List<String?> = listOf(
+            "cell OV",          // bit 0  Cell overvoltage
+            "cell UV",          // bit 1  Cell undervoltage
+            "pack OV",          // bit 2  Pack overvoltage
+            "pack UV",          // bit 3  Pack undervoltage
+            "charge OT",        // bit 4  Charging over temperature
+            "charge UT",        // bit 5  Charging under temperature
+            "discharge OT",     // bit 6  Discharging over temperature
+            "discharge UT",     // bit 7  Discharging under temperature
+            "charge OC",        // bit 8  Charging overcurrent
+            "discharge OC",     // bit 9  Discharging overcurrent
+            "short circuit",    // bit 10 Short circuit
+            "front-end fault",  // bit 11 IC front-end error
+            "software lock",    // bit 12 Mosfet Software Lock
+            "charge timeout",   // bit 13 Charge timeout Close
+            null,               // bit 14 Unknown (0x0E)
+            null                // bit 15 Unknown (0x0F)
+        )
     }
 }

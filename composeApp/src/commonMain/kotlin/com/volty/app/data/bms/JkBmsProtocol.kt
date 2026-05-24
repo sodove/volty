@@ -166,9 +166,8 @@ class JkBmsProtocol(
         // Temperatures (value / 10.0, -2000 = NaN/not connected).
         // T1/T2 are cell-block temps. JK02 firmware variants also expose a MOS
         // temperature later in the frame; we keep a conservative two-temp parse
-        // here because the next u16 (offset 134+o) is reused as the fault-flag
-        // word on the 24s firmware and would yield bogus readings if treated as
-        // a temperature.
+        // here so that the bytes reused for the fault-flag word are not also
+        // surfaced as a temperature.
         val temps = mutableListOf<Float>()
         val t1 = buf.i16LE(130 + o)
         if (t1 != -2000 && t1 in -400..1500) temps.add(t1 / 10f)
@@ -180,11 +179,17 @@ class JkBmsProtocol(
         val capacity = buf.u32LE(146 + o) * 0.001f    // Full capacity Ah
         val numCycles = buf.u32LE(150 + o).toInt()
 
-        // Fault / alarm flags at offset 134 (16-bit). Each bit maps to a named
-        // protection or alarm condition. We only emit names for bits that are
-        // actually set so consumers can show a non-empty list when something
-        // is wrong.
-        val faults = parseFaults(buf.u16LE(134 + o))
+        // Errors bitmask: u16 BIG-ENDIAN at data[136..137] for JK02_24S
+        // firmware, data[166..167] for JK02_32S (134 + 32-byte fwOffset).
+        // Source: syssi/esphome-jk-bms-ble, decode_jk02_cell_info_().
+        // Frame may be shorter than the expected offset on truncated reads —
+        // return empty list rather than crash.
+        val faultBase = 136 + o
+        val faults = if (buf.size >= faultBase + 2) {
+            decodeJkFaults(buf.u16BE(faultBase))
+        } else {
+            emptyList()
+        }
 
         lastData = BmsData(
             voltage = voltage,
@@ -203,23 +208,41 @@ class JkBmsProtocol(
         )
     }
 
-    private fun parseFaults(flags: Int): List<String> {
+    /**
+     * Decode the 16-bit JK02 errors bitmask. Bit-to-name mapping is taken verbatim
+     * from syssi/esphome-jk-bms-ble `error_bits_to_string_` (see jk_bms_ble.cpp),
+     * shortened to fit the comma-joined fault banner in the UI.
+     */
+    private fun decodeJkFaults(flags: Int): List<String> {
         if (flags == 0) return emptyList()
-        val names = listOf(
-            "low capacity",       // bit 0
-            "MOS overtemp",       // bit 1
-            "charge OV",          // bit 2
-            "discharge UV",       // bit 3
-            "temperature alarm",  // bit 4
-            "cell OV",            // bit 5
-            "cell UV",            // bit 6
-            "309_A protection",   // bit 7
-            "309_B protection"    // bit 8
-        )
         val out = mutableListOf<String>()
-        for (i in names.indices) {
-            if ((flags ushr i) and 1 == 1) out.add(names[i])
+        for (i in JK_FAULT_NAMES.indices) {
+            if ((flags ushr i) and 1 == 1) out.add(JK_FAULT_NAMES[i])
         }
         return out
+    }
+
+    companion object {
+        // Bit 0 → "Charge Overtemperature", bit 15 → "Charge short circuit".
+        // Order matches the esphome ERRORS table; names are shortened for the
+        // single-line banner.
+        private val JK_FAULT_NAMES = listOf(
+            "charge OT",            // bit 0  Charge Overtemperature
+            "charge UT",            // bit 1  Charge Undertemperature
+            "coproc error",         // bit 2  Coprocessor communication error
+            "cell UV",              // bit 3  Cell Undervoltage
+            "pack UV",              // bit 4  Battery pack undervoltage
+            "discharge OC",         // bit 5  Discharge overcurrent
+            "discharge SC",         // bit 6  Discharge short circuit
+            "discharge OT",         // bit 7  Discharge overtemperature
+            "wire R",               // bit 8  Wire resistance
+            "MOS OT",               // bit 9  Mosfet overtemperature
+            "cell count mismatch",  // bit 10 Cell count is not equal to settings
+            "current sensor",       // bit 11 Current sensor anomaly
+            "cell OV",              // bit 12 Cell Overvoltage
+            "pack OV",              // bit 13 Battery pack overvoltage
+            "charge OC",            // bit 14 Charge overcurrent protection
+            "charge SC"             // bit 15 Charge short circuit
+        )
     }
 }

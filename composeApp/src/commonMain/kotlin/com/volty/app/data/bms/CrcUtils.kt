@@ -54,3 +54,16 @@ fun ByteArray.u32BE(offset: Int): Long =
             ((this[offset + 1].toInt() and 0xFF).toLong() shl 16) or
             ((this[offset + 2].toInt() and 0xFF).toLong() shl 8) or
             (this[offset + 3].toInt() and 0xFF).toLong()
+
+/**
+ * Read 8 bytes starting at [offset] as an unsigned 64-bit little-endian value.
+ * Used by the Daly BLE protocol for its 64-bit alarm bitmap. We build the Long
+ * byte-by-byte to avoid sign-extension surprises when promoting Int → Long.
+ */
+fun ByteArray.u64LE(offset: Int): Long {
+    var v = 0L
+    for (i in 0 until 8) {
+        v = v or ((this[offset + i].toInt() and 0xFF).toLong() shl (i * 8))
+    }
+    return v
+}

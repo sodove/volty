@@ -32,9 +32,10 @@ class JkBmsProtocolTest {
         writeU32LE(frame, 126, (-currentMa).toLong() and 0xFFFFFFFFL)
         writeI16LE(frame, 130, -2000)
         writeI16LE(frame, 132, -2000)
-        // Fault flags live at offset 134 (u16 LE).
-        frame[134] = (faultFlags and 0xFF).toByte()
-        frame[135] = ((faultFlags ushr 8) and 0xFF).toByte()
+        // Errors bitmask at offset 136 (u16 BIG-ENDIAN) per esphome-jk-bms-ble
+        // for the JK02_24S firmware. (fwOffset = 0 in the parser default.)
+        frame[136] = ((faultFlags ushr 8) and 0xFF).toByte()
+        frame[137] = (faultFlags and 0xFF).toByte()
         frame[141] = socPercent.toByte()
         writeU32LE(frame, 142, remainingAhMilli)
         writeU32LE(frame, 146, capacityAhMilli)
@@ -118,13 +119,19 @@ class JkBmsProtocolTest {
     }
 
     @Test
-    fun `parses fault flags from offset 134`() {
+    fun `parses fault flags from offset 136 big-endian`() {
         val proto = JkBmsProtocol(maxCells = 4)
-        // Bit 5 = cell OV. With only that bit set we expect exactly one fault.
-        proto.onNotification(synthesizeCellDataFrame(faultFlags = 1 shl 5))
-        val data = proto.latestData()
-        assertNotNull(data)
-        assertEquals(listOf("cell OV"), data.bmsFaults)
+        // Per esphome-jk-bms-ble:
+        //   bit 12 = "Cell Overvoltage" → shortened to "cell OV"
+        //   bit 3  = "Cell Undervoltage" → shortened to "cell UV"
+        // Verify a single-bit set and a two-bit set decode in the right order.
+        proto.onNotification(synthesizeCellDataFrame(faultFlags = 1 shl 12))
+        assertEquals(listOf("cell OV"), proto.latestData()!!.bmsFaults)
+
+        val proto2 = JkBmsProtocol(maxCells = 4)
+        proto2.onNotification(synthesizeCellDataFrame(faultFlags = (1 shl 3) or (1 shl 12)))
+        // Bits are decoded LSB-first, so bit 3 comes before bit 12.
+        assertEquals(listOf("cell UV", "cell OV"), proto2.latestData()!!.bmsFaults)
     }
 
     @Test
