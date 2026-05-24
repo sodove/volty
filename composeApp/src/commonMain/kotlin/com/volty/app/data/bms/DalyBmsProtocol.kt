@@ -47,6 +47,7 @@ class DalyBmsProtocol : BmsProtocol() {
     private var dischargeEnabled: Boolean = false
     private var cellVoltages: MutableList<Float> = mutableListOf()
     private var temperatures: MutableList<Float> = mutableListOf()
+    private var faults: List<String> = emptyList()
     private var hasBasicData = false
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
@@ -55,7 +56,8 @@ class DalyBmsProtocol : BmsProtocol() {
         buildCommand(0x90), // Voltage/Current/SOC
         buildCommand(0x93), // Status
         buildCommand(0x95), // Cell voltages
-        buildCommand(0x96)  // Temperatures
+        buildCommand(0x96), // Temperatures
+        buildCommand(0x98)  // Alarm / fault flags
     )
 
     override val pollIntervalMs: Long = 500L
@@ -73,6 +75,7 @@ class DalyBmsProtocol : BmsProtocol() {
         hasBasicData = false
         cellVoltages.clear()
         temperatures.clear()
+        faults = emptyList()
     }
 
     // --- Protocol implementation ---
@@ -159,16 +162,64 @@ class DalyBmsProtocol : BmsProtocol() {
                 mergeAndUpdate()
             }
             0x96 -> {
-                // Temperatures: up to 7 sensors per frame
+                // Temperatures: up to 7 sensors per frame. Frames carry a
+                // 1-based frame number so multi-frame responses (up to 8
+                // sensors across several frames) accumulate correctly.
                 val frameNum = frame.u8(d) // 1-based frame number
                 if (frameNum == 1) temperatures.clear()
                 for (i in 0 until 7) {
                     val raw = frame.u8(d + 1 + i)
-                    if (raw != 0) temperatures.add((raw - 40).toFloat())
+                    if (raw != 0) {
+                        val celsius = (raw - 40).toFloat()
+                        if (celsius in -40f..150f) temperatures.add(celsius)
+                    }
                 }
                 mergeAndUpdate()
             }
+            0x98 -> {
+                // 8 bytes of alarm flags, one byte per category. Each byte
+                // packs up to 8 bit-flags; we surface human-readable names
+                // for every set bit.
+                faults = parseFaults(frame, d)
+                mergeAndUpdate()
+            }
         }
+    }
+
+    private fun parseFaults(frame: ByteArray, d: Int): List<String> {
+        // Per batmon-ha daly.py, command 0x98 returns 8 bytes of alarm bits:
+        //   byte 0: cell-voltage alarms
+        //   byte 1: pack-voltage alarms
+        //   byte 2: charge-temp alarms
+        //   byte 3: discharge-temp alarms
+        //   byte 4: charge-current alarms
+        //   byte 5: discharge-current alarms
+        //   byte 6: SOC alarms
+        //   byte 7: misc (voltage/temp diff, MOS temp, sensor failures)
+        // We decode the most-significant levels first so users see the
+        // worst-case label per category instead of a noisy duplicate set.
+        val labels = arrayOf(
+            arrayOf("cell OV L1", "cell OV L2", "cell UV L1", "cell UV L2"),
+            arrayOf("pack OV L1", "pack OV L2", "pack UV L1", "pack UV L2"),
+            arrayOf("charge OT L1", "charge OT L2", "charge UT L1", "charge UT L2"),
+            arrayOf("discharge OT L1", "discharge OT L2", "discharge UT L1", "discharge UT L2"),
+            arrayOf("charge OC L1", "charge OC L2"),
+            arrayOf("discharge OC L1", "discharge OC L2"),
+            arrayOf("SOC high L1", "SOC high L2", "SOC low L1", "SOC low L2"),
+            arrayOf("cell diff L1", "cell diff L2", "temp diff L1", "temp diff L2",
+                    "charge MOS OT", "discharge MOS OT", "charge MOS failure", "discharge MOS failure")
+        )
+        val out = mutableListOf<String>()
+        for (byteIdx in 0 until 8) {
+            if (d + byteIdx >= frame.size) break
+            val b = frame.u8(d + byteIdx)
+            if (b == 0) continue
+            val names = labels[byteIdx]
+            for (bit in names.indices) {
+                if ((b ushr bit) and 1 == 1) out.add(names[bit])
+            }
+        }
+        return out
     }
 
     private fun mergeAndUpdate() {
@@ -184,6 +235,7 @@ class DalyBmsProtocol : BmsProtocol() {
             temperatures = temperatures.toList(),
             chargeEnabled = chargeEnabled,
             dischargeEnabled = dischargeEnabled,
+            bmsFaults = faults,
             isConnected = true
         )
     }

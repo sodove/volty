@@ -20,6 +20,7 @@ class JbdBmsProtocolTest {
         chargeCAh: Int = 800,
         capacityCAh: Int = 1000,
         cycles: Int = 7,
+        protectionFlags: Int = 0,
         mosState: Int = 0x03,
         numTemp: Int = 2,
         temps: List<Int> = listOf(2981, 2991)
@@ -34,6 +35,8 @@ class JbdBmsProtocolTest {
         be16(4, chargeCAh)
         be16(6, capacityCAh)
         be16(8, cycles)
+        // Protection bitmap at data offset 16 (u16 BE).
+        be16(16, protectionFlags and 0xFFFF)
         payload[19] = 80
         payload[20] = mosState.toByte()
         payload[22] = numTemp.toByte()
@@ -111,5 +114,17 @@ class JbdBmsProtocolTest {
         assertEquals(25.0f, data.temperatures[0], 0.1f)
         assertEquals(2, data.cellVoltages.size)
         assertEquals(3.300f, data.cellVoltages[0], 0.001f)
+        // Default payload sets no protection bits → empty fault list.
+        assertTrue(data.bmsFaults.isEmpty())
+    }
+
+    @Test
+    fun `parses protection flags into bmsFaults`() {
+        val proto = JbdBmsProtocol()
+        // Bit 6 = discharge OT in JBD's protection bitmap. Verify exactly that label appears.
+        proto.onNotification(jbdFrame(0x03, mainDataPayload(protectionFlags = 1 shl 6)))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("discharge OT"), data.bmsFaults)
     }
 }

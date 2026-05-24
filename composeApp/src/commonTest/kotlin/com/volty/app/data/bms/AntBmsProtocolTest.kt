@@ -46,9 +46,11 @@ class AntBmsProtocolTest {
         chargeEnabled: Int = 1,
         balancerStateRaw: Int = 0,
         capacityRaw: Long = 100_000_000L,  // 100.0 Ah
-        chargeRaw: Long = 80_000_000L      // 80.0 Ah
+        chargeRaw: Long = 80_000_000L,     // 80.0 Ah
+        alarmFlags: Int = 0                // 24-bit packed
     ): ByteArray {
-        // Compute dataLen so the data extends through the last u32 (charge remaining).
+        // Compute dataLen so the data extends through the alarm bytes that sit
+        // immediately after the remaining-charge u32.
         // pos after cells = 34 + numCells*2
         // pos after temps = + numTemp*2
         // pos after mos    = + 2
@@ -57,6 +59,7 @@ class AntBmsProtocolTest {
         // pos after switches = + 2
         // pos after balancer skip = + 2
         // pos after capacity+charge u32s = + 8
+        // pos after alarm bytes = + 3
         val cellsEnd = 34 + numCells * 2
         val tempsEnd = cellsEnd + numTemp * 2
         val mosEnd = tempsEnd + 2
@@ -69,7 +72,8 @@ class AntBmsProtocolTest {
         val balancer2End = switchesEnd + 2
         val capEnd = balancer2End + 4
         val chargeEnd = capEnd + 4
-        val dataEndOffset = chargeEnd
+        val alarmEnd = chargeEnd + 3
+        val dataEndOffset = alarmEnd
         val dataLen = dataEndOffset - 6
         val frameLen = 6 + dataLen + 4
 
@@ -123,6 +127,11 @@ class AntBmsProtocolTest {
 
         // Remaining charge (u32 LE)
         putU32LE(frame, capEnd, chargeRaw)
+
+        // 3-byte alarm bitmap (LSB first)
+        frame[chargeEnd] = (alarmFlags and 0xFF).toByte()
+        frame[chargeEnd + 1] = ((alarmFlags ushr 8) and 0xFF).toByte()
+        frame[chargeEnd + 2] = ((alarmFlags ushr 16) and 0xFF).toByte()
 
         // CRC over [1 : frameLen-4]
         val crc = crc16Modbus(frame, 1, frameLen - 4)
@@ -229,5 +238,24 @@ class AntBmsProtocolTest {
         assertNotNull(proto.latestData())
         proto.reset()
         assertNull(proto.latestData())
+    }
+
+    @Test
+    fun `parses alarm bits into bmsFaults`() {
+        val proto = AntBmsProtocol()
+        // Bit 6 = discharge OT in our parseFaults table.
+        proto.onNotification(synthesizeStatusFrame(alarmFlags = 1 shl 6))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("discharge OT"), data.bmsFaults)
+    }
+
+    @Test
+    fun `default frame has no faults`() {
+        val proto = AntBmsProtocol()
+        proto.onNotification(synthesizeStatusFrame())
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertTrue(data.bmsFaults.isEmpty())
     }
 }

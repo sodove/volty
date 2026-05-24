@@ -163,17 +163,28 @@ class JkBmsProtocol(
         val voltage = buf.u32LE(118 + o) * 0.001f
         val current = -(buf.i32LE(126 + o) * 0.001f) // Negated per batmon-ha
 
-        // Temperatures (value / 10.0, -2000 = NaN/not connected)
+        // Temperatures (value / 10.0, -2000 = NaN/not connected).
+        // T1/T2 are cell-block temps. JK02 firmware variants also expose a MOS
+        // temperature later in the frame; we keep a conservative two-temp parse
+        // here because the next u16 (offset 134+o) is reused as the fault-flag
+        // word on the 24s firmware and would yield bogus readings if treated as
+        // a temperature.
         val temps = mutableListOf<Float>()
         val t1 = buf.i16LE(130 + o)
-        if (t1 != -2000) temps.add(t1 / 10f)
+        if (t1 != -2000 && t1 in -400..1500) temps.add(t1 / 10f)
         val t2 = buf.i16LE(132 + o)
-        if (t2 != -2000) temps.add(t2 / 10f)
+        if (t2 != -2000 && t2 in -400..1500) temps.add(t2 / 10f)
 
         val soc = buf.u8(141 + o).toFloat()
         val charge = buf.u32LE(142 + o) * 0.001f     // Remaining Ah
         val capacity = buf.u32LE(146 + o) * 0.001f    // Full capacity Ah
         val numCycles = buf.u32LE(150 + o).toInt()
+
+        // Fault / alarm flags at offset 134 (16-bit). Each bit maps to a named
+        // protection or alarm condition. We only emit names for bits that are
+        // actually set so consumers can show a non-empty list when something
+        // is wrong.
+        val faults = parseFaults(buf.u16LE(134 + o))
 
         lastData = BmsData(
             voltage = voltage,
@@ -187,7 +198,28 @@ class JkBmsProtocol(
             temperatures = temps,
             chargeEnabled = chargeSwitch,
             dischargeEnabled = dischargeSwitch,
+            bmsFaults = faults,
             isConnected = true
         )
+    }
+
+    private fun parseFaults(flags: Int): List<String> {
+        if (flags == 0) return emptyList()
+        val names = listOf(
+            "low capacity",       // bit 0
+            "MOS overtemp",       // bit 1
+            "charge OV",          // bit 2
+            "discharge UV",       // bit 3
+            "temperature alarm",  // bit 4
+            "cell OV",            // bit 5
+            "cell UV",            // bit 6
+            "309_A protection",   // bit 7
+            "309_B protection"    // bit 8
+        )
+        val out = mutableListOf<String>()
+        for (i in names.indices) {
+            if ((flags ushr i) and 1 == 1) out.add(names[i])
+        }
+        return out
     }
 }

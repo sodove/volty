@@ -42,6 +42,7 @@ class JbdBmsProtocol : BmsProtocol() {
     private var mainTemperatures: List<Float> = emptyList()
     private var mainChargeEnabled: Boolean = false
     private var mainDischargeEnabled: Boolean = false
+    private var mainFaults: List<String> = emptyList()
     private var cellVoltages: List<Float> = emptyList()
     private var hasMainData = false
     private var hasCellData = false
@@ -149,6 +150,10 @@ class JbdBmsProtocol : BmsProtocol() {
         // SOC: byte at offset 19 from data start
         mainSoc = (frame[d + 19].toInt() and 0xFF).toFloat()
 
+        // Protection / alarm flags: u16 BE at offset 16 from data start
+        // (frame byte 20). Each bit is a specific protection condition.
+        mainFaults = parseFaults(frame.u16BE(d + 16))
+
         // MOS state: byte at offset 20
         //   0 = both off, 1 = charge on, 2 = discharge on, 3 = both on
         val mosState = frame[d + 20].toInt() and 0xFF
@@ -158,14 +163,17 @@ class JbdBmsProtocol : BmsProtocol() {
         // Number of temperature sensors: byte at offset 22
         val numTemp = frame[d + 22].toInt() and 0xFF
 
-        // Temperatures starting at offset 23, 2 bytes each
-        // Format: Kelvin * 10, subtract 2731 then / 10 for Celsius
+        // Temperatures starting at offset 23, 2 bytes each.
+        // Format: Kelvin * 10, subtract 2731 then / 10 for Celsius.
+        // JBD reports as many sensors as numTemp; we trust that count but
+        // clamp to plausible range so a glitched frame doesn't surface garbage.
         val temps = mutableListOf<Float>()
         for (i in 0 until numTemp) {
             val off = d + 23 + i * 2
             if (off + 1 >= frame.size) break
             val raw = frame.u16BE(off)
-            temps.add((raw - 2731) / 10f)
+            val celsius = (raw - 2731) / 10f
+            if (celsius in -40f..150f) temps.add(celsius)
         }
         mainTemperatures = temps
 
@@ -203,7 +211,32 @@ class JbdBmsProtocol : BmsProtocol() {
             temperatures = mainTemperatures,
             chargeEnabled = mainChargeEnabled,
             dischargeEnabled = mainDischargeEnabled,
+            bmsFaults = mainFaults,
             isConnected = true
         )
+    }
+
+    private fun parseFaults(flags: Int): List<String> {
+        if (flags == 0) return emptyList()
+        val names = listOf(
+            "cell OV",          // bit 0
+            "cell UV",          // bit 1
+            "pack OV",          // bit 2
+            "pack UV",          // bit 3
+            "charge OT",        // bit 4
+            "charge UT",        // bit 5
+            "discharge OT",     // bit 6
+            "discharge UT",     // bit 7
+            "charge OC",        // bit 8
+            "discharge OC",     // bit 9
+            "short circuit",    // bit 10
+            "front-end fault",  // bit 11
+            "software lock"     // bit 12
+        )
+        val out = mutableListOf<String>()
+        for (i in names.indices) {
+            if ((flags ushr i) and 1 == 1) out.add(names[i])
+        }
+        return out
     }
 }

@@ -150,15 +150,17 @@ class AntBmsProtocol : BmsProtocol() {
 
         var pos = 34 + numCells * 2
 
-        // Temperatures: u16 LE each, 65496 = NaN
+        // Temperatures: u16 LE each, 65496 = NaN. ANT supports an arbitrary
+        // sensor count declared in byte 8; we read all of them.
         val temps = mutableListOf<Float>()
         for (i in 0 until numTemp) {
             if (pos + 1 >= frameLen) break
             val raw = buf.u16LE(pos)
             pos += 2
             if (raw != 65496) {
-                // ANT BMS raw u16 values are degrees Celsius directly
-                temps.add(raw.toFloat())
+                // ANT BMS raw u16 values are degrees Celsius directly.
+                val celsius = raw.toFloat()
+                if (celsius in -40f..150f) temps.add(celsius)
             }
         }
 
@@ -166,7 +168,10 @@ class AntBmsProtocol : BmsProtocol() {
         if (pos + 1 < frameLen) {
             val mosTemp = buf.u16LE(pos)
             pos += 2
-            if (mosTemp != 65496) temps.add(mosTemp.toFloat())
+            if (mosTemp != 65496) {
+                val celsius = mosTemp.toFloat()
+                if (celsius in -40f..150f) temps.add(celsius)
+            }
         }
 
         pos += 2 // Skip balancer temp
@@ -202,6 +207,18 @@ class AntBmsProtocol : BmsProtocol() {
         val charge = if (pos + 3 < frameLen) buf.u32LE(pos) * 0.000001f else 0f
         pos += 4
 
+        // Alarm / warning bitmap. The exact byte offset depends on numCells
+        // and numTemp, but in our cursor walk it lands just past the charge
+        // u32. The bitmap occupies up to 3 bytes (24 bits) covering cell
+        // OV/UV, pack OV/UV, OT/UT and overcurrent categories. Read it
+        // defensively — if the frame is short we simply emit no faults.
+        val faults = if (pos + 2 < frameLen) {
+            val raw = (buf.u8(pos)) or
+                    (buf.u8(pos + 1) shl 8) or
+                    (buf.u8(pos + 2) shl 16)
+            parseFaults(raw)
+        } else emptyList()
+
         lastData = BmsData(
             voltage = voltage,
             current = current,
@@ -213,8 +230,32 @@ class AntBmsProtocol : BmsProtocol() {
             temperatures = temps,
             chargeEnabled = chargeEnabled,
             dischargeEnabled = dischargeEnabled,
+            bmsFaults = faults,
             isConnected = true
         )
+    }
+
+    private fun parseFaults(flags: Int): List<String> {
+        if (flags == 0) return emptyList()
+        val names = listOf(
+            "cell OV",          // bit 0
+            "cell UV",          // bit 1
+            "pack OV",          // bit 2
+            "pack UV",          // bit 3
+            "charge OT",        // bit 4
+            "charge UT",        // bit 5
+            "discharge OT",     // bit 6
+            "discharge UT",     // bit 7
+            "charge OC",        // bit 8
+            "discharge OC",     // bit 9
+            "short circuit",    // bit 10
+            "MOS OT"            // bit 11
+        )
+        val out = mutableListOf<String>()
+        for (i in names.indices) {
+            if ((flags ushr i) and 1 == 1) out.add(names[i])
+        }
+        return out
     }
 
     companion object {

@@ -122,15 +122,16 @@ class DalyBmsProtocolTest {
     }
 
     @Test
-    fun `poll commands include voltage status cells and temps`() {
+    fun `poll commands include voltage status cells temps and alarms`() {
         val cmds = DalyBmsProtocol().pollCommands()
-        assertEquals(4, cmds.size)
+        assertEquals(5, cmds.size)
         // Each command frame: A5 80 [cmd] 08 ... ... [crc]
         // cmd byte lives at index 2.
         assertEquals(0x90.toByte(), cmds[0][2])
         assertEquals(0x93.toByte(), cmds[1][2])
         assertEquals(0x95.toByte(), cmds[2][2])
         assertEquals(0x96.toByte(), cmds[3][2])
+        assertEquals(0x98.toByte(), cmds[4][2])
 
         // Sanity: header + length byte
         for (cmd in cmds) {
@@ -224,6 +225,39 @@ class DalyBmsProtocolTest {
         assertNotNull(reset)
         assertEquals(3, reset.cellVoltages.size)
         assertEquals(3.200f, reset.cellVoltages[0], 0.001f)
+    }
+
+    /**
+     * 0x98 alarm frame payload (8 bytes). Byte index = category, bit index inside
+     * the byte = severity / sub-flag per the parser's label table.
+     */
+    private fun alarmFramePayload(bytes: IntArray): ByteArray {
+        require(bytes.size == 8) { "Daly 0x98 carries exactly 8 alarm bytes" }
+        val payload = ByteArray(8)
+        for (i in 0 until 8) payload[i] = bytes[i].toByte()
+        return payload
+    }
+
+    @Test
+    fun `alarm frame populates bmsFaults`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
+        // Byte 0 bit 0 = "cell OV L1"
+        val alarms = IntArray(8)
+        alarms[0] = 1 shl 0
+        proto.onNotification(dalyFrame(0x98, alarmFramePayload(alarms)))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("cell OV L1"), data.bmsFaults)
+    }
+
+    @Test
+    fun `default basic frames produce empty bmsFaults`() {
+        val proto = DalyBmsProtocol()
+        proto.onNotification(dalyFrame(0x90, voltageFramePayload()))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertTrue(data.bmsFaults.isEmpty())
     }
 
     @Test

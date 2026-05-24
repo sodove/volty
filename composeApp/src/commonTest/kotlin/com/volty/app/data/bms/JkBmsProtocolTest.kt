@@ -16,7 +16,8 @@ class JkBmsProtocolTest {
         socPercent: Int = 75,
         remainingAhMilli: Long = 9000,
         capacityAhMilli: Long = 12000,
-        cycles: Long = 42
+        cycles: Long = 42,
+        faultFlags: Int = 0
     ): ByteArray {
         val frame = ByteArray(320)
         frame[0] = 0x55.toByte(); frame[1] = 0xAA.toByte()
@@ -31,6 +32,9 @@ class JkBmsProtocolTest {
         writeU32LE(frame, 126, (-currentMa).toLong() and 0xFFFFFFFFL)
         writeI16LE(frame, 130, -2000)
         writeI16LE(frame, 132, -2000)
+        // Fault flags live at offset 134 (u16 LE).
+        frame[134] = (faultFlags and 0xFF).toByte()
+        frame[135] = ((faultFlags ushr 8) and 0xFF).toByte()
         frame[141] = socPercent.toByte()
         writeU32LE(frame, 142, remainingAhMilli)
         writeU32LE(frame, 146, capacityAhMilli)
@@ -111,5 +115,24 @@ class JkBmsProtocolTest {
         assertNotNull(proto.latestData())
         proto.reset()
         assertNull(proto.latestData())
+    }
+
+    @Test
+    fun `parses fault flags from offset 134`() {
+        val proto = JkBmsProtocol(maxCells = 4)
+        // Bit 5 = cell OV. With only that bit set we expect exactly one fault.
+        proto.onNotification(synthesizeCellDataFrame(faultFlags = 1 shl 5))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf("cell OV"), data.bmsFaults)
+    }
+
+    @Test
+    fun `no fault flags yields empty list`() {
+        val proto = JkBmsProtocol(maxCells = 4)
+        proto.onNotification(synthesizeCellDataFrame())
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertTrue(data.bmsFaults.isEmpty())
     }
 }
