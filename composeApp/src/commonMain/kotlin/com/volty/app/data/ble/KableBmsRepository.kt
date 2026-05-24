@@ -2,9 +2,6 @@ package com.volty.app.data.ble
 
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
-import com.juul.kable.State
-import com.juul.kable.WriteType
-import com.juul.kable.characteristicOf
 import com.volty.app.data.bms.AntBmsProtocol
 import com.volty.app.data.bms.BmsProtocol
 import com.volty.app.data.bms.BmsTypeDetector
@@ -12,8 +9,6 @@ import com.volty.app.data.bms.DalyBmsProtocol
 import com.volty.app.data.bms.JbdBmsProtocol
 import com.volty.app.data.bms.JkBmsProtocol
 import com.volty.app.data.memory.SampleRingBuffer
-import com.volty.app.data.stats.MovingAvg
-import com.volty.app.data.stats.MovingAverage
 import com.volty.app.domain.model.BmsData
 import com.volty.app.domain.model.BmsType
 import com.volty.app.domain.model.ConnectionState
@@ -21,6 +16,8 @@ import com.volty.app.domain.model.Vehicle
 import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.DiscoveredDevice
 import com.volty.app.domain.repository.VehicleRepository
+import com.volty.app.domain.stats.MovingAvg
+import com.volty.app.domain.stats.MovingAverage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -31,27 +28,65 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
 @OptIn(ExperimentalUuidApi::class, ExperimentalTime::class)
-class KableBmsRepository(
+class KableBmsRepository private constructor(
     private val vehicleRepository: VehicleRepository,
-    private val serviceController: com.volty.app.service.ServiceController
+    private val serviceStart: () -> Unit,
+    private val serviceStop: () -> Unit,
+    /**
+     * Coroutine context for repo-internal work. Production uses
+     * [kotlinx.coroutines.Dispatchers.Default]; tests can inject a
+     * [kotlinx.coroutines.test.TestDispatcher] so `runTest { advanceUntilIdle() }`
+     * actually drives the reconnect / watchdog loops.
+     */
+    private val coroutineContext: kotlin.coroutines.CoroutineContext,
 ) : BmsRepository {
 
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+    /** Production constructor used by Koin. */
+    constructor(
+        vehicleRepository: VehicleRepository,
+        serviceController: com.volty.app.service.ServiceController,
+    ) : this(
+        vehicleRepository = vehicleRepository,
+        serviceStart = { serviceController.start() },
+        serviceStop = { serviceController.stop() },
+        coroutineContext = Dispatchers.Default,
+    )
+
+    internal companion object {
+        /**
+         * Test-only factory: construct with noop start/stop callbacks and a
+         * test dispatcher. Used by [KableBmsRepositoryDisconnectRaceTest] to
+         * avoid the platform `ServiceController` expect/actual.
+         */
+        internal fun forTesting(
+            vehicleRepository: VehicleRepository,
+            serviceStart: () -> Unit,
+            serviceStop: () -> Unit,
+            coroutineContext: kotlin.coroutines.CoroutineContext,
+        ): KableBmsRepository = KableBmsRepository(
+            vehicleRepository = vehicleRepository,
+            serviceStart = serviceStart,
+            serviceStop = serviceStop,
+            coroutineContext = coroutineContext,
+        )
+    }
+
+    private val scope = CoroutineScope(coroutineContext + SupervisorJob())
 
     private val _activeData = MutableStateFlow(BmsData())
     override val activeData: StateFlow<BmsData> = _activeData.asStateFlow()
@@ -64,17 +99,22 @@ class KableBmsRepository(
 
     private val ringBuffer = SampleRingBuffer(capacity = 30 * 60) // 30 min @ 1 Hz
 
-    private var peripheral: Peripheral? = null
-    private var protocol: BmsProtocol? = null
-    private var observeJob: Job? = null
-    private var pollingJob: Job? = null
-    private var stateJob: Job? = null
-    private var reconnectJob: Job? = null
-    private var watchdogJob: Job? = null
+    /** Lock guarding session swap + the userInitiatedDisconnect flag. */
+    private val sessionLock = Mutex()
 
-    // Wall-clock epoch ms of the last successful sample. Used by the watchdog
-    // to detect a silent link drop earlier than BLE supervision timeout.
-    private var lastSampleAtMs: Long = 0L
+    private var currentSession: ConnectionSession? = null
+    private var reconnectJob: Job? = null
+
+    /**
+     * Flag set by [disconnect] to prevent the watchdog / state observer /
+     * reconnect loop from resurrecting a connection the user explicitly
+     * closed. Cleared on the next user-initiated [connect].
+     *
+     * Atomic-ish via [sessionLock]; readers in coroutines must also re-check
+     * after any suspension point.
+     */
+    @Volatile
+    private var userInitiatedDisconnect: Boolean = false
 
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
 
@@ -122,156 +162,81 @@ class KableBmsRepository(
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
         return try {
-            cleanupConnection()
+            // User-initiated entry — clear the disconnect flag and tear down any
+            // existing session under the lock so a concurrent disconnect() sees
+            // a consistent view.
+            sessionLock.withLock {
+                userInitiatedDisconnect = false
+                currentSession?.tearDown()
+                currentSession = null
+            }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
 
-            val proto = createProtocol(type)
-            protocol = proto
-
-            var advertisement = advertisementCache[address]
-            if (advertisement == null) {
-                advertisement = withTimeoutOrNull(5_000L) {
-                    Scanner().advertisements.first { it.identifier.toString() == address }
-                }
-                if (advertisement != null) advertisementCache[address] = advertisement
-            }
+            val advertisement = resolveAdvertisement(address)
             if (advertisement == null) {
                 _connectionState.value = ConnectionState.Failed("Device not found")
                 return Result.failure(IllegalStateException("Device not found"))
             }
 
-            val p = Peripheral(advertisement)
-            peripheral = p
-            val connectOk = withTimeoutOrNull(7_000L) {
-                p.connect()
-                true
-            }
-            if (connectOk == null) {
-                _connectionState.value = ConnectionState.Failed("Connect timeout")
-                println("[VOLTY-BLE] doConnect: connect timeout after 7s")
-                cleanupConnection()
-                return Result.failure(IllegalStateException("Connect timeout"))
-            }
-
-            val notifyChar = characteristicOf(
-                service = Uuid.parse(proto.uuids.serviceUuid),
-                characteristic = Uuid.parse(proto.uuids.notifyCharUuid)
+            val peripheral = Peripheral(advertisement)
+            val protocol = createProtocol(type)
+            val session = ConnectionSession(
+                parentScope = scope,
+                peripheral = peripheral,
+                protocol = protocol,
+                vehicle = vehicle,
+                ringBuffer = ringBuffer,
+                activeData = _activeData,
+                connectionState = _connectionState,
+                onDropDetected = { reason ->
+                    // The session detected a drop. Schedule a reconnect — unless
+                    // the user explicitly disconnected in the meantime.
+                    onSessionDrop(reason, vehicle, address, type)
+                }
             )
 
-            observeJob = scope.launch {
-                try {
-                    // Wait for service discovery to complete before subscribing.
-                    // peripheral.services is StateFlow<List<DiscoveredService>?> — null until discovered.
-                    p.services.filterNotNull().first()
-                    var sampleCount = 0
-                    p.observe(notifyChar).collect { data ->
-                        proto.onNotification(data)
-                        proto.latestData()?.let { bms ->
-                            val sample = bms.copy(timestamp = Clock.System.now())
-                            _activeData.value = sample
-                            ringBuffer.push(sample)
-                            // kotlin.time.Clock works in commonMain (System.currentTimeMillis
-                            // is JVM-only). Class is already opted in via @OptIn at the top.
-                            lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
-                            sampleCount++
-                            if (sampleCount % 50 == 0) {
-                                println("[VOLTY-BLE] sample #$sampleCount lastSampleAtMs=$lastSampleAtMs")
-                            }
-                        }
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Service not yet available, peripheral torn down, etc. — log silently
-                    // and let connection state flip via the state observer.
-                    println("[VOLTY-BLE] observeJob: exception ${e::class.simpleName}: ${e.message}")
+            // Install the session under the lock so a racing disconnect()
+            // can't see a partially-set state.
+            sessionLock.withLock {
+                if (userInitiatedDisconnect) {
+                    // Someone called disconnect() while we were preparing —
+                    // honour it: don't even attempt to bring the link up.
+                    println("[VOLTY-BLE] doConnect: aborted, userInitiatedDisconnect set during prep")
+                    return Result.failure(IllegalStateException("Disconnect requested"))
                 }
+                currentSession = session
             }
 
-            delay(200)
-
-            val writeChar = characteristicOf(
-                service = Uuid.parse(proto.uuids.serviceUuid),
-                characteristic = Uuid.parse(proto.uuids.writeCharUuid)
-            )
-            for (cmd in proto.handshakeCommands()) {
-                p.write(writeChar, cmd, WriteType.WithoutResponse)
-                delay(100)
+            val connectResult = session.connect()
+            if (connectResult.isFailure) {
+                val err = connectResult.exceptionOrNull()?.message ?: "Connection failed"
+                _connectionState.value = ConnectionState.Failed(err)
+                println("[VOLTY-BLE] doConnect: $err")
+                sessionLock.withLock {
+                    if (currentSession === session) currentSession = null
+                }
+                session.tearDown()
+                return Result.failure(IllegalStateException(err))
             }
 
-            val pollCmds = proto.pollCommands()
-            if (pollCmds.isNotEmpty()) {
-                pollingJob = scope.launch {
-                    while (isActive) {
-                        try {
-                            for (cmd in pollCmds) {
-                                p.write(writeChar, cmd, WriteType.WithoutResponse)
-                                delay(50)
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            // retry next cycle
-                        }
-                        delay(proto.pollIntervalMs)
-                    }
-                }
+            // Re-check after suspension: did the user disconnect while we were
+            // mid-handshake?
+            val shouldAbort = sessionLock.withLock {
+                if (userInitiatedDisconnect) {
+                    println("[VOLTY-BLE] doConnect: post-connect, disconnect was requested — tearing down")
+                    if (currentSession === session) currentSession = null
+                    true
+                } else false
             }
-
-            stateJob?.cancel()
-            stateJob = scope.launch {
-                try {
-                    p.state.collect { st ->
-                        if (st is State.Disconnected) {
-                            println("[VOLTY-BLE] stateJob: Disconnected event received")
-                            if (_connectionState.value is ConnectionState.Connected) {
-                                _connectionState.value = ConnectionState.Failed("Reconnecting…")
-                                println("[VOLTY-BLE] state -> Failed(Reconnecting…) via stateJob")
-                                startReconnectLoop(vehicle, address, type)
-                            }
-                        }
-                    }
-                } catch (e: kotlinx.coroutines.CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    // Peripheral torn down during disconnect — ignore.
-                    println("[VOLTY-BLE] stateJob: exception ${e::class.simpleName}: ${e.message}")
-                }
-            }
-
-            // Stale-sample watchdog. BLE supervision timeout (15-30 s) is too slow
-            // for our UX, so if no notification arrives within 5 s while we're
-            // nominally Connected, force a reconnect. Also triggers if 10 s
-            // elapses since connect with zero samples ever (initial-data starvation).
-            watchdogJob?.cancel()
-            watchdogJob = scope.launch {
-                val connectedAtMs = Clock.System.now().toEpochMilliseconds()
-                println("[VOLTY-BLE] watchdog: launched at $connectedAtMs, lastSampleAtMs=$lastSampleAtMs")
-                delay(2_000L) // grace period for initial handshake / first sample
-                while (isActive) {
-                    delay(1_000L)
-                    val state = _connectionState.value
-                    val nowMs = Clock.System.now().toEpochMilliseconds()
-                    val timeSinceSample = nowMs - lastSampleAtMs
-                    val timeSinceConnect = nowMs - connectedAtMs
-                    println("[VOLTY-BLE] watchdog: tick state=${state::class.simpleName} lastSampleAtMs=$lastSampleAtMs deltaMs=$timeSinceSample")
-                    if (state is ConnectionState.Connected) {
-                        val stale = (lastSampleAtMs > 0 && timeSinceSample > 5_000L) ||
-                                    (lastSampleAtMs == 0L && timeSinceConnect > 10_000L)
-                        if (stale) {
-                            println("[VOLTY-BLE] watchdog: STALE — sample age=${timeSinceSample}ms — triggering reconnect")
-                            _connectionState.value = ConnectionState.Failed("Reconnecting…")
-                            startReconnectLoop(vehicle, address, type)
-                            return@launch
-                        }
-                    }
-                }
+            if (shouldAbort) {
+                session.tearDown()
+                return Result.failure(IllegalStateException("Disconnect requested"))
             }
 
             _connectionState.value = ConnectionState.Connected(vehicle)
             println("[VOLTY-BLE] state -> Connected(${vehicle?.name ?: "guest"}) addr=$address")
-            serviceController.start()
+            serviceStart()
             if (vehicle != null) vehicleRepository.touch(vehicle.id)
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -282,69 +247,113 @@ class KableBmsRepository(
         }
     }
 
-    private fun startReconnectLoop(vehicle: Vehicle?, address: String, type: BmsType) {
+    private suspend fun resolveAdvertisement(address: String): com.juul.kable.Advertisement? {
+        val cached = advertisementCache[address]
+        if (cached != null) return cached
+        val found = withTimeoutOrNull(BleConfig.advertisementSearchMs) {
+            Scanner().advertisements.first { it.identifier.toString() == address }
+        }
+        if (found != null) advertisementCache[address] = found
+        return found
+    }
+
+    private suspend fun onSessionDrop(reason: String, vehicle: Vehicle?, address: String, type: BmsType) {
+        // Suspending check + state mutation under the lock so user disconnect
+        // racing with a watchdog can't both win.
+        sessionLock.withLock {
+            if (userInitiatedDisconnect) {
+                println("[VOLTY-BLE] onSessionDrop ignored — user disconnected")
+                return
+            }
+        }
+        if (_connectionState.value is ConnectionState.Connected ||
+            _connectionState.value is ConnectionState.Connecting) {
+            startReconnectLoop(vehicle, address, type, initialReason = reason)
+        }
+    }
+
+    private fun startReconnectLoop(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        initialReason: String
+    ) {
         reconnectJob?.cancel()
-        println("[VOLTY-BLE] reconnect loop: starting")
+        println("[VOLTY-BLE] reconnect loop: starting reason=$initialReason")
         reconnectJob = scope.launch {
             var attempt = 0
             while (isActive) {
-                if (_activeVehicle.value == null) {
-                    println("[VOLTY-BLE] reconnect loop: vehicle cleared, stopping")
+                // Honour user-initiated disconnect, vehicle clearance,
+                // and "already connected by some other path".
+                if (userInitiatedDisconnect) {
+                    println("[VOLTY-BLE] reconnect loop: userInitiatedDisconnect — stopping")
+                    return@launch
+                }
+                if (_activeVehicle.value == null && vehicle != null) {
+                    println("[VOLTY-BLE] reconnect loop: vehicle cleared — stopping")
                     return@launch
                 }
                 if (_connectionState.value is ConnectionState.Connected) {
-                    println("[VOLTY-BLE] reconnect loop: already connected, stopping")
+                    println("[VOLTY-BLE] reconnect loop: already connected — stopping")
                     return@launch
                 }
                 attempt++
                 println("[VOLTY-BLE] reconnect loop: attempt #$attempt")
-                _connectionState.value = ConnectionState.Connecting(vehicle)
                 val result = doConnect(address, type, vehicle)
                 if (result.isSuccess) {
                     println("[VOLTY-BLE] reconnect loop: attempt #$attempt succeeded")
                     return@launch
                 }
+                if (userInitiatedDisconnect) {
+                    println("[VOLTY-BLE] reconnect loop: disconnect requested mid-attempt — stopping")
+                    return@launch
+                }
                 println("[VOLTY-BLE] reconnect loop: attempt #$attempt failed — ${result.exceptionOrNull()?.message}")
-                val delayMs = if (attempt < 10) 3_000L else 10_000L
+                // Settle into Reconnecting BETWEEN attempts so the UI sees a
+                // stable "trying again, attempt #N" message instead of the
+                // Connecting → Failed flicker that doConnect emits internally.
+                _connectionState.value = ConnectionState.Reconnecting(attempt, initialReason)
+                val delayMs = if (attempt < BleConfig.reconnectBackoffAfter)
+                    BleConfig.reconnectDelayMs
+                else
+                    BleConfig.reconnectDelayAfter10Ms
                 delay(delayMs)
             }
         }
     }
 
-    private suspend fun cleanupConnection() {
-        pollingJob?.cancel(); pollingJob = null
-        observeJob?.cancel(); observeJob = null
-        stateJob?.cancel(); stateJob = null
-        watchdogJob?.cancel(); watchdogJob = null
-        // Reset sample-age tracker so a fresh connect gets a clean grace period.
-        lastSampleAtMs = 0L
-        try { peripheral?.disconnect() } catch (_: Exception) {}
-        peripheral = null
-        protocol?.reset(); protocol = null
-    }
-
     override suspend fun disconnect() {
-        reconnectJob?.cancel(); reconnectJob = null
-        cleanupConnection()
+        // Atomically: flag the intent, cancel the reconnect loop, tear down the
+        // session, clear vehicle, set Disconnected. Held under sessionLock so
+        // doConnect / onSessionDrop running on another coroutine see this.
+        val sessionToTear: ConnectionSession?
+        val reconnectToCancel: Job?
+        sessionLock.withLock {
+            userInitiatedDisconnect = true
+            sessionToTear = currentSession
+            currentSession = null
+            reconnectToCancel = reconnectJob
+            reconnectJob = null
+        }
+        reconnectToCancel?.cancel()
+        sessionToTear?.tearDown()
         _activeData.value = BmsData()
         _activeVehicle.value = null
         ringBuffer.clear()
         _connectionState.value = ConnectionState.Disconnected
-        serviceController.stop()
+        serviceStop()
     }
 
     override fun samples(window: Duration): Flow<List<BmsData>> =
         _activeData.map { ringBuffer.within(window) }
 
-    override fun movingAverage(window: Duration): StateFlow<MovingAvg> {
-        val flow = MutableStateFlow(MovingAvg(0f, 0f, window))
-        scope.launch {
-            _activeData.collect {
-                flow.value = MovingAverage.over(ringBuffer.within(window), window)
-            }
-        }
-        return flow.asStateFlow()
-    }
+    /**
+     * Cold flow — one collector per consumer, cancelled with the consumer's
+     * scope. Previously this returned a hot StateFlow whose collector was
+     * tied to the repo's lifetime, leaking one collector per Dashboard init.
+     */
+    override fun movingAverage(window: Duration): Flow<MovingAvg> =
+        _activeData.map { MovingAverage.over(ringBuffer.within(window), window) }
 
     private fun createProtocol(type: BmsType): BmsProtocol = when (type) {
         BmsType.JK_BMS -> JkBmsProtocol()
@@ -356,4 +365,32 @@ class KableBmsRepository(
     fun close() {
         runCatching { scope.cancel() }
     }
+
+    // ----- Test seams (package-private, used only by commonTest) -----
+
+    /**
+     * Test-only: simulate a link drop / stale-sample detection by directly
+     * invoking the reconnect orchestration as if a [ConnectionSession] had
+     * reported one. Lets unit tests exercise the disconnect-vs-reconnect race
+     * without needing a real BLE stack.
+     */
+    internal fun simulateConnectionDropForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        reason: String
+    ) {
+        // Mimic post-drop state: vehicle present, connectionState NOT in
+        // Connected (otherwise the loop's "already connected" guard would
+        // short-circuit and return immediately).
+        _activeVehicle.value = vehicle
+        _connectionState.value = ConnectionState.Reconnecting(0, reason)
+        startReconnectLoop(vehicle, address, type, initialReason = reason)
+    }
+
+    /** Test-only: peek at the reconnect job so tests can await its termination. */
+    internal fun reconnectJobForTest(): Job? = reconnectJob
+
+    /** Test-only: peek at the user-disconnect flag. */
+    internal fun isUserInitiatedDisconnectForTest(): Boolean = userInitiatedDisconnect
 }

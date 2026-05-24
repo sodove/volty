@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -50,6 +51,10 @@ fun RootScreen(component: RootComponent) {
                 animation = stackAnimation(fade())
             ) { child ->
                 when (val instance = child.instance) {
+                    is RootComponent.Child.Loading -> Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) { CircularProgressIndicator() }
                     is RootComponent.Child.Welcome -> WelcomeScreen(instance.component)
                     is RootComponent.Child.Permissions -> PermissionsGateScreen(instance.component)
                     is RootComponent.Child.Scanning -> ScanningScreen(instance.component)

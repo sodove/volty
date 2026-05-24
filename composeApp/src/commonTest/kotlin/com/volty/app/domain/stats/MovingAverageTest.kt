@@ -1,4 +1,4 @@
-package com.volty.app.data.stats
+package com.volty.app.domain.stats
 
 import com.volty.app.domain.model.BmsData
 import kotlin.math.abs

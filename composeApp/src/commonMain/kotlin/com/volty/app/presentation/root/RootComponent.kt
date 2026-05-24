@@ -10,6 +10,7 @@ import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
+import com.arkivanov.essenty.lifecycle.doOnDestroy
 import com.volty.app.data.prefs.AppPrefs
 import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
@@ -33,8 +34,12 @@ import com.volty.app.presentation.vehicle.DefaultVehicleEditComponent
 import com.volty.app.presentation.vehicle.VehicleEditComponent
 import com.volty.app.presentation.welcome.DefaultWelcomeComponent
 import com.volty.app.presentation.welcome.WelcomeComponent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
 import org.koin.core.component.get
@@ -49,6 +54,8 @@ interface RootComponent {
     enum class Tab { Live, Cells, Graph, Settings }
 
     sealed interface Child {
+        /** Transient cold-start state while we read the saved-vehicle DB. */
+        data object Loading : Child
         data class Welcome(val component: WelcomeComponent) : Child
         data class Permissions(val component: PermissionsGateComponent) : Child
         data class Scanning(val component: ScanningComponent) : Child
@@ -64,6 +71,7 @@ interface RootComponent {
 
 @Serializable
 sealed class Config {
+    @Serializable data object Loading : Config()
     @Serializable data object Welcome : Config()
     @Serializable data object Permissions : Config()
     @Serializable data object Scanning : Config()
@@ -85,13 +93,29 @@ class DefaultRootComponent(
     private val vehicleRepository: VehicleRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
 
+    // Lightweight scope for cold-start async work (DB reads). Previously these
+    // ran via runBlocking on the UI thread — risky on slow devices.
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    init {
+        lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+    }
+
     override val stack: Value<ChildStack<*, RootComponent.Child>> = childStack(
         source = nav,
         serializer = Config.serializer(),
-        initialConfiguration = computeInitialConfig(),
+        initialConfiguration = computeInitialConfigSync(),
         handleBackButton = true,
         childFactory = ::createChild
     )
+
+    init {
+        // If we started on Loading (no synchronous answer was available),
+        // resolve the real start destination off the UI thread.
+        if (stack.value.active.configuration is Config.Loading) {
+            scope.launch { resolveStartDestination() }
+        }
+    }
 
     override fun onBack() {
         val current = stack.value.active.configuration
@@ -111,15 +135,34 @@ class DefaultRootComponent(
         nav.bringToFront(target)
     }
 
-    private fun computeInitialConfig(): Config {
+    /**
+     * Synchronous portion of start-destination resolution. Permissions are
+     * cheap to check, so we do that inline. The DB read (saved-vehicle count)
+     * is deferred to [resolveStartDestination] running in [scope] — until it
+     * completes we render [Config.Loading] (a tiny splash).
+     */
+    private fun computeInitialConfigSync(): Config {
         if (permissionsChecker.missingPermissions().isNotEmpty()) return Config.Permissions
-        val savedCount = runBlocking { vehicleRepository.vehicles.first().size }
-        return if (savedCount == 0) Config.Welcome else Config.Scanning
+        return Config.Loading
+    }
+
+    private suspend fun resolveStartDestination() {
+        val savedCount = vehicleRepository.vehicles.first().size
+        nav.replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
+    }
+
+    private fun onPermissionsGranted() {
+        // After permissions are granted, recompute the post-permissions route
+        // (Welcome vs Scanning) off the UI thread. Show the loading splash in
+        // the meantime so the screen isn't blank.
+        nav.replaceAll(Config.Loading)
+        scope.launch { resolveStartDestination() }
     }
 
     @OptIn(DelicateDecomposeApi::class)
     private fun createChild(config: Config, context: ComponentContext): RootComponent.Child =
         when (config) {
+            is Config.Loading -> RootComponent.Child.Loading
             is Config.Welcome -> RootComponent.Child.Welcome(
                 DefaultWelcomeComponent(
                     componentContext = context,
@@ -133,12 +176,7 @@ class DefaultRootComponent(
                 DefaultPermissionsGateComponent(
                     componentContext = context,
                     checker = get<PermissionsChecker>(),
-                    onAllGrantedRequested = {
-                        // After granting, recompute the post-permissions initial route:
-                        // Welcome (0 saved vehicles) or Scanning (>=1 saved vehicle).
-                        val savedCount = runBlocking { vehicleRepository.vehicles.first().size }
-                        nav.replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
-                    }
+                    onAllGrantedRequested = { onPermissionsGranted() }
                 )
             )
             is Config.Scanning -> RootComponent.Child.Scanning(

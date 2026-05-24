@@ -1,10 +1,10 @@
 package com.volty.app.domain.repository
 
-import com.volty.app.data.stats.MovingAvg
 import com.volty.app.domain.model.BmsData
 import com.volty.app.domain.model.BmsType
 import com.volty.app.domain.model.ConnectionState
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.domain.stats.MovingAvg
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
@@ -28,5 +28,12 @@ interface BmsRepository {
     suspend fun disconnect()
 
     fun samples(window: Duration): Flow<List<BmsData>>
-    fun movingAverage(window: Duration): StateFlow<MovingAvg>
+
+    /**
+     * Cold flow of [MovingAvg] over the given [window], emitting on each new
+     * sample. Callers should [kotlinx.coroutines.flow.stateIn] this into their
+     * own [kotlinx.coroutines.CoroutineScope] so the collector is cancelled
+     * with the consumer's lifecycle.
+     */
+    fun movingAverage(window: Duration): Flow<MovingAvg>
 }

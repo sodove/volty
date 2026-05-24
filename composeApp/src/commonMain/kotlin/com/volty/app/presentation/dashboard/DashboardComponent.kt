@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.minutes
@@ -68,17 +69,17 @@ class DefaultDashboardComponent(
     private val _state: MutableStateFlow<DashboardComponent.State> = run {
         val initialData = bmsRepository.activeData.value
         val initialVehicle = bmsRepository.activeVehicle.value
-        val window = (initialVehicle?.averagingWindowMin ?: 5).minutes
-        val initialAvg = bmsRepository.movingAverage(window).value
         val cells = initialData.cellVoltages
         val minV = if (cells.isEmpty()) 0f else cells.min()
         val maxV = if (cells.isEmpty()) 0f else cells.max()
+        // movingAverage is now a cold Flow — its initial seed comes from the
+        // collector launched in `init`. Until then we display 0, which is what
+        // the previous code effectively rendered anyway (the StateFlow seed
+        // was MovingAvg(0f, 0f, window)).
         MutableStateFlow(
             DashboardComponent.State(
                 data = initialData,
                 vehicle = initialVehicle,
-                avgPowerW = initialAvg.avgPowerW,
-                avgCurrentA = initialAvg.avgCurrentA,
                 cellsMinV = minV,
                 cellsMaxV = maxV,
                 cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
