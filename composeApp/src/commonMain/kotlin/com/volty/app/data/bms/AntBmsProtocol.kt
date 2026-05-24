@@ -207,17 +207,13 @@ class AntBmsProtocol : BmsProtocol() {
         val charge = if (pos + 3 < frameLen) buf.u32LE(pos) * 0.000001f else 0f
         pos += 4
 
-        // Alarm / warning bitmap. The exact byte offset depends on numCells
-        // and numTemp, but in our cursor walk it lands just past the charge
-        // u32. The bitmap occupies up to 3 bytes (24 bits) covering cell
-        // OV/UV, pack OV/UV, OT/UT and overcurrent categories. Read it
-        // defensively — if the frame is short we simply emit no faults.
-        val faults = if (pos + 2 < frameLen) {
-            val raw = (buf.u8(pos)) or
-                    (buf.u8(pos + 1) shl 8) or
-                    (buf.u8(pos + 2) shl 16)
-            parseFaults(raw)
-        } else emptyList()
+        // ANT v3 ("BLE22AAUB") splits status into separate ProtectInfo /
+        // WarningInfo structures whose exact layout we have not yet reversed.
+        // The previous "u24 bitmap right after charge u32" guess produced
+        // ~7 phantom faults on a healthy pack (values drift between samples,
+        // suggesting we were reading cycle/runtime counters). Suppress until
+        // we have ground-truth from real frames.
+        val faults: List<String> = emptyList()
 
         lastData = BmsData(
             voltage = voltage,
@@ -233,29 +229,6 @@ class AntBmsProtocol : BmsProtocol() {
             bmsFaults = faults,
             isConnected = true
         )
-    }
-
-    private fun parseFaults(flags: Int): List<String> {
-        if (flags == 0) return emptyList()
-        val names = listOf(
-            "cell OV",          // bit 0
-            "cell UV",          // bit 1
-            "pack OV",          // bit 2
-            "pack UV",          // bit 3
-            "charge OT",        // bit 4
-            "charge UT",        // bit 5
-            "discharge OT",     // bit 6
-            "discharge UT",     // bit 7
-            "charge OC",        // bit 8
-            "discharge OC",     // bit 9
-            "short circuit",    // bit 10
-            "MOS OT"            // bit 11
-        )
-        val out = mutableListOf<String>()
-        for (i in names.indices) {
-            if ((flags ushr i) and 1 == 1) out.add(names[i])
-        }
-        return out
     }
 
     companion object {

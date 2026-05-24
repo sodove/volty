@@ -241,19 +241,12 @@ class AntBmsProtocolTest {
     }
 
     @Test
-    fun `parses alarm bits into bmsFaults`() {
+    fun `bmsFaults is empty until ANT alarm layout is reversed`() {
+        // ANT v3 splits ProtectInfo/WarningInfo into separate structures whose
+        // exact offsets are unknown; until we have ground-truth from real
+        // frames, the parser must not invent faults. See AntBmsProtocol.kt.
         val proto = AntBmsProtocol()
-        // Bit 6 = discharge OT in our parseFaults table.
-        proto.onNotification(synthesizeStatusFrame(alarmFlags = 1 shl 6))
-        val data = proto.latestData()
-        assertNotNull(data)
-        assertEquals(listOf("discharge OT"), data.bmsFaults)
-    }
-
-    @Test
-    fun `default frame has no faults`() {
-        val proto = AntBmsProtocol()
-        proto.onNotification(synthesizeStatusFrame())
+        proto.onNotification(synthesizeStatusFrame(alarmFlags = 0xFFFFFF))
         val data = proto.latestData()
         assertNotNull(data)
         assertTrue(data.bmsFaults.isEmpty())
