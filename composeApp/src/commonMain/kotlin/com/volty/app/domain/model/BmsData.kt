@@ -17,6 +17,7 @@ data class BmsData(
     val temperatures: List<Float> = emptyList(),
     val chargeEnabled: Boolean = false,
     val dischargeEnabled: Boolean = false,
+    val bmsFaults: List<String> = emptyList(),
     val isConnected: Boolean = false,
     val timestamp: Instant = Clock.System.now()
 )
