@@ -88,6 +88,19 @@
     <string name="cells_ok">OK</string>
     <string name="cells_imbalance">Дисбаланс</string>
     <string name="cells_no_data">Нет данных по ячейкам</string>
+    <string name="cells_section_title">Ячейки</string>
+
+    <!-- MOSFET state -->
+    <string name="mosfet_charge_on">Заряд ВКЛ</string>
+    <string name="mosfet_charge_off">Заряд ВЫКЛ</string>
+    <string name="mosfet_discharge_on">Разряд ВКЛ</string>
+    <string name="mosfet_discharge_off">Разряд ВЫКЛ</string>
+
+    <!-- BMS faults -->
+    <string name="bms_faults_title">Ошибки BMS</string>
+
+    <!-- Temperature short label (used when many sensors) -->
+    <string name="temp_label_short">%1$d</string>
 
     <!-- Graph screen -->
     <string name="graph_title">График</string>

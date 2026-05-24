@@ -18,8 +18,11 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -32,7 +35,11 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.volty.app.domain.model.Chemistry
 import com.volty.app.domain.model.ConnectionState
+import com.volty.app.presentation.cells.CellsComponent
+import com.volty.app.presentation.cells.chemistryFraction
+import com.volty.app.presentation.common.CellGrid
 import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
@@ -43,7 +50,9 @@ import kotlin.math.abs
 import kotlin.math.round
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.bms_faults_title
 import volty.composeapp.generated.resources.cells_delta_label
+import volty.composeapp.generated.resources.cells_section_title
 import volty.composeapp.generated.resources.cells_v_avg
 import volty.composeapp.generated.resources.hero_ah_remaining
 import volty.composeapp.generated.resources.hero_charging_to_full
@@ -54,6 +63,10 @@ import volty.composeapp.generated.resources.hero_to_full
 import volty.composeapp.generated.resources.metric_power
 import volty.composeapp.generated.resources.metric_temperature
 import volty.composeapp.generated.resources.metric_voltage
+import volty.composeapp.generated.resources.mosfet_charge_off
+import volty.composeapp.generated.resources.mosfet_charge_on
+import volty.composeapp.generated.resources.mosfet_discharge_off
+import volty.composeapp.generated.resources.mosfet_discharge_on
 import volty.composeapp.generated.resources.no_battery
 import volty.composeapp.generated.resources.power_last_5_min
 import volty.composeapp.generated.resources.status_connected
@@ -69,11 +82,13 @@ fun DashboardScreen(component: DashboardComponent) {
     val state by component.state.collectAsState()
     val data = state.data
     val vehicle = state.vehicle
+    val chemistry = vehicle?.chemistry ?: Chemistry.LI_ION_NMC
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
+            .verticalScroll(rememberScrollState())
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
@@ -81,6 +96,7 @@ fun DashboardScreen(component: DashboardComponent) {
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to MaterialTheme.colorScheme.tertiary
             is ConnectionState.Connecting -> ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
+            is ConnectionState.Reconnecting -> ("● " + stringResource(Res.string.status_reconnecting, c.reason)) to MaterialTheme.colorScheme.secondary
             is ConnectionState.Failed -> ("● " + stringResource(Res.string.status_reconnecting, c.reason)) to MaterialTheme.colorScheme.error
             ConnectionState.Disconnected -> ("● " + stringResource(Res.string.status_disconnected)) to MaterialTheme.colorScheme.outline
             ConnectionState.Scanning -> ("● " + stringResource(Res.string.status_scanning)) to MaterialTheme.colorScheme.secondary
@@ -92,6 +108,17 @@ fun DashboardScreen(component: DashboardComponent) {
             statusColor = statusColor,
             iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
             onClick = component::onPillClicked
+        )
+
+        // BMS faults — only shown when non-empty so the dashboard isn't cluttered
+        if (data.bmsFaults.isNotEmpty()) {
+            FaultsBanner(faults = data.bmsFaults)
+        }
+
+        // MOSFET state chips — quick at-a-glance health
+        MosfetRow(
+            chargeOn = data.chargeEnabled,
+            dischargeOn = data.dischargeEnabled
         )
 
         HeroCard(state)
@@ -167,22 +194,27 @@ fun DashboardScreen(component: DashboardComponent) {
             }
         }
 
+        // Temperature + cells summary. We intentionally drop the IntrinsicSize.Min
+        // height constraint that previously forced the temp FlowRow into a single
+        // line (which clipped the 5th+ sensor). Each card now sizes to its content.
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min)
                 .animateContentSize()
         ) {
             MetricCard(
                 label = stringResource(Res.string.metric_temperature),
                 value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.first())}° C",
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f),
                 extra = {
                     FlowRow(
+                        modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp)
                     ) {
+                        // Compact format "1:25°" survives 4+ sensors on a narrow card
+                        // and FlowRow wraps gracefully when they exceed the row.
                         data.temperatures.forEachIndexed { i, t ->
                             Box(
                                 modifier = Modifier
@@ -190,7 +222,11 @@ fun DashboardScreen(component: DashboardComponent) {
                                     .background(MaterialTheme.colorScheme.surfaceContainerHigh)
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
-                                Text("T${i + 1} ${fmt0(t)}°", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurface)
+                                Text(
+                                    "${i + 1}:${fmt0(t)}°",
+                                    fontSize = 11.sp,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
                             }
                         }
                     }
@@ -199,15 +235,12 @@ fun DashboardScreen(component: DashboardComponent) {
             MetricCard(
                 label = stringResource(Res.string.cells_delta_label, state.cellsDeltaMv),
                 value = if (data.cellVoltages.isEmpty()) "—" else stringResource(Res.string.cells_v_avg, fmt2(data.cellVoltages.average().toFloat())),
-                modifier = Modifier.weight(1f).fillMaxHeight(),
+                modifier = Modifier.weight(1f),
                 extra = {
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.height(18.dp)) {
                         val cells = data.cellVoltages
-                        val min = state.cellsMinV
-                        val max = state.cellsMaxV
-                        val range = (max - min).takeIf { it > 0f } ?: 1f
                         cells.forEach { v ->
-                            val rawFrac = ((v - min) / range).coerceIn(0f, 1f)
+                            val rawFrac = chemistryFraction(v, chemistry)
                             // animateFloatAsState is call-site-keyed, so each per-cell
                             // call in this forEach gets its own animation state.
                             val animFrac by animateFloatAsState(
@@ -230,6 +263,16 @@ fun DashboardScreen(component: DashboardComponent) {
             )
         }
 
+        // Inline cells grid — same renderer as CellsScreen but compact.
+        if (data.cellVoltages.isNotEmpty()) {
+            DashboardCellsSection(
+                voltages = data.cellVoltages,
+                chemistry = chemistry,
+                deltaMv = state.cellsDeltaMv,
+                cellsMinV = state.cellsMinV,
+                cellsMaxV = state.cellsMaxV
+            )
+        }
     }
 
     if (state.sheetOpen) {
@@ -240,6 +283,144 @@ fun DashboardScreen(component: DashboardComponent) {
             onAdd = component::onAddBattery,
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
+        )
+    }
+}
+
+@Composable
+private fun DashboardCellsSection(
+    voltages: List<Float>,
+    chemistry: Chemistry,
+    deltaMv: Int,
+    cellsMinV: Float,
+    cellsMaxV: Float
+) {
+    val cells = voltages.mapIndexed { i, v ->
+        CellsComponent.Cell(
+            index = i + 1,
+            voltageV = v,
+            rangeFraction = chemistryFraction(v, chemistry)
+        )
+    }
+    val maxIdx = if (voltages.isEmpty()) -1 else voltages.indexOf(cellsMaxV)
+    val minIdx = if (voltages.isEmpty()) -1 else voltages.indexOf(cellsMinV)
+    val highlightSpread = deltaMv >= 30
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(20.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(12.dp)
+    ) {
+        Text(
+            stringResource(Res.string.cells_section_title).uppercase(),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+        )
+        Spacer(Modifier.height(8.dp))
+        CellGrid(
+            cells = cells,
+            maxIdx = maxIdx,
+            minIdx = minIdx,
+            highlightSpread = highlightSpread,
+            compact = true,
+            modifier = Modifier.fillMaxWidth()
+        )
+    }
+}
+
+@Composable
+private fun MosfetRow(chargeOn: Boolean, dischargeOn: Boolean) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        MosfetChip(
+            label = stringResource(
+                if (chargeOn) Res.string.mosfet_charge_on else Res.string.mosfet_charge_off
+            ),
+            on = chargeOn,
+            modifier = Modifier.weight(1f)
+        )
+        MosfetChip(
+            label = stringResource(
+                if (dischargeOn) Res.string.mosfet_discharge_on else Res.string.mosfet_discharge_off
+            ),
+            on = dischargeOn,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun MosfetChip(label: String, on: Boolean, modifier: Modifier = Modifier) {
+    val accent = if (on) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+    val container = if (on) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f)
+    } else {
+        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f)
+    }
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(14.dp))
+            .background(container)
+            .padding(horizontal = 10.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        // Filled dot for ON, hollow ring for OFF — readable even when red/green
+        // is hard to tell apart (e.g. greyscale screenshot).
+        Box(
+            modifier = Modifier
+                .size(10.dp)
+                .clip(RoundedCornerShape(5.dp))
+                .background(accent),
+            contentAlignment = Alignment.Center
+        ) {
+            if (!on) {
+                Box(
+                    modifier = Modifier
+                        .size(5.dp)
+                        .clip(RoundedCornerShape(2.5.dp))
+                        .background(container)
+                )
+            }
+        }
+        Text(
+            label,
+            fontSize = 12.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface
+        )
+    }
+}
+
+@Composable
+private fun FaultsBanner(faults: List<String>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                stringResource(Res.string.bms_faults_title),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            faults.joinToString(" · "),
+            fontSize = 13.sp,
+            fontWeight = FontWeight.Medium,
+            color = MaterialTheme.colorScheme.onErrorContainer
         )
     }
 }

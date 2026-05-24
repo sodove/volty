@@ -88,6 +88,19 @@
     <string name="cells_ok">OK</string>
     <string name="cells_imbalance">Imbalance</string>
     <string name="cells_no_data">No cell data yet</string>
+    <string name="cells_section_title">Cells</string>
+
+    <!-- MOSFET state -->
+    <string name="mosfet_charge_on">Charge ON</string>
+    <string name="mosfet_charge_off">Charge OFF</string>
+    <string name="mosfet_discharge_on">Discharge ON</string>
+    <string name="mosfet_discharge_off">Discharge OFF</string>
+
+    <!-- BMS faults -->
+    <string name="bms_faults_title">BMS faults</string>
+
+    <!-- Temperature short label (used when many sensors) -->
+    <string name="temp_label_short">%1$d</string>
 
     <!-- Graph screen -->
     <string name="graph_title">Graph</string>

@@ -1,6 +1,5 @@
 package com.volty.app.domain.usecase
 
-import com.volty.app.data.stats.MovingAvg
 import com.volty.app.domain.model.AlertConfig
 import com.volty.app.domain.model.BmsData
 import com.volty.app.domain.model.BmsType
@@ -9,13 +8,13 @@ import com.volty.app.domain.model.ConnectionState
 import com.volty.app.domain.model.Vehicle
 import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.DiscoveredDevice
+import com.volty.app.domain.stats.MovingAvg
 import com.volty.app.notification.LiveSummary
 import com.volty.app.notification.Notifier
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.time.Duration
@@ -44,8 +43,8 @@ class AlertEngineTest {
         override suspend fun connectGuest(address: String, type: BmsType) = Result.success(Unit)
         override suspend fun disconnect() {}
         override fun samples(window: Duration): Flow<List<BmsData>> = emptyFlow()
-        override fun movingAverage(window: Duration): StateFlow<MovingAvg> =
-            MutableStateFlow(MovingAvg(0f, 0f, window)).asStateFlow()
+        override fun movingAverage(window: Duration): Flow<MovingAvg> =
+            flowOf(MovingAvg(0f, 0f, window))
     }
 
     private fun vehicleWith(
