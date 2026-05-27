@@ -36,4 +36,12 @@ interface BmsRepository {
      * with the consumer's lifecycle.
      */
     fun movingAverage(window: Duration): Flow<MovingAvg>
+
+    /**
+     * Called when the app comes back to the foreground. The repo verifies
+     * sample freshness and forces a reconnect if the in-session watchdog didn't
+     * catch a background drop (Doze, App-Standby, foreground service killed).
+     * Idempotent — safe to call on every lifecycle ON_START.
+     */
+    suspend fun onAppResumed()
 }

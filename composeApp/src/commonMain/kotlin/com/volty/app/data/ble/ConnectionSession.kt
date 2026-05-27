@@ -69,6 +69,14 @@ internal class ConnectionSession(
     val peripheralRef: Peripheral get() = peripheral
 
     /**
+     * Most recent sample receipt time (epoch ms). 0 means no sample has been
+     * received yet for this session. Used by [KableBmsRepository.onAppResumed]
+     * to detect background-induced silent drops the in-session watchdog
+     * couldn't catch because its dispatcher was suspended.
+     */
+    internal fun lastSampleAtMs(): Long = lastSampleAtMs
+
+    /**
      * Attempt to bring the peripheral up. Throws on hard failure; the repo
      * decides whether to retry.
      *

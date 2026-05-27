@@ -110,6 +110,20 @@ class KableBmsRepository private constructor(
     private var reconnectJob: Job? = null
 
     /**
+     * Cached (address, type) of the most recent connection attempt. [onAppResumed]
+     * replays this through the same reconnect pathway the watchdog uses, which is
+     * the only way to re-fire the loop for a guest connection (whose Vehicle is
+     * synthetic and not reconstructable from the [ConnectionState] alone).
+     */
+    private data class ConnectionTarget(
+        val vehicle: Vehicle?,
+        val address: String,
+        val type: BmsType
+    )
+    @Volatile
+    private var lastConnectionTarget: ConnectionTarget? = null
+
+    /**
      * Flag set by [disconnect] to prevent the watchdog / state observer /
      * reconnect loop from resurrecting a connection the user explicitly
      * closed. Cleared on the next user-initiated [connect].
@@ -234,6 +248,7 @@ class KableBmsRepository private constructor(
                     return Result.failure(IllegalStateException("Disconnect requested"))
                 }
                 currentSession = session
+                lastConnectionTarget = ConnectionTarget(vehicle, address, type)
             }
 
             val connectResult = session.connect()
@@ -363,6 +378,9 @@ class KableBmsRepository private constructor(
             currentSession = null
             reconnectToCancel = reconnectJob
             reconnectJob = null
+            // Forget the target so a later [onAppResumed] doesn't try to
+            // resurrect a connection the user explicitly closed.
+            lastConnectionTarget = null
         }
         reconnectToCancel?.cancel()
         sessionToTear?.tearDown()
@@ -372,6 +390,53 @@ class KableBmsRepository private constructor(
         _connectionState.value = ConnectionState.Disconnected
         serviceStop()
     }
+
+    override suspend fun onAppResumed() {
+        // Only meaningful if the repo still thinks it's connected. If we're
+        // Idle / Disconnected / Failed / Connecting, the user's flow will sort
+        // itself out without our help.
+        val state = _connectionState.value
+        if (state !is ConnectionState.Connected) return
+
+        // Snapshot target under the lock so a concurrent disconnect doesn't
+        // pull the rug. We tolerate a missing session (paper-trail Connected
+        // state without a live session): the cached target is enough to drive
+        // the drop pathway and the loop will spin up a fresh session.
+        val target = sessionLock.withLock {
+            if (userInitiatedDisconnect) return@withLock null
+            lastConnectionTarget
+        } ?: return
+
+        val nowMs = Clock.System.now().toEpochMilliseconds()
+        val lastSampleMs = currentSession?.lastSampleAtMs() ?: testLastSampleAtMsOverride ?: 0L
+        val sampleAge = nowMs - lastSampleMs
+
+        // Treat "never received a sample" the same as "long stale" — either way
+        // the in-session watchdog should have caught it by now if the link were
+        // healthy and the dispatcher were running.
+        val isStale = lastSampleMs == 0L || sampleAge > BleConfig.staleSampleMs
+        if (!isStale) return
+
+        val reason = "Background drop (stale ${sampleAge}ms)"
+        println("[VOLTY-BLE] onAppResumed: stale sample age=${sampleAge}ms (lastSampleAtMs=$lastSampleMs) — forcing reconnect")
+        // Tear down any live session and transition out of Connected before
+        // kicking the reconnect loop — the loop's "already connected" guard
+        // would otherwise short-circuit before the first attempt. This mirrors
+        // [simulateConnectionDropForTest] and the production watchdog flow,
+        // where the link drop event has already changed the link state by the
+        // time the loop runs.
+        val sessionToTear = sessionLock.withLock { currentSession }
+        sessionToTear?.tearDown()
+        _connectionState.value = ConnectionState.Reconnecting(0, reason)
+        startReconnectLoop(target.vehicle, target.address, target.type, initialReason = reason)
+    }
+
+    /**
+     * Test-only override of [ConnectionSession.lastSampleAtMs] when no real
+     * session exists in the test harness. Production code never reads this.
+     */
+    @Volatile
+    private var testLastSampleAtMsOverride: Long? = null
 
     override fun samples(window: Duration): Flow<List<BmsData>> =
         _activeData.map { ringBuffer.within(window) }
@@ -422,4 +487,22 @@ class KableBmsRepository private constructor(
 
     /** Test-only: peek at the user-disconnect flag. */
     internal fun isUserInitiatedDisconnectForTest(): Boolean = userInitiatedDisconnect
+
+    /**
+     * Test-only: prime a "stuck Connected" state — as if the app had been
+     * connected pre-background and dispatchers were just unfrozen on resume.
+     * No real [ConnectionSession] is involved; [lastSampleAtMs] is faked via
+     * [testLastSampleAtMsOverride].
+     */
+    internal fun primeConnectedForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        lastSampleAtMs: Long
+    ) {
+        _activeVehicle.value = vehicle
+        _connectionState.value = ConnectionState.Connected(vehicle)
+        lastConnectionTarget = ConnectionTarget(vehicle, address, type)
+        testLastSampleAtMsOverride = lastSampleAtMs
+    }
 }
