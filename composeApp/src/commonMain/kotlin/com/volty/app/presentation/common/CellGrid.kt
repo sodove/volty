@@ -24,17 +24,35 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.volty.app.presentation.cells.CellsComponent
+import com.volty.app.domain.model.Chemistry
 import kotlin.math.round
 
+/** Pure UI model for a single cell row in the dashboard cell grid. */
+data class CellUiModel(
+    val index: Int,
+    val voltageV: Float,
+    /** [0, 1] fraction within the chemistry's nominal operating range. */
+    val rangeFraction: Float
+)
+
 /**
- * 3-column grid of cells with thin progress bars. Shared between [CellsScreen] and the
- * dashboard's inline cells section. The bar fraction is precomputed by the component
- * (chemistry-based, not pack-spread).
+ * Maps a cell voltage to a [0, 1] fraction within the chemistry's operating range.
+ * A fully charged Li-ion cell at 4.20V yields 1.0; a fully discharged cell at 2.80V yields 0.0.
+ */
+fun chemistryFraction(voltage: Float, chemistry: Chemistry): Float {
+    val span = chemistry.defaultHighV - chemistry.defaultLowV
+    if (span <= 0f) return 0f
+    return ((voltage - chemistry.defaultLowV) / span).coerceIn(0f, 1f)
+}
+
+/**
+ * 3-column grid of cells with thin progress bars. Used by the dashboard's inline
+ * cells section. The bar fraction is precomputed by the caller (chemistry-based,
+ * not pack-spread).
  */
 @Composable
 fun CellGrid(
-    cells: List<CellsComponent.Cell>,
+    cells: List<CellUiModel>,
     maxIdx: Int,
     minIdx: Int,
     highlightSpread: Boolean,
@@ -74,7 +92,7 @@ fun CellGrid(
 
 @Composable
 private fun CellCell(
-    cell: CellsComponent.Cell,
+    cell: CellUiModel,
     isMax: Boolean,
     isMin: Boolean,
     compact: Boolean,

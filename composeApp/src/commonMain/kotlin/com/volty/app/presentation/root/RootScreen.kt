@@ -29,7 +29,6 @@ import com.arkivanov.decompose.extensions.compose.stack.animation.fade
 import com.arkivanov.decompose.extensions.compose.stack.animation.stackAnimation
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
 import com.volty.app.presentation.autoconnect.AutoConnectScreen
-import com.volty.app.presentation.cells.CellsScreen
 import com.volty.app.presentation.dashboard.DashboardScreen
 import com.volty.app.presentation.graph.GraphScreen
 import com.volty.app.presentation.permissions.PermissionsGateScreen
@@ -62,7 +61,6 @@ fun RootScreen(component: RootComponent) {
                     is RootComponent.Child.Picker -> PickerScreen(instance.component)
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
-                    is RootComponent.Child.Cells -> CellsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(instance.component)
                     is RootComponent.Child.Settings -> SettingsScreen(instance.component)
                 }
@@ -84,14 +82,12 @@ private fun BottomTabBar(
     modifier: Modifier = Modifier
 ) {
     val visible = active is RootComponent.Child.Dashboard ||
-        active is RootComponent.Child.Cells ||
         active is RootComponent.Child.Graph ||
         active is RootComponent.Child.Settings
     if (!visible) return
 
     val current = when (active) {
         is RootComponent.Child.Dashboard -> RootComponent.Tab.Live
-        is RootComponent.Child.Cells -> RootComponent.Tab.Cells
         is RootComponent.Child.Graph -> RootComponent.Tab.Graph
         is RootComponent.Child.Settings -> RootComponent.Tab.Settings
         else -> RootComponent.Tab.Live
@@ -107,7 +103,6 @@ private fun BottomTabBar(
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         Tab("Live", current == RootComponent.Tab.Live) { onTab(RootComponent.Tab.Live) }
-        Tab("Cells", current == RootComponent.Tab.Cells) { onTab(RootComponent.Tab.Cells) }
         Tab("Graph", current == RootComponent.Tab.Graph) { onTab(RootComponent.Tab.Graph) }
         Tab("⚙", current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
     }

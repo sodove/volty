@@ -16,8 +16,6 @@ import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.autoconnect.AutoConnectComponent
 import com.volty.app.presentation.autoconnect.DefaultAutoConnectComponent
-import com.volty.app.presentation.cells.CellsComponent
-import com.volty.app.presentation.cells.DefaultCellsComponent
 import com.volty.app.presentation.dashboard.DashboardComponent
 import com.volty.app.presentation.dashboard.DefaultDashboardComponent
 import com.volty.app.presentation.graph.DefaultGraphComponent
@@ -51,7 +49,7 @@ interface RootComponent {
     fun onBack()
     fun onTab(tab: Tab)
 
-    enum class Tab { Live, Cells, Graph, Settings }
+    enum class Tab { Live, Graph, Settings }
 
     sealed interface Child {
         /** Transient cold-start state while we read the saved-vehicle DB. */
@@ -63,7 +61,6 @@ interface RootComponent {
         data class Picker(val component: PickerComponent) : Child
         data class Dashboard(val component: DashboardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
-        data class Cells(val component: CellsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
         data class Settings(val component: SettingsComponent) : Child
     }
@@ -79,7 +76,6 @@ sealed class Config {
     @Serializable data class Picker(val mode: String) : Config()
     @Serializable data object Dashboard : Config()
     @Serializable data class VehicleEdit(val vehicleId: String?) : Config()
-    @Serializable data object Cells : Config()
     @Serializable data object Graph : Config()
     @Serializable data object Settings : Config()
 }
@@ -120,7 +116,7 @@ class DefaultRootComponent(
     override fun onBack() {
         val current = stack.value.active.configuration
         when (current) {
-            is Config.Cells, is Config.Graph, is Config.Settings -> nav.replaceAll(Config.Dashboard)
+            is Config.Graph, is Config.Settings -> nav.replaceAll(Config.Dashboard)
             else -> nav.pop()
         }
     }
@@ -128,7 +124,6 @@ class DefaultRootComponent(
     override fun onTab(tab: RootComponent.Tab) {
         val target = when (tab) {
             RootComponent.Tab.Live -> Config.Dashboard
-            RootComponent.Tab.Cells -> Config.Cells
             RootComponent.Tab.Graph -> Config.Graph
             RootComponent.Tab.Settings -> Config.Settings
         }
@@ -218,7 +213,6 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onOpenCells = { nav.push(Config.Cells) },
                     onOpenGraph = { nav.push(Config.Graph) },
                     onOpenSettings = { nav.push(Config.Settings) },
                     onOpenAddBattery = { nav.push(Config.VehicleEdit(null)) },
@@ -233,13 +227,6 @@ class DefaultRootComponent(
                     onSaved = { nav.replaceAll(Config.Dashboard) },
                     onCancelled = { nav.pop() },
                     onDeleted = { nav.pop() }
-                )
-            )
-            is Config.Cells -> RootComponent.Child.Cells(
-                DefaultCellsComponent(
-                    componentContext = context,
-                    bmsRepository = get(),
-                    onBackRequested = { nav.pop() }
                 )
             )
             is Config.Graph -> RootComponent.Child.Graph(

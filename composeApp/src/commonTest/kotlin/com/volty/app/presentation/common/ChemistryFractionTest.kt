@@ -1,4 +1,4 @@
-package com.volty.app.presentation.cells
+package com.volty.app.presentation.common
 
 import com.volty.app.domain.model.Chemistry
 import kotlin.test.Test

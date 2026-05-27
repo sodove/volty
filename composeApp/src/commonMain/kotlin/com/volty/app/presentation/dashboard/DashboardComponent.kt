@@ -30,7 +30,7 @@ interface DashboardComponent {
     fun onDisconnect()
     fun onTabClicked(tab: Tab)
 
-    enum class Tab { Live, Cells, Graph, Settings }
+    enum class Tab { Live, Graph, Settings }
 
     data class State(
         val vehicle: Vehicle? = null,
@@ -58,7 +58,6 @@ class DefaultDashboardComponent(
     componentContext: ComponentContext,
     private val bmsRepository: BmsRepository,
     private val vehicleRepository: VehicleRepository,
-    private val onOpenCells: () -> Unit,
     private val onOpenGraph: () -> Unit,
     private val onOpenSettings: () -> Unit,
     private val onOpenAddBattery: () -> Unit,
@@ -179,7 +178,6 @@ class DefaultDashboardComponent(
     override fun onTabClicked(tab: DashboardComponent.Tab) {
         when (tab) {
             DashboardComponent.Tab.Live -> {} // already on Live
-            DashboardComponent.Tab.Cells -> onOpenCells()
             DashboardComponent.Tab.Graph -> onOpenGraph()
             DashboardComponent.Tab.Settings -> onOpenSettings()
         }

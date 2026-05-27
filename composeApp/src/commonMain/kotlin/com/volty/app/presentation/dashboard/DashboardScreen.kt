@@ -37,9 +37,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.volty.app.domain.model.Chemistry
 import com.volty.app.domain.model.ConnectionState
-import com.volty.app.presentation.cells.CellsComponent
-import com.volty.app.presentation.cells.chemistryFraction
 import com.volty.app.presentation.common.CellGrid
+import com.volty.app.presentation.common.CellUiModel
+import com.volty.app.presentation.common.chemistryFraction
 import com.volty.app.presentation.common.MetricCard
 import com.volty.app.presentation.common.PowerRangeBar
 import com.volty.app.presentation.common.SparklineGraph
@@ -263,7 +263,7 @@ fun DashboardScreen(component: DashboardComponent) {
             )
         }
 
-        // Inline cells grid — same renderer as CellsScreen but compact.
+        // Inline cells grid — compact renderer of all cell voltages.
         if (data.cellVoltages.isNotEmpty()) {
             DashboardCellsSection(
                 voltages = data.cellVoltages,
@@ -296,7 +296,7 @@ private fun DashboardCellsSection(
     cellsMaxV: Float
 ) {
     val cells = voltages.mapIndexed { i, v ->
-        CellsComponent.Cell(
+        CellUiModel(
             index = i + 1,
             voltageV = v,
             rangeFraction = chemistryFraction(v, chemistry)
