@@ -101,7 +101,9 @@ class KableBmsRepository private constructor(
     private val _connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val ringBuffer = SampleRingBuffer(capacity = 30 * 60) // 30 min @ 1 Hz
+    // Default 4-hour time-based cap. Holds enough history for ALL / 1h graph
+    // windows regardless of per-BMS poll rate (JK ~1Hz, ANT 2Hz, etc).
+    private val ringBuffer = SampleRingBuffer()
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()

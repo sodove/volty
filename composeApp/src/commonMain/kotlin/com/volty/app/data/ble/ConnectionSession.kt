@@ -112,8 +112,13 @@ internal class ConnectionSession(
                     protocol.onNotification(data)
                     protocol.latestData()?.let { bms ->
                         val sample = bms.copy(timestamp = Clock.System.now())
-                        activeData.value = sample
+                        // Push to ring buffer BEFORE updating activeData. The
+                        // graph collector subscribes via `_activeData.map { ringBuffer.within(window) }`,
+                        // so if we set activeData first the map runs while the
+                        // new sample isn't in the buffer yet — each graph emit
+                        // would lag by one sample.
                         ringBuffer.push(sample)
+                        activeData.value = sample
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
                         sampleCount++
                         if (sampleCount % 50 == 0) {
