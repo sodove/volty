@@ -18,3 +18,16 @@ data class Vehicle(
     val lastConnectedAt: Instant? = null,
     val isPinned: Boolean = false
 )
+
+/**
+ * Marker for transient (guest) vehicles synthesized by [BmsRepository.connectGuest].
+ * Their [Vehicle.id] uses the sentinel prefix `guest:` so they are never confused
+ * with persisted vehicles and never touched in the saved-vehicle store.
+ */
+const val GUEST_VEHICLE_ID_PREFIX: String = "guest:"
+
+/**
+ * True when this vehicle is a transient guest, not persisted in the
+ * [com.volty.app.domain.repository.VehicleRepository].
+ */
+val Vehicle.isGuest: Boolean get() = id.startsWith(GUEST_VEHICLE_ID_PREFIX)

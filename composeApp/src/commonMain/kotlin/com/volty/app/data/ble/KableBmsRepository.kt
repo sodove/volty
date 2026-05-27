@@ -11,8 +11,11 @@ import com.volty.app.data.bms.JkBmsProtocol
 import com.volty.app.data.memory.SampleRingBuffer
 import com.volty.app.domain.model.BmsData
 import com.volty.app.domain.model.BmsType
+import com.volty.app.domain.model.Chemistry
 import com.volty.app.domain.model.ConnectionState
+import com.volty.app.domain.model.GUEST_VEHICLE_ID_PREFIX
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.domain.model.isGuest
 import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.DiscoveredDevice
 import com.volty.app.domain.repository.VehicleRepository
@@ -37,6 +40,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.uuid.ExperimentalUuidApi
@@ -153,11 +157,35 @@ class KableBmsRepository private constructor(
         }
     }.flowOn(Dispatchers.Default)
 
-    override suspend fun connect(vehicle: Vehicle): Result<Unit> =
-        doConnect(vehicle.bmsAddress, vehicle.bmsType, vehicle)
+    override suspend fun connect(vehicle: Vehicle): Result<Unit> {
+        // If a caller hands a transient guest Vehicle back to connect(), route
+        // it through the guest path so it stays unpersisted and the touch /
+        // saved-vehicle observers leave it alone.
+        if (vehicle.isGuest) return connectGuest(vehicle.bmsAddress, vehicle.bmsType)
+        return doConnect(vehicle.bmsAddress, vehicle.bmsType, vehicle)
+    }
 
     override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> =
-        doConnect(address, type, vehicle = null)
+        doConnect(address, type, vehicle = buildGuestVehicle(address, type))
+
+    /**
+     * Build a transient [Vehicle] that powers the dashboard pill / charge bars
+     * for an ad-hoc (guest) connection. The id uses [GUEST_VEHICLE_ID_PREFIX]
+     * as a sentinel — see [isGuest] — and the entity is never written to the
+     * saved-vehicle store.
+     */
+    private fun buildGuestVehicle(address: String, type: BmsType): Vehicle {
+        val advName = advertisementCache[address]?.name?.takeIf { it.isNotBlank() }
+        return Vehicle(
+            id = "$GUEST_VEHICLE_ID_PREFIX$address",
+            name = advName ?: "Guest BMS",
+            iconKey = "battery",
+            bmsType = type,
+            bmsAddress = address,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Clock.System.now()
+        )
+    }
 
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
@@ -237,7 +265,8 @@ class KableBmsRepository private constructor(
             _connectionState.value = ConnectionState.Connected(vehicle)
             println("[VOLTY-BLE] state -> Connected(${vehicle?.name ?: "guest"}) addr=$address")
             serviceStart()
-            if (vehicle != null) vehicleRepository.touch(vehicle.id)
+            // Guests are transient — never write them to the saved-vehicle store.
+            if (vehicle != null && !vehicle.isGuest) vehicleRepository.touch(vehicle.id)
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
