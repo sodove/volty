@@ -3,7 +3,9 @@ package com.volty.app.presentation.picker
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import com.volty.app.domain.model.Chemistry
+import com.volty.app.domain.model.ConnectionState
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.domain.model.isGuest
 import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.DiscoveredDevice
 import com.volty.app.domain.repository.VehicleRepository
@@ -63,6 +65,35 @@ class DefaultPickerComponent(
     private suspend fun startScan() {
         val saved = vehicleRepository.vehicles.first()
         val savedByAddress: Map<String, Vehicle> = saved.associateBy { it.bmsAddress }
+        // BLE peripherals don't advertise while we hold an active connection,
+        // so a scan would render an empty list and the user is left wondering
+        // what's wrong. Seed the picker with the currently-connected device so
+        // it's always visible. Saved vehicles land in myInRange; guests fall
+        // back to a synthetic DiscoveredDevice in otherNearby.
+        val activeConn = bmsRepository.connectionState.value
+        val activeVehicle = bmsRepository.activeVehicle.value
+        if (activeVehicle != null &&
+            (activeConn is ConnectionState.Connected || activeConn is ConnectionState.Reconnecting)
+        ) {
+            val savedMatch = savedByAddress[activeVehicle.bmsAddress]
+            _state.update { s ->
+                if (savedMatch != null && !activeVehicle.isGuest) {
+                    s.copy(myInRange = listOf(savedMatch))
+                } else {
+                    s.copy(
+                        otherNearby = listOf(
+                            DiscoveredDevice(
+                                address = activeVehicle.bmsAddress,
+                                name = activeVehicle.name,
+                                rssi = 0,
+                                bmsType = activeVehicle.bmsType,
+                                knownVehicle = savedMatch
+                            )
+                        )
+                    )
+                }
+            }
+        }
         scanJob = scope.launch {
             bmsRepository.scanAll().collect { dev ->
                 val matched = savedByAddress[dev.address]

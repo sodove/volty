@@ -6,6 +6,8 @@ import com.volty.app.domain.model.AlertConfig
 import com.volty.app.domain.model.BmsType
 import com.volty.app.domain.model.Chemistry
 import com.volty.app.domain.model.Vehicle
+import com.volty.app.domain.model.isGuest
+import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.VehicleRepository
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -59,6 +61,7 @@ class DefaultVehicleEditComponent(
     componentContext: ComponentContext,
     private val vehicleId: String?,
     private val vehicleRepository: VehicleRepository,
+    private val bmsRepository: BmsRepository,
     private val onSaved: () -> Unit,
     private val onCancelled: () -> Unit,
     private val onDeleted: () -> Unit,
@@ -143,6 +146,14 @@ class DefaultVehicleEditComponent(
                 createdAt = nowOrCreate
             )
             vehicleRepository.upsert(v)
+            // If the user saved while a guest connection was live, swap the
+            // active connection to the freshly-persisted Vehicle so the
+            // dashboard immediately reflects the saved identity (pill name,
+            // saved-vehicle list, etc.) without a manual reconnect step.
+            val active = bmsRepository.activeVehicle.value
+            if (!s.isEditing && active?.isGuest == true && active.bmsAddress == v.bmsAddress) {
+                bmsRepository.connect(v)
+            }
             onSaved()
         }
     }

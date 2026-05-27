@@ -12,6 +12,8 @@ import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import com.volty.app.data.prefs.AppPrefs
+import com.volty.app.domain.model.isGuest
+import com.volty.app.domain.repository.BmsRepository
 import com.volty.app.domain.repository.VehicleRepository
 import com.volty.app.permissions.PermissionsChecker
 import com.volty.app.presentation.autoconnect.AutoConnectComponent
@@ -75,7 +77,16 @@ sealed class Config {
     @Serializable data class AutoConnect(val vehicleId: String) : Config()
     @Serializable data class Picker(val mode: String) : Config()
     @Serializable data object Dashboard : Config()
-    @Serializable data class VehicleEdit(val vehicleId: String?) : Config()
+    @Serializable data class VehicleEdit(
+        val vehicleId: String?,
+        /**
+         * When true and [vehicleId] is null, the edit form prefills BMS type /
+         * address / name from the currently active connection (e.g. the user
+         * tapped "+ Add" while a guest connection is live, so we can capture
+         * the device they're already talking to).
+         */
+        val prefillFromActiveConnection: Boolean = false
+    ) : Config()
     @Serializable data object Graph : Config()
     @Serializable data object Settings : Config()
 }
@@ -87,6 +98,7 @@ class DefaultRootComponent(
     private val nav = StackNavigation<Config>()
 
     private val vehicleRepository: VehicleRepository by inject()
+    private val bmsRepository: BmsRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
 
     // Lightweight scope for cold-start async work (DB reads). Previously these
@@ -215,20 +227,37 @@ class DefaultRootComponent(
                     vehicleRepository = get(),
                     onOpenGraph = { nav.push(Config.Graph) },
                     onOpenSettings = { nav.push(Config.Settings) },
-                    onOpenAddBattery = { nav.push(Config.VehicleEdit(null)) },
+                    onOpenAddBattery = {
+                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                    },
                     onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
                 )
             )
-            is Config.VehicleEdit -> RootComponent.Child.VehicleEdit(
-                DefaultVehicleEditComponent(
-                    componentContext = context,
-                    vehicleId = config.vehicleId,
-                    vehicleRepository = get(),
-                    onSaved = { nav.replaceAll(Config.Dashboard) },
-                    onCancelled = { nav.pop() },
-                    onDeleted = { nav.pop() }
+            is Config.VehicleEdit -> {
+                // Optionally prefill BMS type / address / name from the currently
+                // active connection. Only applies when creating a new vehicle
+                // (vehicleId == null) and the caller asked for it. Guest names
+                // get the synthetic "Guest " prefix stripped (see KableBmsRepository).
+                val prefillVehicle = if (config.vehicleId == null && config.prefillFromActiveConnection) {
+                    bmsRepository.activeVehicle.value
+                } else null
+                val prefilledName = prefillVehicle?.name
+                    ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") null else it }
+                RootComponent.Child.VehicleEdit(
+                    DefaultVehicleEditComponent(
+                        componentContext = context,
+                        vehicleId = config.vehicleId,
+                        vehicleRepository = get(),
+                        bmsRepository = get(),
+                        onSaved = { nav.replaceAll(Config.Dashboard) },
+                        onCancelled = { nav.pop() },
+                        onDeleted = { nav.pop() },
+                        prefilledBmsType = prefillVehicle?.bmsType,
+                        prefilledBmsAddress = prefillVehicle?.bmsAddress,
+                        prefilledName = prefilledName
+                    )
                 )
-            )
+            }
             is Config.Graph -> RootComponent.Child.Graph(
                 DefaultGraphComponent(
                     componentContext = context,
@@ -242,7 +271,9 @@ class DefaultRootComponent(
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
                     onEditVehicleRequested = { id -> nav.push(Config.VehicleEdit(id)) },
-                    onAddBatteryRequested = { nav.push(Config.VehicleEdit(null)) },
+                    onAddBatteryRequested = {
+                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                    },
                     onBackRequested = { nav.pop() }
                 )
             )
