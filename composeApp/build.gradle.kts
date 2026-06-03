@@ -55,11 +55,11 @@ kotlin {
 }
 
 android {
-    namespace = "com.volty.app"
+    namespace = "ru.sodovaya.volty"
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "com.volty.app"
+        applicationId = "ru.sodovaya.volty"
         minSdk = 26
         targetSdk = 36
         versionCode = 1
@@ -75,7 +75,7 @@ android {
 sqldelight {
     databases {
         create("VoltyDatabase") {
-            packageName.set("com.volty.app.data.db")
+            packageName.set("ru.sodovaya.volty.data.db")
             generateAsync.set(false)
         }
     }
