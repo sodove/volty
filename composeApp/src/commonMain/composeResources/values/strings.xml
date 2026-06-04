@@ -7,6 +7,7 @@
     <string name="welcome_subtitle">Monitor your batteries via Bluetooth. Pick one to start.</string>
     <string name="welcome_add_battery">+ Add my battery</string>
     <string name="welcome_quick_connect">⚡ Quick connect (guest)</string>
+    <string name="welcome_try_demo">Try demo</string>
 
     <!-- Permissions -->
     <string name="permissions_title">Permissions needed</string>
@@ -43,6 +44,7 @@
     <string name="picker_other_nearby">Other BMS nearby</string>
     <string name="picker_detected">BMS detected</string>
     <string name="picker_add_new">+ Add new battery</string>
+    <string name="picker_try_demo">Try demo mode</string>
     <string name="picker_scanning">Scanning…</string>
     <string name="picker_error">Error: %1$s</string>
 

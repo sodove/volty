@@ -52,6 +52,7 @@ import volty.composeapp.generated.resources.picker_guest_title
 import volty.composeapp.generated.resources.picker_my_in_range
 import volty.composeapp.generated.resources.picker_other_nearby
 import volty.composeapp.generated.resources.picker_scanning
+import volty.composeapp.generated.resources.picker_try_demo
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -144,6 +145,12 @@ fun PickerScreen(component: PickerComponent) {
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
                 ) {
                     Text(stringResource(Res.string.picker_add_new))
+                }
+                TextButton(
+                    onClick = component::onTryDemo,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    Text(stringResource(Res.string.picker_try_demo))
                 }
             }
         }

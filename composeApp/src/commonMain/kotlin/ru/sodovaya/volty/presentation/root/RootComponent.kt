@@ -12,6 +12,7 @@ import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -158,6 +159,18 @@ class DefaultRootComponent(
         nav.replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
     }
 
+    /**
+     * Start "Try demo" mode from Welcome: spin up the simulated connection off
+     * the UI thread, then replace the stack with the Dashboard so the user lands
+     * straight on live (synthetic) data. The demo vehicle is never persisted.
+     */
+    private fun startDemo() {
+        scope.launch {
+            bmsRepository.connectDemo()
+            nav.replaceAll(Config.Dashboard)
+        }
+    }
+
     private fun onPermissionsGranted() {
         // After permissions are granted, recompute the post-permissions route
         // (Welcome vs Scanning) off the UI thread. Show the loading splash in
@@ -176,7 +189,8 @@ class DefaultRootComponent(
                     // Welcome is only ever shown when permissions are already granted (gated by computeInitialConfig),
                     // so these buttons can route directly to the Picker without re-checking.
                     onAddBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
-                    onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) }
+                    onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) },
+                    onTryDemoRequested = { startDemo() }
                 )
             )
             is Config.Permissions -> RootComponent.Child.Permissions(
@@ -217,6 +231,7 @@ class DefaultRootComponent(
                     onConnectedForEdit = { vehicleId -> nav.replaceAll(Config.VehicleEdit(vehicleId)) },
                     onConnectedGuestNoSave = { nav.replaceAll(Config.Dashboard) },
                     onAddNewBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
+                    onDemoConnected = { nav.replaceAll(Config.Dashboard) },
                     onCancelled = { nav.pop() }
                 )
             )
@@ -239,7 +254,9 @@ class DefaultRootComponent(
                 // (vehicleId == null) and the caller asked for it. Guest names
                 // get the synthetic "Guest " prefix stripped (see KableBmsRepository).
                 val prefillVehicle = if (config.vehicleId == null && config.prefillFromActiveConnection) {
-                    bmsRepository.activeVehicle.value
+                    // Never prefill from the demo connection — the synthetic
+                    // "demo" device/address must not leak into a saved vehicle.
+                    bmsRepository.activeVehicle.value?.takeUnless { it.isDemo }
                 } else null
                 val prefilledName = prefillVehicle?.name
                     ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") null else it }

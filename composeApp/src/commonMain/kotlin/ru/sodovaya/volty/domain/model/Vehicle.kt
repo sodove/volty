@@ -31,3 +31,18 @@ const val GUEST_VEHICLE_ID_PREFIX: String = "guest:"
  * [ru.sodovaya.volty.domain.repository.VehicleRepository].
  */
 val Vehicle.isGuest: Boolean get() = id.startsWith(GUEST_VEHICLE_ID_PREFIX)
+
+/**
+ * Sentinel id for the simulated "Try demo" vehicle synthesized by
+ * [ru.sodovaya.volty.domain.repository.BmsRepository.connectDemo]. Like a guest,
+ * it is never written to the saved-vehicle store, never offered for add-battery
+ * prefill, and never auto-saved.
+ */
+const val DEMO_VEHICLE_ID: String = "demo"
+
+/**
+ * True when this vehicle is the simulated demo battery (see [DEMO_VEHICLE_ID]).
+ * Demo is non-persistent like a guest, but distinct: it has no real BLE device
+ * behind it at all.
+ */
+val Vehicle.isDemo: Boolean get() = id == DEMO_VEHICLE_ID

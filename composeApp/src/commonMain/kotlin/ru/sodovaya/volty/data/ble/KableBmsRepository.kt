@@ -8,11 +8,13 @@ import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
+import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.isGuest
@@ -73,6 +75,22 @@ class KableBmsRepository private constructor(
 
     internal companion object {
         /**
+         * The synthetic vehicle that powers "Try demo" mode. Its id is
+         * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
+         * never confused with a saved or guest vehicle and is never persisted.
+         */
+        val DEMO_VEHICLE: Vehicle = Vehicle(
+            id = DEMO_VEHICLE_ID,
+            name = "Demo battery",
+            iconKey = "scooter",
+            bmsType = BmsType.JK_BMS,
+            bmsAddress = DEMO_VEHICLE_ID,
+            chemistry = Chemistry.LI_ION_NMC,
+            cellCount = DemoBmsSimulator.CELL_COUNT,
+            createdAt = Clock.System.now()
+        )
+
+        /**
          * Test-only factory: construct with noop start/stop callbacks and a
          * test dispatcher. Used by [KableBmsRepositoryDisconnectRaceTest] to
          * avoid the platform `ServiceController` expect/actual.
@@ -110,6 +128,14 @@ class KableBmsRepository private constructor(
 
     private var currentSession: ConnectionSession? = null
     private var reconnectJob: Job? = null
+
+    /**
+     * Job driving the [DemoBmsSimulator] feed in "Try demo" mode. Lives entirely
+     * outside the BLE session machinery: there is no [ConnectionSession], no
+     * watchdog and no reconnect loop for demo. Cancelled on [disconnect], on a
+     * real [doConnect], and before starting a fresh [connectDemo].
+     */
+    private var demoJob: Job? = null
 
     /**
      * Cached (address, type) of the most recent connection attempt. [onAppResumed]
@@ -184,6 +210,44 @@ class KableBmsRepository private constructor(
     override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> =
         doConnect(address, type, vehicle = buildGuestVehicle(address, type))
 
+    override suspend fun connectDemo(): Result<Unit> {
+        println("[VOLTY-BLE] connectDemo: starting simulated session")
+        return try {
+            // Tear down any real session / reconnect loop / prior demo under the
+            // lock so a concurrent disconnect or connect sees a consistent view.
+            sessionLock.withLock {
+                userInitiatedDisconnect = false
+                currentSession?.tearDown()
+                currentSession = null
+                reconnectJob?.cancel()
+                reconnectJob = null
+                demoJob?.cancel()
+                demoJob = null
+                // No real link to resurrect on resume — there is no
+                // ConnectionSession behind a demo connection.
+                lastConnectionTarget = null
+            }
+            _activeVehicle.value = DEMO_VEHICLE
+            ringBuffer.clear()
+            _connectionState.value = ConnectionState.Connected(DEMO_VEHICLE)
+            // Show the foreground notification too, so reviewers see the full
+            // monitoring experience (the service feeds off activeData/activeVehicle).
+            serviceStart()
+            demoJob = scope.launch {
+                DemoBmsSimulator().run { sample ->
+                    ringBuffer.push(sample)
+                    _activeData.value = sample
+                }
+            }
+            Result.success(Unit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            _connectionState.value = ConnectionState.Failed(e.message ?: "Demo failed")
+            Result.failure(e)
+        }
+    }
+
     /**
      * Build a transient [Vehicle] that powers the dashboard pill / charge bars
      * for an ad-hoc (guest) connection. The id uses [GUEST_VEHICLE_ID_PREFIX]
@@ -213,6 +277,9 @@ class KableBmsRepository private constructor(
                 userInitiatedDisconnect = false
                 currentSession?.tearDown()
                 currentSession = null
+                // Connecting to a real BMS kills any running demo simulation.
+                demoJob?.cancel()
+                demoJob = null
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
@@ -374,17 +441,21 @@ class KableBmsRepository private constructor(
         // doConnect / onSessionDrop running on another coroutine see this.
         val sessionToTear: ConnectionSession?
         val reconnectToCancel: Job?
+        val demoToCancel: Job?
         sessionLock.withLock {
             userInitiatedDisconnect = true
             sessionToTear = currentSession
             currentSession = null
             reconnectToCancel = reconnectJob
             reconnectJob = null
+            demoToCancel = demoJob
+            demoJob = null
             // Forget the target so a later [onAppResumed] doesn't try to
             // resurrect a connection the user explicitly closed.
             lastConnectionTarget = null
         }
         reconnectToCancel?.cancel()
+        demoToCancel?.cancel()
         sessionToTear?.tearDown()
         _activeData.value = BmsData()
         _activeVehicle.value = null
@@ -404,6 +475,11 @@ class KableBmsRepository private constructor(
         // pull the rug. We tolerate a missing session (paper-trail Connected
         // state without a live session): the cached target is enough to drive
         // the drop pathway and the loop will spin up a fresh session.
+        //
+        // Demo mode is inherently safe here: connectDemo() clears
+        // lastConnectionTarget, so even though the state is Connected the
+        // snapshot below is null and we return early — no BLE reconnect is ever
+        // attempted for the simulated session, and the demoJob keeps emitting.
         val target = sessionLock.withLock {
             if (userInitiatedDisconnect) return@withLock null
             lastConnectionTarget

@@ -41,6 +41,7 @@ class AlertEngineTest {
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle) = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType) = Result.success(Unit)
+        override suspend fun connectDemo() = Result.success(Unit)
         override suspend fun disconnect() {}
         override fun samples(window: Duration): Flow<List<BmsData>> = emptyFlow()
         override fun movingAverage(window: Duration): Flow<MovingAvg> =

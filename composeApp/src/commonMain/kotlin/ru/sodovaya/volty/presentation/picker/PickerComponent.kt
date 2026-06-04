@@ -27,6 +27,7 @@ interface PickerComponent {
     fun onConnectKnown(vehicle: Vehicle)
     fun onConnectOther(device: DiscoveredDevice)
     fun onAddNewBattery()
+    fun onTryDemo()
     fun onBack()
 
     data class State(
@@ -48,6 +49,7 @@ class DefaultPickerComponent(
     private val onConnectedForEdit: (vehicleId: String) -> Unit,
     private val onConnectedGuestNoSave: () -> Unit,
     private val onAddNewBatteryRequested: () -> Unit,
+    private val onDemoConnected: () -> Unit,
     private val onCancelled: () -> Unit
 ) : PickerComponent, ComponentContext by componentContext {
 
@@ -154,5 +156,16 @@ class DefaultPickerComponent(
     }
 
     override fun onAddNewBattery() { onAddNewBatteryRequested() }
+
+    override fun onTryDemo() {
+        scope.launch {
+            _state.update { it.copy(connecting = "demo", error = null) }
+            scanJob?.cancel()
+            val result = bmsRepository.connectDemo()
+            if (result.isSuccess) onDemoConnected()
+            else _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
+        }
+    }
+
     override fun onBack() { onCancelled() }
 }

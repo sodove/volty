@@ -16,6 +16,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,6 +33,7 @@ import volty.composeapp.generated.resources.welcome_add_battery
 import volty.composeapp.generated.resources.welcome_quick_connect
 import volty.composeapp.generated.resources.welcome_subtitle
 import volty.composeapp.generated.resources.welcome_title
+import volty.composeapp.generated.resources.welcome_try_demo
 
 @Composable
 fun WelcomeScreen(component: WelcomeComponent) {
@@ -72,6 +74,10 @@ fun WelcomeScreen(component: WelcomeComponent) {
             contentPadding = PaddingValues(horizontal = 24.dp, vertical = 12.dp)
         ) {
             Text(stringResource(Res.string.welcome_quick_connect))
+        }
+        Spacer(Modifier.height(4.dp))
+        TextButton(onClick = component::onTryDemo) {
+            Text(stringResource(Res.string.welcome_try_demo))
         }
     }
 }

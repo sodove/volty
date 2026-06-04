@@ -25,6 +25,16 @@ interface BmsRepository {
     fun scanAll(): Flow<DiscoveredDevice>
     suspend fun connect(vehicle: Vehicle): Result<Unit>
     suspend fun connectGuest(address: String, type: BmsType): Result<Unit>
+
+    /**
+     * Connect to a simulated BMS. No BLE is involved: a [ru.sodovaya.volty.data.demo.DemoBmsSimulator]
+     * feeds synthetic data through the same pipeline (Dashboard / Graph / cells /
+     * notification) so reviewers and new users can exercise the full UI without
+     * hardware. The synthetic demo vehicle (see [ru.sodovaya.volty.domain.model.isDemo])
+     * is NEVER persisted.
+     */
+    suspend fun connectDemo(): Result<Unit>
+
     suspend fun disconnect()
 
     fun samples(window: Duration): Flow<List<BmsData>>

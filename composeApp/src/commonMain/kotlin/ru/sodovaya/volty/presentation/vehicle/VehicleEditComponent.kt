@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -151,7 +152,13 @@ class DefaultVehicleEditComponent(
             // dashboard immediately reflects the saved identity (pill name,
             // saved-vehicle list, etc.) without a manual reconnect step.
             val active = bmsRepository.activeVehicle.value
-            if (!s.isEditing && active?.isGuest == true && active.bmsAddress == v.bmsAddress) {
+            // Only a live GUEST connection should auto-swap to the saved vehicle.
+            // Demo is explicitly excluded (it isn't guest, and we never prefill
+            // from it) so its synthetic "demo" identity can never trigger a real
+            // connect off a saved profile.
+            if (!s.isEditing && active?.isGuest == true && active.isDemo.not() &&
+                active.bmsAddress == v.bmsAddress
+            ) {
                 bmsRepository.connect(v)
             }
             onSaved()
