@@ -46,8 +46,9 @@ import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.util.formatFixed
+import ru.sodovaya.volty.util.formatSigned
 import kotlin.math.abs
-import kotlin.math.round
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_faults_title
@@ -154,15 +155,19 @@ fun DashboardScreen(component: DashboardComponent) {
                 onColor = if (powerCharging) powerChargingOn else null,
                 extra = {
                     Column {
+                        // powerMin/powerPeak are consumption-positive (DashboardComponent
+                        // negates the power series: discharge plots upward). The marker
+                        // tracks current consumption, so we negate data.power here too.
+                        // The big number above keeps the domain sign (+ = charging).
                         PowerRangeBar(
-                            min = state.powerMin, peak = state.powerPeak, now = data.power,
+                            min = state.powerMin, peak = state.powerPeak, now = -data.power,
                             modifier = Modifier.fillMaxWidth().height(12.dp),
                             marker = if (powerCharging) powerChargingOn else Color.White
                         )
                         Spacer(Modifier.height(2.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${state.powerMin.toInt()} W", fontSize = 10.sp, color = powerSubColor)
-                            Text("peak ${state.powerPeak.toInt()} W", fontSize = 10.sp, color = powerSubColor)
+                            Text("${fmt0(state.powerMin)} W", fontSize = 10.sp, color = powerSubColor)
+                            Text("peak ${fmt0(state.powerPeak)} W", fontSize = 10.sp, color = powerSubColor)
                         }
                     }
                 }
@@ -533,24 +538,10 @@ private fun HeroCard(state: DashboardComponent.State) {
     }
 }
 
-// --- KMP-safe number formatters (no JVM String.format) ---
+// --- Number formatting delegates to util.NumberFormat (KMP-safe, negative-correct) ---
 
-private fun fmt0(v: Float): String = round(v).toInt().toString()
-private fun fmt1(v: Float): String = roundTo(v, 1)
-private fun fmt2(v: Float): String = roundTo(v, 2)
+private fun fmt0(v: Float): String = formatFixed(v, 0)
+private fun fmt1(v: Float): String = formatFixed(v, 1)
+private fun fmt2(v: Float): String = formatFixed(v, 2)
 
-private fun fmtSigned1(v: Float): String = (if (v >= 0f) "+" else "") + fmt1(v)
-
-private fun roundTo(value: Float, decimals: Int): String {
-    var factor = 1.0
-    repeat(decimals) { factor *= 10.0 }
-    val rounded = round(value.toDouble() * factor) / factor
-    val negative = rounded < 0
-    val absVal = abs(rounded)
-    val intPart = absVal.toLong()
-    val fracScaled = round((absVal - intPart) * factor).toLong()
-    val sign = if (negative) "-" else ""
-    if (decimals == 0) return "$sign$intPart"
-    val fracStr = fracScaled.toString().padStart(decimals, '0')
-    return "$sign$intPart.$fracStr"
-}
+private fun fmtSigned1(v: Float): String = formatSigned(v, 1)

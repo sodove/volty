@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.notification.Notifier
+import ru.sodovaya.volty.util.formatFixed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
@@ -133,9 +134,5 @@ class AlertEngine(
         notifier.showAlert(title, text, severity, alertCounter++)
     }
 
-    private fun formatV(v: Float): String {
-        val whole = v.toInt()
-        val frac = ((v - whole) * 100).toInt()
-        return "$whole.${if (frac < 10) "0$frac" else "$frac"}"
-    }
+    private fun formatV(v: Float): String = formatFixed(v, 2)
 }

@@ -143,7 +143,12 @@ class DefaultDashboardComponent(
 
         scope.launch {
             bmsRepository.samples(5.minutes).collect { samples ->
-                val powers = samples.map { it.power }
+                // Graphs are consumption-positive: discharge plots upward. Domain
+                // convention is "+ = charging", so negate power for the sparkline
+                // and its range. powerMin/powerPeak are derived from the negated
+                // series, so powerPeak = peak consumption and the PowerRangeBar
+                // marker (data.power negated at the call site) reads as consumption.
+                val powers = samples.map { -it.power }
                 _state.update {
                     it.copy(
                         sparkline = powers,

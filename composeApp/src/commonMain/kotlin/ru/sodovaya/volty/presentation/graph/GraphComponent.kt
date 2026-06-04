@@ -86,7 +86,13 @@ class DefaultGraphComponent(
 
     private fun computeStats(prev: GraphComponent.State, samples: List<BmsData>): GraphComponent.State {
         val metric = prev.metric
-        val values = samples.map { extractValue(it, metric) }
+        // Graphs are consumption-positive: discharge plots upward. The domain
+        // convention is "+ = charging", so for POWER/CURRENT we negate the series
+        // for display. Every derived stat (now/avg/peak/min/used) is then computed
+        // from the negated values so "Peak" = peak consumption and "Used" is the
+        // net Wh/Ah consumed over the window. SOC/VOLTAGE/TEMPERATURE are unchanged.
+        val displaySign = if (metric == GraphMetric.POWER || metric == GraphMetric.CURRENT) -1f else 1f
+        val values = samples.map { displaySign * extractValue(it, metric) }
         val avg = if (values.isEmpty()) 0f else values.average().toFloat()
         val peak = if (values.isEmpty()) 0f else values.max()
         val min = if (values.isEmpty()) 0f else values.min()
@@ -111,9 +117,11 @@ class DefaultGraphComponent(
             val v = (extractValue(samples[i - 1], metric) + extractValue(samples[i], metric)) / 2.0
             acc += v * dtHours
         }
+        // Consumption-positive: negate so a discharge session reports positive
+        // Wh/Ah used (charging periods subtract -> net consumption).
         return when (metric) {
-            GraphMetric.POWER -> acc.toFloat()                  // Wh
-            GraphMetric.CURRENT -> acc.toFloat()                // Ah
+            GraphMetric.POWER -> -acc.toFloat()                 // Wh
+            GraphMetric.CURRENT -> -acc.toFloat()               // Ah
             else -> 0f
         }
     }

@@ -7,7 +7,8 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import ru.sodovaya.volty.MainActivity
 import ru.sodovaya.volty.domain.usecase.AlertSeverity
-import kotlin.math.abs
+import ru.sodovaya.volty.util.formatFixed
+import ru.sodovaya.volty.util.formatSigned
 
 private const val LIVE_NOTIFICATION_ID = 1001
 
@@ -18,8 +19,8 @@ class AndroidNotifier(private val context: Context) : Notifier {
     private val manager = context.getSystemService(NotificationManager::class.java)
 
     override fun showLive(summary: LiveSummary) {
-        val signedCurrent = (if (summary.currentA >= 0) "+" else "") + format1(summary.currentA) + " A"
-        val voltageText = format1(summary.voltageV) + " V"
+        val signedCurrent = formatSigned(summary.currentA, 1) + " A"
+        val voltageText = formatFixed(summary.voltageV, 1) + " V"
         val socText = "${summary.socPercent}%"
         val text = listOfNotNull(socText, voltageText, signedCurrent, summary.etaText).joinToString(" · ")
         val builder = NotificationCompat.Builder(context, NotificationChannels.LIVE)
@@ -75,11 +76,4 @@ class AndroidNotifier(private val context: Context) : Notifier {
         )
     }
 
-    private fun format1(v: Float): String {
-        val sign = if (v < 0) "-" else ""
-        val abs = abs(v)
-        val whole = abs.toInt()
-        val frac = ((abs - whole) * 10).toInt()
-        return "$sign$whole.$frac"
-    }
 }

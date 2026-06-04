@@ -38,7 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.presentation.common.MetricCard
-import kotlin.math.round
+import ru.sodovaya.volty.util.formatFixed
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.graph_avg
@@ -296,10 +296,5 @@ private fun formatVal(v: Float, metric: GraphMetric): String {
         GraphMetric.VOLTAGE -> 2
         GraphMetric.TEMPERATURE -> 0
     }
-    val factor = listOf(1f, 10f, 100f, 1000f)[precision]
-    val rounded = round(v * factor) / factor
-    val whole = rounded.toInt()
-    if (precision == 0) return "$whole"
-    val fracInt = round((rounded - whole) * factor).toInt().toString().padStart(precision, '0')
-    return "$whole.$fracInt"
+    return formatFixed(v, precision)
 }

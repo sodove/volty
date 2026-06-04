@@ -25,7 +25,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
-import kotlin.math.round
+import ru.sodovaya.volty.util.formatFixed
 
 /** Pure UI model for a single cell row in the dashboard cell grid. */
 data class CellUiModel(
@@ -155,9 +155,4 @@ private fun CellCell(
     }
 }
 
-private fun formatVoltsThreeDecimals(v: Float): String {
-    val rounded = round(v * 1000f) / 1000f
-    val whole = rounded.toInt()
-    val frac = ((rounded - whole) * 1000).toInt().toString().padStart(3, '0').take(3)
-    return "$whole.$frac V"
-}
+private fun formatVoltsThreeDecimals(v: Float): String = "${formatFixed(v, 3)} V"
