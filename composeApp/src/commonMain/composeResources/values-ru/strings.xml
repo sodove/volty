@@ -47,6 +47,9 @@
     <string name="picker_try_demo">Демо-режим</string>
     <string name="picker_scanning">Сканирование…</string>
     <string name="picker_error">Ошибка: %1$s</string>
+    <string name="picker_show_all">Показать все Bluetooth-устройства (%1$d)</string>
+    <string name="picker_type_unknown">Неизвестно</string>
+    <string name="picker_pick_type_title">Выберите тип BMS</string>
 
     <!-- Dashboard -->
     <string name="status_connected">Подключено · %1$s</string>

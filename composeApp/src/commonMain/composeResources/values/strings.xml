@@ -47,6 +47,9 @@
     <string name="picker_try_demo">Try demo mode</string>
     <string name="picker_scanning">Scanning…</string>
     <string name="picker_error">Error: %1$s</string>
+    <string name="picker_show_all">Show all Bluetooth devices (%1$d)</string>
+    <string name="picker_type_unknown">Unknown</string>
+    <string name="picker_pick_type_title">Select BMS type</string>
 
     <!-- Dashboard -->
     <string name="status_connected">Connected · %1$s</string>
