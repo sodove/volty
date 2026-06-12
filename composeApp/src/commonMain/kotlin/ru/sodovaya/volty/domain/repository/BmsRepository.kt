@@ -13,7 +13,8 @@ data class DiscoveredDevice(
     val address: String,
     val name: String?,
     val rssi: Int,
-    val bmsType: BmsType,
+    /** Auto-detected BMS type, or `null` when the scanner did not recognize the device. */
+    val bmsType: BmsType?,
     val knownVehicle: Vehicle? = null
 )
 

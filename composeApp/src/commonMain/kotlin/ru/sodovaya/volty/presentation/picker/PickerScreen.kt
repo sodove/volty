@@ -21,6 +21,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -35,6 +36,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
@@ -51,8 +53,11 @@ import volty.composeapp.generated.resources.picker_guest_subtitle
 import volty.composeapp.generated.resources.picker_guest_title
 import volty.composeapp.generated.resources.picker_my_in_range
 import volty.composeapp.generated.resources.picker_other_nearby
+import volty.composeapp.generated.resources.picker_pick_type_title
 import volty.composeapp.generated.resources.picker_scanning
+import volty.composeapp.generated.resources.picker_show_all
 import volty.composeapp.generated.resources.picker_try_demo
+import volty.composeapp.generated.resources.picker_type_unknown
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -121,12 +126,32 @@ fun PickerScreen(component: PickerComponent) {
                         DeviceRow(
                             device = d,
                             isConnecting = state.connecting == d.address,
-                            onClick = { component.onConnectOther(d) }
+                            onClick = { component.onDeviceTapped(d) }
                         )
                     }
                 }
 
-                if (state.myInRange.isEmpty() && state.otherNearby.isEmpty()) {
+                if (state.otherDevices.isNotEmpty()) {
+                    item {
+                        TextButton(
+                            onClick = component::onToggleShowAll,
+                            modifier = Modifier.fillMaxWidth().padding(top = 8.dp)
+                        ) {
+                            Text(stringResource(Res.string.picker_show_all, state.otherDevices.size))
+                        }
+                    }
+                    if (state.showAll) {
+                        items(state.otherDevices, key = { "u-" + it.address }) { d ->
+                            DeviceRow(
+                                device = d,
+                                isConnecting = state.connecting == d.address,
+                                onClick = { component.onDeviceTapped(d) }
+                            )
+                        }
+                    }
+                }
+
+                if (state.myInRange.isEmpty() && state.otherNearby.isEmpty() && state.otherDevices.isEmpty()) {
                     item {
                         Column(
                             modifier = Modifier.fillMaxWidth().padding(32.dp),
@@ -151,6 +176,37 @@ fun PickerScreen(component: PickerComponent) {
                     modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
                 ) {
                     Text(stringResource(Res.string.picker_try_demo))
+                }
+            }
+        }
+
+        state.typePickerFor?.let { device ->
+            ModalBottomSheet(onDismissRequest = component::onTypeSheetDismissed) {
+                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
+                    Text(
+                        stringResource(Res.string.picker_pick_type_title),
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        modifier = Modifier.padding(bottom = 8.dp)
+                    )
+                    BmsType.entries.forEach { type ->
+                        val selected = device.bmsType == type
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(12.dp))
+                                .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+                                .clickable { component.onConnectWithType(device, type) }
+                                .padding(14.dp)
+                        ) {
+                            Text(
+                                bmsTypeLabel(type),
+                                fontSize = 14.sp,
+                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                                        else MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -203,8 +259,9 @@ private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: 
     ) {
         Avatar(letter = "?", bg = MaterialTheme.colorScheme.outline)
         Column(modifier = Modifier.weight(1f)) {
-            Text(device.name ?: device.address, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Text("${bmsTypeLabel(device.bmsType)}  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+            Text(device.name ?: "BMS ${device.address.takeLast(4)}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val typeLabel = device.bmsType?.let { bmsTypeLabel(it) } ?: stringResource(Res.string.picker_type_unknown)
+            Text("$typeLabel  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }

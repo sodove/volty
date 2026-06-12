@@ -17,6 +17,7 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -162,7 +163,17 @@ class KableBmsRepository private constructor(
     @Volatile
     private var userInitiatedDisconnect: Boolean = false
 
+    /** Guarded by [advertisementCacheLock]: written from the scan flow on
+     *  Dispatchers.Default, read from connect paths on arbitrary coroutines. */
+    private val advertisementCacheLock = Any()
     private val advertisementCache = mutableMapOf<String, com.juul.kable.Advertisement>()
+
+    private fun cacheAdvertisement(id: String, ad: com.juul.kable.Advertisement) {
+        synchronized(advertisementCacheLock) { advertisementCache[id] = ad }
+    }
+
+    private fun cachedAdvertisement(id: String): com.juul.kable.Advertisement? =
+        synchronized(advertisementCacheLock) { advertisementCache[id] }
 
     init {
         scope.launch {
@@ -174,19 +185,75 @@ class KableBmsRepository private constructor(
                 }
             }
         }
+        scope.launch {
+            _activeData.collect { data -> maybePersistCellCount(data) }
+        }
+    }
+
+    // ----- Cell-count auto-fill -----
+
+    /**
+     * Consecutive samples with an identical cell count required before we
+     * trust it. Multi-frame protocols emit partial lists mid-cycle (Daly
+     * streams 3 cells per 0x95 frame), so a single sample can undercount.
+     */
+    private val cellCountStableSamples = 3
+
+    private var observedCellCount = 0
+    private var observedCellCountStreak = 0
+    private var lastPersistedCellCount: Pair<String, Int>? = null
+
+    /**
+     * The profile's cell count is an auto-filled cache of live telemetry, not
+     * user input: once the reported count is stable, write it back to the
+     * saved vehicle so the UI can show "16s" before the first sample arrives
+     * on later connects. Guests and demo are transient and never persisted.
+     */
+    private suspend fun maybePersistCellCount(data: BmsData) {
+        val n = data.cellVoltages.size
+        if (!data.isConnected || n == 0) {
+            observedCellCountStreak = 0
+            return
+        }
+        if (n == observedCellCount) {
+            observedCellCountStreak++
+        } else {
+            observedCellCount = n
+            observedCellCountStreak = 1
+        }
+        if (observedCellCountStreak < cellCountStableSamples) return
+        val vehicle = _activeVehicle.value ?: return
+        if (vehicle.isGuest || vehicle.isDemo) return
+        if (vehicle.cellCount == n) return
+        if (lastPersistedCellCount == vehicle.id to n) return
+        lastPersistedCellCount = vehicle.id to n
+        println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")
+        vehicleRepository.upsert(vehicle.copy(cellCount = n))
     }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         val knownAddresses: Map<String, Vehicle> =
             vehicleRepository.vehicles.first().associateBy { it.bmsAddress }
-        _connectionState.value = ConnectionState.Scanning
+        // A scan can run WHILE a connection is live (the Picker seeds itself
+        // with the connected device and keeps scanning for others). Don't let
+        // it clobber the Connected / Connecting / Reconnecting state machine —
+        // the watchdog only acts in Connected, so overwriting it would blind
+        // the drop detection.
+        when (_connectionState.value) {
+            is ConnectionState.Connected,
+            is ConnectionState.Connecting,
+            is ConnectionState.Reconnecting -> Unit
+            else -> _connectionState.value = ConnectionState.Scanning
+        }
         val scanner = Scanner()
         scanner.advertisements.collect { ad ->
             val name = ad.name
             val serviceList = ad.uuids.map { it.toString().lowercase() }
-            val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList) ?: return@collect
+            // May be null: the picker now lists every device and lets the user
+            // pick the type manually, so we no longer drop unrecognized ads.
+            val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
             val id = ad.identifier.toString()
-            advertisementCache[id] = ad
+            cacheAdvertisement(id, ad)
             emit(
                 DiscoveredDevice(
                     address = id,
@@ -255,7 +322,7 @@ class KableBmsRepository private constructor(
      * saved-vehicle store.
      */
     private fun buildGuestVehicle(address: String, type: BmsType): Vehicle {
-        val advName = advertisementCache[address]?.name?.takeIf { it.isNotBlank() }
+        val advName = cachedAdvertisement(address)?.name?.takeIf { it.isNotBlank() }
         return Vehicle(
             id = "$GUEST_VEHICLE_ID_PREFIX$address",
             name = advName ?: "Guest BMS",
@@ -280,6 +347,15 @@ class KableBmsRepository private constructor(
                 // Connecting to a real BMS kills any running demo simulation.
                 demoJob?.cancel()
                 demoJob = null
+            }
+            // Connecting to a DIFFERENT device (picker switch without an explicit
+            // disconnect, or a real connect right after demo) must not mix the
+            // previous battery's samples into the new graph. Reconnects to the
+            // same address keep the buffer so the graph survives link drops.
+            val previousAddress = _activeVehicle.value?.bmsAddress
+            if (previousAddress != null && previousAddress != address) {
+                ringBuffer.clear()
+                _activeData.value = BmsData()
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
@@ -361,12 +437,12 @@ class KableBmsRepository private constructor(
     }
 
     private suspend fun resolveAdvertisement(address: String): com.juul.kable.Advertisement? {
-        val cached = advertisementCache[address]
+        val cached = cachedAdvertisement(address)
         if (cached != null) return cached
         val found = withTimeoutOrNull(BleConfig.advertisementSearchMs) {
             Scanner().advertisements.first { it.identifier.toString() == address }
         }
-        if (found != null) advertisementCache[address] = found
+        if (found != null) cacheAdvertisement(address, found)
         return found
     }
 
@@ -381,6 +457,13 @@ class KableBmsRepository private constructor(
         }
         if (_connectionState.value is ConnectionState.Connected ||
             _connectionState.value is ConnectionState.Connecting) {
+            // Leave Connected BEFORE starting the loop — its "already connected"
+            // guard would otherwise short-circuit on the very first iteration and
+            // the link would never come back. The dead session is NOT torn down
+            // here: onDropDetected is invoked from inside the session's own
+            // state/watchdog jobs, and tearDown() cancelAndJoin-ing the calling
+            // job would deadlock. doConnect() in the loop tears it down safely.
+            _connectionState.value = ConnectionState.Reconnecting(0, reason)
             startReconnectLoop(vehicle, address, type, initialReason = reason)
         }
     }
@@ -541,10 +624,10 @@ class KableBmsRepository private constructor(
     // ----- Test seams (package-private, used only by commonTest) -----
 
     /**
-     * Test-only: simulate a link drop / stale-sample detection by directly
-     * invoking the reconnect orchestration as if a [ConnectionSession] had
-     * reported one. Lets unit tests exercise the disconnect-vs-reconnect race
-     * without needing a real BLE stack.
+     * Test-only: simulate a link drop / stale-sample detection by driving the
+     * REAL [onSessionDrop] pathway, exactly as a [ConnectionSession] state
+     * observer / watchdog would. Lets unit tests exercise the
+     * disconnect-vs-reconnect race without needing a real BLE stack.
      */
     internal fun simulateConnectionDropForTest(
         vehicle: Vehicle?,
@@ -552,12 +635,12 @@ class KableBmsRepository private constructor(
         type: BmsType,
         reason: String
     ) {
-        // Mimic post-drop state: vehicle present, connectionState NOT in
-        // Connected (otherwise the loop's "already connected" guard would
-        // short-circuit and return immediately).
+        // Mimic pre-drop state: vehicle present, link believed Connected. The
+        // production drop path (onSessionDrop) is then responsible for moving
+        // the state machine to Reconnecting and spinning up the loop.
         _activeVehicle.value = vehicle
-        _connectionState.value = ConnectionState.Reconnecting(0, reason)
-        startReconnectLoop(vehicle, address, type, initialReason = reason)
+        _connectionState.value = ConnectionState.Connected(vehicle)
+        scope.launch { onSessionDrop(reason, vehicle, address, type) }
     }
 
     /** Test-only: peek at the reconnect job so tests can await its termination. */
@@ -565,6 +648,10 @@ class KableBmsRepository private constructor(
 
     /** Test-only: peek at the user-disconnect flag. */
     internal fun isUserInitiatedDisconnectForTest(): Boolean = userInitiatedDisconnect
+
+    /** Test-only: push a sample into the activeData pipeline (drives the
+     *  cell-count auto-fill collector without a real BLE session). */
+    internal fun emitActiveDataForTest(sample: BmsData) { _activeData.value = sample }
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been

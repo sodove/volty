@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.picker
 
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
+import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -25,7 +26,10 @@ import kotlin.time.ExperimentalTime
 interface PickerComponent {
     val state: StateFlow<State>
     fun onConnectKnown(vehicle: Vehicle)
-    fun onConnectOther(device: DiscoveredDevice)
+    fun onToggleShowAll()
+    fun onDeviceTapped(device: DiscoveredDevice)
+    fun onTypeSheetDismissed()
+    fun onConnectWithType(device: DiscoveredDevice, type: BmsType)
     fun onAddNewBattery()
     fun onTryDemo()
     fun onBack()
@@ -33,8 +37,11 @@ interface PickerComponent {
     data class State(
         val mode: String = "cold",
         val myInRange: List<Vehicle> = emptyList(),
-        val otherNearby: List<DiscoveredDevice> = emptyList(),
-        val connecting: String? = null,    // address being connected
+        val otherNearby: List<DiscoveredDevice> = emptyList(),   // detected (bmsType != null)
+        val otherDevices: List<DiscoveredDevice> = emptyList(),  // undetected (bmsType == null)
+        val showAll: Boolean = false,
+        val typePickerFor: DiscoveredDevice? = null,             // device whose type sheet is open
+        val connecting: String? = null,
         val error: String? = null
     )
 }
@@ -100,14 +107,21 @@ class DefaultPickerComponent(
             bmsRepository.scanAll().collect { dev ->
                 val matched = savedByAddress[dev.address]
                 _state.update { s ->
-                    if (matched != null) {
-                        val myInRange = if (s.myInRange.any { it.id == matched.id }) s.myInRange
-                                        else s.myInRange + matched
-                        s.copy(myInRange = myInRange)
-                    } else {
-                        val otherNearby = if (s.otherNearby.any { it.address == dev.address }) s.otherNearby
-                                          else s.otherNearby + dev
-                        s.copy(otherNearby = otherNearby)
+                    when {
+                        matched != null -> {
+                            val myInRange = if (s.myInRange.any { it.id == matched.id }) s.myInRange
+                                            else s.myInRange + matched
+                            s.copy(myInRange = myInRange)
+                        }
+                        dev.bmsType != null -> {
+                            val otherNearby = if (s.otherNearby.any { it.address == dev.address }) s.otherNearby
+                                              else s.otherNearby + dev
+                            s.copy(otherNearby = otherNearby)
+                        }
+                        else -> {
+                            if (s.otherDevices.any { it.address == dev.address }) s
+                            else s.copy(otherDevices = (s.otherDevices + dev).sortedByDescending { it.rssi })
+                        }
                     }
                 }
             }
@@ -124,17 +138,28 @@ class DefaultPickerComponent(
         }
     }
 
-    override fun onConnectOther(device: DiscoveredDevice) {
+    override fun onToggleShowAll() {
+        _state.update { it.copy(showAll = !it.showAll) }
+    }
+
+    override fun onDeviceTapped(device: DiscoveredDevice) {
+        _state.update { it.copy(typePickerFor = device) }
+    }
+
+    override fun onTypeSheetDismissed() {
+        _state.update { it.copy(typePickerFor = null) }
+    }
+
+    override fun onConnectWithType(device: DiscoveredDevice, type: BmsType) {
         scope.launch {
-            _state.update { it.copy(connecting = device.address, error = null) }
+            _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
             if (mode == "add") {
-                // Create and save Vehicle, then connect as known so activeVehicle is set
                 val v = Vehicle(
                     id = "v-" + kotlin.random.Random.nextLong().toString(16).removePrefix("-"),
                     name = device.name ?: "BMS ${device.address.takeLast(4)}",
                     iconKey = "generic",
-                    bmsType = device.bmsType,
+                    bmsType = type,
                     bmsAddress = device.address,
                     chemistry = Chemistry.LI_ION_NMC,
                     createdAt = Clock.System.now()
@@ -143,12 +168,11 @@ class DefaultPickerComponent(
                 val result = bmsRepository.connect(v)
                 if (result.isSuccess) onConnectedForEdit(v.id)
                 else {
-                    vehicleRepository.delete(v.id) // rollback so user isn't stuck with a broken save
+                    vehicleRepository.delete(v.id)
                     _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
                 }
             } else {
-                // guest / cold mode: connect as guest, no save
-                val result = bmsRepository.connectGuest(device.address, device.bmsType)
+                val result = bmsRepository.connectGuest(device.address, type)
                 if (result.isSuccess) onConnectedGuestNoSave()
                 else _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
             }
