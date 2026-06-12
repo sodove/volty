@@ -114,12 +114,17 @@ class DefaultPickerComponent(
                             s.copy(myInRange = myInRange)
                         }
                         dev.bmsType != null -> {
-                            val otherNearby = if (s.otherNearby.any { it.address == dev.address }) s.otherNearby
-                                              else s.otherNearby + dev
-                            s.copy(otherNearby = otherNearby)
+                            if (s.otherNearby.any { it.address == dev.address }) s
+                            // A device first seen as undetected may later resolve to a type —
+                            // drop it from otherDevices so it can't appear in both lists.
+                            else s.copy(
+                                otherNearby = s.otherNearby + dev,
+                                otherDevices = s.otherDevices.filterNot { it.address == dev.address }
+                            )
                         }
                         else -> {
-                            if (s.otherDevices.any { it.address == dev.address }) s
+                            if (s.otherDevices.any { it.address == dev.address } ||
+                                s.otherNearby.any { it.address == dev.address }) s
                             else s.copy(otherDevices = (s.otherDevices + dev).sortedByDescending { it.rssi })
                         }
                     }
@@ -143,6 +148,7 @@ class DefaultPickerComponent(
     }
 
     override fun onDeviceTapped(device: DiscoveredDevice) {
+        if (_state.value.connecting != null) return
         _state.update { it.copy(typePickerFor = device) }
     }
 
@@ -151,6 +157,7 @@ class DefaultPickerComponent(
     }
 
     override fun onConnectWithType(device: DiscoveredDevice, type: BmsType) {
+        if (_state.value.connecting != null) return
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()

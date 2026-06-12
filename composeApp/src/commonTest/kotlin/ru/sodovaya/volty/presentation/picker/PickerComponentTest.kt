@@ -23,12 +23,13 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
-import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class PickerComponentTest {
@@ -62,7 +63,7 @@ class PickerComponentTest {
     private fun vehicle(id: String, address: String) = Vehicle(
         id = id, name = "Saved", iconKey = "generic",
         bmsType = BmsType.JK_BMS, bmsAddress = address,
-        chemistry = Chemistry.LI_ION_NMC, createdAt = Clock.System.now()
+        chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
     )
 
     private fun device(address: String, type: BmsType?, rssi: Int = -50) =
@@ -91,6 +92,11 @@ class PickerComponentTest {
         return c to bmsRepo
     }
 
+    @AfterTest
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
     @Test
     fun `scan results are classified into saved, detected and undetected`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
@@ -107,7 +113,6 @@ class PickerComponentTest {
         assertEquals(listOf("v1"), s.myInRange.map { it.id })
         assertEquals(listOf("BB:DETECT"), s.otherNearby.map { it.address })
         assertEquals(listOf("CC:UNKNOWN"), s.otherDevices.map { it.address })
-        Dispatchers.resetMain()
     }
 
     @Test
@@ -122,7 +127,6 @@ class PickerComponentTest {
         advanceUntilIdle()
 
         assertEquals(listOf("NEAR", "MID", "FAR"), c.state.value.otherDevices.map { it.address })
-        Dispatchers.resetMain()
     }
 
     @Test
@@ -136,7 +140,6 @@ class PickerComponentTest {
         advanceUntilIdle()
 
         assertEquals(listOf("CC:UNKNOWN" to BmsType.JBD_BMS), repo.guestConnects)
-        Dispatchers.resetMain()
     }
 
     @Test
@@ -150,6 +153,5 @@ class PickerComponentTest {
         assertEquals("CC:UNKNOWN", c.state.value.typePickerFor?.address)
         c.onTypeSheetDismissed()
         assertTrue(c.state.value.typePickerFor == null)
-        Dispatchers.resetMain()
     }
 }
