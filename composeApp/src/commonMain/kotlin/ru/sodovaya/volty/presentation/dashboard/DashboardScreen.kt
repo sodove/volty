@@ -136,7 +136,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 label = stringResource(Res.string.metric_voltage),
                 value = "${fmt2(data.voltage)} V",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
-                sub = if (vehicle?.cellCount != null && data.cellVoltages.isNotEmpty()) {
+                sub = if (data.cellVoltages.isNotEmpty()) {
                     "${data.cellVoltages.size}s · ${fmt2(data.voltage / data.cellVoltages.size)} V/cell"
                 } else null
             )

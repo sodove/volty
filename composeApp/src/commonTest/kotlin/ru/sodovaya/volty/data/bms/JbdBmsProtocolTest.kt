@@ -3,15 +3,27 @@ package ru.sodovaya.volty.data.bms
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class JbdBmsProtocolTest {
 
     /** Assemble a JBD response frame: DD <cmd> 00 <len> <data...> <csum_hi> <csum_lo> 77 */
-    private fun jbdFrame(cmd: Int, data: ByteArray): ByteArray {
-        val payload = byteArrayOf(0x00, data.size.toByte()) + data
-        // Kelly's parser doesn't validate the checksum bytes — placeholders OK.
-        return byteArrayOf(0xDD.toByte(), cmd.toByte()) + payload + byteArrayOf(0x00, 0x00, 0x77)
+    private fun jbdFrame(cmd: Int, data: ByteArray, status: Int = 0): ByteArray {
+        val statusLenData = byteArrayOf(status.toByte(), data.size.toByte()) + data
+        val csum = jbdChecksum(statusLenData)
+        return byteArrayOf(0xDD.toByte(), cmd.toByte()) + statusLenData +
+            byteArrayOf((csum shr 8).toByte(), (csum and 0xFF).toByte(), 0x77)
+    }
+
+    /**
+     * JBD response checksum: 0x10000 - sum(status + len + data), low 16 bits.
+     * Matches syssi/esphome-jbd-bms chksum_(raw + 2, data_len + 2).
+     */
+    private fun jbdChecksum(statusLenData: ByteArray): Int {
+        var sum = 0
+        for (b in statusLenData) sum += (b.toInt() and 0xFF)
+        return (0x10000 - (sum and 0xFFFF)) and 0xFFFF
     }
 
     private fun mainDataPayload(
@@ -78,12 +90,10 @@ class JbdBmsProtocolTest {
         // Cell #1 = 0x0C77 = 3191 mV (3.191 V). Big-endian bytes: 0x0C 0x77.
         // The 0x77 in byte 2 of the cell payload sits at frame index 5 (header DD cmd 00 len 0C 77 ...).
         val cellsPayload = byteArrayOf(0x0C.toByte(), 0x77.toByte(), 0x0C.toByte(), 0x80.toByte())
-        val frame = byteArrayOf(0xDD.toByte(), 0x04.toByte(), 0x00, cellsPayload.size.toByte()) +
-            cellsPayload +
-            byteArrayOf(0x00, 0x00, 0x77)
+        val frame = jbdFrame(0x04, cellsPayload)
 
         // Must also feed main data first so the merge logic surfaces BmsData
-        proto.onNotification(byteArrayOf(0xDD.toByte(), 0x03.toByte(), 0x00, 23) + ByteArray(23) + byteArrayOf(0x00, 0x00, 0x77))
+        proto.onNotification(jbdFrame(0x03, ByteArray(23)))
         proto.onNotification(frame)
         val data = proto.latestData()
         assertNotNull(data)
@@ -101,8 +111,9 @@ class JbdBmsProtocolTest {
         val data = proto.latestData()
         assertNotNull(data)
         assertEquals(50.00f, data.voltage, 0.001f)
-        // currentCa = -200 (raw), parser does -(i16BE(...) / 100) = -(-2.00) = +2.00
-        assertEquals(2.00f, data.current, 0.001f)
+        // JBD native sign: + = charging, - = discharging (matches our domain, no negation).
+        // currentCa = -200 (raw) → -2.00 A = discharging / consumption.
+        assertEquals(-2.00f, data.current, 0.001f)
         assertEquals(8.00f, data.charge, 0.001f)
         assertEquals(10.00f, data.capacity, 0.001f)
         assertEquals(7, data.numCycles)
@@ -116,6 +127,39 @@ class JbdBmsProtocolTest {
         assertEquals(3.300f, data.cellVoltages[0], 0.001f)
         // Default payload sets no protection bits → empty fault list.
         assertTrue(data.bmsFaults.isEmpty())
+    }
+
+    @Test
+    fun `positive raw current reads as charging`() {
+        val proto = JbdBmsProtocol()
+        // currentCa = +350 (raw) → +3.50 A. JBD native + = charging.
+        proto.onNotification(jbdFrame(0x03, mainDataPayload(currentCa = 350)))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(3.50f, data.current, 0.001f)
+    }
+
+    @Test
+    fun `rejects frame with bad checksum`() {
+        val proto = JbdBmsProtocol()
+        val frame = jbdFrame(0x03, mainDataPayload())
+        // Corrupt the checksum high byte (index size-3 is csum_hi).
+        frame[frame.size - 3] = (frame[frame.size - 3].toInt() xor 0xFF).toByte()
+        proto.onNotification(frame)
+        assertNull(proto.latestData())
+    }
+
+    @Test
+    fun `out-of-range cell voltages are filtered out`() {
+        val proto = JbdBmsProtocol()
+        proto.onNotification(jbdFrame(0x03, mainDataPayload()))
+        // Second "cell" is implausible (0xFFFF mV ≈ 65 V) — a corrupted reading.
+        // It must be dropped, not surfaced as a 65 V cell that trips cell-high alarms.
+        proto.onNotification(jbdFrame(0x04, cellsPayload(intArrayOf(3300, 0xFFFF))))
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(1, data.cellVoltages.size)
+        assertEquals(3.300f, data.cellVoltages[0], 0.001f)
     }
 
     @Test

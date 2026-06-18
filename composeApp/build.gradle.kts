@@ -55,8 +55,38 @@ kotlin {
 }
 
 android {
+    signingConfigs {
+        create("release") {
+            storeFile = file("..\\123.jks")
+            storePassword = System.getenv("VOLTY_KEYSTORE_PASSWORD")
+            keyAlias = System.getenv("VOLTY_KEY_ALIAS")
+            keyPassword = System.getenv("VOLTY_KEY_PASSWORD")
+        }
+    }
+
     namespace = "ru.sodovaya.volty"
     compileSdk = 36
+
+    packaging {
+        resources {
+            excludes += "/META-INF/{AL2.0,LGPL2.1}"
+            excludes += "META-INF/versions/9/previous-compilation-data.bin"
+        }
+    }
+    buildTypes {
+        getByName("release") {
+            isMinifyEnabled = true
+            signingConfig = signingConfigs.getByName("release")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+        }
+        getByName("debug") {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("release")
+        }
+    }
 
     defaultConfig {
         applicationId = "ru.sodovaya.volty"

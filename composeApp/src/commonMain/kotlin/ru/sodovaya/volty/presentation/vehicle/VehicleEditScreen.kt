@@ -60,7 +60,6 @@ import volty.composeapp.generated.resources.vehicle_edit_new
 import volty.composeapp.generated.resources.vehicle_field_averaging_window
 import volty.composeapp.generated.resources.vehicle_field_bms_address
 import volty.composeapp.generated.resources.vehicle_field_bms_type
-import volty.composeapp.generated.resources.vehicle_field_cell_count
 import volty.composeapp.generated.resources.vehicle_field_cell_high
 import volty.composeapp.generated.resources.vehicle_field_cell_low
 import volty.composeapp.generated.resources.vehicle_field_chemistry
@@ -152,14 +151,6 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            OutlinedTextField(
-                value = state.cellCount?.toString() ?: "",
-                onValueChange = { component.onCellCountChanged(it.toIntOrNull()) },
-                label = { Text(stringResource(Res.string.vehicle_field_cell_count)) },
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-                modifier = Modifier.fillMaxWidth()
-            )
-
             SectionLabel(stringResource(Res.string.vehicle_field_averaging_window))
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf(1, 5, 10, 30).forEach { min ->
@@ -229,11 +220,19 @@ private fun ReadOnlyRow(label: String, value: String) {
     }
 }
 
+// The numeric fields keep their own text state: rendering straight from the
+// parsed component value made intermediate input impossible ("3." reparsed to
+// "3.0" mid-typing; any invalid char wiped the field). External value changes
+// (the async initial load) still sync in, but only when they disagree with
+// what the current text parses to — so in-progress typing is never clobbered.
+
 @Composable
 private fun FloatField(label: String, value: Float?, onChange: (Float?) -> Unit) {
+    var text by remember { mutableStateOf(value?.toString() ?: "") }
+    if (value != text.toFloatOrNull()) text = value?.toString() ?: ""
     OutlinedTextField(
-        value = value?.toString() ?: "",
-        onValueChange = { onChange(it.toFloatOrNull()) },
+        value = text,
+        onValueChange = { text = it; onChange(it.toFloatOrNull()) },
         label = { Text(label) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
         modifier = Modifier.fillMaxWidth()
@@ -242,9 +241,11 @@ private fun FloatField(label: String, value: Float?, onChange: (Float?) -> Unit)
 
 @Composable
 private fun IntField(label: String, value: Int?, onChange: (Int?) -> Unit) {
+    var text by remember { mutableStateOf(value?.toString() ?: "") }
+    if (value != text.toIntOrNull()) text = value?.toString() ?: ""
     OutlinedTextField(
-        value = value?.toString() ?: "",
-        onValueChange = { onChange(it.toIntOrNull()) },
+        value = text,
+        onValueChange = { text = it; onChange(it.toIntOrNull()) },
         label = { Text(label) },
         keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
         modifier = Modifier.fillMaxWidth()

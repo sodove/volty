@@ -28,5 +28,9 @@ fun formatFixed(v: Float, decimals: Int): String {
 }
 
 /** Like [formatFixed] but always prefixes a sign ("+1.2" / "-1.2"; "+0.0" for zero). */
-fun formatSigned(v: Float, decimals: Int): String =
-    (if (v >= 0f) "+" else "") + formatFixed(v, decimals)
+fun formatSigned(v: Float, decimals: Int): String {
+    // Decide the sign from the FORMATTED value: -0.04 at 1 decimal renders
+    // "0.0" (no minus), so it must show "+0.0", not a bare "0.0".
+    val s = formatFixed(v, decimals)
+    return if (s.startsWith("-")) s else "+$s"
+}

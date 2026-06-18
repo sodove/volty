@@ -150,27 +150,27 @@ class AntBmsProtocol : BmsProtocol() {
 
         var pos = 34 + numCells * 2
 
-        // Temperatures: u16 LE each, 65496 = NaN. ANT supports an arbitrary
-        // sensor count declared in byte 8; we read all of them.
+        // Temperatures: SIGNED i16 LE, degrees Celsius directly (per
+        // syssi/esphome-ant-bms `(int16_t) ant_get_16bit(...)`), so sub-zero
+        // winter readings come through correctly. The sentinel for a missing
+        // sensor is -40 (0xFFD8 = 65496 unsigned, per batmon-ha). ANT supports
+        // an arbitrary sensor count declared in byte 8; we read all of them.
         val temps = mutableListOf<Float>()
         for (i in 0 until numTemp) {
             if (pos + 1 >= frameLen) break
-            val raw = buf.u16LE(pos)
+            val raw = buf.i16LE(pos)
             pos += 2
-            if (raw != 65496) {
-                // ANT BMS raw u16 values are degrees Celsius directly.
-                val celsius = raw.toFloat()
-                if (celsius in -40f..150f) temps.add(celsius)
+            if (raw != TEMP_SENTINEL && raw in -39..150) {
+                temps.add(raw.toFloat())
             }
         }
 
         // MOS temperature
         if (pos + 1 < frameLen) {
-            val mosTemp = buf.u16LE(pos)
+            val mosTemp = buf.i16LE(pos)
             pos += 2
-            if (mosTemp != 65496) {
-                val celsius = mosTemp.toFloat()
-                if (celsius in -40f..150f) temps.add(celsius)
+            if (mosTemp != TEMP_SENTINEL && mosTemp in -39..150) {
+                temps.add(mosTemp.toFloat())
             }
         }
 
@@ -288,5 +288,8 @@ class AntBmsProtocol : BmsProtocol() {
 
     companion object {
         private const val FUNC_STATUS = 0x01
+
+        /** "Sensor not connected" sentinel: -40 signed = 0xFFD8 = 65496 unsigned. */
+        private const val TEMP_SENTINEL = -40
     }
 }

@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.notification.LiveSummary
 import ru.sodovaya.volty.notification.NotificationChannels
@@ -61,6 +62,20 @@ class MonitoringService : Service() {
             .setOngoing(true)
             .build()
         startForeground(FOREGROUND_ID, seed)
+
+        // START_STICKY can resurrect the service in a FRESH process (after the
+        // system killed us). There the repo singleton has no session, no target
+        // and nothing will reconnect on its own — without this check the user
+        // is left with a frozen "Starting…" notification forever.
+        when (bmsRepository.connectionState.value) {
+            is ConnectionState.Idle,
+            is ConnectionState.Disconnected,
+            is ConnectionState.Failed -> {
+                stopSelf()
+                return
+            }
+            else -> Unit
+        }
 
         scope.launch {
             bmsRepository.activeData

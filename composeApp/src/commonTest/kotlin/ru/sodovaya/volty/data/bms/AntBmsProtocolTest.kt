@@ -222,6 +222,22 @@ class AntBmsProtocolTest {
     }
 
     @Test
+    fun `negative temperatures parse as signed and sentinel is filtered`() {
+        val proto = AntBmsProtocol()
+        // T1 = -5 °C (winter ride), T2 = -40 = "sensor not connected" sentinel,
+        // MOS temp = 12 °C. putU16LE(-5 and 0xFFFF) encodes the two's complement.
+        val frame = synthesizeStatusFrame(
+            numTemp = 2,
+            tempsCelsius = intArrayOf(-5 and 0xFFFF, 65496),
+            mosTempCelsius = 12
+        )
+        proto.onNotification(frame)
+        val data = proto.latestData()
+        assertNotNull(data)
+        assertEquals(listOf(-5f, 12f), data.temperatures)
+    }
+
+    @Test
     fun `rejects frame with bad CRC`() {
         val proto = AntBmsProtocol()
         val frame = synthesizeStatusFrame()

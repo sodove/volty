@@ -84,7 +84,19 @@ internal class ConnectionSession(
      * Polling, state-watch and the watchdog continue running in the
      * background under [parentScope].
      */
-    suspend fun connect(): Result<Unit> {
+    suspend fun connect(): Result<Unit> = try {
+        doConnect()
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        // A failed handshake write (link dropped mid-setup, missing
+        // characteristic, …) must surface as Result.failure so the repo's
+        // failure branch tears the half-built session down instead of leaving
+        // its background jobs running.
+        Result.failure(e)
+    }
+
+    private suspend fun doConnect(): Result<Unit> {
         val connectOk = withTimeoutOrNull(BleConfig.connectTimeoutMs) {
             peripheral.connect()
             true

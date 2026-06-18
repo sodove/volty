@@ -85,6 +85,19 @@ class JbdBmsProtocol : BmsProtocol() {
         )
     }
 
+    /**
+     * Validate a JBD response checksum. Sums status + length + data (bytes [2 ..
+     * 3 + dataLen]) and compares the two's-complement (0x10000 - sum) against the
+     * big-endian checksum stored just before the 0x77 terminator.
+     */
+    private fun checksumValid(frame: ByteArray, dataLen: Int, expectedLen: Int): Boolean {
+        var sum = 0
+        for (i in 2 until 4 + dataLen) sum += (frame[i].toInt() and 0xFF)
+        val computed = (0x10000 - (sum and 0xFFFF)) and 0xFFFF
+        val actual = frame.u16BE(expectedLen - 3)
+        return computed == actual
+    }
+
     private fun tryParseAll() {
         while (true) {
             val buf = buffer.toByteArray()
@@ -114,6 +127,16 @@ class JbdBmsProtocol : BmsProtocol() {
                 continue
             }
 
+            // Validate checksum so corrupted/misaligned BLE frames can't surface
+            // garbage (e.g. impossible cell voltages that trip both cell-high and
+            // cell-low alarms at once). JBD checksum = 0x10000 - sum(status + len
+            // + data), low 16 bits, big-endian — per syssi/esphome-jbd-bms
+            // chksum_(raw + 2, data_len + 2). Daly and JK already validate.
+            if (!checksumValid(current, dataLen, expectedLen)) {
+                buffer.trimLeading(1)
+                continue
+            }
+
             val frame = current.copyOfRange(0, expectedLen)
             val cmd = frame[1].toInt() and 0xFF
             parseResponse(cmd, frame)
@@ -139,8 +162,11 @@ class JbdBmsProtocol : BmsProtocol() {
 
         // Voltage: u16 BE / 100 (volts)
         mainVoltage = frame.u16BE(d) / 100f
-        // Current: i16 BE / 100, negated (positive = discharge)
-        mainCurrent = -(frame.i16BE(d + 2) / 100f)
+        // Current: i16 BE / 100. JBD native sign already matches our domain
+        // (+ = charging, - = discharging), so do NOT negate. Confirmed against
+        // syssi/esphome-jbd-bms (positive current = charging). batmon-ha negates
+        // only because its BmsSample uses the opposite (+ = discharge) convention.
+        mainCurrent = frame.i16BE(d + 2) / 100f
         // Remaining charge: u16 BE / 100 (Ah)
         mainCharge = frame.u16BE(d + 4) / 100f
         // Full capacity: u16 BE / 100 (Ah)
@@ -191,7 +217,9 @@ class JbdBmsProtocol : BmsProtocol() {
             val off = 4 + i * 2
             if (off + 1 >= frame.size) break
             val mv = frame.u16BE(off)
-            cells.add(mv / 1000f)
+            // Sanity-filter implausible readings (matches Daly/JK) so a corrupted
+            // frame can't surface a 65 V "cell" that trips cell-high/low alarms.
+            if (mv in 1..5000) cells.add(mv / 1000f)
         }
         cellVoltages = cells
         hasCellData = true

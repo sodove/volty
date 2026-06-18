@@ -47,6 +47,10 @@ class DefaultScanningComponent(
     private var timerJob: Job? = null
     private var scanJob: Job? = null
 
+    /** One-shot guard: scan keeps emitting after we navigate away, and each
+     *  repeated advertisement must not re-trigger navigation. */
+    private var navigated = false
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
         scope.launch { runScan() }
@@ -76,8 +80,11 @@ class DefaultScanningComponent(
                     else s.copy(knownInRange = s.knownInRange + matched)
                 }
                 if (_state.value.knownInRange.size >= 2) {
-                    timerJob?.cancel()
-                    onMultipleOrNone()
+                    navigateOnce {
+                        timerJob?.cancel()
+                        scanJob?.cancel()
+                        onMultipleOrNone()
+                    }
                 }
             }
         }
@@ -85,15 +92,23 @@ class DefaultScanningComponent(
 
     private fun handleScanCompleted() {
         val known = _state.value.knownInRange
-        when (known.size) {
-            1 -> onSingleKnown(known.first().id)
-            else -> onMultipleOrNone()
+        navigateOnce {
+            when (known.size) {
+                1 -> onSingleKnown(known.first().id)
+                else -> onMultipleOrNone()
+            }
         }
+    }
+
+    private inline fun navigateOnce(block: () -> Unit) {
+        if (navigated) return
+        navigated = true
+        block()
     }
 
     override fun onSkipClicked() {
         timerJob?.cancel()
         scanJob?.cancel()
-        onMultipleOrNone()
+        navigateOnce { onMultipleOrNone() }
     }
 }

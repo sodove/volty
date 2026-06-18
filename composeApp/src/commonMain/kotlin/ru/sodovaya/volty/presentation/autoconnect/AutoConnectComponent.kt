@@ -51,6 +51,10 @@ class DefaultAutoConnectComponent(
     private var countdownJob: Job? = null
     private var connectJob: Job? = null
 
+    /** Countdown from prefs; [onRetry] restarts from this, not the decayed
+     *  state value (which has already ticked down to 0). */
+    private var configuredCountdownSec: Int = 3
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
         scope.launch { loadVehicleAndStart() }
@@ -63,6 +67,7 @@ class DefaultAutoConnectComponent(
             return
         }
         val countdown = appPrefs.autoConnectCountdownSec.first()
+        configuredCountdownSec = countdown
         _state.update { it.copy(vehicle = vehicle, countdownSec = countdown) }
         startCountdown(countdown)
     }
@@ -113,6 +118,6 @@ class DefaultAutoConnectComponent(
 
     override fun onRetry() {
         _state.update { it.copy(phase = AutoConnectComponent.Phase.Counting, failure = null) }
-        startCountdown(_state.value.countdownSec.coerceAtLeast(1))
+        startCountdown(configuredCountdownSec.coerceAtLeast(1))
     }
 }

@@ -26,7 +26,10 @@ class AlertEngine(
     private val armed = mutableMapOf<Pair<String, AlertKind>, Boolean>()
 
     private val debounce = 3.seconds
-    private var alertCounter = 100
+
+    // Alert notification ids. Starts well clear of the foreground/live
+    // notification id (1001) so a long session can't collide with it.
+    private var alertCounter = 10_000
 
     fun start(scope: CoroutineScope) {
         scope.launch {

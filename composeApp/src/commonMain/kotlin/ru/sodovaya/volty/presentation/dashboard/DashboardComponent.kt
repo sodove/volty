@@ -11,11 +11,15 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Duration.Companion.minutes
@@ -54,6 +58,7 @@ interface DashboardComponent {
     )
 }
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class DefaultDashboardComponent(
     componentContext: ComponentContext,
     private val bmsRepository: BmsRepository,
@@ -125,10 +130,17 @@ class DefaultDashboardComponent(
         }
 
         scope.launch {
-            val window = (_state.value.vehicle?.averagingWindowMin ?: 5).minutes
-            bmsRepository.movingAverage(window).collect { avg ->
-                _state.update { it.copy(avgPowerW = avg.avgPowerW, avgCurrentA = avg.avgCurrentA) }
-            }
+            // Follow the active vehicle: its averagingWindowMin may differ per
+            // battery and can change after a vehicle switch or an edit. A
+            // one-shot read at init raced the (initially null) vehicle and
+            // silently fell back to 5 min forever.
+            bmsRepository.activeVehicle
+                .map { (it?.averagingWindowMin ?: 5).minutes }
+                .distinctUntilChanged()
+                .flatMapLatest { window -> bmsRepository.movingAverage(window) }
+                .collect { avg ->
+                    _state.update { it.copy(avgPowerW = avg.avgPowerW, avgCurrentA = avg.avgCurrentA) }
+                }
         }
 
         // Second moving-average subscription with a SHORT window. Drives only the

@@ -30,7 +30,6 @@ interface VehicleEditComponent {
     fun onIconChanged(iconKey: String)
     fun onChemistryChanged(c: Chemistry)
     fun onAveragingWindowChanged(min: Int)
-    fun onCellCountChanged(count: Int?)
     fun onCellHighVChanged(v: Float?)
     fun onCellLowVChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
@@ -46,7 +45,6 @@ interface VehicleEditComponent {
         val chemistry: Chemistry = Chemistry.LI_ION_NMC,
         val bmsType: BmsType = BmsType.JK_BMS,
         val bmsAddress: String = "",
-        val cellCount: Int? = null,
         val averagingWindowMin: Int = 5,
         val cellHighV: Float? = null,
         val cellLowV: Float? = null,
@@ -92,7 +90,6 @@ class DefaultVehicleEditComponent(
                     chemistry = v.chemistry,
                     bmsType = v.bmsType,
                     bmsAddress = v.bmsAddress,
-                    cellCount = v.cellCount,
                     averagingWindowMin = v.averagingWindowMin,
                     cellHighV = v.alertConfig.cellHighV,
                     cellLowV = v.alertConfig.cellLowV,
@@ -116,7 +113,6 @@ class DefaultVehicleEditComponent(
     override fun onIconChanged(iconKey: String) { _state.update { it.copy(iconKey = iconKey) } }
     override fun onChemistryChanged(c: Chemistry) { _state.update { it.copy(chemistry = c) } }
     override fun onAveragingWindowChanged(min: Int) { _state.update { it.copy(averagingWindowMin = min) } }
-    override fun onCellCountChanged(count: Int?) { _state.update { it.copy(cellCount = count) } }
     override fun onCellHighVChanged(v: Float?) { _state.update { it.copy(cellHighV = v) } }
     override fun onCellLowVChanged(v: Float?) { _state.update { it.copy(cellLowV = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
@@ -127,8 +123,10 @@ class DefaultVehicleEditComponent(
         if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
         scope.launch {
             _state.update { it.copy(saving = true) }
-            val nowOrCreate = if (s.isEditing) vehicleRepository.get(vehicleId!!)?.createdAt ?: Clock.System.now()
-                              else Clock.System.now()
+            // Preserve everything the edit form doesn't expose (cutoff / delta /
+            // notify toggles, pin, last-connected) — rebuilding from defaults
+            // would silently wipe them on every save.
+            val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
             val v = Vehicle(
                 id = vehicleId ?: "v-${Random.nextLong()}",
                 name = s.name,
@@ -136,15 +134,19 @@ class DefaultVehicleEditComponent(
                 bmsType = s.bmsType,
                 bmsAddress = s.bmsAddress,
                 chemistry = s.chemistry,
-                cellCount = s.cellCount,
+                // Auto-filled from live telemetry by the repo (see
+                // KableBmsRepository.maybePersistCellCount) — never edited here.
+                cellCount = existing?.cellCount,
                 averagingWindowMin = s.averagingWindowMin,
-                alertConfig = AlertConfig(
+                alertConfig = (existing?.alertConfig ?: AlertConfig()).copy(
                     cellHighV = s.cellHighV,
                     cellLowV = s.cellLowV,
                     temperatureHighC = s.temperatureHighC,
                     socLowPercent = s.socLowPercent
                 ),
-                createdAt = nowOrCreate
+                createdAt = existing?.createdAt ?: Clock.System.now(),
+                lastConnectedAt = existing?.lastConnectedAt,
+                isPinned = existing?.isPinned ?: false
             )
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the

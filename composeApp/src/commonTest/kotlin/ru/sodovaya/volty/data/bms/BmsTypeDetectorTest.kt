@@ -36,14 +36,26 @@ class BmsTypeDetectorTest {
     }
 
     @Test
-    fun `returns null when name is missing even with known service UUID`() {
-        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(JBD_SERVICE)))
-        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(DALY_SERVICE)))
+    fun `detects JBD by unique service UUID when name does not match`() {
+        // Stock BMS on the Syccyba Goliath advertises a "DB…" name that no
+        // prefix matches — fall back to the JBD-unique 0xFF00 service UUID.
+        assertEquals(BmsType.JBD_BMS, BmsTypeDetector.detect(name = "DB12345", serviceUuids = listOf(JBD_SERVICE)))
+        assertEquals(BmsType.JBD_BMS, BmsTypeDetector.detect(name = null, serviceUuids = listOf(JBD_SERVICE)))
     }
 
     @Test
-    fun `returns null for unknown name even with known service UUID`() {
-        // DJI cameras advertise service fff0 but their name doesn't match
+    fun `detects JK by service UUID when name does not match`() {
+        // 0xFFE0 is shared by JK and ANT, but ANT always advertises an "ANT…"
+        // name (caught by name match first), so an unmatched name on 0xFFE0 is JK.
+        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = "BMS123", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
+        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = null, serviceUuids = listOf(JK_OR_ANT_SERVICE)))
+    }
+
+    @Test
+    fun `does not fall back on the shared Daly service UUID`() {
+        // 0xFFF0 is widely shared (DJI cameras, headphones) — name must match
+        // for Daly, the UUID alone is not enough.
+        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(DALY_SERVICE)))
         assertNull(BmsTypeDetector.detect(name = "OsmoSodovaya", serviceUuids = listOf(DALY_SERVICE)))
     }
 
