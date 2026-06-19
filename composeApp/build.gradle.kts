@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.application)
@@ -55,22 +57,32 @@ kotlin {
 }
 
 android {
-    // Release signing secrets come from the environment — never hard-code them.
-    // Set: VOLTY_KEYSTORE_FILE (defaults to ../123.jks), VOLTY_KEYSTORE_PASSWORD,
-    // VOLTY_KEY_ALIAS, VOLTY_KEY_PASSWORD. When the keystore/password are absent
-    // (e.g. a fresh clone / CI without secrets) the release config is skipped and
-    // debug falls back to the default debug keystore so the build still works.
-    val releaseStorePath = System.getenv("VOLTY_KEYSTORE_FILE") ?: "../123.jks"
-    val hasReleaseKeystore = file(releaseStorePath).exists() &&
-        System.getenv("VOLTY_KEYSTORE_PASSWORD") != null
+    // Release signing secrets — never hard-coded. Read from a gitignored
+    // keystore.properties at the repo root (so Android Studio signs reliably
+    // without OS env vars), falling back to environment variables for CI.
+    // Properties: storeFile (root-relative), storePassword, keyAlias, keyPassword.
+    // See keystore.properties.example. When neither source provides a usable
+    // keystore (fresh clone / CI without secrets) the release config is skipped
+    // and debug falls back to the default debug keystore so the build still works.
+    val keystoreProps = Properties().apply {
+        val f = rootProject.file("keystore.properties")
+        if (f.exists()) f.inputStream().use { load(it) }
+    }
+    fun signingSecret(propKey: String, envKey: String): String? =
+        keystoreProps.getProperty(propKey) ?: System.getenv(envKey)
+
+    val storeFilePath = signingSecret("storeFile", "VOLTY_KEYSTORE_FILE") ?: "123.jks"
+    val releaseStoreFile = rootProject.file(storeFilePath)
+    val releaseStorePassword = signingSecret("storePassword", "VOLTY_KEYSTORE_PASSWORD")
+    val hasReleaseKeystore = releaseStoreFile.exists() && releaseStorePassword != null
 
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
-                storeFile = file(releaseStorePath)
-                storePassword = System.getenv("VOLTY_KEYSTORE_PASSWORD")
-                keyAlias = System.getenv("VOLTY_KEY_ALIAS")
-                keyPassword = System.getenv("VOLTY_KEY_PASSWORD")
+                storeFile = releaseStoreFile
+                storePassword = releaseStorePassword
+                keyAlias = signingSecret("keyAlias", "VOLTY_KEY_ALIAS")
+                keyPassword = signingSecret("keyPassword", "VOLTY_KEY_PASSWORD")
             }
         }
     }
