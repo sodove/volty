@@ -9,12 +9,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.BasicText
+import androidx.compose.foundation.text.TextAutoSize
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -55,7 +58,21 @@ fun MetricCard(
                 color = fg.copy(alpha = 0.65f)
             )
             Spacer(Modifier.height(2.dp))
-            Text(text = value, fontSize = 22.sp, fontWeight = FontWeight.Medium, color = fg)
+            // Auto-shrink to one line so wide values (e.g. "-3876 W") never wrap
+            // onto a second line. autoSize fits within the card width, clamped so
+            // it stays readable; fontSize in the style is ignored when autoSize set.
+            BasicText(
+                text = value,
+                modifier = Modifier.fillMaxWidth(),
+                style = TextStyle(color = fg, fontWeight = FontWeight.Medium),
+                maxLines = 1,
+                softWrap = false,
+                autoSize = TextAutoSize.StepBased(
+                    minFontSize = 13.sp,
+                    maxFontSize = 22.sp,
+                    stepSize = 1.sp
+                )
+            )
             if (sub != null) {
                 Spacer(Modifier.height(2.dp))
                 Text(text = sub, fontSize = 11.sp, color = fg.copy(alpha = 0.7f))

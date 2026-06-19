@@ -32,6 +32,7 @@ interface VehicleEditComponent {
     fun onAveragingWindowChanged(min: Int)
     fun onCellHighVChanged(v: Float?)
     fun onCellLowVChanged(v: Float?)
+    fun onTemperatureWarnChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
     fun onSave()
@@ -48,6 +49,7 @@ interface VehicleEditComponent {
         val averagingWindowMin: Int = 5,
         val cellHighV: Float? = null,
         val cellLowV: Float? = null,
+        val temperatureWarnC: Float? = 50f,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
         val nameError: Boolean = false,
@@ -93,6 +95,7 @@ class DefaultVehicleEditComponent(
                     averagingWindowMin = v.averagingWindowMin,
                     cellHighV = v.alertConfig.cellHighV,
                     cellLowV = v.alertConfig.cellLowV,
+                    temperatureWarnC = v.alertConfig.temperatureWarnC,
                     temperatureHighC = v.alertConfig.temperatureHighC,
                     socLowPercent = v.alertConfig.socLowPercent
                 )
@@ -115,6 +118,7 @@ class DefaultVehicleEditComponent(
     override fun onAveragingWindowChanged(min: Int) { _state.update { it.copy(averagingWindowMin = min) } }
     override fun onCellHighVChanged(v: Float?) { _state.update { it.copy(cellHighV = v) } }
     override fun onCellLowVChanged(v: Float?) { _state.update { it.copy(cellLowV = v) } }
+    override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
 
@@ -141,6 +145,7 @@ class DefaultVehicleEditComponent(
                 alertConfig = (existing?.alertConfig ?: AlertConfig()).copy(
                     cellHighV = s.cellHighV,
                     cellLowV = s.cellLowV,
+                    temperatureWarnC = s.temperatureWarnC,
                     temperatureHighC = s.temperatureHighC,
                     socLowPercent = s.socLowPercent
                 ),

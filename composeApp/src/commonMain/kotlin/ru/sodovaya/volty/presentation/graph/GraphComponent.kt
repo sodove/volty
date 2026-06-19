@@ -144,5 +144,5 @@ private fun extractValueOf(d: BmsData, metric: GraphMetric): Float = when (metri
     GraphMetric.POWER -> d.power
     GraphMetric.CURRENT -> d.current
     GraphMetric.VOLTAGE -> d.voltage
-    GraphMetric.TEMPERATURE -> d.temperatures.firstOrNull() ?: 0f
+    GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull() ?: 0f
 }

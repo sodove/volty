@@ -155,6 +155,7 @@
     <string name="vehicle_section_alerts">Пороги алертов</string>
     <string name="vehicle_field_cell_high">Макс. напряжение ячейки</string>
     <string name="vehicle_field_cell_low">Мин. напряжение ячейки</string>
+    <string name="vehicle_field_temp_warn">Предупреждение по температуре (°C)</string>
     <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
     <string name="vehicle_field_soc_low">Низкий SOC (%%)</string>
     <string name="vehicle_delete">Удалить батарею</string>

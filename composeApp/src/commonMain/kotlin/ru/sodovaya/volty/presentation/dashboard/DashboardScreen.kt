@@ -166,8 +166,8 @@ fun DashboardScreen(component: DashboardComponent) {
                         )
                         Spacer(Modifier.height(2.dp))
                         Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${fmt0(state.powerMin)} W", fontSize = 10.sp, color = powerSubColor)
-                            Text("peak ${fmt0(state.powerPeak)} W", fontSize = 10.sp, color = powerSubColor)
+                            Text("${fmt0(state.powerMin)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
+                            Text("peak ${fmt0(state.powerPeak)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
                         }
                     }
                 }
@@ -208,9 +208,14 @@ fun DashboardScreen(component: DashboardComponent) {
                 .fillMaxWidth()
                 .animateContentSize()
         ) {
+            // Headline shows the HOTTEST sensor (not sensor #1) — that's the one
+            // that matters for safety and the one AlertEngine watches (it alerts on
+            // max). The hottest chip below is tinted so you can see *which* sensor.
+            val hottestIdx = if (data.temperatures.size > 1)
+                data.temperatures.indices.maxByOrNull { data.temperatures[it] } else null
             MetricCard(
                 label = stringResource(Res.string.metric_temperature),
-                value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.first())}° C",
+                value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.max())}° C",
                 modifier = Modifier.weight(1f),
                 extra = {
                     FlowRow(
@@ -221,16 +226,21 @@ fun DashboardScreen(component: DashboardComponent) {
                         // Compact format "1:25°" survives 4+ sensors on a narrow card
                         // and FlowRow wraps gracefully when they exceed the row.
                         data.temperatures.forEachIndexed { i, t ->
+                            val isHottest = i == hottestIdx
                             Box(
                                 modifier = Modifier
                                     .clip(RoundedCornerShape(10.dp))
-                                    .background(MaterialTheme.colorScheme.surfaceContainerHigh)
+                                    .background(
+                                        if (isHottest) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceContainerHigh
+                                    )
                                     .padding(horizontal = 6.dp, vertical = 2.dp)
                             ) {
                                 Text(
                                     "${i + 1}:${fmt0(t)}°",
                                     fontSize = 11.sp,
-                                    color = MaterialTheme.colorScheme.onSurface
+                                    color = if (isHottest) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurface
                                 )
                             }
                         }

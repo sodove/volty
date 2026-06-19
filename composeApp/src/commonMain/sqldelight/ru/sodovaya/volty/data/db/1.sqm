@@ -1,0 +1,5 @@
+-- v1 -> v2: add an early-warning temperature threshold (Float, nullable).
+-- Existing rows get NULL, which AlertEngine resolves to the 50°C default — a
+-- warn tier below the existing critical (temperatureHighC) so the user is
+-- alerted before the BMS hits its own protection cut-off.
+ALTER TABLE VehicleRow ADD COLUMN temperatureWarnC REAL;

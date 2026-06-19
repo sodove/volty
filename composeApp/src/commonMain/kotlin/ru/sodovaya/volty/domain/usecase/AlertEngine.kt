@@ -82,6 +82,18 @@ class AlertEngine(
         }
 
         if (data.temperatures.isNotEmpty()) {
+            // Two tiers off the SAME max-sensor reading. WARN fires only in the
+            // band [warn, high) so a single rising trend escalates warn -> high
+            // instead of emitting both at once; HIGH owns everything at/above the
+            // critical threshold (which is also where the BMS trips its own
+            // protection, so WARN is the user's lead time before that).
+            fire(AlertKind.TEMPERATURE_WARN, vehicle, now,
+                triggered = maxTemp > cfg.temperatureWarnC && maxTemp < cfg.temperatureHighC,
+                recovered = maxTemp < cfg.temperatureWarnC - 3f,
+                severity = AlertSeverity.WARNING,
+                title = "Temperature warning",
+                text = "${maxTemp.toInt()}°C on ${vehicle.name}"
+            )
             fire(AlertKind.TEMPERATURE_HIGH, vehicle, now,
                 triggered = maxTemp > cfg.temperatureHighC,
                 recovered = maxTemp < cfg.temperatureHighC - 3f,

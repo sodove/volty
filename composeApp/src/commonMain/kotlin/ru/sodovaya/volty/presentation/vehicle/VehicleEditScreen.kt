@@ -68,6 +68,7 @@ import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
+import volty.composeapp.generated.resources.vehicle_field_temp_warn
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_section_alerts
 
@@ -166,6 +167,7 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             SectionLabel(stringResource(Res.string.vehicle_section_alerts))
             FloatField(stringResource(Res.string.vehicle_field_cell_high), state.cellHighV, component::onCellHighVChanged)
             FloatField(stringResource(Res.string.vehicle_field_cell_low), state.cellLowV, component::onCellLowVChanged)
+            FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
             FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
             IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
 

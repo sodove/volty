@@ -13,6 +13,7 @@ CREATE TABLE VehicleRow (
     cellHighV                REAL,
     cellLowV                 REAL,
     cellDeltaMv              INTEGER,
+    temperatureWarnC         REAL,
     temperatureHighC         REAL,
     socLowPercent            INTEGER,
     socCutoffPercent         INTEGER,
@@ -34,11 +35,11 @@ SELECT * FROM VehicleRow WHERE id = :id;
 upsert:
 INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, bmsType, bmsAddress, chemistry, cellCount, averagingWindowMin,
-    cellHighV, cellLowV, cellDeltaMv, temperatureHighC, socLowPercent, socCutoffPercent,
+    cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned
 ) VALUES (
     :id, :name, :iconKey, :bmsType, :bmsAddress, :chemistry, :cellCount, :averagingWindowMin,
-    :cellHighV, :cellLowV, :cellDeltaMv, :temperatureHighC, :socLowPercent, :socCutoffPercent,
+    :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned
 );
 

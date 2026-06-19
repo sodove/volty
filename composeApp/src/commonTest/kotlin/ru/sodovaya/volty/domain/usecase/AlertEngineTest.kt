@@ -147,6 +147,53 @@ class AlertEngineTest {
     }
 
     @Test
+    fun `temperature warning fires in band below critical`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        // 54°C is above warn (50) but below high (60) -> a single WARNING.
+        engine.evaluateForTest(bmsData(temps = listOf(54f)), v)
+        assertEquals(1, notifier.alerts.size)
+        val (title, _, severity) = notifier.alerts.first()
+        assertEquals("Temperature warning", title)
+        assertEquals(AlertSeverity.WARNING, severity)
+    }
+
+    @Test
+    fun `temperature uses hottest sensor not first`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        // First sensor is cool, a later one is hot -> warn must still fire on max.
+        engine.evaluateForTest(bmsData(temps = listOf(25f, 30f, 54f)), v)
+        assertEquals(1, notifier.alerts.size)
+        assertEquals(AlertSeverity.WARNING, notifier.alerts.first().third)
+    }
+
+    @Test
+    fun `temperature escalates warn then critical as it rises`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        engine.evaluateForTest(bmsData(temps = listOf(54f)), v) // WARNING
+        engine.evaluateForTest(bmsData(temps = listOf(65f)), v) // CRITICAL (warn no longer in band)
+        assertEquals(2, notifier.alerts.size)
+        assertEquals(AlertSeverity.WARNING, notifier.alerts[0].third)
+        assertEquals(AlertSeverity.CRITICAL, notifier.alerts[1].third)
+    }
+
+    @Test
+    fun `temperature high at 65 does not also fire warning`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        // Jumping straight into the critical range must not emit a warn too.
+        engine.evaluateForTest(bmsData(temps = listOf(65f)), v)
+        assertEquals(1, notifier.alerts.size)
+        assertEquals(AlertSeverity.CRITICAL, notifier.alerts.first().third)
+    }
+
+    @Test
     fun `soc low triggers warning`() {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
