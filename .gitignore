@@ -9,5 +9,12 @@
 .cxx
 *.apk
 *.aab
+
+# Signing keystores & secrets — never commit
+*.jks
+*.keystore
+keystore.properties
+/build_output.log
+/composeApp/release/
 /composeApp/build
 .superpowers/

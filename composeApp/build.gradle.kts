@@ -55,12 +55,23 @@ kotlin {
 }
 
 android {
+    // Release signing secrets come from the environment — never hard-code them.
+    // Set: VOLTY_KEYSTORE_FILE (defaults to ../123.jks), VOLTY_KEYSTORE_PASSWORD,
+    // VOLTY_KEY_ALIAS, VOLTY_KEY_PASSWORD. When the keystore/password are absent
+    // (e.g. a fresh clone / CI without secrets) the release config is skipped and
+    // debug falls back to the default debug keystore so the build still works.
+    val releaseStorePath = System.getenv("VOLTY_KEYSTORE_FILE") ?: "../123.jks"
+    val hasReleaseKeystore = file(releaseStorePath).exists() &&
+        System.getenv("VOLTY_KEYSTORE_PASSWORD") != null
+
     signingConfigs {
-        create("release") {
-            storeFile = file("..\\123.jks")
-            storePassword = System.getenv("VOLTY_KEYSTORE_PASSWORD")
-            keyAlias = System.getenv("VOLTY_KEY_ALIAS")
-            keyPassword = System.getenv("VOLTY_KEY_PASSWORD")
+        if (hasReleaseKeystore) {
+            create("release") {
+                storeFile = file(releaseStorePath)
+                storePassword = System.getenv("VOLTY_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("VOLTY_KEY_ALIAS")
+                keyPassword = System.getenv("VOLTY_KEY_PASSWORD")
+            }
         }
     }
 
@@ -76,7 +87,7 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
@@ -84,7 +95,7 @@ android {
         }
         getByName("debug") {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("release")
+            if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
         }
     }
 
