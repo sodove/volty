@@ -120,7 +120,28 @@ internal class ConnectionSession(
                 // peripheral.services is StateFlow<List<DiscoveredService>?> — null until discovered.
                 peripheral.services.filterNotNull().first()
                 var sampleCount = 0
-                peripheral.observe(notifyChar).collect { data ->
+                peripheral.observe(
+                    notifyChar,
+                    // The handshake MUST go out only AFTER notifications are
+                    // actually enabled (CCCD written). JK BMS streams cell data
+                    // solely in response to a one-shot 0x96 and never repeats it
+                    // (pollCommands is empty), so a handshake raced ahead of the
+                    // live subscription is lost forever and the device looks
+                    // connected-but-silent. A fixed pre-write delay couldn't
+                    // guarantee this — service discovery + CCCD enable on Android
+                    // routinely exceeds it. Kable's onSubscription fires exactly
+                    // after notifications are enabled, matching the ordering the
+                    // reference (fl4p/batmon-ha jikong.py) relies on:
+                    // start_notify → then write 0x97/0x96. Polling BMS types
+                    // (JBD/Daly/ANT) masked this by re-sending every cycle.
+                    onSubscription = {
+                        delay(BleConfig.handshakeWarmupMs)
+                        for (cmd in protocol.handshakeCommands()) {
+                            peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
+                            delay(BleConfig.writeSpacingMs.coerceAtLeast(100L))
+                        }
+                    }
+                ).collect { data ->
                     protocol.onNotification(data)
                     protocol.latestData()?.let { bms ->
                         val sample = bms.copy(timestamp = Clock.System.now())
@@ -145,13 +166,10 @@ internal class ConnectionSession(
             }
         }
 
-        delay(BleConfig.handshakeWarmupMs)
-
-        for (cmd in protocol.handshakeCommands()) {
-            peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
-            delay(BleConfig.writeSpacingMs.coerceAtLeast(100L))
-        }
-
+        // Note: the handshake is issued from the observe(onSubscription) hook
+        // above — NOT here — so it can never race ahead of the live
+        // notification subscription. Poll-based protocols still (re)send their
+        // poll commands below; that path self-heals by design.
         val pollCmds = protocol.pollCommands()
         if (pollCmds.isNotEmpty()) {
             pollingJob = parentScope.launch {
