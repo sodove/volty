@@ -63,6 +63,8 @@
     <string name="hero_state_of_charge">УРОВЕНЬ ЗАРЯДА</string>
     <string name="hero_charging_to_full">ЗАРЯЖАЕТСЯ ДО ПОЛНОЙ</string>
     <string name="hero_ah_remaining">АЧ ОСТАЛОСЬ</string>
+    <string name="hero_cycles_count">%1$d циклов</string>
+    <string name="hero_cycles_ah">оборот %1$s Ач</string>
     <string name="hero_to_empty">до разряда · средн. %1$d Вт</string>
     <string name="hero_to_full">до полной · средн. %1$d Вт</string>
     <string name="hero_now">сейчас</string>
@@ -135,6 +137,9 @@
     <string name="settings_seconds">%1$d с</string>
     <string name="settings_my_batteries">Мои батареи</string>
     <string name="settings_add_new_battery">+ Добавить новую батарею</string>
+    <string name="settings_diagnostics">Диагностика</string>
+    <string name="settings_send_logs">Отправить логи приложения</string>
+    <string name="settings_send_logs_subtitle">Поделиться logcat приложения для диагностики</string>
     <string name="settings_delete">Удалить</string>
     <string name="settings_delete_title">Удалить «%1$s»?</string>
     <string name="settings_delete_text">Профиль будет удалён.</string>

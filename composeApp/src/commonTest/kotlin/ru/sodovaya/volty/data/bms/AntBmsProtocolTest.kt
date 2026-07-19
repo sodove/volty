@@ -30,6 +30,7 @@ class AntBmsProtocolTest {
      *   +2      balancer state + reserved (skipped)
      *   +4      capacity       (u32 LE * 0.000001)
      *   +4      remaining Ah   (u32 LE * 0.000001)
+     *   +4      cycle Ah       (u32 LE * 0.001)
      */
     private fun synthesizeStatusFrame(
         numCells: Int = 4,
@@ -47,6 +48,7 @@ class AntBmsProtocolTest {
         balancerStateRaw: Int = 0,
         capacityRaw: Long = 100_000_000L,  // 100.0 Ah
         chargeRaw: Long = 80_000_000L,     // 80.0 Ah
+        cycleChargeRaw: Long = 150_000L,   // *0.001 = 150.0 Ah cumulative
         alarmFlags: Int = 0                // 24-bit packed
     ): ByteArray {
         // Compute dataLen so the data extends through the alarm bytes that sit
@@ -72,7 +74,8 @@ class AntBmsProtocolTest {
         val balancer2End = switchesEnd + 2
         val capEnd = balancer2End + 4
         val chargeEnd = capEnd + 4
-        val alarmEnd = chargeEnd + 3
+        val cycleEnd = chargeEnd + 4
+        val alarmEnd = cycleEnd + 3
         val dataEndOffset = alarmEnd
         val dataLen = dataEndOffset - 6
         val frameLen = 6 + dataLen + 4
@@ -128,10 +131,13 @@ class AntBmsProtocolTest {
         // Remaining charge (u32 LE)
         putU32LE(frame, capEnd, chargeRaw)
 
+        // Cumulative cycled charge (u32 LE) — "total Ah cycle"
+        putU32LE(frame, chargeEnd, cycleChargeRaw)
+
         // 3-byte alarm bitmap (LSB first)
-        frame[chargeEnd] = (alarmFlags and 0xFF).toByte()
-        frame[chargeEnd + 1] = ((alarmFlags ushr 8) and 0xFF).toByte()
-        frame[chargeEnd + 2] = ((alarmFlags ushr 16) and 0xFF).toByte()
+        frame[cycleEnd] = (alarmFlags and 0xFF).toByte()
+        frame[cycleEnd + 1] = ((alarmFlags ushr 8) and 0xFF).toByte()
+        frame[cycleEnd + 2] = ((alarmFlags ushr 16) and 0xFF).toByte()
 
         // CRC over [1 : frameLen-4]
         val crc = crc16Modbus(frame, 1, frameLen - 4)
@@ -214,6 +220,8 @@ class AntBmsProtocolTest {
         assertEquals(100.0f, data.capacity, 0.001f)
         // remaining charge = 80_000_000 * 0.000001 = 80.0 Ah
         assertEquals(80.0f, data.charge, 0.001f)
+        // cumulative cycled charge = 150_000 * 0.001 = 150.0 Ah
+        assertEquals(150.0f, data.cycleCapacityAh, 0.001f)
 
         // power = voltage * current
         assertEquals(50.50f * 12.30f, data.power, 0.01f)

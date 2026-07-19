@@ -56,6 +56,8 @@ import volty.composeapp.generated.resources.cells_delta_label
 import volty.composeapp.generated.resources.cells_section_title
 import volty.composeapp.generated.resources.cells_v_avg
 import volty.composeapp.generated.resources.hero_ah_remaining
+import volty.composeapp.generated.resources.hero_cycles_ah
+import volty.composeapp.generated.resources.hero_cycles_count
 import volty.composeapp.generated.resources.hero_charging_to_full
 import volty.composeapp.generated.resources.hero_now
 import volty.composeapp.generated.resources.hero_state_of_charge
@@ -512,8 +514,23 @@ private fun HeroCard(state: DashboardComponent.State) {
             }
             Spacer(Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 6.dp)) {
-                Text(fmt1(data.charge), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
-                Text(" / ${fmt1(data.capacity)}", fontSize = 12.sp, color = onColor.copy(alpha = 0.65f))
+                // Cycles, above the Ah block: an integer count for count-based BMS
+                // (JK/JBD/Daly), or ANT's cumulative "total Ah cycle" in Ah.
+                val cyclesText = when {
+                    data.cycleCapacityAh > 0f ->
+                        stringResource(Res.string.hero_cycles_ah, fmt0(data.cycleCapacityAh))
+                    data.numCycles > 0 ->
+                        stringResource(Res.string.hero_cycles_count, data.numCycles)
+                    else -> null
+                }
+                if (cyclesText != null) {
+                    Text(cyclesText, fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
+                }
+                // Remaining / total on one line — remaining stays bold, total lighter.
+                Row(verticalAlignment = Alignment.Bottom) {
+                    Text(fmt1(data.charge), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
+                    Text(" / ${fmt1(data.capacity)}", fontSize = 12.sp, color = onColor.copy(alpha = 0.65f))
+                }
                 Text(stringResource(Res.string.hero_ah_remaining), fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
             }
         }

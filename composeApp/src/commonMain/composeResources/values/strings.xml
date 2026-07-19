@@ -63,6 +63,8 @@
     <string name="hero_state_of_charge">STATE OF CHARGE</string>
     <string name="hero_charging_to_full">CHARGING TO FULL</string>
     <string name="hero_ah_remaining">AH REMAINING</string>
+    <string name="hero_cycles_count">%1$d cycles</string>
+    <string name="hero_cycles_ah">%1$s Ah cycled</string>
     <string name="hero_to_empty">to empty · avg %1$d W</string>
     <string name="hero_to_full">to full · avg %1$d W</string>
     <string name="hero_now">now</string>
@@ -135,6 +137,9 @@
     <string name="settings_seconds">%1$d s</string>
     <string name="settings_my_batteries">My batteries</string>
     <string name="settings_add_new_battery">+ Add new battery</string>
+    <string name="settings_diagnostics">Diagnostics</string>
+    <string name="settings_send_logs">Send app logs</string>
+    <string name="settings_send_logs_subtitle">Share the app\'s logcat for troubleshooting</string>
     <string name="settings_delete">Delete</string>
     <string name="settings_delete_title">Delete \"%1$s\"?</string>
     <string name="settings_delete_text">This will remove the saved profile.</string>

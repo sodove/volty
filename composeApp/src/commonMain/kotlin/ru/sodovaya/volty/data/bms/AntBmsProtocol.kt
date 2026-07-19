@@ -211,6 +211,11 @@ class AntBmsProtocol : BmsProtocol() {
         // Remaining charge: u32 LE * 0.000001 (Ah)
         val charge = if (pos + 3 < frameLen) buf.u32LE(pos) * 0.000001f else 0f
         pos += 4
+        // Cumulative cycled charge ("total Ah cycle"): u32 LE * 0.001 (Ah).
+        // ANT reports this instead of an integer cycle count — see
+        // fl4p/batmon-ha ant.py: `cycle_charge = u32(offset) * 0.001`.
+        val cycleCapacityAh = if (pos + 3 < frameLen) buf.u32LE(pos) * 0.001f else 0f
+        pos += 4
 
         val chargeEnabled = chargeStatus == 1
         val dischargeEnabled = dischargeStatus == 1
@@ -230,6 +235,7 @@ class AntBmsProtocol : BmsProtocol() {
             soc = soc,
             charge = charge,
             capacity = capacity,
+            cycleCapacityAh = cycleCapacityAh,
             cellVoltages = cells,
             temperatures = temps,
             chargeEnabled = chargeEnabled,
