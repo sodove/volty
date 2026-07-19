@@ -2,6 +2,7 @@ package ru.sodovaya.volty.di
 
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
+import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AndroidNotifier
 import ru.sodovaya.volty.notification.Notifier
 import ru.sodovaya.volty.permissions.PermissionsChecker
@@ -15,4 +16,5 @@ val androidModule = module {
     single { PermissionsChecker(androidContext()) }
     single<Notifier> { AndroidNotifier(androidContext()) }
     single { ServiceController(androidContext()) }
+    single { LogExporter(androidContext()) }
 }

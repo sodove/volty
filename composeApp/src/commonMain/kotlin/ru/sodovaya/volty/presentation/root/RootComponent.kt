@@ -287,6 +287,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
+                    logExporter = get(),
                     onEditVehicleRequested = { id -> nav.push(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {
                         nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))

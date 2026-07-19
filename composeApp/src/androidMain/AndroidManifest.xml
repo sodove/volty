@@ -39,5 +39,16 @@
             android:name=".service.MonitoringService"
             android:foregroundServiceType="connectedDevice"
             android:exported="false" />
+
+        <!-- Shares the exported logcat file with the chosen app (see LogExporter). -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.settings
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.CoroutineScope
@@ -25,6 +26,7 @@ interface SettingsComponent {
     fun onEditVehicle(id: String)
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
+    fun onSendLogs()
     fun onBack()
 
     data class State(
@@ -40,6 +42,7 @@ class DefaultSettingsComponent(
     componentContext: ComponentContext,
     private val appPrefs: AppPrefs,
     private val vehicleRepository: VehicleRepository,
+    private val logExporter: LogExporter,
     private val onEditVehicleRequested: (String) -> Unit,
     private val onAddBatteryRequested: () -> Unit,
     private val onBackRequested: () -> Unit
@@ -77,5 +80,6 @@ class DefaultSettingsComponent(
     override fun onEditVehicle(id: String) { onEditVehicleRequested(id) }
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }
+    override fun onSendLogs() { logExporter.exportLogs() }
     override fun onBack() { onBackRequested() }
 }

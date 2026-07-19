@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -56,6 +57,9 @@ import volty.composeapp.generated.resources.settings_add_new_battery
 import volty.composeapp.generated.resources.settings_auto_connect_countdown
 import volty.composeapp.generated.resources.settings_delete
 import volty.composeapp.generated.resources.settings_delete_text
+import volty.composeapp.generated.resources.settings_diagnostics
+import volty.composeapp.generated.resources.settings_send_logs
+import volty.composeapp.generated.resources.settings_send_logs_subtitle
 import volty.composeapp.generated.resources.settings_delete_title
 import volty.composeapp.generated.resources.settings_dynamic_color
 import volty.composeapp.generated.resources.settings_dynamic_color_subtitle
@@ -160,6 +164,36 @@ fun SettingsScreen(component: SettingsComponent) {
             TextButton(onClick = component::onAddBattery, modifier = Modifier.fillMaxWidth()) {
                 Text(stringResource(Res.string.settings_add_new_battery))
             }
+
+            HorizontalDivider()
+
+            // DIAGNOSTICS
+            SectionLabel(stringResource(Res.string.settings_diagnostics))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(16.dp))
+                    .background(MaterialTheme.colorScheme.surfaceContainer)
+                    .clickable(onClick = component::onSendLogs)
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Icon(
+                    Icons.Default.Share,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary
+                )
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(stringResource(Res.string.settings_send_logs), fontSize = 14.sp, fontWeight = FontWeight.Medium)
+                    Text(
+                        stringResource(Res.string.settings_send_logs_subtitle),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            }
+
             Spacer(Modifier.height(24.dp))
         }
 
