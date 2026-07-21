@@ -123,6 +123,12 @@ internal class ConnectionSession(
                 // peripheral.services is StateFlow<List<DiscoveredService>?> — null until discovered.
                 peripheral.services.filterNotNull().first()
                 var sampleCount = 0
+                // Protocols cache their last decode, and this loop re-reads
+                // every pack on every notification — the gate turns that into
+                // "onSample fires only when the pack genuinely decoded
+                // something new". Without it a silent pack would keep being
+                // re-submitted with frozen data and could never go stale.
+                val sampleGate = PackSampleGate(protocol.packCount)
                 peripheral.observe(
                     notifyChar,
                     // The handshake MUST go out only AFTER notifications are
@@ -149,6 +155,10 @@ internal class ConnectionSession(
                     var got = false
                     for (packIndex in 0 until protocol.packCount) {
                         val bms = protocol.latestData(packIndex) ?: continue
+                        // Gate BEFORE the timestamp-stamping copy: the copy
+                        // makes a fresh instance every time and would defeat
+                        // the identity check.
+                        if (!sampleGate.advance(packIndex, bms)) continue
                         onSample(packIndex, bms.copy(timestamp = Clock.System.now()))
                         got = true
                     }

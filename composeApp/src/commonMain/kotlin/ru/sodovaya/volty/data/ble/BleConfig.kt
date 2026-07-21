@@ -29,6 +29,28 @@ object BleConfig {
     /** If we got at least one sample, this is the max allowed age before we declare stale. */
     const val staleSampleMs: Long = 5_000L
 
+    /**
+     * Max age of one pack's last sample before [VehicleConnection] marks it
+     * offline, while OTHER packs on the same link keep reporting.
+     *
+     * Evidence for the number: the real Begode ET Max capture
+     * ([ru.sodovaya.volty.data.bms.BegodeDumpFixture], 13 s / 228
+     * notifications) shows the wheel cycling through all four `bmsnum` values
+     * and both cell-frame types in ~1.4 s — in normal streaming no branch is
+     * silent for much longer than about a second and a half. 5 s is >3x that
+     * worst-case gap, so a healthy branch can never be flagged by its own
+     * cadence.
+     *
+     * It also deliberately equals [staleSampleMs]: a shared-link stall long
+     * enough to age a healthy pack past this threshold is, within one
+     * [watchdogTickMs], long enough for the session watchdog to tear the whole
+     * link down — so the per-pack check almost never fires on link-wide
+     * hiccups. The residual edge (a stall just under the watchdog's trigger
+     * plus the pack's normal gap) self-heals on the pack's next sample within
+     * one ~1.4 s cycle.
+     */
+    const val packOfflineAfterMs: Long = 5_000L
+
     /** If we never got a sample, this is how long after connect we wait before declaring stuck. */
     const val noSampleEverMs: Long = 10_000L
 

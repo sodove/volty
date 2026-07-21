@@ -327,6 +327,36 @@ class BegodeProtocolTest {
 
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
 
+    // --- latestData identity contract ---
+
+    @Test
+    fun latestDataKeepsTheSameInstanceForABranchThatDecodedNothingNew() {
+        // PackSampleGate (and through it the per-pack liveness check in
+        // VehicleConnection) relies on this: a branch's latestData is REPLACED
+        // with a fresh instance on every decode for that branch, and returns
+        // the exact same instance while the branch is silent. If this contract
+        // breaks, a dead branch either keeps looking alive (never replaced ->
+        // fine, still same instance -> gate suppresses; but mutated in place
+        // -> gate suppresses a LIVE branch) — pin it.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        protocol.onNotification(telemetryFrame(bmsnum = 2, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        val branch0Before = protocol.latestData(0)
+        val branch1Before = protocol.latestData(1)
+
+        // Only branch 0 keeps decoding.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1471, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+
+        assertTrue(
+            protocol.latestData(0) !== branch0Before,
+            "a decode for branch 0 must produce a fresh instance"
+        )
+        assertTrue(
+            protocol.latestData(1) === branch1Before,
+            "a silent branch must keep returning the same cached instance"
+        )
+    }
+
     private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {
         require(payload.size == 16) { "payload is frame bytes 2..17" }
         return byteArrayOf(0x55, 0xAA.toByte()) + payload +
