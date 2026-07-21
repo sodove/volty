@@ -476,12 +476,15 @@ class KableBmsRepository private constructor(
                 connectionState = _connectionState,
                 onSample = { packIndex, sample ->
                     // Devices that report no SoC at all (a Begode wheel gives
-                    // voltage and cells only) arrive with soc = 0. Estimate it
-                    // from average cell voltage against the vehicle's configured
-                    // cell-voltage bounds — BEFORE aggregation, so per-pack SoC
-                    // maths sees it. Samples with a real, coulomb-counted SoC
-                    // pass through untouched (see VoltageSocEstimator).
-                    val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle)
+                    // voltage and cells only) get one estimated from average
+                    // cell voltage against the vehicle's configured cell-voltage
+                    // bounds — BEFORE aggregation, so per-pack SoC maths sees
+                    // it. The estimator keys on the PACK's BmsType (packIndex,
+                    // not the vehicle-level shortcut — a future BMS group can
+                    // mix types): a coulomb-counting BMS's sample passes
+                    // through untouched, including a genuine 0 % on a flat
+                    // pack (see VoltageSocEstimator).
+                    val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle, packIndex)
                     // The aggregate is a true identity for a single pack
                     // (cell voltages included), so every vehicle routes
                     // through it. submit() returns the snapshot it just

@@ -13,7 +13,8 @@ import ru.sodovaya.volty.domain.model.Vehicle
  * else — so its samples arrive with `soc = 0` and the dashboard showed "0 %"
  * on a nearly full wheel. This maps the average cell voltage linearly onto
  * 0..100 % between the vehicle's configured cell-voltage bounds: the user's
- * alert thresholds when set, the chemistry defaults otherwise.
+ * alert thresholds when set, otherwise the chemistry's usable range
+ * ([Chemistry.emptyCellV]..[Chemistry.defaultHighV]).
  *
  * Pure and vehicle-aware, so it lives in the domain layer next to
  * [PackAggregator] — a protocol cannot do this, it has no idea what chemistry
@@ -30,8 +31,16 @@ object VoltageSocEstimator {
     /**
      * Average cell voltage mapped linearly onto 0..100 % between
      * [AlertConfig.cellLowV]..[AlertConfig.cellHighV], falling back to
-     * [Chemistry.defaultLowV]..[Chemistry.defaultHighV]. Clamped to 0..100.
+     * [Chemistry.emptyCellV]..[Chemistry.defaultHighV]. Clamped to 0..100.
      * An empty cell list (or a degenerate bounds window) yields 0, never NaN.
+     *
+     * The fallback floor is [Chemistry.emptyCellV] — the usable-range floor —
+     * NOT [Chemistry.defaultLowV], the cell-damage threshold behind the
+     * low-cell alert. The resulting ordering is deliberate: the SoC estimate
+     * reaches 0 % (Li-ion: 3.30 V) before the low-cell alert fires (2.80 V),
+     * so the rider hears "you are out of range" before "the cells are being
+     * damaged". A user-configured [AlertConfig.cellLowV] still wins when set:
+     * the bounds the user configured ARE their 0 % and 100 %.
      */
     fun estimateSocPercent(
         cellVoltages: List<Float>,
@@ -40,7 +49,7 @@ object VoltageSocEstimator {
     ): Float {
         if (cellVoltages.isEmpty()) return 0f
         val highV = alertConfig.cellHighV ?: chemistry.defaultHighV
-        val lowV = alertConfig.cellLowV ?: chemistry.defaultLowV
+        val lowV = alertConfig.cellLowV ?: chemistry.emptyCellV
         val span = highV - lowV
         if (span <= 0f) return 0f
         val avg = cellVoltages.average().toFloat()
@@ -48,15 +57,26 @@ object VoltageSocEstimator {
     }
 
     /**
-     * Fill in an estimated SoC ONLY when the device did not report one itself:
-     * `soc == 0` AND there are cell voltages to estimate from. A JK or ANT
-     * sample already carries a real, coulomb-counted SoC — overwriting it with
-     * a voltage estimate would be a regression — and with no cells (or no
-     * vehicle to take bounds from) there is nothing honest to compute.
+     * Fill in an estimated SoC ONLY for a pack whose BMS type does not report
+     * one itself ([ru.sodovaya.volty.domain.model.BmsType.reportsStateOfCharge]
+     * is false). The guard is by device identity, not by value: a JK or ANT
+     * sample carries a real, coulomb-counted SoC that must pass through
+     * untouched even when it is a genuine 0 % on a flat pack — a `soc == 0`
+     * check cannot tell that apart from "no SoC reported" and would overwrite
+     * the true zero with a reassuring voltage estimate at the exact moment
+     * the rider needs to stop.
+     *
+     * [packIndex] selects the pack (by its [ru.sodovaya.volty.domain.model.Pack.index],
+     * matching VehicleConnection.submit) — the per-pack type, not the
+     * vehicle-level shortcut, because a future BMS group can mix types. An
+     * unknown index, a null vehicle, or a sample with no cells passes through
+     * unchanged: there is nothing honest to compute.
      */
-    fun withEstimatedSoc(sample: BmsData, vehicle: Vehicle?): BmsData {
+    fun withEstimatedSoc(sample: BmsData, vehicle: Vehicle?, packIndex: Int): BmsData {
         if (vehicle == null) return sample
-        if (sample.soc != 0f || sample.cellVoltages.isEmpty()) return sample
+        val pack = vehicle.packs.firstOrNull { it.index == packIndex } ?: return sample
+        if (pack.bmsType.reportsStateOfCharge) return sample
+        if (sample.cellVoltages.isEmpty()) return sample
         return sample.copy(
             soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig)
         )
