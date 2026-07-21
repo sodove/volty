@@ -132,13 +132,20 @@ class KableBmsRepository private constructor(
      * Orchestrator for the currently connected vehicle. Null when nothing is
      * connected.
      *
-     * EVERY write goes through [sessionLock], and every check-then-write
-     * (the identity-guarded failure cleanup) is performed inside a single
-     * critical section, so a failed attempt can never null out the
-     * orchestrator a concurrent attempt installed in between. The writers are:
-     * [doConnect] (install, and clear via [clearOrchestratorLocked]),
+     * Every PRODUCTION write goes through [sessionLock], and every
+     * check-then-write (the identity-guarded failure cleanup) is performed
+     * inside a single critical section, so a failed attempt can never null out
+     * the orchestrator a concurrent attempt installed in between. The writers
+     * are: [doConnect] (install, and clear via [clearOrchestratorLocked]),
      * [connectDemo] and [disconnect] (clear) — all inside a
      * `sessionLock.withLock { }` block.
+     *
+     * The one exception is [installSampleFunnelForTest], which writes the field
+     * unlocked. It has no production call site and runs on a single-threaded
+     * test dispatcher, so it cannot race — but it does mean "every write is
+     * locked" holds for production paths only. Keep it that way: a second
+     * unlocked writer that production could reach would silently undo the
+     * guarantee the rest of this doc describes.
      *
      * [sessionLock] is a plain non-reentrant [Mutex]. The two cleanup helpers
      * have opposite locking contracts: [clearOrchestratorLocked] ASSUMES the
@@ -544,8 +551,9 @@ class KableBmsRepository private constructor(
             // (cell voltages included), so every vehicle routes
             // through it. submit() returns the snapshot it just
             // emitted, so the aggregate is built once per sample.
-            // Fall back to the raw sample only if the orchestrator
-            // was swapped out mid-flight.
+            // Fall back to the enriched sample — not the raw one — if
+            // the orchestrator was swapped out mid-flight, so a Begode
+            // keeps its estimated SoC even on that path.
             val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
             // Ring buffer before activeData: the graph collector maps
             // over _activeData and reads the buffer, so announcing the
