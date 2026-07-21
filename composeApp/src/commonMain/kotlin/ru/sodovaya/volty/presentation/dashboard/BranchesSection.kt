@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.presentation.common.chemistryFraction
+import ru.sodovaya.volty.presentation.common.groupPackCells
 import ru.sodovaya.volty.presentation.common.packDisplayLabel
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
@@ -67,6 +68,7 @@ internal fun BranchesSection(
                 rowPacks.forEach { p ->
                     BranchCard(
                         state = p,
+                        packCount = packs.size,
                         chemistry = chemistry,
                         onClick = { onPackClicked(p.pack.index) },
                         modifier = Modifier.weight(1f).fillMaxHeight()
@@ -82,6 +84,7 @@ internal fun BranchesSection(
 @Composable
 private fun BranchCard(
     state: PackState,
+    packCount: Int,
     chemistry: Chemistry,
     onClick: () -> Unit,
     modifier: Modifier = Modifier
@@ -102,7 +105,7 @@ private fun BranchCard(
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
-                packDisplayLabel(state.pack).uppercase(),
+                packDisplayLabel(state.pack, packCount).uppercase(),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f * contentAlpha),
@@ -139,10 +142,13 @@ private fun BranchCard(
                 Spacer(Modifier.height(6.dp))
                 // Compact per-section indication: voltage + a mini bar whose fill
                 // is the chemistry fraction of the section's average cell voltage.
-                // Cells per section is only known when the cell list divides
-                // evenly across sections; otherwise the bar stays empty.
-                val perSection = if (cells.isNotEmpty() && cells.size % sections.size == 0)
-                    cells.size / sections.size else 0
+                // Cells per section come from the shared grouping, which splits
+                // only when the protocol declared authoritative cell ranges (see
+                // groupPackCells); without them the bar honestly stays empty
+                // instead of dividing by a guessed per-section cell count.
+                val cellsPerSection: Map<Int, Int> = groupPackCells(state)
+                    .mapNotNull { g -> g.section?.let { it.index to g.voltages.size } }
+                    .toMap()
                 Row(horizontalArrangement = Arrangement.spacedBy(6.dp), modifier = Modifier.fillMaxWidth()) {
                     sections.forEach { s ->
                         Column(Modifier.weight(1f)) {
@@ -154,8 +160,9 @@ private fun BranchCard(
                                 softWrap = false
                             )
                             Spacer(Modifier.height(2.dp))
-                            val fraction = if (perSection > 0)
-                                chemistryFraction(s.voltage / perSection, chemistry) else 0f
+                            val sectionCells = cellsPerSection[s.index] ?: 0
+                            val fraction = if (sectionCells > 0)
+                                chemistryFraction(s.voltage / sectionCells, chemistry) else 0f
                             Box(
                                 modifier = Modifier
                                     .fillMaxWidth()

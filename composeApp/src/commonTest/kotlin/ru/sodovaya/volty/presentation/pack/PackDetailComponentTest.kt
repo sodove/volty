@@ -110,16 +110,18 @@ class PackDetailComponentTest {
         val c = component(repo, packIndex = 0)
         advanceUntilIdle()
 
-        // 6 cells over 2 sections: first half is the first assembly, exactly
-        // like the Begode layout verified against the ET Max dump.
+        // 6 cells over 2 sections with the protocol declaring each section's
+        // exact cell range — the only breakdown the UI will group by (list
+        // arithmetic over a possibly-truncated cell list is refused, see
+        // groupPackCells).
         val cells = listOf(3.701f, 3.702f, 3.703f, 3.711f, 3.712f, 3.713f)
         repo.activeVehicleData.value = PackAggregator.build(
             listOf(
                 packState(
                     0, cells,
                     sections = listOf(
-                        SectionState(index = 0, voltage = 11.106f),
-                        SectionState(index = 1, voltage = 11.136f)
+                        SectionState(index = 0, voltage = 11.106f, cellRange = 0..2),
+                        SectionState(index = 1, voltage = 11.136f, cellRange = 3..5)
                     )
                 )
             ),

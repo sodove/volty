@@ -4,8 +4,9 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.PackState
-import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.presentation.common.CellGroup
+import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -20,26 +21,15 @@ interface PackDetailComponent {
     val state: StateFlow<State>
     fun onBack()
 
-    /**
-     * Cells of one physical assembly (section), or the whole pack when the
-     * protocol reported no section breakdown.
-     */
-    data class CellGroup(
-        /** null when the pack has no section breakdown — render one flat list. */
-        val section: SectionState?,
-        /**
-         * 0-based position of the first element of [voltages] within the
-         * pack's cellVoltages. Cell indices are positional — the rendered
-         * number is `startIndex + i + 1` — so cells keep their physical
-         * numbers across section boundaries.
-         */
-        val startIndex: Int,
-        val voltages: List<Float>
-    )
-
     data class State(
         /** null until the observed pack index appears in the live data. */
         val pack: PackState? = null,
+        /**
+         * Total packs of the vehicle, not just the observed one — drives the
+         * title: a lone pack keeps its own name, branches get positional
+         * labels (see packLabelFor).
+         */
+        val packCount: Int = 1,
         val chemistry: Chemistry = Chemistry.LI_ION_NMC,
         val groups: List<CellGroup> = emptyList()
     )
@@ -56,10 +46,11 @@ class DefaultPackDetailComponent(
 
     private val _state = MutableStateFlow(
         run {
-            val pack = bmsRepository.activeVehicleData.value.packs
-                .firstOrNull { it.pack.index == packIndex }
+            val packs = bmsRepository.activeVehicleData.value.packs
+            val pack = packs.firstOrNull { it.pack.index == packIndex }
             PackDetailComponent.State(
                 pack = pack,
+                packCount = packs.size,
                 chemistry = bmsRepository.activeVehicle.value?.chemistry ?: Chemistry.LI_ION_NMC,
                 groups = groupPackCells(pack)
             )
@@ -73,7 +64,9 @@ class DefaultPackDetailComponent(
         scope.launch {
             bmsRepository.activeVehicleData.collect { vd ->
                 val pack = vd.packs.firstOrNull { it.pack.index == packIndex }
-                _state.update { it.copy(pack = pack, groups = groupPackCells(pack)) }
+                _state.update {
+                    it.copy(pack = pack, packCount = vd.packs.size, groups = groupPackCells(pack))
+                }
             }
         }
 
@@ -85,31 +78,4 @@ class DefaultPackDetailComponent(
     }
 
     override fun onBack() { onBackRequested() }
-}
-
-/**
- * Splits a pack's cells into per-section groups.
- *
- * Sections are grouped only when the protocol supplied a breakdown AND the
- * cell list divides evenly across it (a Begode branch is N sections of equal
- * size, cells running consecutively — verified against the ET Max dump).
- * Anything else — no sections, or a cell list still being assembled at boot —
- * yields one flat group: a fabricated grouping would lie about which physical
- * assembly a cell sits in.
- */
-internal fun groupPackCells(pack: PackState?): List<PackDetailComponent.CellGroup> {
-    val cells = pack?.data?.cellVoltages ?: return emptyList()
-    if (cells.isEmpty()) return emptyList()
-    val sections = pack.sections.sortedBy { it.index }
-    if (sections.isEmpty() || cells.size % sections.size != 0) {
-        return listOf(PackDetailComponent.CellGroup(section = null, startIndex = 0, voltages = cells))
-    }
-    val perSection = cells.size / sections.size
-    return sections.mapIndexed { i, section ->
-        PackDetailComponent.CellGroup(
-            section = section,
-            startIndex = i * perSection,
-            voltages = cells.subList(i * perSection, (i + 1) * perSection).toList()
-        )
-    }
 }

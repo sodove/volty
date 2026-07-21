@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.presentation.common.CellGrid
+import ru.sodovaya.volty.presentation.common.CellGroup
 import ru.sodovaya.volty.presentation.common.CellUiModel
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.chemistryFraction
@@ -70,7 +71,7 @@ fun PackDetailScreen(component: PackDetailComponent) {
             TopAppBar(
                 title = {
                     Text(
-                        pack?.let { packDisplayLabel(it.pack) } ?: "",
+                        pack?.let { packDisplayLabel(it.pack, state.packCount) } ?: "",
                         fontWeight = FontWeight.SemiBold
                     )
                 },
@@ -166,7 +167,7 @@ fun PackDetailScreen(component: PackDetailComponent) {
 
 @Composable
 private fun CellGroupCard(
-    group: PackDetailComponent.CellGroup,
+    group: CellGroup,
     chemistry: Chemistry,
     globalMinIdx: Int,
     globalMaxIdx: Int,

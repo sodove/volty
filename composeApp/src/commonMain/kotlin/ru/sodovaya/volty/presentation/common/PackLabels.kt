@@ -6,22 +6,42 @@ import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.branch_label_n
 
-/**
- * Matches the auto-synthesised pack label produced by
- * [ru.sodovaya.volty.domain.model.expandedTo] ("Pack 2", "Pack 3", …).
- * That label is deliberately NOT localised in the domain layer (it is
- * persisted), so localisation happens here at render time instead.
- */
-private val AUTO_PACK_LABEL = Regex("""^Pack (\d+)$""")
+/** Which label a pack card should show. Resolved to a string at render time. */
+sealed interface PackLabel {
+    /** The pack's stored label, shown verbatim (the user's own naming). */
+    data class Own(val text: String) : PackLabel
+
+    /** Localised positional label ("Branch N" / "Ветка N"); [number] is 1-based. */
+    data class Positional(val number: Int) : PackLabel
+}
 
 /**
- * Display label for a pack. User-given labels (a vehicle name, "Основная")
- * pass through untouched; the domain's synthetic "Pack N" placeholder is
- * rendered as the localised branch term ("Branch N" / "Ветка N").
+ * Decides a pack's display label. Pure and non-composable so the mapping is
+ * unit-testable; [packDisplayLabel] localises the result.
+ *
+ * Stored labels are inconsistent across producers: `singlePackVehicle()`
+ * names pack 0 after the vehicle, while `expandedTo()` names synthesised
+ * packs "Pack 2", "Pack 3"…. Left as stored, every multi-pack wheel would
+ * show one card titled with the vehicle name and the rest positionally —
+ * defeating the side-by-side comparison the branch block exists for.
+ *
+ * The decision is made here, at display time, rather than by rewriting
+ * stored rows: fixing the data would need a migration and would freeze
+ * today's locale into persisted labels. Instead:
+ *  - multi-pack vehicle: EVERY branch gets a positional label derived from
+ *    [Pack.index], regardless of what is stored, so the cards read as a
+ *    uniform comparable set;
+ *  - single pack: there is nothing to compare it against, so the stored
+ *    label (the user's own name) passes through untouched.
  */
+fun packLabelFor(pack: Pack, packCount: Int): PackLabel =
+    if (packCount > 1) PackLabel.Positional(pack.index + 1)
+    else PackLabel.Own(pack.label)
+
+/** Localised display label for a pack; see [packLabelFor] for the decision. */
 @Composable
-fun packDisplayLabel(pack: Pack): String {
-    val auto = AUTO_PACK_LABEL.matchEntire(pack.label) ?: return pack.label
-    val n = auto.groupValues[1].toIntOrNull() ?: return pack.label
-    return stringResource(Res.string.branch_label_n, n)
-}
+fun packDisplayLabel(pack: Pack, packCount: Int): String =
+    when (val label = packLabelFor(pack, packCount)) {
+        is PackLabel.Own -> label.text
+        is PackLabel.Positional -> stringResource(Res.string.branch_label_n, label.number)
+    }
