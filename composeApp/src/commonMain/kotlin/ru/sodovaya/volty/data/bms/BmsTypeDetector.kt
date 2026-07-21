@@ -49,6 +49,17 @@ object BmsTypeDetector {
             name.startsWith("ANT", ignoreCase = true) -> BmsType.ANT_BMS
             name.startsWith("DL-", ignoreCase = true) ||
                 name.startsWith("Daly", ignoreCase = true) -> BmsType.DALY_BMS
+            // Begode / Gotway wheels advertise a model-family name, e.g.
+            // "GotWay_75042" (ET Max), "EXN-…", "MTEN3", "Master", "T4".
+            // The wheel also exposes FFE0, but the JK fallback below only fires
+            // when no name prefix matched, so these must stay in the name list.
+            name.startsWith("GotWay", ignoreCase = true) ||
+                name.startsWith("Begode", ignoreCase = true) ||
+                name.startsWith("GW", ignoreCase = true) ||
+                name.startsWith("EX", ignoreCase = true) ||
+                name.startsWith("MTEN", ignoreCase = true) ||
+                name.startsWith("Master", ignoreCase = true) ||
+                name.startsWith("T4", ignoreCase = true) -> BmsType.BEGODE
             else -> null
         }
     }

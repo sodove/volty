@@ -178,6 +178,7 @@
     <string name="bms_jbd">JBD BMS</string>
     <string name="bms_ant">Ant BMS</string>
     <string name="bms_daly">Daly BMS</string>
+    <string name="bms_begode">Begode</string>
 
     <!-- Notifications -->
     <string name="notif_monitoring_title">Volty · %1$s</string>
