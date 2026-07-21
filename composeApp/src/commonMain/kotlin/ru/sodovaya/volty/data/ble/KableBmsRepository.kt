@@ -33,6 +33,7 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.MovingAverage
+import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -474,13 +475,20 @@ class KableBmsRepository private constructor(
                 vehicle = vehicle,
                 connectionState = _connectionState,
                 onSample = { packIndex, sample ->
+                    // Devices that report no SoC at all (a Begode wheel gives
+                    // voltage and cells only) arrive with soc = 0. Estimate it
+                    // from average cell voltage against the vehicle's configured
+                    // cell-voltage bounds — BEFORE aggregation, so per-pack SoC
+                    // maths sees it. Samples with a real, coulomb-counted SoC
+                    // pass through untouched (see VoltageSocEstimator).
+                    val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle)
                     // The aggregate is a true identity for a single pack
                     // (cell voltages included), so every vehicle routes
                     // through it. submit() returns the snapshot it just
                     // emitted, so the aggregate is built once per sample.
                     // Fall back to the raw sample only if the orchestrator
                     // was swapped out mid-flight.
-                    val forActive = vehicleConnection?.submit(packIndex, sample)?.aggregate ?: sample
+                    val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
                     // Ring buffer before activeData: the graph collector maps
                     // over _activeData and reads the buffer, so announcing the
                     // sample first would make every graph emit lag by one.

@@ -103,6 +103,20 @@ class BegodeProtocolTest {
     }
 
     @Test
+    fun mosfetFlagsAreOnBecauseAWheelReportsNoMosfetState() {
+        // A Begode reports no charge/discharge MOSFET state at all. Defaulting
+        // the flags to false painted alarming red "OFF" badges on a healthy
+        // wheel — a wheel streaming telemetry is by definition not cut off, so
+        // both flags must read true on every decoded branch.
+        val protocol = protocolFedWithFixture()
+        for (packIndex in 0..1) {
+            val data = assertNotNull(protocol.latestData(packIndex))
+            assertTrue(data.chargeEnabled, "branch $packIndex chargeEnabled must be true")
+            assertTrue(data.dischargeEnabled, "branch $packIndex dischargeEnabled must be true")
+        }
+    }
+
+    @Test
     fun branchesReportTheirOwnCells() {
         val protocol = protocolFedWithFixture()
         val cells0 = assertNotNull(protocol.latestData(0)).cellVoltages
