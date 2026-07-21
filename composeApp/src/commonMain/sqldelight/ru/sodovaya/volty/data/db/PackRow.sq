@@ -1,0 +1,32 @@
+-- One row per battery pack. A conventional battery has exactly one; a Begode
+-- wheel has two sharing a single bmsAddress; a manually assembled group has
+-- one per BLE device.
+
+CREATE TABLE PackRow (
+    vehicleId   TEXT NOT NULL,
+    packIndex   INTEGER NOT NULL,
+    label       TEXT NOT NULL,
+    bmsType     TEXT NOT NULL,   -- enum name: JK_BMS | JBD_BMS | ANT_BMS | DALY_BMS
+    bmsAddress  TEXT NOT NULL,
+    cellCount   INTEGER,
+    PRIMARY KEY (vehicleId, packIndex),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+CREATE INDEX PackRow_vehicle ON PackRow(vehicleId, packIndex);
+
+selectAll:
+SELECT * FROM PackRow ORDER BY vehicleId, packIndex;
+
+selectByVehicle:
+SELECT * FROM PackRow WHERE vehicleId = :vehicleId ORDER BY packIndex;
+
+upsert:
+INSERT OR REPLACE INTO PackRow(vehicleId, packIndex, label, bmsType, bmsAddress, cellCount)
+VALUES (:vehicleId, :packIndex, :label, :bmsType, :bmsAddress, :cellCount);
+
+deleteByVehicle:
+DELETE FROM PackRow WHERE vehicleId = :vehicleId;
+
+deleteFromIndex:
+DELETE FROM PackRow WHERE vehicleId = :vehicleId AND packIndex >= :fromIndex;

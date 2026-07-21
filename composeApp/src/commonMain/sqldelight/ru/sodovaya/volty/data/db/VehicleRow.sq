@@ -1,14 +1,13 @@
--- Vehicle profile table. One row per saved BMS. Named VehicleRow to avoid
+-- Vehicle profile table. One row per saved vehicle. Named VehicleRow to avoid
 -- collision with the domain class ru.sodovaya.volty.domain.model.Vehicle.
+-- Per-pack data (which BMS, at which address, how many cells) lives in PackRow.
 
 CREATE TABLE VehicleRow (
     id                       TEXT NOT NULL PRIMARY KEY,
     name                     TEXT NOT NULL,
     iconKey                  TEXT NOT NULL,
-    bmsType                  TEXT NOT NULL,   -- enum name: JK_BMS | JBD_BMS | ANT_BMS | DALY_BMS
-    bmsAddress               TEXT NOT NULL,
+    topology                 TEXT NOT NULL DEFAULT 'PARALLEL',  -- enum name: PARALLEL | SERIES
     chemistry                TEXT NOT NULL,   -- enum name: LI_ION_NMC | LIFEPO4 | LEAD_ACID
-    cellCount                INTEGER,
     averagingWindowMin       INTEGER NOT NULL DEFAULT 5,
     cellHighV                REAL,
     cellLowV                 REAL,
@@ -34,11 +33,11 @@ SELECT * FROM VehicleRow WHERE id = :id;
 
 upsert:
 INSERT OR REPLACE INTO VehicleRow(
-    id, name, iconKey, bmsType, bmsAddress, chemistry, cellCount, averagingWindowMin,
+    id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned
 ) VALUES (
-    :id, :name, :iconKey, :bmsType, :bmsAddress, :chemistry, :cellCount, :averagingWindowMin,
+    :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned
 );
