@@ -237,6 +237,41 @@ class VehicleConnectionTest {
     }
 
     @Test
+    fun aSecondSurvivorSubmitAfterRecoveryDoesNotFakeTheLaggingBranchDead() {
+        // Regression for the ordering a single-gap derivation misses: after a
+        // link-wide stall the lagging branch is entitled to a FULL healthy gap
+        // before its first post-recovery sample, and nothing forbids the
+        // surviving branch completing its own next cycle — and sweeping —
+        // inside that window. Two branches, two gaps. Timings are built from
+        // the config constants so the test keeps checking the RELATIONSHIP if
+        // someone retunes the watchdog.
+        val clock = FakeClock()
+        val c = conn(clock = clock)
+        c.submit(1, BmsData(voltage = 100.8f, current = 12.4f, isConnected = true))
+        // Branch 1's ordinary cadence elapses before the stall begins.
+        clock.advance(BleConfig.maxHealthyPackGapMs)
+        c.submit(0, BmsData(voltage = 100.6f, current = 12.0f, isConnected = true))
+
+        // Link-wide stall just inside the session watchdog's blind spot.
+        clock.advance(BleConfig.staleSampleMs + BleConfig.watchdogTickMs)
+        // Recovery: the first post-stall sample belongs to branch 0.
+        c.submit(0, BmsData(voltage = 100.5f, current = 12.0f, isConnected = true))
+
+        // Branch 0's own next healthy cycle lands while branch 1's first
+        // post-recovery sample — legitimately due up to maxHealthyPackGapMs
+        // after recovery — has not arrived yet.
+        clock.advance(BleConfig.maxHealthyPackGapMs)
+        val snap = c.submit(0, BmsData(voltage = 100.5f, current = 12.0f, isConnected = true))
+
+        assertTrue(
+            snap.packs[1].isOnline,
+            "the lagging branch is still inside its own post-recovery window"
+        )
+        assertFalse(snap.isPartial)
+        assertEquals(24.4f, snap.aggregate.current, absoluteTolerance = 0.001f)
+    }
+
+    @Test
     fun markOnlineRefreshesTheTimestampSoTheNextSweepKeepsThePack() {
         val clock = FakeClock()
         val c = conn(clock = clock)
