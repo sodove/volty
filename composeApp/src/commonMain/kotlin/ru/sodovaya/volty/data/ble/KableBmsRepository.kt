@@ -329,9 +329,13 @@ class KableBmsRepository private constructor(
                 demoJob = null
                 // Demo bypasses the orchestrator entirely — the simulator
                 // feeds _activeData directly and has no BLE lines to route.
-                // Reset the vehicle-level flow together with the orchestrator
-                // (as disconnect() does), so a previous real connection's
-                // packs are not left published while the demo runs.
+                // Reset the vehicle-level flow together with the orchestrator so
+                // a previous real connection's packs are not left published
+                // while the demo runs. disconnect() reaches the same end state
+                // by a different route — it clears the flow outside any lock and
+                // takes sessionLock separately for the orchestrator, because it
+                // must not hold the lock across tearDown(). Here both writes fit
+                // in the one critical section this method already holds.
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
                 // No real link to resurrect on resume — there is no
