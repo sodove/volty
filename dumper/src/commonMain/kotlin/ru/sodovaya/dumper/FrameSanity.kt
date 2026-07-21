@@ -77,8 +77,20 @@ class FrameSanity {
     private fun drain() {
         var i = 0
         while (true) {
-            val start = indexOfHeader(from = i) ?: break
+            val start = indexOfHeader(from = i)
+            if (start == null) {
+                // No header ahead of i: none of these bytes can start a frame,
+                // so drop them all — except a trailing 0x55, whose completing
+                // 0xAA may arrive in the next notification. Without this trim
+                // a header-free stream (e.g. the wrong device picked from the
+                // scan list) would grow the buffer without bound.
+                i = buffer.size
+                if (buffer.isNotEmpty() && buffer[buffer.size - 1] == HEADER_0) i = buffer.size - 1
+                break
+            }
             if (buffer.size - start < FRAME_SIZE) {
+                // Header found but the frame is not complete yet: keep the
+                // partial frame; at MTU 23 every frame arrives split.
                 i = start
                 break
             }
