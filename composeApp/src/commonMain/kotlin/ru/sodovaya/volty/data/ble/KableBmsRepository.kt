@@ -16,7 +16,10 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
+import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.cellCount
@@ -118,6 +121,16 @@ class KableBmsRepository private constructor(
 
     private val _activeData = MutableStateFlow(BmsData())
     override val activeData: StateFlow<BmsData> = _activeData.asStateFlow()
+
+    private val _activeVehicleData = MutableStateFlow(VehicleData())
+    override val activeVehicleData: StateFlow<VehicleData> = _activeVehicleData.asStateFlow()
+
+    /**
+     * Orchestrator for the currently connected vehicle. Null when nothing is
+     * connected. Written only under [sessionLock]; sample submission happens
+     * from the single funnel below.
+     */
+    private var vehicleConnection: VehicleConnection? = null
 
     private val _activeVehicle = MutableStateFlow<Vehicle?>(null)
     override val activeVehicle: StateFlow<Vehicle?> = _activeVehicle.asStateFlow()
@@ -295,6 +308,9 @@ class KableBmsRepository private constructor(
                 reconnectJob = null
                 demoJob?.cancel()
                 demoJob = null
+                // Demo bypasses the orchestrator entirely — the simulator
+                // feeds _activeData directly and has no BLE lines to route.
+                vehicleConnection = null
                 // No real link to resurrect on resume — there is no
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
@@ -364,6 +380,13 @@ class KableBmsRepository private constructor(
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
+            vehicleConnection = VehicleConnection(
+                packs = vehicle?.packs ?: listOf(
+                    Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address)
+                ),
+                topology = vehicle?.topology ?: PackTopology.PARALLEL,
+                onVehicleData = { vd -> _activeVehicleData.value = vd }
+            )
 
             val advertisement = resolveAdvertisement(address)
             if (advertisement == null) {
@@ -373,20 +396,30 @@ class KableBmsRepository private constructor(
 
             val peripheral = Peripheral(advertisement)
             val protocol = createProtocol(type)
+            val isMultiPack = (vehicle?.packs?.size ?: 1) > 1
             val session = ConnectionSession(
                 parentScope = scope,
                 peripheral = peripheral,
                 protocol = protocol,
                 vehicle = vehicle,
                 connectionState = _connectionState,
-                onSample = { _, sample ->
-                    // Single-link, single-pack for now: the pack index is
-                    // ignored until VehicleConnection lands. Order matters —
-                    // the graph collector maps over _activeData and reads the
-                    // ring buffer, so a sample must be in the buffer before
-                    // activeData announces it, or every graph emit lags by one.
-                    ringBuffer.push(sample)
-                    _activeData.value = sample
+                onSample = { packIndex, sample ->
+                    vehicleConnection?.submit(packIndex, sample)
+                    // Ring buffer before activeData: the graph collector maps
+                    // over _activeData and reads the buffer, so announcing the
+                    // sample first would make every graph emit lag by one.
+                    //
+                    // Single pack keeps the raw sample: the aggregate never
+                    // carries per-cell data (cell indices are meaningless
+                    // across packs), but the dashboard cell grid and the
+                    // cell-count auto-fill read activeData — with one pack
+                    // there is nothing to aggregate, so feed the sample
+                    // through bit-for-bit as before the multi-pack refactor.
+                    val forActive = if (isMultiPack)
+                        vehicleConnection?.snapshot()?.aggregate ?: sample
+                    else sample
+                    ringBuffer.push(forActive)
+                    _activeData.value = forActive
                 },
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule a reconnect — unless
@@ -553,6 +586,8 @@ class KableBmsRepository private constructor(
         demoToCancel?.cancel()
         sessionToTear?.tearDown()
         _activeData.value = BmsData()
+        _activeVehicleData.value = VehicleData()
+        vehicleConnection = null
         _activeVehicle.value = null
         ringBuffer.clear()
         _connectionState.value = ConnectionState.Disconnected

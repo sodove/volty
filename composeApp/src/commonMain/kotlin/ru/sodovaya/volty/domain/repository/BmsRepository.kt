@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
@@ -19,6 +20,13 @@ data class DiscoveredDevice(
 )
 
 interface BmsRepository {
+    /**
+     * Per-pack view of the active vehicle plus the derived aggregate.
+     * [activeData] is the aggregate of this — kept as a separate property so
+     * the dashboard, notification and alert engine need no changes.
+     */
+    val activeVehicleData: StateFlow<VehicleData>
+
     val activeData: StateFlow<BmsData>
     val activeVehicle: StateFlow<Vehicle?>
     val connectionState: StateFlow<ConnectionState>
