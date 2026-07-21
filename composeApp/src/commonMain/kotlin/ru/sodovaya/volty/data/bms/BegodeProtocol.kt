@@ -258,6 +258,13 @@ class BegodeProtocol : BmsProtocol() {
             power = voltage * current,
             cellVoltages = contiguousCells(branch.cells),
             temperatures = branch.sectionTemps.filterNotNull(),
+            // A Begode reports no charge/discharge MOSFET state at all, and a
+            // wheel that is streaming telemetry is by definition not cut off.
+            // Leaving the defaults (false) rendered alarming red "OFF" badges
+            // on a healthy wheel. True is an approximation — the truthful
+            // model would be a nullable "unknown" state in BmsData.
+            chargeEnabled = true,
+            dischargeEnabled = true,
             isConnected = true
         )
     }

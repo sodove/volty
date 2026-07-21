@@ -528,10 +528,18 @@ private fun HeroCard(state: DashboardComponent.State) {
                 if (cyclesText != null) {
                     Text(cyclesText, fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
                 }
-                // Remaining / total on one line — remaining stays bold, total lighter.
-                Row(verticalAlignment = Alignment.Bottom) {
-                    Text(fmt1(data.charge), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
-                    Text(" / ${fmt1(data.capacity)}", fontSize = 12.sp, color = onColor.copy(alpha = 0.65f))
+                // Remaining / total on one line — remaining stays bold, total
+                // lighter. A device that never reported a capacity (a Begode
+                // wheel has no Ah counters at all) leaves it at 0 — showing a
+                // fabricated "0.0 / 0.0" would be a lie, so render the "—"
+                // placeholder this screen uses for unavailable values instead.
+                if (data.capacity > 0f) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(fmt1(data.charge), fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
+                        Text(" / ${fmt1(data.capacity)}", fontSize = 12.sp, color = onColor.copy(alpha = 0.65f))
+                    }
+                } else {
+                    Text("—", fontSize = 20.sp, fontWeight = FontWeight.SemiBold, color = onColor)
                 }
                 Text(stringResource(Res.string.hero_ah_remaining), fontSize = 10.sp, color = onColor.copy(alpha = 0.7f))
             }
