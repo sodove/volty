@@ -73,6 +73,10 @@ class PackAggregatorTest {
         assertEquals(only.data.voltage, agg.voltage)
         assertEquals(only.data.current, agg.current)
         assertEquals(only.data.soc, agg.soc)
+        assertEquals(only.data.charge, agg.charge)
+        assertEquals(only.data.capacity, agg.capacity)
+        assertEquals(only.data.temperatures, agg.temperatures)
+        assertTrue(agg.isConnected)
     }
 
     // --- Parallel ---
@@ -98,6 +102,40 @@ class PackAggregatorTest {
         assertEquals(20f, agg.charge, absoluteTolerance = 0.001f)
         assertEquals(40f, agg.capacity, absoluteTolerance = 0.001f)
         assertEquals(50f, agg.soc, absoluteTolerance = 0.001f)
+    }
+
+    // JBD and Daly BMS commonly report SoC without capacity; the weighted
+    // mean must fall back to a plain mean instead of collapsing to 0%.
+
+    @Test
+    fun parallelFallsBackToPlainMeanSocWhenNoPackReportsCapacity() {
+        val packs = listOf(
+            state(0, 50f, 1f, soc = 80f, charge = 0f, capacity = 0f),
+            state(1, 50f, 1f, soc = 60f, charge = 0f, capacity = 0f)
+        )
+        val agg = PackAggregator.aggregate(packs, PackTopology.PARALLEL)
+        assertEquals(70f, agg.soc, absoluteTolerance = 0.001f)
+    }
+
+    @Test
+    fun singlePackWithZeroCapacityKeepsItsReportedSoc() {
+        // The JBD/Daly single-battery case — the most common real setup.
+        val only = state(0, 50f, 1f, soc = 87f, charge = 0f, capacity = 0f)
+        val agg = PackAggregator.aggregate(listOf(only), PackTopology.PARALLEL)
+        assertEquals(87f, agg.soc, absoluteTolerance = 0.001f)
+    }
+
+    @Test
+    fun zeroCapacityPackContributesZeroWeightToParallelSoc() {
+        val packs = listOf(
+            state(0, 50f, 1f, soc = 80f, charge = 16f, capacity = 20f),
+            state(1, 50f, 1f, soc = 10f, charge = 0f, capacity = 0f)
+        )
+        val agg = PackAggregator.aggregate(packs, PackTopology.PARALLEL)
+        // Total capacity is 20, so the weighted branch is taken and the
+        // capacity-less pack carries zero weight: (80*20 + 10*0) / 20 = 80.
+        assertEquals(80f, agg.soc, absoluteTolerance = 0.001f)
+        assertEquals(20f, agg.capacity, absoluteTolerance = 0.001f)
     }
 
     @Test
@@ -197,6 +235,15 @@ class PackAggregatorTest {
             state(1, 50f, 1f, online = false)
         )
         assertFalse(PackAggregator.aggregate(packs, PackTopology.SERIES).isConnected)
+    }
+
+    @Test
+    fun seriesIsConnectedWhenAllPacksAreOnline() {
+        val packs = listOf(
+            state(0, 50f, 1f),
+            state(1, 50f, 1f)
+        )
+        assertTrue(PackAggregator.aggregate(packs, PackTopology.SERIES).isConnected)
     }
 
     @Test
