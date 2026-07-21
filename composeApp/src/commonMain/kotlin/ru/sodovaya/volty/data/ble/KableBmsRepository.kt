@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.expandedTo
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -131,13 +132,20 @@ class KableBmsRepository private constructor(
      * Orchestrator for the currently connected vehicle. Null when nothing is
      * connected.
      *
-     * EVERY write goes through [sessionLock], and every check-then-write
-     * (the identity-guarded failure cleanup) is performed inside a single
-     * critical section, so a failed attempt can never null out the
-     * orchestrator a concurrent attempt installed in between. The writers are:
-     * [doConnect] (install, and clear via [clearOrchestratorLocked]),
+     * Every PRODUCTION write goes through [sessionLock], and every
+     * check-then-write (the identity-guarded failure cleanup) is performed
+     * inside a single critical section, so a failed attempt can never null out
+     * the orchestrator a concurrent attempt installed in between. The writers
+     * are: [doConnect] (install, and clear via [clearOrchestratorLocked]),
      * [connectDemo] and [disconnect] (clear) — all inside a
      * `sessionLock.withLock { }` block.
+     *
+     * The one exception is [installSampleFunnelForTest], which writes the field
+     * unlocked. It has no production call site and runs on a single-threaded
+     * test dispatcher, so it cannot race — but it does mean "every write is
+     * locked" holds for production paths only. Keep it that way: a second
+     * unlocked writer that production could reach would silently undo the
+     * guarantee the rest of this doc describes.
      *
      * [sessionLock] is a plain non-reentrant [Mutex]. The two cleanup helpers
      * have opposite locking contracts: [clearOrchestratorLocked] ASSUMES the
@@ -227,6 +235,9 @@ class KableBmsRepository private constructor(
         scope.launch {
             _activeData.collect { data -> maybePersistCellCount(data) }
         }
+        scope.launch {
+            _activeVehicleData.collect { vd -> maybePersistPacks(vd) }
+        }
     }
 
     // ----- Cell-count auto-fill -----
@@ -249,7 +260,7 @@ class KableBmsRepository private constructor(
      * on later connects. Guests and demo are transient and never persisted.
      */
     private suspend fun maybePersistCellCount(data: BmsData) {
-        val n = data.cellVoltages.size
+        val n = primaryPackCellCount() ?: data.cellVoltages.size
         if (!data.isConnected || n == 0) {
             observedCellCountStreak = 0
             return
@@ -269,6 +280,32 @@ class KableBmsRepository private constructor(
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")
         vehicleRepository.upsert(vehicle.withCellCount(n))
     }
+
+    /**
+     * Cell count of the PRIMARY pack, or null when the orchestrator has not
+     * published one yet (then [maybePersistCellCount] falls back to the sample
+     * it was handed).
+     *
+     * [Vehicle.cellCount] describes one pack, but [_activeData] carries the
+     * vehicle-level AGGREGATE, whose `cellVoltages` is the union of every
+     * online pack — 80 values for a two-branch Begode. Persisting that would
+     * store a 40S wheel as "80s".
+     *
+     * INVARIANT: [_activeVehicleData] is assumed to describe the SAME
+     * connection as [_activeVehicle], which [maybePersistCellCount] persists
+     * into — nothing here checks it. The guarantee is [doConnect]'s teardown
+     * ordering (previous session torn down under [sessionLock] before the
+     * new vehicle identity is written); the device-switch branch resets
+     * [_activeData] and the ring buffer but leaves [_activeVehicleData]
+     * alone, so the safety rests entirely on that ordering. A violation
+     * would persist one vehicle's branch cell count into another's profile.
+     */
+    private fun primaryPackCellCount(): Int? =
+        _activeVehicleData.value.packs
+            .firstOrNull()
+            ?.takeIf { it.isOnline }
+            ?.data?.cellVoltages?.size
+            ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         val knownAddresses: Map<String, Vehicle> =
@@ -385,6 +422,149 @@ class KableBmsRepository private constructor(
     }
 
     /**
+     * The pack list the orchestrator is built from: the vehicle's own packs,
+     * grown to [protocolPackCount] slots when the protocol knows about more
+     * batteries than the stored profile does.
+     *
+     * A Begode wheel is two parallel branches multiplexed over ONE BLE link and
+     * its [BmsProtocol.packCount] is 2, but the vehicle was created as a
+     * single-pack profile. Without this, slot 1 does not exist, `submit(1, ...)`
+     * hits [VehicleConnection]'s unknown-index path and the second branch's
+     * samples are silently dropped — which does not look like a missing pack in
+     * the UI, it looks like HALF the wheel's current and power (parallel,
+     * near-identical branches make the voltage and cells look fine).
+     *
+     * Sized once, at construction time, on purpose: [VehicleConnection] is not
+     * thread-safe by design and the sample funnel calls into it from the
+     * session's own coroutine, so resizing or rebuilding it mid-session would
+     * race with the samples flowing through it.
+     */
+    private fun connectionPacks(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        protocolPackCount: Int
+    ): List<Pack> {
+        val base = vehicle?.packs?.takeIf { it.isNotEmpty() }
+            ?: listOf(Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address))
+        return base.expandedTo(protocolPackCount)
+    }
+
+    // ----- Discovered-pack auto-fill -----
+
+    /** Vehicle id whose extended pack list was already written back. */
+    private var lastPersistedPackVehicleId: String? = null
+
+    /**
+     * Sibling of [maybePersistCellCount] for the pack list: once a pack the
+     * protocol invented has actually produced data, write the extended list
+     * back into the saved vehicle so the profile matches the battery on later
+     * launches (and the pack cards keep their names).
+     *
+     * Same terms as the cell-count auto-fill: proof before writing (there, a
+     * stable count over consecutive samples; here, the extra pack reporting —
+     * a slot that never comes online is a guess and must not reach the
+     * database), never for guests or demo, and never a rewrite of what is
+     * already stored.
+     *
+     * INVARIANT: [vd] (from [_activeVehicleData]) is assumed to describe the
+     * SAME connection as [_activeVehicle] — nothing here checks it. The
+     * guarantee is [doConnect]'s teardown ordering: the previous session is
+     * torn down under [sessionLock] BEFORE the new vehicle identity is
+     * written, so a snapshot from the old orchestrator can no longer arrive
+     * once [_activeVehicle] has moved on. Note the device-switch branch in
+     * [doConnect] resets [_activeData] and the ring buffer but deliberately
+     * leaves [_activeVehicleData] alone, so this safety rests entirely on
+     * that ordering. If it is ever violated, this method appends one
+     * vehicle's discovered pack to ANOTHER vehicle's saved profile.
+     */
+    private suspend fun maybePersistPacks(vd: VehicleData) {
+        val discovered = vd.packs
+        if (discovered.isEmpty()) return
+        val vehicle = _activeVehicle.value ?: return
+        if (vehicle.isGuest || vehicle.isDemo) return
+        if (discovered.size <= vehicle.packs.size) return
+        // Only the slots this vehicle does not know about need proving; the
+        // stored ones are user configuration and may legitimately be offline.
+        val extraSlots = discovered.drop(vehicle.packs.size)
+        if (extraSlots.any { !it.isOnline }) return
+        if (lastPersistedPackVehicleId == vehicle.id) return
+        lastPersistedPackVehicleId = vehicle.id
+        // Only APPEND the newly discovered slots. The vehicle's own packs are
+        // user configuration plus the cell-count auto-fill, both of which can
+        // have changed since the orchestrator was built — taking the
+        // orchestrator's copies wholesale would silently revert them.
+        val packs = vehicle.packs + extraSlots.map { it.pack }
+        println("[VOLTY-BLE] pack auto-fill: ${vehicle.name} -> ${packs.size} packs")
+        vehicleRepository.upsert(vehicle.copy(packs = packs))
+    }
+
+    /**
+     * The orchestrator plus the per-sample funnel [doConnect] wires into a
+     * [ConnectionSession]. Built as one unit so the funnel and the
+     * orchestrator are guaranteed to agree on the pack list.
+     */
+    private class SamplePipeline(
+        val orchestrator: VehicleConnection,
+        val onSample: (packIndex: Int, sample: BmsData) -> Unit
+    )
+
+    /**
+     * Build the orchestrator and the onSample funnel for one connection
+     * attempt. Shared between [doConnect] and the test seam
+     * [installSampleFunnelForTest], so tests exercise the exact production
+     * wiring rather than a copy that can drift.
+     */
+    private fun buildSamplePipeline(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        protocol: BmsProtocol
+    ): SamplePipeline {
+        val packs = connectionPacks(vehicle, address, type, protocol.packCount)
+        // The SoC estimator must see the SAME expanded pack list the
+        // orchestrator is sized from. The stored vehicle can know fewer packs
+        // than the protocol does (a one-pack Begode profile vs. two branches):
+        // handed the stored list, the estimator's per-pack lookup misses for
+        // the synthesised slot, that branch's Begode sample keeps its reported
+        // soc = 0, and the parallel aggregate — a plain mean when no pack
+        // reports capacity — HALVES the wheel's state of charge, feeding the
+        // same halved value into the SOC_LOW / SOC_CUTOFF alerts.
+        val socVehicle = vehicle?.copy(packs = packs)
+        val orchestrator = VehicleConnection(
+            packs = packs,
+            topology = vehicle?.topology ?: PackTopology.PARALLEL,
+            onVehicleData = { vd -> _activeVehicleData.value = vd }
+        )
+        val onSample: (Int, BmsData) -> Unit = { packIndex, sample ->
+            // Devices that report no SoC at all (a Begode wheel gives
+            // voltage and cells only) get one estimated from average
+            // cell voltage against the vehicle's configured cell-voltage
+            // bounds — BEFORE aggregation, so per-pack SoC maths sees
+            // it. The estimator keys on the PACK's BmsType (packIndex,
+            // not the vehicle-level shortcut — a future BMS group can
+            // mix types): a coulomb-counting BMS's sample passes
+            // through untouched, including a genuine 0 % on a flat
+            // pack (see VoltageSocEstimator).
+            val enriched = VoltageSocEstimator.withEstimatedSoc(sample, socVehicle, packIndex)
+            // The aggregate is a true identity for a single pack
+            // (cell voltages included), so every vehicle routes
+            // through it. submit() returns the snapshot it just
+            // emitted, so the aggregate is built once per sample.
+            // Fall back to the enriched sample — not the raw one — if
+            // the orchestrator was swapped out mid-flight, so a Begode
+            // keeps its estimated SoC even on that path.
+            val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
+            // Ring buffer before activeData: the graph collector maps
+            // over _activeData and reads the buffer, so announcing the
+            // sample first would make every graph emit lag by one.
+            ringBuffer.push(forActive)
+            _activeData.value = forActive
+        }
+        return SamplePipeline(orchestrator, onSample)
+    }
+
+    /**
      * Failure-path cleanup for [doConnect]: drop the orchestrator installed by
      * the failed attempt and reset the vehicle-level flow, so the field's
      * "null when nothing is connected" contract holds and a failed connect
@@ -445,13 +625,13 @@ class KableBmsRepository private constructor(
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
-            val orchestrator = VehicleConnection(
-                packs = vehicle?.packs ?: listOf(
-                    Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address)
-                ),
-                topology = vehicle?.topology ?: PackTopology.PARALLEL,
-                onVehicleData = { vd -> _activeVehicleData.value = vd }
-            )
+            // The protocol is built BEFORE the orchestrator so the orchestrator
+            // can be sized to it — see [connectionPacks]. It is a plain object
+            // with no I/O, so constructing it this early is free and cannot
+            // fail the connect.
+            val protocol = createProtocol(type)
+            val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
+            val orchestrator = pipeline.orchestrator
             installedOrchestrator = orchestrator
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
@@ -467,37 +647,13 @@ class KableBmsRepository private constructor(
             }
 
             val peripheral = Peripheral(advertisement)
-            val protocol = createProtocol(type)
             val session = ConnectionSession(
                 parentScope = scope,
                 peripheral = peripheral,
                 protocol = protocol,
                 vehicle = vehicle,
                 connectionState = _connectionState,
-                onSample = { packIndex, sample ->
-                    // Devices that report no SoC at all (a Begode wheel gives
-                    // voltage and cells only) get one estimated from average
-                    // cell voltage against the vehicle's configured cell-voltage
-                    // bounds — BEFORE aggregation, so per-pack SoC maths sees
-                    // it. The estimator keys on the PACK's BmsType (packIndex,
-                    // not the vehicle-level shortcut — a future BMS group can
-                    // mix types): a coulomb-counting BMS's sample passes
-                    // through untouched, including a genuine 0 % on a flat
-                    // pack (see VoltageSocEstimator).
-                    val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle, packIndex)
-                    // The aggregate is a true identity for a single pack
-                    // (cell voltages included), so every vehicle routes
-                    // through it. submit() returns the snapshot it just
-                    // emitted, so the aggregate is built once per sample.
-                    // Fall back to the raw sample only if the orchestrator
-                    // was swapped out mid-flight.
-                    val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
-                    // Ring buffer before activeData: the graph collector maps
-                    // over _activeData and reads the buffer, so announcing the
-                    // sample first would make every graph emit lag by one.
-                    ringBuffer.push(forActive)
-                    _activeData.value = forActive
-                },
+                onSample = pipeline.onSample,
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule a reconnect — unless
                     // the user explicitly disconnected in the meantime.
@@ -789,6 +945,38 @@ class KableBmsRepository private constructor(
     /** Test-only: push a sample into the activeData pipeline (drives the
      *  cell-count auto-fill collector without a real BLE session). */
     internal fun emitActiveDataForTest(sample: BmsData) { _activeData.value = sample }
+
+    /** Test-only: push a vehicle snapshot into the pack auto-fill collector. */
+    internal fun emitVehicleDataForTest(vd: VehicleData) { _activeVehicleData.value = vd }
+
+    /**
+     * Test-only: the pack list [doConnect] would build for this target,
+     * including the protocol lookup that decides how many slots exist.
+     */
+    internal fun connectionPacksForTest(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> =
+        connectionPacks(vehicle, address, type, createProtocol(type).packCount)
+
+    /**
+     * Test-only: build and install the exact sample pipeline [doConnect]
+     * wires into a [ConnectionSession] — expanded pack list, SoC-estimation
+     * vehicle, orchestrator — without a BLE link, and return the onSample
+     * funnel so tests can push per-pack samples through the production path.
+     *
+     * [ConnectionSession] requires a real Kable [Peripheral], so this seam is
+     * the only way commonTest can reach the funnel. It shares
+     * [buildSamplePipeline] with [doConnect] on purpose: the test drives the
+     * production wiring itself, not a copy that can drift. The unlocked field
+     * write is fine here — tests run single-threaded on a test dispatcher.
+     */
+    internal fun installSampleFunnelForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType
+    ): (packIndex: Int, sample: BmsData) -> Unit {
+        val pipeline = buildSamplePipeline(vehicle, address, type, createProtocol(type))
+        vehicleConnection = pipeline.orchestrator
+        return pipeline.onSample
+    }
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been

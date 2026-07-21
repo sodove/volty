@@ -63,11 +63,19 @@ class BegodeProtocolTest {
             )
             assertTrue(data.isConnected, "branch $packIndex must be connected")
 
-            // Pack voltage from frame 0x01 bytes 6..7 (0.1 V): 0x05C0 = 147.2 V
-            // in the final frames of this capture.
+            // Branch voltage is the SUM OF ITS CELLS (~148.4 V), not the
+            // 0x01 frame's pack-voltage field (~147.2 V at 0.1 V/unit). That
+            // field is not in the frame's own 0.1 V units — across the 86
+            // samples of this capture cellSum / raw is a constant 0.1009 — and
+            // showing 147.2 V next to "4.09 V/cell" on a 40S branch was a
+            // visible contradiction on the wheel.
             assertTrue(
-                data.voltage in 147.0f..147.4f,
-                "branch $packIndex pack voltage ${data.voltage} should be ~147.2 V"
+                data.voltage in 148.1f..148.7f,
+                "branch $packIndex voltage ${data.voltage} should be the cell sum ~148.4 V"
+            )
+            assertEquals(
+                data.cellVoltages.sum(), data.voltage, 1e-3f,
+                "branch $packIndex voltage must equal its cell sum exactly"
             )
 
             // Wheel was stationary: branch current is exactly 0 in every frame.
@@ -100,6 +108,49 @@ class BegodeProtocolTest {
                 assertTrue(t in 25f..28f, "branch $packIndex temp $t outside 25..28")
             }
         }
+    }
+
+    // --- Branch voltage comes from the cells, with the frame field as fallback ---
+
+    @Test
+    fun branchVoltageFallsBackToTheFrameFieldBeforeAnyCellsArrive() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        val data = assertNotNull(protocol.latestData(0))
+        // No cells yet — the 0x01 field is all we have, ~1 % low but usable.
+        assertEquals(147.2f, data.voltage, 0.01f)
+    }
+
+    @Test
+    fun aPartialCellSetNeverBecomesTheBranchVoltage() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        // Only the first of five cell packets: 8 cells summing to ~29.7 V.
+        protocol.onNotification(cellFrame(type = 0x02, packetIndex = 0, baseMv = 3710))
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(8, data.cellVoltages.size, "precondition: cells still arriving")
+        assertEquals(147.2f, data.voltage, 0.01f, "a partial cell sum must not be published as the pack voltage")
+    }
+
+    @Test
+    fun theFullCellSetBecomesTheBranchVoltageAndDrivesPower() {
+        val protocol = BegodeProtocol()
+        // 8.8 A on the branch (the field's unit is 0.1 A) — roughly the
+        // per-branch half of the 17.70 A a reference app showed for the wheel.
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, currentRaw = 88, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        for (packet in 0 until 5) {
+            protocol.onNotification(cellFrame(type = 0x02, packetIndex = packet, baseMv = 3710))
+        }
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(40, data.cellVoltages.size)
+        val cellSum = data.cellVoltages.sum()
+        assertEquals(148.54f, cellSum, 0.01f, "fixture-shaped cells sum to ~148.54 V")
+        assertEquals(cellSum, data.voltage, 1e-3f, "voltage is the cell sum once the set is complete")
+        // Power is voltage x current, so correcting the voltage moves it too:
+        // 8.8 A x 148.54 V = 1307.2 W, where the frame field gave 1295.4 W.
+        assertEquals(cellSum * 8.8f, data.power, 0.1f)
     }
 
     @Test
@@ -282,11 +333,19 @@ class BegodeProtocolTest {
             byteArrayOf(type.toByte(), subtype.toByte(), 0x5A, 0x5A, 0x5A, 0x5A)
     }
 
-    /** 0x01 telemetry frame: pack voltage at 6..7, temps at 10..13, section voltage at 14..15 (all BE). */
-    private fun telemetryFrame(bmsnum: Int, packVoltageRaw: Int, t1: Int, t2: Int, sectionVoltageRaw: Int): ByteArray {
+    /** 0x01 telemetry frame: pack voltage at 6..7, current at 8..9, temps at 10..13, section voltage at 14..15 (all BE). */
+    private fun telemetryFrame(
+        bmsnum: Int,
+        packVoltageRaw: Int,
+        t1: Int,
+        t2: Int,
+        sectionVoltageRaw: Int,
+        currentRaw: Int = 0
+    ): ByteArray {
         val p = ByteArray(16)
         p[4] = (packVoltageRaw shr 8).toByte(); p[5] = packVoltageRaw.toByte()
-        // Bytes 6..7 of the payload (frame 8..9) are the branch current: 0.
+        // Bytes 6..7 of the payload (frame 8..9) are the branch current, 0.1 A.
+        p[6] = (currentRaw shr 8).toByte(); p[7] = currentRaw.toByte()
         p[8] = (t1 shr 8).toByte(); p[9] = t1.toByte()
         p[10] = (t2 shr 8).toByte(); p[11] = t2.toByte()
         p[12] = (sectionVoltageRaw shr 8).toByte(); p[13] = sectionVoltageRaw.toByte()

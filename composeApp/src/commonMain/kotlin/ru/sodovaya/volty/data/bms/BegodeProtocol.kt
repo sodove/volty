@@ -61,8 +61,9 @@ class BegodeProtocol : BmsProtocol() {
     // BmsData yet: the raw voltage is on Begode's 67.2 V scale and needs a
     // nominal-voltage multiplier this protocol does not know (see the design
     // spec, "Масштабирование напряжения в кадре 0x00") — using it as a pack
-    // voltage here would show ~59 V on a 168 V wheel. Pack voltage comes from
-    // the 0x01 frame instead. Kept for the upcoming aggregation task.
+    // voltage here would show ~59 V on a 168 V wheel. Branch voltage comes from
+    // the cells instead (see [branchVoltage]). Kept for the upcoming
+    // aggregation task.
     private var liveVoltageRaw: Int = 0
     private var phaseCurrentA: Float = 0f
     private var boardTempC: Float = 0f
@@ -71,7 +72,11 @@ class BegodeProtocol : BmsProtocol() {
     private class BranchState {
         /** True once at least one 0x01 frame for this branch was seen. */
         var sawTelemetry = false
-        /** Whole-pack voltage as reported in the branch's 0x01 frames (V). */
+        /**
+         * Whole-pack voltage as reported in the branch's 0x01 frames, at the
+         * frame's nominal 0.1 V/unit. Only a fallback for [branchVoltage] —
+         * the field's real scale is ~0.1009 V/unit.
+         */
         var packVoltageV = 0f
         /** Branch current (A), positive = charging. */
         var currentA = 0f
@@ -250,13 +255,14 @@ class BegodeProtocol : BmsProtocol() {
      */
     private fun rebuild(branch: BranchState) {
         if (!branch.sawTelemetry) return
-        val voltage = branch.packVoltageV
+        val cells = contiguousCells(branch.cells)
+        val voltage = branchVoltage(branch, cells)
         val current = branch.currentA
         branch.lastData = BmsData(
             voltage = voltage,
             current = current,
             power = voltage * current,
-            cellVoltages = contiguousCells(branch.cells),
+            cellVoltages = cells,
             temperatures = branch.sectionTemps.filterNotNull(),
             // A Begode reports no charge/discharge MOSFET state at all, and a
             // wheel that is streaming telemetry is by definition not cut off.
@@ -267,6 +273,34 @@ class BegodeProtocol : BmsProtocol() {
             dischargeEnabled = true,
             isConnected = true
         )
+    }
+
+    /**
+     * The branch's voltage: the SUM OF ITS CELLS whenever the full cell set is
+     * available, the 0x01 frame's pack-voltage field while cells are still
+     * arriving.
+     *
+     * The frame field is NOT in the 0.1 V units the rest of that frame uses:
+     * across the 86 samples of the ET Max capture, cellSum / raw is a constant
+     * 0.1009 (spread 0.09 %), while the section-voltage field in the SAME frame
+     * is exactly 0.1 V per unit. On the wheel this rendered as "162.00 V" on a
+     * tile that simultaneously read "4.09 V/cell" — 40 x 4.09 = 163.6 V, the
+     * two numbers contradicting each other. No corrected scale factor is
+     * hard-coded here: the cells are the ground truth and are already decoded.
+     * Because power is voltage x current, this moves power too.
+     *
+     * "Full cell set" cannot be asserted from the packet grid — the wheel never
+     * announces how many cells a branch has, and packets arrive out of order —
+     * so completeness is judged against the frame field itself: the true sum is
+     * ~0.9 % ABOVE it, whereas one missing 8-cell packet out of five puts the
+     * partial sum ~20 % BELOW. [CELL_SUM_COMPLETE_RATIO] sits in that gap.
+     */
+    private fun branchVoltage(branch: BranchState, cells: List<Float>): Float {
+        val frameVoltage = branch.packVoltageV
+        if (cells.isEmpty()) return frameVoltage
+        val cellSum = cells.sum()
+        if (frameVoltage <= 0f) return cellSum
+        return if (cellSum >= frameVoltage * CELL_SUM_COMPLETE_RATIO) cellSum else frameVoltage
     }
 
     /**
@@ -290,5 +324,12 @@ class BegodeProtocol : BmsProtocol() {
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150
+
+        /**
+         * A cell sum this close to the 0x01 pack-voltage field means every cell
+         * packet has landed — see [branchVoltage]. The real sum runs ~0.9 %
+         * above the field; a single missing packet drops it ~20 % below.
+         */
+        private const val CELL_SUM_COMPLETE_RATIO = 0.9f
     }
 }
