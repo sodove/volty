@@ -77,7 +77,21 @@ fun List<Pack>.expandedTo(count: Int): List<Pack> {
 data class SectionState(
     val index: Int,
     val voltage: Float,
-    val temperatures: List<Float> = emptyList()
+    val temperatures: List<Float> = emptyList(),
+    /**
+     * 0-based indices into the pack's [BmsData.cellVoltages] that this
+     * section physically covers, as declared by the protocol that decoded
+     * the frame. Null when the protocol knows the section's voltage but not
+     * which cells belong to it.
+     *
+     * The UI never infers this range: [BmsData.cellVoltages] is truncated at
+     * the first gap, so list arithmetic (size / sections) can place a cell in
+     * the wrong physical assembly while looking plausible. A producer that
+     * wants per-section cell grouping must fill this in for EVERY section of
+     * the pack, and the ranges must tile the cell list exactly — see
+     * `groupPackCells`.
+     */
+    val cellRange: IntRange? = null
 )
 
 /** Live state of one pack. */

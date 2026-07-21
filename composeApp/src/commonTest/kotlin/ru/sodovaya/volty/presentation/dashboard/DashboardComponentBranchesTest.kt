@@ -34,8 +34,13 @@ import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 
+/**
+ * State-level contract of the dashboard's branch summary block: rendered only
+ * for a genuinely multi-branch battery, and offline branches stay in the state
+ * with their last values so the UI can grey them rather than drop them.
+ */
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
-class DashboardComponentPacksTest {
+class DashboardComponentBranchesTest {
 
     private class FakeBmsRepo : BmsRepository {
         override val activeVehicleData = MutableStateFlow(VehicleData())
@@ -72,9 +77,13 @@ class DashboardComponentPacksTest {
             onDisconnectRequested = {}
         )
 
-    private fun packState(index: Int, voltage: Float, online: Boolean) = PackState(
-        pack = Pack(index, "Branch ${index + 1}", BmsType.ANT_BMS, "AA:0$index"),
-        data = BmsData(voltage = voltage, isConnected = online),
+    private fun packState(index: Int, label: String, voltage: Float, online: Boolean) = PackState(
+        pack = Pack(index, label, BmsType.BEGODE, "AA:BB"),
+        data = BmsData(
+            voltage = voltage,
+            cellVoltages = List(4) { 3.7f },
+            isConnected = online
+        ),
         isOnline = online
     )
 
@@ -84,49 +93,75 @@ class DashboardComponentPacksTest {
     }
 
     @Test
-    fun `packs and partial flag reach the state from activeVehicleData`() = runTest {
+    fun `single pack means the branch block does not render`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         val c = component(repo)
         advanceUntilIdle()
 
         repo.activeVehicleData.value = PackAggregator.build(
-            listOf(packState(0, 100.6f, online = true), packState(1, 100.8f, online = false)),
+            listOf(packState(0, "Battery", 58.4f, online = true)),
             PackTopology.PARALLEL
         )
         advanceUntilIdle()
 
-        val s = c.state.value
-        assertEquals(listOf("Branch 1", "Branch 2"), s.packs.map { it.pack.label })
-        assertTrue(s.isPartial)
-        assertFalse(s.packs[1].isOnline)
+        assertFalse(c.state.value.showBranches)
     }
 
     @Test
-    fun `a single online pack is not flagged partial`() = runTest {
-        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val repo = FakeBmsRepo()
-        val c = component(repo)
-        advanceUntilIdle()
-
-        repo.activeVehicleData.value = PackAggregator.build(
-            listOf(packState(0, 58.4f, online = true)),
-            PackTopology.PARALLEL
-        )
-        advanceUntilIdle()
-
-        val s = c.state.value
-        assertEquals(1, s.packs.size)
-        assertFalse(s.isPartial)
-    }
-
-    @Test
-    fun `state starts with no packs before anything connects`() = runTest {
+    fun `no packs at all also means no branch block`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val c = component(FakeBmsRepo())
         advanceUntilIdle()
 
-        assertTrue(c.state.value.packs.isEmpty())
-        assertFalse(c.state.value.isPartial)
+        assertFalse(c.state.value.showBranches)
+    }
+
+    @Test
+    fun `two packs render the block with both labels`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.activeVehicleData.value = PackAggregator.build(
+            listOf(
+                packState(0, "Wheel", 148.2f, online = true),
+                packState(1, "Pack 2", 148.4f, online = true)
+            ),
+            PackTopology.PARALLEL
+        )
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertTrue(s.showBranches)
+        assertEquals(listOf("Wheel", "Pack 2"), s.packs.map { it.pack.label })
+    }
+
+    @Test
+    fun `offline pack stays in the state marked offline with its last values`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.activeVehicleData.value = PackAggregator.build(
+            listOf(
+                packState(0, "Wheel", 148.2f, online = true),
+                packState(1, "Pack 2", 147.9f, online = false)
+            ),
+            PackTopology.PARALLEL
+        )
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertTrue(s.showBranches)
+        assertTrue(s.isPartial)
+        val offline = s.packs[1]
+        assertFalse(offline.isOnline)
+        // The last reading survives so the rider can see what the branch read
+        // before it went quiet.
+        assertEquals(147.9f, offline.data.voltage)
+        assertEquals(4, offline.data.cellVoltages.size)
     }
 }

@@ -34,6 +34,7 @@ interface DashboardComponent {
     fun onAddBattery()
     fun onDisconnect()
     fun onTabClicked(tab: Tab)
+    fun onPackClicked(packIndex: Int)
 
     enum class Tab { Live, Graph, Settings }
 
@@ -60,7 +61,14 @@ interface DashboardComponent {
         val sheetOpen: Boolean = false,
         val isCharging: Boolean = false,
         val connection: ConnectionState = ConnectionState.Idle
-    )
+    ) {
+        /**
+         * The branch summary block renders only for a genuinely multi-branch
+         * battery. With one pack (every existing user) it must not render at
+         * all, keeping the dashboard pixel-identical to the single-pack layout.
+         */
+        val showBranches: Boolean get() = packs.size > 1
+    }
 }
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -71,6 +79,7 @@ class DefaultDashboardComponent(
     private val onOpenGraph: () -> Unit,
     private val onOpenSettings: () -> Unit,
     private val onOpenAddBattery: () -> Unit,
+    private val onOpenPackDetail: (packIndex: Int) -> Unit,
     private val onDisconnectRequested: () -> Unit
 ) : DashboardComponent, ComponentContext by componentContext {
 
@@ -202,6 +211,8 @@ class DefaultDashboardComponent(
             onDisconnectRequested()
         }
     }
+
+    override fun onPackClicked(packIndex: Int) { onOpenPackDetail(packIndex) }
 
     override fun onTabClicked(tab: DashboardComponent.Tab) {
         when (tab) {
