@@ -200,15 +200,25 @@ class BegodeProtocol : BmsProtocol() {
         branch.currentA = frame.i16BE(8) * 0.1f
 
         // Two temperature sensors per section, degrees Celsius directly.
-        // The sanity range guards against garbage; 0 C is a legal winter
-        // reading, so the all-zero frames a booting BMS sends do register
-        // transiently and are overwritten by the first real frame (<1 s).
         val t1 = frame.i16BE(10)
         val t2 = frame.i16BE(12)
-        if (t1 in TEMP_SANITY) branch.sectionTemps[section * 2] = t1.toFloat()
-        if (t2 in TEMP_SANITY) branch.sectionTemps[section * 2 + 1] = t2.toFloat()
+        val sectionVoltageRaw = frame.i16BE(14)
 
-        branch.sectionVoltageV[section] = frame.i16BE(14) * 0.1f
+        // A booting BMS zero-pads the telemetry payload: both temperatures AND
+        // the section voltage read 0 while the pack voltage is already real
+        // (the fixture opens with ~5 s of such frames). A genuine cold reading
+        // cannot look like this — a live 20S section never sits at 0.0 V — so
+        // the discriminator is the all-zero payload, not the temperature value:
+        // 0 C with a non-zero section voltage is accepted as real winter data.
+        // On a boot frame keep the previous known values (or none) instead of
+        // publishing zeros that would feed the dashboard and alert thresholds.
+        val isBootPlaceholder = t1 == 0 && t2 == 0 && sectionVoltageRaw == 0
+        if (!isBootPlaceholder) {
+            // The sanity range guards against garbage spikes.
+            if (t1 in TEMP_SANITY) branch.sectionTemps[section * 2] = t1.toFloat()
+            if (t2 in TEMP_SANITY) branch.sectionTemps[section * 2 + 1] = t2.toFloat()
+            branch.sectionVoltageV[section] = sectionVoltageRaw * 0.1f
+        }
 
         rebuild(branch)
     }
@@ -246,10 +256,25 @@ class BegodeProtocol : BmsProtocol() {
             voltage = voltage,
             current = current,
             power = voltage * current,
-            cellVoltages = branch.cells.entries.sortedBy { it.key }.map { it.value },
+            cellVoltages = contiguousCells(branch.cells),
             temperatures = branch.sectionTemps.filterNotNull(),
             isConnected = true
         )
+    }
+
+    /**
+     * Cells from physical cell 0 up to the first gap, so a list index always
+     * equals the physical cell number. Cell packets arrive out of order and a
+     * missing middle packet must not compact the map around the gap — that
+     * would show physical cell 32 at list index 16, and the dashboard renders
+     * this list positionally. A shorter but honest list beats a full but
+     * shuffled one; the tail appears as soon as the missing packet lands.
+     */
+    private fun contiguousCells(cells: Map<Int, Float>): List<Float> {
+        val run = ArrayList<Float>(cells.size)
+        while (true) {
+            run.add(cells[run.size] ?: return run)
+        }
     }
 
     companion object {

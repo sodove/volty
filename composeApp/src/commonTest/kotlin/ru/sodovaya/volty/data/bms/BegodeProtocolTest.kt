@@ -91,10 +91,13 @@ class BegodeProtocolTest {
                 "branch $packIndex cell sum $sum should be ~148.4 V"
             )
 
-            // Two temperatures per section, two sections per branch.
+            // Two temperatures per section, two sections per branch. The
+            // capture's ground truth is 25..28 C (t1 = 28 C, t2 = 25..26 C on
+            // every bmsnum), so the band pins the decode to the known values —
+            // a decoder wrong by even a few degrees must fail here.
             assertEquals(4, data.temperatures.size, "branch $packIndex temp count")
             data.temperatures.forEach { t ->
-                assertTrue(t in 20f..40f, "branch $packIndex temp $t implausible")
+                assertTrue(t in 25f..28f, "branch $packIndex temp $t outside 25..28")
             }
         }
     }
@@ -144,6 +147,98 @@ class BegodeProtocolTest {
         }
     }
 
+    // --- Boot-time zero telemetry (the wheel zero-pads 0x01 frames at start) ---
+
+    @Test
+    fun bootZeroFramesNeverPublishZeroTemperatures() {
+        // The capture opens with ~5 s of zero-padded 0x01 frames: 13 all-zero
+        // telemetry frames through notification 78, and under a naive decoder
+        // the stale 0 C for branch 0 / section 0 survives in published data
+        // until the first genuine bmsnum-0 frame completes at notification 98.
+        // Walking the WHOLE fixture notification by notification covers that
+        // opening window as a prefix (any prefix >= 99 would catch it) and
+        // additionally proves zeros never reappear mid-stream.
+        val protocol = BegodeProtocol()
+        BegodeDumpFixture.chunks().forEachIndexed { i, chunk ->
+            protocol.onNotification(chunk)
+            for (packIndex in 0..1) {
+                protocol.latestData(packIndex)?.temperatures?.forEach { t ->
+                    assertTrue(
+                        t != 0f,
+                        "branch $packIndex published 0 C after notification $i"
+                    )
+                }
+            }
+        }
+        // Not vacuous: all four real temperatures must have arrived by the end.
+        for (packIndex in 0..1) {
+            assertEquals(
+                4,
+                assertNotNull(protocol.latestData(packIndex)).temperatures.size,
+                "branch $packIndex temp count after full fixture"
+            )
+        }
+    }
+
+    @Test
+    fun bootPlaceholderKeepsPreviousTemperatures() {
+        val protocol = BegodeProtocol()
+        // A real reading first...
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        // ...then a zero-padded boot-style frame for the same section.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1473, t1 = 0, t2 = 0, sectionVoltageRaw = 0))
+        val data = assertNotNull(protocol.latestData(0))
+        // Pack voltage is real even in boot frames and must update; the
+        // zero-padded temperatures must not clobber the known ones.
+        assertEquals(147.3f, data.voltage, 0.01f)
+        assertEquals(listOf(28f, 26f), data.temperatures)
+    }
+
+    @Test
+    fun genuineZeroCelsiusReadingIsAccepted() {
+        // A wheel really can sit at 0 C in winter. Unlike a boot placeholder,
+        // a genuine cold frame carries a live section voltage (a 20S section
+        // never reads 0.0 V), so it must be published as-is.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 0, t2 = 0, sectionVoltageRaw = 741))
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(listOf(0f, 0f), data.temperatures, "0 C with live section voltage is real data")
+    }
+
+    // --- Cell positions must survive a missing middle packet ---
+
+    @Test
+    fun missingMiddleCellPacketDoesNotShiftPositions() {
+        val protocol = BegodeProtocol()
+        // Telemetry first: a branch publishes nothing before its 0x01 frame.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+
+        // Each cell gets a value unique to its physical position.
+        fun mvOf(cell: Int) = 3000 + (cell / 8) * 100 + (cell % 8)
+
+        // Packets arrive out of order and packet 2 (cells 16..23) is missing.
+        for (packet in intArrayOf(3, 0, 4, 1)) {
+            protocol.onNotification(cellFrame(type = 0x02, packetIndex = packet, baseMv = 3000 + packet * 100))
+        }
+
+        val partial = assertNotNull(protocol.latestData(0)).cellVoltages
+        // Only the contiguous run 0..15 may be exposed: a map compacted around
+        // the gap would show physical cell 24 at list index 16, and the
+        // dashboard renders this list positionally.
+        assertEquals(16, partial.size, "list must stop at the first gap")
+        partial.forEachIndexed { i, v ->
+            assertEquals(mvOf(i) / 1000f, v, 1e-4f, "cell $i misplaced — positions shifted")
+        }
+
+        // Once the missing packet lands, the full list appears, each cell in place.
+        protocol.onNotification(cellFrame(type = 0x02, packetIndex = 2, baseMv = 3000 + 2 * 100))
+        val full = assertNotNull(protocol.latestData(0)).cellVoltages
+        assertEquals(40, full.size, "full list once every packet arrived")
+        full.forEachIndexed { i, v ->
+            assertEquals(mvOf(i) / 1000f, v, 1e-4f, "cell $i after gap filled")
+        }
+    }
+
     @Test
     fun noDataBeforeAnyBmsFrame() {
         val protocol = BegodeProtocol()
@@ -163,6 +258,36 @@ class BegodeProtocolTest {
         BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
         val data = assertNotNull(protocol.latestData(0))
         assertEquals(40, data.cellVoltages.size)
+    }
+
+    // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
+
+    private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {
+        require(payload.size == 16) { "payload is frame bytes 2..17" }
+        return byteArrayOf(0x55, 0xAA.toByte()) + payload +
+            byteArrayOf(type.toByte(), subtype.toByte(), 0x5A, 0x5A, 0x5A, 0x5A)
+    }
+
+    /** 0x01 telemetry frame: pack voltage at 6..7, temps at 10..13, section voltage at 14..15 (all BE). */
+    private fun telemetryFrame(bmsnum: Int, packVoltageRaw: Int, t1: Int, t2: Int, sectionVoltageRaw: Int): ByteArray {
+        val p = ByteArray(16)
+        p[4] = (packVoltageRaw shr 8).toByte(); p[5] = packVoltageRaw.toByte()
+        // Bytes 6..7 of the payload (frame 8..9) are the branch current: 0.
+        p[8] = (t1 shr 8).toByte(); p[9] = t1.toByte()
+        p[10] = (t2 shr 8).toByte(); p[11] = t2.toByte()
+        p[12] = (sectionVoltageRaw shr 8).toByte(); p[13] = sectionVoltageRaw.toByte()
+        return frame(0x01, bmsnum, p)
+    }
+
+    /** Cell frame (0x02/0x03): 8 cells at frame bytes 2..17, BE millivolts baseMv..baseMv+7. */
+    private fun cellFrame(type: Int, packetIndex: Int, baseMv: Int): ByteArray {
+        val p = ByteArray(16)
+        for (i in 0 until 8) {
+            val mv = baseMv + i
+            p[i * 2] = (mv shr 8).toByte()
+            p[i * 2 + 1] = mv.toByte()
+        }
+        return frame(type, packetIndex, p)
     }
 
     private fun assertSameDecodedData(a: BmsData, b: BmsData, label: String) {
