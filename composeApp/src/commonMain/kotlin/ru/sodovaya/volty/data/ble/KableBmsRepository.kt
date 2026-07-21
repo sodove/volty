@@ -137,8 +137,12 @@ class KableBmsRepository private constructor(
      * [connectDemo] and [disconnect] (clear) — all inside a
      * `sessionLock.withLock { }` block.
      *
-     * [sessionLock] is a plain non-reentrant [Mutex]: the cleanup helper
-     * therefore ASSUMES the lock is already held and never takes it itself.
+     * [sessionLock] is a plain non-reentrant [Mutex]. The two cleanup helpers
+     * have opposite locking contracts: [clearOrchestratorLocked] ASSUMES the
+     * lock is already held and never takes it itself, whereas
+     * [clearOrchestratorAfterFailure] takes [sessionLock] itself and must
+     * therefore never be called from inside a critical section — the mutex is
+     * not reentrant, so doing so hangs silently instead of throwing.
      *
      * Reads are unlocked. The session's onSample callback accesses the field
      * null-safely and tolerates a concurrent swap (a sample routed through a
@@ -325,7 +329,11 @@ class KableBmsRepository private constructor(
                 demoJob = null
                 // Demo bypasses the orchestrator entirely — the simulator
                 // feeds _activeData directly and has no BLE lines to route.
+                // Reset the vehicle-level flow together with the orchestrator
+                // (as disconnect() does), so a previous real connection's
+                // packs are not left published while the demo runs.
                 vehicleConnection = null
+                _activeVehicleData.value = VehicleData()
                 // No real link to resurrect on resume — there is no
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null

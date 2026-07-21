@@ -81,6 +81,24 @@ class PackAggregatorTest {
         assertTrue(agg.isConnected)
     }
 
+    @Test
+    fun singlePackParallelSocIdentitySurvivesInexactFloatProducts() {
+        // Arithmetically hostile fixture: 19 x 13.6 is NOT exactly
+        // representable as a Float x Float product. A Float multiply rounds
+        // before widening to Double, so the weighted SoC average returns
+        // ~18.999998f instead of 19f — which soc.toInt() truncates to 18%
+        // in the persistent notification and can trip the low-SoC alert a
+        // whole percentage point early. Do NOT "tidy" these numbers into
+        // round ones (e.g. 87f / 20f): exactly representable products make
+        // this test blind to the regression it exists to catch.
+        val only = state(0, voltage = 84f, current = 1f, soc = 19f, charge = 2.6f, capacity = 13.6f)
+        val agg = PackAggregator.aggregate(listOf(only), PackTopology.PARALLEL)
+        // No absoluteTolerance here on purpose: a tolerance would hide
+        // exactly the precision loss under test.
+        assertEquals(only.data.soc, agg.soc)
+        assertEquals(only.data.soc.toInt(), agg.soc.toInt())
+    }
+
     // --- Parallel ---
 
     @Test

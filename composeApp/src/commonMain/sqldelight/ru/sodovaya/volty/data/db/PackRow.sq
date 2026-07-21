@@ -27,6 +27,3 @@ VALUES (:vehicleId, :packIndex, :label, :bmsType, :bmsAddress, :cellCount);
 
 deleteByVehicle:
 DELETE FROM PackRow WHERE vehicleId = :vehicleId;
-
-deleteFromIndex:
-DELETE FROM PackRow WHERE vehicleId = :vehicleId AND packIndex >= :fromIndex;

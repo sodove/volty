@@ -60,8 +60,12 @@ object PackAggregator {
                 // Capacity-weighted average of the packs' reported SoC —
                 // reduces to the identity for a single pack. Falls back to
                 // the plain mean when no pack reports capacity.
+                // Widen BEFORE multiplying: a Float x Float product rounds to
+                // Float precision first, breaking the single-pack identity
+                // (e.g. 19f x 13.6f aggregates to 18.999998f, truncating to
+                // 18% and tripping the low-SoC alert a point early).
                 soc = if (capacity > 0f)
-                    (data.sumOf { (it.soc * it.capacity).toDouble() } / capacity).toFloat()
+                    (data.sumOf { it.soc.toDouble() * it.capacity.toDouble() } / capacity).toFloat()
                 else data.map { it.soc }.average().toFloat()
             }
             PackTopology.SERIES -> {
