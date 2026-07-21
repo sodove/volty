@@ -17,8 +17,13 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -80,7 +85,7 @@ class KableBmsRepository private constructor(
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
          * never confused with a saved or guest vehicle and is never persisted.
          */
-        val DEMO_VEHICLE: Vehicle = Vehicle(
+        val DEMO_VEHICLE: Vehicle = singlePackVehicle(
             id = DEMO_VEHICLE_ID,
             name = "Demo battery",
             iconKey = "scooter",
@@ -228,7 +233,7 @@ class KableBmsRepository private constructor(
         if (lastPersistedCellCount == vehicle.id to n) return
         lastPersistedCellCount = vehicle.id to n
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")
-        vehicleRepository.upsert(vehicle.copy(cellCount = n))
+        vehicleRepository.upsert(vehicle.withCellCount(n))
     }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
@@ -323,7 +328,7 @@ class KableBmsRepository private constructor(
      */
     private fun buildGuestVehicle(address: String, type: BmsType): Vehicle {
         val advName = cachedAdvertisement(address)?.name?.takeIf { it.isNotBlank() }
-        return Vehicle(
+        return singlePackVehicle(
             id = "$GUEST_VEHICLE_ID_PREFIX$address",
             name = advName ?: "Guest BMS",
             iconKey = "battery",

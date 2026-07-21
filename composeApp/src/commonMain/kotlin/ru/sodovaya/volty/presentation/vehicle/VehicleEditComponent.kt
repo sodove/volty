@@ -6,8 +6,12 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.CoroutineScope
@@ -131,7 +135,7 @@ class DefaultVehicleEditComponent(
             // notify toggles, pin, last-connected) — rebuilding from defaults
             // would silently wipe them on every save.
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
-            val v = Vehicle(
+            val v = singlePackVehicle(
                 id = vehicleId ?: "v-${Random.nextLong()}",
                 name = s.name,
                 iconKey = s.iconKey,

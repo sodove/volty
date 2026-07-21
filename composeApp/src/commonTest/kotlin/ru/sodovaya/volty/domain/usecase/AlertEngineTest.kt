@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -52,7 +53,7 @@ class AlertEngineTest {
     private fun vehicleWith(
         alertConfig: AlertConfig = AlertConfig(),
         chemistry: Chemistry = Chemistry.LI_ION_NMC
-    ) = Vehicle(
+    ) = singlePackVehicle(
         id = "v1",
         name = "Test",
         iconKey = "generic",

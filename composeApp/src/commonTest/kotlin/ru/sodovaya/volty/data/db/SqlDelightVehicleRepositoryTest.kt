@@ -5,6 +5,8 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -24,7 +26,7 @@ class SqlDelightVehicleRepositoryTest {
         return SqlDelightVehicleRepository(VoltyDatabaseProvider(driver))
     }
 
-    private fun v(id: String, name: String = "test") = Vehicle(
+    private fun v(id: String, name: String = "test") = singlePackVehicle(
         id = id,
         name = name,
         iconKey = "generic",

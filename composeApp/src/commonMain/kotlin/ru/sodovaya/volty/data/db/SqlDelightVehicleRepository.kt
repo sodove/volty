@@ -6,6 +6,10 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -63,7 +67,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 }
 
 @OptIn(ExperimentalTime::class)
-private fun VehicleRow.toDomain(): Vehicle = Vehicle(
+private fun VehicleRow.toDomain(): Vehicle = singlePackVehicle(
     id = id,
     name = name,
     iconKey = iconKey,

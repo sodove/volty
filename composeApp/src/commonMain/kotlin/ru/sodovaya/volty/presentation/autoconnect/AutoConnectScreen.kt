@@ -39,6 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res

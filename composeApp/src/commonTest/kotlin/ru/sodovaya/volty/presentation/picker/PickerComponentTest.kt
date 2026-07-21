@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -60,7 +61,7 @@ class PickerComponentTest {
         override suspend fun touch(id: String) {}
     }
 
-    private fun vehicle(id: String, address: String) = Vehicle(
+    private fun vehicle(id: String, address: String) = singlePackVehicle(
         id = id, name = "Saved", iconKey = "generic",
         bmsType = BmsType.JK_BMS, bmsAddress = address,
         chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
