@@ -378,9 +378,16 @@ class KableBmsRepository private constructor(
                 peripheral = peripheral,
                 protocol = protocol,
                 vehicle = vehicle,
-                ringBuffer = ringBuffer,
-                activeData = _activeData,
                 connectionState = _connectionState,
+                onSample = { _, sample ->
+                    // Single-link, single-pack for now: the pack index is
+                    // ignored until VehicleConnection lands. Order matters —
+                    // the graph collector maps over _activeData and reads the
+                    // ring buffer, so a sample must be in the buffer before
+                    // activeData announces it, or every graph emit lags by one.
+                    ringBuffer.push(sample)
+                    _activeData.value = sample
+                },
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule a reconnect — unless
                     // the user explicitly disconnected in the meantime.
