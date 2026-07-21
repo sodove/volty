@@ -17,4 +17,5 @@ keystore.properties
 /build_output.log
 /composeApp/release/
 /composeApp/build
+/dumper/build
 .superpowers/
