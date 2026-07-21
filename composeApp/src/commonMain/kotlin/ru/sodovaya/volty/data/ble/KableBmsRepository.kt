@@ -129,8 +129,10 @@ class KableBmsRepository private constructor(
      * Orchestrator for the currently connected vehicle. Null when nothing is
      * connected. NOT uniformly guarded by [sessionLock]: [connectDemo] nulls
      * it inside its locked section, but [doConnect] installs the new instance
-     * and [disconnect] clears it OUTSIDE theirs. Readers on the session's
-     * onSample funnel access it null-safely and tolerate a concurrent swap
+     * (and clears it again on every failure path, via
+     * [clearOrchestratorAfterFailure]) and [disconnect] clears it OUTSIDE
+     * theirs. Readers on the session's onSample callback access it
+     * null-safely and tolerate a concurrent swap
      * (a sample routed through a stale or absent orchestrator is dropped or
      * passed through raw, never crashed on).
      */
@@ -359,8 +361,28 @@ class KableBmsRepository private constructor(
         )
     }
 
+    /**
+     * Failure-path cleanup for [doConnect]: drop the orchestrator installed by
+     * the failed attempt and reset the vehicle-level flow, so the field's
+     * "null when nothing is connected" contract holds and a failed connect
+     * never leaves the previous vehicle's packs published. Identity-guarded:
+     * a concurrent connect that already installed its own orchestrator is
+     * left alone.
+     */
+    private fun clearOrchestratorAfterFailure(installed: VehicleConnection?) {
+        if (installed == null) return
+        if (vehicleConnection === installed) {
+            vehicleConnection = null
+            _activeVehicleData.value = VehicleData()
+        }
+    }
+
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
+        // Tracks the orchestrator THIS attempt installed, so every failure
+        // path (including the catch-all below) can undo exactly its own
+        // installation and nothing else's.
+        var installedOrchestrator: VehicleConnection? = null
         return try {
             // User-initiated entry — clear the disconnect flag and tear down any
             // existing session under the lock so a concurrent disconnect() sees
@@ -384,17 +406,20 @@ class KableBmsRepository private constructor(
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
-            vehicleConnection = VehicleConnection(
+            val orchestrator = VehicleConnection(
                 packs = vehicle?.packs ?: listOf(
                     Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address)
                 ),
                 topology = vehicle?.topology ?: PackTopology.PARALLEL,
                 onVehicleData = { vd -> _activeVehicleData.value = vd }
             )
+            installedOrchestrator = orchestrator
+            vehicleConnection = orchestrator
 
             val advertisement = resolveAdvertisement(address)
             if (advertisement == null) {
                 _connectionState.value = ConnectionState.Failed("Device not found")
+                clearOrchestratorAfterFailure(orchestrator)
                 return Result.failure(IllegalStateException("Device not found"))
             }
 
@@ -407,12 +432,13 @@ class KableBmsRepository private constructor(
                 vehicle = vehicle,
                 connectionState = _connectionState,
                 onSample = { packIndex, sample ->
-                    vehicleConnection?.submit(packIndex, sample)
                     // The aggregate is a true identity for a single pack
                     // (cell voltages included), so every vehicle routes
-                    // through it. Fall back to the raw sample only if the
-                    // orchestrator was swapped out mid-flight.
-                    val forActive = vehicleConnection?.snapshot()?.aggregate ?: sample
+                    // through it. submit() returns the snapshot it just
+                    // emitted, so the aggregate is built once per sample.
+                    // Fall back to the raw sample only if the orchestrator
+                    // was swapped out mid-flight.
+                    val forActive = vehicleConnection?.submit(packIndex, sample)?.aggregate ?: sample
                     // Ring buffer before activeData: the graph collector maps
                     // over _activeData and reads the buffer, so announcing the
                     // sample first would make every graph emit lag by one.
@@ -433,6 +459,7 @@ class KableBmsRepository private constructor(
                     // Someone called disconnect() while we were preparing —
                     // honour it: don't even attempt to bring the link up.
                     println("[VOLTY-BLE] doConnect: aborted, userInitiatedDisconnect set during prep")
+                    clearOrchestratorAfterFailure(orchestrator)
                     return Result.failure(IllegalStateException("Disconnect requested"))
                 }
                 currentSession = session
@@ -448,6 +475,7 @@ class KableBmsRepository private constructor(
                     if (currentSession === session) currentSession = null
                 }
                 session.tearDown()
+                clearOrchestratorAfterFailure(orchestrator)
                 return Result.failure(IllegalStateException(err))
             }
 
@@ -462,6 +490,7 @@ class KableBmsRepository private constructor(
             }
             if (shouldAbort) {
                 session.tearDown()
+                clearOrchestratorAfterFailure(orchestrator)
                 return Result.failure(IllegalStateException("Disconnect requested"))
             }
 
@@ -472,9 +501,14 @@ class KableBmsRepository private constructor(
             if (vehicle != null && !vehicle.isGuest) vehicleRepository.touch(vehicle.id)
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
+            // Deliberately NO orchestrator cleanup here: cancellation means a
+            // newer connect / disconnect superseded this attempt and owns the
+            // field now; clearing from a late-running cancelled coroutine
+            // could clobber the successor's freshly installed orchestrator.
             throw e
         } catch (e: Exception) {
             _connectionState.value = ConnectionState.Failed(e.message ?: "Connection failed")
+            clearOrchestratorAfterFailure(installedOrchestrator)
             Result.failure(e)
         }
     }

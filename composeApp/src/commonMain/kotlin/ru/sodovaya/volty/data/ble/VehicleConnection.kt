@@ -13,10 +13,16 @@ import kotlin.time.ExperimentalTime
  * Holds the live state of every pack of one vehicle and derives the
  * vehicle-level view from it.
  *
- * Deliberately synchronous and free of coroutines: samples arrive from
- * several [ConnectionSession] coroutines at once, so the repository funnels
- * them through a single consumer and calls in here from that one place. That
- * keeps the shared state single-threaded by construction instead of by lock.
+ * Deliberately synchronous and free of coroutines — and NOT thread-safe:
+ * the backing pack list is a plain unguarded MutableList, and there is no
+ * internal funnel or queue. This is safe today only because exactly one
+ * [ConnectionSession] exists at a time and its single observe coroutine is
+ * the only caller of [submit] / [markOffline] / [markOnline]; the repository
+ * tears the previous session down (cancelAndJoin) before installing a new
+ * orchestrator, so calls never overlap. Anything that introduces a second
+ * concurrent caller — e.g. a second BLE link with its own session
+ * coroutine — MUST serialise samples (single consumer channel or
+ * equivalent) before they reach this class, rather than adding locks here.
  */
 @OptIn(ExperimentalTime::class)
 internal class VehicleConnection(
@@ -30,16 +36,24 @@ internal class VehicleConnection(
         .map { PackState(pack = it, data = BmsData(), isOnline = false) }
         .toMutableList()
 
-    /** Feed a freshly parsed sample for one pack. Unknown indices are ignored. */
-    fun submit(packIndex: Int, data: BmsData) {
+    /**
+     * Feed a freshly parsed sample for one pack and return the resulting
+     * vehicle snapshot — the same instance that was just pushed through
+     * [onVehicleData] — so callers do not rebuild the aggregate a second
+     * time. Unknown indices leave the state untouched and emit nothing; the
+     * returned snapshot then simply reflects the unchanged state.
+     */
+    fun submit(packIndex: Int, data: BmsData): VehicleData {
         val slot = states.indexOfFirst { it.pack.index == packIndex }
-        if (slot < 0) return
+        if (slot < 0) return snapshot()
         states[slot] = states[slot].copy(
             data = data,
             isOnline = true,
             lastSeenAt = Clock.System.now()
         )
-        emit()
+        val snap = snapshot()
+        onVehicleData(snap)
+        return snap
     }
 
     /**
