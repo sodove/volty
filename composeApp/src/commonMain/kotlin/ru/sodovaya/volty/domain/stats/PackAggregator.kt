@@ -12,9 +12,13 @@ import kotlin.time.ExperimentalTime
  * reads beyond the fallback timestamp, no state. All multi-pack maths lives
  * here so it can be tested without a radio.
  *
- * Deliberately NOT aggregated: [BmsData.cellVoltages]. Concatenating cells
- * across packs would make "worst cell #14" point at an index that exists in
- * neither pack. Per-cell data is read from [PackState.data] instead.
+ * [BmsData.cellVoltages] is the union of all ONLINE packs' cells, in pack
+ * order, under both topologies (mirroring [BmsData.temperatures]). The union
+ * exists so alert thresholds see every cell of the vehicle — the alert engine
+ * only compares min/max/spread, so a cell over or under limit in any pack
+ * still fires. Positional per-cell display (the dashboard cell grid, where
+ * "cell #14" must name a physical cell) reads [PackState.data.cellVoltages]
+ * per pack instead, never the concatenated aggregate.
  */
 @OptIn(ExperimentalTime::class)
 object PackAggregator {
@@ -82,7 +86,7 @@ object PackAggregator {
             capacity = capacity,
             numCycles = data.maxOf { it.numCycles },
             cycleCapacityAh = cycleAh,
-            cellVoltages = emptyList(),
+            cellVoltages = online.flatMap { it.data.cellVoltages },
             temperatures = online.flatMap { it.data.temperatures },
             chargeEnabled = data.all { it.chargeEnabled },
             dischargeEnabled = data.all { it.dischargeEnabled },

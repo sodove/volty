@@ -63,6 +63,7 @@ class PackAggregatorTest {
         assertEquals(only.data.charge, agg.charge)
         assertEquals(only.data.capacity, agg.capacity)
         assertEquals(only.data.temperatures, agg.temperatures)
+        assertEquals(only.data.cellVoltages, agg.cellVoltages)
         assertTrue(agg.isConnected)
     }
 
@@ -76,6 +77,7 @@ class PackAggregatorTest {
         assertEquals(only.data.charge, agg.charge)
         assertEquals(only.data.capacity, agg.capacity)
         assertEquals(only.data.temperatures, agg.temperatures)
+        assertEquals(only.data.cellVoltages, agg.cellVoltages)
         assertTrue(agg.isConnected)
     }
 
@@ -176,10 +178,30 @@ class PackAggregatorTest {
     // --- Shared rules ---
 
     @Test
-    fun cellVoltagesAreNeverMerged() {
-        val packs = listOf(state(0, 50f, 1f), state(1, 50f, 1f))
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages.isEmpty())
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages.isEmpty())
+    fun cellVoltagesAreUnionedInPackOrderUnderBothTopologies() {
+        // The alert engine reads min/max/spread off the aggregate, so every
+        // cell of every online pack must be present — dropping them would
+        // silently disable the cell alerts on multi-pack vehicles.
+        val packs = listOf(
+            state(0, 50f, 1f, cells = listOf(3.30f, 3.31f)),
+            state(1, 50f, 1f, cells = listOf(3.32f, 3.45f, 3.29f))
+        )
+        val expected = listOf(3.30f, 3.31f, 3.32f, 3.45f, 3.29f)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages)
+    }
+
+    @Test
+    fun offlinePackCellsAreExcludedFromTheUnion() {
+        // An offline pack's cells are stale — they must not drive an alert.
+        // The offline pack here carries alarming values to make a leak fail loudly.
+        val packs = listOf(
+            state(0, 50f, 1f, cells = listOf(3.30f, 3.31f)),
+            state(1, 50f, 1f, cells = listOf(2.10f, 4.90f), online = false)
+        )
+        val expected = listOf(3.30f, 3.31f)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages)
     }
 
     @Test

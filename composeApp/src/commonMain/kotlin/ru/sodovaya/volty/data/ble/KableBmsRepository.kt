@@ -127,8 +127,12 @@ class KableBmsRepository private constructor(
 
     /**
      * Orchestrator for the currently connected vehicle. Null when nothing is
-     * connected. Written only under [sessionLock]; sample submission happens
-     * from the single funnel below.
+     * connected. NOT uniformly guarded by [sessionLock]: [connectDemo] nulls
+     * it inside its locked section, but [doConnect] installs the new instance
+     * and [disconnect] clears it OUTSIDE theirs. Readers on the session's
+     * onSample funnel access it null-safely and tolerate a concurrent swap
+     * (a sample routed through a stale or absent orchestrator is dropped or
+     * passed through raw, never crashed on).
      */
     private var vehicleConnection: VehicleConnection? = null
 
@@ -396,7 +400,6 @@ class KableBmsRepository private constructor(
 
             val peripheral = Peripheral(advertisement)
             val protocol = createProtocol(type)
-            val isMultiPack = (vehicle?.packs?.size ?: 1) > 1
             val session = ConnectionSession(
                 parentScope = scope,
                 peripheral = peripheral,
@@ -405,19 +408,14 @@ class KableBmsRepository private constructor(
                 connectionState = _connectionState,
                 onSample = { packIndex, sample ->
                     vehicleConnection?.submit(packIndex, sample)
+                    // The aggregate is a true identity for a single pack
+                    // (cell voltages included), so every vehicle routes
+                    // through it. Fall back to the raw sample only if the
+                    // orchestrator was swapped out mid-flight.
+                    val forActive = vehicleConnection?.snapshot()?.aggregate ?: sample
                     // Ring buffer before activeData: the graph collector maps
                     // over _activeData and reads the buffer, so announcing the
                     // sample first would make every graph emit lag by one.
-                    //
-                    // Single pack keeps the raw sample: the aggregate never
-                    // carries per-cell data (cell indices are meaningless
-                    // across packs), but the dashboard cell grid and the
-                    // cell-count auto-fill read activeData — with one pack
-                    // there is nothing to aggregate, so feed the sample
-                    // through bit-for-bit as before the multi-pack refactor.
-                    val forActive = if (isMultiPack)
-                        vehicleConnection?.snapshot()?.aggregate ?: sample
-                    else sample
                     ringBuffer.push(forActive)
                     _activeData.value = forActive
                 },
