@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.expandedTo
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -227,6 +228,9 @@ class KableBmsRepository private constructor(
         scope.launch {
             _activeData.collect { data -> maybePersistCellCount(data) }
         }
+        scope.launch {
+            _activeVehicleData.collect { vd -> maybePersistPacks(vd) }
+        }
     }
 
     // ----- Cell-count auto-fill -----
@@ -249,7 +253,7 @@ class KableBmsRepository private constructor(
      * on later connects. Guests and demo are transient and never persisted.
      */
     private suspend fun maybePersistCellCount(data: BmsData) {
-        val n = data.cellVoltages.size
+        val n = primaryPackCellCount() ?: data.cellVoltages.size
         if (!data.isConnected || n == 0) {
             observedCellCountStreak = 0
             return
@@ -269,6 +273,23 @@ class KableBmsRepository private constructor(
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")
         vehicleRepository.upsert(vehicle.withCellCount(n))
     }
+
+    /**
+     * Cell count of the PRIMARY pack, or null when the orchestrator has not
+     * published one yet (then [maybePersistCellCount] falls back to the sample
+     * it was handed).
+     *
+     * [Vehicle.cellCount] describes one pack, but [_activeData] carries the
+     * vehicle-level AGGREGATE, whose `cellVoltages` is the union of every
+     * online pack — 80 values for a two-branch Begode. Persisting that would
+     * store a 40S wheel as "80s".
+     */
+    private fun primaryPackCellCount(): Int? =
+        _activeVehicleData.value.packs
+            .firstOrNull()
+            ?.takeIf { it.isOnline }
+            ?.data?.cellVoltages?.size
+            ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         val knownAddresses: Map<String, Vehicle> =
@@ -385,6 +406,73 @@ class KableBmsRepository private constructor(
     }
 
     /**
+     * The pack list the orchestrator is built from: the vehicle's own packs,
+     * grown to [protocolPackCount] slots when the protocol knows about more
+     * batteries than the stored profile does.
+     *
+     * A Begode wheel is two parallel branches multiplexed over ONE BLE link and
+     * its [BmsProtocol.packCount] is 2, but the vehicle was created as a
+     * single-pack profile. Without this, slot 1 does not exist, `submit(1, ...)`
+     * hits [VehicleConnection]'s unknown-index path and the second branch's
+     * samples are silently dropped — which does not look like a missing pack in
+     * the UI, it looks like HALF the wheel's current and power (parallel,
+     * near-identical branches make the voltage and cells look fine).
+     *
+     * Sized once, at construction time, on purpose: [VehicleConnection] is not
+     * thread-safe by design and the sample funnel calls into it from the
+     * session's own coroutine, so resizing or rebuilding it mid-session would
+     * race with the samples flowing through it.
+     */
+    private fun connectionPacks(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        protocolPackCount: Int
+    ): List<Pack> {
+        val base = vehicle?.packs?.takeIf { it.isNotEmpty() }
+            ?: listOf(Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address))
+        return base.expandedTo(protocolPackCount)
+    }
+
+    // ----- Discovered-pack auto-fill -----
+
+    /** Vehicle id whose extended pack list was already written back. */
+    private var lastPersistedPackVehicleId: String? = null
+
+    /**
+     * Sibling of [maybePersistCellCount] for the pack list: once a pack the
+     * protocol invented has actually produced data, write the extended list
+     * back into the saved vehicle so the profile matches the battery on later
+     * launches (and the pack cards keep their names).
+     *
+     * Same terms as the cell-count auto-fill: proof before writing (there, a
+     * stable count over consecutive samples; here, the extra pack reporting —
+     * a slot that never comes online is a guess and must not reach the
+     * database), never for guests or demo, and never a rewrite of what is
+     * already stored.
+     */
+    private suspend fun maybePersistPacks(vd: VehicleData) {
+        val discovered = vd.packs
+        if (discovered.isEmpty()) return
+        val vehicle = _activeVehicle.value ?: return
+        if (vehicle.isGuest || vehicle.isDemo) return
+        if (discovered.size <= vehicle.packs.size) return
+        // Only the slots this vehicle does not know about need proving; the
+        // stored ones are user configuration and may legitimately be offline.
+        val extraSlots = discovered.drop(vehicle.packs.size)
+        if (extraSlots.any { !it.isOnline }) return
+        if (lastPersistedPackVehicleId == vehicle.id) return
+        lastPersistedPackVehicleId = vehicle.id
+        // Only APPEND the newly discovered slots. The vehicle's own packs are
+        // user configuration plus the cell-count auto-fill, both of which can
+        // have changed since the orchestrator was built — taking the
+        // orchestrator's copies wholesale would silently revert them.
+        val packs = vehicle.packs + extraSlots.map { it.pack }
+        println("[VOLTY-BLE] pack auto-fill: ${vehicle.name} -> ${packs.size} packs")
+        vehicleRepository.upsert(vehicle.copy(packs = packs))
+    }
+
+    /**
      * Failure-path cleanup for [doConnect]: drop the orchestrator installed by
      * the failed attempt and reset the vehicle-level flow, so the field's
      * "null when nothing is connected" contract holds and a failed connect
@@ -445,10 +533,13 @@ class KableBmsRepository private constructor(
             }
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
+            // The protocol is built BEFORE the orchestrator so the orchestrator
+            // can be sized to it — see [connectionPacks]. It is a plain object
+            // with no I/O, so constructing it this early is free and cannot
+            // fail the connect.
+            val protocol = createProtocol(type)
             val orchestrator = VehicleConnection(
-                packs = vehicle?.packs ?: listOf(
-                    Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address)
-                ),
+                packs = connectionPacks(vehicle, address, type, protocol.packCount),
                 topology = vehicle?.topology ?: PackTopology.PARALLEL,
                 onVehicleData = { vd -> _activeVehicleData.value = vd }
             )
@@ -467,7 +558,6 @@ class KableBmsRepository private constructor(
             }
 
             val peripheral = Peripheral(advertisement)
-            val protocol = createProtocol(type)
             val session = ConnectionSession(
                 parentScope = scope,
                 peripheral = peripheral,
@@ -789,6 +879,16 @@ class KableBmsRepository private constructor(
     /** Test-only: push a sample into the activeData pipeline (drives the
      *  cell-count auto-fill collector without a real BLE session). */
     internal fun emitActiveDataForTest(sample: BmsData) { _activeData.value = sample }
+
+    /** Test-only: push a vehicle snapshot into the pack auto-fill collector. */
+    internal fun emitVehicleDataForTest(vd: VehicleData) { _activeVehicleData.value = vd }
+
+    /**
+     * Test-only: the pack list [doConnect] would build for this target,
+     * including the protocol lookup that decides how many slots exist.
+     */
+    internal fun connectionPacksForTest(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> =
+        connectionPacks(vehicle, address, type, createProtocol(type).packCount)
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been
