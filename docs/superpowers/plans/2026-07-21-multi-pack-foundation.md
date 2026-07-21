@@ -424,10 +424,12 @@ object PackAggregator {
             PackTopology.PARALLEL -> {
                 charge = data.sumOf { it.charge.toDouble() }.toFloat()
                 capacity = data.sumOf { it.capacity.toDouble() }.toFloat()
-                // Weighted by capacity, which is exactly charge/capacity.
-                // Falls back to the plain mean when no pack reports capacity.
-                soc = if (capacity > 0f) charge / capacity * 100f
-                      else data.map { it.soc }.average().toFloat()
+                // Capacity-weighted average of the packs' reported SoC —
+                // reduces to the identity for a single pack. Falls back to
+                // the plain mean when no pack reports capacity.
+                soc = if (capacity > 0f)
+                    (data.sumOf { (it.soc * it.capacity).toDouble() } / capacity).toFloat()
+                else data.map { it.soc }.average().toFloat()
             }
             PackTopology.SERIES -> {
                 // A series string can only deliver as much as its weakest link.
