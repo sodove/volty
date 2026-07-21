@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.ble
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
+import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
@@ -739,6 +740,7 @@ class KableBmsRepository private constructor(
         BmsType.JBD_BMS -> JbdBmsProtocol()
         BmsType.ANT_BMS -> AntBmsProtocol()
         BmsType.DALY_BMS -> DalyBmsProtocol()
+        BmsType.BEGODE -> BegodeProtocol()
     }
 
     fun close() {

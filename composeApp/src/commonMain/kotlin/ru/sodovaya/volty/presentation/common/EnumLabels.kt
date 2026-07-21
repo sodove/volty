@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_ant
+import volty.composeapp.generated.resources.bms_begode
 import volty.composeapp.generated.resources.bms_daly
 import volty.composeapp.generated.resources.bms_jbd
 import volty.composeapp.generated.resources.bms_jk
@@ -20,6 +21,7 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
         BmsType.JBD_BMS -> Res.string.bms_jbd
         BmsType.ANT_BMS -> Res.string.bms_ant
         BmsType.DALY_BMS -> Res.string.bms_daly
+        BmsType.BEGODE -> Res.string.bms_begode
     }
 )
 
