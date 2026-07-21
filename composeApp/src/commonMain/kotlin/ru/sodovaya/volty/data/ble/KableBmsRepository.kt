@@ -127,14 +127,23 @@ class KableBmsRepository private constructor(
 
     /**
      * Orchestrator for the currently connected vehicle. Null when nothing is
-     * connected. NOT uniformly guarded by [sessionLock]: [connectDemo] nulls
-     * it inside its locked section, but [doConnect] installs the new instance
-     * (and clears it again on every failure path, via
-     * [clearOrchestratorAfterFailure]) and [disconnect] clears it OUTSIDE
-     * theirs. Readers on the session's onSample callback access it
-     * null-safely and tolerate a concurrent swap
-     * (a sample routed through a stale or absent orchestrator is dropped or
-     * passed through raw, never crashed on).
+     * connected.
+     *
+     * EVERY write goes through [sessionLock], and every check-then-write
+     * (the identity-guarded failure cleanup) is performed inside a single
+     * critical section, so a failed attempt can never null out the
+     * orchestrator a concurrent attempt installed in between. The writers are:
+     * [doConnect] (install, and clear via [clearOrchestratorLocked]),
+     * [connectDemo] and [disconnect] (clear) — all inside a
+     * `sessionLock.withLock { }` block.
+     *
+     * [sessionLock] is a plain non-reentrant [Mutex]: the cleanup helper
+     * therefore ASSUMES the lock is already held and never takes it itself.
+     *
+     * Reads are unlocked. The session's onSample callback accesses the field
+     * null-safely and tolerates a concurrent swap (a sample routed through a
+     * stale or absent orchestrator is dropped or passed through raw, never
+     * crashed on).
      */
     private var vehicleConnection: VehicleConnection? = null
 
@@ -368,13 +377,29 @@ class KableBmsRepository private constructor(
      * never leaves the previous vehicle's packs published. Identity-guarded:
      * a concurrent connect that already installed its own orchestrator is
      * left alone.
+     *
+     * PRECONDITION: the caller holds [sessionLock]. The identity check and the
+     * write must be one critical section — otherwise a competing attempt can
+     * install its orchestrator between them and have it wiped. [sessionLock]
+     * is not reentrant, so this helper must never take it; callers that do not
+     * already hold it go through [clearOrchestratorAfterFailure].
      */
-    private fun clearOrchestratorAfterFailure(installed: VehicleConnection?) {
+    private fun clearOrchestratorLocked(installed: VehicleConnection?) {
         if (installed == null) return
         if (vehicleConnection === installed) {
             vehicleConnection = null
             _activeVehicleData.value = VehicleData()
         }
+    }
+
+    /**
+     * [clearOrchestratorLocked] for callers that do NOT hold [sessionLock].
+     * Every [doConnect] failure path except the prep-abort one (which already
+     * runs inside a locked section) uses this.
+     */
+    private suspend fun clearOrchestratorAfterFailure(installed: VehicleConnection?) {
+        if (installed == null) return
+        sessionLock.withLock { clearOrchestratorLocked(installed) }
     }
 
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
@@ -414,7 +439,11 @@ class KableBmsRepository private constructor(
                 onVehicleData = { vd -> _activeVehicleData.value = vd }
             )
             installedOrchestrator = orchestrator
-            vehicleConnection = orchestrator
+            // Install under the lock: the failure cleanup below is an
+            // identity-guarded check-then-write, and it can only be safe if
+            // the competing writer — a concurrent connect / reconnect attempt
+            // installing ITS orchestrator — is serialised against it.
+            sessionLock.withLock { vehicleConnection = orchestrator }
 
             val advertisement = resolveAdvertisement(address)
             if (advertisement == null) {
@@ -459,7 +488,9 @@ class KableBmsRepository private constructor(
                     // Someone called disconnect() while we were preparing —
                     // honour it: don't even attempt to bring the link up.
                     println("[VOLTY-BLE] doConnect: aborted, userInitiatedDisconnect set during prep")
-                    clearOrchestratorAfterFailure(orchestrator)
+                    // Already inside sessionLock — use the locked variant, the
+                    // mutex is not reentrant.
+                    clearOrchestratorLocked(orchestrator)
                     return Result.failure(IllegalStateException("Disconnect requested"))
                 }
                 currentSession = session
@@ -619,7 +650,9 @@ class KableBmsRepository private constructor(
         sessionToTear?.tearDown()
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
-        vehicleConnection = null
+        // Fresh acquisition: the block above has already released the lock,
+        // and tearDown() must not run while holding it.
+        sessionLock.withLock { vehicleConnection = null }
         _activeVehicle.value = null
         ringBuffer.clear()
         _connectionState.value = ConnectionState.Disconnected
