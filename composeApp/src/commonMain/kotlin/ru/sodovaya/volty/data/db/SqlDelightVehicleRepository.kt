@@ -52,38 +52,46 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 
     override suspend fun upsert(vehicle: Vehicle) {
         val a = vehicle.alertConfig
-        queries.upsert(
-            id = vehicle.id,
-            name = vehicle.name,
-            iconKey = vehicle.iconKey,
-            topology = vehicle.topology.name,
-            chemistry = vehicle.chemistry.name,
-            averagingWindowMin = vehicle.averagingWindowMin.toLong(),
-            cellHighV = a.cellHighV?.toDouble(),
-            cellLowV = a.cellLowV?.toDouble(),
-            cellDeltaMv = a.cellDeltaMv?.toLong(),
-            temperatureWarnC = a.temperatureWarnC?.toDouble(),
-            temperatureHighC = a.temperatureHighC?.toDouble(),
-            socLowPercent = a.socLowPercent?.toLong(),
-            socCutoffPercent = a.socCutoffPercent?.toLong(),
-            disconnectNotify = if (a.disconnectNotify) 1L else 0L,
-            chargeCompleteNotify = if (a.chargeCompleteNotify) 1L else 0L,
-            createdAt = vehicle.createdAt.toString(),
-            lastConnectedAt = vehicle.lastConnectedAt?.toString(),
-            isPinned = if (vehicle.isPinned) 1L else 0L
-        )
-        // Packs are stored by index, so a shrinking list would otherwise leave
-        // the tail behind: drop everything at or past the new size first.
-        packQueries.deleteFromIndex(vehicleId = vehicle.id, fromIndex = vehicle.packs.size.toLong())
-        vehicle.packs.forEach { p ->
-            packQueries.upsert(
-                vehicleId = vehicle.id,
-                packIndex = p.index.toLong(),
-                label = p.label,
-                bmsType = p.bmsType.name,
-                bmsAddress = p.bmsAddress,
-                cellCount = p.cellCount?.toLong()
+        // One transaction for the vehicle row and its packs: a crash between
+        // the writes must never leave a packless VehicleRow behind (get() and
+        // the vehicles flow would silently drop it forever), and committing
+        // both tables together collapses their change notifications into a
+        // single emission instead of two.
+        queries.transaction {
+            queries.upsert(
+                id = vehicle.id,
+                name = vehicle.name,
+                iconKey = vehicle.iconKey,
+                topology = vehicle.topology.name,
+                chemistry = vehicle.chemistry.name,
+                averagingWindowMin = vehicle.averagingWindowMin.toLong(),
+                cellHighV = a.cellHighV?.toDouble(),
+                cellLowV = a.cellLowV?.toDouble(),
+                cellDeltaMv = a.cellDeltaMv?.toLong(),
+                temperatureWarnC = a.temperatureWarnC?.toDouble(),
+                temperatureHighC = a.temperatureHighC?.toDouble(),
+                socLowPercent = a.socLowPercent?.toLong(),
+                socCutoffPercent = a.socCutoffPercent?.toLong(),
+                disconnectNotify = if (a.disconnectNotify) 1L else 0L,
+                chargeCompleteNotify = if (a.chargeCompleteNotify) 1L else 0L,
+                createdAt = vehicle.createdAt.toString(),
+                lastConnectedAt = vehicle.lastConnectedAt?.toString(),
+                isPinned = if (vehicle.isPinned) 1L else 0L
             )
+            // Replace the pack set wholesale. Stored indices are whatever the
+            // caller provided — nothing guarantees a contiguous 0..n-1 — so
+            // trimming by index cannot be trusted to remove every stale row.
+            packQueries.deleteByVehicle(vehicle.id)
+            vehicle.packs.forEach { p ->
+                packQueries.upsert(
+                    vehicleId = vehicle.id,
+                    packIndex = p.index.toLong(),
+                    label = p.label,
+                    bmsType = p.bmsType.name,
+                    bmsAddress = p.bmsAddress,
+                    cellCount = p.cellCount?.toLong()
+                )
+            }
         }
     }
 

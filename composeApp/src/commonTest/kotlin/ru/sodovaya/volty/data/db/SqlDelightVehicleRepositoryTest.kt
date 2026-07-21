@@ -197,11 +197,49 @@ class SqlDelightVehicleRepositoryTest {
     }
 
     @Test
-    fun deletingAVehicleLeavesNoOrphanPacks() = runTest {
+    fun droppingAMiddlePackWithoutReindexingLeavesNoStaleRow() = runTest {
+        // Pack indices are not required to be contiguous: dropping the middle
+        // pack of three without renumbering ([0,1,2] -> [0,2]) must not leave
+        // the old index-1 row behind. A size-based trim would.
         val repo = newRepo()
+        val three = Vehicle(
+            id = "wheel-4",
+            name = "Wheel",
+            iconKey = "wheel",
+            packs = listOf(
+                Pack(0, "First", BmsType.JK_BMS, "AA:01"),
+                Pack(1, "Second", BmsType.JK_BMS, "AA:02"),
+                Pack(2, "Third", BmsType.JK_BMS, "AA:03")
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Clock.System.now()
+        )
+        repo.upsert(three)
+        repo.upsert(three.copy(packs = listOf(three.packs[0], three.packs[2])))
+
+        val got = repo.get("wheel-4")!!
+        assertEquals(listOf(0, 2), got.packs.map { it.index })
+        assertEquals(listOf("First", "Third"), got.packs.map { it.label })
+    }
+
+    @Test
+    fun deletingAVehicleLeavesNoOrphanPacks() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        VoltyDatabase.Schema.create(driver)
+        val provider = VoltyDatabaseProvider(driver)
+        val repo = SqlDelightVehicleRepository(provider)
         repo.upsert(sampleVehicle())
         repo.delete(sampleVehicle().id)
         assertNull(repo.get(sampleVehicle().id))
+        // get() returning null only proves the VehicleRow is gone. The orphan
+        // guarantee has to be asserted against PackRow itself: ON DELETE
+        // CASCADE never fires here because PRAGMA foreign_keys is off by
+        // default and nothing enables it.
+        val remaining = provider.database.packRowQueries
+            .selectByVehicle(sampleVehicle().id)
+            .executeAsList()
+        assertEquals(emptyList(), remaining)
     }
 
     @Test
@@ -262,6 +300,27 @@ class SqlDelightVehicleRepositoryTest {
             0
         )
 
+        // A second vehicle with NULL cellCount and NULL lastConnectedAt: it
+        // exercises the nullable path through the copy statements, and having
+        // two rows at all would catch a copy that lost its per-row scoping.
+        driver.execute(
+            null,
+            """
+            INSERT INTO VehicleRow(
+                id, name, iconKey, bmsType, bmsAddress, chemistry, cellCount,
+                averagingWindowMin, cellHighV, cellLowV, cellDeltaMv, temperatureHighC,
+                socLowPercent, socCutoffPercent, disconnectNotify, chargeCompleteNotify,
+                createdAt, lastConnectedAt, isPinned, temperatureWarnC
+            ) VALUES (
+                'v2-2', 'Barebones', 'wheel', 'ANT_BMS', 'AA:BB:CC:00:11:22', 'LI_ION_NMC', NULL,
+                5, NULL, NULL, NULL, NULL,
+                NULL, NULL, 1, 1,
+                '2024-03-04T05:06:07Z', NULL, 0, NULL
+            )
+            """.trimIndent(),
+            0
+        )
+
         VoltyDatabase.Schema.migrate(driver, 2, 3)
 
         val repo = SqlDelightVehicleRepository(VoltyDatabaseProvider(driver))
@@ -293,6 +352,25 @@ class SqlDelightVehicleRepositoryTest {
         assertEquals("2024-01-02T03:04:05Z", got.createdAt.toString())
         assertEquals("2024-06-07T08:09:10Z", got.lastConnectedAt?.toString())
         assertTrue(got.isPinned)
+
+        // The second vehicle came through with its own single pack — not
+        // zero (lost row) and not two (cross-vehicle copy) — and its NULL
+        // columns stayed NULL.
+        val second = repo.get("v2-2")
+        assertNotNull(second)
+        assertEquals("Barebones", second.name)
+        assertEquals("wheel", second.iconKey)
+        assertEquals(Chemistry.LI_ION_NMC, second.chemistry)
+        assertEquals(1, second.packs.size)
+        val secondPack = second.packs[0]
+        assertEquals(0, secondPack.index)
+        assertEquals("Barebones", secondPack.label)
+        assertEquals(BmsType.ANT_BMS, secondPack.bmsType)
+        assertEquals("AA:BB:CC:00:11:22", secondPack.bmsAddress)
+        assertNull(secondPack.cellCount)
+        assertNull(second.lastConnectedAt)
+        assertEquals("2024-03-04T05:06:07Z", second.createdAt.toString())
+        assertTrue(!second.isPinned)
 
         // Recreating VehicleRow drops its index with it; the migration must
         // have recreated the index on the renamed table.
