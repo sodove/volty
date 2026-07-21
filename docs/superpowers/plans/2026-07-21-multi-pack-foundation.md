@@ -264,10 +264,14 @@ class PackAggregatorTest {
     // --- Shared rules ---
 
     @Test
-    fun cellVoltagesAreNeverMerged() {
-        val packs = listOf(state(0, 50f, 1f), state(1, 50f, 1f))
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages.isEmpty())
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages.isEmpty())
+    fun cellVoltagesAreUnioned() {
+        val packs = listOf(
+            state(0, 50f, 1f, cells = listOf(4.00f, 4.10f)),
+            state(1, 50f, 1f, cells = listOf(3.90f, 4.05f))
+        )
+        val expected = listOf(4.00f, 4.10f, 3.90f, 4.05f)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages)
     }
 
     @Test
@@ -383,9 +387,11 @@ import kotlin.time.ExperimentalTime
  * reads beyond the fallback timestamp, no state. All multi-pack maths lives
  * here so it can be tested without a radio.
  *
- * Deliberately NOT aggregated: [BmsData.cellVoltages]. Concatenating cells
- * across packs would make "worst cell #14" point at an index that exists in
- * neither pack. Per-cell data is read from [PackState.data] instead.
+ * [BmsData.cellVoltages] is the union of the online packs' cells, so alert
+ * thresholds see every cell of the vehicle — AlertEngine reads only the
+ * minimum, maximum and their spread, never an index. Positional per-cell
+ * display reads [PackState.data] instead, where a cell's number still means
+ * something.
  */
 @OptIn(ExperimentalTime::class)
 object PackAggregator {
@@ -453,7 +459,7 @@ object PackAggregator {
             capacity = capacity,
             numCycles = data.maxOf { it.numCycles },
             cycleCapacityAh = cycleAh,
-            cellVoltages = emptyList(),
+            cellVoltages = online.flatMap { it.data.cellVoltages },
             temperatures = online.flatMap { it.data.temperatures },
             chargeEnabled = data.all { it.chargeEnabled },
             dischargeEnabled = data.all { it.dischargeEnabled },
