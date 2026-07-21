@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.CoroutineScope

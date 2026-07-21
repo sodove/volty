@@ -1,0 +1,65 @@
+-- v2 -> v3: packs become first-class. Per-pack columns move out of VehicleRow
+-- into PackRow, and VehicleRow gains the wiring topology.
+--
+-- Columns are removed by recreating the table rather than with DROP COLUMN:
+-- SQLite only learned DROP COLUMN in 3.35, and older engines are still in the
+-- field on Android.
+
+CREATE TABLE PackRow (
+    vehicleId   TEXT NOT NULL,
+    packIndex   INTEGER NOT NULL,
+    label       TEXT NOT NULL,
+    bmsType     TEXT NOT NULL,
+    bmsAddress  TEXT NOT NULL,
+    cellCount   INTEGER,
+    PRIMARY KEY (vehicleId, packIndex),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+CREATE INDEX PackRow_vehicle ON PackRow(vehicleId, packIndex);
+
+-- Every existing vehicle becomes a one-pack vehicle. The pack is labelled
+-- after the vehicle, which is what singlePackVehicle() does for new ones.
+INSERT INTO PackRow(vehicleId, packIndex, label, bmsType, bmsAddress, cellCount)
+SELECT id, 0, name, bmsType, bmsAddress, cellCount FROM VehicleRow;
+
+CREATE TABLE VehicleRow_new (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    iconKey                  TEXT NOT NULL,
+    topology                 TEXT NOT NULL DEFAULT 'PARALLEL',
+    chemistry                TEXT NOT NULL,
+    averagingWindowMin       INTEGER NOT NULL DEFAULT 5,
+    cellHighV                REAL,
+    cellLowV                 REAL,
+    cellDeltaMv              INTEGER,
+    temperatureWarnC         REAL,
+    temperatureHighC         REAL,
+    socLowPercent            INTEGER,
+    socCutoffPercent         INTEGER,
+    disconnectNotify         INTEGER NOT NULL DEFAULT 1,
+    chargeCompleteNotify     INTEGER NOT NULL DEFAULT 1,
+    createdAt                TEXT NOT NULL,
+    lastConnectedAt          TEXT,
+    isPinned                 INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO VehicleRow_new(
+    id, name, iconKey, topology, chemistry, averagingWindowMin,
+    cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC,
+    socLowPercent, socCutoffPercent, disconnectNotify, chargeCompleteNotify,
+    createdAt, lastConnectedAt, isPinned
+)
+SELECT
+    id, name, iconKey, 'PARALLEL', chemistry, averagingWindowMin,
+    cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC,
+    socLowPercent, socCutoffPercent, disconnectNotify, chargeCompleteNotify,
+    createdAt, lastConnectedAt, isPinned
+FROM VehicleRow;
+
+DROP INDEX VehicleRow_pinned_recent;
+DROP TABLE VehicleRow;
+ALTER TABLE VehicleRow_new RENAME TO VehicleRow;
+
+-- Recreated AFTER the rename: dropping the old table takes its index with it.
+CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);

@@ -4,6 +4,9 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -51,7 +54,7 @@ class KableBmsRepositoryOnAppResumedTest {
         underTest = null
     }
 
-    private fun vehicle() = Vehicle(
+    private fun vehicle() = singlePackVehicle(
         id = "v1",
         name = "Test",
         iconKey = "generic",

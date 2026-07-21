@@ -5,7 +5,6 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
-import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -48,9 +47,13 @@ internal class ConnectionSession(
     private val peripheral: Peripheral,
     private val protocol: BmsProtocol,
     private val vehicle: Vehicle?,
-    private val ringBuffer: SampleRingBuffer,
-    private val activeData: MutableStateFlow<BmsData>,
     private val connectionState: MutableStateFlow<ConnectionState>,
+    /**
+     * Called for every parsed sample. The session does not own where samples
+     * go: with more than one pack behind a link there is no single
+     * destination, so routing and aggregation belong to the caller.
+     */
+    private val onSample: (packIndex: Int, data: BmsData) -> Unit,
     /** Callback when a link drop is detected (state event or watchdog). */
     private val onDropDetected: suspend (reason: String) -> Unit
 ) {
@@ -143,15 +146,13 @@ internal class ConnectionSession(
                     }
                 ).collect { data ->
                     protocol.onNotification(data)
-                    protocol.latestData()?.let { bms ->
-                        val sample = bms.copy(timestamp = Clock.System.now())
-                        // Push to ring buffer BEFORE updating activeData. The
-                        // graph collector subscribes via `_activeData.map { ringBuffer.within(window) }`,
-                        // so if we set activeData first the map runs while the
-                        // new sample isn't in the buffer yet — each graph emit
-                        // would lag by one sample.
-                        ringBuffer.push(sample)
-                        activeData.value = sample
+                    var got = false
+                    for (packIndex in 0 until protocol.packCount) {
+                        val bms = protocol.latestData(packIndex) ?: continue
+                        onSample(packIndex, bms.copy(timestamp = Clock.System.now()))
+                        got = true
+                    }
+                    if (got) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
                         sampleCount++
                         if (sampleCount % 50 == 0) {

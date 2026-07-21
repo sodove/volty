@@ -6,7 +6,10 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -162,7 +165,7 @@ class DefaultPickerComponent(
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
             if (mode == "add") {
-                val v = Vehicle(
+                val v = singlePackVehicle(
                     id = "v-" + kotlin.random.Random.nextLong().toString(16).removePrefix("-"),
                     name = device.name ?: "BMS ${device.address.takeLast(4)}",
                     iconKey = "generic",

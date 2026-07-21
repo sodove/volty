@@ -37,6 +37,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellUiModel
 import ru.sodovaya.volty.presentation.common.chemistryFraction

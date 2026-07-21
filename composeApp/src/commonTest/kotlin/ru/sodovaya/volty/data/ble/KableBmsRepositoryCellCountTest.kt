@@ -5,6 +5,10 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -55,7 +59,7 @@ class KableBmsRepositoryCellCountTest {
         coroutineContext = StandardTestDispatcher(testScope.testScheduler),
     )
 
-    private fun vehicle(id: String = "v1", cellCount: Int? = null) = Vehicle(
+    private fun vehicle(id: String = "v1", cellCount: Int? = null) = singlePackVehicle(
         id = id,
         name = "Test",
         iconKey = "generic",

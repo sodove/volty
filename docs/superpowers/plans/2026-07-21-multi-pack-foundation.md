@@ -264,10 +264,14 @@ class PackAggregatorTest {
     // --- Shared rules ---
 
     @Test
-    fun cellVoltagesAreNeverMerged() {
-        val packs = listOf(state(0, 50f, 1f), state(1, 50f, 1f))
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages.isEmpty())
-        assertTrue(PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages.isEmpty())
+    fun cellVoltagesAreUnioned() {
+        val packs = listOf(
+            state(0, 50f, 1f, cells = listOf(4.00f, 4.10f)),
+            state(1, 50f, 1f, cells = listOf(3.90f, 4.05f))
+        )
+        val expected = listOf(4.00f, 4.10f, 3.90f, 4.05f)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.PARALLEL).cellVoltages)
+        assertEquals(expected, PackAggregator.aggregate(packs, PackTopology.SERIES).cellVoltages)
     }
 
     @Test
@@ -383,9 +387,11 @@ import kotlin.time.ExperimentalTime
  * reads beyond the fallback timestamp, no state. All multi-pack maths lives
  * here so it can be tested without a radio.
  *
- * Deliberately NOT aggregated: [BmsData.cellVoltages]. Concatenating cells
- * across packs would make "worst cell #14" point at an index that exists in
- * neither pack. Per-cell data is read from [PackState.data] instead.
+ * [BmsData.cellVoltages] is the union of the online packs' cells, so alert
+ * thresholds see every cell of the vehicle — AlertEngine reads only the
+ * minimum, maximum and their spread, never an index. Positional per-cell
+ * display reads [PackState.data] instead, where a cell's number still means
+ * something.
  */
 @OptIn(ExperimentalTime::class)
 object PackAggregator {
@@ -424,10 +430,12 @@ object PackAggregator {
             PackTopology.PARALLEL -> {
                 charge = data.sumOf { it.charge.toDouble() }.toFloat()
                 capacity = data.sumOf { it.capacity.toDouble() }.toFloat()
-                // Weighted by capacity, which is exactly charge/capacity.
-                // Falls back to the plain mean when no pack reports capacity.
-                soc = if (capacity > 0f) charge / capacity * 100f
-                      else data.map { it.soc }.average().toFloat()
+                // Capacity-weighted average of the packs' reported SoC —
+                // reduces to the identity for a single pack. Falls back to
+                // the plain mean when no pack reports capacity.
+                soc = if (capacity > 0f)
+                    (data.sumOf { (it.soc * it.capacity).toDouble() } / capacity).toFloat()
+                else data.map { it.soc }.average().toFloat()
             }
             PackTopology.SERIES -> {
                 // A series string can only deliver as much as its weakest link.
@@ -451,7 +459,7 @@ object PackAggregator {
             capacity = capacity,
             numCycles = data.maxOf { it.numCycles },
             cycleCapacityAh = cycleAh,
-            cellVoltages = emptyList(),
+            cellVoltages = online.flatMap { it.data.cellVoltages },
             temperatures = online.flatMap { it.data.temperatures },
             chargeEnabled = data.all { it.chargeEnabled },
             dischargeEnabled = data.all { it.dischargeEnabled },
@@ -1384,6 +1392,7 @@ git commit -m "refactor(ble): session reports samples instead of owning them"
 - Create: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/VehicleConnection.kt`
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/domain/repository/BmsRepository.kt:21-25`
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/KableBmsRepository.kt:114-116` (+ добавить `_activeVehicleData`)
+- Modify: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/picker/PickerComponentTest.kt:37-51` (`FakeBmsRepo` реализует новое свойство)
 - Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/data/ble/VehicleConnectionTest.kt`
 
 **Interfaces:**
@@ -1668,18 +1677,30 @@ interface BmsRepository {
 
 Добавить импорты `Pack`, `PackTopology`, `VehicleData`.
 
-- [ ] **Step 7: Прогнать весь набор тестов**
+- [ ] **Step 7: Починить фейковый репозиторий в тестах**
+
+Расширение интерфейса `BmsRepository` ломает `FakeBmsRepo` в
+`composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/picker/PickerComponentTest.kt:40`.
+Добавить рядом с `activeData`:
+
+```kotlin
+        override val activeVehicleData = MutableStateFlow(VehicleData())
+```
+
+плюс импорт `ru.sodovaya.volty.domain.model.VehicleData`.
+
+- [ ] **Step 8: Прогнать весь набор тестов**
 
 Run: `./gradlew :composeApp:testDebugUnitTest`
 Expected: PASS. Если `KableBmsRepositoryCellCountTest` упал — вероятная причина в том, что `emitActiveDataForTest` пишет в `_activeData` мимо оркестратора; это ожидаемо и правильно, тест проверяет автозаполнение числа ячеек, а не агрегацию.
 
-- [ ] **Step 8: Проверить на устройстве**
+- [ ] **Step 9: Проверить на устройстве**
 
 Run: `./gradlew :composeApp:installDebug`
 
 Подключиться к реальной BMS и убедиться: дашборд показывает те же цифры, что и до рефакторинга; график рисуется без ступенек и без отставания; отключение и переподключение работают.
 
-- [ ] **Step 9: Коммит**
+- [ ] **Step 10: Коммит**
 
 ```bash
 git add -A
@@ -1693,78 +1714,161 @@ git commit -m "feat(ble): vehicle connection orchestrates packs and aggregation"
 Дашборд начинает получать по-пакетное состояние. При одном пакете он ничего нового не рисует — это подготовка почвы для блока «Ветки» из следующего плана.
 
 **Files:**
-- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardComponent.kt`
-- Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardPacksTest.kt`
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardComponent.kt:39-58, 100-118`
+- Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardComponentPacksTest.kt`
 
 **Interfaces:**
 - Consumes: `BmsRepository.activeVehicleData` из Task 5.
 - Produces: `DashboardComponent.State.packs: List<PackState>`, `DashboardComponent.State.isPartial: Boolean`.
 
-- [ ] **Step 1: Прочитать текущий компонент**
+- [ ] **Step 1: Написать падающий тест компонента**
 
-Открыть `DashboardComponent.kt` и найти, как собирается `State` из `bmsRepository.activeData`. Новые поля добавляются в тот же `combine`/`map`, ничего не переписывая.
+Тест проверяет именно проводку: что `State.packs` и `State.isPartial` действительно
+приходят из `BmsRepository.activeVehicleData`. Форма фейков скопирована с
+`PickerComponentTest` — это принятый в проекте способ тестировать компоненты.
 
-- [ ] **Step 2: Написать падающий тест**
-
-Создать `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardPacksTest.kt`:
+Создать `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/dashboard/DashboardComponentPacksTest.kt`:
 
 ```kotlin
 package ru.sodovaya.volty.presentation.dashboard
 
+import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.PackAggregator
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 
-/**
- * Guards the invariant this plan is built around: a one-pack vehicle must
- * look exactly like it did before packs existed.
- */
-@OptIn(ExperimentalTime::class)
-class DashboardPacksTest {
+@OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
+class DashboardComponentPacksTest {
 
-    @Test
-    fun singlePackVehicleDataHasNoPartialFlagAndOnePack() {
-        val states = listOf(
-            PackState(
-                pack = Pack(0, "Battery", BmsType.JK_BMS, "AA:01"),
-                data = BmsData(voltage = 58.4f, current = 3.2f, soc = 91f, isConnected = true),
-                isOnline = true
-            )
+    private class FakeBmsRepo : BmsRepository {
+        override val activeVehicleData = MutableStateFlow(VehicleData())
+        override val activeData = MutableStateFlow(BmsData())
+        override val activeVehicle = MutableStateFlow<Vehicle?>(null)
+        override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+        override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
+        override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
+        override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
+        override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
+        override suspend fun disconnect() {}
+        override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
+        override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
+        override suspend fun onAppResumed() {}
+    }
+
+    private class FakeVehicleRepo : VehicleRepository {
+        override val vehicles: Flow<List<Vehicle>> = flowOf(emptyList())
+        override suspend fun get(id: String): Vehicle? = null
+        override suspend fun upsert(vehicle: Vehicle) {}
+        override suspend fun delete(id: String) {}
+        override suspend fun touch(id: String) {}
+    }
+
+    private fun component(repo: FakeBmsRepo): DefaultDashboardComponent =
+        DefaultDashboardComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            bmsRepository = repo,
+            vehicleRepository = FakeVehicleRepo(),
+            onOpenGraph = {},
+            onOpenSettings = {},
+            onOpenAddBattery = {},
+            onDisconnectRequested = {}
         )
-        val vd: VehicleData = PackAggregator.build(states, PackTopology.PARALLEL)
-        assertEquals(1, vd.packs.size)
-        assertFalse(vd.isPartial)
-        assertEquals(58.4f, vd.aggregate.voltage)
+
+    private fun packState(index: Int, voltage: Float, online: Boolean) = PackState(
+        pack = Pack(index, "Branch ${index + 1}", BmsType.ANT_BMS, "AA:0$index"),
+        data = BmsData(voltage = voltage, isConnected = online),
+        isOnline = online
+    )
+
+    @AfterTest
+    fun tearDown() {
+        Dispatchers.resetMain()
     }
 
     @Test
-    fun twoPacksWithOneOfflineAreFlaggedPartial() {
-        val states = listOf(
-            PackState(Pack(0, "Branch 1", BmsType.ANT_BMS, "AA:01"), BmsData(voltage = 100.6f, isConnected = true), isOnline = true),
-            PackState(Pack(1, "Branch 2", BmsType.ANT_BMS, "AA:02"), BmsData(voltage = 100.8f), isOnline = false)
+    fun `packs and partial flag reach the state from activeVehicleData`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.activeVehicleData.value = PackAggregator.build(
+            listOf(packState(0, 100.6f, online = true), packState(1, 100.8f, online = false)),
+            PackTopology.PARALLEL
         )
-        val vd = PackAggregator.build(states, PackTopology.PARALLEL)
-        assertTrue(vd.isPartial)
-        assertEquals(2, vd.packs.size)
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals(listOf("Branch 1", "Branch 2"), s.packs.map { it.pack.label })
+        assertTrue(s.isPartial)
+        assertFalse(s.packs[1].isOnline)
+    }
+
+    @Test
+    fun `a single online pack is not flagged partial`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.activeVehicleData.value = PackAggregator.build(
+            listOf(packState(0, 58.4f, online = true)),
+            PackTopology.PARALLEL
+        )
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals(1, s.packs.size)
+        assertFalse(s.isPartial)
+    }
+
+    @Test
+    fun `state starts with no packs before anything connects`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeBmsRepo())
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.packs.isEmpty())
+        assertFalse(c.state.value.isPartial)
     }
 }
 ```
 
-- [ ] **Step 3: Запустить тест**
+- [ ] **Step 2: Запустить тест и убедиться, что он падает**
 
-Run: `./gradlew :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.dashboard.DashboardPacksTest"`
-Expected: PASS сразу — тест закрепляет уже реализованное поведение как контракт для следующего плана.
+Run: `./gradlew :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.dashboard.DashboardComponentPacksTest"`
+Expected: FAIL — `Unresolved reference: packs` в `DashboardComponent.State`.
 
-- [ ] **Step 4: Добавить поля в состояние дашборда**
+- [ ] **Step 3: Добавить поля в состояние дашборда**
 
 В `DashboardComponent.State` добавить:
 
@@ -1775,7 +1879,24 @@ Expected: PASS сразу — тест закрепляет уже реализ�
         val isPartial: Boolean = false,
 ```
 
-В сборке состояния подмешать `bmsRepository.activeVehicleData`, заполняя `packs = vd.packs` и `isPartial = vd.isPartial`. Остальные поля состояния продолжают читаться из `activeData` — менять их нельзя.
+Добавить в `init` отдельный коллектор рядом с существующими (не трогая
+коллектор `activeData`/`activeVehicle`, чтобы не менять поведение остальных
+полей):
+
+```kotlin
+        scope.launch {
+            bmsRepository.activeVehicleData.collect { vd ->
+                _state.update { it.copy(packs = vd.packs, isPartial = vd.isPartial) }
+            }
+        }
+```
+
+Добавить импорт `ru.sodovaya.volty.domain.model.PackState`.
+
+- [ ] **Step 4: Запустить тест и убедиться, что он проходит**
+
+Run: `./gradlew :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.dashboard.DashboardComponentPacksTest"`
+Expected: PASS, все 3 теста.
 
 - [ ] **Step 5: Скомпилировать и прогнать всё**
 

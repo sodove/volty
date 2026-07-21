@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -51,6 +52,10 @@ interface DashboardComponent {
         val cellsMinV: Float = 0f,
         val cellsMaxV: Float = 0f,
         val cellsDeltaMv: Int = 0,
+        /** Per-pack state. Exactly one entry for a conventional battery. */
+        val packs: List<PackState> = emptyList(),
+        /** true when some pack is offline and the aggregate covers only the rest. */
+        val isPartial: Boolean = false,
         val savedVehicles: List<Vehicle> = emptyList(),
         val sheetOpen: Boolean = false,
         val isCharging: Boolean = false,
@@ -115,6 +120,12 @@ class DefaultDashboardComponent(
                         )
                     }
                 }
+        }
+
+        scope.launch {
+            bmsRepository.activeVehicleData.collect { vd ->
+                _state.update { it.copy(packs = vd.packs, isPartial = vd.isPartial) }
+            }
         }
 
         scope.launch {

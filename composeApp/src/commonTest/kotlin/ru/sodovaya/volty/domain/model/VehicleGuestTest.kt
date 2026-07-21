@@ -14,7 +14,7 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 class VehicleGuestTest {
 
-    private fun vehicle(id: String) = Vehicle(
+    private fun vehicle(id: String) = singlePackVehicle(
         id = id,
         name = "test",
         iconKey = "battery",

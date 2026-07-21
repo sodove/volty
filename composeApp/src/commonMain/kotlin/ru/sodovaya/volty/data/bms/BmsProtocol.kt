@@ -18,8 +18,17 @@ abstract class BmsProtocol {
     /** Feed an incoming BLE notification chunk. */
     abstract fun onNotification(data: ByteArray)
 
-    /** Latest fully-parsed BMS data, or null if nothing has been parsed yet. */
-    abstract fun latestData(): BmsData?
+    /**
+     * How many logical packs this one link carries. One for every BMS volty
+     * talks to directly; a Begode wheel multiplexes two over a single link.
+     */
+    open val packCount: Int get() = 1
+
+    /** Latest fully-parsed data for [packIndex], or null if nothing parsed yet. */
+    abstract fun latestData(packIndex: Int): BmsData?
+
+    /** Convenience for the single-pack case. */
+    fun latestData(): BmsData? = latestData(0)
 
     /** Reset internal buffers and parser state. */
     abstract fun reset()

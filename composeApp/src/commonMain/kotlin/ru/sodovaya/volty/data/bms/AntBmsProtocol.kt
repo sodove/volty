@@ -47,7 +47,7 @@ class AntBmsProtocol : BmsProtocol() {
         tryParseAll()
     }
 
-    override fun latestData(): BmsData? = lastData
+    override fun latestData(packIndex: Int): BmsData? = lastData
 
     override fun reset() {
         buffer.reset()
