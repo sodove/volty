@@ -97,6 +97,18 @@
     <string name="cells_no_data">Нет данных по ячейкам</string>
     <string name="cells_section_title">Ячейки</string>
 
+    <!-- Branches (multi-pack summary block + branch detail screen) -->
+    <string name="branches_section_title">Ветки</string>
+    <string name="branch_label_n">Ветка %1$d</string>
+    <string name="branch_offline">не отвечает</string>
+    <string name="branch_offline_banner">Ветка не отвечает — показаны последние данные</string>
+    <string name="branch_voltage_v">%1$s В</string>
+    <string name="branch_current_a">%1$s А</string>
+    <string name="branch_min_cell">мин %1$s В</string>
+    <string name="branch_max_cell">макс %1$s В</string>
+    <string name="branch_delta_mv">Δ %1$d мВ</string>
+    <string name="section_voltage">Сборка %1$d · %2$s В</string>
+
     <!-- MOSFET state -->
     <string name="mosfet_charge_on">Заряд ВКЛ</string>
     <string name="mosfet_charge_off">Заряд ВЫКЛ</string>

@@ -282,8 +282,21 @@ fun DashboardScreen(component: DashboardComponent) {
             )
         }
 
-        // Inline cells grid — compact renderer of all cell voltages.
-        if (data.cellVoltages.isNotEmpty()) {
+        // Branch summary block — one card per pack. Guarded by showBranches so a
+        // single-pack battery renders exactly the pre-multi-pack dashboard.
+        if (state.showBranches) {
+            BranchesSection(
+                packs = state.packs,
+                chemistry = chemistry,
+                onPackClicked = component::onPackClicked
+            )
+        }
+
+        // Inline cells grid — compact renderer of all cell voltages. Multi-pack
+        // batteries skip it: the aggregate list is a concatenation whose indices
+        // match no physical cell, and per the design cells live on the branch
+        // detail screen (an ET Max would otherwise dump 80 cells here).
+        if (!state.showBranches && data.cellVoltages.isNotEmpty()) {
             DashboardCellsSection(
                 voltages = data.cellVoltages,
                 chemistry = chemistry,

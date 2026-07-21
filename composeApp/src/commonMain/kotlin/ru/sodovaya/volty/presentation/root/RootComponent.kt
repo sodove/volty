@@ -27,6 +27,8 @@ import ru.sodovaya.volty.presentation.graph.DefaultGraphComponent
 import ru.sodovaya.volty.presentation.graph.GraphComponent
 import ru.sodovaya.volty.presentation.permissions.DefaultPermissionsGateComponent
 import ru.sodovaya.volty.presentation.permissions.PermissionsGateComponent
+import ru.sodovaya.volty.presentation.pack.DefaultPackDetailComponent
+import ru.sodovaya.volty.presentation.pack.PackDetailComponent
 import ru.sodovaya.volty.presentation.picker.DefaultPickerComponent
 import ru.sodovaya.volty.presentation.picker.PickerComponent
 import ru.sodovaya.volty.presentation.scanning.DefaultScanningComponent
@@ -65,6 +67,7 @@ interface RootComponent {
         data class AutoConnect(val component: AutoConnectComponent) : Child
         data class Picker(val component: PickerComponent) : Child
         data class Dashboard(val component: DashboardComponent) : Child
+        data class PackDetail(val component: PackDetailComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class Graph(val component: GraphComponent) : Child
         data class Settings(val component: SettingsComponent) : Child
@@ -80,6 +83,7 @@ sealed class Config {
     @Serializable data class AutoConnect(val vehicleId: String) : Config()
     @Serializable data class Picker(val mode: String) : Config()
     @Serializable data object Dashboard : Config()
+    @Serializable data class PackDetail(val packIndex: Int) : Config()
     @Serializable data class VehicleEdit(
         val vehicleId: String?,
         /**
@@ -247,7 +251,16 @@ class DefaultRootComponent(
                     onOpenAddBattery = {
                         nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
+                    onOpenPackDetail = { packIndex -> nav.push(Config.PackDetail(packIndex)) },
                     onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
+                )
+            )
+            is Config.PackDetail -> RootComponent.Child.PackDetail(
+                DefaultPackDetailComponent(
+                    componentContext = context,
+                    packIndex = config.packIndex,
+                    bmsRepository = get(),
+                    onBackRequested = { nav.pop() }
                 )
             )
             is Config.VehicleEdit -> {

@@ -97,6 +97,18 @@
     <string name="cells_no_data">No cell data yet</string>
     <string name="cells_section_title">Cells</string>
 
+    <!-- Branches (multi-pack summary block + branch detail screen) -->
+    <string name="branches_section_title">Branches</string>
+    <string name="branch_label_n">Branch %1$d</string>
+    <string name="branch_offline">offline</string>
+    <string name="branch_offline_banner">Branch is not responding — showing its last data</string>
+    <string name="branch_voltage_v">%1$s V</string>
+    <string name="branch_current_a">%1$s A</string>
+    <string name="branch_min_cell">min %1$s V</string>
+    <string name="branch_max_cell">max %1$s V</string>
+    <string name="branch_delta_mv">Δ %1$d mV</string>
+    <string name="section_voltage">Section %1$d · %2$s V</string>
+
     <!-- MOSFET state -->
     <string name="mosfet_charge_on">Charge ON</string>
     <string name="mosfet_charge_off">Charge OFF</string>
