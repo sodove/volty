@@ -207,6 +207,60 @@ class VehicleConnectionTest {
     }
 
     @Test
+    fun aLinkWideStallTheWatchdogCannotSeeMarksNoBranchOffline() {
+        // Built from the constants so it keeps testing the RELATIONSHIP, not a
+        // magic number: the longest link-wide stall the session watchdog can
+        // miss is just under staleSampleMs + watchdogTickMs (age must exceed
+        // staleSampleMs AT a tick), and when the link recovers the first
+        // sample belongs to one branch, so the sweep measures the other
+        // branch's age as that stall plus its own normal pre-stall gap.
+        val clock = FakeClock()
+        val c = conn(clock = clock)
+        c.submit(1, BmsData(voltage = 100.8f, current = 12.4f, isConnected = true))
+        // Branch 1's ordinary cadence elapses before the stall begins.
+        clock.advance(BleConfig.maxHealthyPackGapMs)
+        c.submit(0, BmsData(voltage = 100.6f, current = 12.0f, isConnected = true))
+
+        // The whole link goes quiet — both branches together, ordinary
+        // Android BLE behaviour — for as long as the watchdog can overlook.
+        clock.advance(BleConfig.staleSampleMs + BleConfig.watchdogTickMs)
+
+        // Link recovers; the first sample happens to belong to branch 0.
+        val snap = c.submit(0, BmsData(voltage = 100.5f, current = 12.0f, isConnected = true))
+
+        assertTrue(
+            snap.packs[1].isOnline,
+            "a healthy branch must not be faked dead by a link-wide stall"
+        )
+        assertFalse(snap.isPartial)
+        assertEquals(24.4f, snap.aggregate.current, absoluteTolerance = 0.001f)
+    }
+
+    @Test
+    fun markOnlineRefreshesTheTimestampSoTheNextSweepKeepsThePack() {
+        val clock = FakeClock()
+        val c = conn(clock = clock)
+        c.submit(0, BmsData(voltage = 100.6f, current = 12.0f, isConnected = true))
+        c.submit(1, BmsData(voltage = 100.8f, current = 12.4f, isConnected = true))
+        clock.advance(BleConfig.packOfflineAfterMs + 1)
+        c.submit(0, BmsData(voltage = 100.5f, current = 12.0f, isConnected = true))
+        assertFalse(c.snapshot().packs[1].isOnline)
+
+        c.markOnline(1)
+        assertTrue(c.snapshot().packs[1].isOnline)
+        assertEquals(clock.now(), c.snapshot().packs[1].lastSeenAt)
+
+        // Time passes (well under the threshold) and another pack reports:
+        // with a stale lastSeenAt the sweep would immediately re-flag pack 1.
+        clock.advance(BleConfig.maxHealthyPackGapMs)
+        val snap = c.submit(0, BmsData(voltage = 100.5f, current = 12.0f, isConnected = true))
+        assertTrue(
+            snap.packs[1].isOnline,
+            "a revived pack must not be re-marked offline off its ancient timestamp"
+        )
+    }
+
+    @Test
     fun redundantMarkCallsDoNotEmit() {
         val sink = mutableListOf<VehicleData>()
         val c = conn(sink = sink)

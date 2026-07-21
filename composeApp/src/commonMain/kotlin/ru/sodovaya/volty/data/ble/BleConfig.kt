@@ -30,26 +30,42 @@ object BleConfig {
     const val staleSampleMs: Long = 5_000L
 
     /**
-     * Max age of one pack's last sample before [VehicleConnection] marks it
-     * offline, while OTHER packs on the same link keep reporting.
-     *
-     * Evidence for the number: the real Begode ET Max capture
+     * Worst observed gap between two consecutive decodes for ONE pack while
+     * the link is healthy. Evidence: the real Begode ET Max capture
      * ([ru.sodovaya.volty.data.bms.BegodeDumpFixture], 13 s / 228
      * notifications) shows the wheel cycling through all four `bmsnum` values
      * and both cell-frame types in ~1.4 s — in normal streaming no branch is
-     * silent for much longer than about a second and a half. 5 s is >3x that
-     * worst-case gap, so a healthy branch can never be flagged by its own
-     * cadence.
-     *
-     * It also deliberately equals [staleSampleMs]: a shared-link stall long
-     * enough to age a healthy pack past this threshold is, within one
-     * [watchdogTickMs], long enough for the session watchdog to tear the whole
-     * link down — so the per-pack check almost never fires on link-wide
-     * hiccups. The residual edge (a stall just under the watchdog's trigger
-     * plus the pack's normal gap) self-heals on the pack's next sample within
-     * one ~1.4 s cycle.
+     * silent for much longer than about a second and a half. Every polling
+     * protocol cycles faster than this too.
      */
-    const val packOfflineAfterMs: Long = 5_000L
+    const val maxHealthyPackGapMs: Long = 1_500L
+
+    /**
+     * Max age of one pack's last sample before [VehicleConnection] marks it
+     * offline, while OTHER packs on the same link keep reporting.
+     *
+     * Derived, not tuned — a link-wide stall (the whole connection quiet at
+     * once, ordinary Android BLE behaviour) must always resolve as a LINK
+     * problem, i.e. the session watchdog tearing the connection down, before
+     * it can masquerade as one dead branch:
+     *
+     *  - the longest stall the watchdog can miss is just under
+     *    [staleSampleMs] + [watchdogTickMs] (the sample age must exceed
+     *    [staleSampleMs] AT a tick for it to fire);
+     *  - when the link then recovers, the first sample belongs to one branch,
+     *    and the sweep measures the OTHER branch's age as that stall plus the
+     *    branch's own normal pre-stall gap — up to [maxHealthyPackGapMs] more.
+     *
+     * So the sum is the worst age a perfectly healthy branch can show after a
+     * stall the watchdog overlooked; any stall long enough to push a branch
+     * past it necessarily trips the watchdog first. The sweep compares with
+     * strict `>`, which makes the exact sum sufficient. Deriving it keeps the
+     * relationship intact when someone tunes the watchdog constants.
+     *
+     * The price is flagging a genuinely dead branch ~2.5 s later than the old
+     * 5 s constant — nothing about that detection is time-critical.
+     */
+    const val packOfflineAfterMs: Long = staleSampleMs + watchdogTickMs + maxHealthyPackGapMs
 
     /** If we never got a sample, this is how long after connect we wait before declaring stuck. */
     const val noSampleEverMs: Long = 10_000L

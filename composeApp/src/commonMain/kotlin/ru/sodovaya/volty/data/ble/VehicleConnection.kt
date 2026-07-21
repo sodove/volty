@@ -56,6 +56,17 @@ internal class VehicleConnection(
      * free of timers and coroutines; the one case a submit can't see — the
      * whole link going quiet — is already handled by [ConnectionSession]'s
      * stale-sample watchdog, which tears the connection down.
+     *
+     * Liveness here keys on "the protocol produced NEW data for this pack"
+     * (enforced upstream by [PackSampleGate]), not on any specific frame
+     * arriving. Known gap: a Begode branch whose `0x01` telemetry stops while
+     * its cell frames keep coming still mints fresh [BmsData] instances
+     * (`parseCells` → `rebuild`) carrying a frozen current, so this sweep
+     * never fires for it and the aggregate keeps counting current the branch
+     * is not delivering. Whether real firmware ever behaves that way is
+     * unobserved — if the balancing board cuts a branch, its BMS most likely
+     * goes silent entirely — so the gap is documented (see the open question
+     * in the multi-pack spec), not guessed at with machinery.
      */
     fun submit(packIndex: Int, data: BmsData): VehicleData {
         val slot = states.indexOfFirst { it.pack.index == packIndex }
@@ -98,7 +109,9 @@ internal class VehicleConnection(
     fun markOnline(packIndex: Int) {
         val slot = states.indexOfFirst { it.pack.index == packIndex }
         if (slot < 0 || states[slot].isOnline) return
-        states[slot] = states[slot].copy(isOnline = true)
+        // Refresh the timestamp too: revived with its old lastSeenAt, the
+        // pack would be re-marked offline by the very next submit's sweep.
+        states[slot] = states[slot].copy(isOnline = true, lastSeenAt = clock())
         emit()
     }
 

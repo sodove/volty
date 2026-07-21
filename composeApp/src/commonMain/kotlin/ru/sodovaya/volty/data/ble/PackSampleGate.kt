@@ -21,6 +21,13 @@ import ru.sodovaya.volty.domain.model.BmsData
  * Equality would wrongly suppress a parked vehicle whose consecutive decodes
  * carry identical values — those are real proof of life.
  *
+ * Scope: the gate decides PACK liveness only — what reaches `onSample`, and
+ * through it [VehicleConnection]'s staleness sweep and the ring buffer. It
+ * does NOT gate the session watchdog's `lastSampleAtMs`, which stays fed by
+ * any cached decode on any notification (see `routePackSamples`): the
+ * watchdog judges the LINK, and a device notifying without new decodes is a
+ * live link.
+ *
  * Not thread-safe, by design: it lives inside one session's single observe
  * coroutine, the same funnel [VehicleConnection] relies on.
  */

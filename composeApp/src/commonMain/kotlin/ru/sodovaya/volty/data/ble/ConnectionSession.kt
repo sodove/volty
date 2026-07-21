@@ -128,6 +128,8 @@ internal class ConnectionSession(
                 // "onSample fires only when the pack genuinely decoded
                 // something new". Without it a silent pack would keep being
                 // re-submitted with frozen data and could never go stale.
+                // The gate does NOT feed the watchdog: lastSampleAtMs
+                // refreshes on any cached decode (see routePackSamples).
                 val sampleGate = PackSampleGate(protocol.packCount)
                 peripheral.observe(
                     notifyChar,
@@ -152,17 +154,10 @@ internal class ConnectionSession(
                     }
                 ).collect { data ->
                     protocol.onNotification(data)
-                    var got = false
-                    for (packIndex in 0 until protocol.packCount) {
-                        val bms = protocol.latestData(packIndex) ?: continue
-                        // Gate BEFORE the timestamp-stamping copy: the copy
-                        // makes a fresh instance every time and would defeat
-                        // the identity check.
-                        if (!sampleGate.advance(packIndex, bms)) continue
+                    val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms ->
                         onSample(packIndex, bms.copy(timestamp = Clock.System.now()))
-                        got = true
                     }
-                    if (got) {
+                    if (linkAlive) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
                         sampleCount++
                         if (sampleCount % 50 == 0) {
@@ -260,4 +255,39 @@ internal class ConnectionSession(
             protocol.reset()
         }
     }
+}
+
+/**
+ * Routes one notification's worth of per-pack protocol state to two consumers
+ * with deliberately different diets:
+ *
+ *  - The returned Boolean is LINK liveness — true whenever any pack has a
+ *    decode cached at all (`latestData` non-null), new or not. It feeds the
+ *    session watchdog's `lastSampleAtMs`, exactly the behaviour the watchdog
+ *    had before [PackSampleGate] existed: once decoding has started, every
+ *    notification counts. A device that keeps notifying without producing new
+ *    decodes — e.g. a JK BMS answering with settings/device-info frames,
+ *    which never assign `lastData` — is a live link, not a dead one, and must
+ *    not be torn down into a reconnect loop.
+ *
+ *  - [onNewSample] is PACK liveness — invoked only when [gate] confirms the
+ *    protocol produced a genuinely new decode for that pack. It feeds
+ *    [VehicleConnection]'s per-pack staleness sweep and the ring buffer.
+ */
+internal fun routePackSamples(
+    protocol: BmsProtocol,
+    gate: PackSampleGate,
+    onNewSample: (packIndex: Int, data: BmsData) -> Unit
+): Boolean {
+    var linkAlive = false
+    for (packIndex in 0 until protocol.packCount) {
+        val bms = protocol.latestData(packIndex) ?: continue
+        linkAlive = true
+        // Gate BEFORE the timestamp-stamping copy the caller makes: the copy
+        // creates a fresh instance every time and would defeat the identity
+        // check.
+        if (!gate.advance(packIndex, bms)) continue
+        onNewSample(packIndex, bms)
+    }
+    return linkAlive
 }
