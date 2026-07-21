@@ -283,6 +283,15 @@ class KableBmsRepository private constructor(
      * vehicle-level AGGREGATE, whose `cellVoltages` is the union of every
      * online pack — 80 values for a two-branch Begode. Persisting that would
      * store a 40S wheel as "80s".
+     *
+     * INVARIANT: [_activeVehicleData] is assumed to describe the SAME
+     * connection as [_activeVehicle], which [maybePersistCellCount] persists
+     * into — nothing here checks it. The guarantee is [doConnect]'s teardown
+     * ordering (previous session torn down under [sessionLock] before the
+     * new vehicle identity is written); the device-switch branch resets
+     * [_activeData] and the ring buffer but leaves [_activeVehicleData]
+     * alone, so the safety rests entirely on that ordering. A violation
+     * would persist one vehicle's branch cell count into another's profile.
      */
     private fun primaryPackCellCount(): Int? =
         _activeVehicleData.value.packs
@@ -450,6 +459,17 @@ class KableBmsRepository private constructor(
      * a slot that never comes online is a guess and must not reach the
      * database), never for guests or demo, and never a rewrite of what is
      * already stored.
+     *
+     * INVARIANT: [vd] (from [_activeVehicleData]) is assumed to describe the
+     * SAME connection as [_activeVehicle] — nothing here checks it. The
+     * guarantee is [doConnect]'s teardown ordering: the previous session is
+     * torn down under [sessionLock] BEFORE the new vehicle identity is
+     * written, so a snapshot from the old orchestrator can no longer arrive
+     * once [_activeVehicle] has moved on. Note the device-switch branch in
+     * [doConnect] resets [_activeData] and the ring buffer but deliberately
+     * leaves [_activeVehicleData] alone, so this safety rests entirely on
+     * that ordering. If it is ever violated, this method appends one
+     * vehicle's discovered pack to ANOTHER vehicle's saved profile.
      */
     private suspend fun maybePersistPacks(vd: VehicleData) {
         val discovered = vd.packs
@@ -470,6 +490,70 @@ class KableBmsRepository private constructor(
         val packs = vehicle.packs + extraSlots.map { it.pack }
         println("[VOLTY-BLE] pack auto-fill: ${vehicle.name} -> ${packs.size} packs")
         vehicleRepository.upsert(vehicle.copy(packs = packs))
+    }
+
+    /**
+     * The orchestrator plus the per-sample funnel [doConnect] wires into a
+     * [ConnectionSession]. Built as one unit so the funnel and the
+     * orchestrator are guaranteed to agree on the pack list.
+     */
+    private class SamplePipeline(
+        val orchestrator: VehicleConnection,
+        val onSample: (packIndex: Int, sample: BmsData) -> Unit
+    )
+
+    /**
+     * Build the orchestrator and the onSample funnel for one connection
+     * attempt. Shared between [doConnect] and the test seam
+     * [installSampleFunnelForTest], so tests exercise the exact production
+     * wiring rather than a copy that can drift.
+     */
+    private fun buildSamplePipeline(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType,
+        protocol: BmsProtocol
+    ): SamplePipeline {
+        val packs = connectionPacks(vehicle, address, type, protocol.packCount)
+        // The SoC estimator must see the SAME expanded pack list the
+        // orchestrator is sized from. The stored vehicle can know fewer packs
+        // than the protocol does (a one-pack Begode profile vs. two branches):
+        // handed the stored list, the estimator's per-pack lookup misses for
+        // the synthesised slot, that branch's Begode sample keeps its reported
+        // soc = 0, and the parallel aggregate — a plain mean when no pack
+        // reports capacity — HALVES the wheel's state of charge, feeding the
+        // same halved value into the SOC_LOW / SOC_CUTOFF alerts.
+        val socVehicle = vehicle?.copy(packs = packs)
+        val orchestrator = VehicleConnection(
+            packs = packs,
+            topology = vehicle?.topology ?: PackTopology.PARALLEL,
+            onVehicleData = { vd -> _activeVehicleData.value = vd }
+        )
+        val onSample: (Int, BmsData) -> Unit = { packIndex, sample ->
+            // Devices that report no SoC at all (a Begode wheel gives
+            // voltage and cells only) get one estimated from average
+            // cell voltage against the vehicle's configured cell-voltage
+            // bounds — BEFORE aggregation, so per-pack SoC maths sees
+            // it. The estimator keys on the PACK's BmsType (packIndex,
+            // not the vehicle-level shortcut — a future BMS group can
+            // mix types): a coulomb-counting BMS's sample passes
+            // through untouched, including a genuine 0 % on a flat
+            // pack (see VoltageSocEstimator).
+            val enriched = VoltageSocEstimator.withEstimatedSoc(sample, socVehicle, packIndex)
+            // The aggregate is a true identity for a single pack
+            // (cell voltages included), so every vehicle routes
+            // through it. submit() returns the snapshot it just
+            // emitted, so the aggregate is built once per sample.
+            // Fall back to the raw sample only if the orchestrator
+            // was swapped out mid-flight.
+            val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
+            // Ring buffer before activeData: the graph collector maps
+            // over _activeData and reads the buffer, so announcing the
+            // sample first would make every graph emit lag by one.
+            ringBuffer.push(forActive)
+            _activeData.value = forActive
+        }
+        return SamplePipeline(orchestrator, onSample)
     }
 
     /**
@@ -538,11 +622,8 @@ class KableBmsRepository private constructor(
             // with no I/O, so constructing it this early is free and cannot
             // fail the connect.
             val protocol = createProtocol(type)
-            val orchestrator = VehicleConnection(
-                packs = connectionPacks(vehicle, address, type, protocol.packCount),
-                topology = vehicle?.topology ?: PackTopology.PARALLEL,
-                onVehicleData = { vd -> _activeVehicleData.value = vd }
-            )
+            val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
+            val orchestrator = pipeline.orchestrator
             installedOrchestrator = orchestrator
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
@@ -564,30 +645,7 @@ class KableBmsRepository private constructor(
                 protocol = protocol,
                 vehicle = vehicle,
                 connectionState = _connectionState,
-                onSample = { packIndex, sample ->
-                    // Devices that report no SoC at all (a Begode wheel gives
-                    // voltage and cells only) get one estimated from average
-                    // cell voltage against the vehicle's configured cell-voltage
-                    // bounds — BEFORE aggregation, so per-pack SoC maths sees
-                    // it. The estimator keys on the PACK's BmsType (packIndex,
-                    // not the vehicle-level shortcut — a future BMS group can
-                    // mix types): a coulomb-counting BMS's sample passes
-                    // through untouched, including a genuine 0 % on a flat
-                    // pack (see VoltageSocEstimator).
-                    val enriched = VoltageSocEstimator.withEstimatedSoc(sample, vehicle, packIndex)
-                    // The aggregate is a true identity for a single pack
-                    // (cell voltages included), so every vehicle routes
-                    // through it. submit() returns the snapshot it just
-                    // emitted, so the aggregate is built once per sample.
-                    // Fall back to the raw sample only if the orchestrator
-                    // was swapped out mid-flight.
-                    val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
-                    // Ring buffer before activeData: the graph collector maps
-                    // over _activeData and reads the buffer, so announcing the
-                    // sample first would make every graph emit lag by one.
-                    ringBuffer.push(forActive)
-                    _activeData.value = forActive
-                },
+                onSample = pipeline.onSample,
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule a reconnect — unless
                     // the user explicitly disconnected in the meantime.
@@ -889,6 +947,28 @@ class KableBmsRepository private constructor(
      */
     internal fun connectionPacksForTest(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> =
         connectionPacks(vehicle, address, type, createProtocol(type).packCount)
+
+    /**
+     * Test-only: build and install the exact sample pipeline [doConnect]
+     * wires into a [ConnectionSession] — expanded pack list, SoC-estimation
+     * vehicle, orchestrator — without a BLE link, and return the onSample
+     * funnel so tests can push per-pack samples through the production path.
+     *
+     * [ConnectionSession] requires a real Kable [Peripheral], so this seam is
+     * the only way commonTest can reach the funnel. It shares
+     * [buildSamplePipeline] with [doConnect] on purpose: the test drives the
+     * production wiring itself, not a copy that can drift. The unlocked field
+     * write is fine here — tests run single-threaded on a test dispatcher.
+     */
+    internal fun installSampleFunnelForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType
+    ): (packIndex: Int, sample: BmsData) -> Unit {
+        val pipeline = buildSamplePipeline(vehicle, address, type, createProtocol(type))
+        vehicleConnection = pipeline.orchestrator
+        return pipeline.onSample
+    }
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been

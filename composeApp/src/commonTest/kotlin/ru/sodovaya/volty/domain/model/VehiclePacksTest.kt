@@ -66,6 +66,27 @@ class VehiclePacksTest {
     }
 
     @Test
+    fun expandedToSynthesisesUniqueIndicesForNonContiguousPacks() {
+        // A stored list can, in principle, start above index 0. Deriving the
+        // next index from the list SIZE would synthesise a duplicate index 1
+        // here — and VehicleConnection.submit matches by index, so one slot
+        // would be permanently unreachable.
+        val stored = listOf(Pack(index = 1, label = "Branch B", bmsType = BmsType.BEGODE, bmsAddress = "AA:01"))
+        val expanded = stored.expandedTo(2)
+        assertEquals(2, expanded.size)
+        assertEquals(listOf(1, 2), expanded.map { it.index })
+        assertEquals("Pack 3", expanded[1].label, "the label follows the synthesised index")
+    }
+
+    @Test
+    fun expandedToKeepsContiguousExpansionUnchanged() {
+        val stored = listOf(Pack(index = 0, label = "Battery", bmsType = BmsType.BEGODE, bmsAddress = "AA:01"))
+        val expanded = stored.expandedTo(2)
+        assertEquals(listOf(0, 1), expanded.map { it.index })
+        assertEquals("Pack 2", expanded[1].label)
+    }
+
+    @Test
     fun guestSentinelStillWorks() {
         val guest = singlePackVehicle(
             id = "${GUEST_VEHICLE_ID_PREFIX}AA:BB",

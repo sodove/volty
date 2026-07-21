@@ -51,10 +51,18 @@ data class Pack(
 fun List<Pack>.expandedTo(count: Int): List<Pack> {
     if (isEmpty() || size >= count) return this
     val template = first()
-    return this + (size until count).map { i ->
+    // Continue from the highest EXISTING index, not from the list size — the
+    // two only coincide when the stored indices run contiguously from 0. A
+    // list holding only Pack(index = 1) sized to two slots must not
+    // synthesise a duplicate index 1: VehicleConnection.submit matches packs
+    // by index (indexOfFirst), so a duplicate would leave one slot
+    // permanently unreachable.
+    val nextIndex = maxOf { it.index } + 1
+    return this + (0 until count - size).map { offset ->
+        val index = nextIndex + offset
         Pack(
-            index = i,
-            label = "Pack ${i + 1}",
+            index = index,
+            label = "Pack ${index + 1}",
             bmsType = template.bmsType,
             bmsAddress = template.bmsAddress
         )
