@@ -47,6 +47,12 @@ fun DumperScreen(
     var startedAt by remember { mutableStateOf(0L) }
     var observations by remember { mutableStateOf(sanity.observations()) }
     var finishedPath by remember { mutableStateOf<String?>(null) }
+    // Error text that was on screen when a stop completed successfully. The
+    // dump was finalised and handed to the share sheet despite it, so keeping
+    // it next to "Saved: …" would make success look like failure. Errors that
+    // arrive afterwards (failed connect, failed scan) are new text and render
+    // normally.
+    var acknowledgedError by remember { mutableStateOf<String?>(null) }
 
     // Shared by the Stop button and the auto-stop: finalize the file on disk
     // and hand it to the share sheet.
@@ -64,6 +70,11 @@ fun DumperScreen(
         )
         finishedPath = file.absolutePath
         writer.share(file)
+        // Reached only if finish() and share() threw nothing: the stop
+        // succeeded, so a mid-recording error (e.g. a disconnect that already
+        // stopped the data) is history, not current state. If finish or share
+        // fail they throw past this line and the error stays visible.
+        acknowledgedError = error
     }
 
     // Auto-stop so an abandoned recording cannot grow without bound. Goes
@@ -83,12 +94,15 @@ fun DumperScreen(
         } else if (!recording && connectingTo == null) {
             Button(onClick = {
                 finishedPath = null
+                // A fresh scan clears the recorder's error, so a future error
+                // with identical text must not be swallowed as acknowledged.
+                acknowledgedError = null
                 scanning = true
                 recorder.startScan()
             }) { Text("Scan") }
         }
 
-        error?.let { Text("Error: $it") }
+        error?.takeIf { it != acknowledgedError }?.let { Text("Error: $it") }
 
         connectingTo?.let { d ->
             Text("Connecting to ${d.name ?: d.address}…")
@@ -119,17 +133,30 @@ fun DumperScreen(
                         Modifier.fillMaxWidth().clickable(enabled = connectingTo == null) {
                             connectingTo = d
                             scanning = false
+                            // record() clears the recorder's error; the next
+                            // one to arrive is new and must render.
+                            acknowledgedError = null
                             scope.launch {
                                 sanity.reset()
-                                writer.begin(d.name, d.address)
-                                // Monotonic clock: a wall-clock adjustment
-                                // mid-capture must not skew the t_ms column.
-                                startedAt = SystemClock.elapsedRealtime()
                                 observations = sanity.observations()
                                 val result = recorder.record(d) { chunk ->
                                     sanity.feed(chunk)
                                     writer.append(SystemClock.elapsedRealtime() - startedAt, chunk)
                                     observations = sanity.observations()
+                                }
+                                if (result.isSuccess) {
+                                    // Open the file only after the recorder
+                                    // accepted the session, inside its
+                                    // reentrancy guard: a failed connect or a
+                                    // rejected duplicate tap never touches the
+                                    // writer. No suspension point between here
+                                    // and record() returning, so no chunk can
+                                    // arrive before begin() on this
+                                    // single-threaded scope.
+                                    writer.begin(d.name, d.address)
+                                    // Monotonic clock: a wall-clock adjustment
+                                    // mid-capture must not skew the t_ms column.
+                                    startedAt = SystemClock.elapsedRealtime()
                                 }
                                 connectingTo = null
                                 // Failure text arrives via recorder.error.
