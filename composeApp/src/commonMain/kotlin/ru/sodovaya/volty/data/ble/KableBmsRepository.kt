@@ -37,10 +37,13 @@ import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.MovingAverage
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -87,6 +90,18 @@ class KableBmsRepository private constructor(
     )
 
     internal companion object {
+        /**
+         * Buffer of the sample funnel channel. BMS links sample at 1-6 Hz and
+         * the consumer resumes inline on the sender's thread (see
+         * [launchSampleConsumer]), so the buffer only ever holds samples that
+         * raced a concurrent drain — 64 slots absorb a burst from several
+         * links hundreds of times over. In practice `trySend` can therefore
+         * fail only on a CLOSED channel (a late sample from a session already
+         * torn down); a genuinely full buffer would mean the consumer stopped
+         * draining, and the drop is logged either way, never silent.
+         */
+        const val SAMPLE_FUNNEL_CAPACITY = 64
+
         /**
          * The synthetic vehicle that powers "Try demo" mode. Its id is
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
@@ -177,6 +192,20 @@ class KableBmsRepository private constructor(
 
     private var currentSession: ConnectionSession? = null
     private var reconnectJob: Job? = null
+
+    /**
+     * The serialisation barrier of the sample funnel: sessions enrich on their
+     * own coroutine and only SEND a [PackSample] here; the single consumer
+     * launched by [launchSampleConsumer] owns every shared-state mutation
+     * ([VehicleConnection.submit], [ringBuffer], [_activeData]). One channel +
+     * consumer pair per connection, installed in the same [sessionLock]
+     * critical section as [vehicleConnection] so the identity-guarded failure
+     * cleanup covers both, and closed wherever the orchestrator is cleared.
+     * Same locking discipline — and the same single unlocked test-seam
+     * exception — as the [vehicleConnection] field itself.
+     */
+    private var sampleChannel: Channel<PackSample>? = null
+    private var sampleConsumerJob: Job? = null
 
     /**
      * Job driving the [DemoBmsSimulator] feed in "Try demo" mode. Lives entirely
@@ -378,6 +407,9 @@ class KableBmsRepository private constructor(
                 // in the one critical section this method already holds.
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
+                // No orchestrator, no funnel: close any previous connection's
+                // channel so its consumer ends with it.
+                closeSampleFunnelLocked()
                 // No real link to resurrect on resume — there is no
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
@@ -510,25 +542,33 @@ class KableBmsRepository private constructor(
 
     /**
      * The orchestrator plus the per-sample funnel [doConnect] wires into a
-     * [ConnectionSession]. Built as one unit so the funnel and the
-     * orchestrator are guaranteed to agree on the pack list.
+     * [ConnectionSession]. Built as one unit so the funnel, the channel and
+     * the orchestrator are guaranteed to agree on the pack list.
      */
     private class SamplePipeline(
         val orchestrator: VehicleConnection,
+        val channel: Channel<PackSample>,
         val onSample: (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit
     )
 
     /**
-     * Build the orchestrator and the onSample funnel for one connection
-     * attempt. Shared between [doConnect] and the test seam
-     * [installSampleFunnelForTest], so tests exercise the exact production
-     * wiring rather than a copy that can drift.
+     * Build the orchestrator, the funnel channel and the onSample enrichment
+     * stage for one connection attempt. Shared between [doConnect] and the
+     * test seam [installSampleFunnelForTest], so tests exercise the exact
+     * production wiring rather than a copy that can drift.
+     *
+     * [localToGlobal] translates the session's LOCAL pack index (0-based
+     * within its own protocol) to the vehicle-global index the orchestrator
+     * is keyed by. With a single link the two are identical — the default —
+     * so this is only the seam the multi-link fan-out will populate from its
+     * [LinkSpec.globalIndex].
      */
     private fun buildSamplePipeline(
         vehicle: Vehicle?,
         address: String,
         type: BmsType,
-        protocol: BmsProtocol
+        protocol: BmsProtocol,
+        localToGlobal: (localIndex: Int) -> Int = { it }
     ): SamplePipeline {
         val stored = storedPacks(vehicle, address, type)
         val packs = stored.expandedTo(protocol.packCount)
@@ -550,7 +590,13 @@ class KableBmsRepository private constructor(
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
             onVehicleData = { vd -> _activeVehicleData.value = vd }
         )
-        val onSample: (Int, BmsData, List<SectionState>) -> Unit = { packIndex, sample, sections ->
+        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        val onSample: (Int, BmsData, List<SectionState>) -> Unit = { localIndex, sample, sections ->
+            // Translate to the vehicle-global index FIRST: the scaler and the
+            // estimator both look the pack up by its global index in the
+            // expanded vehicle, and the orchestrator downstream of the
+            // channel is keyed by it too.
+            val packIndex = localToGlobal(localIndex)
             // A Begode without a smart BMS publishes its synthetic pack with
             // voltage = 0 and offers the live-frame reading (on the 67.2 V
             // scale) separately — the protocol cannot scale it because the
@@ -571,24 +617,82 @@ class KableBmsRepository private constructor(
             // through untouched, including a genuine 0 % on a flat
             // pack (see VoltageSocEstimator).
             val enriched = VoltageSocEstimator.withEstimatedSoc(scaled, socVehicle, packIndex)
-            // The aggregate is a true identity for a single pack
-            // (cell voltages included), so every vehicle routes
-            // through it. submit() returns the snapshot it just
-            // emitted, so the aggregate is built once per sample.
-            // Fall back to the enriched sample — not the raw one — if
-            // the orchestrator was swapped out mid-flight, so a Begode
-            // keeps its estimated SoC even on that path. The section
-            // breakdown rides beside the sample into the pack state; the
-            // vehicle-level aggregate has no section field, so nothing of
-            // it survives the fallback path — dropped, not misattributed.
-            val forActive = vehicleConnection?.submit(packIndex, enriched, sections)?.aggregate ?: enriched
-            // Ring buffer before activeData: the graph collector maps
-            // over _activeData and reads the buffer, so announcing the
-            // sample first would make every graph emit lag by one.
-            ringBuffer.push(forActive)
-            _activeData.value = forActive
+            // Enrichment ends the per-link work: it depends on THIS link's
+            // protocol state, so it must run here on the session's own
+            // coroutine. Everything that mutates shared state crosses the
+            // channel to the single consumer (see [launchSampleConsumer]).
+            // trySend, not send — onSample is not suspending, and the buffer
+            // is sized so a drop can only mean a closed (torn-down) funnel
+            // or a stopped consumer; either way it must be visible.
+            val sent = channel.trySend(PackSample(packIndex, enriched, sections))
+            if (sent.isFailure) {
+                println("[VOLTY-BLE] sample funnel: dropped sample for pack=$packIndex (channel closed or full)")
+            }
         }
-        return SamplePipeline(orchestrator, onSample)
+        return SamplePipeline(orchestrator, channel, onSample)
+    }
+
+    /**
+     * Launch the single consumer coroutine that owns every shared-state
+     * mutation of one connection: [VehicleConnection.submit], the ring
+     * buffer, [_activeData]. N session coroutines funnel their enriched
+     * samples into [channel]; because one coroutine drains it, no two
+     * submits can ever overlap — [VehicleConnection] keeps its
+     * single-threaded-by-construction invariant without growing a lock.
+     *
+     * [Dispatchers.Unconfined] + [CoroutineStart.UNDISPATCHED] on purpose:
+     * the consumer resumes INLINE on the sender's thread, so with a single
+     * link the submit → ring buffer → _activeData sequence still executes
+     * synchronously inside the session's onSample call, on the same thread,
+     * exactly as before the channel existed — behaviour-identical, no added
+     * latency, and the single-threaded test seam observes the effects
+     * immediately. This is safe because the body suspends ONLY at the
+     * channel receive and never touches [sessionLock]; and it stays a true
+     * serialisation barrier because a coroutine is sequential regardless of
+     * where it resumes — a second sender's trySend while the consumer is
+     * mid-drain just buffers, with the channel providing the happens-before
+     * edge between the threads.
+     */
+    private fun launchSampleConsumer(channel: Channel<PackSample>): Job =
+        scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            for (packSample in channel) {
+                // The aggregate is a true identity for a single pack
+                // (cell voltages included), so every vehicle routes
+                // through it. submit() returns the snapshot it just
+                // emitted, so the aggregate is built once per sample.
+                // Fall back to the enriched sample — not the raw one — if
+                // the orchestrator was swapped out mid-flight, so a Begode
+                // keeps its estimated SoC even on that path. The section
+                // breakdown rides beside the sample into the pack state; the
+                // vehicle-level aggregate has no section field, so nothing of
+                // it survives the fallback path — dropped, not misattributed.
+                val forActive = vehicleConnection
+                    ?.submit(packSample.globalPackIndex, packSample.data, packSample.sections)
+                    ?.aggregate
+                    ?: packSample.data
+                // Ring buffer before activeData: the graph collector maps
+                // over _activeData and reads the buffer, so announcing the
+                // sample first would make every graph emit lag by one.
+                ringBuffer.push(forActive)
+                _activeData.value = forActive
+            }
+        }
+
+    /**
+     * Close the sample funnel and forget it. The consumer drains whatever
+     * the channel still buffers and its job then completes on its own —
+     * [Channel.close] does not suspend and the consumer never takes
+     * [sessionLock], so calling this inside a critical section cannot
+     * deadlock teardown.
+     *
+     * PRECONDITION: caller holds [sessionLock] — the funnel fields share the
+     * [vehicleConnection] locking discipline, including its one unlocked
+     * test-seam exception ([installProtocolPipelineForTest]).
+     */
+    private fun closeSampleFunnelLocked() {
+        sampleChannel?.close()
+        sampleChannel = null
+        sampleConsumerJob = null
     }
 
     /**
@@ -643,6 +747,10 @@ class KableBmsRepository private constructor(
         if (vehicleConnection === installed) {
             vehicleConnection = null
             _activeVehicleData.value = VehicleData()
+            // The funnel was installed in the same critical section as the
+            // orchestrator, so it belongs to the same failed attempt — the
+            // identity guard above covers both.
+            closeSampleFunnelLocked()
         }
     }
 
@@ -696,8 +804,19 @@ class KableBmsRepository private constructor(
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
             // the competing writer — a concurrent connect / reconnect attempt
-            // installing ITS orchestrator — is serialised against it.
-            sessionLock.withLock { vehicleConnection = orchestrator }
+            // installing ITS orchestrator — is serialised against it. The
+            // funnel is installed in the SAME critical section (replacing the
+            // previous connection's, whose consumer ends when its channel
+            // closes) so orchestrator and funnel always belong to the same
+            // attempt; launching inside the section is fine — the consumer
+            // runs undispatched only to its first channel receive and never
+            // takes the lock.
+            sessionLock.withLock {
+                vehicleConnection = orchestrator
+                closeSampleFunnelLocked()
+                sampleChannel = pipeline.channel
+                sampleConsumerJob = launchSampleConsumer(pipeline.channel)
+            }
 
             val advertisement = resolveAdvertisement(address)
             if (advertisement == null) {
@@ -891,8 +1010,14 @@ class KableBmsRepository private constructor(
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
         // Fresh acquisition: the block above has already released the lock,
-        // and tearDown() must not run while holding it.
-        sessionLock.withLock { vehicleConnection = null }
+        // and tearDown() must not run while holding it. The funnel closes
+        // beside the orchestrator: the session was torn down (and its observe
+        // loop joined) above, so no sample can hit the closed channel, and
+        // closing does not suspend — teardown cannot deadlock here.
+        sessionLock.withLock {
+            vehicleConnection = null
+            closeSampleFunnelLocked()
+        }
         _activeVehicle.value = null
         ringBuffer.clear()
         _connectionState.value = ConnectionState.Disconnected
@@ -1050,9 +1175,24 @@ class KableBmsRepository private constructor(
     ): Pair<BmsProtocol, (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> {
         val protocol = createProtocol(type)
         val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
+        // Unlocked writes — the one sanctioned test-seam exception to the
+        // sessionLock discipline, see [vehicleConnection]. The REAL channel
+        // consumer is launched too: samples pushed through the returned
+        // funnel cross the production serialisation barrier, not a shortcut.
         vehicleConnection = pipeline.orchestrator
+        closeSampleFunnelLocked()
+        sampleChannel = pipeline.channel
+        sampleConsumerJob = launchSampleConsumer(pipeline.channel)
         return protocol to pipeline.onSample
     }
+
+    /**
+     * Test-only: the live funnel channel, so tests can inject a fully
+     * enriched [PackSample] directly — the exact shape a second link's
+     * session will produce once the fan-out lands — and prove the consumer
+     * routes it into the shared state by its global pack index.
+     */
+    internal fun sampleFunnelChannelForTest(): SendChannel<PackSample>? = sampleChannel
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been
@@ -1072,3 +1212,17 @@ class KableBmsRepository private constructor(
         testLastSampleAtMsOverride = lastSampleAtMs
     }
 }
+
+/**
+ * One enriched sample crossing the serialisation barrier between a link's
+ * session coroutine and the single consumer that owns the shared state
+ * (orchestrator submit, ring buffer, activeData). By the time a sample
+ * enters the channel its enrichment (Begode live-voltage scaling, SoC
+ * estimation) is done and [globalPackIndex] is the VEHICLE-global pack
+ * index — the session's local index has already been translated.
+ */
+internal data class PackSample(
+    val globalPackIndex: Int,
+    val data: BmsData,
+    val sections: List<SectionState>
+)
