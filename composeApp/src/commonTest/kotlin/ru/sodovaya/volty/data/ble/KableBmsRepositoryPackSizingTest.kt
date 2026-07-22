@@ -8,6 +8,7 @@ import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddress
@@ -15,6 +16,7 @@ import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.PackAggregator
+import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -173,8 +175,8 @@ class KableBmsRepositoryPackSizingTest {
             cellVoltages = List(40) { 3.93f },
             isConnected = true
         )
-        funnel(0, branch)
-        funnel(1, branch)
+        funnel(0, branch, emptyList())
+        funnel(1, branch, emptyList())
 
         val snap = repo.activeVehicleData.value
         assertEquals(2, snap.packs.size, "precondition: both branches routed")
@@ -188,6 +190,33 @@ class KableBmsRepositoryPackSizingTest {
         snap.packs.forEach { p ->
             assertEquals(70.0f, p.data.soc, absoluteTolerance = 0.1f)
         }
+    }
+
+    @Test
+    fun `sections travel the production funnel into the pack state`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = vehicle()
+        // The exact funnel doConnect wires into a ConnectionSession — sections
+        // enter beside the sample and must come out on PackState.sections.
+        val funnel = repo.installSampleFunnelForTest(v, v.bmsAddress, v.bmsType)
+
+        val cells = List(20) { 3.705f } + List(20) { 3.71f }
+        val sections = listOf(
+            SectionState(index = 0, voltage = 74.1f, temperatures = listOf(28f, 25f), cellRange = 0..19),
+            SectionState(index = 1, voltage = 74.2f, temperatures = listOf(28f, 25f), cellRange = 20..39)
+        )
+        funnel(0, BmsData(voltage = 148.3f, cellVoltages = cells, isConnected = true), sections)
+        funnel(1, BmsData(voltage = 148.3f, cellVoltages = cells, isConnected = true), emptyList())
+
+        val snap = repo.activeVehicleData.value
+        assertEquals(sections, snap.packs[0].sections, "branch 0 must publish its breakdown")
+        assertTrue(snap.packs[1].sections.isEmpty(), "branch 1 reported none and must show none")
+
+        // And what came through satisfies the UI's grouping predicate — the
+        // whole point of carrying the sections this far.
+        val groups = groupPackCells(snap.packs[0])
+        assertEquals(2, groups.size, "authoritative ranges must group")
+        assertEquals(listOf(0, 20), groups.map { it.startIndex })
     }
 
     @Test

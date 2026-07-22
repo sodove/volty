@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.PackAggregator
 import kotlin.time.Clock
@@ -67,13 +68,25 @@ internal class VehicleConnection(
      * unobserved — if the balancing board cuts a branch, its BMS most likely
      * goes silent entirely — so the gap is documented (see the open question
      * in the multi-pack spec), not guessed at with machinery.
+     *
+     * [sections] is the protocol's physical-assembly breakdown for this pack,
+     * read at the same moment as the sample (see `routePackSamples`), so the
+     * two always describe one decode state. It overwrites unconditionally:
+     * the breakdown is per-sample truth, and keeping a stale one after the
+     * protocol stopped vouching for it (a reset, a reconnect) would pin old
+     * assembly voltages next to fresh cells.
      */
-    fun submit(packIndex: Int, data: BmsData): VehicleData {
+    fun submit(
+        packIndex: Int,
+        data: BmsData,
+        sections: List<SectionState> = emptyList()
+    ): VehicleData {
         val slot = states.indexOfFirst { it.pack.index == packIndex }
         if (slot < 0) return snapshot()
         val now = clock()
         states[slot] = states[slot].copy(
             data = data,
+            sections = sections,
             isOnline = true,
             lastSeenAt = now
         )

@@ -7,6 +7,7 @@ import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -53,7 +54,7 @@ internal class ConnectionSession(
      * go: with more than one pack behind a link there is no single
      * destination, so routing and aggregation belong to the caller.
      */
-    private val onSample: (packIndex: Int, data: BmsData) -> Unit,
+    private val onSample: (packIndex: Int, data: BmsData, sections: List<SectionState>) -> Unit,
     /** Callback when a link drop is detected (state event or watchdog). */
     private val onDropDetected: suspend (reason: String) -> Unit
 ) {
@@ -154,8 +155,8 @@ internal class ConnectionSession(
                     }
                 ).collect { data ->
                     protocol.onNotification(data)
-                    val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms ->
-                        onSample(packIndex, bms.copy(timestamp = Clock.System.now()))
+                    val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms, sections ->
+                        onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
                     }
                     if (linkAlive) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
@@ -273,11 +274,15 @@ internal class ConnectionSession(
  *  - [onNewSample] is PACK liveness — invoked only when [gate] confirms the
  *    protocol produced a genuinely new decode for that pack. It feeds
  *    [VehicleConnection]'s per-pack staleness sweep and the ring buffer.
+ *    The pack's section breakdown rides along with each new sample: it is
+ *    read here, from the same protocol state in the same single-threaded
+ *    funnel, so sample and sections always describe ONE decode — and it is
+ *    read only for gated samples, never rebuilt for a silent pack.
  */
 internal fun routePackSamples(
     protocol: BmsProtocol,
     gate: PackSampleGate,
-    onNewSample: (packIndex: Int, data: BmsData) -> Unit
+    onNewSample: (packIndex: Int, data: BmsData, sections: List<SectionState>) -> Unit
 ): Boolean {
     var linkAlive = false
     for (packIndex in 0 until protocol.packCount) {
@@ -287,7 +292,7 @@ internal fun routePackSamples(
         // creates a fresh instance every time and would defeat the identity
         // check.
         if (!gate.advance(packIndex, bms)) continue
-        onNewSample(packIndex, bms)
+        onNewSample(packIndex, bms, protocol.sections(packIndex))
     }
     return linkAlive
 }

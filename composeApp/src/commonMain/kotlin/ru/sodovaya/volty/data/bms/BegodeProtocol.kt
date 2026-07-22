@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.SectionState
+import kotlin.math.abs
 
 /**
  * Begode / Gotway electric unicycle protocol.
@@ -106,6 +108,81 @@ class BegodeProtocol : BmsProtocol() {
 
     override fun latestData(packIndex: Int): BmsData? =
         branches.getOrNull(packIndex)?.lastData
+
+    /**
+     * The two physical assemblies of branch [packIndex], wired in series
+     * (bmsnum's low bit — see [parseBmsTelemetry]).
+     *
+     * Reported only once BOTH assemblies' voltages have arrived in genuine
+     * (non-boot) 0x01 frames: those voltages are the evidence everything else
+     * is anchored to, and half a breakdown would be a guess. Boot-placeholder
+     * frames leave [BranchState.sectionVoltageV] at 0, so a booting wheel
+     * reports no sections rather than 0.0 V assemblies.
+     *
+     * [SectionState.cellRange] is filled ONLY when a split of the branch's
+     * contiguous cell list is verified against the assembly voltages — see
+     * [verifiedSplitCellCount]. The UI refuses ranges derived from list
+     * arithmetic (`groupPackCells`), and this producer honours that contract:
+     * no verified split — null ranges, and the dashboard degrades to a flat
+     * cell list instead of mislabeling cells of the second assembly.
+     */
+    override fun sections(packIndex: Int): List<SectionState> {
+        val branch = branches.getOrNull(packIndex) ?: return emptyList()
+        val v0 = branch.sectionVoltageV[0]
+        val v1 = branch.sectionVoltageV[1]
+        if (v0 <= 0f || v1 <= 0f) return emptyList()
+        val cells = contiguousCells(branch.cells)
+        val split = verifiedSplitCellCount(cells, v0, v1)
+        return listOf(
+            SectionState(
+                index = 0,
+                voltage = v0,
+                temperatures = listOfNotNull(branch.sectionTemps[0], branch.sectionTemps[1]),
+                cellRange = split?.let { 0 until it }
+            ),
+            SectionState(
+                index = 1,
+                voltage = v1,
+                temperatures = listOfNotNull(branch.sectionTemps[2], branch.sectionTemps[3]),
+                cellRange = split?.let { it until cells.size }
+            )
+        )
+    }
+
+    /**
+     * The number of leading cells that provably belong to the first assembly,
+     * or null when no split of [cells] is confirmed by the reported voltages.
+     *
+     * The boundary is FOUND AND VERIFIED, never assumed: the split point is
+     * wherever the running cell sum matches the first assembly's reported
+     * voltage while the remainder matches the second's, both within
+     * [SECTION_SPLIT_TOLERANCE_V]. A truncated cell list fails naturally —
+     * its remainder cannot reach the second assembly's voltage — as does a
+     * wheel whose cells are not two series assemblies in frame order. This is
+     * what makes the feature model-agnostic: a 24-cell T4 branch resolves to
+     * 12 + 12 by the same search, with no per-model layout hard-coded.
+     *
+     * The match must also be UNIQUE. With sane cells uniqueness is automatic
+     * (moving the boundary by one cell shifts both sums by a whole cell
+     * voltage, far beyond the tolerance), so a second fitting split means the
+     * cell values are too degenerate to carry evidence — and no range beats a
+     * coin flip.
+     */
+    private fun verifiedSplitCellCount(cells: List<Float>, v0: Float, v1: Float): Int? {
+        if (cells.size < 2) return null
+        val total = cells.sum()
+        var match: Int? = null
+        var prefix = 0f
+        for (k in 1 until cells.size) {
+            prefix += cells[k - 1]
+            val fits = abs(prefix - v0) <= SECTION_SPLIT_TOLERANCE_V &&
+                abs(total - prefix - v1) <= SECTION_SPLIT_TOLERANCE_V
+            if (!fits) continue
+            if (match != null) return null // Two fitting splits — no evidence either way.
+            match = k
+        }
+        return match
+    }
 
     override fun reset() {
         buffer.reset()
@@ -331,5 +408,20 @@ class BegodeProtocol : BmsProtocol() {
          * above the field; a single missing packet drops it ~20 % below.
          */
         private const val CELL_SUM_COMPLETE_RATIO = 0.9f
+
+        /**
+         * How far a candidate section's cell sum may sit from the assembly
+         * voltage its 0x01 frame reported and still count as the same number.
+         *
+         * The observed disagreement on the ET Max capture is at most 0.09 V
+         * (74.19 V of summed cells against a reported 74.1): the field's
+         * 0.1 V quantisation, plus 1 mV cell quantisation, plus two
+         * independent measurement paths. 0.5 V gives five times that headroom
+         * for wheels not yet seen, while staying far below the ~2 V minimum a
+         * single misplaced cell would shift both sums by — so the tolerance
+         * can never make a wrong split pass while the right one fails, and
+         * [verifiedSplitCellCount]'s uniqueness check backstops even that.
+         */
+        private const val SECTION_SPLIT_TOLERANCE_V = 0.5f
     }
 }
