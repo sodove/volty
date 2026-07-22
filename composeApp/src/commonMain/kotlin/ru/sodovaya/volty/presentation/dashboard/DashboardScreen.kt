@@ -51,6 +51,7 @@ import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
 import kotlin.math.abs
+import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_faults_title
@@ -145,7 +146,19 @@ fun DashboardScreen(component: DashboardComponent) {
                 value = if (data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 sub = if (data.cellVoltages.isNotEmpty()) {
-                    "${data.cellVoltages.size}s · ${fmt2(data.voltage / data.cellVoltages.size)} V/cell"
+                    // Cells in SERIES behind the aggregate voltage — not the raw
+                    // cell count. For a parallel multi-branch pack the cell list
+                    // is every branch's cells unioned (80 on a two-branch 40S
+                    // wheel) while the voltage is one branch's, so the raw count
+                    // would read "80s · 2.08 V/cell". Derive the series count
+                    // from the mean cell voltage instead, so count × per-cell
+                    // reconciles with the tile's own voltage. For a single pack
+                    // this equals cellVoltages.size exactly — unchanged.
+                    val perCell = data.cellVoltages.average().toFloat()
+                    val seriesCells =
+                        if (perCell > 0f) (data.voltage / perCell).roundToInt()
+                        else data.cellVoltages.size
+                    "${seriesCells}s · ${fmt2(perCell)} V/cell"
                 } else null
             )
             val powerCharging = data.current > 0.05f
