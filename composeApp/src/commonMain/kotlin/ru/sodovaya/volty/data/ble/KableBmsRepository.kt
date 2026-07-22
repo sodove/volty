@@ -445,11 +445,19 @@ class KableBmsRepository private constructor(
         address: String,
         type: BmsType,
         protocolPackCount: Int
-    ): List<Pack> {
-        val base = vehicle?.packs?.takeIf { it.isNotEmpty() }
+    ): List<Pack> = storedPacks(vehicle, address, type).expandedTo(protocolPackCount)
+
+    /**
+     * The packs the profile actually knows about — the vehicle's own list, or
+     * a single default slot for a guest. These are published from the first
+     * snapshot; the slots [connectionPacks] synthesises beyond them are handed
+     * to [VehicleConnection] as LATENT and appear only once they report, so a
+     * Begode without a smart BMS (which never fills its second branch) shows
+     * one pack instead of a permanently-offline phantom "Pack 2".
+     */
+    private fun storedPacks(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> =
+        vehicle?.packs?.takeIf { it.isNotEmpty() }
             ?: listOf(Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address))
-        return base.expandedTo(protocolPackCount)
-    }
 
     // ----- Discovered-pack auto-fill -----
 
@@ -522,7 +530,8 @@ class KableBmsRepository private constructor(
         type: BmsType,
         protocol: BmsProtocol
     ): SamplePipeline {
-        val packs = connectionPacks(vehicle, address, type, protocol.packCount)
+        val stored = storedPacks(vehicle, address, type)
+        val packs = stored.expandedTo(protocol.packCount)
         // The SoC estimator must see the SAME expanded pack list the
         // orchestrator is sized from. The stored vehicle can know fewer packs
         // than the protocol does (a one-pack Begode profile vs. two branches):
@@ -533,7 +542,11 @@ class KableBmsRepository private constructor(
         // same halved value into the SOC_LOW / SOC_CUTOFF alerts.
         val socVehicle = vehicle?.copy(packs = packs)
         val orchestrator = VehicleConnection(
-            packs = packs,
+            packs = stored,
+            // Protocol-synthesised slots stay invisible until they report:
+            // a Begode without a smart BMS never fills its second branch,
+            // and an eager slot would be a permanently-offline phantom.
+            latentPacks = packs.drop(stored.size),
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
             onVehicleData = { vd -> _activeVehicleData.value = vd }
         )
