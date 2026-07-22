@@ -48,12 +48,20 @@ object VoltageSocEstimator {
         alertConfig: AlertConfig
     ): Float {
         if (cellVoltages.isEmpty()) return 0f
+        return estimateFromAverageCellVoltage(cellVoltages.average().toFloat(), chemistry, alertConfig)
+    }
+
+    /** The linear map itself, for callers that already hold an average cell voltage. */
+    private fun estimateFromAverageCellVoltage(
+        averageCellV: Float,
+        chemistry: Chemistry,
+        alertConfig: AlertConfig
+    ): Float {
         val highV = alertConfig.cellHighV ?: chemistry.defaultHighV
         val lowV = alertConfig.cellLowV ?: chemistry.emptyCellV
         val span = highV - lowV
         if (span <= 0f) return 0f
-        val avg = cellVoltages.average().toFloat()
-        return ((avg - lowV) / span * 100f).coerceIn(0f, 100f)
+        return ((averageCellV - lowV) / span * 100f).coerceIn(0f, 100f)
     }
 
     /**
@@ -76,9 +84,24 @@ object VoltageSocEstimator {
         if (vehicle == null) return sample
         val pack = vehicle.packs.firstOrNull { it.index == packIndex } ?: return sample
         if (pack.bmsType.reportsStateOfCharge) return sample
-        if (sample.cellVoltages.isEmpty()) return sample
+        if (sample.cellVoltages.isNotEmpty()) {
+            return sample.copy(
+                soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig)
+            )
+        }
+        // No cells at all: a Begode without a smart BMS streams only a pack
+        // voltage (scaled upstream from the live frame). When the profile
+        // knows how many cells divide it, the average cell voltage is
+        // voltage / cellCount and the same linear map applies. A zero
+        // voltage is the "unscaled, cell count unknown" sentinel from that
+        // path — dividing it would proclaim an exact 0 % on a wheel whose
+        // charge is simply unknown, so it passes through untouched.
+        val cellCount = pack.cellCount ?: return sample
+        if (cellCount <= 0 || sample.voltage <= 0f) return sample
         return sample.copy(
-            soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig)
+            soc = estimateFromAverageCellVoltage(
+                sample.voltage / cellCount, vehicle.chemistry, vehicle.alertConfig
+            )
         )
     }
 }

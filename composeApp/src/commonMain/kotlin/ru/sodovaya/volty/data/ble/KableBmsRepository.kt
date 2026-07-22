@@ -551,6 +551,16 @@ class KableBmsRepository private constructor(
             onVehicleData = { vd -> _activeVehicleData.value = vd }
         )
         val onSample: (Int, BmsData, List<SectionState>) -> Unit = { packIndex, sample, sections ->
+            // A Begode without a smart BMS publishes its synthetic pack with
+            // voltage = 0 and offers the live-frame reading (on the 67.2 V
+            // scale) separately — the protocol cannot scale it because the
+            // multiplier needs a cell count it must not invent. This is the
+            // one place where the sample meets the vehicle profile, whose
+            // cell count is user-set or auto-filled from a prior smart-BMS
+            // connect — so the scaling lands here, before SoC estimation.
+            // When no cell count is known the voltage honestly stays 0
+            // ("unknown") rather than reading 59 V on a 168 V pack.
+            val scaled = withScaledBegodeLiveVoltage(protocol, packIndex, sample, socVehicle)
             // Devices that report no SoC at all (a Begode wheel gives
             // voltage and cells only) get one estimated from average
             // cell voltage against the vehicle's configured cell-voltage
@@ -560,7 +570,7 @@ class KableBmsRepository private constructor(
             // mix types): a coulomb-counting BMS's sample passes
             // through untouched, including a genuine 0 % on a flat
             // pack (see VoltageSocEstimator).
-            val enriched = VoltageSocEstimator.withEstimatedSoc(sample, socVehicle, packIndex)
+            val enriched = VoltageSocEstimator.withEstimatedSoc(scaled, socVehicle, packIndex)
             // The aggregate is a true identity for a single pack
             // (cell voltages included), so every vehicle routes
             // through it. submit() returns the snapshot it just
@@ -579,6 +589,39 @@ class KableBmsRepository private constructor(
             _activeData.value = forActive
         }
         return SamplePipeline(orchestrator, onSample)
+    }
+
+    /**
+     * Scale the synthetic no-BMS Begode pack's live-frame voltage to real
+     * pack volts, when — and only when — the protocol is currently offering
+     * one ([BegodeProtocol.liveVoltageOn672ScaleV] is non-null exactly while
+     * the synthetic pack is active) and this pack's profile knows its cell
+     * count. Every other sample passes through untouched: a smart-BMS branch
+     * sample (the protocol retires the live voltage on the first BMS frame),
+     * any non-Begode protocol, and the synthetic pack of a profile with no
+     * cell count — for that last one the voltage stays at the protocol's 0
+     * ("unknown"), which downstream renders as no voltage instead of the raw
+     * 58.92 V reading masquerading as pack volts.
+     *
+     * Same single-funnel guarantee as the sections read in
+     * [routePackSamples]: this runs on the session's own coroutine right
+     * after the decode, so the protocol state it reads and the sample it
+     * scales describe one moment.
+     */
+    private fun withScaledBegodeLiveVoltage(
+        protocol: BmsProtocol,
+        packIndex: Int,
+        sample: BmsData,
+        socVehicle: Vehicle?
+    ): BmsData {
+        if (protocol !is BegodeProtocol || packIndex != 0) return sample
+        val liveV = protocol.liveVoltageOn672ScaleV() ?: return sample
+        val cellCount = socVehicle?.packs?.firstOrNull { it.index == packIndex }?.cellCount
+            ?: return sample
+        if (cellCount <= 0) return sample
+        val voltage = BegodeProtocol.scaleLiveVoltage(liveV, cellCount)
+        // Power is voltage-derived and was equally unknown in the sample.
+        return sample.copy(voltage = voltage, power = voltage * sample.current)
     }
 
     /**
@@ -989,10 +1032,26 @@ class KableBmsRepository private constructor(
         vehicle: Vehicle?,
         address: String,
         type: BmsType
-    ): (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit {
-        val pipeline = buildSamplePipeline(vehicle, address, type, createProtocol(type))
+    ): (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit =
+        installProtocolPipelineForTest(vehicle, address, type).second
+
+    /**
+     * [installSampleFunnelForTest] that also exposes the protocol instance the
+     * pipeline captured. Lets a test drive the REAL decode → scale → estimate
+     * chain — feed the protocol raw notifications, route its packs through
+     * the returned funnel via [routePackSamples] — which is the only way to
+     * exercise the Begode live-voltage scaling: it reads the protocol's own
+     * state, so a hand-built sample cannot reach it.
+     */
+    internal fun installProtocolPipelineForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType
+    ): Pair<BmsProtocol, (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> {
+        val protocol = createProtocol(type)
+        val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
         vehicleConnection = pipeline.orchestrator
-        return pipeline.onSample
+        return protocol to pipeline.onSample
     }
 
     /**
