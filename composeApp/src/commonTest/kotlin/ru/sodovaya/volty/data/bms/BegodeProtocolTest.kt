@@ -1,6 +1,10 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
+import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -304,6 +308,234 @@ class BegodeProtocolTest {
         }
     }
 
+    // --- Physical assemblies (sections) ---
+
+    /** Wraps a branch's decode into the [PackState] the UI grouping sees. */
+    private fun packStateOf(protocol: BegodeProtocol, packIndex: Int): PackState =
+        PackState(
+            pack = Pack(index = packIndex, label = "Branch", bmsType = BmsType.BEGODE, bmsAddress = "AA:BB"),
+            data = assertNotNull(protocol.latestData(packIndex)),
+            sections = protocol.sections(packIndex),
+            isOnline = true
+        )
+
+    @Test
+    fun fixtureYieldsTwoVerifiedSectionsPerBranch() {
+        val protocol = protocolFedWithFixture()
+
+        // Ground truth from the capture (see the multi-pack spec): each
+        // branch's first 20 cells sum to its reported 74.1 V assembly, the
+        // second 20 to the 74.2 V one.
+        val expectedCellSums = listOf(
+            74.19f to 74.25f, // branch 0
+            74.14f to 74.27f  // branch 1
+        )
+
+        for (packIndex in 0..1) {
+            val sections = protocol.sections(packIndex)
+            assertEquals(2, sections.size, "branch $packIndex must report two assemblies")
+            assertEquals(0, sections[0].index)
+            assertEquals(1, sections[1].index)
+
+            // Assembly voltages exactly as the 0x01 frames report them.
+            assertEquals(74.1f, sections[0].voltage, 0.01f, "branch $packIndex assembly 0 voltage")
+            assertEquals(74.2f, sections[1].voltage, 0.01f, "branch $packIndex assembly 1 voltage")
+
+            // The split was FOUND against those voltages, not assumed: 20+20.
+            assertEquals(0..19, sections[0].cellRange, "branch $packIndex assembly 0 range")
+            assertEquals(20..39, sections[1].cellRange, "branch $packIndex assembly 1 range")
+
+            // And it is genuine: each range's cells really sum to the capture's
+            // known per-assembly values.
+            val cells = assertNotNull(protocol.latestData(packIndex)).cellVoltages
+            val (sum0, sum1) = expectedCellSums[packIndex]
+            assertEquals(sum0, cells.subList(0, 20).sum(), 0.02f, "branch $packIndex assembly 0 cell sum")
+            assertEquals(sum1, cells.subList(20, 40).sum(), 0.02f, "branch $packIndex assembly 1 cell sum")
+
+            // Two temperatures per assembly, matching the capture's final
+            // genuine frames (t1 = 28 C, t2 = 25 C on every bmsnum).
+            assertEquals(listOf(28f, 25f), sections[0].temperatures, "branch $packIndex assembly 0 temps")
+            assertEquals(listOf(28f, 25f), sections[1].temperatures, "branch $packIndex assembly 1 temps")
+        }
+    }
+
+    @Test
+    fun theUiGroupingPredicateAcceptsTheFixtureSections() {
+        val protocol = protocolFedWithFixture()
+        for (packIndex in 0..1) {
+            val groups = groupPackCells(packStateOf(protocol, packIndex))
+            assertEquals(2, groups.size, "branch $packIndex must group into its two assemblies")
+            assertEquals(0, groups[0].section?.index)
+            assertEquals(1, groups[1].section?.index)
+            // Positional cell numbering survives the boundary: the second
+            // assembly starts at physical cell 20 (rendered as cell 21).
+            assertEquals(0, groups[0].startIndex)
+            assertEquals(20, groups[1].startIndex)
+            assertEquals(20, groups[0].voltages.size)
+            assertEquals(20, groups[1].voltages.size)
+        }
+    }
+
+    @Test
+    fun noRangesAndNoGroupingWhileCellsAreStillArriving() {
+        // Walk the real capture notification by notification: at NO point may
+        // a branch with an incomplete cell list carry a cell range, and the UI
+        // grouping must stay flat until the branch's full 40 cells landed.
+        val protocol = BegodeProtocol()
+        var partialStatesWithSections = 0
+        BegodeDumpFixture.chunks().forEachIndexed { i, chunk ->
+            protocol.onNotification(chunk)
+            for (packIndex in 0..1) {
+                val data = protocol.latestData(packIndex) ?: continue
+                if (data.cellVoltages.size >= 40) continue
+                val sections = protocol.sections(packIndex)
+                if (sections.isNotEmpty()) partialStatesWithSections++
+                sections.forEach { s ->
+                    assertNull(
+                        s.cellRange,
+                        "branch $packIndex fabricated a range with only " +
+                            "${data.cellVoltages.size} cells after notification $i"
+                    )
+                }
+                val groups = groupPackCells(packStateOf(protocol, packIndex))
+                assertTrue(
+                    groups.all { it.section == null },
+                    "branch $packIndex grouped an incomplete cell list after notification $i"
+                )
+            }
+        }
+        // Not vacuous: the capture really contains states where both assembly
+        // voltages are known while the cells are still arriving.
+        assertTrue(
+            partialStatesWithSections > 0,
+            "the fixture must exercise the sections-known / cells-partial window"
+        )
+    }
+
+    @Test
+    fun noSectionsBeforeBothAssemblyVoltagesArrive() {
+        val protocol = BegodeProtocol()
+        assertTrue(protocol.sections(0).isEmpty(), "no telemetry — no sections")
+
+        // Boot-placeholder frames (all-zero payload) carry no assembly voltage
+        // and must not create 0.0 V sections.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 0, t2 = 0, sectionVoltageRaw = 0))
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 1472, t1 = 0, t2 = 0, sectionVoltageRaw = 0))
+        assertTrue(protocol.sections(0).isEmpty(), "boot placeholders are not evidence")
+
+        // One genuine assembly is still only half a breakdown.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        assertTrue(protocol.sections(0).isEmpty(), "one assembly voltage is not a breakdown")
+
+        // Both genuine: the breakdown appears, for this branch only.
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 742))
+        val sections = protocol.sections(0)
+        assertEquals(2, sections.size)
+        assertEquals(74.1f, sections[0].voltage, 0.01f)
+        assertEquals(74.2f, sections[1].voltage, 0.01f)
+        assertTrue(protocol.sections(1).isEmpty(), "branch 1 has seen nothing")
+    }
+
+    @Test
+    fun assemblyVoltagesThatDoNotAddUpToTheCellsYieldNoRanges() {
+        // A wheel we have never seen: assemblies report 72.0 / 76.5 V, but the
+        // cells (fixture-shaped, ~3.71 V each, total ~148.5) have no prefix
+        // summing to 72.0 — the nearest prefix sums are 70.55 (19 cells) and
+        // 74.26 (20 cells), both beyond the tolerance. Evidence contradicts
+        // any split, so the honest answer is voltages without ranges.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1485, t1 = 28, t2 = 26, sectionVoltageRaw = 720))
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 1485, t1 = 28, t2 = 26, sectionVoltageRaw = 765))
+        for (packet in 0 until 5) {
+            protocol.onNotification(cellFrame(type = 0x02, packetIndex = packet, baseMv = 3710))
+        }
+
+        val sections = protocol.sections(0)
+        assertEquals(2, sections.size, "the assembly voltages themselves are real evidence")
+        assertEquals(72.0f, sections[0].voltage, 0.01f)
+        assertEquals(76.5f, sections[1].voltage, 0.01f)
+        assertNull(sections[0].cellRange, "no split verifies — no range")
+        assertNull(sections[1].cellRange, "no split verifies — no range")
+
+        // And the UI degrades to one flat, unattributed cell list.
+        val groups = groupPackCells(packStateOf(protocol, 0))
+        assertEquals(1, groups.size)
+        assertNull(groups[0].section)
+    }
+
+    @Test
+    fun anAmbiguousSplitIsRefused() {
+        // Degenerate cells where TWO splits fit the reported voltages within
+        // tolerance: [2.0, 0.1, 2.0, ...] with assemblies 2.1 and 6.3 V —
+        // both k=1 (2.0 / 6.4) and k=2 (2.1 / 6.3) fit. Real hardware never
+        // looks like this, but if it ever does there is no evidence for either
+        // boundary, and no range beats a coin flip.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 84, t1 = 28, t2 = 26, sectionVoltageRaw = 21))
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 84, t1 = 28, t2 = 26, sectionVoltageRaw = 63))
+        protocol.onNotification(
+            cellFrameOf(type = 0x02, packetIndex = 0, mv = intArrayOf(2000, 100, 2000, 100, 2000, 100, 2000, 100))
+        )
+
+        val sections = protocol.sections(0)
+        assertEquals(2, sections.size)
+        assertNull(sections[0].cellRange, "two fitting splits — refuse both")
+        assertNull(sections[1].cellRange, "two fitting splits — refuse both")
+    }
+
+    @Test
+    fun theSplitSearchIsModelAgnostic() {
+        // A T4-like branch: 24 cells (3 packets), two 12S assemblies. Nothing
+        // in the protocol knows this layout — the same search that resolves
+        // the ET Max's 20+20 must resolve 12+12 from the voltages alone.
+        // First 12 cells of the builder's pattern sum to 46.834 V, the
+        // remaining 12 to 46.850 V; the frames report 46.8 for both.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 936, t1 = 20, t2 = 21, sectionVoltageRaw = 468))
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 936, t1 = 20, t2 = 21, sectionVoltageRaw = 468))
+        for (packet in 0 until 3) {
+            protocol.onNotification(cellFrame(type = 0x02, packetIndex = packet, baseMv = 3900))
+        }
+
+        val sections = protocol.sections(0)
+        assertEquals(2, sections.size)
+        assertEquals(0..11, sections[0].cellRange, "24 cells resolve to 12+12 with nothing hard-coded")
+        assertEquals(12..23, sections[1].cellRange)
+
+        val groups = groupPackCells(packStateOf(protocol, 0))
+        assertEquals(2, groups.size, "the UI grouping accepts the verified 12+12 split")
+        assertEquals(12, groups[0].voltages.size)
+        assertEquals(12, groups[1].voltages.size)
+    }
+
+    @Test
+    fun temperaturesLandOnTheRightAssembly() {
+        // bmsnum 0 and 1 are branch 0's two assemblies, 2 and 3 branch 1's.
+        // Distinct temperatures per bmsnum pin the full mapping: a decoder
+        // that swaps assemblies within a branch, or branches, must fail here.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 30, t2 = 31, sectionVoltageRaw = 741))
+        protocol.onNotification(telemetryFrame(bmsnum = 1, packVoltageRaw = 1472, t1 = 32, t2 = 33, sectionVoltageRaw = 742))
+        protocol.onNotification(telemetryFrame(bmsnum = 2, packVoltageRaw = 1472, t1 = 34, t2 = 35, sectionVoltageRaw = 741))
+        protocol.onNotification(telemetryFrame(bmsnum = 3, packVoltageRaw = 1472, t1 = 36, t2 = 37, sectionVoltageRaw = 742))
+
+        val branch0 = protocol.sections(0)
+        val branch1 = protocol.sections(1)
+        assertEquals(listOf(30f, 31f), branch0[0].temperatures, "bmsnum 0 -> branch 0, assembly 0")
+        assertEquals(listOf(32f, 33f), branch0[1].temperatures, "bmsnum 1 -> branch 0, assembly 1")
+        assertEquals(listOf(34f, 35f), branch1[0].temperatures, "bmsnum 2 -> branch 1, assembly 0")
+        assertEquals(listOf(36f, 37f), branch1[1].temperatures, "bmsnum 3 -> branch 1, assembly 1")
+    }
+
+    @Test
+    fun resetClearsSections() {
+        val protocol = protocolFedWithFixture()
+        assertEquals(2, protocol.sections(0).size, "precondition: fixture produced sections")
+        protocol.reset()
+        assertTrue(protocol.sections(0).isEmpty())
+        assertTrue(protocol.sections(1).isEmpty())
+    }
+
     @Test
     fun noDataBeforeAnyBmsFrame() {
         val protocol = BegodeProtocol()
@@ -389,6 +621,17 @@ class BegodeProtocolTest {
             val mv = baseMv + i
             p[i * 2] = (mv shr 8).toByte()
             p[i * 2 + 1] = mv.toByte()
+        }
+        return frame(type, packetIndex, p)
+    }
+
+    /** Cell frame with an explicit millivolt value per cell. */
+    private fun cellFrameOf(type: Int, packetIndex: Int, mv: IntArray): ByteArray {
+        require(mv.size == 8) { "a cell frame carries exactly 8 cells" }
+        val p = ByteArray(16)
+        for (i in 0 until 8) {
+            p[i * 2] = (mv[i] shr 8).toByte()
+            p[i * 2 + 1] = mv[i].toByte()
         }
         return frame(type, packetIndex, p)
     }

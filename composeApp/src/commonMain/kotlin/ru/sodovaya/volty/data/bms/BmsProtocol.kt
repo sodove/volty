@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.SectionState
 
 abstract class BmsProtocol {
 
@@ -29,6 +30,22 @@ abstract class BmsProtocol {
 
     /** Convenience for the single-pack case. */
     fun latestData(): BmsData? = latestData(0)
+
+    /**
+     * Physically replaceable assemblies ("sections") inside pack [packIndex],
+     * each with the voltage / temperature evidence the protocol decoded for
+     * it. Empty — the default — when the protocol has no such breakdown,
+     * which is every single-assembly BMS volty talks to directly.
+     *
+     * Contract for implementers: [SectionState.cellRange] may only be filled
+     * from evidence about the frame layout that was actually verified, never
+     * from arithmetic over the received cell list — `groupPackCells` refuses
+     * inferred boundaries, and a fabricated range would mislabel every cell
+     * of the later assemblies. No verified range is reported as null, and no
+     * verified breakdown at all as an empty list; both degrade downstream to
+     * a flat cell list, which is the honest rendering.
+     */
+    open fun sections(packIndex: Int): List<SectionState> = emptyList()
 
     /** Reset internal buffers and parser state. */
     abstract fun reset()
