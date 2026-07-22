@@ -8,8 +8,6 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -82,7 +80,6 @@ import volty.composeapp.generated.resources.status_idle
 import volty.composeapp.generated.resources.status_reconnecting
 import volty.composeapp.generated.resources.status_scanning
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun DashboardScreen(component: DashboardComponent) {
     val state by component.state.collectAsState()
@@ -129,12 +126,15 @@ fun DashboardScreen(component: DashboardComponent) {
 
         HeroCard(state)
 
-        // 2-col metric grid
+        // 2-col metric grid. IntrinsicSize.Max (not Min): both cards take the
+        // height of the TALLER one, so the power card's range bar + "-x W / peak"
+        // labels are never clipped and the voltage card fills to match. Min took
+        // the shorter card's height and cut the power labels off at the top.
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
-                .height(IntrinsicSize.Min)
+                .height(IntrinsicSize.Max)
                 .animateContentSize()
         ) {
             MetricCard(
@@ -220,13 +220,20 @@ fun DashboardScreen(component: DashboardComponent) {
             }
         }
 
-        // Temperature + cells summary. We intentionally drop the IntrinsicSize.Min
-        // height constraint that previously forced the temp FlowRow into a single
-        // line (which clipped the 5th+ sensor). Each card now sizes to its content.
+        // Temperature + cells summary, equal height. The temperature sensors are
+        // laid out as a chunked Column-of-Rows (a fixed 3 per row), NOT a FlowRow:
+        // FlowRow's intrinsic height is unreliable (it doesn't know its width
+        // during intrinsic measurement and reports a single line), which is why an
+        // earlier IntrinsicSize.Min here clipped the 5th+ sensor. A Column of Rows
+        // reports a correct intrinsic height, so IntrinsicSize.Max below makes both
+        // cards take the taller card's full height — the cells card grows to match
+        // the temperature grid, animated by animateContentSize, with no clipping
+        // and no measure-then-resize oscillation.
         Row(
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier
                 .fillMaxWidth()
+                .height(IntrinsicSize.Max)
                 .animateContentSize()
         ) {
             // Headline shows the HOTTEST sensor (not sensor #1) — that's the one
@@ -237,32 +244,36 @@ fun DashboardScreen(component: DashboardComponent) {
             MetricCard(
                 label = stringResource(Res.string.metric_temperature),
                 value = if (data.temperatures.isEmpty()) "—" else "${fmt0(data.temperatures.max())}° C",
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
-                    FlowRow(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        verticalArrangement = Arrangement.spacedBy(4.dp)
-                    ) {
-                        // Compact format "1:25°" survives 4+ sensors on a narrow card
-                        // and FlowRow wraps gracefully when they exceed the row.
-                        data.temperatures.forEachIndexed { i, t ->
-                            val isHottest = i == hottestIdx
-                            Box(
-                                modifier = Modifier
-                                    .clip(RoundedCornerShape(10.dp))
-                                    .background(
-                                        if (isHottest) MaterialTheme.colorScheme.primaryContainer
-                                        else MaterialTheme.colorScheme.surfaceContainerHigh
-                                    )
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                            ) {
-                                Text(
-                                    "${i + 1}:${fmt0(t)}°",
-                                    fontSize = 11.sp,
-                                    color = if (isHottest) MaterialTheme.colorScheme.onPrimaryContainer
-                                    else MaterialTheme.colorScheme.onSurface
-                                )
+                    // Fixed 3 per row. A Column of Rows has a correct intrinsic
+                    // height (unlike FlowRow), so the card's height is honest and
+                    // IntrinsicSize.Max on the parent equalises the two cards
+                    // without clipping any sensor. Compact "1:25°" fits 3 across a
+                    // narrow card; 8 sensors wrap to three rows, as before.
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        data.temperatures.toList().chunked(3).forEachIndexed { rowIdx, rowTemps ->
+                            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                                rowTemps.forEachIndexed { colIdx, t ->
+                                    val i = rowIdx * 3 + colIdx
+                                    val isHottest = i == hottestIdx
+                                    Box(
+                                        modifier = Modifier
+                                            .clip(RoundedCornerShape(10.dp))
+                                            .background(
+                                                if (isHottest) MaterialTheme.colorScheme.primaryContainer
+                                                else MaterialTheme.colorScheme.surfaceContainerHigh
+                                            )
+                                            .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    ) {
+                                        Text(
+                                            "${i + 1}:${fmt0(t)}°",
+                                            fontSize = 11.sp,
+                                            color = if (isHottest) MaterialTheme.colorScheme.onPrimaryContainer
+                                            else MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
@@ -271,16 +282,33 @@ fun DashboardScreen(component: DashboardComponent) {
             MetricCard(
                 label = stringResource(Res.string.cells_delta_label, state.cellsDeltaMv),
                 value = if (data.cellVoltages.isEmpty()) "—" else stringResource(Res.string.cells_v_avg, fmt2(data.cellVoltages.average().toFloat())),
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.weight(1f).fillMaxHeight(),
                 extra = {
-                    Row(horizontalArrangement = Arrangement.spacedBy(2.dp), modifier = Modifier.height(18.dp)) {
-                        val cells = data.cellVoltages
-                        cells.forEach { v ->
-                            val rawFrac = chemistryFraction(v, chemistry)
-                            // animateFloatAsState is call-site-keyed, so each per-cell
-                            // call in this forEach gets its own animation state.
+                    // Glanceable spread indicator, not a per-cell readout (the
+                    // per-branch screens show every cell). One bar per cell up to
+                    // the cap — single-pack packs are unchanged — but a two-branch
+                    // 80-cell pack is bucketed into `cap` averaged bars so it reads
+                    // as a mini-histogram instead of 80 sub-pixel slivers. 1.dp
+                    // spacing keeps it continuous.
+                    val cap = 24
+                    val cells = data.cellVoltages
+                    val fractions: List<Float> = when {
+                        cells.isEmpty() -> emptyList()
+                        cells.size <= cap -> cells.map { chemistryFraction(it, chemistry) }
+                        else -> (0 until cap).map { b ->
+                            val start = b * cells.size / cap
+                            val end = maxOf(start + 1, (b + 1) * cells.size / cap)
+                            cells.subList(start, end)
+                                .map { chemistryFraction(it, chemistry) }
+                                .average().toFloat()
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(1.dp), modifier = Modifier.height(18.dp)) {
+                        fractions.forEach { frac ->
+                            // animateFloatAsState is call-site-keyed, so each bar in
+                            // this forEach gets its own animation state.
                             val animFrac by animateFloatAsState(
-                                targetValue = rawFrac,
+                                targetValue = frac,
                                 animationSpec = tween(durationMillis = 400),
                                 label = "cellMini"
                             )
