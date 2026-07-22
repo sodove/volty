@@ -99,4 +99,12 @@ object BleConfig {
 
     /** Threshold of attempts at which the back-off kicks in. */
     const val reconnectBackoffAfter: Int = 10
+
+    /**
+     * Start offset between the links of one vehicle at connect time. Raising
+     * several GATT connections at the exact same instant is flaky on Android,
+     * so link i starts i × this many milliseconds after link 0. A single-link
+     * vehicle never waits — the stagger only applies from the second link on.
+     */
+    const val linkStaggerMs: Long = 300L
 }
