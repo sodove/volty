@@ -19,6 +19,7 @@ import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddress
@@ -506,7 +507,7 @@ class KableBmsRepository private constructor(
      */
     private class SamplePipeline(
         val orchestrator: VehicleConnection,
-        val onSample: (packIndex: Int, sample: BmsData) -> Unit
+        val onSample: (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit
     )
 
     /**
@@ -536,7 +537,7 @@ class KableBmsRepository private constructor(
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
             onVehicleData = { vd -> _activeVehicleData.value = vd }
         )
-        val onSample: (Int, BmsData) -> Unit = { packIndex, sample ->
+        val onSample: (Int, BmsData, List<SectionState>) -> Unit = { packIndex, sample, sections ->
             // Devices that report no SoC at all (a Begode wheel gives
             // voltage and cells only) get one estimated from average
             // cell voltage against the vehicle's configured cell-voltage
@@ -553,8 +554,11 @@ class KableBmsRepository private constructor(
             // emitted, so the aggregate is built once per sample.
             // Fall back to the enriched sample — not the raw one — if
             // the orchestrator was swapped out mid-flight, so a Begode
-            // keeps its estimated SoC even on that path.
-            val forActive = vehicleConnection?.submit(packIndex, enriched)?.aggregate ?: enriched
+            // keeps its estimated SoC even on that path. The section
+            // breakdown rides beside the sample into the pack state; the
+            // vehicle-level aggregate has no section field, so nothing of
+            // it survives the fallback path — dropped, not misattributed.
+            val forActive = vehicleConnection?.submit(packIndex, enriched, sections)?.aggregate ?: enriched
             // Ring buffer before activeData: the graph collector maps
             // over _activeData and reads the buffer, so announcing the
             // sample first would make every graph emit lag by one.
@@ -972,7 +976,7 @@ class KableBmsRepository private constructor(
         vehicle: Vehicle?,
         address: String,
         type: BmsType
-    ): (packIndex: Int, sample: BmsData) -> Unit {
+    ): (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit {
         val pipeline = buildSamplePipeline(vehicle, address, type, createProtocol(type))
         vehicleConnection = pipeline.orchestrator
         return pipeline.onSample

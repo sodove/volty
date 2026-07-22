@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.VehicleData
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -37,6 +38,29 @@ class VehicleConnectionTest {
         onVehicleData = { sink += it },
         clock = clock::now
     )
+
+    @Test
+    fun submitCarriesTheSectionBreakdownIntoThePackState() {
+        val c = conn()
+        val sections = listOf(
+            SectionState(index = 0, voltage = 74.1f, temperatures = listOf(28f, 25f), cellRange = 0..19),
+            SectionState(index = 1, voltage = 74.2f, temperatures = listOf(28f, 25f), cellRange = 20..39)
+        )
+        val snap = c.submit(0, BmsData(voltage = 148.4f, isConnected = true), sections)
+        assertEquals(sections, snap.packs[0].sections, "sections must reach the pack state")
+        assertTrue(snap.packs[1].sections.isEmpty(), "the other pack is untouched")
+    }
+
+    @Test
+    fun aLaterSampleWithoutSectionsClearsThem() {
+        // The breakdown is per-sample truth: after a protocol reset (reconnect)
+        // the sections vanish until re-learned, and the pack state must follow
+        // rather than pin stale assembly voltages next to fresh cells.
+        val c = conn()
+        c.submit(0, BmsData(voltage = 148.4f, isConnected = true), listOf(SectionState(index = 0, voltage = 74.1f)))
+        val snap = c.submit(0, BmsData(voltage = 148.3f, isConnected = true))
+        assertTrue(snap.packs[0].sections.isEmpty(), "a section-less sample must clear the breakdown")
+    }
 
     @Test
     fun startsWithEveryPackOfflineAndNoAggregate() {
