@@ -138,7 +138,11 @@ fun DashboardScreen(component: DashboardComponent) {
         ) {
             MetricCard(
                 label = stringResource(Res.string.metric_voltage),
-                value = "${fmt2(data.voltage)} V",
+                // Zero is never a real pack voltage — it means "unknown": a
+                // Begode without a smart BMS whose profile has no cell count
+                // yet (the live-frame reading cannot be scaled honestly), or
+                // no sample at all. Show a dash rather than "0.00 V".
+                value = if (data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 sub = if (data.cellVoltages.isNotEmpty()) {
                     "${data.cellVoltages.size}s · ${fmt2(data.voltage / data.cellVoltages.size)} V/cell"

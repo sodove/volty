@@ -59,16 +59,37 @@ class BegodeProtocol : BmsProtocol() {
     private val buffer = ByteArrayAccumulator()
     private val branches = Array(2) { BranchState() }
 
-    // Wheel-level telemetry from the live 0x00 frame. Not exposed through
-    // BmsData yet: the raw voltage is on Begode's 67.2 V scale and needs a
-    // nominal-voltage multiplier this protocol does not know (see the design
-    // spec, "Масштабирование напряжения в кадре 0x00") — using it as a pack
-    // voltage here would show ~59 V on a 168 V wheel. Branch voltage comes from
-    // the cells instead (see [branchVoltage]). Kept for the upcoming
-    // aggregation task.
+    // Wheel-level telemetry from the live 0x00 frame. The raw voltage is on
+    // Begode's 67.2 V scale and needs a nominal-voltage multiplier this
+    // protocol does not know (see the design spec, "Масштабирование
+    // напряжения в кадре 0x00") — using it as a pack voltage would show
+    // ~59 V on a 168 V wheel. Branch voltage comes from the cells instead
+    // (see [branchVoltage]); the synthetic no-BMS pack publishes voltage = 0
+    // and lets the caller scale via [liveVoltageOn672ScaleV].
     private var liveVoltageRaw: Int = 0
     private var phaseCurrentA: Float = 0f
     private var boardTempC: Float = 0f
+
+    /**
+     * True once ANY smart-BMS frame (0x01/0x02/0x03) was decoded. Not every
+     * Begode has a smart BMS — the T4 and older wheels likely stream only
+     * 0x00 and 0x04 — and this flag is what decides between the two modes:
+     * while false, pack 0 is synthesised from the live frame ([liveData]);
+     * the first BMS frame retires the synthetic pack permanently (until
+     * [reset]), so it can never override real branch data.
+     */
+    private var smartBmsSeen = false
+
+    /**
+     * The synthetic pack of a wheel without a smart BMS, rebuilt from every
+     * genuine live frame: phase current, board temperature, no cells — and
+     * `voltage = 0`, because the live-frame voltage is on the 67.2 V scale
+     * and the scale factor needs a cell count this protocol must not invent.
+     * Callers that know the cell count scale [liveVoltageOn672ScaleV].
+     * A fresh instance per decode, same identity contract PackSampleGate
+     * relies on for real branches.
+     */
+    private var liveData: BmsData? = null
 
     /** Per-branch decode state, assembled from 0x01 and 0x02/0x03 frames. */
     private class BranchState {
@@ -106,8 +127,32 @@ class BegodeProtocol : BmsProtocol() {
         tryParseAll()
     }
 
-    override fun latestData(packIndex: Int): BmsData? =
-        branches.getOrNull(packIndex)?.lastData
+    override fun latestData(packIndex: Int): BmsData? {
+        val branch = branches.getOrNull(packIndex) ?: return null
+        branch.lastData?.let { return it }
+        // No decoded branch data. A wheel without a smart BMS never produces
+        // any — fall back to the pack synthesised from the live frame, but
+        // ONLY while no BMS frame has ever been seen: the synthetic pack is a
+        // fallback that yields the moment real frames arrive, never an
+        // override. Pack 0 only — there is no evidence of a second branch.
+        if (packIndex == 0 && !smartBmsSeen) return liveData
+        return null
+    }
+
+    /**
+     * Live-frame voltage in volts on Begode's 67.2 V reference scale, or null
+     * when it must not be used: before the first genuine live frame, or as
+     * soon as any smart-BMS frame proves the wheel has real branches.
+     *
+     * This is the ONE number the synthetic pack cannot publish honestly on
+     * its own: pack volts are `this * nominal / 67.2`, and the nominal needs
+     * a cell count the protocol does not know (a dumb wheel sends no cell
+     * frames). The caller that knows the vehicle's cell count applies
+     * [scaleLiveVoltage]; a caller that knows none must show no voltage
+     * rather than a wrong one.
+     */
+    fun liveVoltageOn672ScaleV(): Float? =
+        if (!smartBmsSeen && liveVoltageRaw > 0) liveVoltageRaw * 0.01f else null
 
     /**
      * The two physical assemblies of branch [packIndex], wired in series
@@ -190,6 +235,10 @@ class BegodeProtocol : BmsProtocol() {
         liveVoltageRaw = 0
         phaseCurrentA = 0f
         boardTempC = 0f
+        // A reconnect may face a different wheel: a protocol stuck in
+        // "smart BMS seen" would leave a dumb wheel dataless again.
+        smartBmsSeen = false
+        liveData = null
     }
 
     // --- Protocol implementation ---
@@ -263,6 +312,32 @@ class BegodeProtocol : BmsProtocol() {
         liveVoltageRaw = frame.u16BE(2)
         phaseCurrentA = frame.i16BE(10) * 0.01f
         boardTempC = frame.i16BE(12) / 340f + 36.53f
+        // While no smart-BMS frame has arrived, this frame IS the battery
+        // telemetry: synthesise pack 0 from it so a wheel without a smart BMS
+        // connects at all instead of staying null forever. Gated on a genuine
+        // voltage — a boot-zero live frame would synthesise a 0.00 V pack
+        // with the temperature formula's raw-zero artefact (36.53 C).
+        if (!smartBmsSeen && liveVoltageRaw > 0) {
+            liveData = BmsData(
+                // Unscaled on purpose — see [liveVoltageOn672ScaleV]. Power
+                // is voltage-derived and equally unknowable here.
+                voltage = 0f,
+                current = phaseCurrentA,
+                power = 0f,
+                // No fuel gauge and no cells: soc = 0 here means "unknown",
+                // not "empty", and downstream must not alarm on it. The
+                // estimator flips this back to true the moment the vehicle
+                // profile's cell count makes a voltage estimate possible.
+                socKnown = false,
+                cellVoltages = emptyList(),
+                temperatures = listOf(boardTempC),
+                // Same rationale as [rebuild]: a streaming wheel is not cut
+                // off, and false renders alarming red OFF badges.
+                chargeEnabled = true,
+                dischargeEnabled = true,
+                isConnected = true
+            )
+        }
     }
 
     /**
@@ -274,6 +349,7 @@ class BegodeProtocol : BmsProtocol() {
     private fun parseBmsTelemetry(frame: ByteArray) {
         val bmsnum = frame.u8(19)
         if (bmsnum > 3) return
+        retireSyntheticPack()
         val branch = branches[bmsnum shr 1]
         val section = bmsnum and 1
 
@@ -311,6 +387,7 @@ class BegodeProtocol : BmsProtocol() {
      * Cell number = packetIndex * 8 + i.
      */
     private fun parseCells(frame: ByteArray, branch: Int) {
+        retireSyntheticPack()
         val state = branches[branch]
         val packetIndex = frame.u8(19)
         for (i in 0 until 8) {
@@ -325,10 +402,22 @@ class BegodeProtocol : BmsProtocol() {
     }
 
     /**
+     * Any smart-BMS frame proves this wheel has real branches: drop the
+     * synthetic no-BMS pack permanently (until [reset]). Real branch data may
+     * still be a few frames away — 0x02 can precede the first 0x01 — and
+     * that gap honestly reports NO pack rather than a synthetic one
+     * contradicting the cells in flight.
+     */
+    private fun retireSyntheticPack() {
+        smartBmsSeen = true
+        liveData = null
+    }
+
+    /**
      * Rebuild the branch's [BmsData] from accumulated state. Gated on the 0x01
-     * frame: without it there is no voltage, and a wheel without a smart BMS
-     * never sends one — such a wheel intentionally yields null here (the
-     * fallback design is still an open question, see the spec).
+     * frame: without it there is no voltage. A wheel without a smart BMS never
+     * sends one — such a wheel is served by the synthetic live-frame pack
+     * instead (see [liveData]).
      */
     private fun rebuild(branch: BranchState) {
         if (!branch.sawTelemetry) return
@@ -398,6 +487,28 @@ class BegodeProtocol : BmsProtocol() {
     companion object {
         private const val FRAME_SIZE = 24
         private const val TAIL_OFFSET = 20
+
+        /**
+         * The reference the live frame's voltage is expressed against: Begode
+         * reports every wheel as if it were a 16S one, full at 16 x 4.2 =
+         * 67.2 V. Confirmed on the ET Max capture: raw 5892 (58.92 V) for a
+         * pack whose 0x01 frames and cell sums independently read ~147-148 V,
+         * a factor of exactly 168 / 67.2 = 2.5 (WheelLog's getScaledVoltage).
+         */
+        private const val LIVE_VOLTAGE_REFERENCE_V = 67.2f
+
+        /** Full-charge volts per Li-ion cell — the term the 67.2 V reference is built from. */
+        private const val FULL_CELL_V = 4.2f
+
+        /**
+         * Scale a [liveVoltageOn672ScaleV] reading to real pack volts for a
+         * wheel with [cellCount] cells in series: `v * (cellCount * 4.2) /
+         * 67.2`. Static because the protocol itself never has a cell count to
+         * call it with — the caller supplies one from the vehicle profile
+         * (user-set, or auto-filled from a prior smart-BMS connect).
+         */
+        fun scaleLiveVoltage(voltageOn672ScaleV: Float, cellCount: Int): Float =
+            voltageOn672ScaleV * (cellCount * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V)
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150

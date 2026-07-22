@@ -29,6 +29,21 @@ import kotlin.time.Instant
 @OptIn(ExperimentalTime::class)
 internal class VehicleConnection(
     packs: List<Pack>,
+    /**
+     * Slots the PROTOCOL says may exist but [packs] (the stored profile) does
+     * not know about. A latent slot is invisible — absent from every snapshot
+     * — until its first sample, and a full citizen from then on.
+     *
+     * This is what keeps a Begode without a smart BMS honest: the protocol
+     * always reports packCount = 2 (it cannot know before the frames arrive),
+     * but a dumb wheel only ever produces data for pack 0. Publishing the
+     * second slot eagerly would pin a permanently-offline phantom "Pack 2"
+     * card and a permanent isPartial on every such wheel; keeping it latent
+     * means the configuration follows the stream (see the multi-pack spec,
+     * "Откуда берутся пакеты"). A stored pack is never latent — user
+     * configuration may legitimately be offline and must stay visible.
+     */
+    latentPacks: List<Pack> = emptyList(),
     private val topology: PackTopology,
     private val onVehicleData: (VehicleData) -> Unit,
     /**
@@ -41,6 +56,16 @@ internal class VehicleConnection(
     private val states: MutableList<PackState> = packs
         .sortedBy { it.index }
         .map { PackState(pack = it, data = BmsData(), isOnline = false) }
+        .toMutableList()
+
+    /**
+     * Latent slots not yet materialised. A stored index always wins over a
+     * latent duplicate: [submit] matches slots by index, and a duplicate
+     * would leave one of them permanently unreachable. Same thread-safety
+     * terms as [states] — mutated only from the session's single funnel.
+     */
+    private val latent: MutableList<Pack> = latentPacks
+        .filter { lp -> packs.none { it.index == lp.index } }
         .toMutableList()
 
     /**
@@ -81,8 +106,11 @@ internal class VehicleConnection(
         data: BmsData,
         sections: List<SectionState> = emptyList()
     ): VehicleData {
-        val slot = states.indexOfFirst { it.pack.index == packIndex }
-        if (slot < 0) return snapshot()
+        var slot = states.indexOfFirst { it.pack.index == packIndex }
+        if (slot < 0) {
+            slot = materialiseLatent(packIndex)
+            if (slot < 0) return snapshot()
+        }
         val now = clock()
         states[slot] = states[slot].copy(
             data = data,
@@ -106,6 +134,22 @@ internal class VehicleConnection(
         val snap = snapshot()
         onVehicleData(snap)
         return snap
+    }
+
+    /**
+     * Promote the latent slot with [packIndex] into [states], keeping index
+     * order, and return its position — or -1 when no such latent slot exists
+     * (then the index is genuinely unknown and the sample is dropped, as
+     * before). Called only from [submit], so materialisation and the sample
+     * that caused it are one state change and one emission.
+     */
+    private fun materialiseLatent(packIndex: Int): Int {
+        val li = latent.indexOfFirst { it.index == packIndex }
+        if (li < 0) return -1
+        val pack = latent.removeAt(li)
+        states.add(PackState(pack = pack, data = BmsData(), isOnline = false))
+        states.sortBy { it.pack.index }
+        return states.indexOfFirst { it.pack.index == packIndex }
     }
 
     /**

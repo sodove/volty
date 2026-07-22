@@ -207,6 +207,53 @@ class AlertEngineTest {
     }
 
     @Test
+    fun `unknown soc fires no soc alerts even at zero percent`() {
+        // A dumb Begode with no cell count: soc = 0 means "unknown", not
+        // "empty". Neither SOC_LOW nor SOC_CUTOFF may fire on it.
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
+        engine.evaluateForTest(bmsData(soc = 0f).copy(socKnown = false), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `unknown soc does not silence cell voltage alerts on the same sample`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
+        // Close-together cells so CELL_DELTA does not fire too.
+        engine.evaluateForTest(bmsData(cells = listOf(4.21f, 4.25f), soc = 0f).copy(socKnown = false), v)
+        assertEquals(1, notifier.alerts.size)
+        assertEquals("Cell voltage high", notifier.alerts.first().first)
+    }
+
+    @Test
+    fun `unknown soc does not silence temperature alerts on the same sample`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
+        engine.evaluateForTest(bmsData(temps = listOf(65f), soc = 0f).copy(socKnown = false), v)
+        assertEquals(1, notifier.alerts.size)
+        assertEquals("Temperature high", notifier.alerts.first().first)
+    }
+
+    @Test
+    fun `a genuine known zero percent still fires both soc alerts`() {
+        // The case the socKnown gate must NOT break: a coulomb-counting BMS
+        // reporting a truly flat pack. socKnown defaults to true on its samples.
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
+        engine.evaluateForTest(bmsData(soc = 0f), v)
+        assertEquals(2, notifier.alerts.size)
+        assertEquals(
+            listOf("Battery low", "Discharge cutoff"),
+            notifier.alerts.map { it.first }
+        )
+    }
+
+    @Test
     fun `charge complete fires when SOC 100 and current near zero`() {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())

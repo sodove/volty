@@ -10,6 +10,16 @@ data class BmsData(
     val current: Float = 0f,
     val power: Float = 0f,
     val soc: Float = 0f,
+    /**
+     * False when [soc] is a placeholder for a value nobody knows: a Begode
+     * without a smart BMS and with no configured cell count has no fuel gauge
+     * and nothing to estimate from, so its samples carry `soc = 0` that means
+     * "unknown", not "empty". A genuinely flat pack reads `soc = 0` WITH
+     * `socKnown = true` — the value alone cannot express the difference, this
+     * flag can. SoC-based alerts are skipped while it is false. Defaults to
+     * true: every device that reports or estimates a SoC produces a known one.
+     */
+    val socKnown: Boolean = true,
     val charge: Float = 0f,
     val capacity: Float = 0f,
     /**

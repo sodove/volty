@@ -158,6 +158,50 @@ class PackAggregatorTest {
         assertEquals(20f, agg.capacity, absoluteTolerance = 0.001f)
     }
 
+    // --- socKnown: the aggregate SoC is only meaningful if every pack's was ---
+
+    private fun PackState.withUnknownSoc() = copy(data = data.copy(soc = 0f, socKnown = false))
+
+    @Test
+    fun allKnownPacksYieldAKnownAggregateSoc() {
+        val packs = listOf(state(0, 50f, 1f, soc = 80f), state(1, 50f, 1f, soc = 60f))
+        assertTrue(PackAggregator.aggregate(packs, PackTopology.PARALLEL).socKnown)
+        assertTrue(PackAggregator.aggregate(packs, PackTopology.SERIES).socKnown)
+    }
+
+    @Test
+    fun allUnknownPacksYieldAnUnknownAggregateSoc() {
+        // The dumb-Begode case: the single synthetic pack has no SoC, so
+        // neither does the vehicle.
+        val only = state(0, 50f, 1f).withUnknownSoc()
+        assertFalse(PackAggregator.aggregate(listOf(only), PackTopology.PARALLEL).socKnown)
+        assertFalse(PackAggregator.aggregate(listOf(only), PackTopology.SERIES).socKnown)
+    }
+
+    @Test
+    fun aSingleUnknownPackMakesTheAggregateSocUnknown() {
+        // Parallel weights the unknown pack's placeholder 0 into the average;
+        // series takes minOf, which the fabricated 0 always wins. Either way
+        // the aggregate number is polluted, so it must not drive SoC alerts.
+        val packs = listOf(
+            state(0, 50f, 1f, soc = 80f),
+            state(1, 50f, 1f).withUnknownSoc()
+        )
+        assertFalse(PackAggregator.aggregate(packs, PackTopology.PARALLEL).socKnown)
+        assertFalse(PackAggregator.aggregate(packs, PackTopology.SERIES).socKnown)
+    }
+
+    @Test
+    fun anOfflineUnknownPackDoesNotPolluteTheAggregateSoc() {
+        // Offline packs are excluded from every aggregate figure, including
+        // this one: the number the online packs produced is still meaningful.
+        val packs = listOf(
+            state(0, 50f, 1f, soc = 80f),
+            state(1, 50f, 1f, online = false).withUnknownSoc()
+        )
+        assertTrue(PackAggregator.aggregate(packs, PackTopology.PARALLEL).socKnown)
+    }
+
     @Test
     fun powerIsSummedInBothTopologies() {
         val packs = listOf(
