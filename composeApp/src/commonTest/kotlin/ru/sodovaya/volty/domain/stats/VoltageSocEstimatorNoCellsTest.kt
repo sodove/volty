@@ -6,7 +6,9 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertSame
+import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -67,6 +69,38 @@ class VoltageSocEstimatorNoCellsTest {
         val sample = BmsData(voltage = 0f, current = -3.5f, isConnected = true)
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
         assertSame(sample, out)
+    }
+
+    @Test
+    fun theVoltageDerivedEstimateMarksTheSocAsKnown() {
+        // The synthetic no-BMS pack arrives with socKnown = false. Once a
+        // cell count makes an estimate possible, the SoC IS known — the
+        // estimate is the fuel gauge — and SoC alerts must work off it.
+        val sample = BmsData(voltage = 147.3f, socKnown = false, isConnected = true)
+        val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
+        assertEquals(42.5f, out.soc, 0.05f)
+        assertTrue(out.socKnown, "an estimated SoC is a known SoC")
+    }
+
+    @Test
+    fun anUnestimatableSampleKeepsItsUnknownSoc() {
+        // No cell count: the pass-through is the identity, so the producer's
+        // socKnown = false survives to gate the SoC alerts downstream.
+        val sample = BmsData(voltage = 0f, socKnown = false, isConnected = true)
+        val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = null), packIndex = 0)
+        assertSame(sample, out)
+        assertFalse(out.socKnown)
+    }
+
+    @Test
+    fun theCellBasedEstimateAlsoMarksTheSocAsKnown() {
+        // Belt and braces for the cell path: even if a producer ever flags a
+        // cell-bearing sample unknown, estimating from those cells makes it
+        // known again.
+        val sample = BmsData(cellVoltages = List(40) { 4.09f }, socKnown = false, isConnected = true)
+        val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
+        assertEquals(87.78f, out.soc, 0.05f)
+        assertTrue(out.socKnown)
     }
 
     @Test

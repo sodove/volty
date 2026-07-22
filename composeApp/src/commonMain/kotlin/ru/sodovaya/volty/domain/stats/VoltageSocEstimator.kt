@@ -86,7 +86,11 @@ object VoltageSocEstimator {
         if (pack.bmsType.reportsStateOfCharge) return sample
         if (sample.cellVoltages.isNotEmpty()) {
             return sample.copy(
-                soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig)
+                soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig),
+                // An estimate IS the device's fuel gauge — mark the SoC known
+                // so the SoC alerts work off it (a no-op for producers that
+                // already default to true).
+                socKnown = true
             )
         }
         // No cells at all: a Begode without a smart BMS streams only a pack
@@ -101,7 +105,12 @@ object VoltageSocEstimator {
         return sample.copy(
             soc = estimateFromAverageCellVoltage(
                 sample.voltage / cellCount, vehicle.chemistry, vehicle.alertConfig
-            )
+            ),
+            // Same as the cell path: once estimated, the SoC is known. The
+            // pass-throughs above are identities on purpose — the synthetic
+            // no-BMS pack's socKnown = false survives them and keeps the SoC
+            // alerts silent on a wheel whose charge nobody can know.
+            socKnown = true
         )
     }
 }

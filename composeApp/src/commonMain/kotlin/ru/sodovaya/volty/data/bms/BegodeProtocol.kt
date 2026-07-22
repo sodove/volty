@@ -324,6 +324,11 @@ class BegodeProtocol : BmsProtocol() {
                 voltage = 0f,
                 current = phaseCurrentA,
                 power = 0f,
+                // No fuel gauge and no cells: soc = 0 here means "unknown",
+                // not "empty", and downstream must not alarm on it. The
+                // estimator flips this back to true the moment the vehicle
+                // profile's cell count makes a voltage estimate possible.
+                socKnown = false,
                 cellVoltages = emptyList(),
                 temperatures = listOf(boardTempC),
                 // Same rationale as [rebuild]: a streaming wheel is not cut

@@ -103,22 +103,30 @@ class AlertEngine(
             )
         }
 
-        fire(AlertKind.SOC_LOW, vehicle, now,
-            triggered = data.soc.toInt() < cfg.socLowPercent,
-            recovered = data.soc.toInt() > cfg.socLowPercent + 3,
-            severity = AlertSeverity.WARNING,
-            title = "Battery low",
-            text = "${data.soc.toInt()}% on ${vehicle.name}"
-        )
-
-        cfg.socCutoffPercent?.let { cutoff ->
-            fire(AlertKind.SOC_CUTOFF, vehicle, now,
-                triggered = data.soc.toInt() < cutoff,
-                recovered = data.soc.toInt() > cutoff + 2,
-                severity = AlertSeverity.CRITICAL,
-                title = "Discharge cutoff",
-                text = "${data.soc.toInt()}% — stop now (${vehicle.name})"
+        // The SoC alerts are the ONLY ones gated on socKnown: a dumb Begode
+        // with no cell count publishes soc = 0 meaning "unknown", not "empty",
+        // and alarming on it every connect would train the user to ignore the
+        // one alert that matters. A genuine 0 % arrives with socKnown = true
+        // and still fires. Every other alert reads its own physical quantity
+        // and is untouched by an unknown SoC.
+        if (data.socKnown) {
+            fire(AlertKind.SOC_LOW, vehicle, now,
+                triggered = data.soc.toInt() < cfg.socLowPercent,
+                recovered = data.soc.toInt() > cfg.socLowPercent + 3,
+                severity = AlertSeverity.WARNING,
+                title = "Battery low",
+                text = "${data.soc.toInt()}% on ${vehicle.name}"
             )
+
+            cfg.socCutoffPercent?.let { cutoff ->
+                fire(AlertKind.SOC_CUTOFF, vehicle, now,
+                    triggered = data.soc.toInt() < cutoff,
+                    recovered = data.soc.toInt() > cutoff + 2,
+                    severity = AlertSeverity.CRITICAL,
+                    title = "Discharge cutoff",
+                    text = "${data.soc.toInt()}% — stop now (${vehicle.name})"
+                )
+            }
         }
 
         if (cfg.chargeCompleteNotify) {

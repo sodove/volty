@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -99,6 +100,32 @@ class BegodeNoBmsProtocolTest {
 
         protocol.onNotification(liveFrame(voltageRaw = 5890))
         assertTrue(protocol.latestData(0) !== first, "a new live frame must mint a fresh instance")
+    }
+
+    @Test
+    fun theSyntheticPackAdmitsItsSocIsUnknown() {
+        // A dumb wheel has no fuel gauge and the protocol has no cell count
+        // to estimate from: its soc = 0 means "unknown", not "empty". The
+        // flag is what keeps AlertEngine from crying "Battery low" on a full
+        // wheel every connect. The estimator flips it back to true the
+        // moment a cell count makes an estimate possible.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(0f, data.soc, 0f)
+        assertFalse(data.socKnown, "the synthetic pack cannot know its state of charge")
+    }
+
+    @Test
+    fun aRealBranchSampleKeepsSocKnownTrue() {
+        // A smart-BMS branch streams cells; its SoC is estimated from them
+        // downstream, so the sample itself stays on the known-SoC default.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        val data = assertNotNull(protocol.latestData(0))
+        assertTrue(data.socKnown, "only the synthetic no-BMS pack may claim an unknown SoC")
     }
 
     // --- The synthetic pack yields to a smart BMS and never returns ---

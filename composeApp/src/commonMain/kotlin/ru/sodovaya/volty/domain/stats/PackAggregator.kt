@@ -86,6 +86,14 @@ object PackAggregator {
             current = current,
             power = power,
             soc = soc,
+            // The aggregate SoC is only meaningful if every ONLINE pack's SoC
+            // was: an unknown pack contributes its placeholder 0 to the
+            // parallel weighted average and always wins the series minOf, so
+            // a single unknown pack pollutes the number under both
+            // topologies. In practice this is all-or-nothing — every
+            // existing setup is all-known, a dumb Begode is its lone
+            // unknown pack.
+            socKnown = data.all { it.socKnown },
             charge = charge,
             capacity = capacity,
             numCycles = data.maxOf { it.numCycles },

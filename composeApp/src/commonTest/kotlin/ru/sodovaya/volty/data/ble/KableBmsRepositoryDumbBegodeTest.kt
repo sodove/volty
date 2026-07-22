@@ -140,6 +140,46 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
+    fun `a dumb wheel with no cell count publishes an unknown SoC end to end`() = runTest {
+        // The false-alarm regression this flag exists for: soc = 0 with
+        // socKnown = false must reach activeData, so AlertEngine skips the
+        // SoC alerts instead of crying "Battery low" on a full wheel.
+        val repo = newRepo(this).also { underTest = it }
+        val wire = Wire(repo, vehicle(cellCount = null))
+
+        wire.notify(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+
+        val data = repo.activeData.value
+        assertTrue(data.isConnected)
+        assertEquals(0f, data.soc, 0f)
+        assertFalse(data.socKnown, "an inestimable SoC must be flagged unknown through the aggregate")
+    }
+
+    @Test
+    fun `a dumb wheel with a known cell count publishes a known estimated SoC`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val wire = Wire(repo, vehicle(cellCount = 40))
+
+        wire.notify(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+
+        val data = repo.activeData.value
+        assertEquals(42.5f, data.soc, 0.1f)
+        assertTrue(data.socKnown, "the voltage estimate is a real fuel gauge — SoC alerts must work")
+    }
+
+    @Test
+    fun `the smart-BMS capture publishes a known SoC`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val wire = Wire(repo, vehicle(cellCount = 40))
+
+        BegodeDumpFixture.chunks().forEach { wire.notify(it) }
+
+        val data = repo.activeData.value
+        assertEquals(45.6f, data.soc, 0.3f)
+        assertTrue(data.socKnown, "a cell-estimated SoC on the smart path stays known")
+    }
+
+    @Test
     fun `the smart-BMS capture through the same pipeline is completely unaffected`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val wire = Wire(repo, vehicle(cellCount = 40))
