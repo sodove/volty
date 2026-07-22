@@ -41,9 +41,12 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.channels.SendChannel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -61,6 +64,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
@@ -190,8 +194,33 @@ class KableBmsRepository private constructor(
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()
 
-    private var currentSession: ConnectionSession? = null
-    private var reconnectJob: Job? = null
+    /**
+     * The links of the current connection — one [PackLink] per distinct pack
+     * address, successor of the single `currentSession` / `reconnectJob`
+     * pair. A single-address vehicle (every stored vehicle until sub-project
+     * B) holds exactly one link and behaves as the old fields did.
+     *
+     * The LIST reference follows the [vehicleConnection] locking discipline:
+     * every production write ([doConnect] install, [disconnect] /
+     * [connectDemo] clear, [onAppResumed] resurrect) happens inside a
+     * `sessionLock.withLock` block; the test seams write it unlocked under
+     * the same single sanctioned exception. Reads are unlocked — the list is
+     * immutable, and a coroutine holding a stale reference only ever finds
+     * links whose identity guards (`links.any { it === link }`) fail closed.
+     */
+    @Volatile
+    private var links: List<PackLink> = emptyList()
+
+    /**
+     * Guards every link STATUS mutation and the fold that derives the
+     * vehicle's [ConnectionState] from them, so the fold never reads a
+     * half-updated link and two links' concurrent transitions cannot
+     * interleave their state writes. Deliberately NOT [sessionLock]: status
+     * changes happen on non-suspending paths (including inside `synchronized`
+     * from drop callbacks) where taking a suspending mutex is impossible, and
+     * the fold never touches the session / channel fields the mutex guards.
+     */
+    private val linkStateLock = Any()
 
     /**
      * The serialisation barrier of the sample funnel: sessions enrich on their
@@ -386,14 +415,18 @@ class KableBmsRepository private constructor(
     override suspend fun connectDemo(): Result<Unit> {
         println("[VOLTY-BLE] connectDemo: starting simulated session")
         return try {
-            // Tear down any real session / reconnect loop / prior demo under the
-            // lock so a concurrent disconnect or connect sees a consistent view.
+            // Tear down every real link (session + reconnect loop) / prior demo
+            // under the lock so a concurrent disconnect or connect sees a
+            // consistent view.
             sessionLock.withLock {
                 userInitiatedDisconnect = false
-                currentSession?.tearDown()
-                currentSession = null
-                reconnectJob?.cancel()
-                reconnectJob = null
+                for (l in links) {
+                    l.session?.tearDown()
+                    l.session = null
+                    l.reconnectJob?.cancel()
+                    l.reconnectJob = null
+                }
+                links = emptyList()
                 demoJob?.cancel()
                 demoJob = null
                 // Demo bypasses the orchestrator entirely — the simulator
@@ -570,28 +603,102 @@ class KableBmsRepository private constructor(
         protocol: BmsProtocol,
         localToGlobal: (localIndex: Int) -> Int = { it }
     ): SamplePipeline {
+        val orchestrator = buildOrchestrator(vehicle, address, type)
+        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        val onSample = makeLinkOnSample(
+            protocol = protocol,
+            socVehicle = socVehicleFor(vehicle, address, type),
+            channel = channel,
+            localToGlobal = localToGlobal
+        )
+        return SamplePipeline(orchestrator, channel, onSample)
+    }
+
+    /**
+     * The vehicle's pack list expanded PER LINK: each distinct address's
+     * stored packs grown to that link's protocol [BmsProtocol.packCount]
+     * (a Begode link owns two branch slots, an ANT link one). For a
+     * single-address vehicle this is exactly the old
+     * `stored.expandedTo(protocol.packCount)`.
+     *
+     * Known limit, deliberate for sub-project A: [expandedTo] synthesises
+     * global indices after the link's own highest index, which is
+     * collision-free while multi-address vehicles only combine
+     * single-pack-protocol links (no way to CREATE anything else exists
+     * until sub-project B).
+     */
+    private fun expandedVehiclePacks(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> {
         val stored = storedPacks(vehicle, address, type)
-        val packs = stored.expandedTo(protocol.packCount)
-        // The SoC estimator must see the SAME expanded pack list the
-        // orchestrator is sized from. The stored vehicle can know fewer packs
-        // than the protocol does (a one-pack Begode profile vs. two branches):
-        // handed the stored list, the estimator's per-pack lookup misses for
-        // the synthesised slot, that branch's Begode sample keeps its reported
-        // soc = 0, and the parallel aggregate — a plain mean when no pack
-        // reports capacity — HALVES the wheel's state of charge, feeding the
-        // same halved value into the SOC_LOW / SOC_CUTOFF alerts.
-        val socVehicle = vehicle?.copy(packs = packs)
-        val orchestrator = VehicleConnection(
+        return planLinks(stored).flatMap { spec ->
+            stored.filter { it.bmsAddress == spec.address }
+                .sortedBy { it.index }
+                .expandedTo(createProtocol(spec.bmsType).packCount)
+        }.sortedBy { it.index }
+    }
+
+    /**
+     * The link plan for one connection, with each link's owned indices grown
+     * to its protocol's pack count — [planLinks] only sees the STORED packs,
+     * but a Begode session speaks local indices up to packCount - 1, so the
+     * link must own the synthesised branch slots too or
+     * [LinkSpec.globalIndex] could not translate them.
+     */
+    private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType): List<LinkSpec> {
+        val stored = storedPacks(vehicle, address, type)
+        return planLinks(stored).map { spec ->
+            val linkPacks = stored.filter { it.bmsAddress == spec.address }
+                .sortedBy { it.index }
+                .expandedTo(createProtocol(spec.bmsType).packCount)
+            spec.copy(ownedIndices = linkPacks.map { it.index })
+        }
+    }
+
+    /**
+     * The vehicle the SoC estimator sees: the SAME expanded pack list the
+     * orchestrator is sized from. The stored vehicle can know fewer packs
+     * than the protocols do (a one-pack Begode profile vs. two branches):
+     * handed the stored list, the estimator's per-pack lookup misses for
+     * the synthesised slot, that branch's Begode sample keeps its reported
+     * soc = 0, and the parallel aggregate — a plain mean when no pack
+     * reports capacity — HALVES the wheel's state of charge, feeding the
+     * same halved value into the SOC_LOW / SOC_CUTOFF alerts.
+     */
+    private fun socVehicleFor(vehicle: Vehicle?, address: String, type: BmsType): Vehicle? =
+        vehicle?.copy(packs = expandedVehiclePacks(vehicle, address, type))
+
+    /**
+     * Build the ONE orchestrator of a connection, sized from the full vehicle
+     * pack list ([expandedVehiclePacks]) regardless of how many links feed it.
+     */
+    private fun buildOrchestrator(vehicle: Vehicle?, address: String, type: BmsType): VehicleConnection {
+        val stored = storedPacks(vehicle, address, type)
+        val expanded = expandedVehiclePacks(vehicle, address, type)
+        return VehicleConnection(
             packs = stored,
             // Protocol-synthesised slots stay invisible until they report:
             // a Begode without a smart BMS never fills its second branch,
             // and an eager slot would be a permanently-offline phantom.
-            latentPacks = packs.drop(stored.size),
+            latentPacks = expanded.filter { ep -> stored.none { it.index == ep.index } },
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
-            onVehicleData = { vd -> _activeVehicleData.value = vd }
+            onVehicleData = { vd -> _activeVehicleData.value = vd },
+            clock = orchestratorClockForTest ?: { Clock.System.now() }
         )
-        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
-        val onSample: (Int, BmsData, List<SectionState>) -> Unit = { localIndex, sample, sections ->
+    }
+
+    /**
+     * The per-link enrichment stage: everything that must run on the SESSION
+     * side of the channel because it depends on this link's protocol state.
+     * Each connect attempt builds a fresh one around its own protocol
+     * instance and the connection's CURRENT channel; [localToGlobal] is the
+     * link's [LinkSpec.globalIndex] (identity for a single link).
+     */
+    private fun makeLinkOnSample(
+        protocol: BmsProtocol,
+        socVehicle: Vehicle?,
+        channel: Channel<PackSample>,
+        localToGlobal: (localIndex: Int) -> Int
+    ): (Int, BmsData, List<SectionState>) -> Unit =
+        { localIndex, sample, sections ->
             // Translate to the vehicle-global index FIRST: the scaler and the
             // estimator both look the pack up by its global index in the
             // expanded vehicle, and the orchestrator downstream of the
@@ -629,8 +736,6 @@ class KableBmsRepository private constructor(
                 println("[VOLTY-BLE] sample funnel: dropped sample for pack=$packIndex (channel closed or full)")
             }
         }
-        return SamplePipeline(orchestrator, channel, onSample)
-    }
 
     /**
      * Launch the single consumer coroutine that owns every shared-state
@@ -764,6 +869,61 @@ class KableBmsRepository private constructor(
         sessionLock.withLock { clearOrchestratorLocked(installed) }
     }
 
+    // ----- Link state fold -----
+
+    /**
+     * Move one link to [status] and refold the vehicle's [ConnectionState] —
+     * THE one place a link status becomes a vehicle state. The fold:
+     *
+     *  - any link ONLINE → [ConnectionState.Connected];
+     *  - none online, any CONNECTING → [ConnectionState.Connecting];
+     *  - all down, any RECONNECTING → [ConnectionState.Reconnecting] with the
+     *    first retrying link's attempt / reason;
+     *  - all FAILED → [ConnectionState.Failed] with the first link's reason.
+     *
+     * A single-link vehicle degenerates to exactly the pre-multi-link state
+     * machine: its one link's transitions produce the same writes, in the
+     * same order, that used to be inlined at each call site.
+     *
+     * The fold only fires while [link] is still installed — a straggler
+     * transition on a superseded link (an old loop outliving a new connect,
+     * a late drop report after [disconnect]) must never clobber the state the
+     * current owner wrote.
+     *
+     * @return true when this transition moved the vehicle INTO Connected —
+     * the moment the old code ran its `Connected → serviceStart → touch`
+     * tail, so a link coming online behind an already-Connected vehicle does
+     * not restart the service.
+     */
+    private fun setLinkState(
+        link: PackLink,
+        status: LinkStatus,
+        attempt: Int = 0,
+        reason: String? = null
+    ): Boolean = synchronized(linkStateLock) {
+        link.status = status
+        link.reconnectAttempt = attempt
+        if (reason != null) link.lastReason = reason
+        val current = links
+        if (current.none { it === link }) return@synchronized false
+        val wasConnected = _connectionState.value is ConnectionState.Connected
+        val vehicle = current.first().vehicle
+        _connectionState.value = when {
+            current.any { it.status == LinkStatus.ONLINE } ->
+                ConnectionState.Connected(vehicle)
+            current.any { it.status == LinkStatus.CONNECTING } ->
+                ConnectionState.Connecting(vehicle)
+            current.any { it.status == LinkStatus.RECONNECTING } ->
+                current.first { it.status == LinkStatus.RECONNECTING }
+                    .let { ConnectionState.Reconnecting(it.reconnectAttempt, it.lastReason) }
+            else ->
+                ConnectionState.Failed(current.first().lastReason.ifEmpty { "Connection failed" })
+        }
+        !wasConnected && _connectionState.value is ConnectionState.Connected
+    }
+
+    // ----- Connect: one vehicle, N links -----
+
     private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
         // Tracks the orchestrator THIS attempt installed, so every failure
@@ -771,13 +931,19 @@ class KableBmsRepository private constructor(
         // installation and nothing else's.
         var installedOrchestrator: VehicleConnection? = null
         return try {
-            // User-initiated entry — clear the disconnect flag and tear down any
-            // existing session under the lock so a concurrent disconnect() sees
-            // a consistent view.
+            // User-initiated entry — clear the disconnect flag and tear down
+            // every existing link's session under the lock so a concurrent
+            // disconnect() sees a consistent view. The outgoing links'
+            // reconnect loops are deliberately NOT cancelled here (the old
+            // code could not cancel its single loop either — this method may
+            // be reached from a stack the loop owns); they stop on their own
+            // via the link-identity guard once the new list is installed.
             sessionLock.withLock {
                 userInitiatedDisconnect = false
-                currentSession?.tearDown()
-                currentSession = null
+                for (l in links) {
+                    l.session?.tearDown()
+                    l.session = null
+                }
                 // Connecting to a real BMS kills any running demo simulation.
                 demoJob?.cancel()
                 demoJob = null
@@ -791,104 +957,72 @@ class KableBmsRepository private constructor(
                 ringBuffer.clear()
                 _activeData.value = BmsData()
             }
+            // Initial state, written directly: the links are not installed yet,
+            // so the fold cannot own this first transition. From installation
+            // on, every state write goes through [setLinkState].
             _connectionState.value = ConnectionState.Connecting(vehicle)
             _activeVehicle.value = vehicle
-            // The protocol is built BEFORE the orchestrator so the orchestrator
-            // can be sized to it — see [connectionPacks]. It is a plain object
-            // with no I/O, so constructing it this early is free and cannot
-            // fail the connect.
-            val protocol = createProtocol(type)
-            val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
-            val orchestrator = pipeline.orchestrator
+
+            val specs = effectiveLinkSpecs(vehicle, address, type)
+            val newLinks = specs.map { PackLink(spec = it, vehicle = vehicle) }
+            val orchestrator = buildOrchestrator(vehicle, address, type)
             installedOrchestrator = orchestrator
+            val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
             // the competing writer — a concurrent connect / reconnect attempt
             // installing ITS orchestrator — is serialised against it. The
-            // funnel is installed in the SAME critical section (replacing the
-            // previous connection's, whose consumer ends when its channel
-            // closes) so orchestrator and funnel always belong to the same
-            // attempt; launching inside the section is fine — the consumer
-            // runs undispatched only to its first channel receive and never
-            // takes the lock.
+            // funnel and the link list are installed in the SAME critical
+            // section (replacing the previous connection's, whose consumer
+            // ends when its channel closes) so orchestrator, funnel and links
+            // always belong to the same attempt; launching inside the section
+            // is fine — the consumer runs undispatched only to its first
+            // channel receive and never takes the lock.
             sessionLock.withLock {
                 vehicleConnection = orchestrator
                 closeSampleFunnelLocked()
-                sampleChannel = pipeline.channel
-                sampleConsumerJob = launchSampleConsumer(pipeline.channel)
-            }
-
-            val advertisement = resolveAdvertisement(address)
-            if (advertisement == null) {
-                _connectionState.value = ConnectionState.Failed("Device not found")
-                clearOrchestratorAfterFailure(orchestrator)
-                return Result.failure(IllegalStateException("Device not found"))
-            }
-
-            val peripheral = Peripheral(advertisement)
-            val session = ConnectionSession(
-                parentScope = scope,
-                peripheral = peripheral,
-                protocol = protocol,
-                vehicle = vehicle,
-                connectionState = _connectionState,
-                onSample = pipeline.onSample,
-                onDropDetected = { reason ->
-                    // The session detected a drop. Schedule a reconnect — unless
-                    // the user explicitly disconnected in the meantime.
-                    onSessionDrop(reason, vehicle, address, type)
-                }
-            )
-
-            // Install the session under the lock so a racing disconnect()
-            // can't see a partially-set state.
-            sessionLock.withLock {
-                if (userInitiatedDisconnect) {
-                    // Someone called disconnect() while we were preparing —
-                    // honour it: don't even attempt to bring the link up.
-                    println("[VOLTY-BLE] doConnect: aborted, userInitiatedDisconnect set during prep")
-                    // Already inside sessionLock — use the locked variant, the
-                    // mutex is not reentrant.
-                    clearOrchestratorLocked(orchestrator)
-                    return Result.failure(IllegalStateException("Disconnect requested"))
-                }
-                currentSession = session
+                sampleChannel = channel
+                sampleConsumerJob = launchSampleConsumer(channel)
+                links = newLinks
                 lastConnectionTarget = ConnectionTarget(vehicle, address, type)
             }
 
-            val connectResult = session.connect()
-            if (connectResult.isFailure) {
-                val err = connectResult.exceptionOrNull()?.message ?: "Connection failed"
-                _connectionState.value = ConnectionState.Failed(err)
-                println("[VOLTY-BLE] doConnect: $err")
-                sessionLock.withLock {
-                    if (currentSession === session) currentSession = null
+            // Raise the links. A single link runs INLINE in this coroutine —
+            // the exact pre-multi-link call shape, preserving its cancellation
+            // and ordering behaviour to the byte. Several links run
+            // concurrently, each started linkStaggerMs after the previous
+            // (simultaneous GATT connects are flaky on Android), inside
+            // coroutineScope so a superseding connect / disconnect cancelling
+            // THIS coroutine takes the whole fan-out down with it.
+            val results: List<Result<Unit>> =
+                if (newLinks.size == 1) {
+                    listOf(connectLinkAttempt(newLinks[0], isReconnectAttempt = false))
+                } else {
+                    coroutineScope {
+                        newLinks.mapIndexed { i, link ->
+                            async {
+                                if (i > 0) delay(i * BleConfig.linkStaggerMs)
+                                connectLinkAttempt(link, isReconnectAttempt = false)
+                            }
+                        }.awaitAll()
+                    }
                 }
-                session.tearDown()
-                clearOrchestratorAfterFailure(orchestrator)
-                return Result.failure(IllegalStateException(err))
-            }
 
-            // Re-check after suspension: did the user disconnect while we were
-            // mid-handshake?
-            val shouldAbort = sessionLock.withLock {
-                if (userInitiatedDisconnect) {
-                    println("[VOLTY-BLE] doConnect: post-connect, disconnect was requested — tearing down")
-                    if (currentSession === session) currentSession = null
-                    true
-                } else false
-            }
-            if (shouldAbort) {
-                session.tearDown()
+            if (newLinks.none { it.status == LinkStatus.ONLINE }) {
+                // Every link failed (or the connect was aborted): the fold has
+                // already published Failed / left Connecting for disconnect()
+                // to overwrite — mirror the old failure tail: drop what this
+                // attempt installed and report the first error.
+                val firstFailure = results.firstNotNullOfOrNull { it.exceptionOrNull() }
+                    ?: IllegalStateException("Connection failed")
                 clearOrchestratorAfterFailure(orchestrator)
-                return Result.failure(IllegalStateException("Disconnect requested"))
+                return Result.failure(firstFailure)
             }
-
-            _connectionState.value = ConnectionState.Connected(vehicle)
-            println("[VOLTY-BLE] state -> Connected(${vehicle?.name ?: "guest"}) addr=$address")
-            serviceStart()
-            // Guests are transient — never write them to the saved-vehicle store.
-            if (vehicle != null && !vehicle.isGuest) vehicleRepository.touch(vehicle.id)
+            // Partial initial connect: at least one link answered, so the
+            // vehicle is Connected (the fold already says so). The links that
+            // did not answer are pushed by their own background loops instead
+            // of failing the whole connect — no "wait for all".
+            startRetriesForMissingLinks(newLinks)
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
             // Deliberately NO orchestrator cleanup here: cancellation means a
@@ -903,6 +1037,195 @@ class KableBmsRepository private constructor(
         }
     }
 
+    /**
+     * One connect attempt for ONE link — the per-address body of what
+     * doConnect used to inline for its single session, preserved
+     * transition-for-transition (state writes now via [setLinkState], whose
+     * single-link fold produces the identical sequence): resolve the
+     * advertisement, raise the session, install it under [sessionLock] with
+     * the userInitiatedDisconnect prep check, connect, re-check the flag
+     * after the suspension, then Connected → serviceStart → touch.
+     *
+     * [isReconnectAttempt] gates the pipeline rebuild: every pre-multi-link
+     * reconnect attempt rebuilt the orchestrator and funnel from scratch, and
+     * the degenerate single-link path must keep doing so — but only when NO
+     * sibling link is up or mid-attempt, because a live sibling is actively
+     * feeding the current pipeline and replacing it would orphan that link's
+     * channel. Initial attempts never rebuild: doConnect just installed the
+     * pipeline they feed.
+     */
+    private suspend fun connectLinkAttempt(
+        link: PackLink,
+        isReconnectAttempt: Boolean
+    ): Result<Unit> {
+        val vehicle = link.vehicle
+        val address = link.spec.address
+        val type = link.spec.bmsType
+        // Tracks the orchestrator THIS attempt installed (rebuild path only),
+        // so every failure path can undo exactly its own installation.
+        var installedOrchestrator: VehicleConnection? = null
+        return try {
+            // Tear down this link's previous (dead) session under the lock,
+            // as the old doConnect preamble did for the single session.
+            sessionLock.withLock {
+                link.session?.tearDown()
+                link.session = null
+            }
+            setLinkState(link, LinkStatus.CONNECTING)
+            // The protocol instance is shared by the enrichment funnel and
+            // the session — both must read the same decode state. Plain
+            // object, no I/O; constructing it this early cannot fail.
+            val protocol = createProtocol(type)
+            val channel: Channel<PackSample> = sessionLock.withLock {
+                if (links.none { it === link }) {
+                    return Result.failure(IllegalStateException("Link superseded"))
+                }
+                if (isReconnectAttempt && links.none {
+                        it !== link &&
+                            (it.status == LinkStatus.ONLINE ||
+                                it.status == LinkStatus.CONNECTING ||
+                                it.session != null)
+                    }
+                ) {
+                    installedOrchestrator = rebuildPipelineLocked(vehicle, address, type)
+                }
+                sampleChannel
+                    ?: return Result.failure(IllegalStateException("No sample funnel"))
+            }
+            val onSample = makeLinkOnSample(
+                protocol = protocol,
+                socVehicle = socVehicleFor(vehicle, address, type),
+                channel = channel,
+                // THIS is where the local→global seam is populated: the
+                // session speaks indices local to its protocol, the shared
+                // funnel is keyed by the vehicle's global pack indices.
+                localToGlobal = link.spec::globalIndex
+            )
+
+            val advertisement = resolveAdvertisement(address)
+            if (advertisement == null) {
+                setLinkState(link, LinkStatus.FAILED, reason = "Device not found")
+                clearOrchestratorAfterFailure(installedOrchestrator)
+                return Result.failure(IllegalStateException("Device not found"))
+            }
+
+            val peripheral = Peripheral(advertisement)
+            val session = ConnectionSession(
+                parentScope = scope,
+                peripheral = peripheral,
+                protocol = protocol,
+                vehicle = vehicle,
+                connectionState = _connectionState,
+                onSample = onSample,
+                onDropDetected = { reason ->
+                    // The session detected a drop. Schedule THIS link's
+                    // reconnect — unless the user disconnected in the meantime.
+                    onLinkDrop(link, reason)
+                }
+            )
+
+            // Install the session under the lock so a racing disconnect()
+            // can't see a partially-set state.
+            sessionLock.withLock {
+                if (userInitiatedDisconnect) {
+                    // Someone called disconnect() while we were preparing —
+                    // honour it: don't even attempt to bring the link up.
+                    println("[VOLTY-BLE] link $address: aborted, userInitiatedDisconnect set during prep")
+                    // Already inside sessionLock — use the locked variant, the
+                    // mutex is not reentrant.
+                    clearOrchestratorLocked(installedOrchestrator)
+                    return Result.failure(IllegalStateException("Disconnect requested"))
+                }
+                if (links.none { it === link }) {
+                    clearOrchestratorLocked(installedOrchestrator)
+                    return Result.failure(IllegalStateException("Link superseded"))
+                }
+                link.session = session
+            }
+
+            val connectResult = session.connect()
+            if (connectResult.isFailure) {
+                val err = connectResult.exceptionOrNull()?.message ?: "Connection failed"
+                setLinkState(link, LinkStatus.FAILED, reason = err)
+                println("[VOLTY-BLE] link $address: $err")
+                sessionLock.withLock {
+                    if (link.session === session) link.session = null
+                }
+                session.tearDown()
+                clearOrchestratorAfterFailure(installedOrchestrator)
+                return Result.failure(IllegalStateException(err))
+            }
+
+            // Re-check after suspension: did the user disconnect while we were
+            // mid-handshake?
+            val shouldAbort = sessionLock.withLock {
+                if (userInitiatedDisconnect) {
+                    println("[VOLTY-BLE] link $address: post-connect, disconnect was requested — tearing down")
+                    if (link.session === session) link.session = null
+                    true
+                } else false
+            }
+            if (shouldAbort) {
+                session.tearDown()
+                clearOrchestratorAfterFailure(installedOrchestrator)
+                return Result.failure(IllegalStateException("Disconnect requested"))
+            }
+
+            val becameConnected = setLinkState(link, LinkStatus.ONLINE)
+            println("[VOLTY-BLE] link $address up (${vehicle?.name ?: "guest"})")
+            if (becameConnected) {
+                serviceStart()
+                // Guests are transient — never write them to the saved-vehicle store.
+                if (vehicle != null && !vehicle.isGuest) vehicleRepository.touch(vehicle.id)
+            }
+            Result.success(Unit)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // Deliberately NO cleanup here — same contract as doConnect's.
+            throw e
+        } catch (e: Exception) {
+            setLinkState(link, LinkStatus.FAILED, reason = e.message ?: "Connection failed")
+            clearOrchestratorAfterFailure(installedOrchestrator)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * Replace the orchestrator + funnel with fresh ones — what every
+     * pre-multi-link reconnect attempt did by re-running doConnect. Called
+     * only from [connectLinkAttempt] when no sibling link is feeding the
+     * current pipeline.
+     *
+     * PRECONDITION: caller holds [sessionLock] — this is the same install
+     * block doConnect runs, minus the link list (the links persist across
+     * their attempts).
+     */
+    private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType): VehicleConnection {
+        val orchestrator = buildOrchestrator(vehicle, address, type)
+        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        vehicleConnection = orchestrator
+        closeSampleFunnelLocked()
+        sampleChannel = channel
+        sampleConsumerJob = launchSampleConsumer(channel)
+        return orchestrator
+    }
+
+    /**
+     * The initial-partial tail of [doConnect]: at least one link is online,
+     * so the links that failed their first attempt are handed to their own
+     * background reconnect loops instead of failing the connect. Never
+     * called when the whole connect failed — that path keeps the old
+     * "Failed, no retry" semantics a single-link vehicle always had.
+     */
+    private fun startRetriesForMissingLinks(newLinks: List<PackLink>) {
+        if (userInitiatedDisconnect) return
+        for (l in newLinks) {
+            if (l.status != LinkStatus.FAILED) continue
+            val reason = l.lastReason.ifEmpty { "Initial connect failed" }
+            setLinkState(l, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
+            startLinkReconnectLoop(l, initialReason = reason)
+        }
+    }
+
     private suspend fun resolveAdvertisement(address: String): com.juul.kable.Advertisement? {
         val cached = cachedAdvertisement(address)
         if (cached != null) return cached
@@ -913,69 +1236,82 @@ class KableBmsRepository private constructor(
         return found
     }
 
-    private suspend fun onSessionDrop(reason: String, vehicle: Vehicle?, address: String, type: BmsType) {
+    private suspend fun onLinkDrop(link: PackLink, reason: String) {
         // Suspending check + state mutation under the lock so user disconnect
         // racing with a watchdog can't both win.
         sessionLock.withLock {
             if (userInitiatedDisconnect) {
-                println("[VOLTY-BLE] onSessionDrop ignored — user disconnected")
+                println("[VOLTY-BLE] onLinkDrop ignored — user disconnected")
                 return
             }
         }
-        if (_connectionState.value is ConnectionState.Connected ||
-            _connectionState.value is ConnectionState.Connecting) {
-            // Leave Connected BEFORE starting the loop — its "already connected"
-            // guard would otherwise short-circuit on the very first iteration and
-            // the link would never come back. The dead session is NOT torn down
-            // here: onDropDetected is invoked from inside the session's own
-            // state/watchdog jobs, and tearDown() cancelAndJoin-ing the calling
-            // job would deadlock. doConnect() in the loop tears it down safely.
-            _connectionState.value = ConnectionState.Reconnecting(0, reason)
-            startReconnectLoop(vehicle, address, type, initialReason = reason)
+        // React only while THIS link is still installed and believed up — the
+        // per-link translation of the old Connected/Connecting guard, which
+        // also dedups a double drop report (state event + watchdog firing for
+        // the same death). A sibling link's state is irrelevant here: its
+        // packs, its loop, its business.
+        val believedUp = synchronized(linkStateLock) {
+            links.any { it === link } &&
+                (link.status == LinkStatus.ONLINE || link.status == LinkStatus.CONNECTING)
+        }
+        if (believedUp) {
+            // Leave the up state BEFORE starting the loop — its "already
+            // online" guard would otherwise short-circuit on the very first
+            // iteration and the link would never come back. The dead session
+            // is NOT torn down here: onDropDetected is invoked from inside
+            // the session's own state/watchdog jobs, and tearDown()
+            // cancelAndJoin-ing the calling job would deadlock. The next
+            // attempt in the loop tears it down safely. The fold keeps the
+            // vehicle Connected while any sibling is still up.
+            setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
+            startLinkReconnectLoop(link, initialReason = reason)
         }
     }
 
-    private fun startReconnectLoop(
-        vehicle: Vehicle?,
-        address: String,
-        type: BmsType,
-        initialReason: String
-    ) {
-        reconnectJob?.cancel()
-        println("[VOLTY-BLE] reconnect loop: starting reason=$initialReason")
-        reconnectJob = scope.launch {
+    private fun startLinkReconnectLoop(link: PackLink, initialReason: String) {
+        val address = link.spec.address
+        link.reconnectJob?.cancel()
+        println("[VOLTY-BLE] reconnect loop[$address]: starting reason=$initialReason")
+        link.reconnectJob = scope.launch {
             var attempt = 0
             while (isActive) {
                 // Honour user-initiated disconnect, vehicle clearance,
-                // and "already connected by some other path".
+                // supersession by a newer connect, and "already online by
+                // some other path".
                 if (userInitiatedDisconnect) {
-                    println("[VOLTY-BLE] reconnect loop: userInitiatedDisconnect — stopping")
+                    println("[VOLTY-BLE] reconnect loop[$address]: userInitiatedDisconnect — stopping")
                     return@launch
                 }
-                if (_activeVehicle.value == null && vehicle != null) {
-                    println("[VOLTY-BLE] reconnect loop: vehicle cleared — stopping")
+                if (_activeVehicle.value == null && link.vehicle != null) {
+                    println("[VOLTY-BLE] reconnect loop[$address]: vehicle cleared — stopping")
                     return@launch
                 }
-                if (_connectionState.value is ConnectionState.Connected) {
-                    println("[VOLTY-BLE] reconnect loop: already connected — stopping")
+                if (links.none { it === link }) {
+                    println("[VOLTY-BLE] reconnect loop[$address]: link superseded — stopping")
+                    return@launch
+                }
+                if (link.status == LinkStatus.ONLINE) {
+                    println("[VOLTY-BLE] reconnect loop[$address]: already online — stopping")
                     return@launch
                 }
                 attempt++
-                println("[VOLTY-BLE] reconnect loop: attempt #$attempt")
-                val result = doConnect(address, type, vehicle)
+                println("[VOLTY-BLE] reconnect loop[$address]: attempt #$attempt")
+                val result = connectLinkAttempt(link, isReconnectAttempt = true)
                 if (result.isSuccess) {
-                    println("[VOLTY-BLE] reconnect loop: attempt #$attempt succeeded")
+                    println("[VOLTY-BLE] reconnect loop[$address]: attempt #$attempt succeeded")
                     return@launch
                 }
                 if (userInitiatedDisconnect) {
-                    println("[VOLTY-BLE] reconnect loop: disconnect requested mid-attempt — stopping")
+                    println("[VOLTY-BLE] reconnect loop[$address]: disconnect requested mid-attempt — stopping")
                     return@launch
                 }
-                println("[VOLTY-BLE] reconnect loop: attempt #$attempt failed — ${result.exceptionOrNull()?.message}")
+                println("[VOLTY-BLE] reconnect loop[$address]: attempt #$attempt failed — ${result.exceptionOrNull()?.message}")
                 // Settle into Reconnecting BETWEEN attempts so the UI sees a
                 // stable "trying again, attempt #N" message instead of the
-                // Connecting → Failed flicker that doConnect emits internally.
-                _connectionState.value = ConnectionState.Reconnecting(attempt, initialReason)
+                // Connecting → Failed flicker the attempt emits internally
+                // (the fold masks that flicker entirely while a sibling link
+                // keeps the vehicle Connected).
+                setLinkState(link, LinkStatus.RECONNECTING, attempt = attempt, reason = initialReason)
                 val delayMs = if (attempt < BleConfig.reconnectBackoffAfter)
                     BleConfig.reconnectDelayMs
                 else
@@ -986,40 +1322,50 @@ class KableBmsRepository private constructor(
     }
 
     override suspend fun disconnect() {
-        // Atomically: flag the intent, cancel the reconnect loop, tear down the
-        // session, clear vehicle, set Disconnected. Held under sessionLock so
-        // doConnect / onSessionDrop running on another coroutine see this.
-        val sessionToTear: ConnectionSession?
-        val reconnectToCancel: Job?
+        // Atomically: flag the intent, take every link (sessions + reconnect
+        // loops) out of the shared state, clear vehicle, set Disconnected.
+        // Held under sessionLock so doConnect / onLinkDrop running on another
+        // coroutine see this. The lock is taken ONCE for the whole sweep —
+        // never nested, it is not reentrant.
+        val sessionsToTear: List<ConnectionSession>
+        val reconnectsToCancel: List<Job>
         val demoToCancel: Job?
         sessionLock.withLock {
             userInitiatedDisconnect = true
-            sessionToTear = currentSession
-            currentSession = null
-            reconnectToCancel = reconnectJob
-            reconnectJob = null
+            val current = links
+            sessionsToTear = current.mapNotNull { it.session }
+            reconnectsToCancel = current.mapNotNull { it.reconnectJob }
+            for (l in current) {
+                l.session = null
+                l.reconnectJob = null
+            }
+            links = emptyList()
             demoToCancel = demoJob
             demoJob = null
             // Forget the target so a later [onAppResumed] doesn't try to
             // resurrect a connection the user explicitly closed.
             lastConnectionTarget = null
         }
-        reconnectToCancel?.cancel()
+        reconnectsToCancel.forEach { it.cancel() }
         demoToCancel?.cancel()
-        sessionToTear?.tearDown()
+        sessionsToTear.forEach { it.tearDown() }
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
         // Fresh acquisition: the block above has already released the lock,
         // and tearDown() must not run while holding it. The funnel closes
-        // beside the orchestrator: the session was torn down (and its observe
-        // loop joined) above, so no sample can hit the closed channel, and
-        // closing does not suspend — teardown cannot deadlock here.
+        // beside the orchestrator: every session was torn down (observe loops
+        // joined) above, so no sample can hit the closed channel, and closing
+        // does not suspend — teardown cannot deadlock here.
         sessionLock.withLock {
             vehicleConnection = null
             closeSampleFunnelLocked()
         }
         _activeVehicle.value = null
         ringBuffer.clear()
+        // Direct write, not the fold: the link list is empty (the fold no
+        // longer owns the state) and any straggler link transition is
+        // identity-guarded against the emptied list, so nothing can clobber
+        // this.
         _connectionState.value = ConnectionState.Disconnected
         serviceStop()
     }
@@ -1032,9 +1378,9 @@ class KableBmsRepository private constructor(
         if (state !is ConnectionState.Connected) return
 
         // Snapshot target under the lock so a concurrent disconnect doesn't
-        // pull the rug. We tolerate a missing session (paper-trail Connected
-        // state without a live session): the cached target is enough to drive
-        // the drop pathway and the loop will spin up a fresh session.
+        // pull the rug. We tolerate a missing link structure (paper-trail
+        // Connected state without live links): the cached target is enough to
+        // rebuild the links and let their loops spin up fresh sessions.
         //
         // Demo mode is inherently safe here: connectDemo() clears
         // lastConnectionTarget, so even though the state is Connected the
@@ -1046,27 +1392,64 @@ class KableBmsRepository private constructor(
         } ?: return
 
         val nowMs = Clock.System.now().toEpochMilliseconds()
-        val lastSampleMs = currentSession?.lastSampleAtMs() ?: testLastSampleAtMsOverride ?: 0L
-        val sampleAge = nowMs - lastSampleMs
+        val currentLinks = links
 
-        // Treat "never received a sample" the same as "long stale" — either way
-        // the in-session watchdog should have caught it by now if the link were
-        // healthy and the dispatcher were running.
-        val isStale = lastSampleMs == 0L || sampleAge > BleConfig.staleSampleMs
-        if (!isStale) return
+        if (currentLinks.isEmpty()) {
+            // Paper-trail Connected with no link structure behind it (a state
+            // restored without sessions). One freshness verdict for the whole
+            // vehicle, exactly as before multi-link: never sampled counts as
+            // long stale.
+            val lastSampleMs = testLastSampleAtMsOverride ?: 0L
+            val sampleAge = nowMs - lastSampleMs
+            val isStale = lastSampleMs == 0L || sampleAge > BleConfig.staleSampleMs
+            if (!isStale) return
+            val reason = "Background drop (stale ${sampleAge}ms)"
+            println("[VOLTY-BLE] onAppResumed: stale sample age=${sampleAge}ms (lastSampleAtMs=$lastSampleMs) — forcing reconnect")
+            val newLinks = effectiveLinkSpecs(target.vehicle, target.address, target.type)
+                .map { PackLink(spec = it, vehicle = target.vehicle) }
+            sessionLock.withLock {
+                if (userInitiatedDisconnect) return
+                links = newLinks
+            }
+            for (l in newLinks) {
+                // Transition out of Connected before kicking each loop — the
+                // loop's "already online" guard would otherwise short-circuit
+                // before the first attempt.
+                setLinkState(l, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
+                startLinkReconnectLoop(l, initialReason = reason)
+            }
+            return
+        }
 
-        val reason = "Background drop (stale ${sampleAge}ms)"
-        println("[VOLTY-BLE] onAppResumed: stale sample age=${sampleAge}ms (lastSampleAtMs=$lastSampleMs) — forcing reconnect")
-        // Tear down any live session and transition out of Connected before
-        // kicking the reconnect loop — the loop's "already connected" guard
-        // would otherwise short-circuit before the first attempt. This mirrors
-        // [simulateConnectionDropForTest] and the production watchdog flow,
-        // where the link drop event has already changed the link state by the
-        // time the loop runs.
-        val sessionToTear = sessionLock.withLock { currentSession }
-        sessionToTear?.tearDown()
-        _connectionState.value = ConnectionState.Reconnecting(0, reason)
-        startReconnectLoop(target.vehicle, target.address, target.type, initialReason = reason)
+        // Live link structure: re-check each link's freshness independently
+        // and reconnect only the stale ones — a healthy sibling stays
+        // untouched and keeps the vehicle Connected through the fold.
+        for (link in currentLinks) {
+            // Links already retrying (or still on their initial attempt) have
+            // an owner; only believed-online links need the staleness check.
+            if (link.status != LinkStatus.ONLINE) continue
+            val lastSampleMs = link.session?.lastSampleAtMs() ?: testLastSampleAtMsOverride ?: 0L
+            val sampleAge = nowMs - lastSampleMs
+            // Treat "never received a sample" the same as "long stale" —
+            // either way the in-session watchdog should have caught it by now
+            // if the link were healthy and the dispatcher were running.
+            val isStale = lastSampleMs == 0L || sampleAge > BleConfig.staleSampleMs
+            if (!isStale) continue
+            val reason = "Background drop (stale ${sampleAge}ms)"
+            println("[VOLTY-BLE] onAppResumed[${link.spec.address}]: stale sample age=${sampleAge}ms (lastSampleAtMs=$lastSampleMs) — forcing reconnect")
+            // Tear down the stale session and transition the LINK out of
+            // online before kicking its loop — mirrors the watchdog drop flow,
+            // where the link state has already changed by the time the loop
+            // runs. tearDown() outside the lock, as everywhere.
+            val sessionToTear = sessionLock.withLock {
+                val s = link.session
+                link.session = null
+                s
+            }
+            sessionToTear?.tearDown()
+            setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
+            startLinkReconnectLoop(link, initialReason = reason)
+        }
     }
 
     /**
@@ -1103,7 +1486,7 @@ class KableBmsRepository private constructor(
 
     /**
      * Test-only: simulate a link drop / stale-sample detection by driving the
-     * REAL [onSessionDrop] pathway, exactly as a [ConnectionSession] state
+     * REAL [onLinkDrop] pathway, exactly as a [ConnectionSession] state
      * observer / watchdog would. Lets unit tests exercise the
      * disconnect-vs-reconnect race without needing a real BLE stack.
      */
@@ -1113,16 +1496,22 @@ class KableBmsRepository private constructor(
         type: BmsType,
         reason: String
     ) {
-        // Mimic pre-drop state: vehicle present, link believed Connected. The
-        // production drop path (onSessionDrop) is then responsible for moving
-        // the state machine to Reconnecting and spinning up the loop.
+        // Mimic pre-drop state: vehicle present, one believed-online link —
+        // exactly what a live single-link connection holds. The production
+        // drop path (onLinkDrop) is then responsible for moving the link (and
+        // through the fold the state machine) to Reconnecting and spinning up
+        // the loop. Unlocked link-list write — the sanctioned test-seam
+        // exception, see [vehicleConnection].
         _activeVehicle.value = vehicle
         _connectionState.value = ConnectionState.Connected(vehicle)
-        scope.launch { onSessionDrop(reason, vehicle, address, type) }
+        val link = PackLink(spec = effectiveLinkSpecs(vehicle, address, type).first(), vehicle = vehicle)
+        link.status = LinkStatus.ONLINE
+        links = listOf(link)
+        scope.launch { onLinkDrop(link, reason) }
     }
 
-    /** Test-only: peek at the reconnect job so tests can await its termination. */
-    internal fun reconnectJobForTest(): Job? = reconnectJob
+    /** Test-only: peek at the (first) reconnect job so tests can await its termination. */
+    internal fun reconnectJobForTest(): Job? = links.firstNotNullOfOrNull { it.reconnectJob }
 
     /** Test-only: peek at the user-disconnect flag. */
     internal fun isUserInitiatedDisconnectForTest(): Boolean = userInitiatedDisconnect
@@ -1210,6 +1599,105 @@ class KableBmsRepository private constructor(
         _connectionState.value = ConnectionState.Connected(vehicle)
         lastConnectionTarget = ConnectionTarget(vehicle, address, type)
         testLastSampleAtMsOverride = lastSampleAtMs
+    }
+
+    // ----- Multi-link test seams -----
+
+    /**
+     * Test-only override of the orchestrator's time source, so tests can
+     * drive the per-pack staleness sweep (12 s of real time at production
+     * values) under virtual time. Null in production — [buildOrchestrator]
+     * falls back to the system clock. Set BEFORE installing a pipeline; the
+     * clock is captured at orchestrator construction.
+     */
+    @Volatile
+    internal var orchestratorClockForTest: (() -> Instant)? = null
+
+    /**
+     * Test-only: install the exact multi-link wiring [doConnect] builds —
+     * effective link specs, one orchestrator sized from the full vehicle pack
+     * list, one channel + consumer, one [PackLink] per distinct address — and
+     * return each link's session funnel (LOCAL pack indices, translated to
+     * global through that link's [LinkSpec.globalIndex], in link order).
+     *
+     * [ConnectionSession] requires a real Kable peripheral, so this seam is
+     * the only way commonTest can reach the fan-out. It shares
+     * [effectiveLinkSpecs] / [buildOrchestrator] / [makeLinkOnSample] with
+     * [doConnect] on purpose: the test drives the production wiring itself,
+     * not a copy that can drift. Links start CONNECTING, as after doConnect's
+     * install block. Unlocked writes — the sanctioned test-seam exception,
+     * see [vehicleConnection].
+     */
+    internal fun installLinksForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType
+    ): List<(packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> {
+        val newLinks = effectiveLinkSpecs(vehicle, address, type)
+            .map { PackLink(spec = it, vehicle = vehicle) }
+        val orchestrator = buildOrchestrator(vehicle, address, type)
+        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        vehicleConnection = orchestrator
+        closeSampleFunnelLocked()
+        sampleChannel = channel
+        sampleConsumerJob = launchSampleConsumer(channel)
+        links = newLinks
+        lastConnectionTarget = ConnectionTarget(vehicle, address, type)
+        _activeVehicle.value = vehicle
+        _connectionState.value = ConnectionState.Connecting(vehicle)
+        val socVehicle = socVehicleFor(vehicle, address, type)
+        return newLinks.map { link ->
+            makeLinkOnSample(
+                protocol = createProtocol(link.spec.bmsType),
+                socVehicle = socVehicle,
+                channel = channel,
+                localToGlobal = link.spec::globalIndex
+            )
+        }
+    }
+
+    /** Test-only: how many links the current connection holds. */
+    internal fun linkCountForTest(): Int = links.size
+
+    /** Test-only: one link's reconnect loop job, or null when it has none. */
+    internal fun linkReconnectJobForTest(address: String): Job? =
+        links.firstOrNull { it.spec.address == address }?.reconnectJob
+
+    /**
+     * Test-only: drive the production link-online transition (what a
+     * successful [connectLinkAttempt] performs after its session handshake)
+     * so tests can exercise the fold without a real peripheral.
+     */
+    internal fun markLinkOnlineForTest(address: String) {
+        setLinkState(links.first { it.spec.address == address }, LinkStatus.ONLINE)
+    }
+
+    /**
+     * Test-only: drive the production link-failure transition (what a failed
+     * [connectLinkAttempt] performs) so tests can exercise the fold's
+     * Failed branch without a real peripheral.
+     */
+    internal fun markLinkFailedForTest(address: String, reason: String) {
+        setLinkState(links.first { it.spec.address == address }, LinkStatus.FAILED, reason = reason)
+    }
+
+    /**
+     * Test-only: run [doConnect]'s initial-partial tail — failed links are
+     * promoted to background retry — against the installed link list.
+     */
+    internal fun settleInitialPartialForTest() {
+        startRetriesForMissingLinks(links)
+    }
+
+    /**
+     * Test-only: simulate one link's drop by driving the REAL [onLinkDrop]
+     * pathway, exactly as that link's [ConnectionSession] state observer /
+     * watchdog would — the multi-link sibling of
+     * [simulateConnectionDropForTest].
+     */
+    internal fun simulateLinkDropForTest(address: String, reason: String) {
+        val link = links.first { it.spec.address == address }
+        scope.launch { onLinkDrop(link, reason) }
     }
 }
 
