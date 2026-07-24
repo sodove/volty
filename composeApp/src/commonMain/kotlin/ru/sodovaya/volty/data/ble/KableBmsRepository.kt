@@ -368,7 +368,14 @@ class KableBmsRepository private constructor(
         if (observedCellCountStreak < cellCountStableSamples) return
         val vehicle = _activeVehicle.value ?: return
         if (vehicle.isGuest || vehicle.isDemo) return
-        if (vehicle.cellCount == n) return
+        // packs.firstOrNull(), not the `Vehicle.cellCount` shim: that is
+        // `packs.first()` and THROWS on a zero-pack (controller-only) vehicle.
+        // This runs inside the _activeData collector on the repo's
+        // SupervisorJob scope with no exception handler, so a throw here is
+        // app-fatal on Android. Unreachable only by accident today (a derived
+        // VESC pack carries no cells, so `n == 0` short-circuits above) —
+        // exactly the kind of accident a later protocol change would undo.
+        if (vehicle.packs.firstOrNull()?.cellCount == n) return
         if (lastPersistedCellCount == vehicle.id to n) return
         lastPersistedCellCount = vehicle.id to n
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")

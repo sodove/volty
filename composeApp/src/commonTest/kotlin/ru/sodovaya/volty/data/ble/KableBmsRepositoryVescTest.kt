@@ -5,9 +5,11 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
@@ -51,14 +53,17 @@ import kotlin.time.Instant
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class KableBmsRepositoryVescTest {
 
-    private class StubVehicleRepository : VehicleRepository {
+    /** Records every write so a test can assert the auto-fills stay silent. */
+    private class RecordingVehicleRepository : VehicleRepository {
+        val upserts = mutableListOf<Vehicle>()
         override val vehicles: Flow<List<Vehicle>> = flowOf(emptyList())
         override suspend fun get(id: String): Vehicle? = null
-        override suspend fun upsert(vehicle: Vehicle) {}
+        override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle }
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
     }
 
+    private val vehicleRepo = RecordingVehicleRepository()
     private var underTest: KableBmsRepository? = null
 
     @AfterTest
@@ -68,7 +73,7 @@ class KableBmsRepositoryVescTest {
     }
 
     private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
-        vehicleRepository = StubVehicleRepository(),
+        vehicleRepository = vehicleRepo,
         serviceStart = {},
         serviceStop = {},
         coroutineContext = StandardTestDispatcher(testScope.testScheduler),
@@ -212,6 +217,143 @@ class KableBmsRepositoryVescTest {
         assertEquals(1, vd.controllers.size)
         assertTrue(vd.controllers[0].isOnline)
         assertEquals(SpeedSource.REPORTED, vd.motion.speedSource)
+    }
+
+    // ----- 3b. The derived pack slot a controller link backs -----
+
+    /**
+     * `providesDerivedBattery` makes `VescProtocol.packCount` 1, so the SESSION
+     * will call the battery route with local pack index 0 — which resolves
+     * through `LinkSpec.globalPackIndex(0)`. If the link owned no pack slot
+     * that lookup throws IndexOutOfBounds inside the observe loop, killing it:
+     * the link goes silent, the watchdog fires and the vehicle reconnects
+     * forever. This pins the slot AND that a sample actually lands in it.
+     */
+    @Test
+    fun `a derived-battery VESC link owns pack 0 and its sample materialises the latent slot`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = vescOnlyVehicle(providesDerivedBattery = true)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        assertEquals(
+            listOf(OwnedSource(0)),
+            repo.linkSpecsForTest().single().ownedPacks,
+            "packCount = 1 ⇒ the link must own exactly the slot globalPackIndex(0) resolves"
+        )
+
+        // A motion sample emits a real vehicle snapshot without touching the
+        // battery side — proof the derived slot is LATENT (invisible until it
+        // reports), not an eagerly published permanently-offline phantom.
+        repo.linkMotionFunnelsForTest().single()(
+            0, ControllerData(speedKmh = 12f, speedSource = SpeedSource.REPORTED, isConnected = true)
+        )
+        advanceUntilIdle()
+        assertTrue(
+            repo.activeVehicleData.value.packs.isEmpty(),
+            "the derived slot must stay latent until it reports"
+        )
+
+        funnels.single()(0, BmsData(voltage = 78.2f, current = -8.85f, isConnected = true), emptyList())
+        advanceUntilIdle()
+
+        val snap = repo.activeVehicleData.value
+        assertEquals(1, snap.packs.size, "the derived slot must materialise on its first sample")
+        assertEquals(0, snap.packs[0].pack.index)
+        assertTrue(snap.packs[0].isOnline)
+        assertEquals(78.2f, snap.packs[0].data.voltage, absoluteTolerance = 0.01f)
+        assertEquals(78.2f, repo.activeData.value.voltage, absoluteTolerance = 0.01f)
+    }
+
+    /**
+     * The index-collision half of the same mechanism, plus the guard that keeps
+     * a derived slot out of the database: persisted, it would sit at the
+     * CONTROLLER's address with a BmsType that can never resolve to the
+     * controller's protocol kind — and the next connect's `planLinks` would
+     * reject the vehicle outright ("conflicting protocol kinds").
+     */
+    @Test
+    fun `a BMS beside a derived-battery VESC numbers the derived slot 1 and never persists it`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = Vehicle(
+            id = "v-mixed-derived",
+            name = "Scooter",
+            iconKey = "scooter",
+            packs = listOf(Pack(index = 0, label = "Main", bmsType = BmsType.JK_BMS, bmsAddress = ADDR)),
+            controllers = listOf(
+                Controller(
+                    index = 0, label = "ESC", controllerType = ControllerType.VESC,
+                    address = CTRL_ADDR, providesDerivedBattery = true
+                )
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val specs = repo.linkSpecsForTest()
+
+        val battery = specs.single { it.address == ADDR }
+        val controller = specs.single { it.address == CTRL_ADDR }
+        assertEquals(listOf(OwnedSource(0)), battery.ownedPacks)
+        assertEquals(
+            listOf(OwnedSource(1)),
+            controller.ownedPacks,
+            "the derived slot is numbered AFTER every stored/expanded index — never a collision"
+        )
+
+        funnels[specs.indexOf(battery)](
+            0, BmsData(voltage = 78.0f, current = 1.0f, isConnected = true), emptyList()
+        )
+        funnels[specs.indexOf(controller)](
+            0, BmsData(voltage = 78.2f, current = -8.85f, isConnected = true), emptyList()
+        )
+        advanceUntilIdle()
+
+        val snap = repo.activeVehicleData.value
+        assertEquals(listOf(0, 1), snap.packs.map { it.pack.index }, "both slots reachable, distinct indices")
+        assertTrue(snap.packs.all { it.isOnline })
+
+        // The pack auto-fill sees 2 discovered slots against 1 stored — it is
+        // genuinely reached — and must still write nothing.
+        assertEquals(
+            emptyList(),
+            vehicleRepo.upserts,
+            "a derived slot is runtime telemetry, not discovered hardware — it must never be persisted"
+        )
+    }
+
+    /**
+     * The fourth `packs.first()` trap of the same class, in
+     * `maybePersistCellCount`: `Vehicle.cellCount` is a `packs.first()` shim.
+     * That collector runs on the repo's SupervisorJob scope with no exception
+     * handler, so a throw there kills it silently (and is app-fatal on
+     * Android). The observable consequence is the write at the end of the
+     * method: it happens iff the collector survived the shim.
+     */
+    @Test
+    fun `the cell-count auto-fill survives a zero-pack vehicle`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = vescOnlyVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        // Three consecutive samples with the same cell count is what the
+        // auto-fill demands before it trusts a reading.
+        repeat(3) { i ->
+            repo.emitActiveDataForTest(
+                BmsData(
+                    voltage = 78.2f + i,
+                    cellVoltages = List(20) { 3.91f },
+                    isConnected = true
+                )
+            )
+            advanceUntilIdle()
+        }
+
+        assertEquals(
+            1,
+            vehicleRepo.upserts.size,
+            "the collector must reach its write — 0 upserts means it died on packs.first()"
+        )
     }
 
     // ----- 4. A battery-only vehicle plans exactly as before -----
