@@ -1,11 +1,15 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.stats.MotionAggregator
 import ru.sodovaya.volty.domain.stats.PackAggregator
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -44,6 +48,17 @@ internal class VehicleConnection(
      * configuration may legitimately be offline and must stay visible.
      */
     latentPacks: List<Pack> = emptyList(),
+    /**
+     * Stored controllers of this vehicle, mirroring [packs] on the battery
+     * side. Defaults empty so existing single-side (battery-only)
+     * construction sites keep compiling unchanged.
+     */
+    controllers: List<Controller> = emptyList(),
+    /**
+     * Latent controller slots, mirroring [latentPacks]: invisible until
+     * their first [submitMotion] sample, a full citizen from then on.
+     */
+    latentControllers: List<Controller> = emptyList(),
     private val topology: PackTopology,
     private val onVehicleData: (VehicleData) -> Unit,
     /**
@@ -66,6 +81,17 @@ internal class VehicleConnection(
      */
     private val latent: MutableList<Pack> = latentPacks
         .filter { lp -> packs.none { it.index == lp.index } }
+        .toMutableList()
+
+    /** Mirrors [states] on the motion side. */
+    private val ctrlStates: MutableList<ControllerState> = controllers
+        .sortedBy { it.index }
+        .map { ControllerState(controller = it, data = ControllerData(), isOnline = false) }
+        .toMutableList()
+
+    /** Mirrors [latent] on the motion side. */
+    private val latentCtrl: MutableList<Controller> = latentControllers
+        .filter { lc -> controllers.none { it.index == lc.index } }
         .toMutableList()
 
     /**
@@ -153,6 +179,55 @@ internal class VehicleConnection(
     }
 
     /**
+     * Feed a freshly parsed sample for one controller and return the
+     * resulting vehicle snapshot, mirroring [submit] on the motion side:
+     * same slot-find / materialise / update-with-[now] / staleness-sweep /
+     * snapshot-and-emit flow, staleness measured against the same
+     * [BleConfig.packOfflineAfterMs] threshold.
+     */
+    fun submitMotion(controllerIndex: Int, data: ControllerData): VehicleData {
+        var slot = ctrlStates.indexOfFirst { it.controller.index == controllerIndex }
+        if (slot < 0) {
+            slot = materialiseLatentController(controllerIndex)
+            if (slot < 0) return snapshot()
+        }
+        val now = clock()
+        ctrlStates[slot] = ctrlStates[slot].copy(
+            data = data,
+            isOnline = true,
+            lastSeenAt = now
+        )
+        // Sweep the other controllers for staleness, folded into this
+        // submit's single emission — mirrors submit's pack sweep.
+        for (i in ctrlStates.indices) {
+            if (i == slot) continue
+            val other = ctrlStates[i]
+            if (!other.isOnline) continue
+            val seenAt = other.lastSeenAt ?: continue
+            if ((now - seenAt).inWholeMilliseconds > BleConfig.packOfflineAfterMs) {
+                ctrlStates[i] = other.copy(isOnline = false)
+            }
+        }
+        val snap = snapshot()
+        onVehicleData(snap)
+        return snap
+    }
+
+    /**
+     * Promote the latent slot with [controllerIndex] into [ctrlStates],
+     * keeping index order, and return its position — or -1 when no such
+     * latent slot exists. Mirrors [materialiseLatent].
+     */
+    private fun materialiseLatentController(controllerIndex: Int): Int {
+        val li = latentCtrl.indexOfFirst { it.index == controllerIndex }
+        if (li < 0) return -1
+        val controller = latentCtrl.removeAt(li)
+        ctrlStates.add(ControllerState(controller = controller, data = ControllerData(), isOnline = false))
+        ctrlStates.sortBy { it.controller.index }
+        return ctrlStates.indexOfFirst { it.controller.index == controllerIndex }
+    }
+
+    /**
      * Mark a pack as no longer reporting. Its last data is kept so the UI can
      * grey it out with the values it had, rather than blanking the card.
      */
@@ -172,7 +247,25 @@ internal class VehicleConnection(
         emit()
     }
 
-    fun snapshot(): VehicleData = PackAggregator.build(states.toList(), topology)
+    /**
+     * Build both aggregates into one [VehicleData]: [PackAggregator] for the
+     * battery side, [MotionAggregator] for the motion side. Either [submit]
+     * or [submitMotion] can trigger this, so a battery sample and a motion
+     * sample each publish a complete snapshot carrying both.
+     */
+    fun snapshot(): VehicleData {
+        val battery = PackAggregator.build(states.toList(), topology)
+        val motion = MotionAggregator.build(ctrlStates.toList())
+        return VehicleData(
+            packs = battery.packs,
+            aggregate = battery.aggregate,
+            topology = topology,
+            isPartial = battery.isPartial,
+            controllers = ctrlStates.toList(),
+            motion = motion.aggregate,
+            motionPartial = motion.partial
+        )
+    }
 
     private fun emit() = onVehicleData(snapshot())
 }
