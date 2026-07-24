@@ -26,6 +26,13 @@ data class ControllerData(
     val regenAh: Float = 0f,
     val regenWh: Float = 0f,
     val faults: List<String> = emptyList(),
+    /**
+     * Controller-computed battery level 0..1 from COMM_GET_VALUES_SETUP, or null
+     * when the frame carries none (plain GET_VALUES, non-VESC controllers). Used
+     * only to seed a derived battery's SoC — the real fuel gauge, when a smart
+     * BMS is present, always wins.
+     */
+    val batteryLevelFraction: Float? = null,
     val isConnected: Boolean = false,
     val timestamp: Instant = Clock.System.now()
 ) {
