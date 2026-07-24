@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -39,6 +40,7 @@ class AlertEngineTest {
     private class StubBmsRepository : BmsRepository {
         override val activeVehicleData = MutableStateFlow(VehicleData())
         override val activeData = MutableStateFlow(BmsData())
+        override val activeMotion = MutableStateFlow(ControllerData())
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()

@@ -3,6 +3,7 @@ package ru.sodovaya.volty.domain.repository
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -28,6 +29,14 @@ interface BmsRepository {
     val activeVehicleData: StateFlow<VehicleData>
 
     val activeData: StateFlow<BmsData>
+
+    /**
+     * The vehicle-level motion aggregate (speed, currents, power, …) of the
+     * active vehicle's controllers — the motion twin of [activeData]. Defaults
+     * to an empty [ControllerData] when nothing is connected or the vehicle
+     * has no controllers.
+     */
+    val activeMotion: StateFlow<ControllerData>
     val activeVehicle: StateFlow<Vehicle?>
     val connectionState: StateFlow<ConnectionState>
 
