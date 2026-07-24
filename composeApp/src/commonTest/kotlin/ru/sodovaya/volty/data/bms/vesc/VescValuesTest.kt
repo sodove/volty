@@ -89,6 +89,23 @@ class VescValuesTest {
         assertNull(VescValues.decodeSetupValues(setupPayload().copyOfRange(0, 12)))
     }
 
+    /**
+     * Regression pin for a length-guard off-by-2: the SETUP body (everything after the
+     * opcode, through fault_code) is 55 bytes, not 53. A payload of total length 54 or 55
+     * (i.e. 53 or 54 bytes after the opcode) must still decode to null rather than throwing
+     * an ArrayIndexOutOfBoundsException while reading the trailing tachometer_abs/position/
+     * fault_code fields. 56 bytes is exactly enough for the body (vesc_id, the 57th byte,
+     * is never read by this decoder) and must decode successfully, as must the full frame.
+     */
+    @Test fun setup_payload_truncated_at_the_body_boundary_decodes_to_null_not_throws() {
+        val full = setupPayload()
+        assertEquals(57, full.size)
+        assertNull(VescValues.decodeSetupValues(full.copyOfRange(0, 54)))
+        assertNull(VescValues.decodeSetupValues(full.copyOfRange(0, 55)))
+        assertTrue(VescValues.decodeSetupValues(full.copyOfRange(0, 56)) != null)
+        assertTrue(VescValues.decodeSetupValues(full) != null)
+    }
+
     @Test fun wrong_opcode_is_rejected() {
         val p = setupPayload().copyOf(); p[0] = 99
         assertNull(VescValues.decodeSetupValues(p))

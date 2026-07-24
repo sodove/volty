@@ -21,12 +21,57 @@ object VescValues {
     /** A motor temperature this low means "no sensor wired", not a cold motor. */
     private const val NO_MOTOR_SENSOR_BELOW_C = -50f
 
+    // Per-field widths, named so the body-length sums below are self-documenting
+    // and cannot silently drift out of sync with the fields actually read.
+    private const val I8_BYTES = 1
+    private const val I16_BYTES = 2
+    private const val I32_BYTES = 4
+
+    /**
+     * Bytes read after the opcode in [decodeSetupValues]:
+     * temp_mos(i16) + temp_motor(i16) + current_motor(i32) + current_in(i32) +
+     * duty_now(i16) + rpm(i32) + speed(i32) + v_in(i16) + battery_level(i16) +
+     * amp_hours(i32) + amp_hours_charged(i32) + watt_hours(i32) +
+     * watt_hours_charged(i32) + tachometer(i32) + tachometer_abs(i32) +
+     * position(i32) + fault_code(i8) = 55.
+     */
+    private const val SETUP_BODY_BYTES =
+        I16_BYTES + I16_BYTES +
+            I32_BYTES + I32_BYTES +
+            I16_BYTES +
+            I32_BYTES +
+            I32_BYTES +
+            I16_BYTES + I16_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES +
+            I8_BYTES
+
+    /**
+     * Bytes read after the opcode in [decodeValues]:
+     * temp_mos(i16) + temp_motor(i16) + current_motor(i32) + current_in(i32) +
+     * id(i32) + iq(i32) + duty_now(i16) + rpm(i32) + v_in(i16) +
+     * amp_hours(i32) + amp_hours_charged(i32) + watt_hours(i32) +
+     * watt_hours_charged(i32) + tachometer(i32) + tachometer_abs(i32) +
+     * fault_code(i8) = 53.
+     */
+    private const val VALUES_BODY_BYTES =
+        I16_BYTES + I16_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES + I32_BYTES +
+            I16_BYTES +
+            I32_BYTES +
+            I16_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES + I32_BYTES +
+            I32_BYTES + I32_BYTES +
+            I8_BYTES
+
     fun decodeSetupValues(payload: ByteArray): ControllerData? {
         val r = VescReader(payload)
         if (!r.has(1) || r.u8() != OPCODE_GET_VALUES_SETUP) return null
-        // temps(2+2) currents(4+4) duty(2) rpm(4) speed(4) vin(2) batt(2)
-        // ah(4) ahc(4) wh(4) whc(4) tach(4) tachAbs(4) pos(4) fault(1) = 53
-        if (!r.has(53)) return null
+        if (!r.has(SETUP_BODY_BYTES)) return null
         val tempMos = r.d16(10f)
         val tempMotor = r.d16(10f)
         val currentMotor = r.d32(100f)
@@ -71,8 +116,7 @@ object VescValues {
     fun decodeValues(payload: ByteArray, motor: MotorConfig): ControllerData? {
         val r = VescReader(payload)
         if (!r.has(1) || r.u8() != OPCODE_GET_VALUES) return null
-        // temps(4) currents(8) id/iq(8) duty(2) rpm(4) vin(2) ah/wh(16) tach(8) fault(1) = 53
-        if (!r.has(53)) return null
+        if (!r.has(VALUES_BODY_BYTES)) return null
         val tempMos = r.d16(10f)
         val tempMotor = r.d16(10f)
         val currentMotor = r.d32(100f)
