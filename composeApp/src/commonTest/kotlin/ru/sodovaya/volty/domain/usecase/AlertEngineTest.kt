@@ -48,6 +48,7 @@ class AlertEngineTest {
         override suspend fun connectGuest(address: String, type: BmsType) = Result.success(Unit)
         override suspend fun connectDemo() = Result.success(Unit)
         override suspend fun disconnect() {}
+        override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = emptyFlow()
         override fun movingAverage(window: Duration): Flow<MovingAvg> =
             flowOf(MovingAvg(0f, 0f, window))

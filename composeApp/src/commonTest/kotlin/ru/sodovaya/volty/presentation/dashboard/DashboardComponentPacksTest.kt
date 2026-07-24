@@ -49,6 +49,7 @@ class DashboardComponentPacksTest {
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
         override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
+        override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() {}

@@ -946,6 +946,24 @@ class KableBmsRepository private constructor(
         if (reason != null) link.lastReason = reason
         val current = links
         if (current.none { it === link }) return@synchronized false
+        refoldConnectionStateLocked(current)
+    }
+
+    /**
+     * The fold body itself, factored out of [setLinkState] so a structural
+     * change to the link list — [disconnectLink] dropping one link — can
+     * recompute [ConnectionState] from the surviving links without
+     * hand-rolling a second copy of the fold. [current] must be non-empty
+     * (an empty link list is the "nothing connected" state, which
+     * [disconnectLink] handles by degenerating to [disconnect] instead of
+     * calling this).
+     *
+     * PRECONDITION: caller holds [linkStateLock] — the fold must never read a
+     * half-updated link, exactly as [setLinkState]'s callers require.
+     *
+     * @return true when this recompute moved the vehicle INTO Connected.
+     */
+    private fun refoldConnectionStateLocked(current: List<PackLink>): Boolean {
         val wasConnected = _connectionState.value is ConnectionState.Connected
         val vehicle = current.first().vehicle
         _connectionState.value = when {
@@ -959,7 +977,7 @@ class KableBmsRepository private constructor(
             else ->
                 ConnectionState.Failed(current.first().lastReason.ifEmpty { "Connection failed" })
         }
-        !wasConnected && _connectionState.value is ConnectionState.Connected
+        return !wasConnected && _connectionState.value is ConnectionState.Connected
     }
 
     // ----- Connect: one vehicle, N links -----
@@ -1428,6 +1446,67 @@ class KableBmsRepository private constructor(
         // this.
         _connectionState.value = ConnectionState.Disconnected
         serviceStop()
+    }
+
+    /**
+     * The three outcomes [disconnectLink]'s lookup can reach, decided inside
+     * one [sessionLock] critical section and acted on AFTER it releases —
+     * [ConnectionSession.tearDown] is suspending and, like every other
+     * teardown in this class, must never run while the lock is held.
+     */
+    private sealed interface LinkRemoval {
+        /** No link at that address is installed — [disconnectLink] no-ops. */
+        object NotFound : LinkRemoval
+
+        /**
+         * The address named the vehicle's ONLY link — degenerate to the full
+         * [disconnect] sweep rather than leaving the repository half torn
+         * down (funnel/orchestrator/ring buffers still holding a connection
+         * with zero links behind it).
+         */
+        object LastLink : LinkRemoval
+
+        /** The link was removed from [links]; [remaining] feeds the fold. */
+        data class Removed(
+            val session: ConnectionSession?,
+            val reconnectJob: Job?,
+            val remaining: List<PackLink>
+        ) : LinkRemoval
+    }
+
+    override suspend fun disconnectLink(address: String) {
+        val outcome: LinkRemoval = sessionLock.withLock {
+            val link = links.firstOrNull { it.spec.address == address }
+                ?: return@withLock LinkRemoval.NotFound
+            if (links.size == 1) return@withLock LinkRemoval.LastLink
+            val session = link.session
+            val reconnectJob = link.reconnectJob
+            link.session = null
+            link.reconnectJob = null
+            val remaining = links.filterNot { it === link }
+            links = remaining
+            LinkRemoval.Removed(session, reconnectJob, remaining)
+        }
+        when (outcome) {
+            is LinkRemoval.NotFound -> Unit
+            // Reuse the existing full teardown path instead of duplicating
+            // it: stops the funnel/consumer, clears the orchestrator,
+            // _activeData / _activeMotion / _activeVehicleData, the ring
+            // buffers, and sets ConnectionState.Disconnected.
+            is LinkRemoval.LastLink -> disconnect()
+            is LinkRemoval.Removed -> {
+                println("[VOLTY-BLE] disconnectLink: dropping $address, ${outcome.remaining.size} link(s) remain")
+                outcome.reconnectJob?.cancel()
+                outcome.session?.tearDown()
+                // Reuse the existing fold — do not hand-roll a second copy of
+                // it. Guarded by linkStateLock, same as every other fold
+                // write, so a sibling link's concurrent status transition
+                // can't interleave with this recompute.
+                synchronized(linkStateLock) {
+                    refoldConnectionStateLocked(outcome.remaining)
+                }
+            }
+        }
     }
 
     override suspend fun onAppResumed() {

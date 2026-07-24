@@ -55,6 +55,24 @@ interface BmsRepository {
 
     suspend fun disconnect()
 
+    /**
+     * Tear down ONE link of the active vehicle — its session and reconnect
+     * job — and drop it from the fold, leaving every other link live. The
+     * vehicle's [connectionState] is recomputed from the remaining links.
+     *
+     * A no-op when no link at [address] is currently installed (including
+     * when nothing is connected at all). When [address] names the vehicle's
+     * LAST link, this degenerates to a full [disconnect] rather than leaving
+     * the repository half torn down.
+     *
+     * This is the ride-time BMS -> head-unit handoff primitive: dropping one
+     * link of a multi-link vehicle while its sibling links stay live. It does
+     * not touch the sample funnel or the orchestrator directly — the dropped
+     * link simply stops submitting, and its sources go stale / offline
+     * through the existing per-pack staleness sweep.
+     */
+    suspend fun disconnectLink(address: String)
+
     fun samples(window: Duration): Flow<List<BmsData>>
 
     /**
