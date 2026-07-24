@@ -41,64 +41,90 @@ class VescFrameAccumulator(private val maxBuffer: Int = 4096) {
         if (buf.size > maxBuffer) buf = buf.copyOfRange(buf.size - maxBuffer, buf.size)
 
         val out = mutableListOf<ByteArray>()
-        while (true) {
-            if (buf.isEmpty()) break
-            val start = buf[0].toInt() and 0xFF
-            val headerLen = when (start) { 0x02 -> 2; 0x03 -> 3; else -> 0 }
-            if (headerLen == 0) { buf = buf.copyOfRange(1, buf.size); continue } // resync
-            if (buf.size < headerLen) break                                       // need more
-            val payloadLen = if (start == 0x02) buf[1].toInt() and 0xFF
-                             else ((buf[1].toInt() and 0xFF) shl 8) or (buf[2].toInt() and 0xFF)
-            val total = headerLen + payloadLen + 3                                // +crc(2)+stop(1)
-            if (payloadLen == 0 || total > maxBuffer) { buf = buf.copyOfRange(1, buf.size); continue }
-            if (buf.size < total) {
-                // Not enough bytes yet to check this candidate's CRC/stop. This is
-                // normal when a genuine frame is still arriving over more BLE
-                // chunks — but [start]/[payloadLen] can just as easily be noise
-                // picked up mid-resync (e.g. a stray 0x02 inside a corrupted CRC)
-                // that happens to claim an implausible length, which would
-                // otherwise wedge us here forever "waiting" for bytes that will
-                // never come while a real, already-fully-buffered frame sits
-                // right after it. Only actually wait if nothing later in the
-                // buffer we already have is a complete, verified frame; otherwise
-                // this candidate was a false positive, so drop it and resync.
-                if (!existsVerifiedFrameAfter(1)) break
-                buf = buf.copyOfRange(1, buf.size)
-                continue
-            }
-            val payload = buf.copyOfRange(headerLen, headerLen + payloadLen)
-            val crcGot = ((buf[headerLen + payloadLen].toInt() and 0xFF) shl 8) or
-                          (buf[headerLen + payloadLen + 1].toInt() and 0xFF)
-            val stopOk = (buf[total - 1].toInt() and 0xFF) == VescPacket.STOP
-            if (stopOk && crcGot == VescCrc.crc16(payload)) {
-                out += payload
-                buf = buf.copyOfRange(total, buf.size)
-            } else {
-                buf = buf.copyOfRange(1, buf.size)                                // false start; resync
+        while (buf.isNotEmpty()) {
+            when (val attempt = tryParseAt(0)) {
+                is FrameAttempt.Complete -> {
+                    out += attempt.payload
+                    buf = buf.copyOfRange(attempt.total, buf.size)
+                }
+                is FrameAttempt.NotAFrame, is FrameAttempt.Invalid -> {
+                    buf = buf.copyOfRange(1, buf.size) // false start; resync one byte
+                }
+                is FrameAttempt.Incomplete -> {
+                    // Not enough bytes yet to check this candidate's CRC/stop. This is
+                    // normal when a genuine frame is still arriving over more BLE
+                    // chunks — but the header/length here can just as easily be noise
+                    // picked up mid-resync (e.g. a stray 0x02 inside a corrupted CRC)
+                    // that happens to claim an implausible length, which would
+                    // otherwise wedge us here forever "waiting" for bytes that will
+                    // never come while a real, already-fully-buffered frame sits
+                    // right after it. Only actually wait if nothing later in the
+                    // buffer we already have is a complete, verified frame; otherwise
+                    // this candidate was a false positive, so jump straight past it.
+                    //
+                    // findEarliestVerifiedFrame does one forward scan of whatever is
+                    // currently buffered and, on a hit, we slice off everything before
+                    // the match in a single copyOfRange — not one byte at a time. That
+                    // keeps this whole branch amortized O(n) per append() call: each
+                    // contiguous "looks-like-a-header-but-isn't" stretch is scanned at
+                    // most once, however many false candidates it contains, instead of
+                    // re-scanning the remaining buffer on every single byte dropped
+                    // (which would be O(n^2) — see task-1-report.md, fix round 1,
+                    // finding 2, for the adversarial input that made this matter).
+                    val q = findEarliestVerifiedFrame(1)
+                    if (q == null) break // genuinely need more data
+                    buf = buf.copyOfRange(q, buf.size)
+                }
             }
         }
         return out
     }
 
-    /** True if a complete, CRC- and stop-verified frame starts at or after [from] within the current buffer. */
-    private fun existsVerifiedFrameAfter(from: Int): Boolean {
+    /** Position of the earliest complete, CRC- and stop-verified frame at or after [from], or null if none. */
+    private fun findEarliestVerifiedFrame(from: Int): Int? {
         var pos = from
         while (pos < buf.size) {
-            val start = buf[pos].toInt() and 0xFF
-            val headerLen = when (start) { 0x02 -> 2; 0x03 -> 3; else -> 0 }
-            if (headerLen == 0 || buf.size - pos < headerLen) { pos++; continue }
-            val payloadLen = if (start == 0x02) buf[pos + 1].toInt() and 0xFF
-                             else ((buf[pos + 1].toInt() and 0xFF) shl 8) or (buf[pos + 2].toInt() and 0xFF)
-            val total = headerLen + payloadLen + 3
-            if (payloadLen == 0 || total > maxBuffer || buf.size - pos < total) { pos++; continue }
-            val payloadStart = pos + headerLen
-            val payload = buf.copyOfRange(payloadStart, payloadStart + payloadLen)
-            val crcGot = ((buf[payloadStart + payloadLen].toInt() and 0xFF) shl 8) or
-                          (buf[payloadStart + payloadLen + 1].toInt() and 0xFF)
-            val stopOk = (buf[pos + total - 1].toInt() and 0xFF) == VescPacket.STOP
-            if (stopOk && crcGot == VescCrc.crc16(payload)) return true
+            if (tryParseAt(pos) is FrameAttempt.Complete) return pos
             pos++
         }
-        return false
+        return null
+    }
+
+    /**
+     * Single source of truth for the framing rules (header/length/CRC/stop),
+     * shared by [append] and [findEarliestVerifiedFrame] so the two can never
+     * silently disagree about what counts as a valid frame.
+     */
+    private fun tryParseAt(pos: Int): FrameAttempt {
+        val start = buf[pos].toInt() and 0xFF
+        val headerLen = when (start) { 0x02 -> 2; 0x03 -> 3; else -> 0 }
+        if (headerLen == 0) return FrameAttempt.NotAFrame
+        if (buf.size - pos < headerLen) return FrameAttempt.Incomplete
+        val payloadLen = if (start == 0x02) buf[pos + 1].toInt() and 0xFF
+                         else ((buf[pos + 1].toInt() and 0xFF) shl 8) or (buf[pos + 2].toInt() and 0xFF)
+        val total = headerLen + payloadLen + 3 // +crc(2)+stop(1)
+        if (payloadLen == 0 || total > maxBuffer) return FrameAttempt.NotAFrame
+        if (buf.size - pos < total) return FrameAttempt.Incomplete
+        val payloadStart = pos + headerLen
+        val payload = buf.copyOfRange(payloadStart, payloadStart + payloadLen)
+        val crcGot = ((buf[payloadStart + payloadLen].toInt() and 0xFF) shl 8) or
+                      (buf[payloadStart + payloadLen + 1].toInt() and 0xFF)
+        val stopOk = (buf[pos + total - 1].toInt() and 0xFF) == VescPacket.STOP
+        return if (stopOk && crcGot == VescCrc.crc16(payload)) FrameAttempt.Complete(payload, total)
+               else FrameAttempt.Invalid
+    }
+
+    private sealed interface FrameAttempt {
+        /** Bad start byte, zero length, or a length that would overflow [maxBuffer] — never a valid frame here. */
+        data object NotAFrame : FrameAttempt
+
+        /** Header looks plausible but we don't have all the bytes buffered yet to verify it either way. */
+        data object Incomplete : FrameAttempt
+
+        /** Fully buffered candidate whose CRC and/or stop byte did not match. */
+        data object Invalid : FrameAttempt
+
+        /** Fully buffered, CRC and stop verified. */
+        data class Complete(val payload: ByteArray, val total: Int) : FrameAttempt
     }
 }
