@@ -112,7 +112,7 @@ class DefaultRideDashboardComponent(
                     initialSecondary, initialMotion, initialVehicleData.aggregate, initialUnits
                 ),
                 sessionWhPerKm = RideMetrics.sessionWhPerKm(initialMotion.consumedWh, initialMotion.tripKm),
-                uptimeSeconds = sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds } ?: 0L
+                uptimeSeconds = sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
             )
         )
     }
@@ -124,7 +124,7 @@ class DefaultRideDashboardComponent(
         scope.launch {
             bmsRepository.activeMotion.collect { motion ->
                 if (sessionStartedAt == null) sessionStartedAt = motion.timestamp
-                val uptime = (motion.timestamp - sessionStartedAt!!).inWholeSeconds
+                val uptime = (motion.timestamp - sessionStartedAt!!).inWholeSeconds.coerceAtLeast(0)
                 _state.update { current ->
                     current.copy(
                         motion = motion,

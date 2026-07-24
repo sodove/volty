@@ -36,8 +36,8 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.setMain
-import kotlinx.coroutines.withContext
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -102,10 +102,13 @@ class RideDashboardComponentTest {
      * `stateIn(scope, SharingStarted.Eagerly, ...)` over a `CoroutineScope(Dispatchers.Default + ...)`
      * internal to the class — a real dispatcher, not the test's virtual Main
      * scheduler. Constructing the store with the desired values already
-     * present and then yielding real dispatch time to Default lets that
-     * eager collector catch up BEFORE we build the component, so the
-     * component's synchronous seed (mirroring DefaultDashboardComponent's
-     * `.value`-seeded MutableStateFlow) already reads the right value.
+     * present isn't enough on its own: that eager collector still needs to
+     * be dispatched at least once before `.value` reflects them. Rather than
+     * guess at a wall-clock wait, suspend on the actual condition — `first {}`
+     * returns the moment the eagerly-shared flow catches up, however long
+     * that takes, so the component's synchronous seed (mirroring
+     * DefaultDashboardComponent's `.value`-seeded MutableStateFlow) reads the
+     * right value deterministically.
      */
     private suspend fun appPrefsWith(units: UnitSystem, style: DashboardStyle): AppPrefs {
         val prefs = mutablePreferencesOf(
@@ -113,7 +116,8 @@ class RideDashboardComponentTest {
             stringPreferencesKey("dashboard_style") to style.name
         )
         val appPrefs = AppPrefs(FakePreferencesDataStore(prefs))
-        withContext(Dispatchers.Default) { kotlinx.coroutines.delay(20) }
+        appPrefs.unitSystem.first { it == units }
+        appPrefs.defaultDashboardStyle.first { it == style }
         return appPrefs
     }
 
