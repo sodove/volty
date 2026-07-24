@@ -15,7 +15,10 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerState
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Pack
@@ -108,9 +111,26 @@ class KableBmsRepository private constructor(
         const val SAMPLE_FUNNEL_CAPACITY = 64
 
         /**
+         * Synthetic controller backing "Try demo" mode's motion feed (Task 12):
+         * a single VESC-shaped source so the demo vehicle has a coherent
+         * controller behind the ride curve, the same way it has a stored pack
+         * behind the battery curve — [ru.sodovaya.volty.domain.stats.MotionAggregator]
+         * / [activeMotion] see a real (if synthetic) controller rather than an
+         * empty list.
+         */
+        private val DEMO_CONTROLLER = Controller(
+            index = 0,
+            label = "Demo motor",
+            controllerType = ControllerType.VESC,
+            address = DEMO_VEHICLE_ID
+        )
+
+        /**
          * The synthetic vehicle that powers "Try demo" mode. Its id is
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
          * never confused with a saved or guest vehicle and is never persisted.
+         * Carries [DEMO_CONTROLLER] alongside its single pack so the demo
+         * exercises the motion path end-to-end, not just the battery one.
          */
         val DEMO_VEHICLE: Vehicle = singlePackVehicle(
             id = DEMO_VEHICLE_ID,
@@ -121,7 +141,7 @@ class KableBmsRepository private constructor(
             chemistry = Chemistry.LI_ION_NMC,
             cellCount = DemoBmsSimulator.CELL_COUNT,
             createdAt = Clock.System.now()
-        )
+        ).copy(controllers = listOf(DEMO_CONTROLLER))
 
         /**
          * Test-only factory: construct with noop start/stop callbacks and a
@@ -450,9 +470,9 @@ class KableBmsRepository private constructor(
                 // in the one critical section this method already holds.
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
-                // Reset the motion flow alongside the vehicle-level one — demo
-                // has no controllers, so a prior connection's motion must not
-                // linger.
+                // Reset the motion flow alongside the vehicle-level one so a
+                // prior connection's motion does not linger before the demo's
+                // own ride curve (Task 12) starts publishing its own.
                 _activeMotion.value = ControllerData()
                 // No orchestrator, no funnel: close any previous connection's
                 // channel so its consumer ends with it.
@@ -469,9 +489,26 @@ class KableBmsRepository private constructor(
             // monitoring experience (the service feeds off activeData/activeVehicle).
             serviceStart()
             demoJob = scope.launch {
-                DemoBmsSimulator().run { sample ->
+                DemoBmsSimulator().run { sample, motion ->
                     ringBuffer.push(sample)
                     _activeData.value = sample
+                    // Motion twin of the two lines above: demo bypasses the
+                    // orchestrator entirely (no VehicleConnection, no funnel),
+                    // so the ride curve is fed straight into the SAME flows a
+                    // real connection's onVehicleData hook would publish —
+                    // activeMotion directly, and the motion ring buffer /
+                    // vehicle-level snapshot alongside it. See DEMO_CONTROLLER:
+                    // the demo vehicle carries one, so this controller state
+                    // is coherent with the vehicle it is published under.
+                    motionRingBuffer.push(motion)
+                    _activeMotion.value = motion
+                    _activeVehicleData.value = _activeVehicleData.value.copy(
+                        controllers = listOf(
+                            ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
+                        ),
+                        motion = motion,
+                        motionPartial = false
+                    )
                 }
             }
             Result.success(Unit)
