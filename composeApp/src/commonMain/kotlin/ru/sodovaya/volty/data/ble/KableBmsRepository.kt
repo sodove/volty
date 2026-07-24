@@ -594,7 +594,7 @@ class KableBmsRepository private constructor(
      * within its own protocol) to the vehicle-global index the orchestrator
      * is keyed by. With a single link the two are identical — the default —
      * so this is only the seam the multi-link fan-out will populate from its
-     * [LinkSpec.globalIndex].
+     * [LinkSpec.globalPackIndex].
      */
     private fun buildSamplePipeline(
         vehicle: Vehicle?,
@@ -632,7 +632,7 @@ class KableBmsRepository private constructor(
         return planLinks(stored).flatMap { spec ->
             stored.filter { it.bmsAddress == spec.address }
                 .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.bmsType).packCount)
+                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
         }.sortedBy { it.index }
     }
 
@@ -641,15 +641,15 @@ class KableBmsRepository private constructor(
      * to its protocol's pack count — [planLinks] only sees the STORED packs,
      * but a Begode session speaks local indices up to packCount - 1, so the
      * link must own the synthesised branch slots too or
-     * [LinkSpec.globalIndex] could not translate them.
+     * [LinkSpec.globalPackIndex] could not translate them.
      */
     private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType): List<LinkSpec> {
         val stored = storedPacks(vehicle, address, type)
         return planLinks(stored).map { spec ->
             val linkPacks = stored.filter { it.bmsAddress == spec.address }
                 .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.bmsType).packCount)
-            spec.copy(ownedIndices = linkPacks.map { it.index })
+                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
+            spec.copy(ownedPacks = linkPacks.map { OwnedSource(it.index) })
         }
     }
 
@@ -690,7 +690,7 @@ class KableBmsRepository private constructor(
      * side of the channel because it depends on this link's protocol state.
      * Each connect attempt builds a fresh one around its own protocol
      * instance and the connection's CURRENT channel; [localToGlobal] is the
-     * link's [LinkSpec.globalIndex] (identity for a single link).
+     * link's [LinkSpec.globalPackIndex] (identity for a single link).
      */
     private fun makeLinkOnSample(
         protocol: BmsProtocol,
@@ -1060,7 +1060,7 @@ class KableBmsRepository private constructor(
     ): Result<Unit> {
         val vehicle = link.vehicle
         val address = link.spec.address
-        val type = link.spec.bmsType
+        val type = link.spec.protocolKind.toBmsType()
         // Tracks the orchestrator THIS attempt installed (rebuild path only),
         // so every failure path can undo exactly its own installation.
         var installedOrchestrator: VehicleConnection? = null
@@ -1099,7 +1099,7 @@ class KableBmsRepository private constructor(
                 // THIS is where the local→global seam is populated: the
                 // session speaks indices local to its protocol, the shared
                 // funnel is keyed by the vehicle's global pack indices.
-                localToGlobal = link.spec::globalIndex
+                localToGlobal = link.spec::globalPackIndex
             )
 
             val advertisement = resolveAdvertisement(address)
@@ -1622,7 +1622,7 @@ class KableBmsRepository private constructor(
      * effective link specs, one orchestrator sized from the full vehicle pack
      * list, one channel + consumer, one [PackLink] per distinct address — and
      * return each link's session funnel (LOCAL pack indices, translated to
-     * global through that link's [LinkSpec.globalIndex], in link order).
+     * global through that link's [LinkSpec.globalPackIndex], in link order).
      *
      * [ConnectionSession] requires a real Kable peripheral, so this seam is
      * the only way commonTest can reach the fan-out. It shares
@@ -1652,10 +1652,10 @@ class KableBmsRepository private constructor(
         val socVehicle = socVehicleFor(vehicle, address, type)
         return newLinks.map { link ->
             makeLinkOnSample(
-                protocol = createProtocol(link.spec.bmsType),
+                protocol = createProtocol(link.spec.protocolKind.toBmsType()),
                 socVehicle = socVehicle,
                 channel = channel,
-                localToGlobal = link.spec::globalIndex
+                localToGlobal = link.spec::globalPackIndex
             )
         }
     }
