@@ -23,15 +23,19 @@ import kotlin.time.ExperimentalTime
 @OptIn(ExperimentalTime::class)
 object PackAggregator {
 
-    fun build(packs: List<PackState>, topology: PackTopology): VehicleData = VehicleData(
-        packs = packs,
-        aggregate = aggregate(packs, topology),
-        topology = topology,
-        isPartial = packs.isNotEmpty() && packs.any { !it.isOnline }
-    )
+    fun build(packs: List<PackState>, topology: PackTopology): VehicleData {
+        val collapsed = collapseAliases(packs)
+        return VehicleData(
+            packs = collapsed,
+            aggregate = aggregate(collapsed, topology),
+            topology = topology,
+            isPartial = collapsed.isNotEmpty() && collapsed.any { !it.isOnline }
+        )
+    }
 
     fun aggregate(packs: List<PackState>, topology: PackTopology): BmsData {
-        val online = packs.filter { it.isOnline }
+        val collapsed = collapseAliases(packs)
+        val online = collapsed.filter { it.isOnline }
         if (online.isEmpty()) return BmsData(isConnected = false)
 
         val data = online.map { it.data }
@@ -109,9 +113,38 @@ object PackAggregator {
             // so the vehicle only counts as connected when every pack is up.
             isConnected = when (topology) {
                 PackTopology.PARALLEL -> true
-                PackTopology.SERIES -> online.size == packs.size
+                PackTopology.SERIES -> online.size == collapsed.size
             },
             timestamp = data.maxOfOrNull { it.timestamp } ?: Clock.System.now()
         )
+    }
+
+    /**
+     * Collapses each `aliasGroup` (the same physical battery reached over two
+     * paths — e.g. a direct ANT link and a gateway-hosted VESC-BMS bridge) to
+     * a single representative, so alternate paths never double-count in the
+     * aggregate. `null`-group packs (the common, non-aliased case) are always
+     * kept as-is.
+     *
+     * Within a group: prefer an online member, lowest pack index first, so
+     * the result is deterministic when several paths are up at once. If the
+     * whole group is offline, still keep its lowest-index member — dropping
+     * it entirely would make the battery vanish from the dashboard instead of
+     * showing it as offline.
+     */
+    private fun collapseAliases(packs: List<PackState>): List<PackState> {
+        val grouped = packs.groupBy { it.pack.aliasGroup }
+        val result = ArrayList<PackState>(packs.size)
+        for ((alias, members) in grouped) {
+            if (alias == null) {
+                result += members
+                continue
+            }
+            val online = members.filter { it.isOnline }
+            val chosen = (if (online.isNotEmpty()) online else members)
+                .minByOrNull { it.pack.index }!!
+            result += chosen
+        }
+        return result.sortedBy { it.pack.index }
     }
 }
