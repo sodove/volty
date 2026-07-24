@@ -1476,6 +1476,10 @@ class KableBmsRepository private constructor(
         BmsType.ANT_BMS -> AntBmsProtocol()
         BmsType.DALY_BMS -> DalyBmsProtocol()
         BmsType.BEGODE -> BegodeProtocol()
+        // VESC BMS decode is out of scope for the Part A foundation work that
+        // introduced this enum entry (see the vehicle-platform-A-foundation
+        // plan) — a later part wires the real protocol in.
+        BmsType.VESC_BMS -> error("VESC BMS protocol decode is not implemented yet")
     }
 
     fun close() {
