@@ -60,7 +60,7 @@ class VescProtocol(
                           else VescValues.decodeValues(payload, motor)
             if (decoded != null) {
                 motion = decoded
-                if (deriveBattery) battery = deriveBattery(decoded)
+                if (deriveBattery) battery = synthesiseBattery(decoded)
             }
         }
     }
@@ -88,14 +88,14 @@ class VescProtocol(
      * and VoltageSocEstimator fills it in downstream from the vehicle's
      * chemistry — the same path a dumb Begode takes.
      */
-    private fun deriveBattery(m: ControllerData): BmsData {
+    private fun synthesiseBattery(m: ControllerData): BmsData {
         val level = m.batteryLevelFraction
         val known = level != null && level > 0f
         return BmsData(
             voltage = m.inputVoltageV,
             current = -m.batteryCurrentA,
             power = -m.powerW,
-            soc = if (known) level!! * 100f else 0f,
+            soc = if (known) level * 100f else 0f,
             socKnown = known,
             // No cells and no pack thermistor: a controller measures neither.
             // The ESC temperature is motion telemetry and stays out of the
