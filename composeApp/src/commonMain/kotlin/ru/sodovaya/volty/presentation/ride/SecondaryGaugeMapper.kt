@@ -36,6 +36,12 @@ object SecondaryGaugeMapper {
     private const val MAX_POWER_W = 8000f
     private const val MAX_WH_PER_KM = 50f
 
+    /**
+     * [units] is accepted for a fixed cross-task contract (later screens call this with the
+     * app's unit setting) but is a deliberate no-op here: the imperial toggle only converts
+     * speed and distance, and none of the seven [SecondaryGauge] metrics (%, kW, A, °C, Wh/km)
+     * has an imperial form under the locked design — so this is not a forgotten conversion.
+     */
     fun map(
         gauge: SecondaryGauge,
         motion: ControllerData,

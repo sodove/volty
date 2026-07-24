@@ -50,8 +50,9 @@ fun RadialGauge(
             val gap = 10.dp.toPx()
 
             fun ring(inset: Float, width: Float, color: Color, fraction: Float) {
-                val topLeft = Offset(inset + width / 2f, inset + width / 2f)
                 val side = size.minDimension - 2f * (inset + width / 2f)
+                if (side <= 0f) return // degenerate layout (box too small for this ring) — draw nothing rather than pass a negative Size to drawArc
+                val topLeft = Offset(inset + width / 2f, inset + width / 2f)
                 val arcSize = Size(side, side)
                 drawArc(trackColor, START_ANGLE, SWEEP, false, topLeft, arcSize, style = Stroke(width, cap = androidx.compose.ui.graphics.StrokeCap.Round))
                 if (fraction > 0f) {
