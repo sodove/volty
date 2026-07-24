@@ -191,7 +191,10 @@ fun PickerScreen(component: PickerComponent) {
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    BmsType.entries.forEach { type ->
+                    // VESC_BMS is gateway-hosted (produced only via the VESC gateway in a
+                    // later part), never a manually-picked direct BMS — excluding it here
+                    // keeps the not-yet-implemented createProtocol stub unreachable.
+                    BmsType.entries.filter { it != BmsType.VESC_BMS }.forEach { type ->
                         val selected = device.bmsType == type
                         Row(
                             modifier = Modifier

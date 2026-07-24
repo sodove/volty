@@ -5,8 +5,10 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlinx.coroutines.CoroutineScope
@@ -55,6 +57,13 @@ internal class ConnectionSession(
      * destination, so routing and aggregation belong to the caller.
      */
     private val onSample: (packIndex: Int, data: BmsData, sections: List<SectionState>) -> Unit,
+    /**
+     * Called for every parsed controller (motion) sample, when [protocol]
+     * also implements [MotionSource]. Defaults to a no-op so existing
+     * construction sites — none of which care about motion yet — still
+     * compile unchanged.
+     */
+    private val onMotionSample: (controllerIndex: Int, data: ControllerData) -> Unit = { _, _ -> },
     /** Callback when a link drop is detected (state event or watchdog). */
     private val onDropDetected: suspend (reason: String) -> Unit
 ) {
@@ -132,6 +141,12 @@ internal class ConnectionSession(
                 // The gate does NOT feed the watchdog: lastSampleAtMs
                 // refreshes on any cached decode (see routePackSamples).
                 val sampleGate = PackSampleGate(protocol.packCount)
+                // Created once here — NOT inside collect — so the gate's
+                // per-controller "last seen instance" state persists across
+                // notifications, exactly like sampleGate above. Zero when the
+                // protocol isn't a MotionSource: routeControllerSamples then
+                // has nothing to iterate and always reports not-alive.
+                val motionGate = MotionSampleGate((protocol as? MotionSource)?.controllerCount ?: 0)
                 peripheral.observe(
                     notifyChar,
                     // The handshake MUST go out only AFTER notifications are
@@ -158,7 +173,12 @@ internal class ConnectionSession(
                     val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms, sections ->
                         onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
                     }
-                    if (linkAlive) {
+                    val motionAlive = (protocol as? MotionSource)?.let { ms ->
+                        routeControllerSamples(ms, motionGate) { controllerIndex, motion ->
+                            onMotionSample(controllerIndex, motion.copy(timestamp = Clock.System.now()))
+                        }
+                    } ?: false
+                    if (linkAlive || motionAlive) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
                         sampleCount++
                         if (sampleCount % 50 == 0) {
@@ -295,4 +315,33 @@ internal fun routePackSamples(
         onNewSample(packIndex, bms, protocol.sections(packIndex))
     }
     return linkAlive
+}
+
+/**
+ * The motion twin of [routePackSamples] — same two-diets shape, one
+ * [MotionSource] controller at a time instead of one pack at a time.
+ *
+ * The returned Boolean is LINK liveness for motion: true whenever any
+ * controller has a decode cached at all, new or not. [ConnectionSession]
+ * ORs this with battery link-liveness so a controller-only device (no packs
+ * behind the link) still keeps [ConnectionSession.lastSampleAtMs] fed and
+ * out of the watchdog's reconnect path.
+ *
+ * [onNewMotion] fires only when [gate] confirms a genuinely new decode for
+ * that controller — the same new-instance discriminator [PackSampleGate]
+ * uses for packs.
+ */
+internal fun routeControllerSamples(
+    protocol: MotionSource,
+    gate: MotionSampleGate,
+    onNewMotion: (controllerIndex: Int, data: ControllerData) -> Unit
+): Boolean {
+    var alive = false
+    for (i in 0 until protocol.controllerCount) {
+        val m = protocol.latestMotion(i) ?: continue
+        alive = true
+        if (!gate.advance(i, m)) continue
+        onNewMotion(i, m)
+    }
+    return alive
 }

@@ -9,6 +9,8 @@ CREATE TABLE PackRow (
     bmsType     TEXT NOT NULL,   -- enum name: JK_BMS | JBD_BMS | ANT_BMS | DALY_BMS
     bmsAddress  TEXT NOT NULL,
     cellCount   INTEGER,
+    canId       INTEGER,
+    aliasGroup  TEXT,
     PRIMARY KEY (vehicleId, packIndex),
     FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
 );
@@ -22,8 +24,8 @@ selectByVehicle:
 SELECT * FROM PackRow WHERE vehicleId = :vehicleId ORDER BY packIndex;
 
 upsert:
-INSERT OR REPLACE INTO PackRow(vehicleId, packIndex, label, bmsType, bmsAddress, cellCount)
-VALUES (:vehicleId, :packIndex, :label, :bmsType, :bmsAddress, :cellCount);
+INSERT OR REPLACE INTO PackRow(vehicleId, packIndex, label, bmsType, bmsAddress, cellCount, canId, aliasGroup)
+VALUES (:vehicleId, :packIndex, :label, :bmsType, :bmsAddress, :cellCount, :canId, :aliasGroup);
 
 deleteByVehicle:
 DELETE FROM PackRow WHERE vehicleId = :vehicleId;

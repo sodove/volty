@@ -17,6 +17,7 @@ enum class BmsType(
     JBD_BMS("JBD BMS", reportsStateOfCharge = true),
     ANT_BMS("Ant BMS", reportsStateOfCharge = true),
     DALY_BMS("Daly BMS", reportsStateOfCharge = true),
+    VESC_BMS("VESC BMS", reportsStateOfCharge = true),
 
     /**
      * Begode / Gotway electric unicycle: the wheel streams motherboard and

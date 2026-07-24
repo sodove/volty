@@ -15,6 +15,10 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerState
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Pack
@@ -107,9 +111,26 @@ class KableBmsRepository private constructor(
         const val SAMPLE_FUNNEL_CAPACITY = 64
 
         /**
+         * Synthetic controller backing "Try demo" mode's motion feed (Task 12):
+         * a single VESC-shaped source so the demo vehicle has a coherent
+         * controller behind the ride curve, the same way it has a stored pack
+         * behind the battery curve — [ru.sodovaya.volty.domain.stats.MotionAggregator]
+         * / [activeMotion] see a real (if synthetic) controller rather than an
+         * empty list.
+         */
+        private val DEMO_CONTROLLER = Controller(
+            index = 0,
+            label = "Demo motor",
+            controllerType = ControllerType.VESC,
+            address = DEMO_VEHICLE_ID
+        )
+
+        /**
          * The synthetic vehicle that powers "Try demo" mode. Its id is
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
          * never confused with a saved or guest vehicle and is never persisted.
+         * Carries [DEMO_CONTROLLER] alongside its single pack so the demo
+         * exercises the motion path end-to-end, not just the battery one.
          */
         val DEMO_VEHICLE: Vehicle = singlePackVehicle(
             id = DEMO_VEHICLE_ID,
@@ -120,7 +141,7 @@ class KableBmsRepository private constructor(
             chemistry = Chemistry.LI_ION_NMC,
             cellCount = DemoBmsSimulator.CELL_COUNT,
             createdAt = Clock.System.now()
-        )
+        ).copy(controllers = listOf(DEMO_CONTROLLER))
 
         /**
          * Test-only factory: construct with noop start/stop callbacks and a
@@ -147,6 +168,9 @@ class KableBmsRepository private constructor(
 
     private val _activeVehicleData = MutableStateFlow(VehicleData())
     override val activeVehicleData: StateFlow<VehicleData> = _activeVehicleData.asStateFlow()
+
+    private val _activeMotion = MutableStateFlow(ControllerData())
+    override val activeMotion: StateFlow<ControllerData> = _activeMotion.asStateFlow()
 
     /**
      * Orchestrator for the currently connected vehicle. Null when nothing is
@@ -189,7 +213,11 @@ class KableBmsRepository private constructor(
 
     // Default 4-hour time-based cap. Holds enough history for ALL / 1h graph
     // windows regardless of per-BMS poll rate (JK ~1Hz, ANT 2Hz, etc).
-    private val ringBuffer = SampleRingBuffer()
+    private val ringBuffer = SampleRingBuffer<BmsData> { it.timestamp }
+
+    // Motion twin of [ringBuffer]: retains the per-controller motion samples
+    // funnelled through the SAME single consumer, keyed by their own timestamp.
+    private val motionRingBuffer = SampleRingBuffer<ControllerData> { it.timestamp }
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()
@@ -224,16 +252,18 @@ class KableBmsRepository private constructor(
 
     /**
      * The serialisation barrier of the sample funnel: sessions enrich on their
-     * own coroutine and only SEND a [PackSample] here; the single consumer
-     * launched by [launchSampleConsumer] owns every shared-state mutation
-     * ([VehicleConnection.submit], [ringBuffer], [_activeData]). One channel +
+     * own coroutine and only SEND a [Sample] here — battery ([PackSample]) or
+     * motion ([MotionSample]); the single consumer launched by
+     * [launchSampleConsumer] owns every shared-state mutation
+     * ([VehicleConnection.submit] / [VehicleConnection.submitMotion],
+     * [ringBuffer] / [motionRingBuffer], [_activeData]). One channel +
      * consumer pair per connection, installed in the same [sessionLock]
      * critical section as [vehicleConnection] so the identity-guarded failure
      * cleanup covers both, and closed wherever the orchestrator is cleared.
      * Same locking discipline — and the same single unlocked test-seam
      * exception — as the [vehicleConnection] field itself.
      */
-    private var sampleChannel: Channel<PackSample>? = null
+    private var sampleChannel: Channel<Sample>? = null
     private var sampleConsumerJob: Job? = null
 
     /**
@@ -440,6 +470,10 @@ class KableBmsRepository private constructor(
                 // in the one critical section this method already holds.
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
+                // Reset the motion flow alongside the vehicle-level one so a
+                // prior connection's motion does not linger before the demo's
+                // own ride curve (Task 12) starts publishing its own.
+                _activeMotion.value = ControllerData()
                 // No orchestrator, no funnel: close any previous connection's
                 // channel so its consumer ends with it.
                 closeSampleFunnelLocked()
@@ -449,14 +483,32 @@ class KableBmsRepository private constructor(
             }
             _activeVehicle.value = DEMO_VEHICLE
             ringBuffer.clear()
+            motionRingBuffer.clear()
             _connectionState.value = ConnectionState.Connected(DEMO_VEHICLE)
             // Show the foreground notification too, so reviewers see the full
             // monitoring experience (the service feeds off activeData/activeVehicle).
             serviceStart()
             demoJob = scope.launch {
-                DemoBmsSimulator().run { sample ->
+                DemoBmsSimulator().run { sample, motion ->
                     ringBuffer.push(sample)
                     _activeData.value = sample
+                    // Motion twin of the two lines above: demo bypasses the
+                    // orchestrator entirely (no VehicleConnection, no funnel),
+                    // so the ride curve is fed straight into the SAME flows a
+                    // real connection's onVehicleData hook would publish —
+                    // activeMotion directly, and the motion ring buffer /
+                    // vehicle-level snapshot alongside it. See DEMO_CONTROLLER:
+                    // the demo vehicle carries one, so this controller state
+                    // is coherent with the vehicle it is published under.
+                    motionRingBuffer.push(motion)
+                    _activeMotion.value = motion
+                    _activeVehicleData.value = _activeVehicleData.value.copy(
+                        controllers = listOf(
+                            ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
+                        ),
+                        motion = motion,
+                        motionPartial = false
+                    )
                 }
             }
             Result.success(Unit)
@@ -580,7 +632,7 @@ class KableBmsRepository private constructor(
      */
     private class SamplePipeline(
         val orchestrator: VehicleConnection,
-        val channel: Channel<PackSample>,
+        val channel: Channel<Sample>,
         val onSample: (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit
     )
 
@@ -594,7 +646,7 @@ class KableBmsRepository private constructor(
      * within its own protocol) to the vehicle-global index the orchestrator
      * is keyed by. With a single link the two are identical — the default —
      * so this is only the seam the multi-link fan-out will populate from its
-     * [LinkSpec.globalIndex].
+     * [LinkSpec.globalPackIndex].
      */
     private fun buildSamplePipeline(
         vehicle: Vehicle?,
@@ -604,7 +656,7 @@ class KableBmsRepository private constructor(
         localToGlobal: (localIndex: Int) -> Int = { it }
     ): SamplePipeline {
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
         val onSample = makeLinkOnSample(
             protocol = protocol,
             socVehicle = socVehicleFor(vehicle, address, type),
@@ -632,7 +684,7 @@ class KableBmsRepository private constructor(
         return planLinks(stored).flatMap { spec ->
             stored.filter { it.bmsAddress == spec.address }
                 .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.bmsType).packCount)
+                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
         }.sortedBy { it.index }
     }
 
@@ -641,15 +693,15 @@ class KableBmsRepository private constructor(
      * to its protocol's pack count — [planLinks] only sees the STORED packs,
      * but a Begode session speaks local indices up to packCount - 1, so the
      * link must own the synthesised branch slots too or
-     * [LinkSpec.globalIndex] could not translate them.
+     * [LinkSpec.globalPackIndex] could not translate them.
      */
     private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType): List<LinkSpec> {
         val stored = storedPacks(vehicle, address, type)
         return planLinks(stored).map { spec ->
             val linkPacks = stored.filter { it.bmsAddress == spec.address }
                 .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.bmsType).packCount)
-            spec.copy(ownedIndices = linkPacks.map { it.index })
+                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
+            spec.copy(ownedPacks = linkPacks.map { OwnedSource(it.index) })
         }
     }
 
@@ -679,8 +731,19 @@ class KableBmsRepository private constructor(
             // a Begode without a smart BMS never fills its second branch,
             // and an eager slot would be a permanently-offline phantom.
             latentPacks = expanded.filter { ep -> stored.none { it.index == ep.index } },
+            // The vehicle's controllers, so submitMotion has a slot to route
+            // into. Named arg: two defaulted params sit before `topology`
+            // (latentControllers / the controller list) so positional would
+            // bind the wrong slot. No latent controllers in Part A — nothing
+            // synthesises controller slots beyond the stored profile yet.
+            controllers = vehicle?.controllers ?: emptyList(),
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
-            onVehicleData = { vd -> _activeVehicleData.value = vd },
+            onVehicleData = { vd ->
+                _activeVehicleData.value = vd
+                // The motion aggregate rides the same snapshot; publish it on
+                // the motion StateFlow beside the vehicle-level one.
+                _activeMotion.value = vd.motion
+            },
             clock = orchestratorClockForTest ?: { Clock.System.now() }
         )
     }
@@ -690,12 +753,12 @@ class KableBmsRepository private constructor(
      * side of the channel because it depends on this link's protocol state.
      * Each connect attempt builds a fresh one around its own protocol
      * instance and the connection's CURRENT channel; [localToGlobal] is the
-     * link's [LinkSpec.globalIndex] (identity for a single link).
+     * link's [LinkSpec.globalPackIndex] (identity for a single link).
      */
     private fun makeLinkOnSample(
         protocol: BmsProtocol,
         socVehicle: Vehicle?,
-        channel: Channel<PackSample>,
+        channel: Channel<Sample>,
         localToGlobal: (localIndex: Int) -> Int
     ): (Int, BmsData, List<SectionState>) -> Unit =
         { localIndex, sample, sections ->
@@ -758,28 +821,42 @@ class KableBmsRepository private constructor(
      * mid-drain just buffers, with the channel providing the happens-before
      * edge between the threads.
      */
-    private fun launchSampleConsumer(channel: Channel<PackSample>): Job =
+    private fun launchSampleConsumer(channel: Channel<Sample>): Job =
         scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
-            for (packSample in channel) {
-                // The aggregate is a true identity for a single pack
-                // (cell voltages included), so every vehicle routes
-                // through it. submit() returns the snapshot it just
-                // emitted, so the aggregate is built once per sample.
-                // Fall back to the enriched sample — not the raw one — if
-                // the orchestrator was swapped out mid-flight, so a Begode
-                // keeps its estimated SoC even on that path. The section
-                // breakdown rides beside the sample into the pack state; the
-                // vehicle-level aggregate has no section field, so nothing of
-                // it survives the fallback path — dropped, not misattributed.
-                val forActive = vehicleConnection
-                    ?.submit(packSample.globalPackIndex, packSample.data, packSample.sections)
-                    ?.aggregate
-                    ?: packSample.data
-                // Ring buffer before activeData: the graph collector maps
-                // over _activeData and reads the buffer, so announcing the
-                // sample first would make every graph emit lag by one.
-                ringBuffer.push(forActive)
-                _activeData.value = forActive
+            for (sample in channel) {
+                when (sample) {
+                    is PackSample -> {
+                        // The aggregate is a true identity for a single pack
+                        // (cell voltages included), so every vehicle routes
+                        // through it. submit() returns the snapshot it just
+                        // emitted, so the aggregate is built once per sample.
+                        // Fall back to the enriched sample — not the raw one — if
+                        // the orchestrator was swapped out mid-flight, so a Begode
+                        // keeps its estimated SoC even on that path. The section
+                        // breakdown rides beside the sample into the pack state; the
+                        // vehicle-level aggregate has no section field, so nothing of
+                        // it survives the fallback path — dropped, not misattributed.
+                        val forActive = vehicleConnection
+                            ?.submit(sample.globalPackIndex, sample.data, sample.sections)
+                            ?.aggregate
+                            ?: sample.data
+                        // Ring buffer before activeData: the graph collector maps
+                        // over _activeData and reads the buffer, so announcing the
+                        // sample first would make every graph emit lag by one.
+                        ringBuffer.push(forActive)
+                        _activeData.value = forActive
+                    }
+                    is MotionSample -> {
+                        // Motion twin of the battery branch: route into the
+                        // orchestrator's controller state and retain it. The
+                        // orchestrator publishes the fresh motion aggregate
+                        // through onVehicleData, which sets _activeMotion — so
+                        // nothing sets it here (mirrors how _activeData rides
+                        // off the battery submit's snapshot, not a direct write).
+                        vehicleConnection?.submitMotion(sample.globalControllerIndex, sample.data)
+                        motionRingBuffer.push(sample.data)
+                    }
+                }
             }
         }
 
@@ -906,6 +983,24 @@ class KableBmsRepository private constructor(
         if (reason != null) link.lastReason = reason
         val current = links
         if (current.none { it === link }) return@synchronized false
+        refoldConnectionStateLocked(current)
+    }
+
+    /**
+     * The fold body itself, factored out of [setLinkState] so a structural
+     * change to the link list — [disconnectLink] dropping one link — can
+     * recompute [ConnectionState] from the surviving links without
+     * hand-rolling a second copy of the fold. [current] must be non-empty
+     * (an empty link list is the "nothing connected" state, which
+     * [disconnectLink] handles by degenerating to [disconnect] instead of
+     * calling this).
+     *
+     * PRECONDITION: caller holds [linkStateLock] — the fold must never read a
+     * half-updated link, exactly as [setLinkState]'s callers require.
+     *
+     * @return true when this recompute moved the vehicle INTO Connected.
+     */
+    private fun refoldConnectionStateLocked(current: List<PackLink>): Boolean {
         val wasConnected = _connectionState.value is ConnectionState.Connected
         val vehicle = current.first().vehicle
         _connectionState.value = when {
@@ -919,7 +1014,7 @@ class KableBmsRepository private constructor(
             else ->
                 ConnectionState.Failed(current.first().lastReason.ifEmpty { "Connection failed" })
         }
-        !wasConnected && _connectionState.value is ConnectionState.Connected
+        return !wasConnected && _connectionState.value is ConnectionState.Connected
     }
 
     // ----- Connect: one vehicle, N links -----
@@ -956,6 +1051,10 @@ class KableBmsRepository private constructor(
             if (previousAddress != null && previousAddress != address) {
                 ringBuffer.clear()
                 _activeData.value = BmsData()
+                // Same reasoning on the motion side: a different device's
+                // motion must not bleed into the new vehicle's graph / flow.
+                motionRingBuffer.clear()
+                _activeMotion.value = ControllerData()
             }
             // Initial state, written directly: the links are not installed yet,
             // so the fold cannot own this first transition. From installation
@@ -967,7 +1066,7 @@ class KableBmsRepository private constructor(
             val newLinks = specs.map { PackLink(spec = it, vehicle = vehicle) }
             val orchestrator = buildOrchestrator(vehicle, address, type)
             installedOrchestrator = orchestrator
-            val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+            val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
             // the competing writer — a concurrent connect / reconnect attempt
@@ -1060,7 +1159,7 @@ class KableBmsRepository private constructor(
     ): Result<Unit> {
         val vehicle = link.vehicle
         val address = link.spec.address
-        val type = link.spec.bmsType
+        val type = link.spec.protocolKind.toBmsType()
         // Tracks the orchestrator THIS attempt installed (rebuild path only),
         // so every failure path can undo exactly its own installation.
         var installedOrchestrator: VehicleConnection? = null
@@ -1076,7 +1175,7 @@ class KableBmsRepository private constructor(
             // the session — both must read the same decode state. Plain
             // object, no I/O; constructing it this early cannot fail.
             val protocol = createProtocol(type)
-            val channel: Channel<PackSample> = sessionLock.withLock {
+            val channel: Channel<Sample> = sessionLock.withLock {
                 if (links.none { it === link }) {
                     return Result.failure(IllegalStateException("Link superseded"))
                 }
@@ -1099,7 +1198,7 @@ class KableBmsRepository private constructor(
                 // THIS is where the local→global seam is populated: the
                 // session speaks indices local to its protocol, the shared
                 // funnel is keyed by the vehicle's global pack indices.
-                localToGlobal = link.spec::globalIndex
+                localToGlobal = link.spec::globalPackIndex
             )
 
             val advertisement = resolveAdvertisement(address)
@@ -1117,6 +1216,20 @@ class KableBmsRepository private constructor(
                 vehicle = vehicle,
                 connectionState = _connectionState,
                 onSample = onSample,
+                // Motion twin of onSample: translate the session's LOCAL
+                // controller index to the vehicle-global one (through this
+                // link's ownedControllers) and funnel it as a MotionSample
+                // into the SAME channel. Fires only when the protocol is a
+                // MotionSource; in Part A none is, and a battery-only link's
+                // ownedControllers is empty, so this never runs here.
+                onMotionSample = { localCtrlIndex, data ->
+                    val sent = channel.trySend(
+                        MotionSample(link.spec.globalControllerIndex(localCtrlIndex), data)
+                    )
+                    if (sent.isFailure) {
+                        println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
+                    }
+                },
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule THIS link's
                     // reconnect — unless the user disconnected in the meantime.
@@ -1201,7 +1314,7 @@ class KableBmsRepository private constructor(
      */
     private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType): VehicleConnection {
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
@@ -1351,6 +1464,7 @@ class KableBmsRepository private constructor(
         sessionsToTear.forEach { it.tearDown() }
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
+        _activeMotion.value = ControllerData()
         // Fresh acquisition: the block above has already released the lock,
         // and tearDown() must not run while holding it. The funnel closes
         // beside the orchestrator: every session was torn down (observe loops
@@ -1362,12 +1476,74 @@ class KableBmsRepository private constructor(
         }
         _activeVehicle.value = null
         ringBuffer.clear()
+        motionRingBuffer.clear()
         // Direct write, not the fold: the link list is empty (the fold no
         // longer owns the state) and any straggler link transition is
         // identity-guarded against the emptied list, so nothing can clobber
         // this.
         _connectionState.value = ConnectionState.Disconnected
         serviceStop()
+    }
+
+    /**
+     * The three outcomes [disconnectLink]'s lookup can reach, decided inside
+     * one [sessionLock] critical section and acted on AFTER it releases —
+     * [ConnectionSession.tearDown] is suspending and, like every other
+     * teardown in this class, must never run while the lock is held.
+     */
+    private sealed interface LinkRemoval {
+        /** No link at that address is installed — [disconnectLink] no-ops. */
+        object NotFound : LinkRemoval
+
+        /**
+         * The address named the vehicle's ONLY link — degenerate to the full
+         * [disconnect] sweep rather than leaving the repository half torn
+         * down (funnel/orchestrator/ring buffers still holding a connection
+         * with zero links behind it).
+         */
+        object LastLink : LinkRemoval
+
+        /** The link was removed from [links]; [remaining] feeds the fold. */
+        data class Removed(
+            val session: ConnectionSession?,
+            val reconnectJob: Job?,
+            val remaining: List<PackLink>
+        ) : LinkRemoval
+    }
+
+    override suspend fun disconnectLink(address: String) {
+        val outcome: LinkRemoval = sessionLock.withLock {
+            val link = links.firstOrNull { it.spec.address == address }
+                ?: return@withLock LinkRemoval.NotFound
+            if (links.size == 1) return@withLock LinkRemoval.LastLink
+            val session = link.session
+            val reconnectJob = link.reconnectJob
+            link.session = null
+            link.reconnectJob = null
+            val remaining = links.filterNot { it === link }
+            links = remaining
+            LinkRemoval.Removed(session, reconnectJob, remaining)
+        }
+        when (outcome) {
+            is LinkRemoval.NotFound -> Unit
+            // Reuse the existing full teardown path instead of duplicating
+            // it: stops the funnel/consumer, clears the orchestrator,
+            // _activeData / _activeMotion / _activeVehicleData, the ring
+            // buffers, and sets ConnectionState.Disconnected.
+            is LinkRemoval.LastLink -> disconnect()
+            is LinkRemoval.Removed -> {
+                println("[VOLTY-BLE] disconnectLink: dropping $address, ${outcome.remaining.size} link(s) remain")
+                outcome.reconnectJob?.cancel()
+                outcome.session?.tearDown()
+                // Reuse the existing fold — do not hand-roll a second copy of
+                // it. Guarded by linkStateLock, same as every other fold
+                // write, so a sibling link's concurrent status transition
+                // can't interleave with this recompute.
+                synchronized(linkStateLock) {
+                    refoldConnectionStateLocked(outcome.remaining)
+                }
+            }
+        }
     }
 
     override suspend fun onAppResumed() {
@@ -1476,6 +1652,10 @@ class KableBmsRepository private constructor(
         BmsType.ANT_BMS -> AntBmsProtocol()
         BmsType.DALY_BMS -> DalyBmsProtocol()
         BmsType.BEGODE -> BegodeProtocol()
+        // VESC BMS decode is out of scope for the Part A foundation work that
+        // introduced this enum entry (see the vehicle-platform-A-foundation
+        // plan) — a later part wires the real protocol in.
+        BmsType.VESC_BMS -> error("VESC BMS protocol decode is not implemented yet")
     }
 
     fun close() {
@@ -1577,11 +1757,13 @@ class KableBmsRepository private constructor(
 
     /**
      * Test-only: the live funnel channel, so tests can inject a fully
-     * enriched [PackSample] directly — the exact shape a second link's
-     * session will produce once the fan-out lands — and prove the consumer
-     * routes it into the shared state by its global pack index.
+     * enriched [Sample] directly — a [PackSample] (the exact shape a second
+     * link's session produces once the fan-out lands) or a [MotionSample] (a
+     * controller session's output, which Part A has no protocol to emit) —
+     * and prove the consumer routes it into the shared state by its global
+     * pack / controller index.
      */
-    internal fun sampleFunnelChannelForTest(): SendChannel<PackSample>? = sampleChannel
+    internal fun sampleFunnelChannelForTest(): SendChannel<Sample>? = sampleChannel
 
     /**
      * Test-only: prime a "stuck Connected" state — as if the app had been
@@ -1618,7 +1800,7 @@ class KableBmsRepository private constructor(
      * effective link specs, one orchestrator sized from the full vehicle pack
      * list, one channel + consumer, one [PackLink] per distinct address — and
      * return each link's session funnel (LOCAL pack indices, translated to
-     * global through that link's [LinkSpec.globalIndex], in link order).
+     * global through that link's [LinkSpec.globalPackIndex], in link order).
      *
      * [ConnectionSession] requires a real Kable peripheral, so this seam is
      * the only way commonTest can reach the fan-out. It shares
@@ -1636,7 +1818,7 @@ class KableBmsRepository private constructor(
         val newLinks = effectiveLinkSpecs(vehicle, address, type)
             .map { PackLink(spec = it, vehicle = vehicle) }
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<PackSample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
@@ -1648,10 +1830,10 @@ class KableBmsRepository private constructor(
         val socVehicle = socVehicleFor(vehicle, address, type)
         return newLinks.map { link ->
             makeLinkOnSample(
-                protocol = createProtocol(link.spec.bmsType),
+                protocol = createProtocol(link.spec.protocolKind.toBmsType()),
                 socVehicle = socVehicle,
                 channel = channel,
-                localToGlobal = link.spec::globalIndex
+                localToGlobal = link.spec::globalPackIndex
             )
         }
     }
@@ -1703,14 +1885,33 @@ class KableBmsRepository private constructor(
 
 /**
  * One enriched sample crossing the serialisation barrier between a link's
- * session coroutine and the single consumer that owns the shared state
- * (orchestrator submit, ring buffer, activeData). By the time a sample
- * enters the channel its enrichment (Begode live-voltage scaling, SoC
- * estimation) is done and [globalPackIndex] is the VEHICLE-global pack
- * index — the session's local index has already been translated.
+ * session coroutine and the single consumer that owns the shared state. The
+ * funnel carries battery OR motion: a link's battery stream and its controller
+ * stream enter the SAME single-consumer channel, so the consumer serialises
+ * every mutation of [VehicleConnection] regardless of which side produced it.
+ */
+internal sealed interface Sample
+
+/**
+ * A battery sample. By the time it enters the channel its enrichment (Begode
+ * live-voltage scaling, SoC estimation) is done and [globalPackIndex] is the
+ * VEHICLE-global pack index — the session's local index has already been
+ * translated.
  */
 internal data class PackSample(
     val globalPackIndex: Int,
     val data: BmsData,
     val sections: List<SectionState>
-)
+) : Sample
+
+/**
+ * A motion sample. [globalControllerIndex] is the VEHICLE-global controller
+ * index — the session's local index has already been translated through the
+ * link's [LinkSpec.globalControllerIndex]. No controller protocol emits these
+ * in Part A; the path is exercised by tests and the demo until Part B wires a
+ * real [ru.sodovaya.volty.data.bms.MotionSource] session in.
+ */
+internal data class MotionSample(
+    val globalControllerIndex: Int,
+    val data: ControllerData
+) : Sample

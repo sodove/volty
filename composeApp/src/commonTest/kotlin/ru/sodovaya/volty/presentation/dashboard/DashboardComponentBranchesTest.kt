@@ -5,6 +5,7 @@ import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
@@ -45,6 +46,7 @@ class DashboardComponentBranchesTest {
     private class FakeBmsRepo : BmsRepository {
         override val activeVehicleData = MutableStateFlow(VehicleData())
         override val activeData = MutableStateFlow(BmsData())
+        override val activeMotion = MutableStateFlow(ControllerData())
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
@@ -52,6 +54,7 @@ class DashboardComponentBranchesTest {
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
         override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
+        override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() {}

@@ -191,6 +191,7 @@
     <string name="bms_ant">Ant BMS</string>
     <string name="bms_daly">Daly BMS</string>
     <string name="bms_begode">Begode</string>
+    <string name="bms_vesc">VESC BMS</string>
 
     <!-- Notifications -->
     <string name="notif_monitoring_title">Volty · %1$s</string>

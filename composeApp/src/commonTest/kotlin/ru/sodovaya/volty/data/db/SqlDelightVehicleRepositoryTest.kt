@@ -321,7 +321,12 @@ class SqlDelightVehicleRepositoryTest {
             0
         )
 
-        VoltyDatabase.Schema.migrate(driver, 2, 3)
+        // Migrate all the way to the current schema version, not just to 3:
+        // the repository below is compiled against the CURRENT .sq schema, so
+        // handing it a database frozen at an older version — even a
+        // legitimately-migrated one — would make its generated queries
+        // reference columns/tables that don't exist yet.
+        VoltyDatabase.Schema.migrate(driver, 2, VoltyDatabase.Schema.version)
 
         val repo = SqlDelightVehicleRepository(VoltyDatabaseProvider(driver))
         val got = repo.get("v2-1")

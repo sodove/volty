@@ -24,8 +24,8 @@ internal enum class LinkStatus { CONNECTING, ONLINE, RECONNECTING, FAILED }
  * distinct pack address.
  *
  * A link owns:
- *  - its [spec] — the address, the BMS type behind it, and the vehicle-global
- *    pack indices it is responsible for ([LinkSpec.globalIndex] translates the
+ *  - its [spec] — the address, the protocol behind it, and the vehicle-global
+ *    pack indices it is responsible for ([LinkSpec.globalPackIndex] translates the
  *    session's local sample index before the sample enters the shared funnel);
  *  - its [session] — the current [ConnectionSession], swapped per attempt;
  *  - its [reconnectJob] — the link's own reconnect loop, independent of every

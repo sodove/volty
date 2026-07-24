@@ -24,7 +24,9 @@ data class Pack(
     val label: String,
     val bmsType: BmsType,
     val bmsAddress: String,
-    val cellCount: Int? = null
+    val cellCount: Int? = null,
+    val canId: Int? = null,
+    val aliasGroup: String? = null
 )
 
 /**

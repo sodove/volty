@@ -8,8 +8,9 @@ data class Vehicle(
     val id: String,
     val name: String,
     val iconKey: String,
-    /** Never empty. Single-pack batteries — the overwhelming majority — hold exactly one. */
+    /** Never empty unless [controllers] carries at least one source instead. */
     val packs: List<Pack>,
+    val controllers: List<Controller> = emptyList(),
     val topology: PackTopology = PackTopology.PARALLEL,
     val chemistry: Chemistry,
     val averagingWindowMin: Int = 5,
@@ -19,9 +20,23 @@ data class Vehicle(
     val isPinned: Boolean = false
 ) {
     init {
-        require(packs.isNotEmpty()) { "Vehicle must have at least one pack" }
+        require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }
     }
 }
+
+/** True when this vehicle has at least one motor controller wired in. */
+val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()
+
+/** The lowest-indexed controller, or null when the vehicle has none. */
+val Vehicle.primaryController: Controller? get() = controllers.minByOrNull { it.index }
+
+/**
+ * The address volty identifies/connects this vehicle by. Prefers the
+ * primary controller over the primary pack — safe because [init] guarantees
+ * at least one of [packs] / [controllers] is non-empty.
+ */
+val Vehicle.primaryAddress: String get() =
+    primaryController?.address ?: packs.first().bmsAddress
 
 /**
  * Builds a conventional one-BMS vehicle. Keeps the pre-multi-pack parameter

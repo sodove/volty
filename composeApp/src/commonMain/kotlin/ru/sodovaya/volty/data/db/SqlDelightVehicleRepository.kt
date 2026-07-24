@@ -5,6 +5,9 @@ import app.cash.sqldelight.coroutines.mapToList
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -22,6 +25,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 
     private val queries = provider.database.vehicleRowQueries
     private val packQueries = provider.database.packRowQueries
+    private val controllerQueries = provider.database.controllerRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
         .asFlow()
@@ -31,23 +35,32 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         .asFlow()
         .mapToList(Dispatchers.Default)
 
+    private val controllerRows: Flow<List<ControllerRow>> = controllerQueries.selectAll()
+        .asFlow()
+        .mapToList(Dispatchers.Default)
+
     override val vehicles: Flow<List<Vehicle>> =
-        combine(vehicleRows, packRows) { rows, packs ->
-            val byVehicle = packs.groupBy { it.vehicleId }
-            // A vehicle with no packs cannot be constructed (Vehicle.init
-            // requires at least one), and would mean a broken migration —
-            // drop it rather than crash the whole list.
+        combine(vehicleRows, packRows, controllerRows) { rows, packs, ctrls ->
+            val packsByVehicle = packs.groupBy { it.vehicleId }
+            val controllersByVehicle = ctrls.groupBy { it.vehicleId }
+            // A vehicle with neither packs nor controllers cannot be
+            // constructed (Vehicle.init requires at least one source), and
+            // would mean a broken migration — drop it rather than crash the
+            // whole list. A controller-only vehicle (no packs) is valid.
             rows.mapNotNull { row ->
-                val own = byVehicle[row.id].orEmpty()
-                if (own.isEmpty()) null else row.toDomain(own)
+                val ownPacks = packsByVehicle[row.id].orEmpty()
+                val ownControllers = controllersByVehicle[row.id].orEmpty()
+                if (ownPacks.isEmpty() && ownControllers.isEmpty()) null
+                else row.toDomain(ownPacks, ownControllers)
             }
         }.flowOn(Dispatchers.Default)
 
     override suspend fun get(id: String): Vehicle? {
         val row = queries.selectById(id).executeAsOneOrNull() ?: return null
         val packs = packQueries.selectByVehicle(id).executeAsList()
-        if (packs.isEmpty()) return null
-        return row.toDomain(packs)
+        val controllers = controllerQueries.selectByVehicle(id).executeAsList()
+        if (packs.isEmpty() && controllers.isEmpty()) return null
+        return row.toDomain(packs, controllers)
     }
 
     override suspend fun upsert(vehicle: Vehicle) {
@@ -89,7 +102,25 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                     label = p.label,
                     bmsType = p.bmsType.name,
                     bmsAddress = p.bmsAddress,
-                    cellCount = p.cellCount?.toLong()
+                    cellCount = p.cellCount?.toLong(),
+                    canId = p.canId?.toLong(),
+                    aliasGroup = p.aliasGroup
+                )
+            }
+            // Same wholesale-replace treatment for controllers.
+            controllerQueries.deleteByVehicle(vehicle.id)
+            vehicle.controllers.forEach { c ->
+                controllerQueries.upsert(
+                    vehicleId = vehicle.id,
+                    controllerIndex = c.index.toLong(),
+                    label = c.label,
+                    controllerType = c.controllerType.name,
+                    address = c.address,
+                    canId = c.canId?.toLong(),
+                    polePairs = c.motor.polePairs.toLong(),
+                    wheelDiameterMm = c.motor.wheelDiameterMm.toLong(),
+                    gearRatio = c.motor.gearRatio.toDouble(),
+                    providesDerivedBattery = if (c.providesDerivedBattery) 1L else 0L
                 )
             }
         }
@@ -99,6 +130,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         // Explicit rather than relying on ON DELETE CASCADE: foreign keys are
         // off by default in SQLite unless PRAGMA foreign_keys is enabled.
         packQueries.deleteByVehicle(id)
+        controllerQueries.deleteByVehicle(id)
         queries.delete(id)
     }
 
@@ -108,7 +140,10 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 }
 
 @OptIn(ExperimentalTime::class)
-private fun VehicleRow.toDomain(packRows: List<PackRow>): Vehicle = Vehicle(
+private fun VehicleRow.toDomain(
+    packRows: List<PackRow>,
+    controllerRows: List<ControllerRow>
+): Vehicle = Vehicle(
     id = id,
     name = name,
     iconKey = iconKey,
@@ -118,7 +153,24 @@ private fun VehicleRow.toDomain(packRows: List<PackRow>): Vehicle = Vehicle(
             label = p.label,
             bmsType = BmsType.valueOf(p.bmsType),
             bmsAddress = p.bmsAddress,
-            cellCount = p.cellCount?.toInt()
+            cellCount = p.cellCount?.toInt(),
+            canId = p.canId?.toInt(),
+            aliasGroup = p.aliasGroup
+        )
+    },
+    controllers = controllerRows.sortedBy { it.controllerIndex }.map { c ->
+        Controller(
+            index = c.controllerIndex.toInt(),
+            label = c.label,
+            controllerType = ControllerType.valueOf(c.controllerType),
+            address = c.address,
+            canId = c.canId?.toInt(),
+            motor = MotorConfig(
+                polePairs = c.polePairs.toInt(),
+                wheelDiameterMm = c.wheelDiameterMm.toInt(),
+                gearRatio = c.gearRatio.toFloat()
+            ),
+            providesDerivedBattery = c.providesDerivedBattery == 1L
         )
     },
     topology = PackTopology.valueOf(topology),

@@ -18,7 +18,7 @@ class SampleRingBufferTest {
 
     @Test
     fun `push and within returns chronological items inside the window`() {
-        val buf = SampleRingBuffer()
+        val buf = SampleRingBuffer<BmsData> { it.timestamp }
         val base = Instant.fromEpochSeconds(1_000_000)
         for (i in 0..9) buf.push(sample(base.plus(i.seconds), i.toFloat()))
         val recent = buf.within(5.seconds, now = base.plus(9.seconds))
@@ -30,7 +30,7 @@ class SampleRingBufferTest {
 
     @Test
     fun `maxAge evicts samples older than the window`() {
-        val buf = SampleRingBuffer(maxAge = 10.seconds)
+        val buf = SampleRingBuffer<BmsData>(maxAge = 10.seconds) { it.timestamp }
         val base = Instant.fromEpochSeconds(1_000_000)
         // Push 5 samples 1s apart, then jump forward 25s — earlier ones must evict.
         for (i in 0..4) buf.push(sample(base.plus(i.seconds), i.toFloat()))
@@ -43,7 +43,7 @@ class SampleRingBufferTest {
 
     @Test
     fun `within returns empty when no samples in window`() {
-        val buf = SampleRingBuffer()
+        val buf = SampleRingBuffer<BmsData> { it.timestamp }
         val base = Instant.fromEpochSeconds(1_000_000)
         buf.push(sample(base, 1f))
         val recent = buf.within(1.seconds, now = base.plus(1.minutes))
@@ -52,7 +52,7 @@ class SampleRingBufferTest {
 
     @Test
     fun `clear empties buffer`() {
-        val buf = SampleRingBuffer()
+        val buf = SampleRingBuffer<BmsData> { it.timestamp }
         val base = Instant.fromEpochSeconds(1_000_000)
         buf.push(sample(base, 1f))
         buf.clear()
@@ -63,7 +63,7 @@ class SampleRingBufferTest {
     fun `holds an hour of 2Hz samples under default maxAge`() {
         // ANT BMS polls at 2 Hz. Default maxAge of 4h must comfortably hold an
         // hour's worth (7200 samples), well under hardCap.
-        val buf = SampleRingBuffer()
+        val buf = SampleRingBuffer<BmsData> { it.timestamp }
         val base = Instant.fromEpochSeconds(1_000_000)
         for (i in 0 until 7200) {
             buf.push(sample(base.plus((i * 500L).milliseconds), i.toFloat()))

@@ -12,5 +12,9 @@ data class VehicleData(
     val aggregate: BmsData = BmsData(),
     val topology: PackTopology = PackTopology.PARALLEL,
     /** true when some packs are offline and [aggregate] covers only the rest. */
-    val isPartial: Boolean = false
+    val isPartial: Boolean = false,
+    val controllers: List<ControllerState> = emptyList(),
+    val motion: ControllerData = ControllerData(),
+    /** true when some controllers are offline and [motion] covers only the rest. */
+    val motionPartial: Boolean = false
 )
