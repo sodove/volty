@@ -2,9 +2,11 @@ package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.BmsUuids
+import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -66,6 +68,21 @@ class SampleRoutingTest {
             return stubSections[packIndex] ?: emptyList()
         }
         override fun reset() {}
+    }
+
+    /** A fake protocol that is both a BmsProtocol and a MotionSource. */
+    private class FakeMotionProtocol(
+        private var motion: ControllerData?
+    ) : BmsProtocol(), MotionSource {
+        override val uuids = BmsUuids("0000", "0001", "0002")
+        override fun handshakeCommands() = emptyList<ByteArray>()
+        override fun pollCommands() = emptyList<ByteArray>()
+        override fun onNotification(data: ByteArray) {}
+        override val packCount = 0
+        override fun latestData(packIndex: Int): BmsData? = null
+        override fun reset() {}
+        override val controllerCount = 1
+        override fun latestMotion(controllerIndex: Int) = motion
     }
 
     @Test
@@ -156,6 +173,22 @@ class SampleRoutingTest {
         // either — the breakdown is only ever fetched beside a gated sample.
         routePackSamples(protocol, gate) { _, _, _ -> }
         assertEquals(readsAfterFirst, protocol.sectionsReads)
+    }
+
+    @Test
+    fun controller_only_protocol_keeps_link_alive_via_motion() {
+        val gate = MotionSampleGate(1)
+        val proto = FakeMotionProtocol(ControllerData(speedKmh = 5f))
+        var got: ControllerData? = null
+        val alive = routeControllerSamples(proto, gate) { _, d -> got = d }
+        assertTrue(alive)
+        assertEquals(5f, got?.speedKmh)
+    }
+
+    @Test
+    fun no_motion_decode_reports_not_alive() {
+        val alive = routeControllerSamples(FakeMotionProtocol(null), MotionSampleGate(1)) { _, _ -> }
+        assertFalse(alive)
     }
 
     // ----- The channel funnel (serialisation barrier, multi-link Task 2) -----
