@@ -435,6 +435,7 @@ class KableBmsRepository private constructor(
             // May be null: the picker now lists every device and lets the user
             // pick the type manually, so we no longer drop unrecognized ads.
             val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
+            val controllerType = BmsTypeDetector.detectController(name = name, serviceUuids = serviceList)
             val id = ad.identifier.toString()
             cacheAdvertisement(id, ad)
             emit(
@@ -443,6 +444,7 @@ class KableBmsRepository private constructor(
                     name = name,
                     rssi = ad.rssi,
                     bmsType = type,
+                    controllerType = controllerType,
                     knownVehicle = knownAddresses[id]
                 )
             )

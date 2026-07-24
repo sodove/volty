@@ -265,7 +265,11 @@ private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: 
         Avatar(letter = "?", bg = MaterialTheme.colorScheme.outline)
         Column(modifier = Modifier.weight(1f)) {
             Text(device.name ?: "BMS ${device.address.takeLast(4)}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val typeLabel = device.bmsType?.let { bmsTypeLabel(it) } ?: stringResource(Res.string.picker_type_unknown)
+            val typeLabel = when {
+                device.bmsType != null -> bmsTypeLabel(device.bmsType)
+                device.controllerType != null -> device.controllerType.label
+                else -> stringResource(Res.string.picker_type_unknown)
+            }
             Text("$typeLabel  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)

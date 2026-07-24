@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -17,6 +18,12 @@ data class DiscoveredDevice(
     val rssi: Int,
     /** Auto-detected BMS type, or `null` when the scanner did not recognize the device. */
     val bmsType: BmsType?,
+    /**
+     * Auto-detected controller type — a candidate signal, separate from
+     * [bmsType], since a device can never be both a battery and a controller
+     * (see [ru.sodovaya.volty.data.bms.BmsTypeDetector.detectController]).
+     */
+    val controllerType: ControllerType? = null,
     val knownVehicle: Vehicle? = null
 )
 
