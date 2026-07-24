@@ -1,0 +1,28 @@
+-- One row per motor controller. A vehicle may have zero (pack-only), one, or
+-- several (multi-motor) controllers — see domain/model/Controller.kt.
+
+CREATE TABLE ControllerRow (
+    vehicleId              TEXT NOT NULL,
+    controllerIndex        INTEGER NOT NULL,
+    label                  TEXT NOT NULL,
+    controllerType         TEXT NOT NULL,   -- enum name: VESC | FARDRIVER | KELLY | BEGODE
+    address                TEXT NOT NULL,
+    canId                  INTEGER,          -- NULL = direct
+    polePairs              INTEGER NOT NULL DEFAULT 15,
+    wheelDiameterMm        INTEGER NOT NULL DEFAULT 0,
+    gearRatio              REAL NOT NULL DEFAULT 1.0,
+    providesDerivedBattery INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (vehicleId, controllerIndex),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+CREATE INDEX ControllerRow_vehicle ON ControllerRow(vehicleId, controllerIndex);
+
+selectAll:
+SELECT * FROM ControllerRow ORDER BY vehicleId, controllerIndex;
+selectByVehicle:
+SELECT * FROM ControllerRow WHERE vehicleId = :vehicleId ORDER BY controllerIndex;
+upsert:
+INSERT OR REPLACE INTO ControllerRow(vehicleId, controllerIndex, label, controllerType, address, canId, polePairs, wheelDiameterMm, gearRatio, providesDerivedBattery)
+VALUES (:vehicleId, :controllerIndex, :label, :controllerType, :address, :canId, :polePairs, :wheelDiameterMm, :gearRatio, :providesDerivedBattery);
+deleteByVehicle:
+DELETE FROM ControllerRow WHERE vehicleId = :vehicleId;

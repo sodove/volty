@@ -1,0 +1,21 @@
+-- v3 -> v4: controllers become first-class; packs gain canId + aliasGroup.
+-- ALTER TABLE ADD COLUMN is supported by every SQLite in the field (unlike DROP COLUMN),
+-- so no table recreate is needed.
+ALTER TABLE PackRow ADD COLUMN canId INTEGER;
+ALTER TABLE PackRow ADD COLUMN aliasGroup TEXT;
+
+CREATE TABLE ControllerRow (
+    vehicleId              TEXT NOT NULL,
+    controllerIndex        INTEGER NOT NULL,
+    label                  TEXT NOT NULL,
+    controllerType         TEXT NOT NULL,
+    address                TEXT NOT NULL,
+    canId                  INTEGER,
+    polePairs              INTEGER NOT NULL DEFAULT 15,
+    wheelDiameterMm        INTEGER NOT NULL DEFAULT 0,
+    gearRatio              REAL NOT NULL DEFAULT 1.0,
+    providesDerivedBattery INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (vehicleId, controllerIndex),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+CREATE INDEX ControllerRow_vehicle ON ControllerRow(vehicleId, controllerIndex);
