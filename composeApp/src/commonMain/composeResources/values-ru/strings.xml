@@ -85,6 +85,18 @@
     <string name="sheet_add_battery">+ Добавить батарею</string>
     <string name="sheet_disconnect">Отключить</string>
 
+    <!-- Ride dashboard (Clean) -->
+    <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <string name="ride_odometer">Одометр</string>
+    <string name="ride_trip">Поездка</string>
+    <string name="ride_uptime">В пути</string>
+    <string name="ride_consumption">Расход</string>
+    <string name="ride_consumption_avg">средн. %1$s Вт·ч/км</string>
+    <string name="ride_power">Мощность</string>
+    <string name="ride_battery">Батарея</string>
+    <string name="ride_esc_temp">Темп. ESC</string>
+    <string name="ride_motor_temp">Темп. мотора</string>
+
     <!-- Cells screen -->
     <string name="cells_title">Ячейки · %1$ds</string>
     <string name="cells_max">Макс</string>

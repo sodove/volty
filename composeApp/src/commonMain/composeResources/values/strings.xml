@@ -85,6 +85,18 @@
     <string name="sheet_add_battery">+ Add battery</string>
     <string name="sheet_disconnect">Disconnect</string>
 
+    <!-- Ride dashboard (Clean) -->
+    <string name="ride_speed_unknown">SPEED UNKNOWN</string>
+    <string name="ride_odometer">Odometer</string>
+    <string name="ride_trip">Trip</string>
+    <string name="ride_uptime">Uptime</string>
+    <string name="ride_consumption">Consumption</string>
+    <string name="ride_consumption_avg">avg %1$s Wh/km</string>
+    <string name="ride_power">Power</string>
+    <string name="ride_battery">Battery</string>
+    <string name="ride_esc_temp">ESC temp</string>
+    <string name="ride_motor_temp">Motor temp</string>
+
     <!-- Cells screen -->
     <string name="cells_title">Cells · %1$ds</string>
     <string name="cells_max">Max</string>
