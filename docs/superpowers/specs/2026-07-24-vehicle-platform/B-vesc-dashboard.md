@@ -101,23 +101,60 @@ Nordic UART ⇒ candidate `ControllerType.VESC`. Because NUS is generic, detecti
 is best-effort — confirm by a successful GET_VALUES_SETUP handshake. The picker
 shows it as a controller, not a BMS.
 
-## 7. Ride dashboard (`presentation/ride/`)
+## 7. Ride dashboard (`presentation/ride/`) — LOCKED design (2026-07-25)
 New `RideDashboardComponent` + `RideDashboardScreen`, reading
-`bmsRepository.activeMotion` (+ `activeVehicleData` for battery). Material 3
-Expressive redesign of the native VESC RT-DATA concept (radial gauges kept as the
-concept; dynamic color, expressive shapes/motion; no skeuomorphic dials). Exact
-gauge layout is mocked visually at implementation (frontend-design / visual
-companion). Composition, top→bottom:
-1. `VehiclePill` (reused) — identity + connection/partial state.
-2. **Hero radial speedo** — big `speedKmh` (km/h or mph), arc scaled to a
-   per-vehicle max; a dash when `!speedKnown`.
-3. **Gauge cluster** (cards/mini-gauges): **Duty %** (the ШИМ — prominent, colored
-   by proximity to limit), **Power kW**, **Battery %/V** (from aggregate), **ESC
-   °C** / **Motor °C**.
-4. **Consumption**: Wh/km (session), avg — reuse moving-average.
-5. **Strip**: odometer / trip / uptime.
-- Reuse `MetricCard`, `SparklineGraph` (speed or duty sparkline), `PowerRangeBar`.
+`bmsRepository.activeMotion` (+ `activeVehicleData` for battery). Visual reference:
+`docs/design/ride-dashboard-mockup.html` (directional — the Compose gauge
+component lays out ticks / numbers / center readout with exact, collision-free
+spacing the hand-authored SVG mockup could not).
+
+**Two renderers, both Material You** (dynamic color on Android 12+, Volty fallback
+palette otherwise). The renderer is chosen **per vehicle** (§7.3):
+- **Clean** — Material 3 Expressive. Hero: a concentric radial gauge — **SPEED**
+  on the outer arc (brand accent) + a **configurable inner ring** (§7.2). Below:
+  a 2×2 metric-card cluster (Power, Battery, ESC °C, Motor °C), a consumption card
+  with a sparkline, then the odo/trip/uptime strip. `VehiclePill` reused up top.
+- **Classic VESC** — a skeuomorphic overlapping **dial cluster** echoing the
+  native RT-DATA screen: top fan (Current · Power · Duty), a large SPEED dial with
+  a BATTERY dial overlapping lower-right, bottom fan (ESC · Consumption · Motor),
+  then the strip. Dials are **Material-You-tinted** (tinted faces, accent/semantic
+  needles + swept arcs, red danger segments) — not the original grey/white.
+
+### 7.1 Reusable gauge composables (`presentation/ride/gauge/`)
+- `RadialGauge` — the Clean arc gauge (outer speed + inner secondary rings), Canvas.
+- `DialGauge` — the Classic skeuomorphic dial: Canvas ticks (minor+major), sparse
+  numeric labels placed collision-free around the rim, needle + hub, a swept value
+  arc, an optional red danger segment, and a clean center readout (label/value/unit).
+  Parameterised by min/max/value/majors/colors/danger. **This component is what
+  makes the Classic view legible where the static mockup couldn't.**
+- `ClusterLayout` — a custom `Layout` positioning the eight `DialGauge`s in the
+  overlapping fan/nest composition, scaling to width (not absolute px).
+
+### 7.2 Configurable inner / secondary gauge (per vehicle)
+The rider picks what the secondary gauge shows — a wheel wants **Duty/ШИМ**, a
+scooter **Battery**, a bike **Power** or **Motor °C**:
+`enum SecondaryGauge { DUTY, BATTERY, POWER, CURRENT, MOTOR_TEMP, ESC_TEMP, CONSUMPTION }`.
+In Clean it drives the hero inner ring; in Classic it emphasises the chosen dial.
+
+### 7.3 Per-vehicle dashboard config + persistence
+`enum DashboardStyle { CLEAN, CLASSIC }`. Persist `dashboardStyle` + `secondaryGauge`
+**per vehicle** — add both as columns on `VehicleRow` with a **v4→v5 SQLDelight
+migration** (`4.sqm`: `ALTER TABLE VehicleRow ADD COLUMN dashboardStyle TEXT`,
+`... secondaryGauge TEXT`). The app-level default style lives in `AppPrefs`; a new
+vehicle inherits it, then its per-vehicle value overrides. `Vehicle` gains the two
+fields (or a small `DashboardConfig`); the composer (Part G) and a dashboard
+long-press/settings entry edit them.
+
+### 7.4 Duty color bands (shared with Part F)
+green `<75` · amber `75–90` · red `>90`. A single `dutyLevel(percent)` helper in a
+shared location feeds both the gauge coloring here and the Part F audible-alarm
+thresholds, so they can never diverge.
+
+- Metric set: speed (hero) · duty/ШИМ · power · battery · ESC/motor temp ·
+  consumption (Wh/km + avg, moving-average) · odo/trip/uptime. Reuse
+  `MetricCard`/`SparklineGraph`/`PowerRangeBar` where they fit.
 - The Graph screen gains motion metrics (speed/duty/power) in its metric switcher.
+- Speed shows a dash when `!speedKnown`; km/h or mph per the unit setting (§9).
 
 ## 8. Navigation / tabs (`presentation/root/`)
 Restructure `RootComponent.Tab` from `Live/Graph/Settings` to
@@ -148,11 +185,23 @@ canonical (km/h, km, °C). Settings gets a toggle.
   hidden Ride tab for a controller-less vehicle; tab navigation.
 - Demo — the demo vehicle (from A) drives the Ride dashboard end to end.
 
-## 11. Decisions / open questions
-1. **SETUP as the primary poll.** Gives speed + battery_level in one request;
-   GET_VALUES is the fallback. Confirm 5–10 Hz poll is comfortable over BLE.
-2. **Ride is home only with controllers.** A pure-BMS vehicle keeps today's UX
-   (Battery home, no Ride tab). Confirm.
-3. **Graph demotion** from a top tab to a button — confirm the interaction.
-4. Motor-config auto-read (`COMM_GET_MCCONF`) — nice-to-have; may defer to G.
-   In B, `MotorConfig` is only needed for the GET_VALUES DERIVED fallback.
+## 11. Decisions — RESOLVED (2026-07-25, user sign-off on the mockup)
+1. **Two dashboard styles**, both Material You: **Clean** (M3 Expressive) +
+   **Classic VESC** (skeuomorphic overlapping cluster). Selectable **per vehicle**
+   (app default + per-vehicle override). Both ship in Part B; sequence Clean first
+   (simpler, approved), Classic second (`DialGauge`/`ClusterLayout`).
+2. **Secondary/inner gauge is configurable, per vehicle** — menu
+   Duty · Battery · Power · Current · Motor °C · ESC °C · Consumption.
+3. **Duty color bands**: green <75 / amber 75–90 / red >90 — the SAME thresholds
+   the Part F audible alarm uses (one shared `dutyLevel` helper).
+4. **Ride = home** when the vehicle has a controller; pure-BMS vehicles keep
+   Battery as home (no Ride tab).
+5. **SETUP is the primary poll** (speed + battery_level); GET_VALUES is the DERIVED
+   fallback. ~5–10 Hz.
+6. **Persistence**: per-vehicle `dashboardStyle` + `secondaryGauge` via a
+   **v4→v5** SQLDelight migration (`4.sqm`).
+
+Still deferred: Graph placement (a button off Ride/Battery, not a top tab —
+confirm interaction at build); `COMM_GET_MCCONF` auto-read of `MotorConfig`
+(nice-to-have; `MotorConfig` is only needed for the GET_VALUES DERIVED fallback,
+may defer to G).
