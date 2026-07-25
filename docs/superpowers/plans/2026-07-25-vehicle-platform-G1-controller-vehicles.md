@@ -209,12 +209,15 @@ Rules it must enforce:
 
 **Two things that must be fixed here, not deferred:**
 
-1. **`VehicleEditComponent.onSave()` rebuilds via `singlePackVehicle(...)`** (`:149-182`). For a controller-only vehicle that would **fabricate a pack out of nothing** and silently convert it back into a BMS vehicle on the first save. Branch on the existing vehicle's shape: rebuild with `controllerVehicle(...)` when it has no packs, preserving `controllers`, `topology`, `dashboardStyle`, `secondaryGauge` exactly as the current code preserves them.
-2. **`VehicleEditComponent.initialize()`** (`:104-105`) reads `bmsType`/`bmsAddress` for the read-only header row. For a controller vehicle show the controller type and its address instead — reuse Task 2's `vehicleSourceLabel`.
+1. ~~**`VehicleEditComponent.onSave()` rebuilds via `singlePackVehicle(...)`**~~ — **ALREADY DONE IN TASK 2** (commit `8a16d79` + its fix round). Task 2's compiler sweep reached this line and fixed it there, guarding with
+   `packs = if (existing != null && existing.packs.isEmpty()) emptyList() else built.packs`
+   rather than rebuilding through `controllerVehicle(...)` as this plan originally prescribed. The guard is correct (`existing != null` ⟹ editing; `Vehicle.init` stays satisfied because `controllers` is non-empty) and the round-trip test was added in Task 2's fix round.
+   **Therefore: your Step 1 test below is a *characterisation* test, not a red-first one — it should already be green when you arrive.** Do not weaken it, do not delete it, and do not "fix" the behaviour again. If you find it failing, something regressed in between and that is your first priority. Consider whether rebuilding through `controllerVehicle(...)` now that Task 4 exists is cleaner than the guard; if you change it, the existing test must stay green.
+2. **`VehicleEditComponent.initialize()`** (`:104-105`) reads `bmsType`/`bmsAddress` for the read-only header row. For a controller vehicle show the controller type and its address instead — reuse Task 2's `vehicleSourceLabel`. Note `VehicleEditScreen.kt:149-150` are `ReadOnlyRow`s, so today a controller vehicle displays a fabricated BMS label but discards no user input — this is a display defect, not a data-loss one.
 
 `RootComponent.homeConfigFor` already routes to Ride when the vehicle has controllers — confirm, do not rewrite.
 
-- [ ] **Step 1: Write the failing test** — `VehicleEditComponent` round-trip: load a controller-only vehicle, call `onSave()` with an unchanged name, assert the persisted vehicle **still has zero packs and one controller**. Verify this test fails against the current `singlePackVehicle` path before you fix it, and record the failure — this is the highest-value assertion in the task.
+- [ ] **Step 1: Confirm the round-trip characterisation test is present and green** — `VehicleEditComponent` round-trip: load a controller-only vehicle, call `onSave()` with an unchanged name, assert the persisted vehicle **still has zero packs and one controller**. Task 2's fix round added this along with the behaviour. Read it, satisfy yourself it actually discriminates (revert the guard locally and watch it fail), and report what you observed. Do not treat "it's already green" as permission to skip reading it.
 
 - [ ] **Step 2: Implement the picker branch** — `SourceChoice.Controller` ⇒ `controllerVehicle(...)` ⇒ same upsert/connect/rollback sequence.
 
