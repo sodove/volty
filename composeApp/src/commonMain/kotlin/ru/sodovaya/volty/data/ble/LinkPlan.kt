@@ -89,6 +89,36 @@ data class LinkSpec(
     fun globalControllerIndex(local: Int): Int = ownedControllers[local].globalIndex
 }
 
+/**
+ * Whether this link is a **gateway** — one BLE address fronting several
+ * sources — and therefore needs the multiplexer
+ * ([ru.sodovaya.volty.data.bms.VescGatewayProtocol]) rather than the plain
+ * single-source protocol. Three independent triggers, each of which the single
+ * protocol cannot serve:
+ *
+ *  - **any CAN-forwarded source** — reaching it at all means wrapping the
+ *    request in `COMM_FORWARD_CAN`, which only the multiplexer does;
+ *  - **a hosted battery** (a pack whose own kind is [ProtocolKind.VESC_BMS] on
+ *    a link that speaks something else) — it answers `COMM_BMS_GET_VALUES`, a
+ *    command the single-controller protocol never sends;
+ *  - **more than one controller** on one address — nothing else can even
+ *    address the second one.
+ *
+ * Read off the SPEC, and deliberately blind to how many PACKS a link owns
+ * beyond their tags: a plain single VESC link owns one controller and, once
+ * `planLinkPacks` has given it a derived battery slot, one untagged pack too.
+ * Counting sources naively would flip every existing single-VESC vehicle onto
+ * the gateway — and, worse, would answer differently before and after that
+ * expansion, so the protocol used to SIZE the pack list and the protocol the
+ * session actually speaks could disagree. Every trigger above is invariant
+ * across the expansion (`KableBmsRepository.effectiveLinkSpecs` preserves each
+ * planned source's `canId`/`kind`, and synthesised slots carry neither).
+ */
+val LinkSpec.isGatewayLink: Boolean
+    get() = (ownedPacks + ownedControllers).any { it.canId != null } ||
+        ownedPacks.any { it.kind == ProtocolKind.VESC_BMS } ||
+        ownedControllers.size > 1
+
 /** Battery-only overload — any caller that has no controllers compiles unchanged. */
 fun planLinks(packs: List<Pack>): List<LinkSpec> = planLinks(packs, emptyList())
 

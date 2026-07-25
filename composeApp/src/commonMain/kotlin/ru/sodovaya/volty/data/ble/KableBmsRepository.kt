@@ -798,10 +798,23 @@ class KableBmsRepository private constructor(
      * [LinkSpec.globalPackIndex] could not translate them. The controllers a
      * link owns come straight from [planLinks] — this is what makes
      * [ConnectionSession.onMotionSample] fire at all.
+     *
+     * Each surviving slot keeps the [OwnedSource] [planLinks] built for it,
+     * matched BY GLOBAL INDEX rather than by position. Rebuilding them as a
+     * bare `OwnedSource(index)` — as this did until Part C — silently discarded
+     * `canId` and `kind`. That was invisible while no pack could carry either,
+     * but a gateway's HOSTED battery is exactly such a source: stripped of its
+     * `kind = VESC_BMS` tag it is indistinguishable from a controller-derived
+     * slot, and [LinkSpec.isGatewayLink] would then answer differently here
+     * than it does inside [planLinkPacks] — the protocol that SIZES the pack
+     * list and the protocol the session speaks would disagree. Slots that
+     * [expandedTo] / the derived-slot pass synthesised have no planned
+     * counterpart and stay untagged, which is exactly what they are.
      */
     private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType?): List<LinkSpec> =
         planLinkPacks(vehicle, address, type).map { (spec, packs) ->
-            spec.copy(ownedPacks = packs.map { OwnedSource(it.index) })
+            val planned = spec.ownedPacks.associateBy { it.globalIndex }
+            spec.copy(ownedPacks = packs.map { planned[it.index] ?: OwnedSource(it.index) })
         }
 
     /** One link's spec paired with the pack slots it is responsible for. */
@@ -1852,6 +1865,13 @@ class KableBmsRepository private constructor(
      *
      * Every battery kind falls through (null) to [createProtocol] (BmsType)
      * unchanged.
+     *
+     * The whole [spec] goes to the factory, not just its first controller's
+     * kind: a GATEWAY link (CAN-forwarded controllers, a hosted battery)
+     * resolves there to the multiplexer instead of the single-source protocol.
+     * `deriveBattery` / `motor` below still describe the first owned controller
+     * because that is what the single-source branch needs; the gateway branch
+     * reads every controller's geometry through `motorFor`.
      */
     private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
         val controller = spec.ownedControllers.firstOrNull()?.globalIndex
@@ -1870,7 +1890,16 @@ class KableBmsRepository private constructor(
             // `packCount = 0` and the derived-slot machinery off.
             deriveBattery = controller?.providesDerivedBattery == true ||
                 vehicle?.packs.isNullOrEmpty(),
-            motor = controller?.motor ?: MotorConfig()
+            motor = controller?.motor ?: MotorConfig(),
+            // A gateway link carries several sources, so the factory needs the
+            // whole spec (which CAN ids, which hosted battery) and every
+            // controller's own geometry — not just the first one's. Both are
+            // ignored for a plain single-source link, which still builds the
+            // exact VescProtocol it always did.
+            link = spec,
+            motorFor = { idx ->
+                vehicle?.controllers?.firstOrNull { it.index == idx }?.motor ?: MotorConfig()
+            }
         )?.let { return it }
         return createProtocol(spec.protocolKind.toBmsType())
     }

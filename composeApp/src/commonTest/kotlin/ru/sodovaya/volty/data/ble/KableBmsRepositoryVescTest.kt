@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.domain.model.BmsData
@@ -26,13 +27,17 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
@@ -551,6 +556,177 @@ class KableBmsRepositoryVescTest {
         assertEquals(ProtocolKind.VESC, controller.protocolKind)
         assertEquals(listOf(OwnedSource(0)), controller.ownedControllers)
         assertTrue(controller.ownedPacks.isEmpty(), "no derived battery — no pack slot")
+    }
+
+    // ----- 5. Part C: the gateway link resolves to the multiplexer -----
+
+    /**
+     * The product owner's scooter: ONE head-unit address carrying two CAN uBoxes
+     * and the ANT battery the head unit hosts. `planLinks` folds it into one
+     * link (Part C task 3); this is where that link finally becomes a protocol.
+     */
+    private fun gatewayScooter(): Vehicle = Vehicle(
+        id = "v-gateway",
+        name = "Scooter",
+        iconKey = "scooter",
+        packs = listOf(
+            Pack(index = 0, label = "ANT", bmsType = BmsType.VESC_BMS, bmsAddress = CTRL_ADDR)
+        ),
+        controllers = listOf(
+            Controller(index = 0, label = "Front", controllerType = ControllerType.VESC,
+                address = CTRL_ADDR, canId = 41),
+            // Only the REAR uBox is given wheel geometry, so a factory that
+            // handed every controller the first one's config would be visible.
+            Controller(index = 1, label = "Rear", controllerType = ControllerType.VESC,
+                address = CTRL_ADDR, canId = 42,
+                motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254))
+        ),
+        topology = PackTopology.PARALLEL,
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L)
+    )
+
+    /** `COMM_GET_VALUES` (4), 53-byte body — the per-unit frame a uBox answers with. */
+    private fun valuesFrame(): ByteArray {
+        val o = mutableListOf<Byte>()
+        fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
+        fun i32(v: Int) {
+            o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
+            o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte()
+        }
+        o += 4; i16(400); i16(680); i32(-8250); i32(3000); i32(0); i32(0); i16(500)
+        i32(12000); i16(782); i32(154000); i32(21000); i32(9800000); i32(1200000)
+        i32(0); i32(0); o += 0
+        return VescPacket.frame(o.toByteArray())
+    }
+
+    @Test
+    fun `a gateway link builds the multiplexer instead of a plain VescProtocol`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = gatewayScooter()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertEquals(ProtocolKind.VESC, spec.protocolKind, "the LINK still speaks one wire protocol")
+        assertTrue(spec.isGatewayLink)
+
+        val protocol = repo.createProtocolForTest(spec, v)
+        val gateway = assertIs<VescGatewayProtocol>(protocol)
+        assertEquals(2, gateway.controllerCount, "both uBoxes ride this one link")
+        assertEquals(1, gateway.packCount, "and so does the hosted battery")
+    }
+
+    /**
+     * The regression this task had to fix. `effectiveLinkSpecs` rebuilt every
+     * owned pack as a bare `OwnedSource(index)`, silently dropping `canId` and
+     * `kind`. Nothing noticed while no pack could carry either — but the hosted
+     * VESC-BMS is exactly such a source, and without its tag
+     * [LinkSpec.isGatewayLink] answers differently on the spec the session gets
+     * than on the one `planLinkPacks` sized the pack list from.
+     */
+    @Test
+    fun `effectiveLinkSpecs keeps the hosted battery's kind through the pack resize`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = gatewayScooter()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        assertEquals(
+            planLinks(v.packs, v.controllers).single().ownedPacks,
+            repo.linkSpecsForTest().single().ownedPacks,
+            "the resize must hand the session the SAME owned sources planLinks built"
+        )
+        assertEquals(
+            listOf(OwnedSource(globalIndex = 0, canId = null, kind = ProtocolKind.VESC_BMS)),
+            repo.linkSpecsForTest().single().ownedPacks
+        )
+    }
+
+    /**
+     * The case where the dropped tag was not merely cosmetic: a head unit that
+     * hosts a battery but forwards nothing (one directly-attached controller,
+     * no CAN ids). The hosted pack's `kind` is then the ONLY thing that makes
+     * this a gateway — strip it and the link builds a plain [VescProtocol] that
+     * never sends `BMS_GET_VALUES`, so the battery is simply never read, while
+     * `planLinkPacks` had already sized the pack list from a protocol that said
+     * it would be.
+     */
+    @Test
+    fun `a head unit hosting a battery is a gateway even with no CAN ids`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = Vehicle(
+            id = "v-hosted-only",
+            name = "Scooter",
+            iconKey = "scooter",
+            packs = listOf(
+                Pack(index = 0, label = "ANT", bmsType = BmsType.VESC_BMS, bmsAddress = CTRL_ADDR)
+            ),
+            controllers = listOf(
+                Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC,
+                    address = CTRL_ADDR)
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertTrue(spec.isGatewayLink, "the hosted battery's kind is the only trigger here")
+        val gateway = assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, v))
+        assertEquals(1, gateway.packCount, "and the hosted battery is what it polls")
+        assertEquals(1, gateway.controllerCount)
+    }
+
+    /** A plain, non-gateway VESC link must be untouched by any of this. */
+    @Test
+    fun `a lone VESC link is not a gateway and still builds VescProtocol`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = vescOnlyVehicle(providesDerivedBattery = true)
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertFalse(
+            spec.isGatewayLink,
+            "one controller + its DERIVED pack slot is two owned sources but still one source of truth"
+        )
+        assertIs<VescProtocol>(repo.createProtocolForTest(spec, v))
+    }
+
+    /**
+     * Each controller's own wheel geometry has to reach the multiplexer, or the
+     * fallback speed a `GET_VALUES` frame derives is computed from the wrong
+     * wheel — a wrong number that looks perfectly plausible.
+     */
+    @Test
+    fun `every controller's own motor config reaches the gateway`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = gatewayScooter()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val gateway = assertIs<VescGatewayProtocol>(
+            repo.createProtocolForTest(repo.linkSpecsForTest().single(), v)
+        )
+
+        // Answer inline: this test is about geometry, not about the loop's
+        // serialisation (VescGatewayProtocolTest owns that).
+        val loop = launch {
+            gateway.runPollLoop { frame ->
+                val len = frame[1].toInt() and 0xFF
+                val payload = frame.copyOfRange(2, 2 + len)
+                if (payload[2].toInt() == 4) gateway.onNotification(valuesFrame())
+            }
+        }
+        advanceTimeBy(2_000)
+        runCurrent()
+
+        assertEquals(
+            SpeedSource.NONE,
+            assertNotNull(gateway.latestMotion(0)).speedSource,
+            "the front uBox has no wheel configured, so its speed stays unknown"
+        )
+        val rear = assertNotNull(gateway.latestMotion(1))
+        assertEquals(SpeedSource.DERIVED, rear.speedSource, "the rear uBox's own wheel is configured")
+        assertTrue(rear.speedKmh > 30f, "and its geometry is the one that was used")
+        loop.cancel()
     }
 
     private companion object {
