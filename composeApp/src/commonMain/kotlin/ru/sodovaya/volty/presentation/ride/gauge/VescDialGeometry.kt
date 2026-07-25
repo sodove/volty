@@ -410,4 +410,32 @@ object VescDialGeometry {
     /** [screenAngleDegrees] in radians, ready for `cos`/`sin`. */
     fun screenAngleRadians(gaugeAngleDegrees: Double): Double =
         screenAngleDegrees(gaugeAngleDegrees) * PI / 180.0
+
+    /**
+     * QML lines 101-140: the vertical anchoring of the centre stack's three text blocks, as pure
+     * arithmetic on a centre Y and two measured heights — lifted out of `VescDialGauge`'s draw
+     * lambda (Task 2 review), where it was the one piece of testable geometry left buried where no
+     * test could reach it.
+     *
+     * The VALUE is centred on [centerY] (QML line 103: `anchors.centerIn: parent`) — it, not the
+     * stack as a whole, sits on the dial's middle. The CAPTION's bottom edge sits on the value's
+     * TOP edge (QML line 132: `anchors.bottom: speedLabel.top`) and so grows upward, using its own
+     * [captionHeight]. The UNIT's top edge sits on the value's BOTTOM edge (QML line 117:
+     * `anchors.top: speedLabel.bottom`) — using [valueHeight] again, not the unit's own height,
+     * because it is the value's edge the unit anchors to, not its own.
+     */
+    fun centerTextLayout(centerY: Double, valueHeight: Double, captionHeight: Double): VescCenterTextLayout {
+        val valueTop = centerY - valueHeight / 2.0
+        return VescCenterTextLayout(
+            valueTop = valueTop,
+            captionTop = valueTop - captionHeight,
+            unitTop = valueTop + valueHeight
+        )
+    }
 }
+
+/**
+ * The three top-edge Y positions [VescDialGeometry.centerTextLayout] computes for the centre
+ * stack's value / caption / unit text blocks (QML lines 101-140).
+ */
+data class VescCenterTextLayout(val valueTop: Double, val captionTop: Double, val unitTop: Double)

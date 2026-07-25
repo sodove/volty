@@ -78,9 +78,17 @@ fun rememberVescDialColors(): VescDialColors {
 }
 
 /**
- * A faithful Compose port of VESC Tool's `mobile/CustomGauge.qml` (463 lines), drawn in that
- * file's own z-order: face (`z:0`) -> ticks -> tick labels -> centre text -> needle (`z:2`) ->
- * trace glow and bezel (`z:3`).
+ * A faithful Compose port of VESC Tool's `mobile/CustomGauge.qml` (463 lines): face (`z:0`) ->
+ * ticks -> tick labels -> centre text -> needle (`z:2`) -> trace glow and bezel (`z:3`).
+ *
+ * The middle three layers are NOT in the original's own paint order. `CustomGauge.qml` declares
+ * the centre `Text` block at :101-140 BEFORE the tick/label `Repeater`s at :378-460, and all three
+ * sit at the same `z:0` — Qt paints same-`z` siblings in declaration order, so the original in fact
+ * paints ticks and labels OVER the centre text; it is layered by declaration order, not unlayered.
+ * This file paints centre text last instead. That never differs on screen — the `0.3R` centre
+ * stack never reaches the `0.66R` label ring (see [VescDialMetrics.needleBaseRadius]'s doc for the
+ * radii) — and is the safer order to keep: a future change to the ticks or labels can't accidentally
+ * grow into the readout. Kept rather than reversed to match the QML's declaration order verbatim.
  *
  * Four things the original does that a from-memory "skeuomorphic dial" reliably gets wrong, all
  * of which this file reproduces exactly:
@@ -337,34 +345,36 @@ private fun DrawScope.drawVescCenterText(
     )
 
     val valueLayout = textMeasurer.measure(valueText, valueStyle)
-    val valueTop = center.y - valueLayout.size.height / 2f
+    val captionLayout = if (caption.isNotEmpty()) textMeasurer.measure(caption, captionStyle) else null
+    val unitLayout = if (unit.isNotEmpty()) textMeasurer.measure(unit, unitStyle) else null
+
+    // The anchoring itself — is a pure function of centerY plus two measured heights, tested in
+    // VescDialGeometryTest — not computed inline here.
+    val stack = VescDialGeometry.centerTextLayout(
+        centerY = center.y.toDouble(),
+        valueHeight = valueLayout.size.height.toDouble(),
+        captionHeight = (captionLayout?.size?.height ?: 0).toDouble()
+    )
+
     drawText(
         textLayoutResult = valueLayout,
         color = color,
-        topLeft = Offset(center.x - valueLayout.size.width / 2f, valueTop)
+        topLeft = Offset(center.x - valueLayout.size.width / 2f, stack.valueTop.toFloat())
     )
 
-    if (caption.isNotEmpty()) {
-        val captionLayout = textMeasurer.measure(caption, captionStyle)
+    if (captionLayout != null) {
         drawText(
             textLayoutResult = captionLayout,
             color = color,
-            topLeft = Offset(
-                center.x - captionLayout.size.width / 2f,
-                valueTop - captionLayout.size.height // bottom edge meets the value's top edge
-            )
+            topLeft = Offset(center.x - captionLayout.size.width / 2f, stack.captionTop.toFloat())
         )
     }
 
-    if (unit.isNotEmpty()) {
-        val unitLayout = textMeasurer.measure(unit, unitStyle)
+    if (unitLayout != null) {
         drawText(
             textLayoutResult = unitLayout,
             color = color,
-            topLeft = Offset(
-                center.x - unitLayout.size.width / 2f,
-                valueTop + valueLayout.size.height // top edge meets the value's bottom edge
-            )
+            topLeft = Offset(center.x - unitLayout.size.width / 2f, stack.unitTop.toFloat())
         )
     }
 }

@@ -253,4 +253,41 @@ class VescDialGeometryTest {
         // normalised = 45/60 = 0.75; angle = 270*0.75 + (-225) = 202.5 - 225 = -22.5
         assertEquals(-22.5, speed.valueToAngle(45.0), epsilon)
     }
+
+    // --- centre text stack anchoring (QML:101-140), lifted out of the draw lambda (Task 2 review) ---
+
+    @Test fun the_value_is_centred_on_centerY_regardless_of_its_own_height() {
+        // valueTop = centerY - valueHeight/2, so the value's MIDPOINT sits exactly on centerY.
+        val layout = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 40.0, captionHeight = 10.0)
+        assertEquals(180.0, layout.valueTop, epsilon)
+        assertEquals(200.0, layout.valueTop + 40.0 / 2.0, epsilon) // midpoint == centerY
+    }
+
+    @Test fun the_caption_bottom_edge_meets_the_values_top_edge() {
+        // captionTop = valueTop - captionHeight, i.e. captionTop + captionHeight == valueTop.
+        val layout = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 40.0, captionHeight = 10.0)
+        assertEquals(170.0, layout.captionTop, epsilon)
+        assertEquals(layout.valueTop, layout.captionTop + 10.0, epsilon)
+    }
+
+    @Test fun the_unit_top_edge_meets_the_values_bottom_edge_using_the_VALUES_height_not_its_own() {
+        // QML:117 anchors the unit to speedLabel (the VALUE)'s bottom edge -- unitTop depends on
+        // valueHeight, never on the unit's own measured height (there is no unitHeight parameter
+        // at all). This is the one detail a "just use the block's own height" refactor would get
+        // wrong, so it is pinned directly: two calls that share centerY/valueHeight but differ
+        // only in captionHeight must produce the SAME unitTop.
+        val a = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 40.0, captionHeight = 10.0)
+        val b = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 40.0, captionHeight = 999.0)
+        assertEquals(220.0, a.unitTop, epsilon) // valueTop(180) + valueHeight(40)
+        assertEquals(a.unitTop, b.unitTop, epsilon)
+        // Not vacuous: captionTop DOES differ between a and b, so this is not "everything is equal".
+        assertTrue(a.captionTop != b.captionTop)
+    }
+
+    @Test fun a_taller_value_pushes_the_caption_further_up_and_the_unit_further_down() {
+        val short = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 20.0, captionHeight = 10.0)
+        val tall = VescDialGeometry.centerTextLayout(centerY = 200.0, valueHeight = 60.0, captionHeight = 10.0)
+        assertTrue(tall.captionTop < short.captionTop, "a taller value must push the caption further up")
+        assertTrue(tall.unitTop > short.unitTop, "a taller value must push the unit further down")
+    }
 }
