@@ -6,7 +6,9 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
@@ -14,13 +16,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.withTransform
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
+import androidx.compose.ui.unit.Density
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.util.formatFixed
 import kotlin.math.PI
 import kotlin.math.abs
@@ -50,7 +57,7 @@ data class DialColors(
 fun rememberDialColors(accent: Color = MaterialTheme.colorScheme.primary): DialColors {
     // Deliberately not wrapped in `remember` keyed on the ColorScheme instance: M3's
     // ColorScheme mutates its slots in place (dynamic theme / dark-light switches don't
-    // change object identity), so keying on it would risk serving stale colours.
+    // change object identity), so keying a remember on it would risk serving stale colours.
     val scheme = MaterialTheme.colorScheme
     return DialColors(
         face = scheme.surfaceContainerHighest,
@@ -65,27 +72,49 @@ fun rememberDialColors(accent: Color = MaterialTheme.colorScheme.primary): DialC
     )
 }
 
-// Fixed text styles for the dial's own drawing (colour is applied per-draw via drawText's
-// `color` param, not baked into the style, so a theme change never forces a re-measure).
-private val NumberTextStyle = TextStyle(fontSize = 11.sp)
-private val LabelTextStyle = TextStyle(fontSize = 11.sp, letterSpacing = 1.5.sp)
-private val ValueTextStyle = TextStyle(fontSize = 26.sp, fontWeight = FontWeight.Bold)
-private val UnitTextStyle = TextStyle(fontSize = 11.sp)
-
 private val DialPadding = 4.dp
+
+// Font sizes are fractions of the dial's own radius — the same pattern as every other
+// geometric constant below (tickOuterR, majorTickLen, arcR, hubR), and the same approach the
+// reference mockup uses for its own dial text (`font-size = s * const`; see
+// docs/design/ride-dashboard-mockup.html's `dial()` function — a reasonable typographic ratio
+// to borrow even though its placement maths is exactly what this file avoids porting). This is
+// what gives every instance in an eight-up cluster the same proportions, small dial or hero,
+// instead of a fixed sp guess that only happened to leave headroom at one particular size.
+private const val NumberFontFraction = 0.12f
+private const val LabelFontFraction = 0.07f
+private const val ValueFontFraction = 0.15f
+private const val UnitFontFraction = 0.06f
+private const val LabelLetterSpacingFraction = LabelFontFraction * 0.16f
+
+/**
+ * Raw device pixels -> Sp, deliberately bypassing the system font-scale multiplier: the dial's
+ * digits are geometry sized to fit the space this specific dial measured out for them, not body
+ * text that should grow with an accessibility font-scale setting (a large font-scale would
+ * otherwise blow past the collision guard's own margins). [Density.toSp] divides by
+ * `density * fontScale`; Compose's text renderer multiplies back by that same `density *
+ * fontScale` at draw time, so the two cancel and the rendered size lands at exactly [px]
+ * regardless of the user's font-scale setting.
+ */
+private fun Density.pxToSp(px: Float): TextUnit = px.coerceAtLeast(0f).toSp()
 
 /**
  * The Classic dial: a skeuomorphic VESC-style instrument the rider can pick per vehicle
- * as an alternative to the Clean [RadialGauge]. Everything is sized off `size.minDimension`
- * so one composable serves every dial in an eight-up layout.
+ * as an alternative to the Clean [RadialGauge]. Everything is sized off the dial's own
+ * measured radius so one composable serves every dial in an eight-up layout, from the small
+ * corner dials up to the hero.
  *
  * The mockup this replaces (`docs/design/ride-dashboard-mockup.html`, "Classic VESC" toggle)
- * had its scale numbers collide with the centre readout. This implementation avoids that by
- * construction: the numbers sit on a radius strictly inside the tick marks (computed from
- * their own measured size, not a guessed inset), the centre readout is stacked from measured
- * text heights rather than hand-picked offsets, and — as a real guard rather than a hope —
- * the centre block is shrunk (never enlarged) if its measured footprint would otherwise reach
- * the number ring.
+ * had its scale numbers collide with the centre readout because its numbers sat on a radius
+ * too close to the centre for its centre-text size. This implementation avoids that with two
+ * independent measures: (1) both the tick numbers and the centre readout are sized as fractions
+ * of the dial's own radius (not fixed sp), chosen so that even at the smallest dial in the
+ * planned cluster (`ClusterPlacement`'s 0.32-of-cluster-width corner slots) the centre block's
+ * measured footprint sits comfortably inside the ring the numbers occupy — checked
+ * arithmetically for that size in the task report, not merely assumed to work out; and (2) a
+ * shrink transform that scales the centre block down (never up) as a rare-case safety net —
+ * e.g. a caller-supplied value string longer than the design was sized for — not the mechanism
+ * the acceptance criterion actually relies on.
  */
 @Composable
 fun DialGauge(
@@ -107,22 +136,46 @@ fun DialGauge(
 
     val textMeasurer = rememberTextMeasurer()
     val decimals = if (abs(scale.max) < 10f) 1 else 0
+    val density = LocalDensity.current
 
-    // Text is measured up front (not inside the draw lambda, which cannot call @Composable
-    // functions anyway) and keyed so it is NOT re-measured every animation frame — only the
-    // needle's angle depends on the animated value, everything text-shaped is static per input.
-    val numberLayouts: List<Pair<Float, TextLayoutResult>> = remember(scale, decimals) {
+    // The dial's own pixel size, captured once layout has happened (starts at zero before the
+    // first pass; the guards in the draw lambda simply draw nothing until a real size arrives).
+    // Text can only be measured from a @Composable context, so the radius-derived font sizes
+    // and layouts live here, not in the draw lambda.
+    var canvasSize by remember { mutableStateOf(IntSize.Zero) }
+    val radius = with(density) {
+        (minOf(canvasSize.width, canvasSize.height) / 2f) - DialPadding.toPx()
+    }
+
+    val numberStyle = remember(radius) {
+        TextStyle(fontSize = density.pxToSp(radius * NumberFontFraction))
+    }
+    val labelStyle = remember(radius) {
+        TextStyle(
+            fontSize = density.pxToSp(radius * LabelFontFraction),
+            letterSpacing = density.pxToSp(radius * LabelLetterSpacingFraction)
+        )
+    }
+    val valueStyle = remember(radius) {
+        TextStyle(fontSize = density.pxToSp(radius * ValueFontFraction), fontWeight = FontWeight.Bold)
+    }
+    val unitStyle = remember(radius) {
+        TextStyle(fontSize = density.pxToSp(radius * UnitFontFraction))
+    }
+
+    // Measured once per (radius, text) pair — not every animation frame, since only the
+    // needle's angle depends on the animated value, nothing text-shaped does.
+    val numberLayouts: List<Pair<Float, TextLayoutResult>> = remember(scale, decimals, numberStyle) {
         DialGeometry.majorValues(scale).map { v ->
-            v to textMeasurer.measure(formatFixed(v, decimals), NumberTextStyle)
+            v to textMeasurer.measure(formatFixed(v, decimals), numberStyle)
         }
     }
-    val labelLayout = remember(label) { textMeasurer.measure(label, LabelTextStyle) }
-    val valueLayout = remember(valueText) { textMeasurer.measure(valueText, ValueTextStyle) }
-    val unitLayout = remember(unit) { textMeasurer.measure(unit, UnitTextStyle) }
+    val labelLayout = remember(label, labelStyle) { textMeasurer.measure(label, labelStyle) }
+    val valueLayout = remember(valueText, valueStyle) { textMeasurer.measure(valueText, valueStyle) }
+    val unitLayout = remember(unit, unitStyle) { textMeasurer.measure(unit, unitStyle) }
 
-    Canvas(modifier) {
+    Canvas(modifier.onSizeChanged { canvasSize = it }) {
         if (size.minDimension <= 0f) return@Canvas // degenerate layout — nothing to draw
-        val radius = size.minDimension / 2f - DialPadding.toPx()
         if (radius <= 0f) return@Canvas // box too small even for the padding — draw nothing rather than negative geometry
 
         val center = Offset(size.width / 2f, size.height / 2f)
@@ -144,11 +197,17 @@ fun DialGauge(
         val needleTipR = arcR
         val hubR = radius * 0.07f
 
-        // Numbers sit just inside the major ticks' inner end, offset by their OWN measured
-        // half-height (not a guessed constant) plus a small fixed gap.
-        val maxNumberHalfHeight = (numberLayouts.maxOfOrNull { it.second.size.height } ?: 0) / 2f
+        // Numbers sit just inside the major ticks' inner end. The margin is each label's own
+        // measured HALF-DIAGONAL, not half-height: the 270° sweep passes near-horizontal
+        // (labels sitting almost level with the dial centre), and a wide string like "-60" or
+        // "120" reaches further outward there than its height alone would suggest.
+        val maxNumberHalfDiagonal = numberLayouts.maxOfOrNull { (_, l) ->
+            val hw = l.size.width / 2f
+            val hh = l.size.height / 2f
+            sqrt(hw * hw + hh * hh)
+        } ?: 0f
         val numberGap = 4.dp.toPx()
-        val numberR = (tickOuterR - majorTickLen - numberGap - maxNumberHalfHeight).coerceAtLeast(0f)
+        val numberR = (tickOuterR - majorTickLen - numberGap - maxNumberHalfDiagonal).coerceAtLeast(0f)
 
         // 1. Face
         drawCircle(color = colors.face, radius = radius, center = center)
@@ -233,10 +292,11 @@ fun DialGauge(
         )
         drawCircle(color = colors.needle, radius = hubR, center = center)
 
-        // 7. Centre readout — stacked from MEASURED heights (never guessed offsets), then
-        // shrunk (never enlarged) only if its measured footprint would otherwise reach the
-        // number ring. This is the acceptance criterion: a real collision guard, not a hope
-        // that the chosen proportions happen to leave enough room.
+        // 7. Centre readout — stacked from MEASURED heights (never guessed offsets). Sized
+        // proportionally (see NumberFontFraction et al. above) so it fits inside the number
+        // ring by design; the shrink below is a rare-case safety net — e.g. a caller-supplied
+        // value string longer than the design was sized for — not the mechanism the
+        // acceptance criterion relies on.
         val spacing = 2.dp.toPx()
         val centerTotalHeight =
             labelLayout.size.height + spacing + valueLayout.size.height + spacing + unitLayout.size.height
@@ -245,11 +305,6 @@ fun DialGauge(
             (centerMaxWidth / 2f) * (centerMaxWidth / 2f) + (centerTotalHeight / 2f) * (centerTotalHeight / 2f)
         )
 
-        val maxNumberHalfDiagonal = numberLayouts.maxOfOrNull { (_, l) ->
-            val hw = l.size.width / 2f
-            val hh = l.size.height / 2f
-            sqrt(hw * hw + hh * hh)
-        } ?: 0f
         val collisionMargin = 4.dp.toPx()
         val safeRadius = (numberR - maxNumberHalfDiagonal - collisionMargin).coerceAtLeast(0f)
         val centerScale = if (centerHalfDiagonal > 0f) {
@@ -265,28 +320,29 @@ fun DialGauge(
         y += valueLayout.size.height + spacing
         val unitTop = y
 
-        // Scale about the dial centre via the canvas transform (not the DrawScope `scale(...)`
-        // helper, which would be shadowed by this function's own `scale: DialScale` parameter).
-        val canvas = drawContext.canvas
-        canvas.save()
-        canvas.translate(center.x, center.y)
-        canvas.scale(centerScale, centerScale)
-        canvas.translate(-center.x, -center.y)
-        drawText(
-            labelLayout,
-            color = colors.label,
-            topLeft = Offset(center.x - labelLayout.size.width / 2f, labelTop)
-        )
-        drawText(
-            valueLayout,
-            color = colors.value,
-            topLeft = Offset(center.x - valueLayout.size.width / 2f, valueTop)
-        )
-        drawText(
-            unitLayout,
-            color = colors.label,
-            topLeft = Offset(center.x - unitLayout.size.width / 2f, unitTop)
-        )
-        canvas.restore()
+        // `scale` here resolves to DrawTransform's member function, not this composable's own
+        // `scale: DialScale` parameter: DialScale has no `invoke` operator, so it is never a
+        // candidate for call syntax — no shadowing risk. withTransform also saves/restores the
+        // canvas transform in a finally block, so a throw between the three drawText calls
+        // below can't leave a dirty transform for the rest of the frame.
+        withTransform({
+            scale(scaleX = centerScale, scaleY = centerScale, pivot = center)
+        }) {
+            drawText(
+                labelLayout,
+                color = colors.label,
+                topLeft = Offset(center.x - labelLayout.size.width / 2f, labelTop)
+            )
+            drawText(
+                valueLayout,
+                color = colors.value,
+                topLeft = Offset(center.x - valueLayout.size.width / 2f, valueTop)
+            )
+            drawText(
+                unitLayout,
+                color = colors.label,
+                topLeft = Offset(center.x - unitLayout.size.width / 2f, unitTop)
+            )
+        }
     }
 }
