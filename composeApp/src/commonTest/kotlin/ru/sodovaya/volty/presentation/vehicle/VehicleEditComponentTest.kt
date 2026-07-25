@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
@@ -281,5 +282,92 @@ class VehicleEditComponentTest {
         // Still preserved even though this save's only edited field was the style.
         assertEquals(originalControllers, saved.controllers)
         assertEquals(PackTopology.SERIES, saved.topology)
+    }
+
+    // ----- G1 Task 6: motor configuration -----
+
+    /**
+     * The core round trip: onSave() must route the edited [MotorConfig] fields
+     * onto `controllers[0]`, not just re-persist the loaded default. Every
+     * value used here (7 / 200 / 2.5f) differs from `MotorConfig()`'s own
+     * default (15 / 0 / 1f), so a regression that keeps discarding the edit
+     * and re-saving the loaded default trips this assertion.
+     */
+    @Test
+    fun `save persists edited motor config onto controllers 0`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // Sanity: the form loaded the controller's current (default) motor config.
+        assertEquals(true, c.state.value.hasController)
+        assertEquals(15, c.state.value.motorPolePairs)
+        assertEquals(0, c.state.value.motorWheelDiameterMm)
+        assertEquals(1f, c.state.value.motorGearRatio)
+
+        c.onMotorPolePairsChanged(7)
+        c.onMotorWheelDiameterChanged(200)
+        c.onMotorGearRatioChanged(2.5f)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        val savedController = saved.controllers.single()
+        assertEquals(MotorConfig(polePairs = 7, wheelDiameterMm = 200, gearRatio = 2.5f), savedController.motor)
+        // Everything else about the controller must survive untouched.
+        assertEquals("Main", savedController.label)
+        assertEquals(ControllerType.VESC, savedController.controllerType)
+        assertEquals("AA:BB", savedController.address)
+    }
+
+    /**
+     * Blanking a motor field (as IntField/FloatField do when the text can't
+     * parse — see that pattern for cellHighV etc.) must fall back to
+     * `MotorConfig()`'s own default, not silently persist a zero or the
+     * pre-edit value. Starting from a non-default 9 and clearing it makes a
+     * fallback-to-zero or fallback-to-stale-9 bug equally visible: only the
+     * real default (15) satisfies the assertion.
+     */
+    @Test
+    fun `blanking a motor field falls back to MotorConfig's default`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onMotorPolePairsChanged(9)
+        c.onMotorPolePairsChanged(null) // user cleared the field
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(MotorConfig().polePairs, saved.controllers.single().motor.polePairs)
+    }
+
+    /**
+     * `hasController` — the flag the screen uses to decide whether the Motor
+     * section renders at all — must be false for a pack-only vehicle, and
+     * saving it unchanged must not fabricate a controller (mapIndexed over an
+     * empty list stays empty). No Compose test harness exists, so this is the
+     * reachable assertion for "the fields are absent, not merely disabled."
+     */
+    @Test
+    fun `a pack-only vehicle has no controller to configure, and saving fabricates none`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val packOnly = existingVehicle().copy(controllers = emptyList())
+        val repo = FakeVehicleRepo(listOf(packOnly))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertEquals(false, c.state.value.hasController)
+        assertEquals(null, c.state.value.motorPolePairs)
+        assertEquals(null, c.state.value.motorWheelDiameterMm)
+        assertEquals(null, c.state.value.motorGearRatio)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), repo.upserts.single().controllers)
     }
 }

@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
@@ -42,6 +43,9 @@ interface VehicleEditComponent {
     fun onTemperatureWarnChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
+    fun onMotorPolePairsChanged(v: Int?)
+    fun onMotorWheelDiameterChanged(v: Int?)
+    fun onMotorGearRatioChanged(v: Float?)
     fun onDashboardStyleChanged(style: DashboardStyle?)
     fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
     fun onSave()
@@ -84,6 +88,25 @@ interface VehicleEditComponent {
         val temperatureWarnC: Float? = 50f,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
+        /**
+         * Whether the Motor section should render at all — true only when the
+         * loaded vehicle has a controller. A pack-only vehicle must not see an
+         * empty motor card, so the screen omits the section entirely rather
+         * than disabling it. Always false while CREATING: this screen never
+         * originates a controller (Picker does), so a new vehicle has none yet.
+         */
+        val hasController: Boolean = false,
+        /**
+         * [ru.sodovaya.volty.domain.model.MotorConfig] fields for
+         * `controllers[0]` — G1 supports exactly one controller per vehicle, so
+         * there is no list editor here (Part G2/C). Nullable to reuse the same
+         * IntField/FloatField empty-input handling as the alert-threshold
+         * fields below; a blank field falls back to `MotorConfig()`'s default
+         * for that field at save time rather than persisting a hole.
+         */
+        val motorPolePairs: Int? = null,
+        val motorWheelDiameterMm: Int? = null,
+        val motorGearRatio: Float? = null,
         /** Null = follow the app-level default. */
         val dashboardStyle: DashboardStyle? = null,
         val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
@@ -145,6 +168,12 @@ class DefaultVehicleEditComponent(
                     temperatureWarnC = v.alertConfig.temperatureWarnC,
                     temperatureHighC = v.alertConfig.temperatureHighC,
                     socLowPercent = v.alertConfig.socLowPercent,
+                    // G1: exactly one controller per vehicle, so controllers[0]
+                    // is THE controller — no index to pick.
+                    hasController = v.controllers.isNotEmpty(),
+                    motorPolePairs = v.controllers.firstOrNull()?.motor?.polePairs,
+                    motorWheelDiameterMm = v.controllers.firstOrNull()?.motor?.wheelDiameterMm,
+                    motorGearRatio = v.controllers.firstOrNull()?.motor?.gearRatio,
                     dashboardStyle = v.dashboardStyle,
                     secondaryGauge = v.secondaryGauge
                 )
@@ -173,6 +202,9 @@ class DefaultVehicleEditComponent(
     override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
+    override fun onMotorPolePairsChanged(v: Int?) { _state.update { it.copy(motorPolePairs = v) } }
+    override fun onMotorWheelDiameterChanged(v: Int?) { _state.update { it.copy(motorWheelDiameterMm = v) } }
+    override fun onMotorGearRatioChanged(v: Float?) { _state.update { it.copy(motorGearRatio = v) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
 
@@ -220,7 +252,23 @@ class DefaultVehicleEditComponent(
                 // a battery the vehicle doesn't have. Keep it pack-less; the
                 // controllers copied below satisfy Vehicle's "needs a source".
                 packs = if (existing != null && existing.packs.isEmpty()) emptyList() else built.packs,
-                controllers = existing?.controllers ?: emptyList(),
+                // Preserve every existing controller field (address, type,
+                // canId, providesDerivedBattery...) EXCEPT motor: this screen
+                // is the only place that edits MotorConfig, and it only ever
+                // edits controllers[0] (G1: exactly one controller per
+                // vehicle). Blank fields fall back to MotorConfig()'s own
+                // defaults rather than persisting a hole.
+                controllers = (existing?.controllers ?: emptyList()).mapIndexed { i, c ->
+                    if (i == 0) {
+                        c.copy(
+                            motor = MotorConfig(
+                                polePairs = s.motorPolePairs ?: MotorConfig().polePairs,
+                                wheelDiameterMm = s.motorWheelDiameterMm ?: MotorConfig().wheelDiameterMm,
+                                gearRatio = s.motorGearRatio ?: MotorConfig().gearRatio
+                            )
+                        )
+                    } else c
+                },
                 topology = existing?.topology ?: built.topology,
                 dashboardStyle = s.dashboardStyle,
                 secondaryGauge = s.secondaryGauge

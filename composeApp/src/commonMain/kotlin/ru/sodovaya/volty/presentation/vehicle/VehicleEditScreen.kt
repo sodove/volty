@@ -76,15 +76,19 @@ import volty.composeapp.generated.resources.vehicle_field_chemistry
 import volty.composeapp.generated.resources.vehicle_field_controller_address
 import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_dashboard_style
+import volty.composeapp.generated.resources.vehicle_field_gear_ratio
 import volty.composeapp.generated.resources.vehicle_field_icon
 import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
+import volty.composeapp.generated.resources.vehicle_field_pole_pairs
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
+import volty.composeapp.generated.resources.vehicle_field_wheel_diameter
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_section_alerts
+import volty.composeapp.generated.resources.vehicle_section_motor
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
@@ -206,6 +210,18 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
             FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
             IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
+
+            // MOTOR — absent (not disabled) for a pack-only vehicle: it has no
+            // controller for these numbers to configure. Manual entry only —
+            // reading them back from the controller (COMM_GET_MCCONF) is
+            // deferred past G1 (G-vehicle-composer.md §4, B-vesc-dashboard.md §11).
+            if (state.hasController) {
+                HorizontalDivider()
+                SectionLabel(stringResource(Res.string.vehicle_section_motor))
+                IntField(stringResource(Res.string.vehicle_field_pole_pairs), state.motorPolePairs, component::onMotorPolePairsChanged)
+                IntField(stringResource(Res.string.vehicle_field_wheel_diameter), state.motorWheelDiameterMm, component::onMotorWheelDiameterChanged)
+                FloatField(stringResource(Res.string.vehicle_field_gear_ratio), state.motorGearRatio, component::onMotorGearRatioChanged)
+            }
 
             HorizontalDivider()
 

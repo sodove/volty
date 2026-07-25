@@ -198,6 +198,10 @@
     <string name="vehicle_field_temp_warn">Temperature warning (°C)</string>
     <string name="vehicle_field_temp_high">Temperature high (°C)</string>
     <string name="vehicle_field_soc_low">SOC low (%%)</string>
+    <string name="vehicle_section_motor">Motor</string>
+    <string name="vehicle_field_pole_pairs">Pole pairs</string>
+    <string name="vehicle_field_wheel_diameter">Wheel diameter (mm)</string>
+    <string name="vehicle_field_gear_ratio">Gear ratio</string>
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_delete">Delete battery</string>

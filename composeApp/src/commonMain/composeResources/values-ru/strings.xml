@@ -198,6 +198,10 @@
     <string name="vehicle_field_temp_warn">Предупреждение по температуре (°C)</string>
     <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
     <string name="vehicle_field_soc_low">Низкий SOC (%%)</string>
+    <string name="vehicle_section_motor">Мотор</string>
+    <string name="vehicle_field_pole_pairs">Пар полюсов</string>
+    <string name="vehicle_field_wheel_diameter">Диаметр колеса (мм)</string>
+    <string name="vehicle_field_gear_ratio">Передаточное число</string>
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_delete">Удалить батарею</string>
