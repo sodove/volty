@@ -129,20 +129,42 @@ for them by vehicle type is a guess dressed as a default.
   this is.
 
 **Defaults become a starting point, not a profile.** Ship one set of thresholds
-(§3's numbers: duty 80/90 %, temps 90 °C, speed off until set) applied uniformly
-wherever the metric is available. They are an opening position the rider edits,
-not a decision keyed on vehicle shape.
+applied uniformly wherever the metric is available. They are an opening position
+the rider edits, not a decision keyed on vehicle shape.
+
+**§3's temperature defaults are wrong and must change.** It specifies 90 °C for
+**both** `motorTempHighC` and `escTempHighC`. Two separate errors:
+- **Too low for a motor.** The product owner runs his own motor to **130 °C** by
+  choice. A 90 °C default would nag him continuously from the first ride — and an
+  alarm a rider learns to ignore is worse than no alarm, because it trains them
+  to dismiss the one that matters.
+- **One number for two different parts.** Motor windings and ESC FETs do not share
+  a thermal limit; the ESC's headroom is much smaller. They need separate defaults,
+  not the same constant written twice.
+
+Pick the two numbers with the product owner before implementing (§9.3), and treat
+"the rider raises it" as the expected case, not an edge case. `TempBands`
+(`B §11`) already holds ESC 70/85 and motor 85/100 for dashboard colour — **decide
+deliberately whether the alarm reuses those or takes its own**, and if they
+diverge, say why in the code. Two sources of truth for "when is it hot" is a
+defect waiting to happen; that risk is already recorded for Part C's `l_temp_fet_start`
+question (`C §10`).
 
 **Consequences for the UI (Part G2 owns the screen):**
 - the alert list shows every available alert for this vehicle, each with its own
   toggle and threshold field;
-- an alert the hardware cannot supply is **absent**, not greyed out — a disabled
-  row invites the question "why can't I turn this on?", an absent one does not;
+- an alert the hardware cannot supply is shown **greyed out with the reason
+  stated** — e.g. "Kelly controllers do not report duty", "no motor temperature
+  sensor on this controller". Product owner's call (2026-07-26), and the better
+  one: a greyed row with an explanation teaches the rider what their hardware
+  does and does not measure, where an absent row silently leaves them wondering.
+  The reason text is the point — a grey row with no explanation is the version
+  that invites "why can't I turn this on?";
 - the two modality switches (tone, vibration) and the master switch stay global
   as §4 describes; per-alert preference is about *whether it fires*, not *how*.
 
-**Consequence for §9.3:** the open question "confirm default thresholds per the
-user's wheels and scooter" is narrower now — one set of numbers to confirm, not
-a per-shape profile.
+**Consequence for §9.3:** narrower but sharper — one set of numbers to confirm
+rather than a per-shape profile, but the temperature pair must actually be
+re-picked rather than carried over.
 
 §7 stays above as the superseded reasoning; this section governs.
