@@ -168,3 +168,43 @@ rather than a per-shape profile, but the temperature pair must actually be
 re-picked rather than carried over.
 
 §7 stays above as the superseded reasoning; this section governs.
+
+### 10.1 Threshold defaults — decided, not to be asked (2026-07-26)
+
+Product owner: *"смысл спрашивать сразу три числа, ставь дефолт для нормальных
+людей, но дай возможность менять их."* Correct — the previous section left three
+numbers "to confirm with the owner", which quietly hands the decision back to the
+user for something we can reason about ourselves. Decide, ship, make it editable.
+
+**The defaults:**
+
+| Alert | Default | Why |
+|---|---|---|
+| `dutyWarnPercent` | 80 % | unchanged from §3 — matches `DutyBands`' amber and wheel-rider convention |
+| `dutyHighPercent` | 90 % | unchanged from §3 — `DutyBands`' red |
+| `escTempHighC` | **90 °C** | FET derating typically begins ~85 °C; alarm just past it |
+| `motorTempHighC` | **110 °C** | windings tolerate far more than FETs; 90 would nag continuously on ordinary hardware |
+| `speedLimitKmh` | off | meaningless without a rider-chosen number |
+
+**The `TempBands` question is resolved, not deferred.** The dashboard keeps its
+own bands (ESC 70/85, motor 85/100, `B §11`) and the alarm keeps the numbers
+above. They differ **on purpose** and are not two answers to one question:
+
+- the dial's colour is a *glanceable* warning — it should turn amber and red
+  early, while the rider still has cheap options;
+- the alarm *interrupts* — it must come later, or it fires while the dial is
+  merely amber and the rider learns to dismiss it.
+
+So the dial goes red **before** the alarm sounds, by design. Anyone changing
+either set must keep that ordering: `alarm ≥ band-red`, per metric. Write that
+invariant next to the constants, and test it.
+
+**On the owner's own 130 °C:** he runs his motor there by choice, so even 110 °C
+will nag him — and that is the correct outcome for a default. He raises it once,
+per vehicle, and the setting exists precisely for that. A default tuned to the
+most tolerant rider in the room would be silent for everyone who needed it.
+
+Part C's `l_temp_fet_start` question (`C §10`) is **separate and still open**:
+that is about whether to adopt the *controller's own* configured limit once
+`GET_MCCONF` can read it, which would make the ESC default hardware-specific
+rather than a constant. Deciding it does not change anything above.
