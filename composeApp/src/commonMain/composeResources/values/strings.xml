@@ -216,7 +216,6 @@
     <string name="dashboard_style_clean">Clean</string>
     <string name="dashboard_style_classic">Classic</string>
     <string name="dashboard_style_default">Default</string>
-    <string name="dashboard_style_classic_soon">Classic is coming soon — renders as Clean for now.</string>
 
     <!-- Secondary gauge labels (per-vehicle "Inner gauge" picker) -->
     <string name="secondary_gauge_duty">Duty</string>

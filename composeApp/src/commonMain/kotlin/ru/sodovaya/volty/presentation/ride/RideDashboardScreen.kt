@@ -90,7 +90,8 @@ import volty.composeapp.generated.resources.status_scanning
  *  - [DashboardStyle.CLASSIC]: [ClassicRideCluster], an eight-dial overlapping
  *    VESC-style cluster.
  *
- * Both styles share the vehicle pill and the monospace odo/trip/uptime strip.
+ * Both styles share the vehicle pill, the Graph link, and the monospace
+ * odo/trip/uptime strip.
  */
 @Composable
 fun RideDashboardScreen(component: RideDashboardComponent) {
@@ -168,8 +169,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
                 ConsumptionCard(
                     motion = motion,
                     sessionWhPerKm = state.sessionWhPerKm,
-                    recentSpeeds = recentSpeeds,
-                    onOpenGraph = component::onOpenGraph
+                    recentSpeeds = recentSpeeds
                 )
             }
             DashboardStyle.CLASSIC -> ClassicRideCluster(
@@ -177,6 +177,15 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
                 maxSpeedKmh = vehicleMaxSpeed,
                 modifier = Modifier.fillMaxWidth()
             )
+        }
+
+        // Graph is no longer a bottom tab — this is its entry point from the
+        // ride dashboard. It lives here, alongside the odometer strip, rather
+        // than inside either style's renderer, so it's present for BOTH
+        // Clean and Classic (Classic's cluster otherwise leaves riders no
+        // Graph affordance on this screen at all).
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            GraphLinkButton(onClick = component::onOpenGraph)
         }
 
         OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
@@ -339,8 +348,7 @@ private fun TempMetricCard(
 private fun ConsumptionCard(
     motion: ControllerData,
     sessionWhPerKm: Float?,
-    recentSpeeds: List<Float>,
-    onOpenGraph: () -> Unit
+    recentSpeeds: List<Float>
 ) {
     val instantWhPerKm = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
     Column(
@@ -361,20 +369,12 @@ private fun ConsumptionCard(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (sessionWhPerKm != null) {
-                    Text(
-                        text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                    )
-                }
-                // Graph is no longer a bottom tab — this is its entry point
-                // from the ride dashboard.
-                GraphLinkButton(onClick = onOpenGraph)
+            if (sessionWhPerKm != null) {
+                Text(
+                    text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                )
             }
         }
         Spacer(Modifier.height(4.dp))
