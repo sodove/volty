@@ -13,14 +13,21 @@ import kotlin.test.assertTrue
 
 class VescProtocolTest {
 
-    private fun setupFrame(speedMs: Int = 13056, vIn: Int = 782, currentIn: Int = 5240, battLevel: Int = 840): ByteArray {
+    private fun setupFrame(
+        speedMs: Int = 13056,
+        vIn: Int = 782,
+        currentIn: Int = 5240,
+        battLevel: Int = 840,
+        tachM: Int = 12400000,
+        tachAbsM: Int = 1284600000
+    ): ByteArray {
         val o = mutableListOf<Byte>()
         fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
         fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
                           o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
         o += 47; i16(520); i16(680); i32(-8250); i32(currentIn); i16(760); i32(12000); i32(speedMs)
         i16(vIn); i16(battLevel); i32(154000); i32(21000); i32(9800000); i32(1200000)
-        i32(12400000); i32(1284600000); i32(0); o += 0; o += 11
+        i32(tachM); i32(tachAbsM); i32(0); o += 0; o += 11
         return VescPacket.frame(o.toByteArray())
     }
 
@@ -40,6 +47,49 @@ class VescProtocolTest {
         assertTrue(abs(m.speedKmh - 47.0f) < 0.05f)
         assertEquals(SpeedSource.REPORTED, m.speedSource)
         assertEquals(1, p.controllerCount)
+    }
+
+    // --- tripKm: distance since this connection started, not the ESC's since-boot tachometer ---
+
+    @Test fun first_frame_of_a_connection_starts_the_trip_at_zero() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachAbsM = 1284600000))
+        assertEquals(0f, p.latestMotion(0)!!.tripKm)
+    }
+
+    @Test fun trip_is_distance_travelled_since_the_first_frame_not_the_raw_counter() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachAbsM = 1284600000))         // session baseline: 1284.6 km on the ESC's odometer
+        p.onNotification(setupFrame(tachAbsM = 1289600000))         // ESC odometer advanced 5.0 km
+        val m = p.latestMotion(0)!!
+        assertTrue(abs(m.tripKm - 5.0f) < 0.01f, "expected ~5.0 km travelled this session, got ${m.tripKm}")
+        // and NOT the raw absolute odometer reading itself:
+        assertTrue(abs(m.tripKm - 1289.6f) > 1f)
+    }
+
+    @Test fun reversing_the_vehicle_does_not_make_trip_negative() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachM = 12400000, tachAbsM = 1284600000))
+        // The vehicle backs up: the signed tachometer moves backwards, but the
+        // absolute counter that tripKm is derived from only ever adds distance.
+        p.onNotification(setupFrame(tachM = 12000000, tachAbsM = 1284700000))
+        val m = p.latestMotion(0)!!
+        assertTrue(m.tripKm >= 0f, "trip must never go negative on reverse, got ${m.tripKm}")
+        assertTrue(abs(m.tripKm - 0.1f) < 0.01f, "expected 0.1 km of (reverse) travel, got ${m.tripKm}")
+    }
+
+    @Test fun reset_starts_a_new_trip_session_at_zero() {
+        val p = VescProtocol()
+        p.onNotification(setupFrame(tachAbsM = 1284600000))
+        p.onNotification(setupFrame(tachAbsM = 1289600000))
+        assertTrue(p.latestMotion(0)!!.tripKm > 0f)
+
+        p.reset()
+
+        // Same (still-advancing) ESC odometer reading as before reset, but this is the
+        // first frame of a brand-new connection, so the session must start over at 0.
+        p.onNotification(setupFrame(tachAbsM = 1289600000))
+        assertEquals(0f, p.latestMotion(0)!!.tripKm, "a new connection must start a fresh session at 0")
     }
 
     @Test fun a_frame_split_across_chunks_still_decodes() {

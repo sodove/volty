@@ -40,6 +40,18 @@ class VescProtocol(
     @Volatile private var motion: ControllerData? = null
     @Volatile private var battery: BmsData? = null
 
+    /**
+     * Session baseline for [ControllerData.tripKm]: the absolute odometer reading
+     * ([ControllerData.odometerKm], i.e. `tachometer_abs`) at the first decoded frame
+     * of this connection. Null until that first frame arrives, and cleared by [reset]
+     * so a new connection starts its trip over at 0.
+     *
+     * Deliberately based on the ABSOLUTE counter rather than the signed `tachometer`:
+     * the absolute counter only ever accumulates, so a reversing vehicle adds to the
+     * trip instead of subtracting from it, and the delta can never go negative.
+     */
+    @Volatile private var tripBaselineKm: Float? = null
+
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
     override fun pollCommands(): List<ByteArray> = listOf(
@@ -59,8 +71,10 @@ class VescProtocol(
             val decoded = if (useSetupFrame) VescValues.decodeSetupValues(payload)
                           else VescValues.decodeValues(payload, motor)
             if (decoded != null) {
-                motion = decoded
-                if (deriveBattery) battery = synthesiseBattery(decoded)
+                val baseline = tripBaselineKm ?: decoded.odometerKm.also { tripBaselineKm = it }
+                val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
+                motion = withSessionTrip
+                if (deriveBattery) battery = synthesiseBattery(withSessionTrip)
             }
         }
     }
@@ -75,6 +89,7 @@ class VescProtocol(
         accumulator.reset()
         motion = null
         battery = null
+        tripBaselineKm = null
     }
 
     /**
