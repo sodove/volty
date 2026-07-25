@@ -85,6 +85,34 @@ class LinkPlanTest {
         assertTrue(links[0].ownedPacks.isEmpty())
     }
 
+    /**
+     * Pins the untagged half of Task 3's rule directly at the `planLinks`
+     * level (not just through `KableBmsRepositoryVescTest`, which only
+     * exercises this for controllers — its `effectiveLinkSpecs` rebuilds
+     * `ownedPacks` from scratch and would hide a pack-side regression here).
+     * A direct pack whose own kind IS the link's kind must come out with
+     * `kind == null`, so every pre-Part-C `OwnedSource(index)` still equals a
+     * freshly planned one.
+     */
+    @Test
+    fun ordinary_direct_pack_source_leaves_kind_untagged() {
+        val links = planLinks(listOf(pack(0, "AA", BmsType.ANT_BMS)))
+        assertEquals(
+            LinkSpec(address = "AA", protocolKind = ProtocolKind.ANT, ownedPacks = listOf(OwnedSource(0))),
+            links.single()
+        )
+    }
+
+    /** Controller-side sibling of [ordinary_direct_pack_source_leaves_kind_untagged]. */
+    @Test
+    fun ordinary_direct_controller_source_leaves_kind_untagged() {
+        val links = planLinks(emptyList(), listOf(Controller(0, "ESC", ControllerType.VESC, "AA")))
+        assertEquals(
+            LinkSpec(address = "AA", protocolKind = ProtocolKind.VESC, ownedControllers = listOf(OwnedSource(0))),
+            links.single()
+        )
+    }
+
     @Test
     fun begode_pack_and_controller_share_one_link() {
         val links = planLinks(
@@ -117,10 +145,90 @@ class LinkPlanTest {
         }
     }
 
+    // --- Task 3 (Part C): CAN-forwarded controllers + hosted battery ---
+
+    /**
+     * Replaces `can_forwarded_source_is_rejected_in_part_A` (Part A/B): Part C
+     * lifts the `canId == null` assertion, so a single CAN-forwarded controller
+     * must now plan cleanly instead of throwing. Deliberately replaced, not
+     * deleted — see task-3-report.md.
+     */
     @Test
-    fun can_forwarded_source_is_rejected_in_part_A() {
+    fun can_forwarded_controller_is_accepted_in_part_C() {
+        val links = planLinks(emptyList(), listOf(Controller(0, "c", ControllerType.VESC, "GW", canId = 41)))
+        assertEquals(1, links.size)
+        assertEquals(ProtocolKind.VESC, links[0].protocolKind)
+        assertEquals(listOf(OwnedSource(0, canId = 41, kind = ProtocolKind.VESC)), links[0].ownedControllers)
+    }
+
+    /**
+     * The product owner's actual scooter, the shape the whole of Part C exists
+     * for: one head-unit link owning three sources — two uBox controllers at
+     * distinct CAN ids, and the head unit's own hosted battery (VESC_BMS,
+     * answered directly — never forwarded, hence no canId). One [LinkSpec],
+     * link kind VESC (the gateway's own wire protocol), each owned source
+     * tagged with its OWN decode kind.
+     */
+    @Test
+    fun scooter_two_can_controllers_plus_hosted_bms_is_one_gateway_link() {
+        val links = planLinks(
+            packs = listOf(Pack(index = 2, label = "Battery", bmsType = BmsType.VESC_BMS, bmsAddress = "GW")),
+            controllers = listOf(
+                Controller(0, "Front uBox", ControllerType.VESC, "GW", canId = 41),
+                Controller(1, "Rear uBox", ControllerType.VESC, "GW", canId = 42)
+            )
+        )
+        assertEquals(1, links.size, "one BLE address must still be one link")
+        val gw = links[0]
+        assertEquals("GW", gw.address)
+        assertEquals(ProtocolKind.VESC, gw.protocolKind, "the link speaks the gateway's own (VESC) wire protocol")
+
+        assertEquals(
+            listOf(
+                OwnedSource(0, canId = 41, kind = ProtocolKind.VESC),
+                OwnedSource(1, canId = 42, kind = ProtocolKind.VESC)
+            ),
+            gw.ownedControllers
+        )
+        assertEquals(
+            listOf(OwnedSource(2, canId = null, kind = ProtocolKind.VESC_BMS)),
+            gw.ownedPacks,
+            "the hosted battery has no canId — the gateway answers BMS_GET_VALUES itself"
+        )
+    }
+
+    /**
+     * The rule Task 3 must NOT weaken: a single BLE link still speaks exactly
+     * one LINK protocol, even once its owned sources may be CAN-forwarded.
+     * Two CAN-forwarded controllers of genuinely different, non-hosted kinds
+     * at one gateway address is still a conflict — lifting the canId
+     * restriction only ever ADDS the one sanctioned VESC/VESC_BMS pairing
+     * (§6), it does not open the gate to arbitrary mixed kinds.
+     */
+    @Test
+    fun conflicting_kinds_among_can_forwarded_controllers_still_throw() {
         assertFailsWith<IllegalArgumentException> {
-            planLinks(emptyList(), listOf(Controller(0, "c", ControllerType.VESC, "GW", canId = 41)))
+            planLinks(
+                emptyList(),
+                listOf(
+                    Controller(0, "a", ControllerType.VESC, "GW", canId = 1),
+                    Controller(1, "b", ControllerType.FARDRIVER, "GW", canId = 2)
+                )
+            )
+        }
+    }
+
+    /** Two nodes cannot physically share one CAN id behind the same gateway. */
+    @Test
+    fun duplicate_can_id_at_one_gateway_address_throws() {
+        assertFailsWith<IllegalArgumentException> {
+            planLinks(
+                emptyList(),
+                listOf(
+                    Controller(0, "a", ControllerType.VESC, "GW", canId = 5),
+                    Controller(1, "b", ControllerType.VESC, "GW", canId = 5)
+                )
+            )
         }
     }
 }
