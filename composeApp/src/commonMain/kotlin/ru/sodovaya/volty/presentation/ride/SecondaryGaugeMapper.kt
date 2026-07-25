@@ -70,8 +70,9 @@ object SecondaryGaugeMapper {
             TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
         )
         SecondaryGauge.ESC_TEMP -> SecondaryReadout(
-            "ESC", motion.escTempC.roundToInt().toString(), "°C",
-            frac(motion.escTempC, TempBands.ESC_CRITICAL_C + 20f),
+            "ESC",
+            if (motion.hasEscTemp) motion.escTempC.roundToInt().toString() else "—", "°C",
+            if (motion.hasEscTemp) frac(motion.escTempC, TempBands.ESC_CRITICAL_C + 20f) else 0f,
             TempBands.escLevel(motion.escTempC)
         )
         SecondaryGauge.CONSUMPTION -> {

@@ -49,6 +49,13 @@ class SecondaryGaugeMapperTest {
         assertEquals(DutyLevel.CRITICAL, r.severity)
     }
 
+    @Test fun esc_temp_dashes_when_the_sensor_is_unwired() {
+        val noSensor = motion.copy(escTempC = -60f)
+        val r = SecondaryGaugeMapper.map(SecondaryGauge.ESC_TEMP, noSensor, battery, UnitSystem.METRIC)
+        assertEquals("—", r.value)
+        assertEquals(0f, r.fraction)
+    }
+
     @Test fun consumption_falls_back_to_a_dash_when_standing_still() {
         val stopped = motion.copy(speedKmh = 0f, consumedWh = 0f, tripKm = 0f)
         val r = SecondaryGaugeMapper.map(SecondaryGauge.CONSUMPTION, stopped, battery, UnitSystem.METRIC)

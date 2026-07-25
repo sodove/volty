@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
@@ -81,14 +82,15 @@ import volty.composeapp.generated.resources.status_reconnecting
 import volty.composeapp.generated.resources.status_scanning
 
 /**
- * The Clean Ride dashboard — the app's home screen for a vehicle with a motor
- * controller. Per the locked design (`docs/design/ride-dashboard-mockup.html`,
- * Clean view): vehicle pill, a concentric speedo hero, a 2x2 metric cluster,
- * a consumption card with a sparkline, and a monospace odo/trip/uptime strip.
+ * The Ride dashboard — the app's home screen for a vehicle with a motor
+ * controller. Per the locked design (`docs/design/ride-dashboard-mockup.html`),
+ * a vehicle picks one of two renderers via [DashboardStyle]:
+ *  - [DashboardStyle.CLEAN]: vehicle pill, a concentric speedo hero, a 2x2
+ *    metric cluster, a consumption card with a sparkline.
+ *  - [DashboardStyle.CLASSIC]: [ClassicRideCluster], an eight-dial overlapping
+ *    VESC-style cluster.
  *
- * [ru.sodovaya.volty.domain.model.DashboardStyle.CLASSIC] renders this same
- * layout for now — the Classic (overlapping VESC dial cluster) renderer is a
- * later task.
+ * Both styles share the vehicle pill and the monospace odo/trip/uptime strip.
  */
 @Composable
 fun RideDashboardScreen(component: RideDashboardComponent) {
@@ -157,16 +159,25 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             onClick = component::onPillClicked
         )
 
-        RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
+        when (state.style) {
+            DashboardStyle.CLEAN -> {
+                RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
 
-        MetricCluster(motion = motion, battery = state.battery)
+                MetricCluster(motion = motion, battery = state.battery)
 
-        ConsumptionCard(
-            motion = motion,
-            sessionWhPerKm = state.sessionWhPerKm,
-            recentSpeeds = recentSpeeds,
-            onOpenGraph = component::onOpenGraph
-        )
+                ConsumptionCard(
+                    motion = motion,
+                    sessionWhPerKm = state.sessionWhPerKm,
+                    recentSpeeds = recentSpeeds,
+                    onOpenGraph = component::onOpenGraph
+                )
+            }
+            DashboardStyle.CLASSIC -> ClassicRideCluster(
+                state = state,
+                maxSpeedKmh = vehicleMaxSpeed,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
 
         OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
     }
@@ -185,8 +196,9 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 
 private const val SPARKLINE_MAX_POINTS = 40
 
+/** Shared severity->colour mapping, reused by [ClassicRideCluster] so both renderers agree. */
 @Composable
-private fun severityColor(level: DutyLevel): Color = when (level) {
+internal fun severityColor(level: DutyLevel): Color = when (level) {
     DutyLevel.NORMAL -> MaterialTheme.colorScheme.primary
     DutyLevel.WARN -> MaterialTheme.colorScheme.tertiary
     DutyLevel.CRITICAL -> MaterialTheme.colorScheme.error
