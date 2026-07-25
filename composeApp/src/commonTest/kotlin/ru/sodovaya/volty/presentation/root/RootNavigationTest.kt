@@ -8,6 +8,8 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -82,5 +84,43 @@ class RootNavigationTest {
     fun the_ride_and_settings_tabs_reach_their_own_destinations() {
         assertEquals(Config.Ride, configForTab(RootComponent.Tab.Ride))
         assertEquals(Config.Settings, configForTab(RootComponent.Tab.Settings))
+    }
+
+    // --- shouldLeaveRide: never leave a Ride entry behind for a vehicle that
+    // has no controller. The stack is passed in as a plain list, so the whole
+    // rule is reachable without Decompose.
+
+    @Test
+    fun a_buried_ride_entry_is_left_when_the_vehicle_loses_its_controller() {
+        // Ride home, then the Battery tab: bringToFront leaves [Ride, Dashboard].
+        // Switching to a pure-BMS vehicle from the BATTERY dashboard's sheet
+        // means `active` is Dashboard — but Ride is still underneath, one system
+        // back away. Inspecting only the active entry would miss this.
+        assertTrue(shouldLeaveRide(vehicle(), listOf(Config.Ride, Config.Dashboard)))
+    }
+
+    @Test
+    fun an_active_ride_entry_is_left_when_the_vehicle_loses_its_controller() {
+        assertTrue(shouldLeaveRide(vehicle(), listOf(Config.Ride)))
+    }
+
+    @Test
+    fun a_stack_without_ride_is_left_alone() {
+        assertFalse(shouldLeaveRide(vehicle(), listOf(Config.Dashboard, Config.Graph)))
+        assertFalse(shouldLeaveRide(vehicle(), emptyList<Config>()))
+    }
+
+    @Test
+    fun switching_between_two_controller_vehicles_stays_on_ride() {
+        assertFalse(shouldLeaveRide(vehicle(controllers = listOf(vesc)), listOf(Config.Ride)))
+    }
+
+    @Test
+    fun the_transient_null_vehicle_inside_a_switch_does_not_leave_ride() {
+        // disconnect() clears activeVehicle before connect() sets the next one.
+        // Reacting to that gap would bounce every Ride -> Ride vehicle switch
+        // onto the battery dashboard, and would race the disconnect path (which
+        // routes to Scanning on its own).
+        assertFalse(shouldLeaveRide(null, listOf(Config.Ride)))
     }
 }

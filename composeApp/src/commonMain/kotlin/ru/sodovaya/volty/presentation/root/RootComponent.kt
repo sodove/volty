@@ -140,6 +140,29 @@ internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
     RootComponent.Tab.Settings -> Config.Settings
 }
 
+/**
+ * True when the active vehicle no longer belongs on the Ride dashboard but
+ * [stackConfigs] still holds one, so the root must re-route home.
+ *
+ * Inspects the WHOLE stack, not just its active entry: tapping Battery from
+ * Ride leaves `[Ride, Dashboard]`, and switching to a controller-less vehicle
+ * from the battery dashboard's own sheet would otherwise leave `Config.Ride`
+ * buried underneath — one system back and the user is on a Ride dashboard with
+ * no motion source and no Ride tab to escape by.
+ *
+ * A null [vehicle] is deliberately NOT a trigger. It is the transient gap
+ * inside a vehicle switch (`disconnect()` clears `activeVehicle` before
+ * `connect()` sets the next one) and the steady state after a real disconnect.
+ * Reacting to it would bounce a Ride -> Ride vehicle switch onto the battery
+ * dashboard, and would race the disconnect path, which routes to Scanning by
+ * itself. Waiting for the real vehicle costs nothing: the guard only has to win
+ * before the user presses back.
+ */
+internal fun shouldLeaveRide(vehicle: Vehicle?, stackConfigs: List<*>): Boolean {
+    if (vehicle == null) return false
+    return homeConfigFor(vehicle) !is Config.Ride && stackConfigs.any { it is Config.Ride }
+}
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -184,10 +207,9 @@ class DefaultRootComponent(
             bmsRepository.activeVehicle.collect { v ->
                 val home = homeConfigFor(v)
                 _rideAvailable.value = home is Config.Ride
-                // Switching to a controller-less vehicle while Ride is on screen
-                // would strand the user on a dashboard with no motion source
-                // behind it — and with the Ride tab now hidden, no way back.
-                if (home !is Config.Ride && stack.value.active.configuration is Config.Ride) {
+                // Switching to a controller-less vehicle must not leave a Ride
+                // entry anywhere in the stack — see [shouldLeaveRide].
+                if (shouldLeaveRide(v, stack.value.items.map { it.configuration })) {
                     nav.replaceAll(home)
                 }
             }
