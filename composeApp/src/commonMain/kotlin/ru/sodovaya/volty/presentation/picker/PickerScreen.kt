@@ -37,12 +37,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.picker_add_new
@@ -57,6 +58,8 @@ import volty.composeapp.generated.resources.picker_my_in_range
 import volty.composeapp.generated.resources.picker_other_nearby
 import volty.composeapp.generated.resources.picker_pick_type_title
 import volty.composeapp.generated.resources.picker_scanning
+import volty.composeapp.generated.resources.picker_section_battery
+import volty.composeapp.generated.resources.picker_section_controller
 import volty.composeapp.generated.resources.picker_show_all
 import volty.composeapp.generated.resources.picker_try_demo
 import volty.composeapp.generated.resources.picker_type_unknown
@@ -110,7 +113,8 @@ fun PickerScreen(component: PickerComponent) {
                     items(state.myInRange, key = { "v-" + it.id }) { v ->
                         VehicleRow(
                             vehicle = v,
-                            isConnecting = state.connecting == v.bmsAddress,
+                            // Mirrors what PickerComponent.onConnectKnown stores.
+                            isConnecting = state.connecting == v.primaryAddress,
                             onClick = { component.onConnectKnown(v) }
                         )
                     }
@@ -191,30 +195,77 @@ fun PickerScreen(component: PickerComponent) {
                         fontWeight = FontWeight.SemiBold,
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
-                    // VESC_BMS is gateway-hosted (produced only via the VESC gateway in a
-                    // later part), never a manually-picked direct BMS — excluding it here
-                    // keeps the not-yet-implemented createProtocol stub unreachable.
-                    BmsType.entries.filter { it != BmsType.VESC_BMS }.forEach { type ->
-                        val selected = device.bmsType == type
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
-                                .clickable { component.onConnectWithType(device, type) }
-                                .padding(14.dp)
-                        ) {
-                            Text(
-                                bmsTypeLabel(type),
-                                fontSize = 14.sp,
-                                color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
-                                        else MaterialTheme.colorScheme.onSurface
+
+                    // Single source of truth for both the pre-selected row and
+                    // the section order below — see [preselectedChoice]. Relies
+                    // on device.bmsType and device.controllerType being
+                    // mutually exclusive (BmsTypeDetector.detectController
+                    // returns null whenever detect() already matched, see
+                    // BmsTypeDetector.kt:82 and KableBmsRepository.kt:454-455),
+                    // so at most one of the two sections below is ever
+                    // preselected.
+                    val preselected = preselectedChoice(device)
+
+                    val controllerSection: @Composable () -> Unit = {
+                        SectionHeader(stringResource(Res.string.picker_section_controller))
+                        // All four are legal manual choices even where the protocol lands
+                        // later (e.g. FarDriver) — Task 5 decides what connecting does,
+                        // this sheet never hides or disables a type.
+                        ControllerType.entries.forEach { type ->
+                            TypeRow(
+                                label = type.label,
+                                selected = preselected == SourceChoice.Controller(type),
+                                onClick = { component.onConnectWithType(device, SourceChoice.Controller(type)) }
                             )
                         }
+                    }
+                    val batterySection: @Composable () -> Unit = {
+                        SectionHeader(stringResource(Res.string.picker_section_battery))
+                        // VESC_BMS is gateway-hosted (produced only via the VESC gateway in a
+                        // later part), never a manually-picked direct BMS — excluding it here
+                        // keeps the not-yet-implemented createProtocol stub unreachable.
+                        BmsType.entries.filter { it != BmsType.VESC_BMS }.forEach { type ->
+                            TypeRow(
+                                label = bmsTypeLabel(type),
+                                selected = preselected == SourceChoice.Battery(type),
+                                onClick = { component.onConnectWithType(device, SourceChoice.Battery(type)) }
+                            )
+                        }
+                    }
+
+                    // The section matching this device's detection renders first (and
+                    // carries the highlight below), so the common case is one tap.
+                    // Both always render — detection is a hint, not a lock, so an
+                    // unrecognised (or misdetected) device can still pick either kind.
+                    if (preselected is SourceChoice.Battery) {
+                        batterySection()
+                        controllerSection()
+                    } else {
+                        controllerSection()
+                        batterySection()
                     }
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun TypeRow(label: String, selected: Boolean, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(12.dp))
+            .background(if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent)
+            .clickable(onClick = onClick)
+            .padding(14.dp)
+    ) {
+        Text(
+            label,
+            fontSize = 14.sp,
+            color = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+                    else MaterialTheme.colorScheme.onSurface
+        )
     }
 }
 
@@ -244,7 +295,14 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
         Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.primary)
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            Text("${bmsTypeLabel(vehicle.bmsType)}  ·  saved", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+            // Drop the whole source segment (and its separator) when there is no
+            // label, rather than leaving a dangling "·" or an empty slot.
+            val source = vehicleSourceLabel(vehicle)
+            Text(
+                if (source != null) "$source  ·  saved" else "saved",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+            )
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }

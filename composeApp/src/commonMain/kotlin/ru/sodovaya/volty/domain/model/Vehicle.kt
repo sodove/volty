@@ -76,16 +76,6 @@ fun singlePackVehicle(
     isPinned = isPinned
 )
 
-/**
- * Primary-pack shortcuts. Every consumer that predates multi-pack support
- * reads these and keeps working unchanged: for a one-pack vehicle they are
- * the whole truth, and for a multi-pack one they describe the pack the
- * vehicle is identified and connected by.
- */
-val Vehicle.primaryPack: Pack get() = packs.first()
-val Vehicle.bmsType: BmsType get() = primaryPack.bmsType
-val Vehicle.bmsAddress: String get() = primaryPack.bmsAddress
-val Vehicle.cellCount: Int? get() = primaryPack.cellCount
 val Vehicle.isMultiPack: Boolean get() = packs.size > 1
 
 /** Cell count is auto-filled from live telemetry — see KableBmsRepository. */

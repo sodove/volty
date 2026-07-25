@@ -49,7 +49,9 @@
     <string name="picker_error">Ошибка: %1$s</string>
     <string name="picker_show_all">Показать все Bluetooth-устройства (%1$d)</string>
     <string name="picker_type_unknown">Неизвестно</string>
-    <string name="picker_pick_type_title">Выберите тип BMS</string>
+    <string name="picker_pick_type_title">Выберите тип</string>
+    <string name="picker_section_controller">Контроллер</string>
+    <string name="picker_section_battery">Батарея (BMS)</string>
 
     <!-- Dashboard -->
     <string name="status_connected">Подключено · %1$s</string>
@@ -185,6 +187,8 @@
     <string name="vehicle_field_icon">Иконка</string>
     <string name="vehicle_field_bms_type">Тип BMS</string>
     <string name="vehicle_field_bms_address">Адрес BMS</string>
+    <string name="vehicle_field_controller_type">Тип контроллера</string>
+    <string name="vehicle_field_controller_address">Адрес контроллера</string>
     <string name="vehicle_field_chemistry">Химия</string>
     <string name="vehicle_field_cell_count">Кол-во ячеек (опц.)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>
@@ -193,7 +197,11 @@
     <string name="vehicle_field_cell_low">Мин. напряжение ячейки</string>
     <string name="vehicle_field_temp_warn">Предупреждение по температуре (°C)</string>
     <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
-    <string name="vehicle_field_soc_low">Низкий SOC (%%)</string>
+    <string name="vehicle_field_soc_low">Низкий SOC (%)</string>
+    <string name="vehicle_section_motor">Мотор</string>
+    <string name="vehicle_field_pole_pairs">Пар полюсов</string>
+    <string name="vehicle_field_wheel_diameter">Диаметр колеса (мм)</string>
+    <string name="vehicle_field_gear_ratio">Передаточное число</string>
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_delete">Удалить батарею</string>

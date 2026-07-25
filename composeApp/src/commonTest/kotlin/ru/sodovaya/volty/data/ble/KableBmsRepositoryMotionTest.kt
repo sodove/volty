@@ -10,8 +10,7 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -93,7 +92,7 @@ class KableBmsRepositoryMotionTest {
         val v = motionVehicle()
         // Installs the exact production wiring: one orchestrator (now sized
         // with the vehicle's controllers), one channel, one consumer.
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val channel = assertNotNull(repo.sampleFunnelChannelForTest())
 
         assertEquals(SpeedSource.NONE, repo.activeMotion.value.speedSource, "initial motion has no speed source")
@@ -121,7 +120,7 @@ class KableBmsRepositoryMotionTest {
     fun `activeMotion emits the reported speed via Turbine`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = motionVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val channel = assertNotNull(repo.sampleFunnelChannelForTest())
         val scheduler = testScheduler
 

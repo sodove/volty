@@ -11,9 +11,8 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.PackAggregator
 import ru.sodovaya.volty.presentation.common.groupPackCells
@@ -95,7 +94,7 @@ class KableBmsRepositoryPackSizingTest {
         val v = vehicle()
         assertEquals(1, v.packs.size, "precondition: the stored vehicle has one pack")
 
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         assertEquals(2, packs.size, "BegodeProtocol reports packCount = 2")
         assertEquals(listOf(0, 1), packs.map { it.index })
@@ -113,7 +112,7 @@ class KableBmsRepositoryPackSizingTest {
     fun `a sample for the synthesised pack is not dropped`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val emitted = mutableListOf<VehicleData>()
         val orchestrator = VehicleConnection(
@@ -135,7 +134,7 @@ class KableBmsRepositoryPackSizingTest {
     fun `two parallel branches aggregate to the wheel's real current`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val orchestrator = VehicleConnection(
             packs = packs,
             topology = PackTopology.PARALLEL,
@@ -164,7 +163,7 @@ class KableBmsRepositoryPackSizingTest {
         // (via the shared buildSamplePipeline), not a hand-built aggregate.
         val v = vehicle()
         assertEquals(1, v.packs.size, "precondition: the stored vehicle has one pack")
-        val funnel = repo.installSampleFunnelForTest(v, v.bmsAddress, v.bmsType)
+        val funnel = repo.installSampleFunnelForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         // A Begode reports no SoC (soc = 0 on every sample). 40 cells at
         // 3.93 V map linearly between LI_ION_NMC's emptyCellV = 3.30 and
@@ -198,7 +197,7 @@ class KableBmsRepositoryPackSizingTest {
         val v = vehicle()
         // The exact funnel doConnect wires into a ConnectionSession — sections
         // enter beside the sample and must come out on PackState.sections.
-        val funnel = repo.installSampleFunnelForTest(v, v.bmsAddress, v.bmsType)
+        val funnel = repo.installSampleFunnelForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val cells = List(20) { 3.705f } + List(20) { 3.71f }
         val sections = listOf(
@@ -224,7 +223,7 @@ class KableBmsRepositoryPackSizingTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle(type = BmsType.JK_BMS)
 
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         assertEquals(1, packs.size, "JK is a single-pack BMS — nothing to synthesise")
         assertEquals(v.packs, packs, "the stored pack must pass through untouched")
@@ -258,9 +257,9 @@ class KableBmsRepositoryPackSizingTest {
     fun `the discovered pack list is persisted once the extra pack reports`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         repo.emitVehicleDataForTest(liveVehicleData(packs))
         runCurrent()
@@ -276,9 +275,9 @@ class KableBmsRepositoryPackSizingTest {
     fun `packs are not persisted while the extra pack is still silent`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         // Branch 0 streaming, branch 1 never seen: the second slot is a guess
         // until it produces data, and a guess must not reach the database.
@@ -294,9 +293,9 @@ class KableBmsRepositoryPackSizingTest {
     fun `persistence happens once, not on every sample`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         repeat(20) {
             repo.emitVehicleDataForTest(liveVehicleData(packs))
@@ -310,12 +309,11 @@ class KableBmsRepositoryPackSizingTest {
     fun `a vehicle that already stores both packs is not rewritten`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
-        val packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType)
+        val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val twoPackVehicle = v.copy(packs = packs)
         repo.primeConnectedForTest(
             twoPackVehicle,
-            twoPackVehicle.bmsAddress,
-            twoPackVehicle.bmsType,
+            twoPackVehicle.primaryAddress, twoPackVehicle.packs.first().bmsType,
             Clock.System.now().toEpochMilliseconds()
         )
         runCurrent()
@@ -333,11 +331,10 @@ class KableBmsRepositoryPackSizingTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
         // Already stores both packs, so only the cell-count auto-fill can fire.
-        val twoPackVehicle = v.copy(packs = repo.connectionPacksForTest(v, v.bmsAddress, v.bmsType))
+        val twoPackVehicle = v.copy(packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType))
         repo.primeConnectedForTest(
             twoPackVehicle,
-            twoPackVehicle.bmsAddress,
-            twoPackVehicle.bmsType,
+            twoPackVehicle.primaryAddress, twoPackVehicle.packs.first().bmsType,
             Clock.System.now().toEpochMilliseconds()
         )
         runCurrent()
@@ -374,9 +371,9 @@ class KableBmsRepositoryPackSizingTest {
     fun `guest vehicles are never persisted`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val guest = vehicle(id = "${GUEST_VEHICLE_ID_PREFIX}$ADDRESS")
-        repo.primeConnectedForTest(guest, guest.bmsAddress, guest.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(guest, guest.primaryAddress, guest.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
-        val packs = repo.connectionPacksForTest(guest, guest.bmsAddress, guest.bmsType)
+        val packs = repo.connectionPacksForTest(guest, guest.primaryAddress, guest.packs.first().bmsType)
 
         repeat(5) {
             repo.emitVehicleDataForTest(liveVehicleData(packs))
@@ -390,9 +387,9 @@ class KableBmsRepositoryPackSizingTest {
     fun `the demo vehicle is never persisted`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val demo = vehicle(id = DEMO_VEHICLE_ID)
-        repo.primeConnectedForTest(demo, demo.bmsAddress, demo.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(demo, demo.primaryAddress, demo.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
-        val packs = repo.connectionPacksForTest(demo, demo.bmsAddress, demo.bmsType)
+        val packs = repo.connectionPacksForTest(demo, demo.primaryAddress, demo.packs.first().bmsType)
 
         repeat(5) {
             repo.emitVehicleDataForTest(liveVehicleData(packs))

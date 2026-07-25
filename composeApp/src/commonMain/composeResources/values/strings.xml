@@ -38,7 +38,7 @@
     <string name="picker_add_title">Add new battery</string>
     <string name="picker_guest_title">Quick connect</string>
     <string name="picker_cold_title">Pick a battery</string>
-    <string name="picker_guest_subtitle">Guest mode — won\'t save</string>
+    <string name="picker_guest_subtitle">Guest mode — won't save</string>
     <string name="picker_found_nearby">%1$d found nearby</string>
     <string name="picker_my_in_range">My batteries · in range</string>
     <string name="picker_other_nearby">Other BMS nearby</string>
@@ -49,7 +49,9 @@
     <string name="picker_error">Error: %1$s</string>
     <string name="picker_show_all">Show all Bluetooth devices (%1$d)</string>
     <string name="picker_type_unknown">Unknown</string>
-    <string name="picker_pick_type_title">Select BMS type</string>
+    <string name="picker_pick_type_title">Select type</string>
+    <string name="picker_section_controller">Controller</string>
+    <string name="picker_section_battery">Battery (BMS)</string>
 
     <!-- Dashboard -->
     <string name="status_connected">Connected · %1$s</string>
@@ -170,9 +172,9 @@
     <string name="settings_add_new_battery">+ Add new battery</string>
     <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_send_logs">Send app logs</string>
-    <string name="settings_send_logs_subtitle">Share the app\'s logcat for troubleshooting</string>
+    <string name="settings_send_logs_subtitle">Share the app's logcat for troubleshooting</string>
     <string name="settings_delete">Delete</string>
-    <string name="settings_delete_title">Delete \"%1$s\"?</string>
+    <string name="settings_delete_title">Delete “%1$s”?</string>
     <string name="settings_delete_text">This will remove the saved profile.</string>
     <string name="action_cancel">Cancel</string>
 
@@ -185,6 +187,8 @@
     <string name="vehicle_field_icon">Icon</string>
     <string name="vehicle_field_bms_type">BMS type</string>
     <string name="vehicle_field_bms_address">BMS address</string>
+    <string name="vehicle_field_controller_type">Controller type</string>
+    <string name="vehicle_field_controller_address">Controller address</string>
     <string name="vehicle_field_chemistry">Chemistry</string>
     <string name="vehicle_field_cell_count">Cell count (optional)</string>
     <string name="vehicle_field_averaging_window">Averaging window</string>
@@ -193,7 +197,11 @@
     <string name="vehicle_field_cell_low">Cell V low</string>
     <string name="vehicle_field_temp_warn">Temperature warning (°C)</string>
     <string name="vehicle_field_temp_high">Temperature high (°C)</string>
-    <string name="vehicle_field_soc_low">SOC low (%%)</string>
+    <string name="vehicle_field_soc_low">SOC low (%)</string>
+    <string name="vehicle_section_motor">Motor</string>
+    <string name="vehicle_field_pole_pairs">Pole pairs</string>
+    <string name="vehicle_field_wheel_diameter">Wheel diameter (mm)</string>
+    <string name="vehicle_field_gear_ratio">Gear ratio</string>
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_delete">Delete battery</string>

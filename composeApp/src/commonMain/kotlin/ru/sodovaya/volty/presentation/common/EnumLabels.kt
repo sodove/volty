@@ -5,6 +5,9 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.primaryController
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_ant
@@ -37,6 +40,44 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
         BmsType.VESC_BMS -> Res.string.bms_vesc
     }
 )
+
+/**
+ * Which of a vehicle's two possible names a subtitle leads with when the
+ * vehicle has BOTH a motor controller and a BMS. This is a presentation
+ * choice, not a fact about the vehicle: a screen showing motion telemetry
+ * wants the controller named, while one showing cells, faults and chemistry
+ * wants the BMS named. Either way the *other* source is the fallback, so a
+ * vehicle with only one source reads the same under both preferences.
+ */
+enum class SourcePreference { CONTROLLER, BMS }
+
+/**
+ * The one label that names what a vehicle's telemetry comes from — the motor
+ * controller (VESC / FarDriver / …) or the BMS, led by [prefer] and falling
+ * back to whichever is present.
+ *
+ * Null when neither is available — no vehicle at all, or (not reachable today)
+ * a vehicle with no sources. Callers must then OMIT the segment rather than
+ * render "null", an empty chip, or a dash standing in for a real label; the
+ * two status lines that need a non-null argument for a format string supply
+ * their own em-dash placeholder at the call site.
+ *
+ * Single source of truth on purpose: this fallback used to be copy-pasted, and
+ * divergent copies of exactly this kind produced the Clean/Classic parity bugs.
+ * [prefer] parameterises the *order* of the one chain — it does not fork it.
+ */
+@Composable
+fun vehicleSourceLabel(
+    vehicle: Vehicle?,
+    prefer: SourcePreference = SourcePreference.CONTROLLER
+): String? {
+    val controller = vehicle?.primaryController?.controllerType?.label
+    val bms = vehicle?.bmsTypeOrNull?.let { bmsTypeLabel(it) }
+    return when (prefer) {
+        SourcePreference.CONTROLLER -> controller ?: bms
+        SourcePreference.BMS -> bms ?: controller
+    }
+}
 
 @Composable
 fun chemistryLabel(chemistry: Chemistry): String = stringResource(

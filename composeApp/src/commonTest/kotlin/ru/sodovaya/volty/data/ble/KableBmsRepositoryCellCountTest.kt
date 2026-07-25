@@ -5,10 +5,9 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
+import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -88,13 +87,13 @@ class KableBmsRepositoryCellCountTest {
     fun `stable cell count is persisted into the saved vehicle`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle(cellCount = null)
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
 
         emitSamples(repo, cells = 4, count = 3)
 
         assertEquals(1, vehicleRepo.upserts.size, "exactly one auto-fill upsert expected")
-        assertEquals(4, vehicleRepo.upserts.single().cellCount)
+        assertEquals(4, vehicleRepo.upserts.single().cellCountOrNull)
         assertEquals(v.id, vehicleRepo.upserts.single().id)
     }
 
@@ -102,7 +101,7 @@ class KableBmsRepositoryCellCountTest {
     fun `unstable cell count is not persisted`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle(cellCount = null)
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
 
         // Daly-style mid-cycle partial lists: 3, 6, 9 — never the same twice.
@@ -117,7 +116,7 @@ class KableBmsRepositoryCellCountTest {
     fun `matching profile count is not re-persisted`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vehicle(cellCount = 4)
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
 
         emitSamples(repo, cells = 4, count = 5)
@@ -129,7 +128,7 @@ class KableBmsRepositoryCellCountTest {
     fun `guest vehicles are never persisted`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val guest = vehicle(id = "${GUEST_VEHICLE_ID_PREFIX}AA:BB", cellCount = null)
-        repo.primeConnectedForTest(guest, guest.bmsAddress, guest.bmsType, Clock.System.now().toEpochMilliseconds())
+        repo.primeConnectedForTest(guest, guest.primaryAddress, guest.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
 
         emitSamples(repo, cells = 4, count = 5)

@@ -49,11 +49,14 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
+import ru.sodovaya.volty.domain.model.needsDerivedBattery
+import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.secondaryGaugeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
@@ -70,16 +73,22 @@ import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_cell_high
 import volty.composeapp.generated.resources.vehicle_field_cell_low
 import volty.composeapp.generated.resources.vehicle_field_chemistry
+import volty.composeapp.generated.resources.vehicle_field_controller_address
+import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_dashboard_style
+import volty.composeapp.generated.resources.vehicle_field_gear_ratio
 import volty.composeapp.generated.resources.vehicle_field_icon
 import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
+import volty.composeapp.generated.resources.vehicle_field_pole_pairs
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
+import volty.composeapp.generated.resources.vehicle_field_wheel_diameter
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_section_alerts
+import volty.composeapp.generated.resources.vehicle_section_motor
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
@@ -146,8 +155,30 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            ReadOnlyRow(stringResource(Res.string.vehicle_field_bms_type), bmsTypeLabel(state.bmsType))
-            ReadOnlyRow(stringResource(Res.string.vehicle_field_bms_address), state.bmsAddress.ifEmpty { "—" })
+            // What this vehicle's telemetry actually comes from. A
+            // controller-only vehicle has no BMS at all, so captioning these
+            // rows "BMS" and rendering the form's placeholder default made the
+            // screen assert a JK BMS the vehicle does not have. The VALUE goes
+            // through the one shared vehicleSourceLabel chain (BMS-preferring:
+            // this is the battery-side form, and a vehicle with both sources
+            // must keep naming its BMS); the elvis tail covers only the
+            // create-new case, where there is no vehicle to name yet.
+            val describesController = state.sourceVehicle?.needsDerivedBattery == true
+            ReadOnlyRow(
+                stringResource(
+                    if (describesController) Res.string.vehicle_field_controller_type
+                    else Res.string.vehicle_field_bms_type
+                ),
+                vehicleSourceLabel(state.sourceVehicle, SourcePreference.BMS)
+                    ?: bmsTypeLabel(state.bmsType)
+            )
+            ReadOnlyRow(
+                stringResource(
+                    if (describesController) Res.string.vehicle_field_controller_address
+                    else Res.string.vehicle_field_bms_address
+                ),
+                state.sourceAddress.ifEmpty { "—" }
+            )
 
             SectionLabel(stringResource(Res.string.vehicle_field_chemistry))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -179,6 +210,18 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
             FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
             IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
+
+            // MOTOR — absent (not disabled) for a pack-only vehicle: it has no
+            // controller for these numbers to configure. Manual entry only —
+            // reading them back from the controller (COMM_GET_MCCONF) is
+            // deferred past G1 (G-vehicle-composer.md §4, B-vesc-dashboard.md §11).
+            if (state.hasController) {
+                HorizontalDivider()
+                SectionLabel(stringResource(Res.string.vehicle_section_motor))
+                IntField(stringResource(Res.string.vehicle_field_pole_pairs), state.motorPolePairs, component::onMotorPolePairsChanged)
+                IntField(stringResource(Res.string.vehicle_field_wheel_diameter), state.motorWheelDiameterMm, component::onMotorWheelDiameterChanged)
+                FloatField(stringResource(Res.string.vehicle_field_gear_ratio), state.motorGearRatio, component::onMotorGearRatioChanged)
+            }
 
             HorizontalDivider()
 

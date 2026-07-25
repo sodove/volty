@@ -14,8 +14,8 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.bmsAddressOrNull
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
@@ -314,7 +314,12 @@ class DefaultRootComponent(
                     componentContext = context,
                     // Welcome is only ever shown when permissions are already granted (gated by computeInitialConfig),
                     // so these buttons can route directly to the Picker without re-checking.
-                    onAddBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
+                    // push(), not replaceAll(): Welcome stays underneath so the
+                    // add-picker's Cancel / system back (nav.pop()) has
+                    // something to reveal instead of stranding the user — see
+                    // the matching fix on Config.Picker's onAddNewBatteryRequested
+                    // below, which had the identical dead-end bug.
+                    onAddBatteryRequested = { nav.push(Config.Picker(mode = "add")) },
                     onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) },
                     onTryDemoRequested = { startDemo() }
                 )
@@ -356,7 +361,19 @@ class DefaultRootComponent(
                     onConnectedKnown = { nav.replaceAll(homeConfig()) },
                     onConnectedForEdit = { vehicleId -> nav.replaceAll(Config.VehicleEdit(vehicleId)) },
                     onConnectedGuestNoSave = { nav.replaceAll(homeConfig()) },
-                    onAddNewBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
+                    // push(), not replaceAll(): replaceAll wiped the whole stack
+                    // down to this one entry, so onCancelled's nav.pop() below —
+                    // and system back, which routes here through the same
+                    // pop() (see shouldPopOnBack) — had nothing left to reveal
+                    // and the user was stranded on the add-picker with a dead
+                    // Cancel and a dead back button. Pushing keeps whatever
+                    // picker/screen asked for "add new battery" underneath, so
+                    // cancelling returns to it. The add-picker itself never
+                    // offers this same button again (PickerScreen.kt only
+                    // renders "+ Add new battery" when `state.mode != "add"`),
+                    // so this can't be used to push an unbounded run of
+                    // Picker(mode = "add") entries onto the stack.
+                    onAddNewBatteryRequested = { nav.push(Config.Picker(mode = "add")) },
                     onDemoConnected = { nav.replaceAll(homeConfig()) },
                     onCancelled = { nav.pop() }
                 )
@@ -420,8 +437,11 @@ class DefaultRootComponent(
                         onSaved = { nav.replaceAll(homeConfig()) },
                         onCancelled = { nav.pop() },
                         onDeleted = { nav.pop() },
-                        prefilledBmsType = prefillVehicle?.bmsType,
-                        prefilledBmsAddress = prefillVehicle?.bmsAddress,
+                        // Both prefills are already optional, so a source-less
+                        // (controller-only) active connection simply prefills
+                        // nothing instead of throwing.
+                        prefilledBmsType = prefillVehicle?.bmsTypeOrNull,
+                        prefilledBmsAddress = prefillVehicle?.bmsAddressOrNull,
                         prefilledName = prefilledName
                     )
                 )

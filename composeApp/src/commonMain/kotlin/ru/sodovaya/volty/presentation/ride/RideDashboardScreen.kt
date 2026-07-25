@@ -41,7 +41,6 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.RideMetrics
@@ -50,7 +49,7 @@ import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.dashboard.VehicleSheet
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
@@ -74,6 +73,13 @@ import volty.composeapp.generated.resources.ride_power
 import volty.composeapp.generated.resources.ride_speed_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
+import volty.composeapp.generated.resources.secondary_gauge_battery
+import volty.composeapp.generated.resources.secondary_gauge_consumption
+import volty.composeapp.generated.resources.secondary_gauge_current
+import volty.composeapp.generated.resources.secondary_gauge_duty
+import volty.composeapp.generated.resources.secondary_gauge_esc_temp
+import volty.composeapp.generated.resources.secondary_gauge_motor_temp
+import volty.composeapp.generated.resources.secondary_gauge_power
 import volty.composeapp.generated.resources.status_connected
 import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
@@ -131,11 +137,11 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Controller type (VESC/FarDriver/…) when present, falling back to the
-        // BMS label for a vehicle whose packs happen to be primary — mirrors
-        // DashboardScreen's status line, just sourced from the motor side.
-        val controllerLabel = vehicle?.primaryController?.controllerType?.label
-            ?: vehicle?.takeIf { it.packs.isNotEmpty() }?.let { bmsTypeLabel(it.bmsType) }
-            ?: "—"
+        // BMS label for a vehicle whose packs happen to be primary. This used
+        // to be spelled out here; it now lives in [vehicleSourceLabel] and is
+        // shared verbatim with DashboardScreen's status line and every vehicle
+        // row, so the three can no longer drift apart.
+        val controllerLabel = vehicleSourceLabel(vehicle) ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected ->
                 ("● " + stringResource(Res.string.status_connected, controllerLabel)) to MaterialTheme.colorScheme.tertiary
@@ -216,7 +222,22 @@ internal fun severityColor(level: DutyLevel): Color = when (level) {
 @Composable
 private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float) {
     val motion = state.motion
-    val secondary = state.secondaryReadout
+    // Defect 1 fix: state.secondaryReadout (computed by RideDashboardComponent, which is not
+    // Composable) carries SecondaryGaugeMapper's default, unlocalized label — that's how the
+    // hardcoded, sometimes-bilingual "DUTY · ШИМ" leaked onto the hero's inner ring. Mirrors
+    // ClassicRideCluster/ClassicDialSpecs: the pure mapper stays Compose-free, and the Composable
+    // that actually renders resolves the same string_gauge_* keys Classic's dial faces use and
+    // recomputes the readout with them, so both renderers agree on language for the same metric.
+    val secondaryLabels = SecondaryGaugeLabels(
+        duty = stringResource(Res.string.secondary_gauge_duty).uppercase(),
+        battery = stringResource(Res.string.secondary_gauge_battery).uppercase(),
+        power = stringResource(Res.string.secondary_gauge_power).uppercase(),
+        current = stringResource(Res.string.secondary_gauge_current).uppercase(),
+        motorTemp = stringResource(Res.string.secondary_gauge_motor_temp).uppercase(),
+        escTemp = stringResource(Res.string.secondary_gauge_esc_temp).uppercase(),
+        consumption = stringResource(Res.string.secondary_gauge_consumption).uppercase()
+    )
+    val secondary = SecondaryGaugeMapper.map(state.secondary, motion, state.battery, state.units, secondaryLabels)
     val speedFraction = motion.speedKmh / vehicleMaxSpeed
     val secondaryColor = severityColor(secondary.severity)
 

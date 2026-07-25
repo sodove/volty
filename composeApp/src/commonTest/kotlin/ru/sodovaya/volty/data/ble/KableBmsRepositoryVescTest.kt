@@ -16,10 +16,10 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -32,7 +32,8 @@ import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
 import kotlin.time.ExperimentalTime
@@ -126,9 +127,12 @@ class KableBmsRepositoryVescTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vescOnlyVehicle()
 
-        // The trap, pinned: the primary-pack shims are unusable on this vehicle.
-        assertFails("bmsAddress must throw on a zero-pack vehicle") { v.bmsAddress }
-        assertFails("bmsType must throw on a zero-pack vehicle") { v.bmsType }
+        // The trap, pinned. The throwing `packs.first()` shims that used to sit
+        // on Vehicle are gone (G1 task 2) — what replaced them must report
+        // "no pack" rather than blow up, and primaryAddress must still route
+        // through the controller.
+        assertNull(v.bmsAddressOrNull, "a zero-pack vehicle has no pack address")
+        assertNull(v.bmsTypeOrNull, "a zero-pack vehicle has no pack type")
         assertEquals(CTRL_ADDR, v.primaryAddress, "primaryAddress is the safe route")
 
         // connect() must plan the vehicle THROUGH primaryAddress. No BLE stack
@@ -144,6 +148,86 @@ class KableBmsRepositoryVescTest {
         assertEquals(CTRL_ADDR, spec.address)
         assertEquals(ProtocolKind.VESC, spec.protocolKind)
         assertEquals(listOf(OwnedSource(0)), spec.ownedControllers)
+    }
+
+    // ----- G1 Task 5: the picker's gate is DERIVED from this factory -----
+
+    /** A controller-only vehicle of any kind, for probing the factory. */
+    private fun controllerOnly(type: ControllerType): Vehicle = Vehicle(
+        id = "v-${type.name.lowercase()}",
+        name = "probe",
+        iconKey = "generic",
+        packs = emptyList(),
+        controllers = listOf(
+            Controller(
+                index = 0, label = "ESC", controllerType = type,
+                address = CTRL_ADDR, providesDerivedBattery = true
+            )
+        ),
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L)
+    )
+
+    /**
+     * THE test that keeps the two from drifting.
+     *
+     * `unsupportedControllerReason` in the picker used to *list* which
+     * controller kinds work — presentation-layer code encoding a data-layer
+     * fact. The failure mode was silent and delayed: Part D adds a FarDriver
+     * protocol here, nothing in the picker fails to compile, and the sheet goes
+     * on refusing a controller that works.
+     *
+     * The gate now derives its answer from [controllerMotionProtocol], the same
+     * function this factory builds every controller link from. This test drives
+     * the REAL factory for every [ControllerType] and asserts the two agree —
+     * so it stays green when a protocol is added (both sides move together) and
+     * goes red the moment anyone reintroduces a separate list.
+     */
+    @Test
+    fun `the picker's gate agrees with the real connect factory for every controller type`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        ControllerType.entries.forEach { type ->
+            val v = controllerOnly(type)
+            val spec = planLinks(v.packs, v.controllers).single()
+            // Exactly what doConnect sees: build through the factory, and treat
+            // a throw as "cannot connect" — doConnect catches it and returns
+            // Result.failure rather than propagating.
+            val built = runCatching { repo.createProtocolForTest(spec, v) }.getOrNull()
+            assertEquals(
+                built is MotionSource,
+                controllerMotionSupported(type),
+                "$type: the picker's gate and the connect factory disagree"
+            )
+        }
+    }
+
+    /** Guards the test above from passing vacuously with everything refused. */
+    @Test
+    fun `exactly one controller kind decodes motion today`() {
+        assertEquals(
+            listOf(ControllerType.VESC),
+            ControllerType.entries.filter { controllerMotionSupported(it) }
+        )
+    }
+
+    /**
+     * The case a "types that throw" list would have missed, and the reason the
+     * gate's criterion is `is MotionSource` rather than "did not throw":
+     * `ControllerType.BEGODE.protocolKind()` is `ProtocolKind.BEGODE`, which
+     * `toBmsType()` maps to a REAL `BmsType.BEGODE`. Nothing fails — the
+     * factory quietly hands back a battery decoder, and a Begode controller
+     * would have connected onto a Ride dashboard that can never show motion.
+     */
+    @Test
+    fun `a Begode controller yields a battery decoder, which is why it is refused`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = controllerOnly(ControllerType.BEGODE)
+        val spec = planLinks(v.packs, v.controllers).single()
+
+        val protocol = repo.createProtocolForTest(spec, v)
+        assertIs<BegodeProtocol>(protocol, "it does NOT throw — that is the hazard")
+        assertFalse(protocol is MotionSource, "but it carries no motion")
+        assertFalse(controllerMotionSupported(ControllerType.BEGODE), "so the picker refuses it")
     }
 
     // ----- 2. A VESC link builds a VescProtocol that is a MotionSource -----
@@ -363,7 +447,7 @@ class KableBmsRepositoryVescTest {
 
     /**
      * The fourth `packs.first()` trap of the same class, in
-     * `maybePersistCellCount`: `Vehicle.cellCount` is a `packs.first()` shim.
+     * `maybePersistCellCount`: cell count lives on a Pack, and there is none.
      * That collector runs on the repo's SupervisorJob scope with no exception
      * handler, so a throw there kills it silently (and is app-fatal on
      * Android). The observable consequence is the write at the end of the
@@ -405,7 +489,7 @@ class KableBmsRepositoryVescTest {
             bmsType = BmsType.ANT_BMS, bmsAddress = ADDR,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val spec = repo.linkSpecsForTest().single()
         assertEquals(
@@ -428,7 +512,7 @@ class KableBmsRepositoryVescTest {
             bmsType = BmsType.BEGODE, bmsAddress = ADDR,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val spec = repo.linkSpecsForTest().single()
         assertEquals(ProtocolKind.BEGODE, spec.protocolKind)

@@ -3,9 +3,8 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -82,8 +81,8 @@ class KableBmsRepositoryDisconnectRaceTest {
         // before the disconnect (it would loop indefinitely under virtual time).
         repo.simulateConnectionDropForTest(
             vehicle = v,
-            address = v.bmsAddress,
-            type = v.bmsType,
+            address = v.primaryAddress,
+            type = v.packs.first().bmsType,
             reason = "Link dropped"
         )
 
@@ -138,8 +137,8 @@ class KableBmsRepositoryDisconnectRaceTest {
 
         repo.simulateConnectionDropForTest(
             vehicle = v,
-            address = v.bmsAddress,
-            type = v.bmsType,
+            address = v.primaryAddress,
+            type = v.packs.first().bmsType,
             reason = "Link dropped"
         )
         runCurrent()

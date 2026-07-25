@@ -9,7 +9,6 @@ import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
-import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
@@ -29,15 +28,14 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.expandedTo
 import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -428,14 +426,14 @@ class KableBmsRepository private constructor(
             ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
-        // Keyed by the stored BMS address for every vehicle that has a pack —
-        // exactly as before — and by [Vehicle.primaryAddress] for one that has
-        // none. `bmsAddress` is a `packs.first()` shim and would THROW on a
-        // controller-only vehicle (legal since Part A), taking the whole scan
-        // flow down with it; the fallback is also the only address such a
-        // vehicle can be recognised by.
-        val knownAddresses: Map<String, Vehicle> = vehicleRepository.vehicles.first()
-            .associateBy { it.packs.firstOrNull()?.bmsAddress ?: it.primaryAddress }
+        // Keyed by EVERY address each vehicle can be recognised by — the same
+        // index the Scanning and Picker screens use, see [vehiclesByAddress].
+        // The primary pack alone is not enough: a controller-only vehicle
+        // (legal since Part A) has no pack address at all, and a vehicle with
+        // both sources was invisible whenever its controller was the thing
+        // advertising.
+        val knownAddresses: Map<String, Vehicle> =
+            vehiclesByAddress(vehicleRepository.vehicles.first())
         // A scan can run WHILE a connection is live (the Picker seeds itself
         // with the connected device and keeps scanning for others). Don't let
         // it clobber the Connected / Connecting / Reconnecting state machine —
@@ -474,7 +472,22 @@ class KableBmsRepository private constructor(
         // If a caller hands a transient guest Vehicle back to connect(), route
         // it through the guest path so it stays unpersisted and the touch /
         // saved-vehicle observers leave it alone.
-        if (vehicle.isGuest) return connectGuest(vehicle.primaryAddress, vehicle.bmsType)
+        // bmsTypeOrNull, not the `packs.first()` shim, which would THROW on a
+        // zero-pack vehicle. connectGuest() needs a pack template, and every
+        // guest [buildGuestVehicle] can produce has exactly one pack, so this
+        // is the same call as before for every guest that can exist. A
+        // pack-less guest is an impossible state rather than a supported one:
+        // fail loudly here instead of falling through to doConnect and
+        // silently skipping connectGuest's setup.
+        if (vehicle.isGuest) {
+            val guestPackType = vehicle.bmsTypeOrNull
+                ?: error(
+                    "guest vehicle ${vehicle.id} has zero packs — connectGuest() " +
+                        "needs a pack template, and buildGuestVehicle() always " +
+                        "supplies one, so this guest was built by something else"
+                )
+            return connectGuest(vehicle.primaryAddress, guestPackType)
+        }
         // primaryAddress / packs.firstOrNull(), NOT the bmsAddress / bmsType
         // shims: both are `packs.first()` and a controller-only vehicle (a
         // VESC whose battery is derived at runtime) legally stores ZERO packs
@@ -1822,39 +1835,45 @@ class KableBmsRepository private constructor(
      * The decode protocol ONE link speaks — the controller-aware factory.
      *
      * A controller kind has no [BmsType] at all ([ProtocolKind.toBmsType]
-     * throws for it by design), so the VESC branch must come BEFORE any
-     * `toBmsType()` call: a VESC link built through the battery factory would
-     * crash there. The controller behind the link is the one this link owns
-     * (its first [LinkSpec.ownedControllers] entry, matched against the
+     * throws for it by design), so the controller factory must be asked BEFORE
+     * any `toBmsType()` call: a VESC link built through the battery factory
+     * would crash there. The controller behind the link is the one this link
+     * owns (its first [LinkSpec.ownedControllers] entry, matched against the
      * vehicle's controllers by index), so its own motor geometry and
      * derived-battery choice reach the protocol.
      *
-     * Every battery kind delegates to [createProtocol] (BmsType) unchanged.
+     * **Adding a controller protocol? Add it to [controllerMotionProtocol]
+     * (`ControllerProtocols.kt`), not here.** That function is the single
+     * statement of controller coverage: this factory builds every controller
+     * link from it, and the picker refuses a pick it has no answer for. Adding
+     * an arm there is what makes a newly supported type connectable AND
+     * offerable in one edit — writing a protocol into this `when` instead would
+     * leave the picker refusing a controller that works.
+     *
+     * Every battery kind falls through (null) to [createProtocol] (BmsType)
+     * unchanged.
      */
-    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol =
-        when (spec.protocolKind) {
-            ProtocolKind.VESC -> {
-                val ctrlIndex = spec.ownedControllers.firstOrNull()?.globalIndex
-                val controller = vehicle?.controllers?.firstOrNull { it.index == ctrlIndex }
-                VescProtocol(
-                    // A lone controller with no battery source of its own backs
-                    // a derived pack; the composer (Part G) turns this off once
-                    // a real BMS covers the same battery. Written as `== true ||`
-                    // rather than `?:` so the no-packs fallback stays LIVE even
-                    // though `controller` is never null here in practice (every
-                    // planned VESC link's controller is found in
-                    // `vehicle.controllers`) — a plain elvis on a non-null
-                    // Boolean can never reach its right-hand side, which would
-                    // silently strand a controller-only vehicle with
-                    // `providesDerivedBattery = false` (its own default) at
-                    // `packCount = 0` and the derived-slot machinery off.
-                    deriveBattery = controller?.providesDerivedBattery == true ||
-                        vehicle?.packs.isNullOrEmpty(),
-                    motor = controller?.motor ?: MotorConfig()
-                )
-            }
-            else -> createProtocol(spec.protocolKind.toBmsType())
-        }
+    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
+        val controller = spec.ownedControllers.firstOrNull()?.globalIndex
+            ?.let { idx -> vehicle?.controllers?.firstOrNull { it.index == idx } }
+        controllerMotionProtocol(
+            kind = spec.protocolKind,
+            // A lone controller with no battery source of its own backs a
+            // derived pack; the composer (Part G) turns this off once a real
+            // BMS covers the same battery. Written as `== true ||` rather than
+            // `?:` so the no-packs fallback stays LIVE even though `controller`
+            // is never null for a planned controller link in practice (every
+            // one of them is found in `vehicle.controllers`) — a plain elvis on
+            // a non-null Boolean can never reach its right-hand side, which
+            // would silently strand a controller-only vehicle with
+            // `providesDerivedBattery = false` (its own default) at
+            // `packCount = 0` and the derived-slot machinery off.
+            deriveBattery = controller?.providesDerivedBattery == true ||
+                vehicle?.packs.isNullOrEmpty(),
+            motor = controller?.motor ?: MotorConfig()
+        )?.let { return it }
+        return createProtocol(spec.protocolKind.toBmsType())
+    }
 
     /**
      * The [BmsType] a link's battery half decodes with, or null for a

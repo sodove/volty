@@ -7,9 +7,8 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -91,7 +90,7 @@ class KableBmsRepositoryMultiLinkTest {
     fun `two links interleaved from separate coroutines aggregate both branches`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertEquals(2, funnels.size, "two distinct addresses must raise two links")
         assertEquals(2, repo.linkCountForTest())
         repo.markLinkOnlineForTest(ADDR_A)
@@ -124,7 +123,7 @@ class KableBmsRepositoryMultiLinkTest {
             bmsType = BmsType.BEGODE, bmsAddress = ADDR_A,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertEquals(1, funnels.size, "one address, packCount = 2 — still ONE link")
 
         // The session speaks LOCAL index 1; the link owns global [0, 1].
@@ -142,7 +141,7 @@ class KableBmsRepositoryMultiLinkTest {
     fun `first link online is Connected and partial until the second lands`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertTrue(repo.connectionState.value is ConnectionState.Connecting)
 
         repo.markLinkOnlineForTest(ADDR_A)
@@ -166,7 +165,7 @@ class KableBmsRepositoryMultiLinkTest {
     fun `all links failing the initial connect folds to Failed`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         repo.markLinkFailedForTest(ADDR_A, "Device not found")
         assertTrue(
@@ -187,7 +186,7 @@ class KableBmsRepositoryMultiLinkTest {
         val repo = newRepo(this).also { underTest = it }
         repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
         val v = twoLinkVehicle()
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         repo.markLinkOnlineForTest(ADDR_B)
         funnels[0](0, sample(current = 8.85f), emptyList())
@@ -223,7 +222,7 @@ class KableBmsRepositoryMultiLinkTest {
     fun `both links down folds to Reconnecting`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         repo.markLinkOnlineForTest(ADDR_B)
 
@@ -246,7 +245,7 @@ class KableBmsRepositoryMultiLinkTest {
     fun `initial partial connect keeps the vehicle Connected while the missing link retries`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         // Link A answered, link B was out of radio range at connect time.
         repo.markLinkOnlineForTest(ADDR_A)
@@ -279,7 +278,7 @@ class KableBmsRepositoryMultiLinkTest {
             bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertEquals(1, funnels.size)
         assertEquals(1, repo.linkCountForTest())
 
