@@ -97,8 +97,8 @@ class PickerComponentTest {
         chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
     )
 
-    private fun device(address: String, type: BmsType?, rssi: Int = -50) =
-        DiscoveredDevice(address = address, name = "dev-$address", rssi = rssi, bmsType = type)
+    private fun device(address: String, type: BmsType?, rssi: Int = -50, controllerType: ControllerType? = null) =
+        DiscoveredDevice(address = address, name = "dev-$address", rssi = rssi, bmsType = type, controllerType = controllerType)
 
     private fun component(
         mode: String,
@@ -167,10 +167,71 @@ class PickerComponentTest {
         val (c, repo) = component(mode = "guest", scan = listOf(unknown))
         advanceUntilIdle()
 
-        c.onConnectWithType(unknown, BmsType.JBD_BMS)
+        c.onConnectWithType(unknown, SourceChoice.Battery(BmsType.JBD_BMS))
         advanceUntilIdle()
 
         assertEquals(listOf("CC:UNKNOWN" to BmsType.JBD_BMS), repo.guestConnects)
+    }
+
+    // ----- G1 Task 3: the type sheet learns controllers -----
+
+    @Test
+    fun `tapping a device detected as a controller preselects the matching Controller choice`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("CTRL:VESC", type = null, controllerType = ControllerType.VESC)
+        val (c, _) = component(mode = "guest", scan = listOf(d))
+        advanceUntilIdle()
+
+        c.onDeviceTapped(d)
+
+        val opened = c.state.value.typePickerFor
+        assertEquals(d.address, opened?.address)
+        assertEquals(SourceChoice.Controller(ControllerType.VESC), opened?.let(::preselectedChoice))
+    }
+
+    @Test
+    fun `tapping a device detected as a BMS preselects the matching Battery choice`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("BATT:JK", type = BmsType.JK_BMS)
+        val (c, _) = component(mode = "guest", scan = listOf(d))
+        advanceUntilIdle()
+
+        c.onDeviceTapped(d)
+
+        val opened = c.state.value.typePickerFor
+        assertEquals(SourceChoice.Battery(BmsType.JK_BMS), opened?.let(::preselectedChoice))
+    }
+
+    @Test
+    fun `tapping an unrecognised device preselects nothing, leaving both sections unselected`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("UNKNOWN:01", type = null)
+        val (c, _) = component(mode = "guest", scan = listOf(d))
+        advanceUntilIdle()
+
+        c.onDeviceTapped(d)
+
+        val opened = c.state.value.typePickerFor
+        assertEquals(d.address, opened?.address, "the sheet still opens for an unrecognised device")
+        assertEquals(null, opened?.let(::preselectedChoice))
+    }
+
+    @Test
+    fun `onConnectWithType with a Controller choice is an explicit inert no-op (Task 5 wires the connect path)`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("CTRL:VESC", type = null, controllerType = ControllerType.VESC)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val (c, bmsRepo) = component(mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+        c.onDeviceTapped(d)
+
+        c.onConnectWithType(d, SourceChoice.Controller(ControllerType.VESC))
+        advanceUntilIdle()
+
+        assertEquals(null, c.state.value.typePickerFor, "the sheet still closes")
+        assertEquals(null, c.state.value.connecting, "but no connection attempt is made")
+        assertTrue(vehicleRepo.upserts.isEmpty(), "no vehicle is created — that is Task 4/5's job")
+        assertTrue(bmsRepo.vehicleConnects.isEmpty())
     }
 
     // ----- G1: the picker must see a controller vehicle, and must not die on one -----

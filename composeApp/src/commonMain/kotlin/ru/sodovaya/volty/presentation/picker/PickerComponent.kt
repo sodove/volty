@@ -34,7 +34,7 @@ interface PickerComponent {
     fun onToggleShowAll()
     fun onDeviceTapped(device: DiscoveredDevice)
     fun onTypeSheetDismissed()
-    fun onConnectWithType(device: DiscoveredDevice, type: BmsType)
+    fun onConnectWithType(device: DiscoveredDevice, choice: SourceChoice)
     fun onAddNewBattery()
     fun onTryDemo()
     fun onBack()
@@ -175,8 +175,20 @@ class DefaultPickerComponent(
         _state.update { it.copy(typePickerFor = null) }
     }
 
-    override fun onConnectWithType(device: DiscoveredDevice, type: BmsType) {
+    override fun onConnectWithType(device: DiscoveredDevice, choice: SourceChoice) {
         if (_state.value.connecting != null) return
+        when (choice) {
+            // Building and connecting a controller vehicle is not this component's
+            // job yet: controllerVehicle(...) (Task 4) and the creation/connect/
+            // rollback sequence for it (Task 5) don't exist. Until they land, a
+            // Controller pick is an explicit, inert no-op — it just closes the
+            // sheet, same as dismissing it, and starts nothing.
+            is SourceChoice.Controller -> _state.update { it.copy(typePickerFor = null) }
+            is SourceChoice.Battery -> connectWithBmsType(device, choice.type)
+        }
+    }
+
+    private fun connectWithBmsType(device: DiscoveredDevice, type: BmsType) {
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
