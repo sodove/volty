@@ -48,8 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
@@ -287,7 +286,15 @@ private fun VehicleRow(vehicle: Vehicle, onEdit: () -> Unit, onDelete: () -> Uni
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-            Text("${bmsTypeLabel(vehicle.bmsType)}  ·  ${chemistryLabel(vehicle.chemistry)}", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            // Chemistry always renders; the source segment and its separator
+            // drop out together when the vehicle has no nameable source.
+            val source = vehicleSourceLabel(vehicle)
+            val chemistry = chemistryLabel(vehicle.chemistry)
+            Text(
+                if (source != null) "$source  ·  $chemistry" else chemistry,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
         TextButton(onClick = onDelete) { Text(stringResource(Res.string.settings_delete), color = MaterialTheme.colorScheme.error, fontSize = 12.sp) }
     }

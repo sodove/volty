@@ -5,6 +5,9 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.primaryController
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_ant
@@ -37,6 +40,24 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
         BmsType.VESC_BMS -> Res.string.bms_vesc
     }
 )
+
+/**
+ * The one label that names what a vehicle's telemetry comes from: the motor
+ * controller (VESC / FarDriver / …) when it has one, else its BMS.
+ *
+ * Null when neither is available — no vehicle at all, or (not reachable today)
+ * a vehicle with no sources. Callers must then OMIT the segment rather than
+ * render "null", an empty chip, or a dash standing in for a real label; the
+ * two status lines that need a non-null argument for a format string supply
+ * their own em-dash placeholder at the call site.
+ *
+ * Single source of truth on purpose: this fallback used to be copy-pasted, and
+ * divergent copies of exactly this kind produced the Clean/Classic parity bugs.
+ */
+@Composable
+fun vehicleSourceLabel(vehicle: Vehicle?): String? =
+    vehicle?.primaryController?.controllerType?.label
+        ?: vehicle?.bmsTypeOrNull?.let { bmsTypeLabel(it) }
 
 @Composable
 fun chemistryLabel(chemistry: Chemistry): String = stringResource(

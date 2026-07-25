@@ -8,10 +8,11 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.bmsAddressOrNull
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.domain.model.isDemo
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -101,8 +102,13 @@ class DefaultVehicleEditComponent(
                     name = v.name,
                     iconKey = v.iconKey,
                     chemistry = v.chemistry,
-                    bmsType = v.bmsType,
-                    bmsAddress = v.bmsAddress,
+                    // A controller-only vehicle has no pack to describe, so the
+                    // form's BMS fields fall back to their own defaults (the
+                    // same ones the "create" branch below uses) instead of
+                    // throwing on init. onSave() will not invent a pack for it
+                    // — see the packs preservation there.
+                    bmsType = v.bmsTypeOrNull ?: VehicleEditComponent.State().bmsType,
+                    bmsAddress = v.bmsAddressOrNull ?: VehicleEditComponent.State().bmsAddress,
                     averagingWindowMin = v.averagingWindowMin,
                     cellHighV = v.alertConfig.cellHighV,
                     cellLowV = v.alertConfig.cellLowV,
@@ -155,7 +161,7 @@ class DefaultVehicleEditComponent(
                 chemistry = s.chemistry,
                 // Auto-filled from live telemetry by the repo (see
                 // KableBmsRepository.maybePersistCellCount) — never edited here.
-                cellCount = existing?.cellCount,
+                cellCount = existing?.cellCountOrNull,
                 averagingWindowMin = s.averagingWindowMin,
                 alertConfig = (existing?.alertConfig ?: AlertConfig()).copy(
                     cellHighV = s.cellHighV,
@@ -174,6 +180,13 @@ class DefaultVehicleEditComponent(
             // Without this .copy(), every save through this screen silently
             // wiped a vehicle's VESC controllers and reset its dashboard prefs.
             val v = built.copy(
+                // singlePackVehicle() ALWAYS synthesizes one pack. For a
+                // controller-only vehicle (zero packs) that pack would be built
+                // from this form's placeholder defaults — a phantom JK_BMS at
+                // address "" — so a save from this screen would silently invent
+                // a battery the vehicle doesn't have. Keep it pack-less; the
+                // controllers copied below satisfy Vehicle's "needs a source".
+                packs = if (existing != null && existing.packs.isEmpty()) emptyList() else built.packs,
                 controllers = existing?.controllers ?: emptyList(),
                 topology = existing?.topology ?: built.topology,
                 dashboardStyle = s.dashboardStyle,
@@ -189,8 +202,12 @@ class DefaultVehicleEditComponent(
             // Demo is explicitly excluded (it isn't guest, and we never prefill
             // from it) so its synthetic "demo" identity can never trigger a real
             // connect off a saved profile.
+            // primaryAddress on both sides: it is the identity connect() uses,
+            // it is defined for a vehicle with zero packs, and — unlike
+            // comparing two nullable pack addresses — it can never make two
+            // source-less vehicles look equal by both being null.
             if (!s.isEditing && active?.isGuest == true && active.isDemo.not() &&
-                active.bmsAddress == v.bmsAddress
+                active.primaryAddress == v.primaryAddress
             ) {
                 bmsRepository.connect(v)
             }

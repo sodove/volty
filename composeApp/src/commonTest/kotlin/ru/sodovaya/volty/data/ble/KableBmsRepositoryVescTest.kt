@@ -16,10 +16,10 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -32,7 +32,7 @@ import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFails
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
 import kotlin.time.ExperimentalTime
@@ -126,9 +126,12 @@ class KableBmsRepositoryVescTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vescOnlyVehicle()
 
-        // The trap, pinned: the primary-pack shims are unusable on this vehicle.
-        assertFails("bmsAddress must throw on a zero-pack vehicle") { v.bmsAddress }
-        assertFails("bmsType must throw on a zero-pack vehicle") { v.bmsType }
+        // The trap, pinned. The throwing `packs.first()` shims that used to sit
+        // on Vehicle are gone (G1 task 2) — what replaced them must report
+        // "no pack" rather than blow up, and primaryAddress must still route
+        // through the controller.
+        assertNull(v.bmsAddressOrNull, "a zero-pack vehicle has no pack address")
+        assertNull(v.bmsTypeOrNull, "a zero-pack vehicle has no pack type")
         assertEquals(CTRL_ADDR, v.primaryAddress, "primaryAddress is the safe route")
 
         // connect() must plan the vehicle THROUGH primaryAddress. No BLE stack
@@ -363,7 +366,7 @@ class KableBmsRepositoryVescTest {
 
     /**
      * The fourth `packs.first()` trap of the same class, in
-     * `maybePersistCellCount`: `Vehicle.cellCount` is a `packs.first()` shim.
+     * `maybePersistCellCount`: cell count lives on a Pack, and there is none.
      * That collector runs on the repo's SupervisorJob scope with no exception
      * handler, so a throw there kills it silently (and is app-fatal on
      * Android). The observable consequence is the write at the end of the
@@ -405,7 +408,7 @@ class KableBmsRepositoryVescTest {
             bmsType = BmsType.ANT_BMS, bmsAddress = ADDR,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val spec = repo.linkSpecsForTest().single()
         assertEquals(
@@ -428,7 +431,7 @@ class KableBmsRepositoryVescTest {
             bmsType = BmsType.BEGODE, bmsAddress = ADDR,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val spec = repo.linkSpecsForTest().single()
         assertEquals(ProtocolKind.BEGODE, spec.protocolKind)

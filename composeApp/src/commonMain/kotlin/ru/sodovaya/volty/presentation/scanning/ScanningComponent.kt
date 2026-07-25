@@ -4,7 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
+import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.CoroutineScope
@@ -60,7 +60,10 @@ class DefaultScanningComponent(
     private suspend fun runScan() {
         val timeoutSec = appPrefs.scanTimeoutSec.first()
         val saved = vehicleRepository.vehicles.first()
-        val knownByAddress: Map<String, Vehicle> = saved.associateBy { it.bmsAddress }
+        // Indexed by every address of every vehicle, not just the primary pack's:
+        // a controller-only vehicle has no pack address, so keying on that alone
+        // meant its own advertisement never matched it. See [vehiclesByAddress].
+        val knownByAddress: Map<String, Vehicle> = vehiclesByAddress(saved)
         _state.update { it.copy(secondsLeft = timeoutSec, savedCount = saved.size) }
 
         timerJob = scope.launch {

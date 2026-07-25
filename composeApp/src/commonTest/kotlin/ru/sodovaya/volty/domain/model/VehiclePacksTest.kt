@@ -34,9 +34,13 @@ class VehiclePacksTest {
     @Test
     fun legacyAccessorsReadThroughToTheFirstPack() {
         val v = single()
-        assertEquals(BmsType.JK_BMS, v.bmsType)
-        assertEquals("AA:BB:CC:DD:EE:FF", v.bmsAddress)
-        assertEquals(16, v.cellCount)
+        // The throwing `packs.first()` shims were deleted in G1 task 2; their
+        // safe counterparts must still read through to the primary pack for an
+        // ordinary one-pack vehicle — this is the "BMS path is unchanged" pin.
+        assertEquals(BmsType.JK_BMS, v.bmsTypeOrNull)
+        assertEquals("AA:BB:CC:DD:EE:FF", v.bmsAddressOrNull)
+        assertEquals("AA:BB:CC:DD:EE:FF", v.primaryAddress)
+        assertEquals(16, v.cellCountOrNull)
     }
 
     @Test

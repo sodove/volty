@@ -27,8 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
@@ -95,11 +94,15 @@ private fun VehicleRow(v: Vehicle, isActive: Boolean, onClick: () -> Unit) {
                 fontWeight = FontWeight.SemiBold,
                 color = if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurface
             )
-            Text(
-                bmsTypeLabel(v.bmsType),
-                fontSize = 11.sp,
-                color = (if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = 0.7f)
-            )
+            // Omit the subtitle line entirely when the vehicle has no nameable
+            // source, rather than rendering an empty row under the name.
+            vehicleSourceLabel(v)?.let { source ->
+                Text(
+                    source,
+                    fontSize = 11.sp,
+                    color = (if (isActive) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant).copy(alpha = 0.7f)
+                )
+            }
         }
     }
 }

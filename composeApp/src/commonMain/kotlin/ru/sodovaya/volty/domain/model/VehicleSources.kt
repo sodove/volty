@@ -18,3 +18,20 @@ val Vehicle.allAddresses: Set<String>
 
 /** True when this vehicle has no battery source of its own and a controller must derive one. */
 val Vehicle.needsDerivedBattery: Boolean get() = packs.isEmpty() && controllers.isNotEmpty()
+
+/**
+ * Indexes saved vehicles by *every* address each one can be recognised by, so a
+ * scan result can be matched back to its vehicle whichever of its sources
+ * happened to advertise.
+ *
+ * Deliberately NOT `associateBy { it.bmsAddress }` (the old shape): that keyed
+ * a vehicle by its primary pack alone, so a controller-only vehicle — which has
+ * no pack address at all — could never be recognised from its own
+ * advertisement, and a vehicle with both a pack and a controller was invisible
+ * whenever the controller was the thing in range.
+ *
+ * Collision policy matches the `associateBy` it replaces: when two vehicles
+ * share an address, the later one in [vehicles] wins.
+ */
+fun vehiclesByAddress(vehicles: List<Vehicle>): Map<String, Vehicle> =
+    vehicles.flatMap { v -> v.allAddresses.map { address -> address to v } }.toMap()

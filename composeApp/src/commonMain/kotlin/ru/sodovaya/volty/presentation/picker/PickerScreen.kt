@@ -38,11 +38,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.picker_add_new
@@ -110,7 +110,8 @@ fun PickerScreen(component: PickerComponent) {
                     items(state.myInRange, key = { "v-" + it.id }) { v ->
                         VehicleRow(
                             vehicle = v,
-                            isConnecting = state.connecting == v.bmsAddress,
+                            // Mirrors what PickerComponent.onConnectKnown stores.
+                            isConnecting = state.connecting == v.primaryAddress,
                             onClick = { component.onConnectKnown(v) }
                         )
                     }
@@ -244,7 +245,14 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
         Avatar(letter = iconKeyToEmoji(vehicle.iconKey), bg = MaterialTheme.colorScheme.primary)
         Column(modifier = Modifier.weight(1f)) {
             Text(vehicle.name, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            Text("${bmsTypeLabel(vehicle.bmsType)}  ·  saved", fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f))
+            // Drop the whole source segment (and its separator) when there is no
+            // label, rather than leaving a dangling "·" or an empty slot.
+            val source = vehicleSourceLabel(vehicle)
+            Text(
+                if (source != null) "$source  ·  saved" else "saved",
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onPrimaryContainer.copy(alpha = 0.7f)
+            )
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }

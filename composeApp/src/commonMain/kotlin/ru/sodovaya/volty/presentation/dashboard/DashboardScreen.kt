@@ -37,8 +37,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellUiModel
 import ru.sodovaya.volty.presentation.common.chemistryFraction
@@ -47,7 +46,7 @@ import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.PowerRangeBar
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
@@ -99,7 +98,10 @@ fun DashboardScreen(component: DashboardComponent) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        val bmsLabel = vehicle?.bmsType?.let { bmsTypeLabel(it) } ?: "—"
+        // Shared with Ride's status line — see [vehicleSourceLabel]. The em-dash
+        // is the "no vehicle connected at all" placeholder the format string
+        // needs, exactly as before; it never stands in for a real source.
+        val bmsLabel = vehicleSourceLabel(vehicle) ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to MaterialTheme.colorScheme.tertiary
             is ConnectionState.Connecting -> ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
@@ -505,7 +507,7 @@ private fun HeroCard(state: DashboardComponent.State) {
     val containerColor = if (isCharging) chargingContainer else MaterialTheme.colorScheme.primaryContainer
     val onColor = if (isCharging) chargingOn else MaterialTheme.colorScheme.onPrimaryContainer
     val barColor = if (isCharging) chargingAccent else MaterialTheme.colorScheme.primary
-    val nominalV = v?.cellCount?.let { count -> count * v.chemistry.nominalCellV }
+    val nominalV = v?.cellCountOrNull?.let { count -> count * v.chemistry.nominalCellV }
         ?: data.voltage.coerceAtLeast(1f)
     val eta = timeRemainingDescription(
         isCharging = isCharging,

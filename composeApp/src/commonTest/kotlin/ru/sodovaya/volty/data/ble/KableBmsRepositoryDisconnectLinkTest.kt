@@ -7,9 +7,8 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -86,7 +85,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     fun `disconnectLink drops one link, keeps the other Connected and producing`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        val funnels = repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         repo.markLinkOnlineForTest(ADDR_B)
         funnels[0](0, sample(current = 8.85f), emptyList())
@@ -112,7 +111,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     fun `disconnectLink cancels a reconnecting link's own loop`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         repo.markLinkOnlineForTest(ADDR_B)
 
@@ -137,7 +136,7 @@ class KableBmsRepositoryDisconnectLinkTest {
             bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         assertEquals(ConnectionState.Connected(v), repo.connectionState.value)
 
@@ -153,7 +152,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     fun `disconnectLink is a no-op for an address with no installed link`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = twoLinkVehicle()
-        repo.installLinksForTest(v, v.bmsAddress, v.bmsType)
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
         repo.markLinkOnlineForTest(ADDR_B)
 

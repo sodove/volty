@@ -14,8 +14,8 @@ import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.bmsAddressOrNull
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
@@ -420,8 +420,11 @@ class DefaultRootComponent(
                         onSaved = { nav.replaceAll(homeConfig()) },
                         onCancelled = { nav.pop() },
                         onDeleted = { nav.pop() },
-                        prefilledBmsType = prefillVehicle?.bmsType,
-                        prefilledBmsAddress = prefillVehicle?.bmsAddress,
+                        // Both prefills are already optional, so a source-less
+                        // (controller-only) active connection simply prefills
+                        // nothing instead of throwing.
+                        prefilledBmsType = prefillVehicle?.bmsTypeOrNull,
+                        prefilledBmsAddress = prefillVehicle?.bmsAddressOrNull,
                         prefilledName = prefilledName
                     )
                 )

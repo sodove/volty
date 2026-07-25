@@ -6,10 +6,12 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.primaryAddress
+import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -76,7 +78,10 @@ class DefaultPickerComponent(
 
     private suspend fun startScan() {
         val saved = vehicleRepository.vehicles.first()
-        val savedByAddress: Map<String, Vehicle> = saved.associateBy { it.bmsAddress }
+        // Indexed by every address of every vehicle, not just the primary pack's:
+        // a controller-only vehicle has no pack address, so keying on that alone
+        // meant its own advertisement never matched it. See [vehiclesByAddress].
+        val savedByAddress: Map<String, Vehicle> = vehiclesByAddress(saved)
         // BLE peripherals don't advertise while we hold an active connection,
         // so a scan would render an empty list and the user is left wondering
         // what's wrong. Seed the picker with the currently-connected device so
@@ -87,7 +92,9 @@ class DefaultPickerComponent(
         if (activeVehicle != null &&
             (activeConn is ConnectionState.Connected || activeConn is ConnectionState.Reconnecting)
         ) {
-            val savedMatch = savedByAddress[activeVehicle.bmsAddress]
+            // primaryAddress, not the primary pack's: it already prefers the
+            // controller and is defined for a vehicle with zero packs.
+            val savedMatch = savedByAddress[activeVehicle.primaryAddress]
             _state.update { s ->
                 if (savedMatch != null && !activeVehicle.isGuest) {
                     s.copy(myInRange = listOf(savedMatch))
@@ -95,10 +102,16 @@ class DefaultPickerComponent(
                     s.copy(
                         otherNearby = listOf(
                             DiscoveredDevice(
-                                address = activeVehicle.bmsAddress,
+                                address = activeVehicle.primaryAddress,
                                 name = activeVehicle.name,
                                 rssi = 0,
-                                bmsType = activeVehicle.bmsType,
+                                // Both nullable and both carried, so the row can
+                                // name a controller-only vehicle by its
+                                // controller instead of falling through to
+                                // "unknown type". A pack-only vehicle keeps
+                                // exactly the old pair (type, null).
+                                bmsType = activeVehicle.bmsTypeOrNull,
+                                controllerType = activeVehicle.primaryController?.controllerType,
                                 knownVehicle = savedMatch
                             )
                         )
@@ -138,7 +151,10 @@ class DefaultPickerComponent(
 
     override fun onConnectKnown(vehicle: Vehicle) {
         scope.launch {
-            _state.update { it.copy(connecting = vehicle.bmsAddress, error = null) }
+            // Must stay the same expression PickerScreen's row compares against,
+            // and must be defined for a vehicle with zero packs — primaryAddress
+            // is both, and is also what BmsRepository.connect() identifies by.
+            _state.update { it.copy(connecting = vehicle.primaryAddress, error = null) }
             scanJob?.cancel()
             val result = bmsRepository.connect(vehicle)
             if (result.isSuccess) onConnectedKnown()

@@ -1,12 +1,16 @@
 package ru.sodovaya.volty.presentation.picker
 
+import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -24,6 +28,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
@@ -69,6 +74,26 @@ class PickerComponentTest {
     private fun vehicle(id: String, address: String) = singlePackVehicle(
         id = id, name = "Saved", iconKey = "generic",
         bmsType = BmsType.JK_BMS, bmsAddress = address,
+        chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
+    )
+
+    /** Zero packs, one VESC — the shape G1 exists to make reachable. */
+    private fun controllerVehicle(id: String, address: String) = Vehicle(
+        id = id, name = "Scooter", iconKey = "scooter",
+        packs = emptyList(),
+        controllers = listOf(
+            Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC, address = address)
+        ),
+        chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
+    )
+
+    /** A pack AND a controller: recognisable by either address. */
+    private fun dualSourceVehicle(id: String, packAddress: String, ctrlAddress: String) = Vehicle(
+        id = id, name = "Rig", iconKey = "generic",
+        packs = listOf(Pack(index = 0, label = "P0", bmsType = BmsType.JK_BMS, bmsAddress = packAddress)),
+        controllers = listOf(
+            Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC, address = ctrlAddress)
+        ),
         chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0)
     )
 
@@ -146,6 +171,106 @@ class PickerComponentTest {
         advanceUntilIdle()
 
         assertEquals(listOf("CC:UNKNOWN" to BmsType.JBD_BMS), repo.guestConnects)
+    }
+
+    // ----- G1: the picker must see a controller vehicle, and must not die on one -----
+
+    /**
+     * `startScan()` used to index saved vehicles with
+     * `saved.associateBy { it.bmsAddress }` — a `packs.first()` shim that threw
+     * on a zero-pack vehicle, killing Picker init in all three modes. It now
+     * indexes by every address, which is also the only way a controller
+     * vehicle can be matched to the address it actually advertises.
+     */
+    @Test
+    fun `a saved controller-only vehicle is matched by its controller advertisement`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = controllerVehicle(id = "v-vesc", address = "CTRL:01")
+        val (c, _) = component(
+            mode = "cold",
+            scan = listOf(device("CTRL:01", null)),
+            saved = listOf(saved)
+        )
+
+        c.state.test {
+            advanceUntilIdle()
+            val s = expectMostRecentItem()
+            assertEquals(listOf("v-vesc"), s.myInRange.map { it.id }, "matched as MINE, not a stranger")
+            assertTrue(s.otherDevices.isEmpty(), "and therefore not listed as an unknown device")
+            assertTrue(s.otherNearby.isEmpty())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `a saved vehicle with both sources is matched by its controller advertisement`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = dualSourceVehicle(id = "v-both", packAddress = "PACK:01", ctrlAddress = "CTRL:01")
+        val (c, _) = component(
+            mode = "cold",
+            scan = listOf(device("CTRL:01", null)),
+            saved = listOf(saved)
+        )
+
+        c.state.test {
+            advanceUntilIdle()
+            assertEquals(listOf("v-both"), expectMostRecentItem().myInRange.map { it.id })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun `a controller-only vehicle in the store does not break classification of others`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        // Merely BUILDING the index over a zero-pack vehicle used to throw, so
+        // no device was classified at all. The ordinary BMS vehicle alongside
+        // it must still land in myInRange exactly as it always did.
+        val (c, _) = component(
+            mode = "cold",
+            scan = listOf(device("AA:SAVED", BmsType.JK_BMS), device("CC:UNKNOWN", null)),
+            saved = listOf(controllerVehicle("v-vesc", "CTRL:01"), vehicle("v1", "AA:SAVED"))
+        )
+
+        c.state.test {
+            advanceUntilIdle()
+            val s = expectMostRecentItem()
+            assertEquals(listOf("v1"), s.myInRange.map { it.id })
+            assertEquals(listOf("CC:UNKNOWN"), s.otherDevices.map { it.address })
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    /**
+     * `connecting` is compared against `v.primaryAddress` by PickerScreen's
+     * row, so the two must agree — and for a controller vehicle the only
+     * address that exists is the controller's.
+     */
+    @Test
+    fun `onConnectKnown marks a controller-only vehicle as connecting by its controller address`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = controllerVehicle(id = "v-vesc", address = "CTRL:01")
+        val (c, repo) = component(mode = "cold", scan = emptyList(), saved = listOf(saved))
+        advanceUntilIdle()
+
+        c.onConnectKnown(saved)
+        // onConnectKnown's body runs in scope.launch on the (test) Main
+        // dispatcher, so pump it before reading the state it publishes.
+        runCurrent()
+        assertEquals("CTRL:01", c.state.value.connecting)
+        advanceUntilIdle()
+        assertEquals(listOf("v-vesc"), repo.vehicleConnects.map { it.id })
+    }
+
+    @Test
+    fun `onConnectKnown still marks a pack-only vehicle by its BMS address`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = vehicle(id = "v1", address = "AA:SAVED")
+        val (c, _) = component(mode = "cold", scan = emptyList(), saved = listOf(saved))
+        advanceUntilIdle()
+
+        c.onConnectKnown(saved)
+        runCurrent()
+        assertEquals("AA:SAVED", c.state.value.connecting, "the BMS path is unchanged")
     }
 
     @Test

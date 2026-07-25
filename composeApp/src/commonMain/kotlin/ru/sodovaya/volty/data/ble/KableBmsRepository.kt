@@ -29,15 +29,14 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.domain.model.cellCount
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.expandedTo
 import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -428,14 +427,14 @@ class KableBmsRepository private constructor(
             ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
-        // Keyed by the stored BMS address for every vehicle that has a pack —
-        // exactly as before — and by [Vehicle.primaryAddress] for one that has
-        // none. `bmsAddress` is a `packs.first()` shim and would THROW on a
-        // controller-only vehicle (legal since Part A), taking the whole scan
-        // flow down with it; the fallback is also the only address such a
-        // vehicle can be recognised by.
-        val knownAddresses: Map<String, Vehicle> = vehicleRepository.vehicles.first()
-            .associateBy { it.packs.firstOrNull()?.bmsAddress ?: it.primaryAddress }
+        // Keyed by EVERY address each vehicle can be recognised by — the same
+        // index the Scanning and Picker screens use, see [vehiclesByAddress].
+        // The primary pack alone is not enough: a controller-only vehicle
+        // (legal since Part A) has no pack address at all, and a vehicle with
+        // both sources was invisible whenever its controller was the thing
+        // advertising.
+        val knownAddresses: Map<String, Vehicle> =
+            vehiclesByAddress(vehicleRepository.vehicles.first())
         // A scan can run WHILE a connection is live (the Picker seeds itself
         // with the connected device and keeps scanning for others). Don't let
         // it clobber the Connected / Connecting / Reconnecting state machine —
@@ -474,7 +473,16 @@ class KableBmsRepository private constructor(
         // If a caller hands a transient guest Vehicle back to connect(), route
         // it through the guest path so it stays unpersisted and the touch /
         // saved-vehicle observers leave it alone.
-        if (vehicle.isGuest) return connectGuest(vehicle.primaryAddress, vehicle.bmsType)
+        // bmsTypeOrNull, not the `packs.first()` shim: connectGuest() needs a
+        // pack template and every guest built by [buildGuestVehicle] has one,
+        // so this branch is taken for every guest that can exist today and
+        // behaves exactly as before. A hypothetical pack-less guest falls
+        // through to doConnect below, which still receives the same guest
+        // Vehicle and so keeps it unpersisted (see the isGuest guards there).
+        val guestPackType = vehicle.bmsTypeOrNull
+        if (vehicle.isGuest && guestPackType != null) {
+            return connectGuest(vehicle.primaryAddress, guestPackType)
+        }
         // primaryAddress / packs.firstOrNull(), NOT the bmsAddress / bmsType
         // shims: both are `packs.first()` and a controller-only vehicle (a
         // VESC whose battery is derived at runtime) legally stores ZERO packs

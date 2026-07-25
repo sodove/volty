@@ -41,7 +41,6 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.RideMetrics
@@ -50,7 +49,7 @@ import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.dashboard.VehicleSheet
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
@@ -131,11 +130,11 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         // Controller type (VESC/FarDriver/…) when present, falling back to the
-        // BMS label for a vehicle whose packs happen to be primary — mirrors
-        // DashboardScreen's status line, just sourced from the motor side.
-        val controllerLabel = vehicle?.primaryController?.controllerType?.label
-            ?: vehicle?.takeIf { it.packs.isNotEmpty() }?.let { bmsTypeLabel(it.bmsType) }
-            ?: "—"
+        // BMS label for a vehicle whose packs happen to be primary. This used
+        // to be spelled out here; it now lives in [vehicleSourceLabel] and is
+        // shared verbatim with DashboardScreen's status line and every vehicle
+        // row, so the three can no longer drift apart.
+        val controllerLabel = vehicleSourceLabel(vehicle) ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected ->
                 ("● " + stringResource(Res.string.status_connected, controllerLabel)) to MaterialTheme.colorScheme.tertiary

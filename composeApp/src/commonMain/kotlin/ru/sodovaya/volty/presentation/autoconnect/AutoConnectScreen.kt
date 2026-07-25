@@ -39,8 +39,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import ru.sodovaya.volty.domain.model.bmsType
-import ru.sodovaya.volty.presentation.common.bmsTypeLabel
+import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.autoconnect_cancel
@@ -90,7 +89,7 @@ fun AutoConnectScreen(component: AutoConnectComponent) {
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 Spacer(Modifier.height(16.dp))
-                state.vehicle?.let { VehicleCard(name = it.name, bmsType = bmsTypeLabel(it.bmsType)) }
+                state.vehicle?.let { VehicleCard(name = it.name, sourceLabel = vehicleSourceLabel(it)) }
                 Spacer(Modifier.height(20.dp))
                 Button(onClick = component::onConnectNow) { Text(stringResource(Res.string.autoconnect_connect_now)) }
                 TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.autoconnect_cancel)) }
@@ -160,7 +159,7 @@ private fun CountdownRing(seconds: Int) {
 }
 
 @Composable
-private fun VehicleCard(name: String, bmsType: String) {
+private fun VehicleCard(name: String, sourceLabel: String?) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -181,7 +180,9 @@ private fun VehicleCard(name: String, bmsType: String) {
         }
         Column {
             Text(name, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onPrimaryContainer)
-            Text(bmsType, fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer)
+            // Drop the whole line when there is no nameable source, so the card
+            // never shows a blank second row.
+            sourceLabel?.let { Text(it, fontSize = 11.sp, color = MaterialTheme.colorScheme.onPrimaryContainer) }
         }
     }
 }

@@ -4,9 +4,8 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsAddress
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -72,7 +71,7 @@ class KableBmsRepositoryOnAppResumedTest {
         // Connected pre-background, but the last sample is well past staleSampleMs.
         val now = Clock.System.now().toEpochMilliseconds()
         val staleMs = now - (BleConfig.staleSampleMs + 5_000L)
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, lastSampleAtMs = staleMs)
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, lastSampleAtMs = staleMs)
 
         // Sanity: state begins Connected with no reconnect job.
         assertTrue(repo.connectionState.value is ConnectionState.Connected)
@@ -101,7 +100,7 @@ class KableBmsRepositoryOnAppResumedTest {
         // Sample arrived a moment ago — well within staleSampleMs.
         val now = Clock.System.now().toEpochMilliseconds()
         val freshMs = now - 100L
-        repo.primeConnectedForTest(v, v.bmsAddress, v.bmsType, lastSampleAtMs = freshMs)
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, lastSampleAtMs = freshMs)
 
         repo.onAppResumed()
         runCurrent()

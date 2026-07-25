@@ -8,8 +8,8 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -53,7 +53,7 @@ class SqlDelightVehicleRepositoryTest {
         val got = repo.get("id-1")
         assertNotNull(got)
         assertEquals("Stealth", got.name)
-        assertEquals(BmsType.JK_BMS, got.bmsType)
+        assertEquals(BmsType.JK_BMS, got.bmsTypeOrNull)
         assertEquals(Chemistry.LI_ION_NMC, got.chemistry)
     }
 
