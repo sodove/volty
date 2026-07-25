@@ -88,6 +88,8 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
+    <string name="ride_dial_speed">Скорость</string>
     <string name="ride_odometer">Одометр</string>
     <string name="ride_trip">Поездка</string>
     <string name="ride_uptime">В пути</string>

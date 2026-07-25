@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import ru.sodovaya.volty.util.formatFixed
 import kotlin.math.PI
-import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.math.sqrt
@@ -126,7 +125,11 @@ fun DialGauge(
     modifier: Modifier = Modifier,
     colors: DialColors = rememberDialColors(),
     dangerFrom: Float? = null,
-    showValueArc: Boolean = true
+    showValueArc: Boolean = true,
+    /** True for the one dial `ClassicEmphasis` (presentation.ride) maps the rider's chosen
+     * secondary gauge onto (spec §7.2's Classic half of the "Inner gauge" picker) — drawn with a
+     * heavier rim so it reads as emphasised without touching colour, which severity alone owns. */
+    emphasized: Boolean = false
 ) {
     val animatedFraction by animateFloatAsState(
         targetValue = DialGeometry.fraction(value, scale),
@@ -135,7 +138,7 @@ fun DialGauge(
     )
 
     val textMeasurer = rememberTextMeasurer()
-    val decimals = if (abs(scale.max) < 10f) 1 else 0
+    val decimals = DialGeometry.decimalsFor(scale.max)
     val density = LocalDensity.current
 
     // The dial's own pixel size, captured once layout has happened (starts at zero before the
@@ -185,7 +188,9 @@ fun DialGauge(
         }
 
         // --- geometry, outer to inner (all fractions of `radius`, so the dial is self-similar at any size) ---
-        val rimStrokeWidth = 1.5.dp.toPx()
+        // Emphasis (spec §7.2) is stroke-width only, never a colour change — severity is the
+        // only thing allowed to speak in red/amber, so the "chosen dial" cue has to be shape.
+        val rimStrokeWidth = (if (emphasized) 3.75.dp else 1.5.dp).toPx()
         val rimInset = radius * 0.03f
         val tickOuterR = radius * 0.90f
         val majorTickLen = radius * 0.13f
@@ -207,7 +212,7 @@ fun DialGauge(
             sqrt(hw * hw + hh * hh)
         } ?: 0f
         val numberGap = 4.dp.toPx()
-        val numberR = (tickOuterR - majorTickLen - numberGap - maxNumberHalfDiagonal).coerceAtLeast(0f)
+        val numberR = DialGeometry.numberRadius(tickOuterR, majorTickLen, numberGap, maxNumberHalfDiagonal)
 
         // 1. Face
         drawCircle(color = colors.face, radius = radius, center = center)
@@ -306,12 +311,7 @@ fun DialGauge(
         )
 
         val collisionMargin = 4.dp.toPx()
-        val safeRadius = (numberR - maxNumberHalfDiagonal - collisionMargin).coerceAtLeast(0f)
-        val centerScale = if (centerHalfDiagonal > 0f) {
-            (safeRadius / centerHalfDiagonal).coerceIn(0.5f, 1f)
-        } else {
-            1f
-        }
+        val centerScale = DialGeometry.centreScale(numberR, maxNumberHalfDiagonal, collisionMargin, centerHalfDiagonal)
 
         var y = center.y - centerTotalHeight / 2f
         val labelTop = y

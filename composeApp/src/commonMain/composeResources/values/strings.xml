@@ -88,6 +88,8 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">SPEED UNKNOWN</string>
+    <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
+    <string name="ride_dial_speed">Speed</string>
     <string name="ride_odometer">Odometer</string>
     <string name="ride_trip">Trip</string>
     <string name="ride_uptime">Uptime</string>

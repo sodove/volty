@@ -5,7 +5,10 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.presentation.ride.gauge.ClusterSlot
+import ru.sodovaya.volty.presentation.ride.gauge.DialGeometry
 import ru.sodovaya.volty.util.UnitSystem
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -35,6 +38,48 @@ class ClassicDialSpecsTest {
         assertEquals("47", specs()[ClusterSlot.HERO]!!.valueText)
         assertEquals("29", specs(u = UnitSystem.IMPERIAL)[ClusterSlot.HERO]!!.valueText)
         assertEquals("mph", specs(u = UnitSystem.IMPERIAL)[ClusterSlot.HERO]!!.unit)
+    }
+
+    // Regression for the CRITICAL bug: valueText/unit went through UnitFormatter (so "29 mph")
+    // but `value` and `scale` stayed in raw km/h, so the needle sat between ticks labelled in
+    // km/h under an mph readout. Both the needle's own value AND the ring it moves against must
+    // convert together — asserting only valueText/unit (as the test did before this fix) passes
+    // even when the scale is silently left in the wrong unit, which is exactly what shipped.
+    @Test fun the_hero_scale_converts_to_the_same_unit_as_the_readout() {
+        val metricHero = specs(u = UnitSystem.METRIC)[ClusterSlot.HERO]!!
+        assertEquals(70f, metricHero.scale.max)
+        assertTrue(abs(metricHero.value - 47f) < 0.01f)
+
+        val imperialHero = specs(u = UnitSystem.IMPERIAL)[ClusterSlot.HERO]!!
+        // 70 km/h / 1.609344 = 43.496...
+        assertTrue(
+            abs(imperialHero.scale.max - 43.5f) < 0.05f,
+            "expected hero.scale.max ~= 43.5, was ${imperialHero.scale.max}"
+        )
+        // 47 km/h / 1.609344 = 29.204... — the same conversion the "29" valueText above came from.
+        assertTrue(abs(imperialHero.value - 29.2f) < 0.05f)
+    }
+
+    // The hero is the only dial with a runtime (not fixed-constant) max, so it is the only one
+    // where majorTicks = 7 can stop dividing evenly. 70/7 = 10 happened to work; 80, 100, 120 do
+    // not, and used to produce non-round tick labels (e.g. 0, 11, 23, 34, 46, 57, 69, 80).
+    @Test fun the_hero_tick_labels_stay_round_above_70_kmh() {
+        for (max in listOf(70f, 80f, 100f, 120f)) {
+            val hero = ClassicDialSpecs.build(motion, battery, UnitSystem.METRIC, maxSpeedKmh = max)
+                .first { it.slot == ClusterSlot.HERO }
+            assertEquals(max, hero.scale.max)
+            val majors = DialGeometry.majorValues(hero.scale)
+            val interval = max / hero.scale.majorTicks
+            assertTrue(
+                abs(interval - interval.roundToInt()) < 0.01f,
+                "majorTicks=${hero.scale.majorTicks} does not divide max=$max evenly (interval=$interval)"
+            )
+            // Every consecutive pair of ROUNDED major labels must differ by the same whole
+            // number of km/h — the failure mode this guards against is ticks that are evenly
+            // spaced in theory but jitter once each is independently rounded to 0 decimals.
+            val roundedSteps = majors.map { it.roundToInt() }.zipWithNext { a, b -> b - a }
+            assertEquals(1, roundedSteps.distinct().size, "uneven rounded tick steps: $roundedSteps")
+        }
     }
 
     @Test fun an_unknown_speed_reads_as_a_dash() {
@@ -78,5 +123,37 @@ class ClassicDialSpecsTest {
         val built = ClassicDialSpecs.build(motion, battery, UnitSystem.METRIC, maxSpeedKmh = 0f)
         val hero = built.first { it.slot == ClusterSlot.HERO }
         assertTrue(hero.scale.max > hero.scale.min)
+    }
+
+    // Item 5: ClassicDialSpecs stays Compose-free (no stringResource access), so the composable
+    // hands in already-resolved label text. Defaults keep every test above compiling unchanged,
+    // but the wiring itself — that each caller-supplied label lands on the RIGHT slot, not a
+    // neighbour's — needs its own coverage.
+    @Test fun each_supplied_label_lands_on_its_own_slot() {
+        val labels = ClassicDialLabels(
+            current = "TOK", power = "MOSHCH", duty = "SHIM", speed = "SKOR",
+            battery = "BAT", esc = "ESK", consumption = "RASHOD", motor = "MOTR"
+        )
+        val built = ClassicDialSpecs.build(motion, battery, UnitSystem.METRIC, 70f, labels).associateBy { it.slot }
+        assertEquals("TOK", built[ClusterSlot.TOP_LEFT]!!.label)
+        assertEquals("MOSHCH", built[ClusterSlot.TOP_CENTRE]!!.label)
+        assertEquals("SHIM", built[ClusterSlot.TOP_RIGHT]!!.label)
+        assertEquals("SKOR", built[ClusterSlot.HERO]!!.label)
+        assertEquals("BAT", built[ClusterSlot.HERO_INSET]!!.label)
+        assertEquals("ESK", built[ClusterSlot.BOTTOM_LEFT]!!.label)
+        assertEquals("RASHOD", built[ClusterSlot.BOTTOM_CENTRE]!!.label)
+        assertEquals("MOTR", built[ClusterSlot.BOTTOM_RIGHT]!!.label)
+    }
+
+    @Test fun default_labels_match_the_pre_localization_english_faces() {
+        val built = ClassicDialSpecs.build(motion, battery, UnitSystem.METRIC, 70f).associateBy { it.slot }
+        assertEquals("CURRENT", built[ClusterSlot.TOP_LEFT]!!.label)
+        assertEquals("POWER", built[ClusterSlot.TOP_CENTRE]!!.label)
+        assertEquals("DUTY", built[ClusterSlot.TOP_RIGHT]!!.label)
+        assertEquals("SPEED", built[ClusterSlot.HERO]!!.label)
+        assertEquals("BATTERY", built[ClusterSlot.HERO_INSET]!!.label)
+        assertEquals("ESC", built[ClusterSlot.BOTTOM_LEFT]!!.label)
+        assertEquals("CONSUMPTION", built[ClusterSlot.BOTTOM_CENTRE]!!.label)
+        assertEquals("MOTOR", built[ClusterSlot.BOTTOM_RIGHT]!!.label)
     }
 }
