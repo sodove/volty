@@ -1,5 +1,9 @@
 package ru.sodovaya.volty.presentation.ride.gauge
 
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
 /**
  * One dial in VESC Tool's eight-gauge RT-Data cluster, `mobile/RtDataSetup.qml`'s `GridLayout`
  * (:58-537). Names match the QML's own `id`s (`currentGauge`, `dutyGauge`, ...).
@@ -20,6 +24,13 @@ enum class VescClusterSlot {
  * `VescDialGeometry`/`VescDialMetrics` do for a single dial.
  */
 data class VescClusterBox(val centerX: Double, val centerY: Double, val size: Double)
+
+/**
+ * The two gauge sizes a cluster is built from — Speed's own size [g] and every other dial's [g2],
+ * `gaugeSize`/`gaugeSize2` in `mobile/RtDataSetup.qml` (:45-47). Produced by
+ * [VescClusterGeometry.fit] from the space actually available, never hand-picked.
+ */
+data class VescClusterSizes(val g: Double, val g2: Double)
 
 /**
  * Flattened port of the nested `anchors.centerIn` / `horizontalCenterOffset` /
@@ -84,11 +95,38 @@ object VescClusterGeometry {
     private const val CONSUMPTION_SIZE_FRACTION = 1.05
 
     /**
+     * How much bigger the ONE dial the rider's "Inner gauge" setting picks out is drawn — spec B
+     * §7.2's Classic half. Not from the QML; VESC Tool has no emphasis concept.
+     *
+     * It is a SIZE, deliberately, because the two obvious alternatives do not work here. Colour is
+     * ruled out on principle: in this renderer the needle's colour is the severity signal, so
+     * colouring a dial because the rider picked it would make a preference look like a warning.
+     * A heavier bezel is ruled out by arithmetic: `CustomGauge`'s two rings already fill the entire
+     * `0.07R` band between the ticks and the rim (pinned in `VescDialMetricsTest`), so a heavier
+     * one grows inward over the tick marks. Size has room, reads instantly, needs no colour, and
+     * is already this cluster's own idiom — VESC itself marks Power and Consumption out by drawing
+     * them at `1.05` and nesting them in front (QML :103-104, :489-490).
+     *
+     * `1.12` is chosen to sit clear of that existing `1.05` so an emphasised ordinary dial is not
+     * mistaken for an unemphasised Power dial, while staying small enough that the composition
+     * still reads as one instrument.
+     */
+    const val EMPHASIS_SIZE_FACTOR: Double = 1.12
+
+    /**
      * The eight dials' centres and sizes for a cluster built from Speed's size [g] and every other
      * dial's size [g2] (both must be positive; a non-positive size can only come from a caller
      * bug upstream and is rejected rather than silently propagating a NaN/degenerate layout).
+     *
+     * [emphasized], when given, is drawn at [EMPHASIS_SIZE_FACTOR] of its slot size about the same
+     * centre — position is never touched, so the composition the QML describes is preserved and
+     * only one disc grows.
      */
-    fun place(g: Double, g2: Double): Map<VescClusterSlot, VescClusterBox> {
+    fun place(
+        g: Double,
+        g2: Double,
+        emphasized: VescClusterSlot? = null
+    ): Map<VescClusterSlot, VescClusterBox> {
         require(g > 0.0) { "g must be positive, was $g" }
         require(g2 > 0.0) { "g2 must be positive, was $g2" }
 
@@ -145,7 +183,7 @@ object VescClusterGeometry {
             size = CONSUMPTION_SIZE_FRACTION * g2
         )
 
-        return mapOf(
+        val boxes = mapOf(
             VescClusterSlot.CURRENT to current,
             VescClusterSlot.DUTY to duty,
             VescClusterSlot.POWER to power,
@@ -155,6 +193,42 @@ object VescClusterGeometry {
             VescClusterSlot.MOTOR_TEMP to motor,
             VescClusterSlot.CONSUMPTION to consumption
         )
+        if (emphasized == null) return boxes
+        return boxes.mapValues { (slot, box) ->
+            if (slot == emphasized) box.copy(size = box.size * EMPHASIS_SIZE_FACTOR) else box
+        }
+    }
+
+    /**
+     * The order the eight dials are PAINTED in: [VescClusterSlot.entries] — which is already the
+     * QML's own nesting order, so a later dial in a trio paints over the earlier one it is nested
+     * inside — with [emphasized], when given, moved to the end so the dial the rider picked is
+     * never partly tucked under a neighbour. Bringing it forward is the second half of the
+     * emphasis cue and, like the first half, costs no colour.
+     */
+    fun paintOrder(emphasized: VescClusterSlot? = null): List<VescClusterSlot> =
+        if (emphasized == null) {
+            VescClusterSlot.entries
+        } else {
+            VescClusterSlot.entries.filterNot { it == emphasized } + emphasized
+        }
+
+    /**
+     * The vertical band the placed dials actually occupy, as `top .. bottom` measured in the same
+     * coordinates [place] uses. Usually `0 .. `[totalHeight] — but not always: Power and
+     * Consumption are `1.05` of their row's own `1.1` height, leaving only `0.025 * g2` of margin,
+     * which an emphasised one eats through. A caller that lays the cluster out needs the real
+     * extent so it can shift the whole thing down rather than let the top of a dial be clipped.
+     */
+    fun verticalExtent(
+        g: Double,
+        g2: Double,
+        emphasized: VescClusterSlot? = null
+    ): ClosedFloatingPointRange<Double> {
+        val boxes = place(g, g2, emphasized).values
+        val top = minOf(0.0, boxes.minOf { it.centerY - it.size / 2.0 })
+        val bottom = maxOf(totalHeight(g, g2), boxes.maxOf { it.centerY + it.size / 2.0 })
+        return top..bottom
     }
 
     /**
@@ -163,4 +237,73 @@ object VescClusterGeometry {
      * :539-651) or the incline indicator (QML :372-424) — out of this task's scope.
      */
     fun totalHeight(g: Double, g2: Double): Double = 2.0 * TRIO_ROW_HEIGHT_FRACTION * g2 + g
+
+    // ------------------------------------------------------------------------------------------
+    // Sizing: turning the space available into `g`/`g2`. QML :45-47.
+    // ------------------------------------------------------------------------------------------
+
+    /** QML :47: `gaugeSize2: gaugeSize * 0.55`. */
+    const val G2_FRACTION: Double = 0.55
+
+    /** QML :46, portrait branch: `Math.min(width / 1.37, ...)`. */
+    const val QML_WIDTH_DIVISOR: Double = 1.37
+
+    /**
+     * How tall the cluster is per unit of `g`, at the QML's own `g2 = 0.55g` — `2.21` with nothing
+     * emphasised, a little more when the emphasised dial is one of the two that already fill their
+     * row. DERIVED from [verticalExtent] rather than transcribed, so it can never drift away from
+     * the height the layout actually produces, and taken over EVERY possible emphasis so the fit
+     * does not have to change when the rider changes their "Inner gauge" setting.
+     */
+    val heightPerG: Double
+        get() = worstCase { emphasized ->
+            val extent = verticalExtent(1.0, G2_FRACTION, emphasized)
+            extent.endInclusive - extent.start
+        }
+
+    /**
+     * Half the widest row's horizontal extent, per unit of `g` — `0.65` with nothing emphasised,
+     * set by the Speed dial (half of `g`, pushed left by `0.15g`) and matched by Battery on the
+     * other side. DERIVED from [place] for the same reason as [heightPerG], and likewise over
+     * every possible emphasis.
+     */
+    val halfWidthPerG: Double
+        get() = worstCase { emphasized ->
+            place(1.0, G2_FRACTION, emphasized).values.maxOf { abs(it.centerX) + it.size / 2.0 }
+        }
+
+    /** The largest value [measure] takes over "nothing emphasised" plus each slot in turn. */
+    private inline fun worstCase(measure: (VescClusterSlot?) -> Double): Double =
+        maxOf(measure(null), VescClusterSlot.entries.maxOf { measure(it) })
+
+    /**
+     * The two gauge sizes for a cluster that has to fit inside [availableWidth] x
+     * [availableHeight], both in the same unit (px for a Compose caller).
+     *
+     * The QML derives `gaugeSize` from the screen's width AND height (:45-46) because its cluster
+     * owns the whole window; ours lives in a scrolling column, so [availableHeight] is very often
+     * unbounded — pass [Double.POSITIVE_INFINITY] (or any non-finite/non-positive value) and the
+     * width alone decides, which is the QML's portrait branch with its height term dropped.
+     *
+     * Both limits are honoured, not just the first one that happens to bind: the height limit is
+     * [heightPerG] and the width limit is the LARGER of the QML's own `1.37` divisor and the
+     * `2 * ` [halfWidthPerG] the placements actually require, so a fitted cluster is inside its box
+     * on both axes by arithmetic rather than by the coincidence that `1.37` happens to exceed the
+     * `1.3` the unemphasised placements need. (With emphasis in play they need `1.42`, so the
+     * QML's divisor is in fact NOT enough on its own — which is the whole reason for the `max`.)
+     *
+     * Room for the emphasised dial is reserved unconditionally, whichever slot it turns out to be:
+     * both limits are worst-cased over every possible emphasis, so the cluster does not resize when
+     * the rider changes their "Inner gauge" setting.
+     */
+    fun fit(availableWidth: Double, availableHeight: Double): VescClusterSizes {
+        if (availableWidth <= 0.0 || !availableWidth.isFinite()) return VescClusterSizes(0.0, 0.0)
+        val widthLimit = availableWidth / max(QML_WIDTH_DIVISOR, 2.0 * halfWidthPerG)
+        val g = if (availableHeight.isFinite() && availableHeight > 0.0) {
+            min(widthLimit, availableHeight / heightPerG)
+        } else {
+            widthLimit
+        }
+        return VescClusterSizes(g = g, g2 = g * G2_FRACTION)
+    }
 }

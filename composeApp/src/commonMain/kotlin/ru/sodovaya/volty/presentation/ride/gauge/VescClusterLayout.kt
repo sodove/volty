@@ -7,7 +7,6 @@ import androidx.compose.ui.layout.Layout
 import androidx.compose.ui.layout.ParentDataModifier
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.unit.Dp
 import kotlin.math.roundToInt
 
 /** Scope receiver for [VescClusterLayout]'s content — the only place [Modifier.clusterSlot] exists. */
@@ -28,73 +27,79 @@ private data class VescClusterSlotElement(val slot: VescClusterSlot) : ParentDat
 
 /**
  * Places the eight RT-Data dials per [VescClusterGeometry] — a thin Compose [Layout] over that
- * pure placement function. No positioning arithmetic lives here; this only converts [g]/[g2] to
- * pixels, calls [VescClusterGeometry.place], and turns each returned centre/size into a
- * `measure`+`place` call.
+ * pure placement function. No arithmetic lives here; this only reads the incoming constraints,
+ * calls [VescClusterGeometry.fit] and [VescClusterGeometry.place], and turns each returned
+ * centre/size into a `measure`+`place` call.
  *
- * [g] and [g2] are the two gauge sizes from `mobile/RtDataSetup.qml` (:45-47) — Speed's own size
- * and every other dial's, respectively. Deriving them from the available screen space (the QML's
- * own `isHorizontal ? ... : ...` formula) is a later task's concern; this layout just consumes
- * whatever two sizes it is given.
+ * **Sizing.** The two gauge sizes are DERIVED from the space available, not passed in. They used
+ * to be `Dp` parameters, which left this layout unable to keep its promise: an ideal height was
+ * computed from the given sizes, clamped into the incoming height constraint, and the dials were
+ * then placed at their ideal positions regardless — so a cluster taller than its box reported the
+ * clamped height and quietly let the container clip the bottom trio. [VescClusterGeometry.fit]
+ * takes both axes, so `totalHeight` is inside the height constraint by construction and there is
+ * nothing left to clamp away. An unbounded height (this cluster's normal case: it lives inside a
+ * scrolling column) simply means the width decides, exactly as the QML's portrait branch does.
  *
- * Children are measured with FIXED constraints — the slot decides the size, not the child, exactly
- * as [ClusterLayout] (the renderer this replaces) already does — and placed in
- * [VescClusterSlot.entries] declaration order. That order IS the QML's own paint order: within
- * each trio a later dial is nested inside the previous one (`dutyGauge` inside `currentGauge`,
- * `powerGauge` inside `dutyGauge`; `motTempGauge` inside `escTempGauge`, `efficiencyGauge` inside
+ * Children are measured with FIXED constraints — the slot decides the size, not the child — and
+ * painted in [VescClusterGeometry.paintOrder]. That order IS the QML's own: within each trio a
+ * later dial is nested inside the previous one (`dutyGauge` inside `currentGauge`, `powerGauge`
+ * inside `dutyGauge`; `motTempGauge` inside `escTempGauge`, `efficiencyGauge` inside
  * `motTempGauge`) and therefore painted after it, i.e. on top; `batteryGauge` is nested inside
  * `speedGauge` the same way. Across trios/pairs the paint order does not matter because the
- * geometry keeps them apart (see [VescClusterGeometry]'s overlap doc) — so no separate z-index is
- * needed, unlike [ClusterLayout]'s explicit [SlotBox.zIndex].
+ * geometry keeps them apart (see [VescClusterGeometry]'s overlap doc), so no z-index bookkeeping
+ * is needed — Compose paints same-layer siblings in the order they were placed.
  *
- * The layout's own size is: width = the incoming constraints' width (every [VescClusterBox.centerX]
- * is relative to that width's own centre, by construction — see [VescClusterGeometry]'s "width
- * independence" note); height = [VescClusterGeometry.totalHeight] at the given [g]/[g2], clamped
- * into the incoming height constraints. A caller that wants the cluster to fill more of the screen
- * should pick a larger [g]/[g2], not stretch this layout — stretching would reopen exactly the
- * "gaps between dials" bug this cluster geometry exists to close.
+ * @param emphasized the dial the rider's "Inner gauge" setting picks out, drawn at
+ *   [VescClusterGeometry.EMPHASIS_SIZE_FACTOR] and brought to the front. Null for none.
  */
 @Composable
 fun VescClusterLayout(
-    g: Dp,
-    g2: Dp,
     modifier: Modifier = Modifier,
+    emphasized: VescClusterSlot? = null,
     content: @Composable VescClusterScope.() -> Unit
 ) {
     Layout(content = { VescClusterScopeInstance.content() }, modifier = modifier) { measurables, constraints ->
-        val gPx = g.toPx().toDouble()
-        val g2Px = g2.toPx().toDouble()
-        val boxes = VescClusterGeometry.place(gPx, g2Px)
+        val width = if (constraints.hasBoundedWidth) constraints.maxWidth else constraints.minWidth
+        val availableHeight = if (constraints.hasBoundedHeight) {
+            constraints.maxHeight.toDouble()
+        } else {
+            Double.POSITIVE_INFINITY
+        }
+        val sizes = VescClusterGeometry.fit(width.toDouble(), availableHeight)
 
-        val width = if (constraints.hasBoundedWidth) {
-            constraints.maxWidth
-        } else {
-            constraints.minWidth
+        if (sizes.g <= 0.0) {
+            // Degenerate box (zero width, or a zero-height slot): measure nothing, draw nothing —
+            // better than handing `place` a non-positive size it is required to reject.
+            return@Layout layout(width.coerceAtLeast(0), constraints.minHeight) {}
         }
-        val idealHeight = VescClusterGeometry.totalHeight(gPx, g2Px).roundToInt()
-        val height = if (constraints.hasBoundedHeight) {
-            idealHeight.coerceIn(constraints.minHeight, constraints.maxHeight)
-        } else {
-            idealHeight.coerceAtLeast(constraints.minHeight)
-        }
+
+        val boxes = VescClusterGeometry.place(sizes.g, sizes.g2, emphasized)
+        // An emphasised Power or Consumption dial reaches slightly past its row, so the cluster is
+        // sized and shifted by the REAL extent rather than by totalHeight — the same class of bug
+        // as the one this layout's own sizing used to have, one level down.
+        val extent = VescClusterGeometry.verticalExtent(sizes.g, sizes.g2, emphasized)
+        // Inside the incoming height by construction (see the class doc); coerced only to satisfy
+        // a minHeight larger than the cluster, which pads rather than clips.
+        val height = (extent.endInclusive - extent.start)
+            .roundToInt()
+            .coerceAtLeast(constraints.minHeight)
         val centreX = width / 2.0
 
-        val placed = measurables.map { measurable ->
+        val placed = measurables.associate { measurable ->
             val slot = measurable.parentData as? VescClusterSlot
                 ?: error("VescClusterLayout child is missing a Modifier.clusterSlot(...) — every child must declare its slot")
             val box = boxes.getValue(slot)
             val sizePx = box.size.roundToInt().coerceAtLeast(0)
-            val placeable = measurable.measure(Constraints.fixed(sizePx, sizePx))
-            Triple(slot, placeable, box)
+            slot to (measurable.measure(Constraints.fixed(sizePx, sizePx)) to box)
         }
 
         layout(width, height) {
-            placed.sortedBy { (slot, _, _) -> slot.ordinal }
-                .forEach { (_, placeable, box) ->
-                    val left = (centreX + box.centerX - box.size / 2.0).roundToInt()
-                    val top = (box.centerY - box.size / 2.0).roundToInt()
-                    placeable.placeRelative(left, top)
-                }
+            VescClusterGeometry.paintOrder(emphasized).forEach { slot ->
+                val (placeable, box) = placed[slot] ?: return@forEach
+                val left = (centreX + box.centerX - box.size / 2.0).roundToInt()
+                val top = (box.centerY - box.size / 2.0 - extent.start).roundToInt()
+                placeable.placeRelative(left, top)
+            }
         }
     }
 }

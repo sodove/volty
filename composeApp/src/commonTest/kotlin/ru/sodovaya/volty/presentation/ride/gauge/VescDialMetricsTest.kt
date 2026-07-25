@@ -100,6 +100,16 @@ class VescDialMetricsTest {
         )
     }
 
+    /**
+     * Why emphasis (spec B §7.2) is NOT a heavier bezel, recorded as an assertion so nobody
+     * re-derives it the hard way: the two rings already fill the whole band between the ticks and
+     * the rim, so there is no weight left to add. `2 * bezelStroke` IS `outerRadius -
+     * tickOuterRadius` exactly. The cue lives in [VescClusterGeometry.EMPHASIS_SIZE_FACTOR].
+     */
+    @Test fun the_bezel_exactly_fills_the_band_between_the_ticks_and_the_rim() {
+        assertEquals(r - VescDialMetrics.tickOuterRadius(r), 2.0 * VescDialMetrics.bezelStroke(r), epsilon)
+    }
+
     // --- trace glow (QML:212-220) ----------------------------------------------------------
 
     @Test fun the_trace_arc_and_its_glow_gradient_match_the_qml() {

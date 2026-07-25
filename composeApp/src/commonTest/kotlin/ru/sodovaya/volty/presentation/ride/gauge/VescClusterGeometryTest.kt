@@ -217,4 +217,205 @@ class VescClusterGeometryTest {
         assertFailsWith<IllegalArgumentException> { VescClusterGeometry.place(g, 0.0) }
         assertFailsWith<IllegalArgumentException> { VescClusterGeometry.place(-1.0, g2) }
     }
+
+    // --- fit: turning the space available into g/g2 (QML :45-47) -------------------------------
+    //
+    // The defect this closes: the sizes used to be caller-supplied, so a cluster taller than its
+    // box was placed at its ideal positions anyway and the container clipped the bottom trio.
+    // Every assertion below is on the PLACEMENTS the fitted sizes produce, not on the sizes
+    // themselves, so it fails for the real symptom (a dial outside the box) rather than for an
+    // arithmetic identity.
+
+    /**
+     * Every dial, at every plausible aspect ratio, AND with every possible dial emphasised, lands
+     * fully inside the box it was fitted to. The emphasis sweep matters: an emphasised Speed dial
+     * is the widest thing the cluster can ever contain and an emphasised Power dial is the only
+     * one that reaches past its own row, so a fit that ignored emphasis would pass a plain check
+     * and clip in the field the moment a rider changed their "Inner gauge" setting.
+     */
+    @Test fun a_fitted_cluster_never_puts_a_dial_outside_its_box() {
+        val boxes = listOf(
+            1080.0 to 1920.0,  // phone portrait
+            1080.0 to 800.0,   // squat: height binds
+            720.0 to 4000.0,   // tall and narrow: width binds
+            2000.0 to 1200.0,  // tablet landscape
+            300.0 to 300.0     // small square
+        )
+        val emphases: List<VescClusterSlot?> = listOf(null) + VescClusterSlot.entries
+        for ((w, h) in boxes) {
+            val sizes = VescClusterGeometry.fit(w, h)
+            for (emphasized in emphases) {
+                val placed = VescClusterGeometry.place(sizes.g, sizes.g2, emphasized)
+                val extent = VescClusterGeometry.verticalExtent(sizes.g, sizes.g2, emphasized)
+                val centreX = w / 2.0
+                val where = "${w}x$h emphasis=$emphasized"
+                placed.forEach { (slot, box) ->
+                    val left = centreX + box.centerX - box.size / 2.0
+                    val right = centreX + box.centerX + box.size / 2.0
+                    // The layout shifts every dial down by the extent's own start, so that is the
+                    // origin these are measured against — not zero.
+                    val top = box.centerY - box.size / 2.0 - extent.start
+                    val bottom = box.centerY + box.size / 2.0 - extent.start
+                    assertTrue(left >= -1e-6, "$slot overflows the left edge at $where (left=$left)")
+                    assertTrue(right <= w + 1e-6, "$slot overflows the right edge at $where (right=$right)")
+                    assertTrue(top >= -1e-6, "$slot overflows the top at $where (top=$top)")
+                    assertTrue(bottom <= h + 1e-6, "$slot overflows the bottom at $where (bottom=$bottom)")
+                }
+                assertTrue(
+                    extent.endInclusive - extent.start <= h + 1e-6,
+                    "the cluster reports a height taller than the box it was fitted to at $where"
+                )
+            }
+        }
+    }
+
+    // --- emphasis: spec B §7.2's Classic "Inner gauge" cue, in geometry rather than colour ------
+
+    @Test fun the_emphasised_dial_is_the_only_one_that_grows_and_it_does_not_move() {
+        val plain = VescClusterGeometry.place(g, g2)
+        VescClusterSlot.entries.forEach { emphasized ->
+            val placed = VescClusterGeometry.place(g, g2, emphasized)
+            placed.forEach { (slot, box) ->
+                val before = plain.getValue(slot)
+                assertEquals(before.centerX, box.centerX, epsilon, "$slot moved when $emphasized was emphasised")
+                assertEquals(before.centerY, box.centerY, epsilon, "$slot moved when $emphasized was emphasised")
+                val expected = if (slot == emphasized) {
+                    before.size * VescClusterGeometry.EMPHASIS_SIZE_FACTOR
+                } else {
+                    before.size
+                }
+                assertEquals(expected, box.size, epsilon, "$slot size wrong when $emphasized was emphasised")
+            }
+        }
+    }
+
+    /**
+     * The cue has to be unambiguous against the sizes VESC itself already uses: Power and
+     * Consumption are drawn at `1.05` of their neighbours, so an emphasised ORDINARY dial has to
+     * be clearly bigger than an unemphasised Power dial or the two read the same.
+     */
+    @Test fun an_emphasised_dial_outgrows_the_ones_the_qml_already_draws_larger() {
+        val emphasisedCurrent = VescClusterGeometry.place(g, g2, VescClusterSlot.CURRENT)
+            .getValue(VescClusterSlot.CURRENT).size
+        val plainPower = VescClusterGeometry.place(g, g2).getValue(VescClusterSlot.POWER).size
+        assertTrue(
+            emphasisedCurrent > plainPower,
+            "an emphasised ordinary dial ($emphasisedCurrent) must outgrow a plain Power dial ($plainPower)"
+        )
+    }
+
+    @Test fun the_emphasised_dial_is_painted_last_so_nothing_covers_it() {
+        assertEquals(VescClusterSlot.entries, VescClusterGeometry.paintOrder(null))
+        VescClusterSlot.entries.forEach { emphasized ->
+            val order = VescClusterGeometry.paintOrder(emphasized)
+            assertEquals(VescClusterSlot.entries.size, order.size)
+            assertEquals(VescClusterSlot.entries.toSet(), order.toSet())
+            assertEquals(emphasized, order.last(), "$emphasized was not brought to the front")
+            // ...and the rest keep the QML's own nesting order among themselves.
+            assertEquals(VescClusterSlot.entries.filterNot { it == emphasized }, order.dropLast(1))
+        }
+    }
+
+    /**
+     * Power sits `1.05 * g2` tall inside a row only `1.1 * g2` high, so it has `0.025 * g2` of
+     * margin — less than emphasis needs. [VescClusterGeometry.verticalExtent] is what stops that
+     * becoming a clipped dial, and it must report a NEGATIVE start in exactly that case.
+     */
+    @Test fun an_emphasised_power_dial_reaches_above_the_cluster_and_the_extent_says_so() {
+        val plain = VescClusterGeometry.verticalExtent(g, g2)
+        assertEquals(0.0, plain.start, epsilon)
+        assertEquals(VescClusterGeometry.totalHeight(g, g2), plain.endInclusive, epsilon)
+
+        val emphasisedPower = VescClusterGeometry.verticalExtent(g, g2, VescClusterSlot.POWER)
+        assertTrue(emphasisedPower.start < 0.0, "an emphasised Power dial overhangs the top")
+        // The overhang is exactly what the dial's own growth costs it beyond its 0.025*g2 margin.
+        val overhang = 1.05 * g2 * (VescClusterGeometry.EMPHASIS_SIZE_FACTOR - 1.0) / 2.0 - 0.025 * g2
+        assertEquals(-overhang, emphasisedPower.start, 1e-9)
+
+        val emphasisedConsumption = VescClusterGeometry.verticalExtent(g, g2, VescClusterSlot.CONSUMPTION)
+        assertEquals(0.0, emphasisedConsumption.start, epsilon)
+        assertEquals(
+            VescClusterGeometry.totalHeight(g, g2) + overhang,
+            emphasisedConsumption.endInclusive,
+            1e-9
+        )
+    }
+
+    /** An emphasised dial that has room must not make the cluster grow at all. */
+    @Test fun emphasising_a_dial_with_room_leaves_the_cluster_the_same_height() {
+        listOf(VescClusterSlot.CURRENT, VescClusterSlot.SPEED, VescClusterSlot.BATTERY).forEach { slot ->
+            val extent = VescClusterGeometry.verticalExtent(g, g2, slot)
+            assertEquals(0.0, extent.start, epsilon, "$slot should not overhang the top")
+            assertEquals(
+                VescClusterGeometry.totalHeight(g, g2), extent.endInclusive, epsilon,
+                "$slot should not overhang the bottom"
+            )
+        }
+    }
+
+    /**
+     * The cluster's normal home is a scrolling column, i.e. no height limit at all. Width alone
+     * then decides — and the result must be the same as an arbitrarily tall box would give, or the
+     * scrolling case would silently be a different layout from the bounded one.
+     */
+    @Test fun an_unbounded_height_falls_back_to_the_width_alone() {
+        val unbounded = VescClusterGeometry.fit(1080.0, Double.POSITIVE_INFINITY)
+        val veryTall = VescClusterGeometry.fit(1080.0, 100_000.0)
+        assertEquals(veryTall.g, unbounded.g, epsilon)
+        assertEquals(1080.0 / (2.0 * VescClusterGeometry.halfWidthPerG), unbounded.g, epsilon)
+        // A zero or negative height is treated the same way rather than collapsing the cluster.
+        assertEquals(unbounded.g, VescClusterGeometry.fit(1080.0, 0.0).g, epsilon)
+    }
+
+    /** Whichever axis is tighter is the one that binds — checked in both directions. */
+    @Test fun the_tighter_axis_is_the_one_that_binds() {
+        // Squat box: the height term is far the smaller of the two here.
+        val squat = VescClusterGeometry.fit(1080.0, 800.0)
+        assertEquals(800.0 / VescClusterGeometry.heightPerG, squat.g, epsilon)
+        assertTrue(squat.g < 1080.0 / (2.0 * VescClusterGeometry.halfWidthPerG))
+        // Tall box: the width term wins instead.
+        val tall = VescClusterGeometry.fit(720.0, 4000.0)
+        assertEquals(720.0 / (2.0 * VescClusterGeometry.halfWidthPerG), tall.g, epsilon)
+    }
+
+    @Test fun fit_keeps_the_QMLs_own_ratio_between_the_two_gauge_sizes() {
+        val sizes = VescClusterGeometry.fit(1080.0, 1920.0)
+        assertEquals(0.55, VescClusterGeometry.G2_FRACTION, epsilon) // QML :47
+        assertEquals(sizes.g * 0.55, sizes.g2, epsilon)
+    }
+
+    /** A degenerate box produces zero sizes rather than a negative one `place` would reject. */
+    @Test fun a_degenerate_box_fits_to_nothing() {
+        assertEquals(0.0, VescClusterGeometry.fit(0.0, 1000.0).g, epsilon)
+        assertEquals(0.0, VescClusterGeometry.fit(-10.0, 1000.0).g, epsilon)
+        assertEquals(0.0, VescClusterGeometry.fit(0.0, 1000.0).g2, epsilon)
+    }
+
+    /**
+     * The two derived limits the fit relies on, pinned against the arithmetic they claim to
+     * summarise — and against the UNEMPHASISED figures they would be if emphasis were forgotten,
+     * because "2.21 and 0.65" is exactly what a fit that ignored emphasis would report.
+     *
+     * `2.21` is `2 * 1.1 * 0.55 + 1` (two trio rows plus the hero row); `0.65` is the Speed dial's
+     * own reach (half of `g`, pushed `0.15g` left of centre). Emphasis raises both: an emphasised
+     * Speed dial reaches `0.15 + 0.56 = 0.71`, and an emphasised Power dial adds its overhang to
+     * the height. If an offset in [VescClusterGeometry.place] ever changes, these move with it —
+     * which is the point of deriving them rather than transcribing them.
+     */
+    @Test fun the_fits_limits_cover_the_emphasised_cluster_not_just_the_plain_one() {
+        val plainHeight = 2.0 * 1.1 * VescClusterGeometry.G2_FRACTION + 1.0
+        assertEquals(2.21, plainHeight, 1e-9)
+        assertTrue(
+            VescClusterGeometry.heightPerG > plainHeight,
+            "heightPerG (${VescClusterGeometry.heightPerG}) must leave room for an emphasised Power dial"
+        )
+        assertEquals(0.15 + 0.5 * VescClusterGeometry.EMPHASIS_SIZE_FACTOR, VescClusterGeometry.halfWidthPerG, 1e-9)
+        assertTrue(
+            VescClusterGeometry.halfWidthPerG > 0.65,
+            "halfWidthPerG must leave room for an emphasised Speed dial"
+        )
+        // With emphasis in play the QML's own 1.37 divisor is NOT enough on its own (1.42 > 1.37),
+        // which is exactly why `fit` takes the larger of the two rather than trusting the QML's.
+        assertTrue(2.0 * VescClusterGeometry.halfWidthPerG > VescClusterGeometry.QML_WIDTH_DIVISOR)
+    }
 }

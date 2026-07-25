@@ -33,4 +33,20 @@ object UnitFormatter {
 
     fun distanceUnit(system: UnitSystem): String =
         if (system == UnitSystem.IMPERIAL) "mi" else "km"
+
+    /**
+     * Energy per unit distance in display units — Wh/km passed through, or Wh/mi.
+     *
+     * Note the conversion runs the OTHER way to [distance]: consumption is energy DIVIDED by
+     * distance, so a longer display unit makes the number bigger. A mile is 1.609 km, so a
+     * vehicle burning 20 Wh every kilometre burns 32.2 Wh every mile — hence a multiply where
+     * [distance] divides. Getting this backwards is silent (both directions produce a plausible
+     * number), which is why it lives here next to the constant it shares rather than being
+     * open-coded at a call site.
+     */
+    fun consumptionValue(whPerKm: Float, system: UnitSystem): Float =
+        if (system == UnitSystem.IMPERIAL) whPerKm * KM_PER_MILE else whPerKm
+
+    fun consumptionUnit(system: UnitSystem): String =
+        if (system == UnitSystem.IMPERIAL) "Wh/mi" else "Wh/km"
 }

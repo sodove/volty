@@ -138,6 +138,10 @@ fun rememberVescDialColors(): VescDialColors {
  * @param tickmarkScale QML line 48: scale numbers are multiplied by this before rounding, so a
  *   0..15000 rpm dial can be labelled 0..15 with a "k" [tickmarkSuffix].
  * @param tickmarkSuffix QML line 47.
+ * @param valueTextOverride replaces the formatted readout when non-null. Not in the QML, which
+ *   always has a number to show; this app does not — a motor with no temperature sensor, a
+ *   controller reporting no speed and a standing-still consumption are all genuinely UNKNOWN, and
+ *   printing the `0` the needle rests at would be a lie the rider cannot tell from a real reading.
  */
 @Composable
 fun VescDialGauge(
@@ -151,6 +155,7 @@ fun VescDialGauge(
     centerTextVisible: Boolean = true,
     tickmarkScale: Double = 1.0,
     tickmarkSuffix: String = "",
+    valueTextOverride: String? = null,
     colors: VescDialColors = rememberVescDialColors()
 ) {
     // QML lines 95-100: `Behavior on value { NumberAnimation { easing.type: Easing.OutCirc;
@@ -185,7 +190,7 @@ fun VescDialGauge(
                 outerRadius = outerRadius,
                 textMeasurer = textMeasurer,
                 caption = typeText.uppercase(),
-                valueText = formatFixed(animated, precision),
+                valueText = valueTextOverride ?: formatFixed(animated, precision),
                 unit = unitText.uppercase(),
                 color = colors.text
             )

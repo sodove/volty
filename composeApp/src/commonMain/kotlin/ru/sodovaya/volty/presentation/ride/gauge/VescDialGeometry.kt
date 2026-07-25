@@ -239,7 +239,16 @@ object VescDialMetrics {
     fun needleBaseRadius(outerRadius: Double): Double =
         needleTipRadius(outerRadius) - outerRadius * NEEDLE_LENGTH_FRACTION
 
-    /** QML line 230. */
+    /**
+     * QML line 230.
+     *
+     * Note for anyone reaching for this as an emphasis cue (spec B §7.2 wants the rider's chosen
+     * dial picked out without using colour): there is no room. The two rings this stroke draws
+     * already fill the entire band between [tickOuterRadius] (`0.93R`) and the rim — `2 * 0.035R`
+     * is exactly the `0.07R` available — so any heavier bezel grows inward over the tick marks and
+     * reads as a clipping bug rather than as emphasis. The cue lives in
+     * [VescClusterGeometry.EMPHASIS_SIZE_FACTOR] instead, where there is room to spare.
+     */
     fun bezelStroke(outerRadius: Double): Double = outerRadius * BEZEL_STROKE_FRACTION
 
     /** QML line 245: `outerRadius - borderWidth/2` — the outer ring's centreline. */
