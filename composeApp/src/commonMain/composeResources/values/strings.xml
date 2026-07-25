@@ -79,7 +79,6 @@
 
     <string name="tab_ride">Ride</string>
     <string name="tab_battery">Battery</string>
-    <string name="tab_live">Live</string>
     <string name="tab_cells">Cells</string>
     <string name="tab_graph">Graph</string>
 

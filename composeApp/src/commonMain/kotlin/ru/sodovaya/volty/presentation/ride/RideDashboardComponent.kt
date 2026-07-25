@@ -31,13 +31,10 @@ interface RideDashboardComponent {
     fun onSheetDismiss()
     fun onSwitchVehicle(v: Vehicle)
     fun onAddVehicle()
-    fun onTabClicked(tab: Tab)
     /** Graph is no longer a top-level tab — every dashboard carries a button to it. */
     fun onOpenGraph()
     fun onOpenSettings()
     fun onDisconnect()
-
-    enum class Tab { Ride, Battery, Settings }
 
     @OptIn(ExperimentalTime::class)
     data class State(
@@ -207,17 +204,6 @@ class DefaultRideDashboardComponent(
             _state.update { it.copy(sheetOpen = false) }
             bmsRepository.disconnect()
             bmsRepository.connect(v)
-        }
-    }
-
-    override fun onTabClicked(tab: RideDashboardComponent.Tab) {
-        when (tab) {
-            RideDashboardComponent.Tab.Ride -> {} // already on Ride
-            // Ride <-> Battery is a switch between two root children, so the root
-            // bottom bar owns it (RootComponent.onTab -> bringToFront(Dashboard)).
-            // Nothing sensible for a single child component to do here.
-            RideDashboardComponent.Tab.Battery -> {}
-            RideDashboardComponent.Tab.Settings -> onOpenSettings()
         }
     }
 

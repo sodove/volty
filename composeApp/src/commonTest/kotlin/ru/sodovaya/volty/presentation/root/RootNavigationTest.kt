@@ -123,4 +123,34 @@ class RootNavigationTest {
         // routes to Scanning on its own).
         assertFalse(shouldLeaveRide(null, listOf(Config.Ride)))
     }
+
+    // --- shouldPopOnBack: system back must agree with the screens' own ‹
+    // buttons (both nav.pop()) whenever there is a home entry to reveal, so a
+    // system back out of Graph/Settings does not destroy and rebuild the Ride
+    // (or Dashboard) child underneath — see RootComponent.kt's onBack().
+
+    @Test
+    fun back_from_graph_pops_when_a_home_entry_is_underneath() {
+        assertTrue(shouldPopOnBack(Config.Graph, stackSize = 2))
+    }
+
+    @Test
+    fun back_from_settings_pops_when_a_home_entry_is_underneath() {
+        assertTrue(shouldPopOnBack(Config.Settings, stackSize = 2))
+    }
+
+    @Test
+    fun back_from_graph_or_settings_falls_back_to_replaceAll_with_no_entry_to_pop_to() {
+        // Defensive only — no push onto Graph/Settings today ever leaves it as
+        // the stack's sole entry — but onBack() must still be total.
+        assertFalse(shouldPopOnBack(Config.Graph, stackSize = 1))
+        assertFalse(shouldPopOnBack(Config.Settings, stackSize = 1))
+    }
+
+    @Test
+    fun back_from_any_other_screen_always_pops() {
+        assertTrue(shouldPopOnBack(Config.Dashboard, stackSize = 1))
+        assertTrue(shouldPopOnBack(Config.Ride, stackSize = 5))
+        assertTrue(shouldPopOnBack(Config.PackDetail(0), stackSize = 2))
+    }
 }

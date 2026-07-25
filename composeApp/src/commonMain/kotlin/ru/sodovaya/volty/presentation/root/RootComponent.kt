@@ -163,6 +163,37 @@ internal fun shouldLeaveRide(vehicle: Vehicle?, stackConfigs: List<*>): Boolean 
     return homeConfigFor(vehicle) !is Config.Ride && stackConfigs.any { it is Config.Ride }
 }
 
+/**
+ * Whether system [onBack][DefaultRootComponent.onBack] should `pop()` the
+ * current entry rather than collapse the whole stack with `replaceAll`.
+ *
+ * Graph and Settings are only ever reached by `push` on top of a home entry
+ * (Ride or Dashboard), so popping — exactly what those screens' own ‹ buttons
+ * already do (`onBackRequested = { nav.pop() }`) — reveals that SAME home
+ * component instance instead of destroying and rebuilding it. That is worth
+ * pinning: `replaceAll` was resetting live Ride state (session uptime,
+ * session max speed, the sparkline) and the Battery tab's scroll position on
+ * every system back out of Graph/Settings, while the in-screen button left
+ * all of it alone — the disagreement this function removes.
+ *
+ * `replaceAll(homeConfig())` remains the answer for every other case: from
+ * any OTHER screen it is still correct to just pop, and the [stackSize] <= 1
+ * branch is a defensive fallback for a Graph/Settings entry with nothing
+ * beneath it to pop to (not reachable today — every push onto them lands on
+ * top of a home entry — but it keeps [onBack][DefaultRootComponent.onBack]
+ * total rather than relying on that invariant).
+ *
+ * This does NOT duplicate [shouldLeaveRide]'s job: that guard reacts to a
+ * vehicle losing its controller and already collapses the stack the moment
+ * it happens (see the `activeVehicle` collector in [DefaultRootComponent]),
+ * independent of when — or whether — the user presses back. By the time
+ * back is pressed, if the vehicle really left Ride, [shouldLeaveRide] will
+ * already have replaced the stack; this function only decides HOW to leave
+ * Graph/Settings in the ordinary case.
+ */
+internal fun shouldPopOnBack(current: Any?, stackSize: Int): Boolean =
+    (current !is Config.Graph && current !is Config.Settings) || stackSize > 1
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -225,13 +256,12 @@ class DefaultRootComponent(
 
     override fun onBack() {
         val current = stack.value.active.configuration
-        when (current) {
-            // Graph and Settings are leaves off the home screen — backing out of
-            // them returns to the CURRENT home, which for a controller vehicle
-            // is Ride, not the battery dashboard.
-            is Config.Graph, is Config.Settings -> nav.replaceAll(homeConfig())
-            else -> nav.pop()
-        }
+        // Graph and Settings are leaves off a home screen (Ride or Dashboard) —
+        // popping reveals that SAME home instance, matching their own ‹ buttons
+        // (see Config.Graph / Config.Settings in createChild) and keeping live
+        // Ride state alive. See [shouldPopOnBack] for why this doesn't need to
+        // duplicate [shouldLeaveRide]'s job.
+        if (shouldPopOnBack(current, stack.value.items.size)) nav.pop() else nav.replaceAll(homeConfig())
     }
 
     override fun onTab(tab: RootComponent.Tab) {

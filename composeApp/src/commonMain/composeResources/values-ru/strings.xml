@@ -79,7 +79,6 @@
 
     <string name="tab_ride">Поездка</string>
     <string name="tab_battery">Батарея</string>
-    <string name="tab_live">Сейчас</string>
     <string name="tab_cells">Ячейки</string>
     <string name="tab_graph">График</string>
 

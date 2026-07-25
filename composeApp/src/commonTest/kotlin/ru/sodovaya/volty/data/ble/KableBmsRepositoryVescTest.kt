@@ -167,18 +167,57 @@ class KableBmsRepositoryVescTest {
     }
 
     @Test
-    fun `a controller that backs no battery builds a VescProtocol with no pack`() = runTest {
+    fun `a controller beside a real BMS builds a VescProtocol with no pack`() = runTest {
+        // "Backs no battery" only means something when a real battery source
+        // exists ELSEWHERE — a zero-pack vehicle with the flag off is a
+        // different scenario (see the next test): there the fallback must
+        // derive a battery regardless of the flag.
+        val repo = newRepo(this).also { underTest = it }
+        val v = Vehicle(
+            id = "v-vesc-with-bms",
+            name = "Scooter",
+            iconKey = "scooter",
+            packs = listOf(Pack(index = 0, label = "Main", bmsType = BmsType.JK_BMS, bmsAddress = ADDR)),
+            controllers = listOf(
+                Controller(
+                    index = 0, label = "ESC", controllerType = ControllerType.VESC,
+                    address = CTRL_ADDR, motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254),
+                    providesDerivedBattery = false
+                )
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val controllerSpec = repo.linkSpecsForTest().single { it.address == CTRL_ADDR }
+        val protocol = repo.createProtocolForTest(controllerSpec, v)
+        assertIs<VescProtocol>(protocol)
+        assertEquals(0, protocol.packCount)
+        assertTrue(controllerSpec.ownedPacks.isEmpty(), "a real BMS covers the battery ⇒ the link owns no pack slot")
+    }
+
+    /**
+     * Pins the dead-elvis bug directly: `controller` is never null for a
+     * planned VESC link (its spec's owned controller is always found in
+     * `vehicle.controllers`), so a plain `?:` on its non-null
+     * `providesDerivedBattery` could never fall through to the "no packs at
+     * all" fallback. A controller-only vehicle built with that flag at its
+     * own default (false) must still derive a battery — there is nowhere
+     * else for one to come from.
+     */
+    @Test
+    fun `a controller-only vehicle derives a battery even when its own flag is off`() = runTest {
         val repo = newRepo(this).also { underTest = it }
         val v = vescOnlyVehicle(providesDerivedBattery = false)
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
-        val protocol = repo.createProtocolForTest(repo.linkSpecsForTest().single(), v)
+        val spec = repo.linkSpecsForTest().single()
+        val protocol = repo.createProtocolForTest(spec, v)
         assertIs<VescProtocol>(protocol)
-        assertEquals(0, protocol.packCount)
-        assertTrue(
-            repo.linkSpecsForTest().single().ownedPacks.isEmpty(),
-            "no derived pack ⇒ the link owns no pack slot"
-        )
+        assertEquals(1, protocol.packCount, "no packs anywhere ⇒ the controller must derive one regardless of its flag")
+        assertEquals(listOf(OwnedSource(0)), spec.ownedPacks, "the derived slot must still be planned")
     }
 
     // ----- 3. Motion from a VESC link reaches activeMotion -----

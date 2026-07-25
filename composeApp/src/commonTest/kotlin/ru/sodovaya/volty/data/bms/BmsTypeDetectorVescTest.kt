@@ -31,4 +31,14 @@ class BmsTypeDetectorVescTest {
         assertEquals(BmsType.ANT_BMS, BmsTypeDetector.detect("ANT-BLE24", emptyList()))
         assertEquals(BmsType.JBD_BMS, BmsTypeDetector.detect(null, listOf("0000ff00-0000-1000-8000-00805f9b34fb")))
     }
+
+    @Test fun a_vesc_retrofit_renamed_into_a_begode_name_is_never_double_classified() {
+        // "GW-VESC": a real retrofit — a VESC controller wired into a Begode
+        // wheel, renamed by the user. "GW" matches the Begode name prefix AND
+        // the string contains "VESC", so this device must resolve as a BMS
+        // (the wheel's own Begode identity) and NOT also as a controller —
+        // the known-BMS bail-out in detectController must win first.
+        assertEquals(BmsType.BEGODE, BmsTypeDetector.detect("GW-VESC", emptyList()))
+        assertNull(BmsTypeDetector.detectController("GW-VESC", emptyList()))
+    }
 }

@@ -1839,9 +1839,17 @@ class KableBmsRepository private constructor(
                 VescProtocol(
                     // A lone controller with no battery source of its own backs
                     // a derived pack; the composer (Part G) turns this off once
-                    // a real BMS covers the same battery.
-                    deriveBattery = controller?.providesDerivedBattery
-                        ?: (vehicle?.packs?.isEmpty() ?: true),
+                    // a real BMS covers the same battery. Written as `== true ||`
+                    // rather than `?:` so the no-packs fallback stays LIVE even
+                    // though `controller` is never null here in practice (every
+                    // planned VESC link's controller is found in
+                    // `vehicle.controllers`) — a plain elvis on a non-null
+                    // Boolean can never reach its right-hand side, which would
+                    // silently strand a controller-only vehicle with
+                    // `providesDerivedBattery = false` (its own default) at
+                    // `packCount = 0` and the derived-slot machinery off.
+                    deriveBattery = controller?.providesDerivedBattery == true ||
+                        vehicle?.packs.isNullOrEmpty(),
                     motor = controller?.motor ?: MotorConfig()
                 )
             }
@@ -1853,10 +1861,22 @@ class KableBmsRepository private constructor(
      * controller kind that has none. The non-throwing sibling of
      * [ProtocolKind.toBmsType] — the branches must stay in step: every kind
      * `toBmsType` rejects is a kind that must land in null here.
+     *
+     * Deliberately exhaustive with NO `else` branch: `toBmsType()` is itself
+     * exhaustive over [ProtocolKind], so an `else -> toBmsType()` here would
+     * silently route any future controller kind through the throwing branch
+     * instead of failing to compile — exactly the pairing this KDoc promises
+     * stays in step. Adding a [ProtocolKind] entry now forces a decision here
+     * at compile time, not a runtime `error()` inside [connectLinkAttempt].
      */
     private fun ProtocolKind.batteryBmsTypeOrNull(): BmsType? = when (this) {
         ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
-        else -> toBmsType()
+        ProtocolKind.JK -> BmsType.JK_BMS
+        ProtocolKind.JBD -> BmsType.JBD_BMS
+        ProtocolKind.ANT -> BmsType.ANT_BMS
+        ProtocolKind.DALY -> BmsType.DALY_BMS
+        ProtocolKind.BEGODE -> BmsType.BEGODE
+        ProtocolKind.VESC_BMS -> BmsType.VESC_BMS
     }
 
     private fun createProtocol(type: BmsType): BmsProtocol = when (type) {

@@ -73,9 +73,14 @@ object BmsTypeDetector {
      * [detect] so no battery flow can ever be handed a controller type.
      */
     fun detectController(name: String?, serviceUuids: List<String>): ControllerType? {
-        controllerNameMatch(name)?.let { return it }
         // A device that already looks like a known BMS is never a controller.
+        // Must run BEFORE controllerNameMatch: a VESC retrofit renamed into a
+        // Begode wheel (e.g. "GW-VESC" — this app's actual audience) matches
+        // both the "GW" BMS name prefix AND the "VESC" controller substring, so
+        // checking the name match first would hand it back both a bmsType and
+        // a controllerType.
         if (detect(name, serviceUuids) != null) return null
+        controllerNameMatch(name)?.let { return it }
         val hasNus = serviceUuids.any { it.equals(VescProtocol.NUS_SERVICE, ignoreCase = true) }
         return if (hasNus) ControllerType.VESC else null
     }

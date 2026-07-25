@@ -282,7 +282,7 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
             TempMetricCard(
                 label = stringResource(Res.string.ride_esc_temp),
                 valueC = motion.escTempC,
-                known = true,
+                known = motion.hasEscTemp,
                 severity = TempBands.escLevel(motion.escTempC),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
