@@ -9,7 +9,6 @@ import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
-import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
@@ -1836,39 +1835,45 @@ class KableBmsRepository private constructor(
      * The decode protocol ONE link speaks — the controller-aware factory.
      *
      * A controller kind has no [BmsType] at all ([ProtocolKind.toBmsType]
-     * throws for it by design), so the VESC branch must come BEFORE any
-     * `toBmsType()` call: a VESC link built through the battery factory would
-     * crash there. The controller behind the link is the one this link owns
-     * (its first [LinkSpec.ownedControllers] entry, matched against the
+     * throws for it by design), so the controller factory must be asked BEFORE
+     * any `toBmsType()` call: a VESC link built through the battery factory
+     * would crash there. The controller behind the link is the one this link
+     * owns (its first [LinkSpec.ownedControllers] entry, matched against the
      * vehicle's controllers by index), so its own motor geometry and
      * derived-battery choice reach the protocol.
      *
-     * Every battery kind delegates to [createProtocol] (BmsType) unchanged.
+     * **Adding a controller protocol? Add it to [controllerMotionProtocol]
+     * (`ControllerProtocols.kt`), not here.** That function is the single
+     * statement of controller coverage: this factory builds every controller
+     * link from it, and the picker refuses a pick it has no answer for. Adding
+     * an arm there is what makes a newly supported type connectable AND
+     * offerable in one edit — writing a protocol into this `when` instead would
+     * leave the picker refusing a controller that works.
+     *
+     * Every battery kind falls through (null) to [createProtocol] (BmsType)
+     * unchanged.
      */
-    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol =
-        when (spec.protocolKind) {
-            ProtocolKind.VESC -> {
-                val ctrlIndex = spec.ownedControllers.firstOrNull()?.globalIndex
-                val controller = vehicle?.controllers?.firstOrNull { it.index == ctrlIndex }
-                VescProtocol(
-                    // A lone controller with no battery source of its own backs
-                    // a derived pack; the composer (Part G) turns this off once
-                    // a real BMS covers the same battery. Written as `== true ||`
-                    // rather than `?:` so the no-packs fallback stays LIVE even
-                    // though `controller` is never null here in practice (every
-                    // planned VESC link's controller is found in
-                    // `vehicle.controllers`) — a plain elvis on a non-null
-                    // Boolean can never reach its right-hand side, which would
-                    // silently strand a controller-only vehicle with
-                    // `providesDerivedBattery = false` (its own default) at
-                    // `packCount = 0` and the derived-slot machinery off.
-                    deriveBattery = controller?.providesDerivedBattery == true ||
-                        vehicle?.packs.isNullOrEmpty(),
-                    motor = controller?.motor ?: MotorConfig()
-                )
-            }
-            else -> createProtocol(spec.protocolKind.toBmsType())
-        }
+    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
+        val controller = spec.ownedControllers.firstOrNull()?.globalIndex
+            ?.let { idx -> vehicle?.controllers?.firstOrNull { it.index == idx } }
+        controllerMotionProtocol(
+            kind = spec.protocolKind,
+            // A lone controller with no battery source of its own backs a
+            // derived pack; the composer (Part G) turns this off once a real
+            // BMS covers the same battery. Written as `== true ||` rather than
+            // `?:` so the no-packs fallback stays LIVE even though `controller`
+            // is never null for a planned controller link in practice (every
+            // one of them is found in `vehicle.controllers`) — a plain elvis on
+            // a non-null Boolean can never reach its right-hand side, which
+            // would silently strand a controller-only vehicle with
+            // `providesDerivedBattery = false` (its own default) at
+            // `packCount = 0` and the derived-slot machinery off.
+            deriveBattery = controller?.providesDerivedBattery == true ||
+                vehicle?.packs.isNullOrEmpty(),
+            motor = controller?.motor ?: MotorConfig()
+        )?.let { return it }
+        return createProtocol(spec.protocolKind.toBmsType())
+    }
 
     /**
      * The [BmsType] a link's battery half decodes with, or null for a

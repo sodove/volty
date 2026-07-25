@@ -71,10 +71,10 @@ import volty.composeapp.generated.resources.vehicle_field_averaging_window
 import volty.composeapp.generated.resources.vehicle_field_bms_address
 import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_cell_high
-import volty.composeapp.generated.resources.vehicle_field_controller_address
-import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_cell_low
 import volty.composeapp.generated.resources.vehicle_field_chemistry
+import volty.composeapp.generated.resources.vehicle_field_controller_address
+import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_dashboard_style
 import volty.composeapp.generated.resources.vehicle_field_icon
 import volty.composeapp.generated.resources.vehicle_field_name

@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.presentation.picker
 
+import ru.sodovaya.volty.data.ble.controllerMotionSupported
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -32,33 +33,21 @@ fun preselectedChoice(device: DiscoveredDevice): SourceChoice? = when {
 }
 
 /**
- * Why [type] cannot be connected *yet*, or null when it can — the honest
- * statement of how far the controller half of the app actually reaches today.
+ * How to *phrase* the refusal when [type] cannot be connected yet, or null when
+ * it can. Wording only — the decision itself belongs to the data layer and is
+ * read straight from it.
  *
- * Only [ControllerType.VESC] has a decode protocol
- * ([ru.sodovaya.volty.data.bms.VescProtocol], the sole `MotionSource`). The
- * other three land in the same failure the user gets from an unreachable
- * device, named so they learn *why* — the sheet deliberately keeps offering
- * them (see [SourceChoice]), and silently hiding a type teaches nothing.
+ * [controllerMotionSupported] (`data/ble/ControllerProtocols.kt`) is the
+ * authority: it derives the answer from the same factory
+ * `KableBmsRepository.createProtocol` builds every controller link with, so the
+ * sheet cannot go on refusing a type whose protocol has quietly started
+ * working. That split is deliberate — this file has no business knowing which
+ * protocols exist, and the data layer has no business knowing how a refusal
+ * reads.
  *
- * The two failure modes this covers are NOT the same underneath, which is
- * exactly why one gate has to cover both:
- *  - FARDRIVER / KELLY: `ProtocolKind.toBmsType()` `error(...)`s for them.
- *    `KableBmsRepository.doConnect` does catch it, but the message it surfaces
- *    is an internal one about "a controller kind"; users get a better one here.
- *  - BEGODE: `ControllerType.BEGODE.protocolKind()` is `ProtocolKind.BEGODE`,
- *    which maps to a REAL `BmsType.BEGODE` and therefore builds a
- *    `BegodeProtocol` — a battery decoder that is not a `MotionSource`. Nothing
- *    throws: the connect would succeed and land the user on a Ride dashboard
- *    that can never show motion. Silently wrong is worse than refused.
- *
- * Exhaustive with NO `else`, matching
- * `KableBmsRepository.batteryBmsTypeOrNull`: a new [ControllerType] must force
- * a decision here at compile time. When Part D/E/H lands a real protocol, the
- * whole change is moving that type to the null branch.
+ * The sheet deliberately keeps offering every type (see [SourceChoice]): a user
+ * who sees "FarDriver is not supported yet" learns more than one who sees
+ * nothing.
  */
-fun unsupportedControllerReason(type: ControllerType): String? = when (type) {
-    ControllerType.VESC -> null
-    ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE ->
-        "${type.label} is not supported yet"
-}
+fun unsupportedControllerReason(type: ControllerType): String? =
+    if (controllerMotionSupported(type)) null else "${type.label} is not supported yet"

@@ -32,6 +32,7 @@ import kotlin.math.abs
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.test.assertIs
@@ -147,6 +148,86 @@ class KableBmsRepositoryVescTest {
         assertEquals(CTRL_ADDR, spec.address)
         assertEquals(ProtocolKind.VESC, spec.protocolKind)
         assertEquals(listOf(OwnedSource(0)), spec.ownedControllers)
+    }
+
+    // ----- G1 Task 5: the picker's gate is DERIVED from this factory -----
+
+    /** A controller-only vehicle of any kind, for probing the factory. */
+    private fun controllerOnly(type: ControllerType): Vehicle = Vehicle(
+        id = "v-${type.name.lowercase()}",
+        name = "probe",
+        iconKey = "generic",
+        packs = emptyList(),
+        controllers = listOf(
+            Controller(
+                index = 0, label = "ESC", controllerType = type,
+                address = CTRL_ADDR, providesDerivedBattery = true
+            )
+        ),
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L)
+    )
+
+    /**
+     * THE test that keeps the two from drifting.
+     *
+     * `unsupportedControllerReason` in the picker used to *list* which
+     * controller kinds work — presentation-layer code encoding a data-layer
+     * fact. The failure mode was silent and delayed: Part D adds a FarDriver
+     * protocol here, nothing in the picker fails to compile, and the sheet goes
+     * on refusing a controller that works.
+     *
+     * The gate now derives its answer from [controllerMotionProtocol], the same
+     * function this factory builds every controller link from. This test drives
+     * the REAL factory for every [ControllerType] and asserts the two agree —
+     * so it stays green when a protocol is added (both sides move together) and
+     * goes red the moment anyone reintroduces a separate list.
+     */
+    @Test
+    fun `the picker's gate agrees with the real connect factory for every controller type`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        ControllerType.entries.forEach { type ->
+            val v = controllerOnly(type)
+            val spec = planLinks(v.packs, v.controllers).single()
+            // Exactly what doConnect sees: build through the factory, and treat
+            // a throw as "cannot connect" — doConnect catches it and returns
+            // Result.failure rather than propagating.
+            val built = runCatching { repo.createProtocolForTest(spec, v) }.getOrNull()
+            assertEquals(
+                built is MotionSource,
+                controllerMotionSupported(type),
+                "$type: the picker's gate and the connect factory disagree"
+            )
+        }
+    }
+
+    /** Guards the test above from passing vacuously with everything refused. */
+    @Test
+    fun `exactly one controller kind decodes motion today`() {
+        assertEquals(
+            listOf(ControllerType.VESC),
+            ControllerType.entries.filter { controllerMotionSupported(it) }
+        )
+    }
+
+    /**
+     * The case a "types that throw" list would have missed, and the reason the
+     * gate's criterion is `is MotionSource` rather than "did not throw":
+     * `ControllerType.BEGODE.protocolKind()` is `ProtocolKind.BEGODE`, which
+     * `toBmsType()` maps to a REAL `BmsType.BEGODE`. Nothing fails — the
+     * factory quietly hands back a battery decoder, and a Begode controller
+     * would have connected onto a Ride dashboard that can never show motion.
+     */
+    @Test
+    fun `a Begode controller yields a battery decoder, which is why it is refused`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+        val v = controllerOnly(ControllerType.BEGODE)
+        val spec = planLinks(v.packs, v.controllers).single()
+
+        val protocol = repo.createProtocolForTest(spec, v)
+        assertIs<BegodeProtocol>(protocol, "it does NOT throw — that is the hazard")
+        assertFalse(protocol is MotionSource, "but it carries no motion")
+        assertFalse(controllerMotionSupported(ControllerType.BEGODE), "so the picker refuses it")
     }
 
     // ----- 2. A VESC link builds a VescProtocol that is a MotionSource -----
