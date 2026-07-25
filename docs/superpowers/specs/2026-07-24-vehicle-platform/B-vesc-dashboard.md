@@ -101,6 +101,33 @@ Nordic UART ⇒ candidate `ControllerType.VESC`. Because NUS is generic, detecti
 is best-effort — confirm by a successful GET_VALUES_SETUP handshake. The picker
 shows it as a controller, not a BMS.
 
+### 6.1 Creating a controller-bearing vehicle — DEFERRED TO PART G (decided 2026-07-25)
+Detection above only *labels* a discovered VESC. **Nothing in Part B creates a
+`Vehicle` that has `controllers`** — the picker's type sheet offers `BmsType`
+only, so tapping a detected VESC still builds a single-pack BMS vehicle at that
+address. Consequence: the whole VESC path (protocol, controller link planning,
+derived-pack slots, the Ride dashboard) is exercised by the **demo vehicle and
+tests only**; a real uBox cannot yet be added through the UI.
+
+This was a scope omission in the B1 plan, surfaced by the B1 whole-branch review
+and **explicitly deferred to Part G (the vehicle composer)** by the product
+owner rather than patched into B. Part G owns:
+- a `ControllerType` branch in the picker's type sheet and a controller-shaped
+  vehicle builder (a vehicle may legitimately have zero packs);
+- setting `Controller.providesDerivedBattery` at creation time (it defaults
+  `false`; B1 made the "no battery source ⇒ derive" fallback live, but nothing
+  sets the flag deliberately yet);
+- **fixing the whole `packs.first()` shim family in ONE pass** — it must land
+  with the creation flow, not piecemeal, because a zero-pack vehicle currently
+  throws from: `PickerComponent.kt:79` and `ScanningComponent.kt:63`
+  (`saved.associateBy { it.bmsAddress }` — takes down the entire Picker/Scanning
+  screen, not just a tap), `PickerComponent.kt:141/178`,
+  `VehicleEditComponent.kt:104/158`, `DashboardScreen.kt:102`,
+  `VehicleSheet.kt:99`, `SettingsScreen.kt:298`, `AutoConnectScreen.kt:93`,
+  `RootComponent.kt:393-394`. Four sites of this family were already fixed in B1
+  (`connect`, `scanAll`, `doConnect`'s previous-address check, the cell-count
+  auto-fill); these are the remainder.
+
 ## 7. Ride dashboard (`presentation/ride/`) — LOCKED design (2026-07-25)
 New `RideDashboardComponent` + `RideDashboardScreen`, reading
 `bmsRepository.activeMotion` (+ `activeVehicleData` for battery). Visual reference:
