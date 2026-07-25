@@ -158,3 +158,92 @@ FarDriver reuses it verbatim.
    unit link is up, or only when the hosted BMS actually reports? Prefer the
    latter (no battery gap if the head unit link is up but the hosted BMS is
    momentarily silent).
+
+---
+
+## 10. Open questions — ANSWERED FROM SOURCE (2026-07-25)
+
+Pinned by reading two real implementations rather than a capture:
+- **Gateway side** (what we talk to): `E:\sodovaya\nyxdash\firmware\components\vesc_express\src\`
+  — `commands.c`, `comm_can.c`, `bms.c`, `ant_bms.c`, plus `vesc_core/src/buffer.c`.
+- **Client side** (known-good): VESC Tool `commands.cpp`.
+
+### 10.1 §9.1 Forwarded-reply framing — **BARE, and forwarding MUST be serialised**
+
+`commands.c:369-372` handles `COMM_FORWARD_CAN` by storing the caller's reply
+function in a **single global** `send_func_can_fwd` and relaying the inner bytes
+with `send=0`. The remote node answers as if asked directly; the gateway passes
+those bytes back through `commands_send_packet_can_last` (`commands.c:1091-1099`)
+**untouched** — no `COMM_FORWARD_CAN` re-wrap, no source-id byte.
+
+VESC Tool confirms it: `processPacket` has **no** `COMM_FORWARD_CAN` case at all.
+It wraps on the way out (`emitData`, `commands.cpp:2357-2382`) using client-side
+state `mSendCan`/`mCanId`, and parses replies purely by opcode.
+
+**Therefore: exactly one forwarded request in flight.** Not a style choice —
+four independent reasons:
+1. the binary protocol has no transaction id (`packet.c:41-73` is length + CRC only);
+2. two forwarded replies to the same inner opcode are byte-identical, so only
+   arrival order distinguishes them;
+3. the gateway keeps ONE `send_func_can_fwd` and ONE `rx_buffer_last_id`
+   (`comm_can.c:93`) plus 3 shared reassembly buffers — a second forward before
+   the first reply **races state on the gateway**, whatever the client does;
+4. VESC Tool's own `mCanId` is a single field, i.e. "I am talking to node N",
+   never "N1 and N2 are outstanding".
+
+Poll loop consequence: target → wrapped request → **await the bare reply, matched
+by expected opcode with a timeout** → only then the next. No pipelining. The
+round-robin budget in §3 must be sized against this.
+
+### 10.2 §9.2 `PING_CAN` — blocking ~2.55 s, and a second one is silently dropped
+
+`commands.c:151-165`: reply is `[62][id]…` — one raw byte per responding id,
+**no count prefix, no terminator**; the count comes from the packet length.
+Scans ids 0..254 ascending; 255 is never probed.
+
+Each probe waits **10 ms** for a PONG (`comm_can.c:1106-1124`) with no early
+exit, so the scan is ~2.55 s in essentially every case. It runs in the separate
+`block_task`, so other I/O keeps flowing — but `is_blocking` is set for the whole
+duration and a second `PING_CAN` arriving meanwhile is **silently discarded with
+no error reply** (`commands.c:1064-1075`). A client that retries on timeout gets
+silence, not a second answer. VESC Tool allows 5 s (`commands.cpp:1821-1832`).
+
+### 10.3 §9.3/§9.4 unchanged
+The §9.3 default (one SETUP to the primary uBox + GET_VALUES to all) and §9.4
+preference (release the direct ANT only once the hosted BMS actually reports)
+stand. §10.1 makes §9.3 more attractive still: every extra forwarded request is
+a full serialised round-trip.
+
+### 10.4 §4 BMS field list — confirmed field-by-field, with three traps
+
+`bms.c:298-360` matches §4 exactly for fields 1-18. Three things §4 did not say:
+
+- **`pressure` uses scale `1e-1`**, i.e. decode = `raw × 10` — the inverse of
+  every other d16 in the frame. Trivial to implement backwards.
+- **`can_id` is an `int` truncated to one byte and initialised to `-1`**
+  (`bms.c:53`), so "no BMS data yet" arrives as **`0xFF`**, not `0`. On
+  disconnect the firmware memsets the struct and restores `-1`
+  (`ant_bms.c:901-907`).
+- **Trailing fields are gated on remaining byte count**, and the four
+  charge/discharge totals are **all-or-nothing** (`>= 16` bytes, four
+  `float32_auto` — a bit-packed custom float, *not* a fixed divisor). Parse
+  defensively in VESC Tool's exact order (`commands.cpp:709-772`).
+
+**Sign convention resolved: `i_in > 0` means CHARGING** (`ant_bms.c:658,685`,
+`is_charging = current > 0.05`). That already matches `BmsData`'s convention —
+no flip needed, and §4's "reconcile sign" caveat is discharged.
+
+### 10.5 What an ANT battery behind the gateway actually populates
+
+`ant_bms.c:653-689` fills: `v_tot`, `i_in`/`i_in_ic`, `soc`, `soh`, `ah_cnt`,
+`wh_cnt`, per-cell voltages, balancing flags, per-sensor temps, `temp_ic`,
+`temp_max_cell`, `is_charging`, `can_id`.
+
+**Always zero/empty on the ANT path** — must not be surfaced as real data:
+`v_charge` (explicitly zeroed), `humidity`, `pressure`, `status`, all four
+chg/dis totals, `data_version`. The firmware's own CAN re-broadcast helper says
+as much: *"skips empty STATUS_1..5, CHG/DIS totals"*.
+
+This is the user's own battery path, so it is the case that matters: the decoder
+must distinguish "field absent" from "field is zero", or the Battery screen will
+report a real 0.0 V charge voltage and 0% humidity.
