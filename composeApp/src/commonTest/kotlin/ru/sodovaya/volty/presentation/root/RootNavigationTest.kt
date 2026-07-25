@@ -1,5 +1,15 @@
 package ru.sodovaya.volty.presentation.root
 
+import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.decompose.DelicateDecomposeApi
+import com.arkivanov.decompose.router.stack.ChildStack
+import com.arkivanov.decompose.router.stack.StackNavigation
+import com.arkivanov.decompose.router.stack.childStack
+import com.arkivanov.decompose.router.stack.pop
+import com.arkivanov.decompose.router.stack.push
+import com.arkivanov.decompose.router.stack.replaceAll
+import com.arkivanov.decompose.value.Value
+import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
@@ -29,7 +39,7 @@ import kotlin.time.ExperimentalTime
  * are what this test pins. Decompose's plumbing (`replaceAll` / `bringToFront`
  * actually moving the stack) is the library's job, not this suite's.
  */
-@OptIn(ExperimentalTime::class)
+@OptIn(ExperimentalTime::class, DelicateDecomposeApi::class)
 class RootNavigationTest {
 
     private fun vehicle(
@@ -152,5 +162,103 @@ class RootNavigationTest {
         assertTrue(shouldPopOnBack(Config.Dashboard, stackSize = 1))
         assertTrue(shouldPopOnBack(Config.Ride, stackSize = 5))
         assertTrue(shouldPopOnBack(Config.PackDetail(0), stackSize = 2))
+    }
+
+    // --- Final fixes, Fix 1: "+ Add new battery" used to nav.replaceAll()
+    // Config.Picker(mode = "add") — wiping the whole stack down to one entry
+    // — so neither the add-picker's own Cancel (nav.pop()) nor system back
+    // (which also pops for a Picker: shouldPopOnBack above is true whenever
+    // current isn't Graph/Settings, regardless of stack size) had anything
+    // left to reveal. DefaultRootComponent.createChild now nav.push()es
+    // instead, for both call sites that used to replaceAll() into the
+    // add-picker (Config.Picker's own onAddNewBatteryRequested, and
+    // Config.Welcome's onAddBatteryRequested).
+    //
+    // DefaultRootComponent itself cannot be instantiated in this test source
+    // set to drive that wiring directly. It is a KoinComponent resolving
+    // BmsRepository / VehicleRepository / PermissionsChecker via `by inject()`
+    // / `get()` — already the reason RootNavigationTest's own class doc above
+    // extracted homeConfigFor/shouldPopOnBack/shouldLeaveRide as pure
+    // functions instead. PermissionsChecker makes it worse than "add
+    // koin-test": it is an `expect class` whose Android `actual`
+    // (AndroidPermissionsChecker) wraps a real android.content.Context and is
+    // resolved EAGERLY in DefaultRootComponent's own init (computeInitialConfigSync,
+    // called while building the `stack` property), before any lambda under
+    // test would even run. There is no mocking library, no Robolectric and no
+    // koin-test dependency in this project's test source sets (see
+    // composeApp/build.gradle.kts), so faking that Context is not possible
+    // without adding new test infrastructure. So: not reachable from a unit
+    // test here, plainly.
+    //
+    // What IS reachable, and is more than shouldPopOnBack alone can prove
+    // (that only pins that back POPS — it says nothing about push vs.
+    // replaceAll, which is the actual bug): the real Config sealed class and
+    // the real Decompose StackNavigation/childStack DefaultRootComponent
+    // itself uses underneath, driven through the exact call sequence
+    // createChild's lambdas now perform.
+
+    /** Builds a bare stack over [Config] the same way DefaultRootComponent's
+     * `stack` property does (StackNavigation + childStack), minus the Koin
+     * child factory — the child instance IS the configuration, since only the
+     * stack SHAPE is under test here. */
+    private fun buildStack(initial: Config): Pair<StackNavigation<Config>, Value<ChildStack<Config, Config>>> {
+        val ctx = DefaultComponentContext(LifecycleRegistry())
+        val nav = StackNavigation<Config>()
+        val stack = ctx.childStack(
+            source = nav,
+            serializer = Config.serializer(),
+            initialConfiguration = initial,
+            handleBackButton = true,
+            childFactory = { config, _ -> config }
+        )
+        return nav to stack
+    }
+
+    @Test
+    fun cancelling_the_add_picker_reveals_the_picker_that_requested_it() {
+        val (nav, stack) = buildStack(Config.Picker(mode = "cold"))
+
+        // Mirrors the fixed onAddNewBatteryRequested.
+        nav.push(Config.Picker(mode = "add"))
+        assertEquals(Config.Picker(mode = "add"), stack.value.active.configuration)
+
+        // Mirrors onCancelled (and, via shouldPopOnBack, system back too).
+        nav.pop()
+        assertEquals(
+            Config.Picker(mode = "cold"),
+            stack.value.active.configuration,
+            "cancelling the add-picker must return to the picker that requested it, not strand the user"
+        )
+    }
+
+    @Test
+    fun cancelling_the_add_picker_from_welcome_reveals_welcome() {
+        val (nav, stack) = buildStack(Config.Welcome)
+
+        // Mirrors the fixed onAddBatteryRequested.
+        nav.push(Config.Picker(mode = "add"))
+        assertEquals(Config.Picker(mode = "add"), stack.value.active.configuration)
+
+        nav.pop()
+        assertEquals(Config.Welcome, stack.value.active.configuration, "back from Welcome's add-picker must return to Welcome")
+    }
+
+    @Test
+    fun the_old_replaceAll_wiring_would_have_left_cancel_and_back_dead() {
+        // Documents the bug this fix removes, on the real stack primitives:
+        // replaceAll collapses the stack to ONE entry, so the very next pop()
+        // has nothing to reveal and the active configuration does not move —
+        // exactly the "Cancel does nothing, system back does nothing" report.
+        val (nav, stack) = buildStack(Config.Picker(mode = "cold"))
+
+        nav.replaceAll(Config.Picker(mode = "add"))
+        assertEquals(1, stack.value.items.size, "replaceAll collapses the whole stack to the add-picker alone")
+
+        nav.pop()
+        assertEquals(
+            Config.Picker(mode = "add"),
+            stack.value.active.configuration,
+            "pop() on a single-entry stack is a no-op — the dead-end this task fixes"
+        )
     }
 }

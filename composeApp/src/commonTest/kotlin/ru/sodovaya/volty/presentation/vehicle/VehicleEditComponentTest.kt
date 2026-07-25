@@ -322,6 +322,47 @@ class VehicleEditComponentTest {
     }
 
     /**
+     * The same round trip as above, but on the shape the app can actually
+     * produce: zero packs, one controller (see [controllerOnlyVehicle] and
+     * the Picker's controller-creation path in Task 5). [existingVehicle]
+     * pairs a VESC_BMS pack with a VESC controller at the SAME address
+     * ("AA:BB") — `planLinks` (data/ble/LinkPlan.kt) resolves one address to
+     * more than one `ProtocolKind` (VESC_BMS vs VESC) and throws
+     * "Address AA:BB resolves to conflicting protocol kinds [...]", so that
+     * fixture can never actually connect. Every other Task 6 test above
+     * exercises only that unreachable shape, leaving the real one — a bare
+     * controller vehicle — with no motor-edit coverage at all.
+     */
+    @Test
+    fun `save persists edited motor config onto a zero-pack controller vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // Sanity: the form loaded the controller's current (default) motor config.
+        assertEquals(true, c.state.value.hasController)
+        assertEquals(15, c.state.value.motorPolePairs)
+        assertEquals(0, c.state.value.motorWheelDiameterMm)
+        assertEquals(1f, c.state.value.motorGearRatio)
+
+        c.onMotorPolePairsChanged(7)
+        c.onMotorWheelDiameterChanged(200)
+        c.onMotorGearRatioChanged(2.5f)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(emptyList(), saved.packs, "the shape the app produces has zero packs — the save must not invent one")
+        val savedController = saved.controllers.single()
+        assertEquals(MotorConfig(polePairs = 7, wheelDiameterMm = 200, gearRatio = 2.5f), savedController.motor)
+        // Everything else about the controller must survive untouched.
+        assertEquals("Main", savedController.label)
+        assertEquals(ControllerType.VESC, savedController.controllerType)
+        assertEquals("AA:BB", savedController.address)
+    }
+
+    /**
      * Blanking a motor field (as IntField/FloatField do when the text can't
      * parse — see that pattern for cellHighV etc.) must fall back to
      * `MotorConfig()`'s own default, not silently persist a zero or the

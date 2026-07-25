@@ -196,6 +196,16 @@ fun PickerScreen(component: PickerComponent) {
                         modifier = Modifier.padding(bottom = 8.dp)
                     )
 
+                    // Single source of truth for both the pre-selected row and
+                    // the section order below — see [preselectedChoice]. Relies
+                    // on device.bmsType and device.controllerType being
+                    // mutually exclusive (BmsTypeDetector.detectController
+                    // returns null whenever detect() already matched, see
+                    // BmsTypeDetector.kt:82 and KableBmsRepository.kt:454-455),
+                    // so at most one of the two sections below is ever
+                    // preselected.
+                    val preselected = preselectedChoice(device)
+
                     val controllerSection: @Composable () -> Unit = {
                         SectionHeader(stringResource(Res.string.picker_section_controller))
                         // All four are legal manual choices even where the protocol lands
@@ -204,7 +214,7 @@ fun PickerScreen(component: PickerComponent) {
                         ControllerType.entries.forEach { type ->
                             TypeRow(
                                 label = type.label,
-                                selected = device.controllerType == type,
+                                selected = preselected == SourceChoice.Controller(type),
                                 onClick = { component.onConnectWithType(device, SourceChoice.Controller(type)) }
                             )
                         }
@@ -217,7 +227,7 @@ fun PickerScreen(component: PickerComponent) {
                         BmsType.entries.filter { it != BmsType.VESC_BMS }.forEach { type ->
                             TypeRow(
                                 label = bmsTypeLabel(type),
-                                selected = device.bmsType == type,
+                                selected = preselected == SourceChoice.Battery(type),
                                 onClick = { component.onConnectWithType(device, SourceChoice.Battery(type)) }
                             )
                         }
@@ -227,7 +237,7 @@ fun PickerScreen(component: PickerComponent) {
                     // carries the highlight below), so the common case is one tap.
                     // Both always render — detection is a hint, not a lock, so an
                     // unrecognised (or misdetected) device can still pick either kind.
-                    if (device.bmsType != null) {
+                    if (preselected is SourceChoice.Battery) {
                         batterySection()
                         controllerSection()
                     } else {
