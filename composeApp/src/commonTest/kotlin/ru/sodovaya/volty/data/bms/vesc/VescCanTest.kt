@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.bms.vesc
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 
 class VescCanTest {
 
@@ -21,12 +22,33 @@ class VescCanTest {
         assertContentEquals(byteArrayOf(34, 200.toByte(), 4), out)
     }
 
-    @Test fun ping_can_with_no_responders_is_an_empty_list() {
+    @Test fun ping_can_opcode_only_payload_with_no_responders_is_an_empty_list() {
         assertEquals(emptyList(), VescCan.parsePingCan(byteArrayOf(62)))
     }
 
-    @Test fun ping_can_completely_empty_payload_is_an_empty_list() {
-        assertEquals(emptyList(), VescCan.parsePingCan(byteArrayOf()))
+    @Test fun ping_can_empty_payload_is_null() {
+        assertNull(VescCan.parsePingCan(byteArrayOf()))
+    }
+
+    /**
+     * Same length (one byte) as [ping_can_opcode_only_payload_with_no_responders_is_an_empty_list]
+     * above, differing *only* in the opcode value. This pins that an empty
+     * result requires the correct opcode, not merely "there happen to be no
+     * bytes after index 0" -- a stub that ignores payload[0] entirely would
+     * pass the sibling test but fail this one.
+     */
+    @Test fun ping_can_single_byte_wrong_opcode_is_null() {
+        assertNull(VescCan.parsePingCan(byteArrayOf(4)))
+    }
+
+    /**
+     * A misrouted frame, e.g. a plain COMM_GET_VALUES reply `[4, 5, 12]`,
+     * must not be misread as a PING_CAN id list `[5, 12]` even though the
+     * trailing bytes look like plausible CAN ids. This is the case a codec
+     * that blindly strips index 0 as "the opcode" gets wrong.
+     */
+    @Test fun ping_can_wrong_opcode_with_trailing_bytes_is_null() {
+        assertNull(VescCan.parsePingCan(byteArrayOf(4, 5, 12)))
     }
 
     @Test fun ping_can_single_responder() {

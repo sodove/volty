@@ -32,17 +32,29 @@ object VescCan {
      * opcode, with a timeout) before sending the next — a second forward
      * before the first reply races shared state on the gateway regardless of
      * what the client does (spec §10.1, reasons 1-4).
+     *
+     * [canId] is not range-checked against the spec's 0..254: a value outside
+     * `0..255` silently truncates to its low 8 bits via `Int.toByte()`'s
+     * two's-complement wrap (e.g. `300` encodes the same byte as `44`), the
+     * same unchecked-truncation convention this file family already uses for
+     * raw `Int` fields elsewhere (see [VescReader]/[VescValues]).
      */
     fun forwardCan(canId: Int, inner: ByteArray): ByteArray =
         byteArrayOf(OPCODE_FORWARD_CAN.toByte(), canId.toByte()) + inner
 
     /**
      * Parses a `COMM_PING_CAN` reply payload `[62][id][id]…` into the list of
-     * CAN ids that answered the probe, in wire order. There is **no count
-     * prefix and no terminator** — the number of ids comes from the frame
-     * length alone (`commands.c:151-165`) — so the first byte (the echoed
-     * opcode) is consumed and every remaining byte is one raw, unsigned CAN
-     * id in 0..254 (255 is never probed by the gateway).
+     * CAN ids that answered the probe, in wire order, or `null` if [payload]
+     * is empty or does not begin with [OPCODE_PING_CAN] — the same
+     * null-on-mismatch convention [VescValues.decodeSetupValues] and
+     * [VescValues.decodeValues] use for a wrong/short opcode, so a misrouted
+     * frame (e.g. a plain `COMM_GET_VALUES` reply) can never be misread as a
+     * `PING_CAN` id list.
+     *
+     * There is **no count prefix and no terminator** — the number of ids
+     * comes from the frame length alone (`commands.c:151-165`) — so after the
+     * opcode is consumed, every remaining byte is one raw, unsigned CAN id in
+     * 0..254 (255 is never probed by the gateway).
      *
      * Calling this is expensive on the gateway: the scan blocks it for
      * roughly 2.55 s (10 ms per candidate id × 255 ids, `comm_can.c:1106-1124`),
@@ -50,8 +62,11 @@ object VescCan {
      * **silently dropped with no error reply** (`commands.c:1064-1075`) — a
      * caller that retries on timeout gets silence, not a second answer.
      */
-    fun parsePingCan(payload: ByteArray): List<Int> {
-        if (payload.isEmpty()) return emptyList()
-        return (1 until payload.size).map { payload[it].toInt() and 0xFF }
+    fun parsePingCan(payload: ByteArray): List<Int>? {
+        val r = VescReader(payload)
+        if (!r.has(1) || r.u8() != OPCODE_PING_CAN) return null
+        val ids = mutableListOf<Int>()
+        while (r.has(1)) ids += r.u8()
+        return ids
     }
 }
