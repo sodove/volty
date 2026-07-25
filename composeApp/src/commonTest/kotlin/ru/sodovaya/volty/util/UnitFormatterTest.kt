@@ -43,4 +43,32 @@ class UnitFormatterTest {
         assertEquals("0", UnitFormatter.speed(0f, UnitSystem.METRIC))
         assertEquals("0.0", UnitFormatter.distance(0f, UnitSystem.METRIC))
     }
+
+    @Test fun metric_consumption_passes_through_unconverted() {
+        assertEquals(20f, UnitFormatter.consumptionValue(20f, UnitSystem.METRIC))
+        assertEquals("Wh/km", UnitFormatter.consumptionUnit(UnitSystem.METRIC))
+    }
+
+    /**
+     * Consumption converts the OPPOSITE way to distance — it is energy PER distance, so a longer
+     * display unit makes the number bigger. Getting this backwards is silent (both directions
+     * produce a plausible number), so it is asserted against distance's own direction rather than
+     * against a hand-copied constant: 20 Wh/km must come out ABOVE 20 Wh/mi, while 100 km comes
+     * out BELOW 100 mi.
+     */
+    @Test fun imperial_consumption_converts_the_opposite_way_to_distance() {
+        val whPerMile = UnitFormatter.consumptionValue(20f, UnitSystem.IMPERIAL)
+        assertTrue(abs(whPerMile - 32.187f) < 0.01f, "20 Wh/km is 32.2 Wh/mi, was $whPerMile")
+        assertTrue(whPerMile > 20f, "a mile is longer than a kilometre, so Wh/mi must be the bigger number")
+        assertTrue(UnitFormatter.distance(100f, UnitSystem.IMPERIAL).toFloat() < 100f)
+        assertEquals("Wh/mi", UnitFormatter.consumptionUnit(UnitSystem.IMPERIAL))
+    }
+
+    /** Converting out and back is lossless — the two directions share one constant. */
+    @Test fun consumption_and_distance_use_the_same_conversion_factor() {
+        val whPerMile = UnitFormatter.consumptionValue(20f, UnitSystem.IMPERIAL)
+        val milesPerHundredKm = UnitFormatter.distance(100f, UnitSystem.IMPERIAL).toFloat()
+        // (Wh/mi / Wh/km) and (km / mi) are the same ratio.
+        assertTrue(abs((whPerMile / 20f) - (100f / milesPerHundredKm)) < 0.001f)
+    }
 }

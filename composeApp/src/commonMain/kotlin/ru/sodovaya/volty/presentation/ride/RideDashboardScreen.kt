@@ -57,6 +57,7 @@ import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
+import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -107,9 +108,9 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     val units = state.units
 
     // Session-local trackers, not part of RideDashboardComponent.State: keyed
-    // on the vehicle id so switching vehicles starts both fresh, without the
-    // component needing to know about per-screen presentation history. Both
-    // updates live in a LaunchedEffect keyed on the incoming sample rather
+    // on the vehicle id so switching vehicles starts each one fresh, without the
+    // component needing to know about per-screen presentation history. Every
+    // update below lives in a LaunchedEffect keyed on the incoming sample rather
     // than mutating state directly during composition.
     var sessionMaxSpeedKmh by remember(vehicle?.id) { mutableStateOf(0f) }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
@@ -119,6 +120,36 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     }
     // Never zero: the hero always has at least a 70 km/h scale to draw against.
     val vehicleMaxSpeed = max(70f, ceil(sessionMaxSpeedKmh / 10f) * 10f)
+
+    // Classic's Current and Power dials auto-scale the same way (B-vesc-dashboard.md §14: VESC
+    // derives these from the motor config we cannot read yet, so we scale from what the vehicle has
+    // actually shown this session instead — a deliberate divergence, and today's floors, not
+    // targets, are what ClassicDialSpecs.currentDisplayMax/powerDisplayMax fall back to for a quiet
+    // ride). Unlike speed, both readings are bipolar, so the tracker follows the ABSOLUTE value —
+    // regen braking grows the current scale exactly as much as accelerating does.
+    //
+    // Unlike the plain "grow on any bigger sample" speed tracker above, these two go through
+    // SessionPeakTracker rather than a bare `if (x > max) max = x`: a scale with no ceiling AND no
+    // debounce lets one spurious decode (a single frame reporting, say, 5000 A) peg the dial for
+    // the rest of the ride. ClassicDialSpecs.currentDisplayMax/powerDisplayMax now cap how far that
+    // peg can reach (see their tickCapCeiling doc), but capping the DAMAGE still is not the same as
+    // preventing it — SessionPeakTracker keeps a rising reading from being committed at all until
+    // several consecutive samples corroborate it, so a one-frame glitch never reaches
+    // ClassicDialSpecs in the first place. See SessionPeakTracker's own doc for why a consecutive-
+    // sample debounce was chosen over a percentile or a decay, and why the confirmed value is the
+    // RUN's minimum rather than its maximum. The confirmed value is still handed to ClassicDialSpecs
+    // raw — it does its own floor+snap+ceiling, needing no unit conversion the way speed does.
+    var currentPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
+    LaunchedEffect(vehicle?.id, motion.timestamp) {
+        currentPeakTracker = currentPeakTracker.accept(abs(motion.batteryCurrentA))
+    }
+    val sessionMaxAbsCurrentA = currentPeakTracker.committed
+
+    var powerPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
+    LaunchedEffect(vehicle?.id, motion.timestamp) {
+        powerPeakTracker = powerPeakTracker.accept(abs(motion.powerW))
+    }
+    val sessionMaxAbsPowerW = powerPeakTracker.committed
 
     val recentSpeeds = remember(vehicle?.id) { mutableStateListOf<Float>() }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
@@ -181,6 +212,8 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             DashboardStyle.CLASSIC -> ClassicRideCluster(
                 state = state,
                 maxSpeedKmh = vehicleMaxSpeed,
+                maxCurrentA = sessionMaxAbsCurrentA,
+                maxPowerW = sessionMaxAbsPowerW,
                 modifier = Modifier.fillMaxWidth()
             )
         }

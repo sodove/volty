@@ -82,6 +82,7 @@ import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
 import volty.composeapp.generated.resources.vehicle_field_pole_pairs
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
+import volty.composeapp.generated.resources.vehicle_field_secondary_gauge_caption
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
@@ -238,8 +239,17 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            // INNER GAUGE — what the secondary ring/dial on the Ride screen shows.
+            // INNER GAUGE — what Clean's hero ring shows inside the speed arc. It applies to that
+            // style ONLY: Classic renders all eight VESC dials at once, so it has nothing to pick.
+            // The control stays enabled and visible for a Classic vehicle rather than being hidden
+            // or greyed out, because the style is a per-vehicle setting two fields up and a rider
+            // who switches to Clean would otherwise find their choice had silently gone missing.
             SectionLabel(stringResource(Res.string.vehicle_field_secondary_gauge))
+            Text(
+                text = stringResource(Res.string.vehicle_field_secondary_gauge_caption),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
             FlowRow(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
