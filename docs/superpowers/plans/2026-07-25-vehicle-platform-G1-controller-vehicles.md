@@ -41,7 +41,7 @@
 
 **Context:** `Vehicle.kt:85-88` currently has four extension properties built on `packs.first()`. They throw `NoSuchElementException` for a controller-only vehicle. `Vehicle.primaryAddress` (`Vehicle.kt:42-43`) is already correct and must be left alone — it falls back to `primaryController?.address`.
 
-**Interfaces to produce** (in `VehicleSources.kt`; **delete the four throwing properties from `Vehicle.kt` entirely** — do not deprecate them, do not keep a throwing overload; the whole point is that the compiler flags every call site in Task 2):
+**Interfaces to produce** (in `VehicleSources.kt`). **Leave the four throwing properties in `Vehicle.kt` untouched for now** — Task 2 deletes them, and deleting them here would leave this commit non-compiling. Adding beside them keeps every commit buildable while still setting up Task 2's compiler-driven sweep.
 
 ```kotlin
 val Vehicle.primaryPackOrNull: Pack? get() = packs.firstOrNull()
@@ -72,11 +72,9 @@ Build the fixtures with the real constructors; do not stub `Vehicle`.
 
 - [ ] **Step 3: Verify the test is non-vacuous** — temporarily make `allAddresses` return only pack addresses and confirm the mixed-vehicle test fails; restore. Record the observed failure in your report.
 
-- [ ] **Step 4: Run `./gradlew :composeApp:testDebugUnitTest`** — note that Task 1 alone will NOT compile the app (Task 2 fixes the call sites). Run `:composeApp:compileDebugKotlinAndroid` anyway and **paste the list of unresolved-reference errors into your report** — that list is Task 2's work queue and is the most valuable artifact of this task.
+- [ ] **Step 4: Run `./gradlew :composeApp:testDebugUnitTest` and `:composeApp:compileDebugKotlinAndroid`** — both must pass. Nothing consumes the new accessors yet, so this task is purely additive.
 
 - [ ] **Step 5: Commit** — `feat(vehicle): source accessors that survive a zero-pack vehicle`
-
-  Commit even though the app does not compile: Task 2 is the other half of one atomic change, and the error list is worth preserving in history.
 
 ---
 
@@ -113,7 +111,7 @@ Build the fixtures with the real constructors; do not stub `Vehicle`.
    ```
    **Extract that into one shared helper** (`vehicleSourceLabel(vehicle): String?` — put it next to `bmsTypeLabel`) and use it at every row/subtitle site above, including `RideDashboardScreen` itself. Do not copy the expression around; three divergent copies is exactly how the Clean/Classic parity bugs happened in Part B.
 
-- [ ] **Step 1: Get the full list** — run `:composeApp:compileDebugKotlinAndroid` and record every unresolved reference. Work that list, not this plan's table.
+- [ ] **Step 1: Get the full list** — **delete the four throwing properties** (`primaryPack`, `bmsType`, `bmsAddress`, `cellCount`) from `Vehicle.kt:85-88`. Do not deprecate them, do not keep a throwing overload — a deleted symbol is what makes the compiler enumerate every call site. Then run `:composeApp:compileDebugKotlinAndroid` and record every unresolved reference. **Work that list, not this plan's table** — the table below is a prior survey and is known to be incomplete.
 
 - [ ] **Step 2: Fix each site**, applying the two rules. Where a `String?`/`BmsType?` now flows into UI, render the controller label or omit the segment — never render "null", an empty chip, or a placeholder dash where a real label belongs.
 
