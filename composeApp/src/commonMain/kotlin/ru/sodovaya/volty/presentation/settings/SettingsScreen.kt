@@ -46,16 +46,21 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
+import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.util.UnitSystem
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
+import volty.composeapp.generated.resources.dashboard_style_classic_soon
 import volty.composeapp.generated.resources.settings_add_new_battery
 import volty.composeapp.generated.resources.settings_auto_connect_countdown
+import volty.composeapp.generated.resources.settings_dashboard_style
 import volty.composeapp.generated.resources.settings_delete
 import volty.composeapp.generated.resources.settings_delete_text
 import volty.composeapp.generated.resources.settings_diagnostics
@@ -72,6 +77,9 @@ import volty.composeapp.generated.resources.settings_theme_dark
 import volty.composeapp.generated.resources.settings_theme_light
 import volty.composeapp.generated.resources.settings_theme_system
 import volty.composeapp.generated.resources.settings_title
+import volty.composeapp.generated.resources.settings_units
+import volty.composeapp.generated.resources.settings_units_imperial
+import volty.composeapp.generated.resources.settings_units_metric
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -151,6 +159,45 @@ fun SettingsScreen(component: SettingsComponent) {
                 valueRange = 0f..10f,
                 steps = 9
             )
+
+            HorizontalDivider()
+
+            // UNITS
+            SectionLabel(stringResource(Res.string.settings_units))
+            val unitSystems = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL)
+            val unitLabels = mapOf(
+                UnitSystem.METRIC to stringResource(Res.string.settings_units_metric),
+                UnitSystem.IMPERIAL to stringResource(Res.string.settings_units_imperial)
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                unitSystems.forEachIndexed { idx, u ->
+                    SegmentedButton(
+                        selected = state.unitSystem == u,
+                        onClick = { component.onUnitSystemChanged(u) },
+                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = unitSystems.size)
+                    ) { Text(unitLabels[u] ?: u.name) }
+                }
+            }
+
+            // DASHBOARD STYLE (app default)
+            SectionLabel(stringResource(Res.string.settings_dashboard_style))
+            val dashboardStyles = DashboardStyle.entries
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                dashboardStyles.forEachIndexed { idx, style ->
+                    SegmentedButton(
+                        selected = state.defaultDashboardStyle == style,
+                        onClick = { component.onDefaultDashboardStyleChanged(style) },
+                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = dashboardStyles.size)
+                    ) { Text(dashboardStyleLabel(style)) }
+                }
+            }
+            if (state.defaultDashboardStyle == DashboardStyle.CLASSIC) {
+                Text(
+                    stringResource(Res.string.dashboard_style_classic_soon),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
 
             HorizontalDivider()
 

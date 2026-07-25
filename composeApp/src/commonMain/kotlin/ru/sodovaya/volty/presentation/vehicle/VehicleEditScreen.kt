@@ -5,6 +5,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,13 +47,19 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
+import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.secondaryGaugeLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.action_delete
+import volty.composeapp.generated.resources.dashboard_style_classic_soon
+import volty.composeapp.generated.resources.dashboard_style_default
 import volty.composeapp.generated.resources.vehicle_delete
 import volty.composeapp.generated.resources.vehicle_delete_confirm_text
 import volty.composeapp.generated.resources.vehicle_delete_confirm_title
@@ -63,9 +71,11 @@ import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_cell_high
 import volty.composeapp.generated.resources.vehicle_field_cell_low
 import volty.composeapp.generated.resources.vehicle_field_chemistry
+import volty.composeapp.generated.resources.vehicle_field_dashboard_style
 import volty.composeapp.generated.resources.vehicle_field_icon
 import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
+import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
@@ -74,7 +84,7 @@ import volty.composeapp.generated.resources.vehicle_section_alerts
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun VehicleEditScreen(component: VehicleEditComponent) {
     val state by component.state.collectAsState()
@@ -170,6 +180,44 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
             FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
             IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
+
+            HorizontalDivider()
+
+            // DASHBOARD STYLE — Default (null, follows the app-level setting), Clean, Classic.
+            SectionLabel(stringResource(Res.string.vehicle_field_dashboard_style))
+            val dashboardOptions: List<DashboardStyle?> = listOf(null) + DashboardStyle.entries
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                dashboardOptions.forEachIndexed { idx, style ->
+                    SegmentedButton(
+                        selected = state.dashboardStyle == style,
+                        onClick = { component.onDashboardStyleChanged(style) },
+                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = dashboardOptions.size)
+                    ) { Text(style?.let { dashboardStyleLabel(it) } ?: stringResource(Res.string.dashboard_style_default), fontSize = 12.sp) }
+                }
+            }
+            if (state.dashboardStyle == DashboardStyle.CLASSIC) {
+                Text(
+                    stringResource(Res.string.dashboard_style_classic_soon),
+                    fontSize = 11.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+
+            // INNER GAUGE — what the secondary ring/dial on the Ride screen shows.
+            SectionLabel(stringResource(Res.string.vehicle_field_secondary_gauge))
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                SecondaryGauge.entries.forEach { gauge ->
+                    FilterChip(
+                        selected = state.secondaryGauge == gauge,
+                        onClick = { component.onSecondaryGaugeChanged(gauge) },
+                        label = { Text(secondaryGaugeLabel(gauge)) }
+                    )
+                }
+            }
 
             if (state.isEditing) {
                 Spacer(Modifier.height(8.dp))

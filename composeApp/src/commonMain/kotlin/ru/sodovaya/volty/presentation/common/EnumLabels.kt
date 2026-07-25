@@ -3,6 +3,8 @@ package ru.sodovaya.volty.presentation.common
 import androidx.compose.runtime.Composable
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.bms_ant
@@ -14,6 +16,15 @@ import volty.composeapp.generated.resources.bms_vesc
 import volty.composeapp.generated.resources.chemistry_lead_acid
 import volty.composeapp.generated.resources.chemistry_lifepo4
 import volty.composeapp.generated.resources.chemistry_li_ion_nmc
+import volty.composeapp.generated.resources.dashboard_style_classic
+import volty.composeapp.generated.resources.dashboard_style_clean
+import volty.composeapp.generated.resources.secondary_gauge_battery
+import volty.composeapp.generated.resources.secondary_gauge_consumption
+import volty.composeapp.generated.resources.secondary_gauge_current
+import volty.composeapp.generated.resources.secondary_gauge_duty
+import volty.composeapp.generated.resources.secondary_gauge_esc_temp
+import volty.composeapp.generated.resources.secondary_gauge_motor_temp
+import volty.composeapp.generated.resources.secondary_gauge_power
 
 @Composable
 fun bmsTypeLabel(type: BmsType): String = stringResource(
@@ -33,5 +44,26 @@ fun chemistryLabel(chemistry: Chemistry): String = stringResource(
         Chemistry.LI_ION_NMC -> Res.string.chemistry_li_ion_nmc
         Chemistry.LIFEPO4 -> Res.string.chemistry_lifepo4
         Chemistry.LEAD_ACID -> Res.string.chemistry_lead_acid
+    }
+)
+
+@Composable
+fun dashboardStyleLabel(style: DashboardStyle): String = stringResource(
+    when (style) {
+        DashboardStyle.CLEAN -> Res.string.dashboard_style_clean
+        DashboardStyle.CLASSIC -> Res.string.dashboard_style_classic
+    }
+)
+
+@Composable
+fun secondaryGaugeLabel(gauge: SecondaryGauge): String = stringResource(
+    when (gauge) {
+        SecondaryGauge.DUTY -> Res.string.secondary_gauge_duty
+        SecondaryGauge.BATTERY -> Res.string.secondary_gauge_battery
+        SecondaryGauge.POWER -> Res.string.secondary_gauge_power
+        SecondaryGauge.CURRENT -> Res.string.secondary_gauge_current
+        SecondaryGauge.MOTOR_TEMP -> Res.string.secondary_gauge_motor_temp
+        SecondaryGauge.ESC_TEMP -> Res.string.secondary_gauge_esc_temp
+        SecondaryGauge.CONSUMPTION -> Res.string.secondary_gauge_consumption
     }
 )

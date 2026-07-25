@@ -161,6 +161,10 @@
     <string name="settings_scan_timeout">Default scan timeout</string>
     <string name="settings_auto_connect_countdown">Default auto-connect countdown</string>
     <string name="settings_seconds">%1$d s</string>
+    <string name="settings_units">Units</string>
+    <string name="settings_units_metric">Metric</string>
+    <string name="settings_units_imperial">Imperial</string>
+    <string name="settings_dashboard_style">Dashboard style</string>
     <string name="settings_my_batteries">My batteries</string>
     <string name="settings_add_new_battery">+ Add new battery</string>
     <string name="settings_diagnostics">Diagnostics</string>
@@ -189,6 +193,8 @@
     <string name="vehicle_field_temp_warn">Temperature warning (°C)</string>
     <string name="vehicle_field_temp_high">Temperature high (°C)</string>
     <string name="vehicle_field_soc_low">SOC low (%%)</string>
+    <string name="vehicle_field_dashboard_style">Dashboard style</string>
+    <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_delete">Delete battery</string>
     <string name="vehicle_delete_confirm_title">Delete this battery?</string>
     <string name="vehicle_delete_confirm_text">This cannot be undone.</string>
@@ -206,6 +212,21 @@
     <string name="bms_daly">Daly BMS</string>
     <string name="bms_begode">Begode</string>
     <string name="bms_vesc">VESC BMS</string>
+
+    <!-- Dashboard style labels (shared by Settings' app default and per-vehicle picker) -->
+    <string name="dashboard_style_clean">Clean</string>
+    <string name="dashboard_style_classic">Classic</string>
+    <string name="dashboard_style_default">Default</string>
+    <string name="dashboard_style_classic_soon">Classic is coming soon — renders as Clean for now.</string>
+
+    <!-- Secondary gauge labels (per-vehicle "Inner gauge" picker) -->
+    <string name="secondary_gauge_duty">Duty</string>
+    <string name="secondary_gauge_battery">Battery</string>
+    <string name="secondary_gauge_power">Power</string>
+    <string name="secondary_gauge_current">Current</string>
+    <string name="secondary_gauge_motor_temp">Motor temp</string>
+    <string name="secondary_gauge_esc_temp">ESC temp</string>
+    <string name="secondary_gauge_consumption">Consumption</string>
 
     <!-- Notifications -->
     <string name="notif_monitoring_title">Volty · %1$s</string>
