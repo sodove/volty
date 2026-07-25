@@ -138,7 +138,10 @@ class RideDashboardComponentTest {
         secondary: SecondaryGauge = SecondaryGauge.DUTY,
         vehicleStyle: DashboardStyle? = null,
         appDefault: DashboardStyle = DashboardStyle.CLEAN,
-        units: UnitSystem = UnitSystem.METRIC
+        units: UnitSystem = UnitSystem.METRIC,
+        onOpenSettingsRequested: () -> Unit = {},
+        onAddVehicleRequested: () -> Unit = {},
+        onDisconnectRequested: () -> Unit = {}
     ): DefaultRideDashboardComponent {
         if (repo.activeVehicle.value == null) {
             repo.activeVehicle.value = vehicleWith(vehicleStyle, secondary)
@@ -149,8 +152,9 @@ class RideDashboardComponentTest {
             bmsRepository = repo,
             vehicleRepository = FakeVehicleRepo(),
             appPrefs = appPrefs,
-            onOpenSettingsRequested = {},
-            onDisconnectRequested = {}
+            onOpenSettingsRequested = onOpenSettingsRequested,
+            onAddVehicleRequested = onAddVehicleRequested,
+            onDisconnectRequested = onDisconnectRequested
         )
     }
 
@@ -218,5 +222,33 @@ class RideDashboardComponentTest {
             val s = awaitItem()
             assertTrue(kotlin.math.abs(s.sessionWhPerKm!! - 16.9f) < 0.05f)
         }
+    }
+
+    @Test
+    fun add_vehicle_closes_the_sheet_and_forwards_the_request() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        var addRequested = false
+        val c = component(repo, onAddVehicleRequested = { addRequested = true })
+        advanceUntilIdle()
+        c.onPillClicked() // open the sheet
+        c.onAddVehicle()
+        advanceUntilIdle()
+        assertTrue(addRequested)
+        c.state.test { assertEquals(false, awaitItem().sheetOpen) }
+    }
+
+    @Test
+    fun opening_settings_closes_the_sheet() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        var settingsRequested = false
+        val c = component(repo, onOpenSettingsRequested = { settingsRequested = true })
+        advanceUntilIdle()
+        c.onPillClicked() // open the sheet
+        c.onOpenSettings()
+        advanceUntilIdle()
+        assertTrue(settingsRequested)
+        c.state.test { assertEquals(false, awaitItem().sheetOpen) }
     }
 }

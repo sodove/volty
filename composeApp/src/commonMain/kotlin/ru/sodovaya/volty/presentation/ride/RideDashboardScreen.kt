@@ -44,6 +44,7 @@ import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.RideMetrics
+import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
@@ -97,10 +98,14 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 
     // Session-local trackers, not part of RideDashboardComponent.State: keyed
     // on the vehicle id so switching vehicles starts both fresh, without the
-    // component needing to know about per-screen presentation history.
+    // component needing to know about per-screen presentation history. Both
+    // updates live in a LaunchedEffect keyed on the incoming sample rather
+    // than mutating state directly during composition.
     var sessionMaxSpeedKmh by remember(vehicle?.id) { mutableStateOf(0f) }
-    if (motion.speedKnown && motion.speedKmh > sessionMaxSpeedKmh) {
-        sessionMaxSpeedKmh = motion.speedKmh
+    LaunchedEffect(vehicle?.id, motion.timestamp) {
+        if (motion.speedKnown && motion.speedKmh > sessionMaxSpeedKmh) {
+            sessionMaxSpeedKmh = motion.speedKmh
+        }
     }
     // Never zero: the hero always has at least a 70 km/h scale to draw against.
     val vehicleMaxSpeed = max(70f, ceil(sessionMaxSpeedKmh / 10f) * 10f)
@@ -169,10 +174,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             saved = state.savedVehicles,
             activeId = state.vehicle?.id,
             onSwitch = component::onSwitchVehicle,
-            // RideDashboardComponent has no dedicated "add vehicle" hook (that
-            // flow lives behind Settings for this screen) — routing there
-            // keeps the button a real action rather than a dead no-op.
-            onAdd = component::onOpenSettings,
+            onAdd = component::onAddVehicle,
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
         )
@@ -180,22 +182,6 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 }
 
 private const val SPARKLINE_MAX_POINTS = 40
-
-// Mirrors the ESC/MOTOR bands in SecondaryGaugeMapper (kept private to that
-// mapper's own metric-selection logic) — duplicated as plain thresholds here
-// because the 2x2 cluster always shows both temps regardless of which one the
-// rider picked as their secondary gauge.
-private const val ESC_WARN_C = 70f
-private const val ESC_CRITICAL_C = 85f
-private const val MOTOR_WARN_C = 85f
-private const val MOTOR_CRITICAL_C = 100f
-
-private fun tempSeverity(c: Float, warn: Float, critical: Float, known: Boolean = true): DutyLevel = when {
-    !known -> DutyLevel.NORMAL
-    c >= critical -> DutyLevel.CRITICAL
-    c >= warn -> DutyLevel.WARN
-    else -> DutyLevel.NORMAL
-}
 
 @Composable
 private fun severityColor(level: DutyLevel): Color = when (level) {
@@ -295,14 +281,14 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
                 label = stringResource(Res.string.ride_esc_temp),
                 valueC = motion.escTempC,
                 known = true,
-                severity = tempSeverity(motion.escTempC, ESC_WARN_C, ESC_CRITICAL_C),
+                severity = TempBands.escLevel(motion.escTempC),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             TempMetricCard(
                 label = stringResource(Res.string.ride_motor_temp),
                 valueC = motion.motorTempC,
                 known = motion.hasMotorTemp,
-                severity = tempSeverity(motion.motorTempC, MOTOR_WARN_C, MOTOR_CRITICAL_C, motion.hasMotorTemp),
+                severity = TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }

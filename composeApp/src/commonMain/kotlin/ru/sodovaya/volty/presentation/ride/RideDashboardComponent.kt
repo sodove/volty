@@ -30,6 +30,7 @@ interface RideDashboardComponent {
     fun onPillClicked()
     fun onSheetDismiss()
     fun onSwitchVehicle(v: Vehicle)
+    fun onAddVehicle()
     fun onTabClicked(tab: Tab)
     fun onOpenSettings()
     fun onDisconnect()
@@ -68,6 +69,7 @@ class DefaultRideDashboardComponent(
     private val vehicleRepository: VehicleRepository,
     private val appPrefs: AppPrefs,
     private val onOpenSettingsRequested: () -> Unit,
+    private val onAddVehicleRequested: () -> Unit,
     private val onDisconnectRequested: () -> Unit
 ) : RideDashboardComponent, ComponentContext by componentContext {
 
@@ -209,11 +211,24 @@ class DefaultRideDashboardComponent(
         when (tab) {
             RideDashboardComponent.Tab.Ride -> {} // already on Ride
             RideDashboardComponent.Tab.Battery -> {} // no dedicated navigation target in this task
-            RideDashboardComponent.Tab.Settings -> onOpenSettingsRequested()
+            RideDashboardComponent.Tab.Settings -> onOpenSettings()
         }
     }
 
-    override fun onOpenSettings() { onOpenSettingsRequested() }
+    override fun onAddVehicle() {
+        // Mirrors DashboardComponent.onAddBattery — a real navigation hook the
+        // sheet's "+ Add battery" affordance can invoke, rather than a
+        // relabeled Settings shortcut. Clears the sheet first: it's about to
+        // navigate away, same as onSwitchVehicle does before it (dis)connects.
+        _state.update { it.copy(sheetOpen = false) }
+        onAddVehicleRequested()
+    }
+
+    override fun onOpenSettings() {
+        // Returning from Settings must not find the vehicle sheet still open.
+        _state.update { it.copy(sheetOpen = false) }
+        onOpenSettingsRequested()
+    }
 
     override fun onDisconnect() {
         scope.launch {
