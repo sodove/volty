@@ -116,8 +116,17 @@ class KableBmsRepositoryIndependentControllersTest {
         val specs = repo.linkSpecsForTest()
         assertEquals(setOf(ADDR_A, ADDR_B), specs.map { it.address }.toSet())
         specs.forEach { spec ->
-            assertFalse(spec.isGatewayLink, "one controller per address, no CAN id — not a gateway")
-            assertEquals(1, spec.ownedControllers.size)
+            // Full-equality, not `isGatewayLink == false` (which the fixture
+            // forces) nor a bare size check: the load-bearing fact is that an
+            // independently-addressed controller still plans to the UNTAGGED
+            // Part A shape. A canId or a kind appearing here is what would flip
+            // the link onto the gateway multiplexer, and it is invisible to the
+            // compiler — same type, fields just not passed.
+            assertEquals(
+                listOf(OwnedSource(globalIndex = spec.ownedControllers.single().globalIndex)),
+                spec.ownedControllers,
+                "one plain controller, no canId and no kind tag — exactly as before Part C"
+            )
             assertIs<VescProtocol>(
                 repo.createProtocolForTest(spec, v),
                 "each link must build a plain single-controller VescProtocol, not the gateway multiplexer"

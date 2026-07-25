@@ -5,7 +5,9 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
+import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -680,11 +682,22 @@ class KableBmsRepositoryVescTest {
 
         // Answer inline: this test is about geometry, not about the loop's
         // serialisation (VescGatewayProtocolTest owns that).
+        //
+        // The inner opcode has to be read where it actually is. This link owns
+        // a HOSTED battery, whose BMS_GET_VALUES request is a bare one-byte
+        // payload — indexing [2] on it threw, and `exchange`'s write-failure
+        // catch swallowed the IOOBE, so the test was quietly driving the
+        // failure path once per cycle instead of the silent-source one.
         val loop = launch {
             gateway.runPollLoop { frame ->
                 val len = frame[1].toInt() and 0xFF
                 val payload = frame.copyOfRange(2, 2 + len)
-                if (payload[2].toInt() == 4) gateway.onNotification(valuesFrame())
+                val inner = if ((payload[0].toInt() and 0xFF) == VescCan.OPCODE_FORWARD_CAN) {
+                    payload[2].toInt() and 0xFF
+                } else {
+                    payload[0].toInt() and 0xFF
+                }
+                if (inner == VescValues.OPCODE_GET_VALUES) gateway.onNotification(valuesFrame())
             }
         }
         advanceTimeBy(2_000)

@@ -15,7 +15,6 @@ import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
@@ -162,24 +161,31 @@ class KableBmsRepositoryAliasHandoffTest {
      * sample onwards must carry a live battery — through the head unit coming
      * up, through the swap itself, and after it.
      *
-     * The recorded history is asserted wholesale rather than item by item
-     * because [kotlinx.coroutines.flow.StateFlow] conflates: a strict
-     * awaitItem() sequence would silently tolerate a dropped intermediate. The
-     * failure this test is aimed at is not a one-emission blip anyway — it is
-     * a battery that is absent for as long as the hosted BMS stays quiet,
-     * which is exactly what a "release when the gateway link is up" trigger
-     * produces and what `assertFalse(seen.any { !it.aggregate.isConnected })`
-     * catches at every step below.
+     * **Recorded through [KableBmsRepository.vehicleDataTapForTest], not by
+     * collecting [KableBmsRepository.activeVehicleData], and that is what gives
+     * this test its teeth.** The release does two things in one synchronous
+     * consumer pass — `submit` the hosted sample, then `markOffline` the direct
+     * pack — and the whole property is that they happen in that order: inverted,
+     * the mark-offline publishes a snapshot whose alias group has no online
+     * member at all. A [kotlinx.coroutines.flow.StateFlow] CONFLATES that
+     * intermediate away, so a collector sees only the good final value and the
+     * inversion passes. The tap sits on the orchestrator's own `onVehicleData`
+     * and drops nothing, so every snapshot the code publishes is judged —
+     * including the one the bug would produce.
+     *
+     * The failure it is aimed at is not a one-emission blip either: a "release
+     * when the gateway link is up" trigger leaves the battery absent for as
+     * long as the hosted BMS stays quiet. Both are caught by the same
+     * `assertNoGap` at every step below.
      */
     @Test
     fun `the aggregated battery never gaps across the swap`() = repoTest { repo ->
         val v = twoPathScooter()
-        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
-
         val seen = mutableListOf<VehicleData>()
-        val recorder: Job = launch { repo.activeVehicleData.collect { seen += it } }
-        runCurrent()
-        seen.clear() // the pre-connection VehicleData() default is not part of the ride
+        // Before the install: the orchestrator captures this callback at
+        // construction, exactly as it captures orchestratorClockForTest.
+        repo.vehicleDataTapForTest = { seen += it }
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         fun assertNoGap(step: String) {
             val offline = seen.filter { !it.aggregate.isConnected }
@@ -220,8 +226,6 @@ class KableBmsRepositoryAliasHandoffTest {
             absoluteTolerance = 0.001f,
             message = "the battery is the head unit's now"
         )
-
-        recorder.cancel()
     }
 
     /**
@@ -358,6 +362,171 @@ class KableBmsRepositoryAliasHandoffTest {
             message = "and it is the direct path's live reading, not the head unit's frozen one"
         )
         assertEquals(1, snap.packs.size, "still one battery — the alias group is counted once")
+    }
+
+    /**
+     * **The head unit dies in the one-instruction window where the direct link
+     * is owed a re-raise but has not been torn down yet.**
+     *
+     * The release cannot tear the link down inline — `disconnectLink` suspends
+     * and takes `sessionLock`, neither of which the sample consumer may do — so
+     * it records the debt, marks the direct pack offline and LAUNCHES the
+     * teardown. For as long as that coroutine is queued the direct link is both
+     * owed a return and still installed, and "already installed" is one of the
+     * three refusals of the re-raise. A gateway drop landing there used to take
+     * the debt, be refused, and throw it away; the teardown then ran with
+     * nothing owing the link a return, and the rider had no battery for the
+     * rest of the ride — head unit gone, own link deliberately dropped.
+     *
+     * Driven by ordering the two coroutines on the test dispatcher: the drop is
+     * queued FIRST and the hosted sample arrives second, so when `runCurrent`
+     * drains the queue the drop is serviced while the release's `disconnectLink`
+     * is still waiting behind it. That is the real interleaving, not a mock of
+     * one.
+     *
+     * Asserted on the AGGREGATE the rider sees, and specifically on the direct
+     * path's live 74.0 V, driven through
+     * [KableBmsRepository.linkSampleFunnelsForTest] — the funnels of the links
+     * the app CURRENTLY holds. With the debt discarded the ANT is not among
+     * them, nothing is driven, and the last snapshot the orchestrator published
+     * is still the dead head unit's frozen 73.4 V on pack 1.
+     *
+     * Recorded through [KableBmsRepository.vehicleDataTapForTest] rather than
+     * read off `activeVehicleData` at the end, because the tail of this drain
+     * belongs to the reconnect loops both halves start: with no real peripheral
+     * behind them their first attempt fails, and a failing attempt that had to
+     * rebuild the pipeline clears it — blanking `activeVehicleData` for reasons
+     * that have nothing to do with the handoff. The tap sees what the
+     * orchestrator actually published while it was alive.
+     */
+    @Test
+    fun `a head unit that dies mid-release still gives the direct link back`() = repoTest { repo ->
+        val v = twoPathScooter()
+        val seen = mutableListOf<VehicleData>()
+        repo.vehicleDataTapForTest = { seen += it }
+        val funnels = repo.rideReady(v)
+        repo.markLinkOnlineForTest(HU_ADDR)
+
+        // Three coroutines, queued in this order and drained in it:
+        //  (1) the head unit's drop — serviced while (2)'s teardown is still
+        //      pending, which IS the window;
+        //  (2) the release, queued by the hosted sample's consumer pass;
+        //  (3) the ANT answering directly again — queued from the test body, so
+        //      it lands after (1) and (2) but ahead of the reconnect loops they
+        //      start, whose doomed first attempt would otherwise tear the test
+        //      pipeline down before the battery could be observed.
+        repo.simulateLinkDropForTest(HU_ADDR, "head unit dies mid-release")  // (1)
+        funnels[1](0, hostedSample(), emptyList())                           // (2)
+        launch {                                                             // (3)
+            val live = repo.linkSampleFunnelsForTest()
+            repo.linkAddressesForTest().forEachIndexed { i, address ->
+                if (address == ANT_ADDR) live[i](0, parkedSample(), emptyList())
+            }
+        }
+        runCurrent()
+
+        // The property first, the mechanism after it.
+        val snap = seen.last()
+        assertTrue(snap.aggregate.isConnected, "the rider's battery survived the head unit")
+        assertEquals(
+            74.0f,
+            snap.aggregate.voltage,
+            absoluteTolerance = 0.001f,
+            message = "the battery must be the direct path's live reading, not the dead head unit's frozen one"
+        )
+        assertEquals(1, snap.packs.size, "still one battery — the alias group is counted once")
+        assertEquals(0, snap.packs.single().pack.index, "and the path serving it is the direct one")
+
+        assertContains(
+            repo.linkAddressesForTest(),
+            ANT_ADDR,
+            "a re-raise refused because the link was still installed must not be a re-raise CANCELLED"
+        )
+        assertTrue(
+            assertNotNull(repo.linkReconnectJobForTest(ANT_ADDR)).isActive,
+            "and it comes back through the ordinary reconnect loop, as on every other re-raise path"
+        )
+    }
+
+    // ----- 3b. Damping: the battery must not blink absent on a flapping head unit -----
+
+    /**
+     * A hosted BMS that reports roughly on the `packOfflineAfterMs` boundary
+     * makes the handoff oscillate: report → we release the direct link, go
+     * quiet → we take it back, report → we release it again. Each cycle leaves
+     * the battery on NEITHER path for a moment (the direct link is only
+     * reconnecting, the hosted one has just been retired), so the rider watches
+     * the battery blink absent over and over.
+     *
+     * The damper is a hold-down started by the re-raise: for
+     * [KableBmsRepository.HANDOFF_RELEASE_HOLD_DOWN_MS] afterwards this gateway
+     * cannot take the direct link again. Deliberately a DELAY and not a veto —
+     * the second half of this test is the half that keeps it honest.
+     */
+    @Test
+    fun `a head unit whose battery just went silent cannot take the direct link straight back`() = repoTest { repo ->
+        var nowMs = 1_000_000L
+        repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
+        val v = twoPathScooter()
+        val funnels = repo.rideReady(v)
+        repo.markLinkOnlineForTest(HU_ADDR)
+
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+        assertEquals(listOf(HU_ADDR), repo.linkAddressesForTest(), "the first handoff is uncontroversial")
+
+        // The hosted battery goes quiet while the uBoxes keep the link healthy,
+        // so the direct link comes back — one full flap.
+        nowMs += BleConfig.packOfflineAfterMs + 1_000L
+        repo.linkMotionFunnelsForTest().single()(0, ControllerData(speedKmh = 31f, isConnected = true))
+        runCurrent()
+        assertContains(repo.linkAddressesForTest(), ANT_ADDR, "the re-raise fires, as it must")
+
+        // And the hosted battery pipes up again seconds later. Handing the link
+        // straight back is what makes the battery blink.
+        nowMs += 5_000L
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+
+        assertContains(
+            repo.linkAddressesForTest(),
+            ANT_ADDR,
+            "a head unit that just lost the battery has not earned it back yet — releasing again " +
+                "here is the flap the rider sees as the battery blinking absent"
+        )
+        assertEquals(2, repo.linkCountForTest())
+    }
+
+    /**
+     * The other side of the damper: it must not become a veto. A head unit that
+     * genuinely settles down and keeps serving the battery still wins the
+     * direct link — the hold-down only postpones the decision, it never
+     * cancels it.
+     */
+    @Test
+    fun `a head unit that settles down still wins the battery once the hold-down expires`() = repoTest { repo ->
+        var nowMs = 1_000_000L
+        repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
+        val v = twoPathScooter()
+        val funnels = repo.rideReady(v)
+        repo.markLinkOnlineForTest(HU_ADDR)
+
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+        nowMs += BleConfig.packOfflineAfterMs + 1_000L
+        repo.linkMotionFunnelsForTest().single()(0, ControllerData(speedKmh = 31f, isConnected = true))
+        runCurrent()
+        assertEquals(2, repo.linkCountForTest(), "the link is back and the hold-down is armed")
+
+        nowMs += KableBmsRepository.HANDOFF_RELEASE_HOLD_DOWN_MS
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+
+        assertEquals(
+            listOf(HU_ADDR),
+            repo.linkAddressesForTest(),
+            "the hold-down delays the handoff; it does not cancel it"
+        )
     }
 
     /**

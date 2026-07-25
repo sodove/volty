@@ -124,10 +124,10 @@ class VescGatewayProtocol(
      */
     override val pollIntervalMs: Long = DEFAULT_POLL_INTERVAL_MS,
     /**
-     * How long one request waits for its bare reply. Budgeted so a full cycle
-     * of silent sources still finishes well inside
-     * `BleConfig.staleSampleMs` — a dead uBox must cost cycle time, never the
-     * link.
+     * How long one request waits for its bare reply. A dead uBox must cost
+     * cycle time, never the link — the bound that makes that true is stated
+     * and enforced by [checkSilenceBudget], which this and
+     * [lateReplyGuardMs] are inputs to.
      */
     private val replyTimeoutMs: Long = DEFAULT_REPLY_TIMEOUT_MS,
     /**
@@ -148,6 +148,55 @@ class VescGatewayProtocol(
         const val DEFAULT_POLL_INTERVAL_MS: Long = 50L
         const val DEFAULT_REPLY_TIMEOUT_MS: Long = 400L
         const val DEFAULT_LATE_REPLY_GUARD_MS: Long = 100L
+
+        /**
+         * The budget one link may spend on a run of silent sources before the
+         * session's stale-sample watchdog tears it down — a restatement of
+         * `BleConfig.staleSampleMs`, NOT an import: `data/ble` depends on
+         * `data/bms` (it builds every protocol), so reaching the other way
+         * would close the loop (see [GatewaySource]'s KDoc). Kept as a named
+         * constant so [checkSilenceBudget] can name what it is protecting.
+         */
+        const val WATCHDOG_SILENCE_BUDGET_MS: Long = 5_000L
+
+        /**
+         * The real timeout-budget invariant of this loop, checked rather than
+         * assumed — the task-4 report stated it wrongly ("a whole cycle of
+         * silent sources must fit inside the watchdog"), and a whole cycle of
+         * silence SHOULD trip the watchdog: nothing behind the gateway is
+         * answering.
+         *
+         * What must fit is the longest run of silence that still leaves
+         * somebody reporting, because [ConnectionSession]'s watchdog measures
+         * the gap between two SAMPLES, not the length of a cycle. The worst
+         * such run is every source but one, each costing a full
+         * [replyTimeoutMs] + [lateReplyGuardMs], plus the inter-cycle
+         * [pollIntervalMs] when the run straddles the cycle boundary.
+         *
+         * At the product owner's 4-source plan that is 3 × 500 + 50 = 1550 ms
+         * against a 5 s budget. It grows LINEARLY with the plan, so a vehicle
+         * with enough sources behind one head unit would silently reconnect
+         * forever while most of its CAN bus was healthy. Failing loudly at
+         * construction is the honest outcome: a plan that cannot meet this
+         * bound does not work, and the message says which knob to turn.
+         */
+        internal fun checkSilenceBudget(
+            planSize: Int,
+            replyTimeoutMs: Long,
+            lateReplyGuardMs: Long,
+            pollIntervalMs: Long
+        ) {
+            if (planSize < 2) return
+            val worstSilentRunMs =
+                (planSize - 1) * (replyTimeoutMs + lateReplyGuardMs) + pollIntervalMs
+            require(worstSilentRunMs < WATCHDOG_SILENCE_BUDGET_MS) {
+                "A gateway plan of $planSize sources can go $worstSilentRunMs ms between samples " +
+                    "when all but one are silent, which exceeds the ${WATCHDOG_SILENCE_BUDGET_MS} ms " +
+                    "stale-sample budget — the link would be torn down while most of the CAN bus is " +
+                    "healthy. Lower replyTimeoutMs/lateReplyGuardMs, split the sources across links, " +
+                    "or raise BleConfig.staleSampleMs (and this constant with it)."
+            }
+        }
     }
 
     override val uuids = BmsUuids(
@@ -225,6 +274,10 @@ class VescGatewayProtocol(
         packs.forEach { add(bmsRequest(it)) }
     }
 
+    init {
+        checkSilenceBudget(plan.size, replyTimeoutMs, lateReplyGuardMs, pollIntervalMs)
+    }
+
     private fun frameFor(canId: Int?, inner: ByteArray): ByteArray =
         VescPacket.frame(if (canId == null) inner else VescCan.forwardCan(canId, inner))
 
@@ -244,10 +297,23 @@ class VescGatewayProtocol(
         consume = { payload ->
             VescValues.decodeValues(payload, c.motor)?.let { applyValues(c.globalIndex, it) }
         },
-        // Drop the cached per-unit decode: with it gone nothing can republish
-        // this unit's frozen duty/current next to a live speed, so a quiet uBox
-        // produces NO sample and ages into offline instead of lying.
-        onSilence = { perUnit = perUnit - c.globalIndex }
+        // Drop the cached per-unit decode AND what was published from it: with
+        // both gone nothing can republish this unit's frozen duty/current next
+        // to a live speed, so a quiet uBox produces NO sample and ages into
+        // offline instead of lying.
+        //
+        // `motion` has to go too, not just `perUnit`. `perUnit` is the decode
+        // cache the next publish reads; `motion` is what [latestMotion] hands
+        // out. Dropping only the first leaves the accessor answering with the
+        // quiet controller's last sample forever — harmless to the routing
+        // helpers (they gate on instance identity, so an unchanged instance
+        // yields no new sample) but false to every other reader, and this file
+        // claims "no sample at all". Cheaper to make the claim true than to
+        // leave an accessor that lies to the next caller.
+        onSilence = {
+            perUnit = perUnit - c.globalIndex
+            motion = motion - c.globalIndex
+        }
     )
 
     private fun bmsRequest(p: GatewaySource) = Request(
@@ -317,6 +383,13 @@ class VescGatewayProtocol(
             throw e
         } catch (_: Exception) {
             // The write failed — a link dropping mid-cycle, not a silent node.
+            // DISARM FIRST, exactly as the timeout path below does. The request
+            // never made it onto the wire, so nothing legitimate can answer it;
+            // anything that lands during the pace is a late reply to an EARLIER
+            // request, and an armed expectation would consume it and credit it
+            // to a request that was never sent. (This is the same reasoning as
+            // the quiet window below, applied to the path that used to skip it.)
+            pending = null
             // Pace the loop with the budget the reply would have cost so a dead
             // link cannot spin the CPU while the session's watchdog decides.
             delay(replyTimeoutMs)

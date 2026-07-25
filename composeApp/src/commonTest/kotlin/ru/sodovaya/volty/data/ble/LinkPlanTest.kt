@@ -135,14 +135,24 @@ class LinkPlanTest {
         assertEquals(4, links.size)
     }
 
+    /**
+     * The message is asserted, not just the type: [planLinks] raises
+     * `IllegalArgumentException` from TWO places — the kind conflict here and
+     * the duplicate-CAN-id guard below — so a throw for the wrong reason would
+     * satisfy the type alone and leave the guard under test unexercised.
+     */
     @Test
     fun conflicting_direct_kinds_at_one_address_throw() {
-        assertFailsWith<IllegalArgumentException> {
+        val e = assertFailsWith<IllegalArgumentException> {
             planLinks(
                 packs = listOf(Pack(0, "p", BmsType.ANT_BMS, "SAME")),
                 controllers = listOf(Controller(0, "c", ControllerType.VESC, "SAME"))
             )
         }
+        assertTrue(
+            e.message.orEmpty().contains("resolves to conflicting protocol kinds"),
+            "must fail on the KIND conflict, not on some other guard: ${e.message}"
+        )
     }
 
     // --- Task 3 (Part C): CAN-forwarded controllers + hosted battery ---
@@ -207,7 +217,7 @@ class LinkPlanTest {
      */
     @Test
     fun conflicting_kinds_among_can_forwarded_controllers_still_throw() {
-        assertFailsWith<IllegalArgumentException> {
+        val e = assertFailsWith<IllegalArgumentException> {
             planLinks(
                 emptyList(),
                 listOf(
@@ -216,12 +226,18 @@ class LinkPlanTest {
                 )
             )
         }
+        // The distinct CAN ids here make the duplicate-id guard inapplicable,
+        // so without pinning the message this passes on a throw from it.
+        assertTrue(
+            e.message.orEmpty().contains("resolves to conflicting protocol kinds"),
+            "must fail on the KIND conflict, not on some other guard: ${e.message}"
+        )
     }
 
     /** Two nodes cannot physically share one CAN id behind the same gateway. */
     @Test
     fun duplicate_can_id_at_one_gateway_address_throws() {
-        assertFailsWith<IllegalArgumentException> {
+        val e = assertFailsWith<IllegalArgumentException> {
             planLinks(
                 emptyList(),
                 listOf(
@@ -230,5 +246,12 @@ class LinkPlanTest {
                 )
             )
         }
+        // Both controllers are VESC, so the kind guard cannot fire here — but
+        // asserting the message is what makes that a fact of the test rather
+        // than of the fixture someone edits later.
+        assertTrue(
+            e.message.orEmpty().contains("duplicate CAN id(s) [5]"),
+            "must name the duplicated id, not merely refuse: ${e.message}"
+        )
     }
 }

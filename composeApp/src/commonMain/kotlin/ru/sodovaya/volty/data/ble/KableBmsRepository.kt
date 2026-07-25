@@ -169,6 +169,20 @@ class KableBmsRepository private constructor(
         internal const val HANDOFF_SILENT_REASON = "Head unit stopped serving the battery"
 
         /**
+         * How long after taking a released link back a gateway must wait
+         * before it may take it again — the flapping damper described on
+         * [lastReRaiseAtMsByGateway].
+         *
+         * 60 s, chosen against the failure it damps rather than tuned: the
+         * cycle needs a hosted battery reporting on roughly
+         * [BleConfig.packOfflineAfterMs] (12 s) centres, so a hold-down of a
+         * few times that collapses a run of blinks into at most one per
+         * minute while still letting a head unit that settles down take the
+         * battery on its next report.
+         */
+        internal const val HANDOFF_RELEASE_HOLD_DOWN_MS: Long = 60_000L
+
+        /**
          * Distinct BLE-style address for [DEMO_CONTROLLER]. The demo pack and
          * the demo controller are two different sources on the (synthetic)
          * vehicle, so they must NOT share [DEMO_VEHICLE_ID] as their address:
@@ -345,13 +359,64 @@ class KableBmsRepository private constructor(
     private var yieldedLinks: List<YieldedLink> = emptyList()
 
     /**
-     * Guards the read-modify-write of [yieldedLinks]. A plain monitor rather
-     * than [sessionLock] because both mutators run on non-suspending paths —
-     * the sample consumer must never take a suspending mutex (see
-     * [launchSampleConsumer]) — and neither touches the session fields
-     * [sessionLock] guards.
+     * Guards the read-modify-write of [yieldedLinks] and of
+     * [lastReRaiseAtMsByGateway]. A plain monitor rather than [sessionLock]
+     * because both mutators run on non-suspending paths — the sample consumer
+     * must never take a suspending mutex (see [launchSampleConsumer]) — and
+     * neither touches the session fields [sessionLock] guards.
      */
     private val yieldedLinksLock = Any()
+
+    /**
+     * When each gateway last had a released link taken back off it — the one
+     * field that damps handoff flapping (C §5 follow-up).
+     *
+     * A hosted BMS that reports once every 12-25 s sits right on
+     * [BleConfig.packOfflineAfterMs]: it reports (we release the direct link),
+     * goes quiet past the threshold (we take the link back), reports again (we
+     * release it again), and so on. Every cycle leaves the battery on NEITHER
+     * path for a moment — the direct link is down while it reconnects and the
+     * hosted one has just been retired — so what the rider actually sees is the
+     * battery BLINKING ABSENT, over and over, which is worse than either path
+     * alone.
+     *
+     * So a re-raise starts a hold-down: for [HANDOFF_RELEASE_HOLD_DOWN_MS]
+     * afterwards this gateway may not take the direct link again, however
+     * confidently its hosted battery reports. That deliberately biases towards
+     * the path we can see working. It is a DELAY, never a veto — the hold-down
+     * expires on its own and the next hosted sample releases as usual, so a
+     * head unit that genuinely settles down still wins the battery, just a
+     * minute later. Never keyed on anything that could grow without bound: one
+     * entry per gateway of the current connection, cleared with the plan.
+     */
+    @Volatile
+    private var lastReRaiseAtMsByGateway: Map<String, Long> = emptyMap()
+
+    /**
+     * The repository's own wall clock, sharing the orchestrator's test
+     * override so a test that drives staleness under virtual time drives the
+     * handoff hold-down with the same hand — two clocks would let a test pass
+     * against a timeline no device can produce.
+     */
+    private fun nowMs(): Long =
+        (orchestratorClockForTest?.invoke() ?: Clock.System.now()).toEpochMilliseconds()
+
+    /**
+     * Is [gatewayAddress] still inside the hold-down a re-raise started? See
+     * [lastReRaiseAtMsByGateway] for why the release is damped at all.
+     */
+    private fun withinReReleaseHoldDown(gatewayAddress: String): Boolean {
+        val last = lastReRaiseAtMsByGateway[gatewayAddress] ?: return false
+        val elapsed = nowMs() - last
+        // A clock that went backwards (NTP step, a test rewinding its own
+        // source) must not arm the hold-down forever: treat it as expired.
+        return elapsed in 0 until HANDOFF_RELEASE_HOLD_DOWN_MS
+    }
+
+    /** Start [gatewayAddress]'s hold-down. Same monitor as [yieldedLinks]: they change together. */
+    private fun noteReRaise(gatewayAddress: String) = synchronized(yieldedLinksLock) {
+        lastReRaiseAtMsByGateway = lastReRaiseAtMsByGateway + (gatewayAddress to nowMs())
+    }
 
     /**
      * Record a link as released, unless one for the same address already is.
@@ -369,18 +434,48 @@ class KableBmsRepository private constructor(
     }
 
     /**
-     * Take the links owed to [gatewayAddress] OUT of [yieldedLinks] and return
-     * them — the claim step of every re-raise. Atomic for the same reason
-     * [addYieldedLink] is, and it doubles as the re-raise's own dedup: of two
-     * coroutines racing to bring one link back (a duplicate drop report, a
-     * drop racing the silent-hosted detector) exactly one gets a non-empty
-     * list and the other gets nothing to do.
+     * Decide which of the links owed to [gatewayAddress] may be raised right
+     * now and take **exactly those** out of [yieldedLinks] — the claim step of
+     * every re-raise. Atomic for the same reason [addYieldedLink] is, and it
+     * doubles as the re-raise's own dedup: of two coroutines racing to bring
+     * one link back (a duplicate drop report, a drop racing the silent-hosted
+     * detector) exactly one gets a non-empty list and the other gets nothing
+     * to do.
+     *
+     * **Deciding and consuming are ONE step, and that is the fix for a debt
+     * that could be silently discarded.** This used to take every entry owed
+     * to the gateway unconditionally and only then ask [yieldedLinksToRaise]
+     * whether any of them could be installed; an entry it refused was already
+     * out of [yieldedLinks] and was simply dropped. That is a live race, not a
+     * theoretical one: [releaseDirectLinkIfHostedReported] launches its
+     * `disconnectLink` asynchronously, so for a moment the direct link is BOTH
+     * owed a re-raise and still in [links] — and "already installed" is one of
+     * the three refusals. A gateway drop inside that window took the debt,
+     * refused it, discarded it, and the teardown then ran with nothing owing
+     * the link a return: no battery for the rest of the ride. Refusing without
+     * consuming leaves the debt standing for whoever can honour it, which is
+     * [settleReleaseAgainstGatewayDrop] the instant the window closes.
+     *
+     * The refusals that are NOT about the window (the rider disconnected, the
+     * connection was swept) leave their entries in place too. That is
+     * deliberate and harmless: both [disconnect] and [doConnect] clear
+     * [yieldedLinks] wholesale, so nothing outlives the connection that owed
+     * it.
+     *
+     * @param installedAddresses read by the caller INSIDE [sessionLock],
+     * together with the install that follows — see [raiseYieldedLinksFor].
      */
-    private fun takeYieldedLinksFor(gatewayAddress: String): List<YieldedLink> =
+    private fun claimYieldedLinksToRaise(
+        gatewayAddress: String,
+        installedAddresses: List<String>,
+        userInitiated: Boolean
+    ): List<YieldedLink> =
         synchronized(yieldedLinksLock) {
             val owed = yieldedLinks.filter { it.gatewayAddress == gatewayAddress }
-            if (owed.isNotEmpty()) yieldedLinks = yieldedLinks - owed.toSet()
-            owed
+            if (owed.isEmpty()) return@synchronized emptyList()
+            val raisable = yieldedLinksToRaise(owed, installedAddresses, userInitiated)
+            if (raisable.isNotEmpty()) yieldedLinks = yieldedLinks - raisable.toSet()
+            raisable
         }
 
     /**
@@ -645,6 +740,9 @@ class KableBmsRepository private constructor(
                 // was made for.
                 aliasHandoffs = emptyList()
                 yieldedLinks = emptyList()
+                // The hold-down belongs to the plan it damps: carried into a new
+                // connection it would refuse that connection's FIRST release.
+                lastReRaiseAtMsByGateway = emptyMap()
                 demoJob?.cancel()
                 demoJob = null
                 // Demo bypasses the orchestrator entirely — the simulator
@@ -1064,6 +1162,7 @@ class KableBmsRepository private constructor(
                 // The motion aggregate rides the same snapshot; publish it on
                 // the motion StateFlow beside the vehicle-level one.
                 _activeMotion.value = vd.motion
+                vehicleDataTapForTest?.invoke(vd)
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() }
         )
@@ -1254,6 +1353,14 @@ class KableBmsRepository private constructor(
      * member at all — `aggregate.isConnected` false, i.e. the battery gap this
      * task exists to prevent.
      *
+     * That inversion is pinned, and pinning it took a seam: both calls run in
+     * ONE synchronous consumer pass, so the bad snapshot never survives to
+     * [activeVehicleData] — a [kotlinx.coroutines.flow.StateFlow] conflates it
+     * away and a collector sees only the good final value. `the aggregated
+     * battery never gaps across the swap` therefore records through
+     * [vehicleDataTapForTest], which sits on the orchestrator's own
+     * `onVehicleData` and drops nothing; swap these two lines and it fails.
+     *
      * The mark-offline itself is not bookkeeping either. Without it the
      * released path keeps its `isOnline = true` and its last sample, and since
      * `collapseAliases` prefers the LOWEST-INDEXED online member — normally
@@ -1280,6 +1387,11 @@ class KableBmsRepository private constructor(
         // only fire if the plan and the live link list have diverged — fail
         // closed rather than take the whole vehicle down.
         if (current.size < 2 || current.none { it.spec.address == handoff.gatewayAddress }) return null
+        // Damping (C §5 follow-up): this gateway had the link taken back off it
+        // very recently, so its hosted battery has not yet shown it can hold
+        // one. Releasing again now is how the rider ends up watching the
+        // battery blink absent — see [lastReRaiseAtMsByGateway].
+        if (withinReReleaseHoldDown(handoff.gatewayAddress)) return null
 
         // Claim the release BEFORE performing it, and atomically: if the
         // gateway drops between here and the launched disconnectLink, the drop
@@ -1298,8 +1410,45 @@ class KableBmsRepository private constructor(
         // never do either (see [launchSampleConsumer]), so the teardown runs on
         // the repo scope. The state that matters for the no-gap property — the
         // mark-offline above — has already been applied synchronously.
-        scope.launch { disconnectLink(handoff.directAddress) }
+        scope.launch {
+            disconnectLink(handoff.directAddress)
+            settleReleaseAgainstGatewayDrop(handoff.gatewayAddress)
+        }
         return orchestrator?.snapshot()
+    }
+
+    /**
+     * Close the release window: the direct link is now really gone, so honour
+     * a re-raise that could not be honoured while it was still installed.
+     *
+     * **The second half of the fix [claimYieldedLinksToRaise] describes, and
+     * neither half works alone.** Between this coroutine's launch and the
+     * `disconnectLink` above returning, the direct link is owed a re-raise AND
+     * still in [links]. A gateway drop in that window reaches
+     * [reRaiseYieldedLinksFor], which correctly refuses to install a second
+     * [PackLink] for an address that already has one — and after that refusal
+     * nothing else will ever fire: [onLinkDrop] runs once per death, and the
+     * silent-hosted detector is driven by samples that a dead head unit is no
+     * longer producing. Not consuming the debt keeps it; this is what spends
+     * it.
+     *
+     * Guarded on the gateway not being ONLINE so the ordinary handoff — head
+     * unit healthy, release uncontested — costs one status read and does
+     * nothing. The two orderings that remain are both covered: a drop that
+     * lands after this check finds the direct link already gone and raises it
+     * itself, and a drop racing this one serialises on [sessionLock] inside
+     * [raiseYieldedLinksFor], where whichever arrives second finds the debt
+     * already claimed.
+     */
+    private suspend fun settleReleaseAgainstGatewayDrop(gatewayAddress: String) {
+        if (yieldedLinks.none { it.gatewayAddress == gatewayAddress }) return
+        val gateway = links.firstOrNull { it.spec.address == gatewayAddress }
+        if (gateway != null && gateway.status == LinkStatus.ONLINE) return
+        println(
+            "[VOLTY-BLE] alias handoff: $gatewayAddress went down while the direct link was still " +
+                "being released — honouring the re-raise now that it is gone"
+        )
+        reRaiseYieldedLinksFor(gatewayAddress)
     }
 
     /**
@@ -1309,11 +1458,11 @@ class KableBmsRepository private constructor(
      * The FIRST of the re-raise's two triggers; the other, for a head unit
      * that stays up while the battery behind it goes quiet, is
      * [reRaiseYieldedLinksWhoseHostedWentSilent]. Both claim their links
-     * through [takeYieldedLinksFor], which is what makes them safe to fire
-     * concurrently for the same gateway.
+     * through [claimYieldedLinksToRaise], which is what makes them safe to
+     * fire concurrently for the same gateway.
      */
     private suspend fun reRaiseYieldedLinksFor(gatewayAddress: String) {
-        raiseYieldedLinks(takeYieldedLinksFor(gatewayAddress), HANDOFF_RERAISE_REASON)
+        raiseYieldedLinksFor(gatewayAddress, HANDOFF_RERAISE_REASON)
     }
 
     /**
@@ -1365,27 +1514,40 @@ class KableBmsRepository private constructor(
         if (silent.isEmpty()) return null
 
         // Retire every silent path first, so the snapshot below already shows
-        // the truth, then claim the links owed by each distinct gateway.
+        // the truth, then take back the links owed by each distinct gateway.
         for (handoff in silent) orchestrator.markOffline(handoff.hostedPackIndex)
         for (gatewayAddress in silent.map { it.gatewayAddress }.distinct()) {
-            val owed = takeYieldedLinksFor(gatewayAddress)
-            if (owed.isEmpty()) continue
             println(
                 "[VOLTY-BLE] alias handoff: $gatewayAddress is up but its hosted battery went silent — " +
-                    "taking back ${owed.joinToString { it.spec.address }}"
+                    "taking its released link(s) back"
             )
-            scope.launch { raiseYieldedLinks(owed, HANDOFF_SILENT_REASON) }
+            // The claim now happens INSIDE the launched raise, under
+            // sessionLock and in one step with the install (see
+            // [claimYieldedLinksToRaise]) — so a second sample arriving before
+            // this coroutine runs re-enters here, finds the debt still owed and
+            // launches a second raise, of which exactly one claims anything.
+            scope.launch { raiseYieldedLinksFor(gatewayAddress, HANDOFF_SILENT_REASON) }
         }
         return orchestrator.snapshot()
     }
 
     /**
-     * Install [owed] back into [links] and hand each one to the ordinary
-     * reconnect loop — the shared tail of both re-raise triggers.
+     * Claim whatever [gatewayAddress] owes, install it back into [links] and
+     * hand each one to the ordinary reconnect loop — the shared tail of both
+     * re-raise triggers.
      *
-     * Which of [owed] may actually be raised is [yieldedLinksToRaise]'s
+     * Which of the owed links may actually be raised is [yieldedLinksToRaise]'s
      * decision, kept pure and outside this class so each of its three refusals
-     * can be pinned on its own.
+     * can be pinned on its own; [claimYieldedLinksToRaise] applies it and
+     * consumes ONLY what it approves.
+     *
+     * The claim, the decision it rests on and the install are one
+     * [sessionLock] critical section on purpose. The decision reads [links]
+     * ("is this address already installed?") and the install writes it, so
+     * splitting them would let a concurrent connect slip an address in
+     * between and give it two [PackLink]s — the exact duplicate the refusal
+     * exists to prevent — while the debt that would have caught it was
+     * already spent.
      *
      * Re-raised through the ordinary reconnect loop rather than a bespoke
      * connect: a returning link has to survive the head unit's own flapping,
@@ -1396,18 +1558,21 @@ class KableBmsRepository private constructor(
      * still holds its session, so the orchestrator (and with it every pack's
      * state) survives the re-raise untouched.
      */
-    private suspend fun raiseYieldedLinks(owed: List<YieldedLink>, reason: String) {
-        if (owed.isEmpty()) return
+    private suspend fun raiseYieldedLinksFor(gatewayAddress: String, reason: String) {
         val raised: List<PackLink> = sessionLock.withLock {
-            val fresh = yieldedLinksToRaise(
-                owed = owed,
+            val fresh = claimYieldedLinksToRaise(
+                gatewayAddress = gatewayAddress,
                 installedAddresses = links.map { it.spec.address },
-                userInitiatedDisconnect = userInitiatedDisconnect
+                userInitiated = userInitiatedDisconnect
             ).map { PackLink(spec = it.spec, vehicle = it.vehicle) }
             if (fresh.isEmpty()) return@withLock emptyList()
             links = links + fresh
             fresh
         }
+        if (raised.isEmpty()) return
+        // Arm the flapping damper only when a link genuinely came back: a
+        // no-op claim must not push the hold-down out.
+        noteReRaise(gatewayAddress)
         for (link in raised) {
             println("[VOLTY-BLE] alias handoff: re-raising ${link.spec.address} — $reason")
             // Leave the (default) CONNECTING status before starting the loop,
@@ -1659,6 +1824,9 @@ class KableBmsRepository private constructor(
                 // to fail closed on, so the two must never be published apart.
                 aliasHandoffs = planHandoffs(vehicle, address, type)
                 yieldedLinks = emptyList()
+                // The hold-down belongs to the plan it damps: carried into a new
+                // connection it would refuse that connection's FIRST release.
+                lastReRaiseAtMsByGateway = emptyMap()
                 lastConnectionTarget = ConnectionTarget(vehicle, address, type)
             }
 
@@ -2043,6 +2211,9 @@ class KableBmsRepository private constructor(
             // first sample before doConnect replaced it.
             aliasHandoffs = emptyList()
             yieldedLinks = emptyList()
+            // The hold-down belongs to the plan it damps: carried into a new
+            // connection it would refuse that connection's FIRST release.
+            lastReRaiseAtMsByGateway = emptyMap()
             demoToCancel = demoJob
             demoJob = null
             // Forget the target so a later [onAppResumed] doesn't try to
@@ -2182,6 +2353,9 @@ class KableBmsRepository private constructor(
                 // newLinks again, so nothing is owed a re-raise.
                 aliasHandoffs = planHandoffs(target.vehicle, target.address, target.type)
                 yieldedLinks = emptyList()
+                // The hold-down belongs to the plan it damps: carried into a new
+                // connection it would refuse that connection's FIRST release.
+                lastReRaiseAtMsByGateway = emptyMap()
             }
             for (l in newLinks) {
                 // Transition out of Connected before kicking each loop — the
@@ -2475,6 +2649,24 @@ class KableBmsRepository private constructor(
     internal var orchestratorClockForTest: (() -> Instant)? = null
 
     /**
+     * Test-only tee on EVERY snapshot the orchestrator publishes, before
+     * [activeVehicleData] gets it.
+     *
+     * Exists because [activeVehicleData] is a [StateFlow] and a StateFlow
+     * CONFLATES: two mutations inside one synchronous consumer pass — which is
+     * exactly what the alias handoff's `submit` then `markOffline` is — reach a
+     * collector as one value, and the intermediate one is the value under test.
+     * Without this seam, "the aggregated battery never gaps across the swap"
+     * cannot distinguish the correct order from the inverted one, because the
+     * gap the inversion opens is precisely the emission StateFlow drops.
+     *
+     * Set BEFORE installing a pipeline; the callback is captured at
+     * orchestrator construction. Null in production.
+     */
+    @Volatile
+    internal var vehicleDataTapForTest: ((VehicleData) -> Unit)? = null
+
+    /**
      * Test-only: install the exact multi-link wiring [doConnect] builds —
      * effective link specs, one orchestrator sized from the full vehicle pack
      * list, one channel + consumer, one [PackLink] per distinct address — and
@@ -2508,6 +2700,9 @@ class KableBmsRepository private constructor(
         // rather than a hand-fed one.
         aliasHandoffs = planHandoffs(vehicle, address, type)
         yieldedLinks = emptyList()
+        // The hold-down belongs to the plan it damps: carried into a new
+        // connection it would refuse that connection's FIRST release.
+        lastReRaiseAtMsByGateway = emptyMap()
         lastConnectionTarget = ConnectionTarget(vehicle, address, type)
         _activeVehicle.value = vehicle
         _connectionState.value = ConnectionState.Connecting(vehicle)

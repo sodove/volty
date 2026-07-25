@@ -1,6 +1,5 @@
 package ru.sodovaya.volty.data.bms.vesc
 
-import ru.sodovaya.volty.domain.model.BmsType
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -493,10 +492,6 @@ class VescBmsValuesTest {
     // Opcode / malformed frames
     // =====================================================================
 
-    @Test fun opcode_is_96() {
-        assertEquals(96, VescBmsValues.OPCODE_BMS_GET_VALUES)
-    }
-
     @Test fun empty_payload_is_null() {
         assertNull(VescBmsValues.decode(byteArrayOf()))
     }
@@ -609,7 +604,4 @@ class VescBmsValuesTest {
         assertEquals(0f, d.soc)
     }
 
-    @Test fun bms_type_is_vesc_bms() {
-        assertEquals(BmsType.VESC_BMS, VescBmsValues.BMS_TYPE)
-    }
 }

@@ -35,6 +35,7 @@ import kotlin.math.abs
 import kotlin.math.min
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
@@ -259,6 +260,13 @@ class VescGatewayProtocolTest {
     private val healthyCycleMs = 4 * LATENCY_MS + CYCLE_GAP_MS
 
     /**
+     * One cycle of the default plan with exactly ONE source silent: three
+     * answered round-trips, one that costs the full timeout plus the quiet
+     * window, and the inter-cycle gap.
+     */
+    private val oneSilentCycleMs = 3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS
+
+    /**
      * Advance to just inside the end of [count] full cycles — one millisecond
      * short of the next cycle's first request, which lands exactly on the
      * boundary and would otherwise be counted here.
@@ -349,11 +357,15 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(4 * (3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS))
-        runCurrent()
+        runCycles(4, cycleMs = oneSilentCycleMs)
 
-        assertTrue(link.sent.size >= 8, "the loop kept cycling past the silent uBox")
+        assertEquals(
+            16,
+            link.sent.size,
+            "4 cycles x 4 sources: a silent uBox costs its cycle the timeout, never a skipped request"
+        )
         assertEquals(1, link.maxOutstanding, "a timing-out request is still exactly one request")
+        assertEquals(0, link.outstanding, "and every one of them settled")
         loop.cancel(); device.cancel()
     }
 
@@ -383,12 +395,21 @@ class VescGatewayProtocolTest {
         val b = assertNotNull(p.latestMotion(1), "the second uBox answered")
         assertTrue(abs(a.dutyPercent - 50f) < 0.01f, "canId $CAN_A's duty (0.500) landed on local 0")
         assertTrue(abs(b.dutyPercent - 25f) < 0.01f, "canId $CAN_B's duty (0.250) landed on local 1")
-        assertNull(p.latestMotion(2), "there is no third controller")
+
+        // GLOBALITY, and asserted WITHOUT going back through
+        // GatewaySource.globalIndex — which is what the two duty assertions
+        // above do, so on their own they pin canId->slot and nothing more.
+        // The overlay is folded in only for the source whose key equals the
+        // primary's GLOBAL index (3 here). Key the decode state by arrival
+        // position instead and 0 never equals 3, so the SETUP frame's reported
+        // speed silently stops reaching anyone — with no wheel configured on
+        // these sources, that shows up as NONE.
+        assertEquals(SpeedSource.REPORTED, a.speedSource, "the overlay found the primary by its global index 3")
+        assertTrue(abs(a.speedKmh - 47.0f) < 0.05f, "and it is the SETUP frame's speed")
+        assertEquals(SpeedSource.NONE, b.speedSource, "while global 1 is not the primary and gets no overlay")
 
         val battery = assertNotNull(p.latestData(0))
         assertTrue(abs(battery.voltage - 75.5f) < 0.001f)
-        assertEquals(2, p.controllerCount)
-        assertEquals(1, p.packCount)
         loop.cancel(); device.cancel()
     }
 
@@ -585,12 +606,129 @@ class VescGatewayProtocolTest {
         advanceTimeBy(3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS)
         runCurrent()
 
-        assertNull(p.latestMotion(0), "the late reply was dropped, not applied")
+        // NOT "the late reply was dropped": this stays null however the reply
+        // is mis-credited, because a reply credited to the NEXT request lands
+        // on local 1, not here. What it pins is that the primary produced no
+        // sample of its own — the drop itself is the assertion below.
+        assertNull(p.latestMotion(0), "the primary's own request went unanswered, so it has no sample")
         assertTrue(
             abs(assertNotNull(p.latestMotion(1)).dutyPercent - 25f) < 0.01f,
             "the second uBox reports ITS own 0.250 duty, not the late 0.500 meant for the first"
         )
         loop.cancel(); device.cancel()
+    }
+
+    /**
+     * A uBox that stops answering must stop having a latest sample — "no reply,
+     * no sample" has to be true of the ACCESSOR, not only of the gate that
+     * feeds `ConnectionSession`. Dropping the per-unit decode cache while
+     * leaving what was published from it means `latestMotion` keeps handing out
+     * a frozen duty and current for the rest of the ride: harmless to the
+     * routing helpers (they discriminate on instance identity, so an unchanged
+     * instance yields no new sample) and false to every other reader.
+     */
+    @Test
+    fun `a controller that stops answering drops its last sample instead of freezing it`() = runTest {
+        var awake = true
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (canId == CAN_B && !awake) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertNotNull(p.latestMotion(1), "the rear uBox did answer to begin with")
+
+        awake = false
+        runCycles(2, cycleMs = oneSilentCycleMs)
+
+        assertNull(
+            p.latestMotion(1),
+            "a quiet uBox must have no sample AT ALL — a frozen duty and current beside a live " +
+                "speed is a lie, whoever reads it"
+        )
+        assertNotNull(p.latestMotion(0), "its awake neighbour is untouched")
+        assertNotNull(p.latestData(0), "and so is the hosted battery, which caches deliberately")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The write-failure path must disarm before it paces, exactly as the
+     * timeout path does.** A request whose write threw never reached the wire,
+     * so nothing legitimate can answer it — but the loop still waits out the
+     * reply budget before moving on, and while it waited the expectation used
+     * to stay ARMED. A late reply to an EARLIER request (byte-identical, since
+     * the wire has no transaction id — §10.1 reason 2) landing in that window
+     * was consumed and credited to a request that was never sent.
+     *
+     * Asserted INSIDE the pace, before the loop's own `onSilence` would clear
+     * the slot anyway: the harm is a wrong reading being published at all, not
+     * whether something later overwrites it.
+     */
+    @Test
+    fun `a stale reply arriving while a failed write is paced is not credited to it`() = runTest {
+        val p = protocol(
+            controllers = listOf(GatewaySource(globalIndex = 0, canId = CAN_A)),
+            packs = emptyList()
+        )
+        val scope = this
+        val loop = launch {
+            p.runPollLoop { frame ->
+                val len = frame[1].toInt() and 0xFF
+                val payload = frame.copyOfRange(2, 2 + len)
+                when (payload[2].toInt() and 0xFF) {
+                    VescValues.OPCODE_GET_VALUES -> {
+                        // The link drops mid-write. The reply that lands 20 ms
+                        // later belongs to an earlier exchange — this request
+                        // never made it out, so nothing can legitimately answer.
+                        scope.launch {
+                            delay(LATENCY_MS)
+                            p.onNotification(valuesFrame(dutyRaw = 500))
+                        }
+                        throw IllegalStateException("write failed — the link dropped mid-cycle")
+                    }
+                    else -> p.onNotification(setupFrame())
+                }
+            }
+        }
+
+        // Well inside the 400 ms pace the failure starts, and well past the
+        // 20 ms at which the stale reply arrives.
+        advanceTimeBy(LATENCY_MS * 5)
+        runCurrent()
+
+        assertNull(
+            p.latestMotion(0),
+            "a reply to a request that never went out must be dropped, not credited to it"
+        )
+        loop.cancel()
+    }
+
+    /**
+     * The loop's timeout budget is bounded by what the session's stale-sample
+     * watchdog allows between two SAMPLES, and the binding case is the longest
+     * run of silent sources that still leaves somebody reporting — every source
+     * but one. That scales linearly with the plan, so it is checked at
+     * construction rather than assumed: a plan that cannot meet it does not
+     * work, and reconnecting forever while most of the CAN bus is healthy is a
+     * far worse way to find out.
+     */
+    @Test
+    fun `a plan too large for the stale-sample budget is refused at construction`() {
+        // 9 controllers + the SETUP request = 10 sources: 9 x 500 ms + the
+        // 50 ms cycle gap = 4550 ms, inside the 5 s budget.
+        VescGatewayProtocol(controllers = (0 until 9).map { GatewaySource(globalIndex = it, canId = it + 1) })
+
+        val e = assertFailsWith<IllegalArgumentException> {
+            // One more source pushes the worst silent run to 5550 ms.
+            VescGatewayProtocol(controllers = (0 until 10).map { GatewaySource(globalIndex = it, canId = it + 1) })
+        }
+        assertTrue(
+            e.message.orEmpty().contains("stale-sample budget"),
+            "the refusal has to say what it is protecting, not just that it refused: ${e.message}"
+        )
     }
 
     // ------------------------------------------------------------------
@@ -725,6 +863,80 @@ class VescGatewayProtocolTest {
         assertTrue(
             assertNotNull(latest).controllers.first { it.controller.index == 1 }.isOnline,
             "and it comes back online on its first reply"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The same scooter with its sources numbered so that **every LOCAL index
+     * the protocol speaks differs from the GLOBAL one the vehicle is keyed
+     * by**: the battery is pack 0, the uBoxes are controllers 1 and 2, so local
+     * 0 -> global 1 and local 1 -> global 2.
+     */
+    private fun offsetScooter(): Pair<LinkSpec, VescGatewayProtocol> {
+        val spec = planLinks(offsetPacks(), offsetControllers()).single()
+        return spec to assertIs<VescGatewayProtocol>(
+            controllerMotionProtocol(
+                kind = spec.protocolKind,
+                deriveBattery = false,
+                motor = MotorConfig(),
+                link = spec
+            )
+        )
+    }
+
+    private fun offsetPacks() =
+        listOf(Pack(index = 0, label = "ANT", bmsType = BmsType.VESC_BMS, bmsAddress = "HEAD"))
+
+    private fun offsetControllers() = listOf(
+        Controller(1, "Front", ControllerType.VESC, "HEAD", canId = CAN_A),
+        Controller(2, "Rear", ControllerType.VESC, "HEAD", canId = CAN_B)
+    )
+
+    /**
+     * The routing seam under the condition that can actually break it. Every
+     * other end-to-end test on this link runs with local == global, where a
+     * multiplexer that routed by arrival position would be indistinguishable
+     * from one that routes by the source it asked. Here it is not: get it wrong
+     * and the front uBox's 0.500 duty is published as the REAR's, on a vehicle
+     * whose two motors are meant to be independently readable.
+     */
+    @Test
+    fun `each uBox lands in its own vehicle-global slot when local and global differ`() = runTest {
+        val (spec, p) = offsetScooter()
+        val link = FakeGateway(p, healthyScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        var latest: VehicleData? = null
+        val orchestrator = VehicleConnection(
+            packs = offsetPacks(),
+            controllers = offsetControllers(),
+            topology = PackTopology.PARALLEL,
+            onVehicleData = { latest = it }
+        )
+
+        runCycles(1)
+        routeControllerSamples(p, MotionSampleGate(p.controllerCount)) { local, data ->
+            orchestrator.submitMotion(spec.globalControllerIndex(local), data)
+        }
+        routePackSamples(p, PackSampleGate(p.packCount)) { local, data, sections ->
+            orchestrator.submit(spec.globalPackIndex(local), data, sections)
+        }
+
+        val published = assertNotNull(latest)
+        assertEquals(listOf(1, 2), published.controllers.map { it.controller.index })
+        assertTrue(
+            abs(published.controllers.first { it.controller.index == 1 }.data.dutyPercent - 50f) < 0.01f,
+            "canId $CAN_A rides LOCAL 0 and must land on GLOBAL 1"
+        )
+        assertTrue(
+            abs(published.controllers.first { it.controller.index == 2 }.data.dutyPercent - 25f) < 0.01f,
+            "canId $CAN_B rides LOCAL 1 and must land on GLOBAL 2"
+        )
+        assertTrue(
+            abs(published.packs.single().data.voltage - 75.5f) < 0.001f,
+            "and the hosted battery, local 0 as well, lands on global 0"
         )
         loop.cancel(); device.cancel()
     }
