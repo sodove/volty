@@ -57,7 +57,6 @@ import ru.sodovaya.volty.util.UnitSystem
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
-import volty.composeapp.generated.resources.dashboard_style_classic_soon
 import volty.composeapp.generated.resources.settings_add_new_battery
 import volty.composeapp.generated.resources.settings_auto_connect_countdown
 import volty.composeapp.generated.resources.settings_dashboard_style
@@ -190,13 +189,6 @@ fun SettingsScreen(component: SettingsComponent) {
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = dashboardStyles.size)
                     ) { Text(dashboardStyleLabel(style)) }
                 }
-            }
-            if (state.defaultDashboardStyle == DashboardStyle.CLASSIC) {
-                Text(
-                    stringResource(Res.string.dashboard_style_classic_soon),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             HorizontalDivider()

@@ -58,7 +58,6 @@ import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.action_delete
-import volty.composeapp.generated.resources.dashboard_style_classic_soon
 import volty.composeapp.generated.resources.dashboard_style_default
 import volty.composeapp.generated.resources.vehicle_delete
 import volty.composeapp.generated.resources.vehicle_delete_confirm_text
@@ -194,13 +193,6 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = dashboardOptions.size)
                     ) { Text(style?.let { dashboardStyleLabel(it) } ?: stringResource(Res.string.dashboard_style_default), fontSize = 12.sp) }
                 }
-            }
-            if (state.dashboardStyle == DashboardStyle.CLASSIC) {
-                Text(
-                    stringResource(Res.string.dashboard_style_classic_soon),
-                    fontSize = 11.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
             }
 
             // INNER GAUGE — what the secondary ring/dial on the Ride screen shows.

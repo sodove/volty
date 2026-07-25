@@ -88,6 +88,8 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
+    <string name="ride_dial_speed">Скорость</string>
     <string name="ride_odometer">Одометр</string>
     <string name="ride_trip">Поездка</string>
     <string name="ride_uptime">В пути</string>
@@ -216,7 +218,6 @@
     <string name="dashboard_style_clean">Clean</string>
     <string name="dashboard_style_classic">Classic</string>
     <string name="dashboard_style_default">По умолчанию</string>
-    <string name="dashboard_style_classic_soon">Classic скоро появится — пока отображается как Clean.</string>
 
     <!-- Secondary gauge labels (per-vehicle "Inner gauge" picker) -->
     <string name="secondary_gauge_duty">ШИМ</string>

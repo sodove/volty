@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
@@ -81,14 +82,16 @@ import volty.composeapp.generated.resources.status_reconnecting
 import volty.composeapp.generated.resources.status_scanning
 
 /**
- * The Clean Ride dashboard — the app's home screen for a vehicle with a motor
- * controller. Per the locked design (`docs/design/ride-dashboard-mockup.html`,
- * Clean view): vehicle pill, a concentric speedo hero, a 2x2 metric cluster,
- * a consumption card with a sparkline, and a monospace odo/trip/uptime strip.
+ * The Ride dashboard — the app's home screen for a vehicle with a motor
+ * controller. Per the locked design (`docs/design/ride-dashboard-mockup.html`),
+ * a vehicle picks one of two renderers via [DashboardStyle]:
+ *  - [DashboardStyle.CLEAN]: vehicle pill, a concentric speedo hero, a 2x2
+ *    metric cluster, a consumption card with a sparkline.
+ *  - [DashboardStyle.CLASSIC]: [ClassicRideCluster], an eight-dial overlapping
+ *    VESC-style cluster.
  *
- * [ru.sodovaya.volty.domain.model.DashboardStyle.CLASSIC] renders this same
- * layout for now — the Classic (overlapping VESC dial cluster) renderer is a
- * later task.
+ * Both styles share the vehicle pill, the Graph link, and the monospace
+ * odo/trip/uptime strip.
  */
 @Composable
 fun RideDashboardScreen(component: RideDashboardComponent) {
@@ -157,16 +160,33 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             onClick = component::onPillClicked
         )
 
-        RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
+        when (state.style) {
+            DashboardStyle.CLEAN -> {
+                RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
 
-        MetricCluster(motion = motion, battery = state.battery)
+                MetricCluster(motion = motion, battery = state.battery)
 
-        ConsumptionCard(
-            motion = motion,
-            sessionWhPerKm = state.sessionWhPerKm,
-            recentSpeeds = recentSpeeds,
-            onOpenGraph = component::onOpenGraph
-        )
+                ConsumptionCard(
+                    motion = motion,
+                    sessionWhPerKm = state.sessionWhPerKm,
+                    recentSpeeds = recentSpeeds
+                )
+            }
+            DashboardStyle.CLASSIC -> ClassicRideCluster(
+                state = state,
+                maxSpeedKmh = vehicleMaxSpeed,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        // Graph is no longer a bottom tab — this is its entry point from the
+        // ride dashboard. It lives here, alongside the odometer strip, rather
+        // than inside either style's renderer, so it's present for BOTH
+        // Clean and Classic (Classic's cluster otherwise leaves riders no
+        // Graph affordance on this screen at all).
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            GraphLinkButton(onClick = component::onOpenGraph)
+        }
 
         OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
     }
@@ -185,8 +205,9 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 
 private const val SPARKLINE_MAX_POINTS = 40
 
+/** Shared severity->colour mapping, reused by [ClassicRideCluster] so both renderers agree. */
 @Composable
-private fun severityColor(level: DutyLevel): Color = when (level) {
+internal fun severityColor(level: DutyLevel): Color = when (level) {
     DutyLevel.NORMAL -> MaterialTheme.colorScheme.primary
     DutyLevel.WARN -> MaterialTheme.colorScheme.tertiary
     DutyLevel.CRITICAL -> MaterialTheme.colorScheme.error
@@ -327,8 +348,7 @@ private fun TempMetricCard(
 private fun ConsumptionCard(
     motion: ControllerData,
     sessionWhPerKm: Float?,
-    recentSpeeds: List<Float>,
-    onOpenGraph: () -> Unit
+    recentSpeeds: List<Float>
 ) {
     val instantWhPerKm = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
     Column(
@@ -349,20 +369,12 @@ private fun ConsumptionCard(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
             )
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                if (sessionWhPerKm != null) {
-                    Text(
-                        text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
-                        fontSize = 10.sp,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                    )
-                }
-                // Graph is no longer a bottom tab — this is its entry point
-                // from the ride dashboard.
-                GraphLinkButton(onClick = onOpenGraph)
+            if (sessionWhPerKm != null) {
+                Text(
+                    text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                )
             }
         }
         Spacer(Modifier.height(4.dp))
