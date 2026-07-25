@@ -77,6 +77,8 @@
     <string name="cells_v_avg">%1$s V avg</string>
     <string name="power_last_5_min">POWER · LAST 5 MIN</string>
 
+    <string name="tab_ride">Ride</string>
+    <string name="tab_battery">Battery</string>
     <string name="tab_live">Live</string>
     <string name="tab_cells">Cells</string>
     <string name="tab_graph">Graph</string>

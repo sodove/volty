@@ -9,11 +9,14 @@ import com.arkivanov.decompose.router.stack.childStack
 import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
+import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
+import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -31,6 +34,8 @@ import ru.sodovaya.volty.presentation.pack.DefaultPackDetailComponent
 import ru.sodovaya.volty.presentation.pack.PackDetailComponent
 import ru.sodovaya.volty.presentation.picker.DefaultPickerComponent
 import ru.sodovaya.volty.presentation.picker.PickerComponent
+import ru.sodovaya.volty.presentation.ride.DefaultRideDashboardComponent
+import ru.sodovaya.volty.presentation.ride.RideDashboardComponent
 import ru.sodovaya.volty.presentation.scanning.DefaultScanningComponent
 import ru.sodovaya.volty.presentation.scanning.ScanningComponent
 import ru.sodovaya.volty.presentation.settings.DefaultSettingsComponent
@@ -53,10 +58,17 @@ import org.koin.core.component.inject
 interface RootComponent {
     val stack: Value<ChildStack<*, Child>>
 
+    /**
+     * True when the active vehicle has a motor controller. Drives the Ride
+     * tab's visibility: a pure-BMS vehicle never sees it, so its experience is
+     * exactly the pre-Ride Battery + Settings one.
+     */
+    val rideAvailable: Value<Boolean>
+
     fun onBack()
     fun onTab(tab: Tab)
 
-    enum class Tab { Live, Graph, Settings }
+    enum class Tab { Ride, Battery, Settings }
 
     sealed interface Child {
         /** Transient cold-start state while we read the saved-vehicle DB. */
@@ -66,6 +78,7 @@ interface RootComponent {
         data class Scanning(val component: ScanningComponent) : Child
         data class AutoConnect(val component: AutoConnectComponent) : Child
         data class Picker(val component: PickerComponent) : Child
+        data class Ride(val component: RideDashboardComponent) : Child
         data class Dashboard(val component: DashboardComponent) : Child
         data class PackDetail(val component: PackDetailComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
@@ -82,6 +95,9 @@ sealed class Config {
     @Serializable data object Scanning : Config()
     @Serializable data class AutoConnect(val vehicleId: String) : Config()
     @Serializable data class Picker(val mode: String) : Config()
+    /** The Ride dashboard — home for any vehicle that has a motor controller. */
+    @Serializable data object Ride : Config()
+    /** The battery dashboard — home for a pure-BMS vehicle, Battery tab otherwise. */
     @Serializable data object Dashboard : Config()
     @Serializable data class PackDetail(val packIndex: Int) : Config()
     @Serializable data class VehicleEdit(
@@ -98,6 +114,32 @@ sealed class Config {
     @Serializable data object Settings : Config()
 }
 
+/**
+ * The app's home destination for [vehicle] — the single routing rule behind
+ * every post-connect landing, the back-out target of Graph/Settings, and the
+ * Ride tab's visibility.
+ *
+ * A vehicle with a motor controller is a *vehicle*, so it lands on the Ride
+ * dashboard. A pure-BMS vehicle (and "no vehicle at all") keeps the battery
+ * dashboard it has always had.
+ *
+ * Extracted as a pure function so it can be unit-tested without standing up
+ * Decompose's [ComponentContext] and Koin: see `RootNavigationTest`.
+ */
+internal fun homeConfigFor(vehicle: Vehicle?): Config =
+    if (vehicle?.hasControllers == true) Config.Ride else Config.Dashboard
+
+/**
+ * Destination of each bottom-bar tab. Pure for the same reason as
+ * [homeConfigFor] — the Battery tab must keep reaching the existing
+ * [Config.Dashboard], and that is worth pinning in a test.
+ */
+internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
+    RootComponent.Tab.Ride -> Config.Ride
+    RootComponent.Tab.Battery -> Config.Dashboard
+    RootComponent.Tab.Settings -> Config.Settings
+}
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -111,6 +153,10 @@ class DefaultRootComponent(
     // Lightweight scope for cold-start async work (DB reads). Previously these
     // ran via runBlocking on the UI thread — risky on slow devices.
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+
+    private val _rideAvailable =
+        MutableValue(homeConfigFor(bmsRepository.activeVehicle.value) is Config.Ride)
+    override val rideAvailable: Value<Boolean> = _rideAvailable
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
@@ -130,23 +176,44 @@ class DefaultRootComponent(
         if (stack.value.active.configuration is Config.Loading) {
             scope.launch { resolveStartDestination() }
         }
+
+        // The same rule as homeConfig(), followed live: switching vehicles from
+        // either dashboard's sheet must show/hide the Ride tab without waiting
+        // for a re-navigation. Declared after `stack` because it reads it.
+        scope.launch {
+            bmsRepository.activeVehicle.collect { v ->
+                val home = homeConfigFor(v)
+                _rideAvailable.value = home is Config.Ride
+                // Switching to a controller-less vehicle while Ride is on screen
+                // would strand the user on a dashboard with no motion source
+                // behind it — and with the Ride tab now hidden, no way back.
+                if (home !is Config.Ride && stack.value.active.configuration is Config.Ride) {
+                    nav.replaceAll(home)
+                }
+            }
+        }
     }
+
+    /**
+     * Where "home" is right now. Every post-connect landing goes through here
+     * so a controller vehicle lands on Ride and a pure-BMS one on the battery
+     * dashboard, from one rule rather than five copies of it.
+     */
+    private fun homeConfig(): Config = homeConfigFor(bmsRepository.activeVehicle.value)
 
     override fun onBack() {
         val current = stack.value.active.configuration
         when (current) {
-            is Config.Graph, is Config.Settings -> nav.replaceAll(Config.Dashboard)
+            // Graph and Settings are leaves off the home screen — backing out of
+            // them returns to the CURRENT home, which for a controller vehicle
+            // is Ride, not the battery dashboard.
+            is Config.Graph, is Config.Settings -> nav.replaceAll(homeConfig())
             else -> nav.pop()
         }
     }
 
     override fun onTab(tab: RootComponent.Tab) {
-        val target = when (tab) {
-            RootComponent.Tab.Live -> Config.Dashboard
-            RootComponent.Tab.Graph -> Config.Graph
-            RootComponent.Tab.Settings -> Config.Settings
-        }
-        nav.bringToFront(target)
+        nav.bringToFront(configForTab(tab))
     }
 
     /**
@@ -167,13 +234,14 @@ class DefaultRootComponent(
 
     /**
      * Start "Try demo" mode from Welcome: spin up the simulated connection off
-     * the UI thread, then replace the stack with the Dashboard so the user lands
-     * straight on live (synthetic) data. The demo vehicle is never persisted.
+     * the UI thread, then replace the stack with the home screen so the user
+     * lands straight on live (synthetic) data. The demo vehicle carries a
+     * synthetic controller, so [homeConfig] puts it on Ride. Never persisted.
      */
     private fun startDemo() {
         scope.launch {
             bmsRepository.connectDemo()
-            nav.replaceAll(Config.Dashboard)
+            nav.replaceAll(homeConfig())
         }
     }
 
@@ -223,7 +291,7 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onConnected = { nav.replaceAll(Config.Dashboard) },
+                    onConnected = { nav.replaceAll(homeConfig()) },
                     onCancelled = { nav.replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
@@ -233,12 +301,28 @@ class DefaultRootComponent(
                     mode = config.mode,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onConnectedKnown = { nav.replaceAll(Config.Dashboard) },
+                    onConnectedKnown = { nav.replaceAll(homeConfig()) },
                     onConnectedForEdit = { vehicleId -> nav.replaceAll(Config.VehicleEdit(vehicleId)) },
-                    onConnectedGuestNoSave = { nav.replaceAll(Config.Dashboard) },
+                    onConnectedGuestNoSave = { nav.replaceAll(homeConfig()) },
                     onAddNewBatteryRequested = { nav.replaceAll(Config.Picker(mode = "add")) },
-                    onDemoConnected = { nav.replaceAll(Config.Dashboard) },
+                    onDemoConnected = { nav.replaceAll(homeConfig()) },
                     onCancelled = { nav.pop() }
+                )
+            )
+            is Config.Ride -> RootComponent.Child.Ride(
+                DefaultRideDashboardComponent(
+                    componentContext = context,
+                    bmsRepository = get(),
+                    vehicleRepository = get(),
+                    appPrefs = get<AppPrefs>(),
+                    onOpenGraphRequested = { nav.push(Config.Graph) },
+                    onOpenSettingsRequested = { nav.push(Config.Settings) },
+                    // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
+                    // "+ Add" captures the live connection into a new vehicle.
+                    onAddVehicleRequested = {
+                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                    },
+                    onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
@@ -246,7 +330,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onOpenGraph = { nav.push(Config.Graph) },
+                    onOpenGraphRequested = { nav.push(Config.Graph) },
                     onOpenSettings = { nav.push(Config.Settings) },
                     onOpenAddBattery = {
                         nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
@@ -281,7 +365,7 @@ class DefaultRootComponent(
                         vehicleId = config.vehicleId,
                         vehicleRepository = get(),
                         bmsRepository = get(),
-                        onSaved = { nav.replaceAll(Config.Dashboard) },
+                        onSaved = { nav.replaceAll(homeConfig()) },
                         onCancelled = { nav.pop() },
                         onDeleted = { nav.pop() },
                         prefilledBmsType = prefillVehicle?.bmsType,

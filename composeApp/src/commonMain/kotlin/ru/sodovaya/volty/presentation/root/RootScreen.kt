@@ -34,10 +34,15 @@ import ru.sodovaya.volty.presentation.pack.PackDetailScreen
 import ru.sodovaya.volty.presentation.graph.GraphScreen
 import ru.sodovaya.volty.presentation.permissions.PermissionsGateScreen
 import ru.sodovaya.volty.presentation.picker.PickerScreen
+import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
 import ru.sodovaya.volty.presentation.scanning.ScanningScreen
 import ru.sodovaya.volty.presentation.settings.SettingsScreen
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.welcome.WelcomeScreen
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.tab_battery
+import volty.composeapp.generated.resources.tab_ride
 
 @Composable
 fun RootScreen(component: RootComponent) {
@@ -60,6 +65,7 @@ fun RootScreen(component: RootComponent) {
                     is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
                     is RootComponent.Child.AutoConnect -> AutoConnectScreen(instance.component)
                     is RootComponent.Child.Picker -> PickerScreen(instance.component)
+                    is RootComponent.Child.Ride -> RideDashboardScreen(instance.component)
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
@@ -69,8 +75,10 @@ fun RootScreen(component: RootComponent) {
             }
         }
         // Persistent bottom tab bar — only for main destinations
+        val rideAvailable by component.rideAvailable.subscribeAsState()
         BottomTabBar(
             active = active,
+            rideAvailable = rideAvailable,
             onTab = { tab -> component.onTab(tab) },
             modifier = Modifier.navigationBarsPadding()
         )
@@ -80,19 +88,23 @@ fun RootScreen(component: RootComponent) {
 @Composable
 private fun BottomTabBar(
     active: RootComponent.Child,
+    rideAvailable: Boolean,
     onTab: (RootComponent.Tab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val visible = active is RootComponent.Child.Dashboard ||
+    val visible = active is RootComponent.Child.Ride ||
+        active is RootComponent.Child.Dashboard ||
         active is RootComponent.Child.Graph ||
         active is RootComponent.Child.Settings
     if (!visible) return
 
-    val current = when (active) {
-        is RootComponent.Child.Dashboard -> RootComponent.Tab.Live
-        is RootComponent.Child.Graph -> RootComponent.Tab.Graph
+    // Graph is no longer a tab — it's reached from a button on either dashboard.
+    // While it's on screen no tab is selected, hence the nullable.
+    val current: RootComponent.Tab? = when (active) {
+        is RootComponent.Child.Ride -> RootComponent.Tab.Ride
+        is RootComponent.Child.Dashboard -> RootComponent.Tab.Battery
         is RootComponent.Child.Settings -> RootComponent.Tab.Settings
-        else -> RootComponent.Tab.Live
+        else -> null
     }
 
     Row(
@@ -104,8 +116,18 @@ private fun BottomTabBar(
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        Tab("Live", current == RootComponent.Tab.Live) { onTab(RootComponent.Tab.Live) }
-        Tab("Graph", current == RootComponent.Tab.Graph) { onTab(RootComponent.Tab.Graph) }
+        // Hidden for a controller-less vehicle: a pure-BMS user gets exactly the
+        // Battery + Settings bar they had before the Ride dashboard existed.
+        if (rideAvailable) {
+            Tab(
+                stringResource(Res.string.tab_ride),
+                current == RootComponent.Tab.Ride
+            ) { onTab(RootComponent.Tab.Ride) }
+        }
+        Tab(
+            stringResource(Res.string.tab_battery),
+            current == RootComponent.Tab.Battery
+        ) { onTab(RootComponent.Tab.Battery) }
         Tab("⚙", current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
     }
 }

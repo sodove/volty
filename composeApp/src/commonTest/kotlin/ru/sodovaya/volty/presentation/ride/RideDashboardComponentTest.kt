@@ -139,6 +139,7 @@ class RideDashboardComponentTest {
         vehicleStyle: DashboardStyle? = null,
         appDefault: DashboardStyle = DashboardStyle.CLEAN,
         units: UnitSystem = UnitSystem.METRIC,
+        onOpenGraphRequested: () -> Unit = {},
         onOpenSettingsRequested: () -> Unit = {},
         onAddVehicleRequested: () -> Unit = {},
         onDisconnectRequested: () -> Unit = {}
@@ -152,6 +153,7 @@ class RideDashboardComponentTest {
             bmsRepository = repo,
             vehicleRepository = FakeVehicleRepo(),
             appPrefs = appPrefs,
+            onOpenGraphRequested = onOpenGraphRequested,
             onOpenSettingsRequested = onOpenSettingsRequested,
             onAddVehicleRequested = onAddVehicleRequested,
             onDisconnectRequested = onDisconnectRequested
@@ -235,6 +237,20 @@ class RideDashboardComponentTest {
         c.onAddVehicle()
         advanceUntilIdle()
         assertTrue(addRequested)
+        c.state.test { assertEquals(false, awaitItem().sheetOpen) }
+    }
+
+    @Test
+    fun opening_the_graph_closes_the_sheet_and_forwards_the_request() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        var graphRequested = false
+        val c = component(repo, onOpenGraphRequested = { graphRequested = true })
+        advanceUntilIdle()
+        c.onPillClicked() // open the sheet
+        c.onOpenGraph()
+        advanceUntilIdle()
+        assertTrue(graphRequested)
         c.state.test { assertEquals(false, awaitItem().sheetOpen) }
     }
 

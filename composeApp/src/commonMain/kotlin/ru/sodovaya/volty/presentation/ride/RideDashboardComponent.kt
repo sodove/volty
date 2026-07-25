@@ -32,6 +32,8 @@ interface RideDashboardComponent {
     fun onSwitchVehicle(v: Vehicle)
     fun onAddVehicle()
     fun onTabClicked(tab: Tab)
+    /** Graph is no longer a top-level tab — every dashboard carries a button to it. */
+    fun onOpenGraph()
     fun onOpenSettings()
     fun onDisconnect()
 
@@ -68,6 +70,7 @@ class DefaultRideDashboardComponent(
     private val bmsRepository: BmsRepository,
     private val vehicleRepository: VehicleRepository,
     private val appPrefs: AppPrefs,
+    private val onOpenGraphRequested: () -> Unit,
     private val onOpenSettingsRequested: () -> Unit,
     private val onAddVehicleRequested: () -> Unit,
     private val onDisconnectRequested: () -> Unit
@@ -210,7 +213,10 @@ class DefaultRideDashboardComponent(
     override fun onTabClicked(tab: RideDashboardComponent.Tab) {
         when (tab) {
             RideDashboardComponent.Tab.Ride -> {} // already on Ride
-            RideDashboardComponent.Tab.Battery -> {} // no dedicated navigation target in this task
+            // Ride <-> Battery is a switch between two root children, so the root
+            // bottom bar owns it (RootComponent.onTab -> bringToFront(Dashboard)).
+            // Nothing sensible for a single child component to do here.
+            RideDashboardComponent.Tab.Battery -> {}
             RideDashboardComponent.Tab.Settings -> onOpenSettings()
         }
     }
@@ -222,6 +228,12 @@ class DefaultRideDashboardComponent(
         // navigate away, same as onSwitchVehicle does before it (dis)connects.
         _state.update { it.copy(sheetOpen = false) }
         onAddVehicleRequested()
+    }
+
+    override fun onOpenGraph() {
+        // Same reasoning as onOpenSettings — we're about to navigate away.
+        _state.update { it.copy(sheetOpen = false) }
+        onOpenGraphRequested()
     }
 
     override fun onOpenSettings() {

@@ -42,6 +42,7 @@ import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellUiModel
 import ru.sodovaya.volty.presentation.common.chemistryFraction
+import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.PowerRangeBar
 import ru.sodovaya.volty.presentation.common.SparklineGraph
@@ -205,12 +206,21 @@ fun DashboardScreen(component: DashboardComponent) {
                 .animateContentSize()
         ) {
             Column {
-                Text(
-                    stringResource(Res.string.power_last_5_min),
-                    fontSize = 10.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        stringResource(Res.string.power_last_5_min),
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                    )
+                    // Graph is no longer a bottom tab — this is its entry point
+                    // from the battery dashboard.
+                    GraphLinkButton(onClick = component::onOpenGraph)
+                }
                 Spacer(Modifier.height(6.dp))
                 SparklineGraph(
                     values = state.sparkline,

@@ -77,6 +77,8 @@
     <string name="cells_v_avg">%1$s В средн.</string>
     <string name="power_last_5_min">МОЩНОСТЬ · ПОСЛЕДНИЕ 5 МИН</string>
 
+    <string name="tab_ride">Поездка</string>
+    <string name="tab_battery">Батарея</string>
     <string name="tab_live">Сейчас</string>
     <string name="tab_cells">Ячейки</string>
     <string name="tab_graph">График</string>

@@ -45,6 +45,7 @@ import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.RideMetrics
 import ru.sodovaya.volty.domain.stats.TempBands
+import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
@@ -163,7 +164,8 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
         ConsumptionCard(
             motion = motion,
             sessionWhPerKm = state.sessionWhPerKm,
-            recentSpeeds = recentSpeeds
+            recentSpeeds = recentSpeeds,
+            onOpenGraph = component::onOpenGraph
         )
 
         OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
@@ -325,7 +327,8 @@ private fun TempMetricCard(
 private fun ConsumptionCard(
     motion: ControllerData,
     sessionWhPerKm: Float?,
-    recentSpeeds: List<Float>
+    recentSpeeds: List<Float>,
+    onOpenGraph: () -> Unit
 ) {
     val instantWhPerKm = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
     Column(
@@ -335,19 +338,31 @@ private fun ConsumptionCard(
             .background(MaterialTheme.colorScheme.surfaceContainer)
             .padding(12.dp)
     ) {
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             Text(
                 text = stringResource(Res.string.ride_consumption).uppercase(),
                 fontSize = 10.sp,
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
             )
-            if (sessionWhPerKm != null) {
-                Text(
-                    text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
-                    fontSize = 10.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
-                )
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                if (sessionWhPerKm != null) {
+                    Text(
+                        text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
+                        fontSize = 10.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                    )
+                }
+                // Graph is no longer a bottom tab — this is its entry point
+                // from the ride dashboard.
+                GraphLinkButton(onClick = onOpenGraph)
             }
         }
         Spacer(Modifier.height(4.dp))

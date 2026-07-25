@@ -34,9 +34,11 @@ interface DashboardComponent {
     fun onAddBattery()
     fun onDisconnect()
     fun onTabClicked(tab: Tab)
+    /** Graph is no longer a top-level tab — every dashboard carries a button to it. */
+    fun onOpenGraph()
     fun onPackClicked(packIndex: Int)
 
-    enum class Tab { Live, Graph, Settings }
+    enum class Tab { Ride, Battery, Settings }
 
     data class State(
         val vehicle: Vehicle? = null,
@@ -76,7 +78,10 @@ class DefaultDashboardComponent(
     componentContext: ComponentContext,
     private val bmsRepository: BmsRepository,
     private val vehicleRepository: VehicleRepository,
-    private val onOpenGraph: () -> Unit,
+    // Renamed from onOpenGraph so it doesn't collide with the interface's
+    // onOpenGraph() method (a same-named property would make `onOpenGraph()`
+    // resolve to the function and recurse forever).
+    private val onOpenGraphRequested: () -> Unit,
     private val onOpenSettings: () -> Unit,
     private val onOpenAddBattery: () -> Unit,
     private val onOpenPackDetail: (packIndex: Int) -> Unit,
@@ -214,10 +219,15 @@ class DefaultDashboardComponent(
 
     override fun onPackClicked(packIndex: Int) { onOpenPackDetail(packIndex) }
 
+    override fun onOpenGraph() { onOpenGraphRequested() }
+
     override fun onTabClicked(tab: DashboardComponent.Tab) {
         when (tab) {
-            DashboardComponent.Tab.Live -> {} // already on Live
-            DashboardComponent.Tab.Graph -> onOpenGraph()
+            // Battery <-> Ride is a switch between two root children, so the root
+            // bottom bar owns it (RootComponent.onTab -> bringToFront). Nothing
+            // sensible for a single child component to do here.
+            DashboardComponent.Tab.Ride -> {}
+            DashboardComponent.Tab.Battery -> {} // already on Battery
             DashboardComponent.Tab.Settings -> onOpenSettings()
         }
     }
