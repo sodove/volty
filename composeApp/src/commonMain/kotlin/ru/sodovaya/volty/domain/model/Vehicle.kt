@@ -21,7 +21,28 @@ data class Vehicle(
     /** Which Ride renderer this vehicle uses. Null = follow the app-level default. */
     val dashboardStyle: DashboardStyle? = null,
     /** What the secondary gauge shows on this vehicle's dashboard. */
-    val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY
+    val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
+    /**
+     * "Yield BMS to head unit while riding" (C §5).
+     *
+     * When this vehicle's battery is reachable over TWO paths sharing an
+     * `aliasGroup` — a direct BMS link and a battery hosted behind a gateway
+     * head unit — both cannot hold the BMS at once: the head unit takes its
+     * single BLE central slot. With the handoff on, the app releases its own
+     * direct link once the hosted path is actually delivering, and re-raises
+     * it when the head-unit link drops.
+     *
+     * **Null means "follow the default", which is ON** — and, because the
+     * handoff is only ever planned for an alias group that genuinely spans a
+     * direct and a gateway-hosted BMS
+     * ([ru.sodovaya.volty.data.ble.planAliasHandoffs]), null resolves to
+     * "release the direct link" exactly where the contention exists and to
+     * "do nothing" everywhere else. Persisted as a nullable column for the
+     * same reason [dashboardStyle] is: an unset value is not the same
+     * statement as an explicit `true`, and a NOT NULL DEFAULT 1 would claim
+     * every pre-existing vehicle had opted in.
+     */
+    val yieldBmsToHeadUnit: Boolean? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }
@@ -30,6 +51,13 @@ data class Vehicle(
 
 /** True when this vehicle has at least one motor controller wired in. */
 val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()
+
+/**
+ * [Vehicle.yieldBmsToHeadUnit] resolved: unset (null) follows the default,
+ * which is ON. Only an explicit opt-OUT switches the handoff off — see the
+ * field's doc for why "on by default" is safe to state unconditionally here.
+ */
+val Vehicle.yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit != false
 
 /** The lowest-indexed controller, or null when the vehicle has none. */
 val Vehicle.primaryController: Controller? get() = controllers.minByOrNull { it.index }

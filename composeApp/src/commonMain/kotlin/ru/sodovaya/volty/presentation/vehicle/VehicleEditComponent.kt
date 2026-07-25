@@ -271,7 +271,13 @@ class DefaultVehicleEditComponent(
                 },
                 topology = existing?.topology ?: built.topology,
                 dashboardStyle = s.dashboardStyle,
-                secondaryGauge = s.secondaryGauge
+                secondaryGauge = s.secondaryGauge,
+                // Not editable here (this screen is single-pack / single-controller
+                // and cannot express the two-path alias group the toggle is about
+                // — see the Part C task-5 report). Carried through explicitly so a
+                // save from this form does not silently reset a rider's opt-out,
+                // exactly as topology and the controller list are above.
+                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit
             )
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the

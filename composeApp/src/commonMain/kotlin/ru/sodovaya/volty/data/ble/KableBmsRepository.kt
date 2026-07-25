@@ -37,6 +37,7 @@ import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.model.withCellCount
+import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -113,6 +114,14 @@ class KableBmsRepository private constructor(
          * draining, and the drop is logged either way, never silent.
          */
         const val SAMPLE_FUNNEL_CAPACITY = 64
+
+        /**
+         * Reason stamped on a link re-raised after the head unit it was
+         * yielded to went away (Part C §5). Surfaces through the fold as the
+         * Reconnecting message, so the rider is told why the app is dialling
+         * the BMS directly again.
+         */
+        internal const val HANDOFF_RERAISE_REASON = "Head unit link dropped"
 
         /**
          * Distinct BLE-style address for [DEMO_CONTROLLER]. The demo pack and
@@ -259,6 +268,39 @@ class KableBmsRepository private constructor(
      */
     @Volatile
     private var links: List<PackLink> = emptyList()
+
+    /**
+     * The alias-path handoffs of the CURRENT connection (Part C §5) — planned
+     * once, beside the link list, by [planAliasHandoffs]. Empty for every
+     * vehicle without a battery reachable over both a direct link and a
+     * gateway head unit, which is every vehicle that existed before this
+     * feature: the release/re-raise machinery below all short-circuits on
+     * `isEmpty()`, so a single-BMS vehicle executes one field read and nothing
+     * else.
+     */
+    @Volatile
+    private var aliasHandoffs: List<AliasHandoff> = emptyList()
+
+    /**
+     * Links this connection has RELEASED to a head unit and owes a re-raise
+     * on, keyed by the gateway whose hosted battery displaced them. Written
+     * only from the sample consumer (release) and [onLinkDrop] (re-raise),
+     * both of which are single coroutines; `@Volatile` covers the cross-thread
+     * publication, and the list is replaced wholesale rather than mutated.
+     */
+    @Volatile
+    private var yieldedLinks: List<YieldedLink> = emptyList()
+
+    /**
+     * A released link, kept whole so it can be re-raised exactly as planned —
+     * the [LinkSpec] carries the owned pack's global index, which is what
+     * makes the returning link feed the same orchestrator slot it fed before.
+     */
+    private data class YieldedLink(
+        val spec: LinkSpec,
+        val vehicle: Vehicle?,
+        val gatewayAddress: String
+    )
 
     /**
      * Guards every link STATUS mutation and the fold that derives the
@@ -517,6 +559,11 @@ class KableBmsRepository private constructor(
                     l.reconnectJob = null
                 }
                 links = emptyList()
+                // No links, no handoff: a demo session has no BLE contention
+                // to resolve, and a stale plan would outlive the connection it
+                // was made for.
+                aliasHandoffs = emptyList()
+                yieldedLinks = emptyList()
                 demoJob?.cancel()
                 demoJob = null
                 // Demo bypasses the orchestrator entirely — the simulator
@@ -817,6 +864,30 @@ class KableBmsRepository private constructor(
             spec.copy(ownedPacks = packs.map { planned[it.index] ?: OwnedSource(it.index) })
         }
 
+    /**
+     * The alias-path handoffs this connection should honour (C §5): the pure
+     * [planAliasHandoffs] applied to the link plan, gated by the vehicle's own
+     * **"yield BMS to head unit while riding"** toggle.
+     *
+     * An explicit opt-out ([Vehicle.yieldsBmsToHeadUnit] false) plans nothing
+     * at all, so the toggle switches off the mechanism rather than merely its
+     * last step — there is no released link to re-raise, no marked-offline
+     * pack, nothing. Unset is ON: see [Vehicle.yieldBmsToHeadUnit] for why the
+     * default can be stated unconditionally here.
+     *
+     * Planned from the EXPANDED pack list, the same one the orchestrator is
+     * sized from, so a handoff's pack indices are the vehicle-global indices
+     * [VehicleConnection] is keyed by — not the stored profile's, which can be
+     * a shorter list.
+     */
+    private fun planHandoffs(vehicle: Vehicle?, address: String, type: BmsType?): List<AliasHandoff> {
+        if (vehicle == null || !vehicle.yieldsBmsToHeadUnit) return emptyList()
+        return planAliasHandoffs(
+            specs = effectiveLinkSpecs(vehicle, address, type),
+            packs = expandedVehiclePacks(vehicle, address, type)
+        )
+    }
+
     /** One link's spec paired with the pack slots it is responsible for. */
     private data class LinkPacks(val spec: LinkSpec, val packs: List<Pack>)
 
@@ -1024,16 +1095,26 @@ class KableBmsRepository private constructor(
                         // (cell voltages included), so every vehicle routes
                         // through it. submit() returns the snapshot it just
                         // emitted, so the aggregate is built once per sample.
+                        val submitted = vehicleConnection
+                            ?.submit(sample.globalPackIndex, sample.data, sample.sections)
+                        // THE alias-path handoff trigger (C §5 / §9.4). It sits
+                        // HERE, after the submit that just put the hosted pack
+                        // online, and nowhere else — this is the one place the
+                        // app learns that the hosted battery is genuinely
+                        // REPORTING rather than merely that its link came up.
+                        // Releasing on "link up" instead would let a momentarily
+                        // silent hosted BMS leave the battery on no path at all.
+                        // Runs on the consumer coroutine, so its mark-offline is
+                        // serialised with every other VehicleConnection mutation
+                        // exactly like the submit above.
+                        val afterHandoff = releaseDirectLinkIfHostedReported(sample.globalPackIndex)
                         // Fall back to the enriched sample — not the raw one — if
                         // the orchestrator was swapped out mid-flight, so a Begode
                         // keeps its estimated SoC even on that path. The section
                         // breakdown rides beside the sample into the pack state; the
                         // vehicle-level aggregate has no section field, so nothing of
                         // it survives the fallback path — dropped, not misattributed.
-                        val forActive = vehicleConnection
-                            ?.submit(sample.globalPackIndex, sample.data, sample.sections)
-                            ?.aggregate
-                            ?: sample.data
+                        val forActive = (afterHandoff ?: submitted)?.aggregate ?: sample.data
                         // Ring buffer before activeData: the graph collector maps
                         // over _activeData and reads the buffer, so announcing the
                         // sample first would make every graph emit lag by one.
@@ -1053,6 +1134,121 @@ class KableBmsRepository private constructor(
                 }
             }
         }
+
+    // ----- Alias-path handoff (Part C §5) -----
+
+    /**
+     * The head unit's hosted battery just delivered a sample for
+     * [hostedPackIndex] — let go of the direct link to the same battery, so
+     * the head unit can hold the BMS's one BLE central slot.
+     *
+     * Called from the sample consumer and ONLY from there. That placement is
+     * the whole point of §9.4: "the hosted BMS is reporting" is a statement
+     * about a decoded sample, and this is the single place in the repository
+     * where one is observed. A trigger hung off the link-online transition
+     * instead would fire while the hosted battery was still silent and leave
+     * the rider with the battery on neither path.
+     *
+     * **The ordering is the acceptance property, not an implementation
+     * detail.** By the time this runs, the caller has already `submit`ted the
+     * hosted sample, so the hosted pack is ONLINE. Marking the direct pack
+     * offline can therefore never empty the alias group:
+     * `PackAggregator.collapseAliases` still finds an online member and the
+     * vehicle-level battery carries straight over. Reverse the two and the
+     * mark-offline publishes a snapshot in which the group has no online
+     * member at all — `aggregate.isConnected` false, i.e. the battery gap this
+     * task exists to prevent.
+     *
+     * The mark-offline itself is not bookkeeping either. Without it the
+     * released path keeps its `isOnline = true` and its last sample, and since
+     * `collapseAliases` prefers the LOWEST-INDEXED online member — normally
+     * the direct one — the dashboard would keep showing the frozen parked
+     * reading for a full `packOfflineAfterMs` while a live hosted sample sat
+     * right beside it. Retiring the path we just released is what makes the
+     * aggregate follow the battery instead of the pack numbering.
+     *
+     * @return the snapshot taken after the handover, or null when nothing
+     * happened (then the caller keeps the submit's own snapshot).
+     */
+    private fun releaseDirectLinkIfHostedReported(hostedPackIndex: Int): VehicleData? {
+        // The fast path for every vehicle that predates this feature: one
+        // volatile read, no allocation, no behaviour.
+        val handoffs = aliasHandoffs
+        if (handoffs.isEmpty()) return null
+        val handoff = handoffs.firstOrNull { it.hostedPackIndex == hostedPackIndex } ?: return null
+        // Already released and not yet re-raised — nothing owed. Checked
+        // before the link lookup so a burst of hosted samples cannot queue a
+        // second disconnectLink behind the first.
+        if (yieldedLinks.any { it.spec.address == handoff.directAddress }) return null
+        val current = links
+        val direct = current.firstOrNull { it.spec.address == handoff.directAddress } ?: return null
+        // Defensive, and load-bearing: disconnectLink degenerates to a FULL
+        // disconnect when it names the only remaining link, which would tear
+        // down the very connection the head unit is riding on. A handoff
+        // always has at least the gateway beside the direct link, so this can
+        // only fire if the plan and the live link list have diverged — fail
+        // closed rather than take the whole vehicle down.
+        if (current.size < 2 || current.none { it.spec.address == handoff.gatewayAddress }) return null
+
+        println(
+            "[VOLTY-BLE] alias handoff: hosted pack ${handoff.hostedPackIndex} is reporting — " +
+                "releasing the direct link ${handoff.directAddress} to ${handoff.gatewayAddress}"
+        )
+        // Remember BEFORE releasing: if the gateway drops between here and the
+        // launched disconnectLink, the drop path must already know it owes a
+        // re-raise.
+        yieldedLinks = yieldedLinks + YieldedLink(direct.spec, direct.vehicle, handoff.gatewayAddress)
+        val orchestrator = vehicleConnection
+        orchestrator?.markOffline(handoff.directPackIndex)
+        // disconnectLink suspends and takes sessionLock; this consumer must
+        // never do either (see [launchSampleConsumer]), so the teardown runs on
+        // the repo scope. The state that matters for the no-gap property — the
+        // mark-offline above — has already been applied synchronously.
+        scope.launch { disconnectLink(handoff.directAddress) }
+        return orchestrator?.snapshot()
+    }
+
+    /**
+     * The head-unit link at [gatewayAddress] is going down — bring back every
+     * direct link released to it, or the battery is left on no path at all.
+     *
+     * Re-raised through the ordinary reconnect loop rather than a bespoke
+     * connect: a returning link has to survive the head unit's own flapping,
+     * and that loop already owns the backoff, the supersession guards and the
+     * user-disconnect checks. Its attempts run with `isReconnectAttempt = true`,
+     * which is correct here as well — the pipeline is rebuilt only when NO
+     * sibling link is alive, and while the gateway is merely reconnecting it
+     * still holds its session, so the orchestrator (and with it every pack's
+     * state) survives the re-raise untouched.
+     */
+    private suspend fun reRaiseYieldedLinksFor(gatewayAddress: String) {
+        val owed = yieldedLinks.filter { it.gatewayAddress == gatewayAddress }
+        if (owed.isEmpty()) return
+        yieldedLinks = yieldedLinks - owed.toSet()
+        val raised: List<PackLink> = sessionLock.withLock {
+            if (userInitiatedDisconnect) return
+            // An empty link list means the connection is gone entirely
+            // (disconnect swept it); re-adding a link here would resurrect a
+            // connection the user closed.
+            if (links.isEmpty()) return
+            val installed = links.map { it.spec.address }.toSet()
+            val fresh = owed
+                .filterNot { it.spec.address in installed }
+                .map { PackLink(spec = it.spec, vehicle = it.vehicle) }
+            if (fresh.isEmpty()) return
+            links = links + fresh
+            fresh
+        }
+        for (link in raised) {
+            println("[VOLTY-BLE] alias handoff: re-raising ${link.spec.address} — $gatewayAddress dropped")
+            // Leave the (default) CONNECTING status before starting the loop,
+            // exactly as onLinkDrop does: the loop's "already online" guard is
+            // the only thing it checks, and RECONNECTING is what the fold
+            // renders as "trying again".
+            setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = HANDOFF_RERAISE_REASON)
+            startLinkReconnectLoop(link, initialReason = HANDOFF_RERAISE_REASON)
+        }
+    }
 
     /**
      * Close the sample funnel and forget it. The consumer drains whatever
@@ -1288,6 +1484,12 @@ class KableBmsRepository private constructor(
                 sampleChannel = channel
                 sampleConsumerJob = launchSampleConsumer(channel)
                 links = newLinks
+                // Planned in the SAME critical section as the links they
+                // describe: a handoff naming an address no longer installed is
+                // exactly the divergence releaseDirectLinkIfHostedReported has
+                // to fail closed on, so the two must never be published apart.
+                aliasHandoffs = planHandoffs(vehicle, address, type)
+                yieldedLinks = emptyList()
                 lastConnectionTarget = ConnectionTarget(vehicle, address, type)
             }
 
@@ -1576,6 +1778,12 @@ class KableBmsRepository private constructor(
             // vehicle Connected while any sibling is still up.
             setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
             startLinkReconnectLoop(link, initialReason = reason)
+            // Part C §5: if this is the head unit a direct BMS link was
+            // yielded to, that link has to come back NOW — while the gateway
+            // is merely reconnecting, not after it gives up. Inside the
+            // believedUp guard so a duplicate drop report (state event plus
+            // watchdog for one death) cannot raise the link twice.
+            reRaiseYieldedLinksFor(link.spec.address)
         }
     }
 
@@ -1651,6 +1859,11 @@ class KableBmsRepository private constructor(
                 l.reconnectJob = null
             }
             links = emptyList()
+            // The connection is over: nothing is owed a re-raise, and a plan
+            // that outlived its links would be read by the NEXT connection's
+            // first sample before doConnect replaced it.
+            aliasHandoffs = emptyList()
+            yieldedLinks = emptyList()
             demoToCancel = demoJob
             demoJob = null
             // Forget the target so a later [onAppResumed] doesn't try to
@@ -1784,6 +1997,12 @@ class KableBmsRepository private constructor(
             sessionLock.withLock {
                 if (userInitiatedDisconnect) return
                 links = newLinks
+                // The link list was rebuilt from the cached target, so the
+                // handoff plan is rebuilt with it — same critical section, same
+                // reason as in doConnect. Anything previously yielded is part of
+                // newLinks again, so nothing is owed a re-raise.
+                aliasHandoffs = planHandoffs(target.vehicle, target.address, target.type)
+                yieldedLinks = emptyList()
             }
             for (l in newLinks) {
                 // Transition out of Connected before kicking each loop — the
@@ -2105,6 +2324,11 @@ class KableBmsRepository private constructor(
         sampleChannel = channel
         sampleConsumerJob = launchSampleConsumer(channel)
         links = newLinks
+        // The production pairing (see doConnect): the plan and the links it
+        // names are installed together, so a test drives the real trigger
+        // rather than a hand-fed one.
+        aliasHandoffs = planHandoffs(vehicle, address, type)
+        yieldedLinks = emptyList()
         lastConnectionTarget = ConnectionTarget(vehicle, address, type)
         _activeVehicle.value = vehicle
         _connectionState.value = ConnectionState.Connecting(vehicle)
@@ -2146,6 +2370,16 @@ class KableBmsRepository private constructor(
 
     /** Test-only: how many links the current connection holds. */
     internal fun linkCountForTest(): Int = links.size
+
+    /** Test-only: the addresses of the currently installed links, in order. */
+    internal fun linkAddressesForTest(): List<String> = links.map { it.spec.address }
+
+    /**
+     * Test-only: the alias-path handoffs [doConnect] planned for the installed
+     * connection (Part C §5) — empty for every vehicle without a battery
+     * reachable both directly and through a gateway head unit.
+     */
+    internal fun aliasHandoffsForTest(): List<AliasHandoff> = aliasHandoffs
 
     /** Test-only: one link's reconnect loop job, or null when it has none. */
     internal fun linkReconnectJobForTest(address: String): Job? =
