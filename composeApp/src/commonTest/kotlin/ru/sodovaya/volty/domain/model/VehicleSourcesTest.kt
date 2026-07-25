@@ -25,9 +25,26 @@ class VehicleSourcesTest {
         packs = listOf(Pack(0, "P", BmsType.ANT_BMS, "PACK", cellCount = 12)),
         controllers = listOf(Controller(0, "ESC", ControllerType.VESC, "CTRL"))
     )
+    /**
+     * Deliberately NOT a single shared-address pair: with only one address on
+     * each side, `setOf("SAME")` is satisfied by any type-correct
+     * implementation of `allAddresses` (a `Set<String>` can't hold a
+     * duplicate regardless of whether it actually reads both `packs` and
+     * `controllers`). Giving each side an extra, non-shared address makes the
+     * expected set's size discriminate: dropping either source changes the
+     * result to 2 elements instead of 3, and dropping the address-level
+     * dedup itself is unreachable to observe via a `Set` return type — this
+     * fixture instead proves both sources are actually being read.
+     */
     private val sharedAddress = vec(
-        packs = listOf(Pack(0, "P", BmsType.ANT_BMS, "SAME")),
-        controllers = listOf(Controller(0, "ESC", ControllerType.VESC, "SAME"))
+        packs = listOf(
+            Pack(0, "P", BmsType.ANT_BMS, "SAME"),
+            Pack(1, "P2", BmsType.ANT_BMS, "P2")
+        ),
+        controllers = listOf(
+            Controller(0, "ESC", ControllerType.VESC, "SAME"),
+            Controller(1, "ESC2", ControllerType.VESC, "C2")
+        )
     )
 
     // -- primaryPackOrNull / bmsTypeOrNull / bmsAddressOrNull / cellCountOrNull --
@@ -68,7 +85,7 @@ class VehicleSourcesTest {
     }
 
     @Test fun allAddresses_deduplicates_when_pack_and_controller_share_one_link_address() {
-        assertEquals(setOf("SAME"), sharedAddress.allAddresses)
+        assertEquals(setOf("SAME", "P2", "C2"), sharedAddress.allAddresses)
     }
 
     @Test fun allAddresses_is_never_empty_for_a_valid_vehicle() {
