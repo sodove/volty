@@ -300,3 +300,49 @@ The `Vehicle.bmsType` / `bmsAddress` / `cellCount` shims still call
 `PickerComponent.kt` and `ScanningComponent.kt`, which take down a whole
 screen rather than a single tap — must be fixed in one pass together with
 the controller-vehicle creation flow, per §6.1.
+
+---
+
+## 13. Debt carried out of G1 (recorded at merge, 2026-07-25)
+
+Part G1 (`d011987`) made controller-bearing vehicles creatable. What it
+knowingly left behind:
+
+- **`_activeVehicle` survives a failed connect.** The row is deleted but the
+  field still points at it, and `_rideAvailable` flips true. Verified
+  unreachable today for four independent reasons — `shouldLeaveRide` returns
+  false for a controller vehicle, the tab bar is hidden on Picker, the
+  picker's active-vehicle seed requires `Connected`/`Reconnecting`, and the
+  only exit from Picker is a successful connect that overwrites the field.
+  **Trigger to watch: one `nav.push(Config.Picker(...))` or one change to
+  tab-bar visibility makes it live.**
+- **Scope cancellation mid-connect skips the rollback**, leaving an orphan
+  row. Narrow window, identical on the BMS path, pre-dates G1.
+- **The unsupported-controller refusal is unlocalised**, consistent with
+  every other picker error (they all render `exceptionOrNull()?.message`).
+- **Controller picks ignore picker mode.** A `BmsType` pick in "guest"/"cold"
+  stays unsaved; a controller pick always persists and routes to Vehicle
+  Edit, because `connectGuest` takes a `BmsType` and cannot express a
+  controller. A user-visible asymmetry, argued in the KDoc.
+- **The anti-drift test does not cover `unsupportedControllerReason` itself.**
+  It pins that `createProtocol` keeps consulting `controllerMotionProtocol`;
+  re-hardcoding the picker's side as a separate `when` would leave the suite
+  green.
+- **`RideDashboardComponent.State.secondaryReadout` is dead** — written in
+  six places, read by nothing since the screen recomputes it. One test still
+  asserts on it.
+- **Battery-centric vocabulary.** "Edit battery", "Pick a battery", "MY
+  BATTERIES", "Add new battery" — now wrong for a vehicle with no battery at
+  all. This is Part G2's job along with the composer proper; the entry point
+  should ask what the vehicle *is*, not offer to add a battery.
+
+### 13.1 Two lessons worth keeping
+- **Compose Multiplatform does not process Android's backslash escapes in
+  string resources.** `\'` and `\"` render literally. Four such defects
+  shipped unnoticed because no test reads a rendered string and the Russian
+  strings happened to use guillemets. Sweep both locale files after any
+  string work.
+- **A hand-written list of call sites in a spec is not a work queue.** G1's
+  compiler-driven sweep found five sites `§6.1` had missed, including a file
+  that was not mentioned at all. Delete the symbol and let the build
+  enumerate.
