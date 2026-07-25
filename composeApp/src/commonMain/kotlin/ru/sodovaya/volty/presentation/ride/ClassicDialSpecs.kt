@@ -78,13 +78,22 @@ object ClassicDialSpecs {
             ?: RideMetrics.sessionWhPerKm(motion.consumedWh, motion.tripKm)
 
         // The hero's max is the only RUNTIME scale in the cluster (every other dial's span is a
-        // fixed design constant above) — resolved in km/h first so majorTicks divides the actual
-        // riding range evenly, THEN converted to the display unit. Picking ticks after converting
-        // to mph would chase two moving targets at once for no benefit: the "keep ticks round"
-        // requirement only ever showed up against the km/h range riders actually see.
+        // fixed design constant above). `DialGauge`/`DialGeometry.majorValues` divide `scale.max`
+        // — the DISPLAY-unit number the ring actually PRINTS — into tick labels, so ticks must be
+        // chosen from THAT number, not from `heroMaxKmh`. Picking ticks from the km/h max (as
+        // this once did) is the bug relocated rather than fixed: a 70 km/h floor divides cleanly
+        // by 7 in km/h, but its mph equivalent, 43.5, has no clean small-integer divisor at all,
+        // so tick count chosen from 70 would still be applied to a scale printing 43.5's ticks.
+        // The km/h max is already snapped to a round number upstream (`RideDashboardScreen`'s
+        // `max(70f, ceil(sessionMax / 10f) * 10f)`), but that snap doesn't survive the /1.609344
+        // conversion to mph, so the DISPLAY max gets its own round-number snap
+        // (`DialGeometry.snapScaleMaxUp`) before ticks are ever picked. Metric's already-round max
+        // snaps to itself (a no-op, confirmed by `the_hero_tick_labels_stay_round_above_70_kmh`),
+        // while imperial's gets rounded up to the next 5 (e.g. 43.5 -> 45 mph) so it always has a
+        // clean divisor for `pickMajorTicks` to find.
         val heroMaxKmh = maxSpeedKmh.coerceAtLeast(HERO_SCALE_MIN_SPAN)
-        val heroMajorTicks = DialGeometry.pickMajorTicks(heroMaxKmh)
-        val heroScaleMax = UnitFormatter.speedValue(heroMaxKmh, units)
+        val heroScaleMax = DialGeometry.snapScaleMaxUp(UnitFormatter.speedValue(heroMaxKmh, units))
+        val heroMajorTicks = DialGeometry.pickMajorTicks(heroScaleMax)
 
         return listOf(
             DialSpec(

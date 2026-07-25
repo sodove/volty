@@ -51,10 +51,13 @@ class ClassicDialSpecsTest {
         assertTrue(abs(metricHero.value - 47f) < 0.01f)
 
         val imperialHero = specs(u = UnitSystem.IMPERIAL)[ClusterSlot.HERO]!!
-        // 70 km/h / 1.609344 = 43.496...
+        // 70 km/h / 1.609344 = 43.496..., snapped UP to the next round mph number (45) so
+        // pickMajorTicks — now correctly consulted in DISPLAY units, not km/h — has a clean
+        // divisor. The snap changes the scale's ceiling, not the reading: `value` below is
+        // still the exact, unsnapped conversion.
         assertTrue(
-            abs(imperialHero.scale.max - 43.5f) < 0.05f,
-            "expected hero.scale.max ~= 43.5, was ${imperialHero.scale.max}"
+            abs(imperialHero.scale.max - 45f) < 0.05f,
+            "expected hero.scale.max ~= 45 (43.5 snapped up to a round mph number), was ${imperialHero.scale.max}"
         )
         // 47 km/h / 1.609344 = 29.204... — the same conversion the "29" valueText above came from.
         assertTrue(abs(imperialHero.value - 29.2f) < 0.05f)
@@ -77,6 +80,37 @@ class ClassicDialSpecsTest {
             // Every consecutive pair of ROUNDED major labels must differ by the same whole
             // number of km/h — the failure mode this guards against is ticks that are evenly
             // spaced in theory but jitter once each is independently rounded to 0 decimals.
+            val roundedSteps = majors.map { it.roundToInt() }.zipWithNext { a, b -> b - a }
+            assertEquals(1, roundedSteps.distinct().size, "uneven rounded tick steps: $roundedSteps")
+        }
+    }
+
+    // Regression for a real bug in the fix above: pickMajorTicks was called on `heroMaxKmh`
+    // (canonical km/h) while `scale.max` — the number DialGauge actually divides into printed
+    // tick labels — is in DISPLAY units. Metric never noticed (same value both ways), but a
+    // 70 km/h floor is 43.5 mph, which has no clean small-integer divisor at all: picking a tick
+    // count from 70 (km/h) and applying it to a scale printing 43.5's ticks reproduces exactly
+    // the ragged-tick defect this file's other test above guards against, just relocated into
+    // imperial. The fix snaps the DISPLAY max up to the next round number (nearest 5) before
+    // picking ticks — metric's already-round max is unaffected (asserted above); this test is
+    // imperial's half of the same coverage.
+    @Test fun the_hero_tick_labels_stay_round_in_imperial_too() {
+        // 70/80/100/120 km/h, each converted to mph and snapped UP to the next round mph value:
+        // 70 / 1.609344 = 43.496 -> 45; 80 -> 49.710 -> 50; 100 -> 62.137 -> 65; 120 -> 74.565 -> 75.
+        val expectedScaleMax = mapOf(70f to 45f, 80f to 50f, 100f to 65f, 120f to 75f)
+        for ((maxKmh, expected) in expectedScaleMax) {
+            val hero = ClassicDialSpecs.build(motion, battery, UnitSystem.IMPERIAL, maxSpeedKmh = maxKmh)
+                .first { it.slot == ClusterSlot.HERO }
+            assertTrue(
+                abs(hero.scale.max - expected) < 0.01f,
+                "for maxSpeedKmh=$maxKmh expected scale.max ~= $expected, was ${hero.scale.max}"
+            )
+            val majors = DialGeometry.majorValues(hero.scale)
+            val interval = hero.scale.max / hero.scale.majorTicks
+            assertTrue(
+                abs(interval - interval.roundToInt()) < 0.01f,
+                "majorTicks=${hero.scale.majorTicks} does not divide max=${hero.scale.max} evenly (interval=$interval)"
+            )
             val roundedSteps = majors.map { it.roundToInt() }.zipWithNext { a, b -> b - a }
             assertEquals(1, roundedSteps.distinct().size, "uneven rounded tick steps: $roundedSteps")
         }

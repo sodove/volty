@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.ride.gauge
 
 import kotlin.math.abs
+import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
@@ -33,6 +34,19 @@ object DialGeometry {
 
     const val START_ANGLE: Float = 135f
     const val SWEEP: Float = 270f
+
+    // Font sizes are fractions of the dial's own radius — the same pattern as every other
+    // geometric constant DialGauge computes (tickOuterR, majorTickLen, arcR, hubR). Committed
+    // HERE rather than as private constants inside DialGauge.kt so DialGeometryTest can derive
+    // real dial geometry (font sizes, measured-label estimates) from the EXACT numbers the
+    // renderer draws with instead of a hand-copied magic number — see
+    // `centre_scale_on_the_real_localized_small_corner_dial_...` below, which replaced a stale
+    // pre-localization pin with a derivation from these.
+    const val NumberFontFraction = 0.12f
+    const val LabelFontFraction = 0.07f
+    const val ValueFontFraction = 0.15f
+    const val UnitFontFraction = 0.06f
+    const val LabelLetterSpacingFraction = LabelFontFraction * 0.16f
 
     /** Position of [value] on the dial as 0..1, clamped. Degenerate scales yield 0. */
     fun fraction(value: Float, scale: DialScale): Float {
@@ -115,6 +129,25 @@ object DialGeometry {
     }
 
     /**
+     * Rounds [max] UP to the nearest multiple of [step] — never down, so the scale never shrinks
+     * below the real value it has to show. A scale max that arrives in an arbitrary DISPLAY unit
+     * (e.g. a km/h-native range converted to mph for an imperial rider) needs its OWN round
+     * number before [pickMajorTicks] can find a clean divisor: the km/h range is already snapped
+     * to a round number upstream (`RideDashboardScreen`'s
+     * `max(70f, ceil(sessionMax / 10f) * 10f)`), but that snap doesn't survive a /1.609344
+     * conversion — 70 km/h becomes 43.5 mph, which has no clean small-integer divisor at all, no
+     * matter which tick count [pickMajorTicks] tries.
+     *
+     * A value that is already a multiple of [step] snaps to itself (a no-op) — this is why
+     * calling this unconditionally on an already-round metric max is safe: it never changes it,
+     * so there is no need to branch on which unit system is active.
+     */
+    fun snapScaleMaxUp(max: Float, step: Float = 5f): Float {
+        if (step <= 0f || max <= 0f) return max
+        return ceil(max / step) * step
+    }
+
+    /**
      * Radius at which a tick's label sits: just inside the tick marks' inner end, offset further
      * inward by [gap] and by the widest label's own measured half-diagonal ([numberHalfDiagonal],
      * not half-height — see [DialGauge]'s draw code for why). Pulled
@@ -126,10 +159,15 @@ object DialGeometry {
 
     /**
      * How much to shrink the centre readout block (label/value/unit stack) so its own measured
-     * footprint never reaches the tick numbers. 1f — no shrink — is the acceptance criterion at
-     * every dial size this cluster ships; this only ever shrinks (floored at 0.5f, never scaled
-     * up) when the centre block is pathologically large for its dial, e.g. a caller-supplied
-     * value string far longer than the design was sized for.
+     * footprint never reaches the tick numbers. 1f means no shrink at all; the value is floored
+     * at 0.5f and never scaled up. This is NOT always 1f in practice: even the smallest real
+     * dial in this cluster (a corner slot, its label localized to Russian) engages this mildly
+     * (~0.9, comfortably above the 0.5 floor) rather than sitting at a flat 1.0 — see
+     * `DialGeometryTest`'s `centre_scale_on_the_real_localized_small_corner_dial_...` test, which
+     * derives that number from the committed font fractions above instead of hand-picking one.
+     * This still shrinks further (down toward the 0.5 floor) for a genuinely pathological centre
+     * block, e.g. a caller-supplied value string far longer than the design was sized for — that
+     * remains the safety-net end of this function's range, just not the only case it handles.
      */
     fun centreScale(numberR: Float, numberHalfDiagonal: Float, margin: Float, centreHalfDiagonal: Float): Float {
         if (centreHalfDiagonal <= 0f) return 1f

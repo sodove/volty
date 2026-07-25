@@ -2,12 +2,31 @@ package ru.sodovaya.volty.presentation.ride.gauge
 
 import kotlin.math.abs
 import kotlin.math.roundToInt
+import kotlin.math.sqrt
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class DialGeometryTest {
+
+    // This module has no Compose UI-test dependency (deliberately not added — see the task
+    // report), so a real TextLayoutResult isn't available here. These two constants stand in for
+    // what a genuine text measurement would give the
+    // `centre_scale_on_the_real_localized_small_corner_dial_...` test below: they are ESTIMATES,
+    // not measured values, and are not tuned to hit any particular target number.
+
+    /** Rough average glyph width for a sans-serif uppercase Latin/Cyrillic string, as a fraction
+     *  of font size. */
+    private val EstimatedAvgGlyphWidthEm = 0.6f
+
+    /** Rough single line's height (ascender to descender), as a multiple of font size. */
+    private val EstimatedLineHeightEm = 1.2f
+
+    private fun estimatedTextWidth(charCount: Int, fontSize: Float, letterSpacing: Float = 0f): Float =
+        charCount * fontSize * EstimatedAvgGlyphWidthEm + charCount * letterSpacing
+
+    private fun estimatedTextHeight(fontSize: Float): Float = fontSize * EstimatedLineHeightEm
 
     private val zeroToHundred = DialScale(min = 0f, max = 100f, majorTicks = 5)
     private val bipolar = DialScale(min = -60f, max = 60f, majorTicks = 6)
@@ -113,6 +132,28 @@ class DialGeometryTest {
         assertEquals(7, DialGeometry.pickMajorTicks(-10f))
     }
 
+    // --- snapScaleMaxUp: a scale max converted into an arbitrary display unit (km/h -> mph)
+    // doesn't inherit the round-number snap its km/h source already has (70 km/h -> 43.5 mph,
+    // no clean divisor at all), so it needs its own snap to a round number before
+    // pickMajorTicks stands a chance. Never rounds DOWN — the scale must still cover the real
+    // value it was given.
+
+    @Test fun snaps_up_to_the_next_multiple_of_the_step() {
+        assertEquals(45f, DialGeometry.snapScaleMaxUp(43.5f, step = 5f))
+        assertEquals(50f, DialGeometry.snapScaleMaxUp(49.71f, step = 5f))
+    }
+
+    @Test fun a_value_already_on_the_step_is_unchanged() {
+        assertEquals(70f, DialGeometry.snapScaleMaxUp(70f, step = 5f))
+        assertEquals(45f, DialGeometry.snapScaleMaxUp(45f, step = 5f))
+    }
+
+    @Test fun degenerate_inputs_pass_through_unchanged() {
+        assertEquals(0f, DialGeometry.snapScaleMaxUp(0f))
+        assertEquals(-5f, DialGeometry.snapScaleMaxUp(-5f))
+        assertEquals(43.5f, DialGeometry.snapScaleMaxUp(43.5f, step = 0f))
+    }
+
     // --- numberRadius: lifted from DialGauge's draw lambda so this arithmetic — wrong by six
     // points on its first pass, per the task report — is pinned by a test rather than
     // re-verified by hand each time.
@@ -127,24 +168,80 @@ class DialGeometryTest {
         assertEquals(0f, r)
     }
 
-    // --- centreScale: the part's actual acceptance criterion (1.0 == no shrink) at the small-dial
-    // proportions this cluster ships, plus the shrink-never-grow safety net for an oversized
-    // centre block.
+    // --- centreScale: the acceptance criterion is that the centre block never collides with the
+    // tick numbers (scale stays comfortably above its 0.5 floor), NOT that scale is always
+    // exactly 1.0 — the test below shows a real dial where a mild, expected shrink is correct.
+    // Also covers the shrink-never-grow safety net for a pathologically oversized centre block.
 
-    @Test fun centre_scale_is_1_when_the_centre_block_comfortably_fits_the_small_dial_proportions() {
-        // Proportions lifted from DialGauge's own fractions of `radius` at a representative small
-        // corner-dial radius (radius = 50px, the smallest slot in ClusterPlacement's cluster):
-        // tickOuterR = 45, majorTickLen = 6.5, numberGap = 4dp ~ 4px, so numberR ~= 45 - 6.5 - 4 -
-        // halfDiagonal. With a realistic small label half-diagonal (~6px) and a centre block half
-        // diagonal comfortably under the safe radius, no shrink should be needed.
-        val numberR = DialGeometry.numberRadius(tickOuterR = 45f, majorTickLen = 6.5f, gap = 4f, numberHalfDiagonal = 6f)
-        val scale = DialGeometry.centreScale(
-            numberR = numberR,
-            numberHalfDiagonal = 6f,
-            margin = 4f,
-            centreHalfDiagonal = 14f
+    // Replaces a stale pin: this test used to hand-pick `centreHalfDiagonal = 14f`, which encoded
+    // the PRE-localization centre block (the English label "MOTOR", ~12.7dp). After localization
+    // the real Russian label is longer — DialGeometryTest has no Compose text measurer available
+    // (no Compose UI-test dependency in this repo, and this task deliberately doesn't add one),
+    // so this derives its inputs from the SAME committed font-fraction constants DialGauge draws
+    // with (DialGeometry.LabelFontFraction et al.) plus two named, documented ESTIMATES standing
+    // in for real text measurement: an average glyph width and a line height, both as fractions
+    // of font size. Every other number mirrors DialGauge's own draw-lambda arithmetic exactly
+    // (radius fractions, spacing, gap, margin).
+    @Test fun centre_scale_on_the_real_localized_small_corner_dial_shrinks_mildly_and_stays_well_clear_of_the_floor() {
+        // Worst case per the task report: the Russian "ТЕМП. МОТОРА" label (ride_motor_temp,
+        // uppercased by ClassicRideCluster) on a corner dial (sizeFraction 0.32, ClusterPlacement)
+        // at a 360dp phone screen. RideDashboardScreen wraps its whole column in 12dp of padding
+        // on each side, so the cluster itself is 360 - 24 = 336dp wide. (dp is used as a bare unit
+        // throughout, not converted to real px: every quantity here — radius, spacing, margins,
+        // gap — is either a Dp value at the same implied density or a fraction of one, and
+        // DialGauge's own pxToSp/toPx round-trip is density-invariant by construction (see its
+        // KDoc), so the density cancels out of the final ratio and never has to be chosen.)
+        val clusterWidthDp = 360f - 2 * 12f
+        val cornerDialSizeFraction = 0.32f // ClusterPlacement.slots' corner SlotBox.sizeFraction
+        val dialDiameterDp = clusterWidthDp * cornerDialSizeFraction
+        val dialPaddingDp = 4f // DialGauge.kt's `DialPadding`
+        val radius = dialDiameterDp / 2f - dialPaddingDp // DialGauge's own `radius` val
+
+        val labelFontSize = DialGeometry.LabelFontFraction * radius
+        val labelLetterSpacing = DialGeometry.LabelLetterSpacingFraction * radius
+        val valueFontSize = DialGeometry.ValueFontFraction * radius
+        val unitFontSize = DialGeometry.UnitFontFraction * radius
+        val numberFontSize = DialGeometry.NumberFontFraction * radius
+
+        val label = "ТЕМП. МОТОРА" // ride_motor_temp, uppercased — 12 characters incl. "." and the space
+        val labelWidth = estimatedTextWidth(label.length, labelFontSize, labelLetterSpacing)
+        val labelHeight = estimatedTextHeight(labelFontSize)
+        // The value ("68") and unit ("°C") this dial prints are far shorter than the label, so
+        // they can't be the widest line — only their height contributes to the stacked block.
+        val valueHeight = estimatedTextHeight(valueFontSize)
+        val unitHeight = estimatedTextHeight(unitFontSize)
+        val spacing = 2f // DialGauge.kt's `spacing` between the three stacked lines
+
+        val centerMaxWidth = labelWidth
+        val centerTotalHeight = labelHeight + spacing + valueHeight + spacing + unitHeight
+        val centreHalfDiagonal = sqrt(
+            (centerMaxWidth / 2f) * (centerMaxWidth / 2f) + (centerTotalHeight / 2f) * (centerTotalHeight / 2f)
         )
-        assertEquals(1f, scale)
+
+        // Tick labels on this same dial (BOTTOM_RIGHT, ClassicDialSpecs' motor-temp scale:
+        // 0..140, majorTicks = 7) top out at 3 digits ("140") — the widest number this dial ever
+        // prints, and so the one that pushes numberR (and therefore the safe radius) inward the
+        // most.
+        val numberHalfDiagonal = run {
+            val w = estimatedTextWidth("140".length, numberFontSize)
+            val h = estimatedTextHeight(numberFontSize)
+            sqrt((w / 2f) * (w / 2f) + (h / 2f) * (h / 2f))
+        }
+
+        val tickOuterR = radius * 0.90f // DialGauge's own fraction
+        val majorTickLen = radius * 0.13f // DialGauge's own fraction
+        val numberGap = 4f // DialGauge.kt's `numberGap`
+        val collisionMargin = 4f // DialGauge.kt's `collisionMargin`
+
+        val numberR = DialGeometry.numberRadius(tickOuterR, majorTickLen, numberGap, numberHalfDiagonal)
+        val scale = DialGeometry.centreScale(numberR, numberHalfDiagonal, collisionMargin, centreHalfDiagonal)
+
+        // The real, post-localization number (~0.92 from these estimates) is NOT 1.0 any more:
+        // the shrink guard genuinely engages now that the label is longer, but only mildly, and
+        // stays far clear of the 0.5 floor — i.e. no collision. Bounded rather than pinned to one
+        // decimal so this doesn't become fragile to the estimate constants' exact values.
+        assertTrue(scale < 0.99f, "expected the shrink guard to engage now that the label is localized, was $scale")
+        assertTrue(scale > 0.75f, "expected the shrink to stay mild, well clear of the 0.5 floor, was $scale")
     }
 
     @Test fun centre_scale_shrinks_but_never_below_half_for_a_pathologically_large_centre_block() {

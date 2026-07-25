@@ -80,11 +80,8 @@ private val DialPadding = 4.dp
 // to borrow even though its placement maths is exactly what this file avoids porting). This is
 // what gives every instance in an eight-up cluster the same proportions, small dial or hero,
 // instead of a fixed sp guess that only happened to leave headroom at one particular size.
-private const val NumberFontFraction = 0.12f
-private const val LabelFontFraction = 0.07f
-private const val ValueFontFraction = 0.15f
-private const val UnitFontFraction = 0.06f
-private const val LabelLetterSpacingFraction = LabelFontFraction * 0.16f
+// The fractions themselves live in `DialGeometry` (not here) so `DialGeometryTest` can derive
+// real dial geometry from the exact numbers this composable draws with.
 
 /**
  * Raw device pixels -> Sp, deliberately bypassing the system font-scale multiplier: the dial's
@@ -106,14 +103,19 @@ private fun Density.pxToSp(px: Float): TextUnit = px.coerceAtLeast(0f).toSp()
  * The mockup this replaces (`docs/design/ride-dashboard-mockup.html`, "Classic VESC" toggle)
  * had its scale numbers collide with the centre readout because its numbers sat on a radius
  * too close to the centre for its centre-text size. This implementation avoids that with two
- * independent measures: (1) both the tick numbers and the centre readout are sized as fractions
- * of the dial's own radius (not fixed sp), chosen so that even at the smallest dial in the
- * planned cluster (`ClusterPlacement`'s 0.32-of-cluster-width corner slots) the centre block's
- * measured footprint sits comfortably inside the ring the numbers occupy — checked
- * arithmetically for that size in the task report, not merely assumed to work out; and (2) a
- * shrink transform that scales the centre block down (never up) as a rare-case safety net —
- * e.g. a caller-supplied value string longer than the design was sized for — not the mechanism
- * the acceptance criterion actually relies on.
+ * cooperating measures: (1) both the tick numbers and the centre readout are sized as fractions
+ * of the dial's own radius (not fixed sp), which is what makes every instance in an eight-up
+ * cluster — small corner dial or hero — keep the same proportions instead of a fixed sp guess
+ * that only happened to leave headroom at one particular size; and (2) a shrink transform that
+ * scales the centre block down (never up) whenever its measured footprint gets close to the
+ * number ring. Sizing alone is not enough to guarantee 1f (no shrink) at every real dial: the
+ * smallest corner slot (`ClusterPlacement`'s 0.32-of-cluster-width dials) with a localized
+ * Russian label engages this mildly (~0.9, comfortably above the 0.5 floor) rather than sitting
+ * at a flat 1.0 — see `DialGeometryTest`'s `centre_scale_on_the_real_localized_small_corner_dial_...`
+ * test, which derives that number from the committed font fractions instead of hand-picking one.
+ * The shrink transform is therefore a genuine, load-bearing part of how this stays
+ * collision-free, not only a rare-case safety net for a pathologically long caller-supplied
+ * value string (though it still floors at 0.5f and handles that case too).
  */
 @Composable
 fun DialGauge(
@@ -151,19 +153,19 @@ fun DialGauge(
     }
 
     val numberStyle = remember(radius) {
-        TextStyle(fontSize = density.pxToSp(radius * NumberFontFraction))
+        TextStyle(fontSize = density.pxToSp(radius * DialGeometry.NumberFontFraction))
     }
     val labelStyle = remember(radius) {
         TextStyle(
-            fontSize = density.pxToSp(radius * LabelFontFraction),
-            letterSpacing = density.pxToSp(radius * LabelLetterSpacingFraction)
+            fontSize = density.pxToSp(radius * DialGeometry.LabelFontFraction),
+            letterSpacing = density.pxToSp(radius * DialGeometry.LabelLetterSpacingFraction)
         )
     }
     val valueStyle = remember(radius) {
-        TextStyle(fontSize = density.pxToSp(radius * ValueFontFraction), fontWeight = FontWeight.Bold)
+        TextStyle(fontSize = density.pxToSp(radius * DialGeometry.ValueFontFraction), fontWeight = FontWeight.Bold)
     }
     val unitStyle = remember(radius) {
-        TextStyle(fontSize = density.pxToSp(radius * UnitFontFraction))
+        TextStyle(fontSize = density.pxToSp(radius * DialGeometry.UnitFontFraction))
     }
 
     // Measured once per (radius, text) pair — not every animation frame, since only the
@@ -298,10 +300,10 @@ fun DialGauge(
         drawCircle(color = colors.needle, radius = hubR, center = center)
 
         // 7. Centre readout — stacked from MEASURED heights (never guessed offsets). Sized
-        // proportionally (see NumberFontFraction et al. above) so it fits inside the number
-        // ring by design; the shrink below is a rare-case safety net — e.g. a caller-supplied
-        // value string longer than the design was sized for — not the mechanism the
-        // acceptance criterion relies on.
+        // proportionally (see DialGeometry.NumberFontFraction et al.), which keeps it close to
+        // the number ring by design but does not guarantee zero shrink on its own — the shrink
+        // below engages mildly even on the smallest real dial (see DialGeometry.centreScale's
+        // KDoc), not only as a rare-case safety net for a pathologically long value string.
         val spacing = 2.dp.toPx()
         val centerTotalHeight =
             labelLayout.size.height + spacing + valueLayout.size.height + spacing + unitLayout.size.height
