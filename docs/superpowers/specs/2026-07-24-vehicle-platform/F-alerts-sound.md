@@ -101,3 +101,48 @@ agree. Reads `AlarmController`'s level — no duplicate thresholds.
    and scooter.
 4. **Speed alarm** — off by default (rider-set limit), or a soft chime at a
    configurable speed? Confirm.
+
+---
+
+## 10. §7 SUPERSEDED — every alert is offered to every vehicle (2026-07-26)
+
+**Decision (product owner):** *"алерты могут быть для всех сразу, каждый сам
+выберет что он хочет, втч с настройками."*
+
+§7 above segmented the alerts by vehicle shape — duty as "the EUC headline",
+temperature as "the scooter headline". That framing came from the opening
+conversation and it is wrong. A wheel rider may well want a motor-temperature
+alarm; a rider on a powerful scooter has every reason to watch duty. Choosing
+for them by vehicle type is a guess dressed as a default.
+
+**What replaces it.** Separate two things §7 conflated:
+
+- **Availability — a fact, not a preference.** An alert exists only if the data
+  exists. Kelly reports no duty (`H §7`), so `DUTY_*` cannot arm on it. A vehicle
+  with no motion source keeps battery alerts only. A controller with no motor
+  temperature sensor cannot raise `MOTOR_TEMP_HIGH`. This gating stays exactly as
+  §3 describes it and is **not** negotiable by settings — an unavailable alert is
+  hidden, not merely defaulted off.
+- **Preference — entirely the rider's.** Every *available* alert is offered on
+  every vehicle, each independently switchable, each with its own editable
+  threshold. No alert is withheld because of what kind of vehicle the app thinks
+  this is.
+
+**Defaults become a starting point, not a profile.** Ship one set of thresholds
+(§3's numbers: duty 80/90 %, temps 90 °C, speed off until set) applied uniformly
+wherever the metric is available. They are an opening position the rider edits,
+not a decision keyed on vehicle shape.
+
+**Consequences for the UI (Part G2 owns the screen):**
+- the alert list shows every available alert for this vehicle, each with its own
+  toggle and threshold field;
+- an alert the hardware cannot supply is **absent**, not greyed out — a disabled
+  row invites the question "why can't I turn this on?", an absent one does not;
+- the two modality switches (tone, vibration) and the master switch stay global
+  as §4 describes; per-alert preference is about *whether it fires*, not *how*.
+
+**Consequence for §9.3:** the open question "confirm default thresholds per the
+user's wheels and scooter" is narrower now — one set of numbers to confirm, not
+a per-shape profile.
+
+§7 stays above as the superseded reasoning; this section governs.
