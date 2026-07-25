@@ -209,3 +209,67 @@ Part C's `l_temp_fet_start` question (`C §10`) is **separate and still open**:
 that is about whether to adopt the *controller's own* configured limit once
 `GET_MCCONF` can read it, which would make the ESC default hardware-specific
 rather than a constant. Deciding it does not change anything above.
+
+### 10.2 Up to three rider-defined levels per alert (2026-07-26)
+
+Product owner: *"все алерты должны быть редактируемыми, что вкл\выкл, что по
+лимитам. и вообще надо бы добавить возможность сделать до трех уровней алертов
+на каждый пункт по выбору юзера."*
+
+**This changes the model, not just the defaults.** §3 bakes the levels into the
+field names — `dutyWarnPercent` + `dutyHighPercent` is two hard-coded steps for
+duty and exactly one for each temperature. That shape cannot express "I want
+three motor-temp steps" or "one duty step is enough for me".
+
+**New shape.** Each alert kind carries an ordered list of **0..3 levels**; each
+level is `{ threshold, enabled }`. Position implies escalation: level 1 is the
+mildest, level 3 the most urgent. An empty list means the rider turned that alert
+off entirely — which is the same thing as all levels disabled, and the UI should
+not present two ways to say it.
+
+**Constraints the implementation must enforce, not merely hope for:**
+- **Monotonic.** `t1 ≤ t2 ≤ t3` for a rising metric (duty, temperature, speed).
+  A rider who types 90/80/100 has expressed something contradictory; the editor
+  must either reorder or refuse, and the engine must never be handed an unsorted
+  list. Decide which at implementation and test it.
+- **Availability still gates the whole kind** (§10): an alert the hardware cannot
+  supply has no levels to edit, greyed with its reason.
+- **Hysteresis is per level** (§8 already asks for it) — with three steps the
+  chatter risk multiplies, and a boundary sitting between two levels must not
+  oscillate between them either.
+
+**The alarm must sound different per level, or the levels are decoration.** §4's
+`AlarmLevel { NONE, WARN, CRITICAL }` is two audible states. Three rider-defined
+steps need three distinguishable signals — most likely one tone whose repetition
+rate and pitch step up, rather than three unrelated sounds. This lands in §9.1's
+tone-design question, which now has a concrete requirement attached: **three
+steps a rider can tell apart with the phone in a pocket**, not three numbers that
+all sound the same.
+
+**Dashboard coupling (§6) needs a rule.** With a variable number of levels, "amber
+at warn, red at high" no longer has fixed referents. Simplest rule that stays
+honest: the dial's own `DutyBands`/`TempBands` colours are **independent** of the
+alert levels — §10.1 already established the dial warns early and the alarm
+interrupts later, and that separation survives this change unchanged. Do not try
+to drive the dial from a rider-defined list.
+
+**Cost, stated honestly.** This is not a small change:
+- `AlertConfig` stops being a flat row of scalars and becomes list-shaped, so the
+  persistence layer needs a table or a serialised column — **a schema migration**,
+  and this project's migration verifier has never run green locally (`B §12.1`).
+- the settings UI gains add/remove/reorder rows per alert, where today it has
+  fixed fields.
+- `AlarmController` moves from comparing against two constants to walking a list.
+
+Worth it — it is the difference between "the app's opinion with an escape hatch"
+and "the rider's own thresholds" — but it should be planned as its own task inside
+Part F rather than folded into another one, and the migration should land with the
+Part G2 composer work that already has to touch this screen.
+
+**Defaults under the new shape** (§10.1's numbers, expressed as levels):
+- duty: two levels — 80 %, 90 %
+- ESC temp: one level — 90 °C
+- motor temp: one level — 110 °C
+- speed: no levels until the rider adds one
+
+The rider adds a third duty step, or a second motor step, or deletes any of them.
