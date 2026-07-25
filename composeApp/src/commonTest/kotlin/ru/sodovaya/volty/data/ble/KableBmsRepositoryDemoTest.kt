@@ -4,9 +4,12 @@ import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.isDemo
-import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -14,7 +17,6 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.AfterTest
@@ -115,16 +117,48 @@ class KableBmsRepositoryDemoTest {
     }
 
     /**
-     * Review regression (Task 14, round 1): [PickerComponent]'s "+ Add battery"
-     * is reachable from a live demo session and connects a real vehicle WITHOUT
-     * calling [KableBmsRepository.disconnect] first (unlike
-     * `DashboardComponent.onSwitchVehicle`). Before this fix, `doConnect`'s
-     * address-transition reset cleared [KableBmsRepository.activeData] /
-     * [KableBmsRepository.activeMotion] but left [KableBmsRepository.activeVehicleData]
-     * holding the demo's `packs`/`aggregate` — exactly what
-     * `RideDashboardComponent` reads for the BATTERY tile — so a plausible but
-     * WRONG SoC/voltage from the demo would show on the real vehicle until its
-     * first sample arrived.
+     * Review regression (Task 14, round 1 + round 2): [PickerComponent]'s
+     * "+ Add battery" is reachable from a live demo session and connects a
+     * real vehicle WITHOUT calling [KableBmsRepository.disconnect] first
+     * (unlike `DashboardComponent.onSwitchVehicle`). Before the round-1 fix,
+     * `doConnect`'s address-transition reset cleared
+     * [KableBmsRepository.activeData] / [KableBmsRepository.activeMotion] but
+     * left [KableBmsRepository.activeVehicleData] holding the demo's
+     * `packs`/`aggregate` — exactly what `RideDashboardComponent` reads for
+     * the BATTERY tile — so a plausible but WRONG SoC/voltage from the demo
+     * would show on the real vehicle until its first sample arrived.
+     *
+     * ROUND 2 (re-review): the first version of this test only asserted after
+     * `advanceUntilIdle()`, which is vacuous — a fully-failed `connect()` ALSO
+     * zeroes `activeVehicleData` via the pre-existing, unrelated
+     * `clearOrchestratorAfterFailure` -> `clearOrchestratorLocked` path
+     * (`KableBmsRepository.kt:1095-1105`), so the assertion passed whether or
+     * not the round-1 fix line was present.
+     *
+     * A `launch { connect(...) }` + `runCurrent()` seam (observing state while
+     * `resolveAdvertisement`'s 5s timeout is supposedly still pending) was
+     * tried next and does NOT work in this harness: in a plain JVM unit test
+     * (no Robolectric shadow), touching real Android BLE classes throws
+     * synchronously (`RuntimeException: Method build in
+     * android.bluetooth.le.ScanSettings$Builder not mocked`) instead of
+     * actually suspending on the virtual timer — confirmed by printing
+     * `testScheduler.currentTime` immediately after a single `runCurrent()`
+     * call: it had NOT advanced past the earlier demo-tick's value, meaning
+     * the whole failed attempt — including `clearOrchestratorAfterFailure` —
+     * ran inside that one `runCurrent()` call, so there is no observable
+     * mid-flight window there either.
+     *
+     * The scenario actually used instead: give the real vehicle's pack and
+     * controller the SAME address but conflicting [ProtocolKind]s. `planLinks`
+     * (via `effectiveLinkSpecs`) throws `IllegalArgumentException` for this —
+     * synchronously, and CRUCIALLY *before* `doConnect` calls
+     * `buildOrchestrator`, so `installedOrchestrator` is never reassigned from
+     * its initial `null`. `clearOrchestratorAfterFailure(null)` is then a
+     * guaranteed no-op (`if (installed == null) return`), which removes the
+     * confound entirely: the address-transition reset (the round-1 fix) is
+     * the ONLY code path that can still zero `activeVehicleData` on this
+     * particular failure. No timing games needed — `repo.connect(...)` can be
+     * awaited directly.
      */
     @Test
     fun `connecting a real vehicle after demo does not leak the demo's battery snapshot`() = runTest {
@@ -140,26 +174,39 @@ class KableBmsRepositoryDemoTest {
 
         // Mirrors PickerComponent.onConnectKnown/onConnectWithType: connect a
         // REAL vehicle at a DIFFERENT address with no preceding disconnect().
-        // No real BLE stack exists in a unit test, so the connect itself fails
-        // fast (see KableBmsRepositoryVescTest / KableBmsRepositoryDisconnectRaceTest
-        // for the same fail-fast pattern) — but doConnect's address-transition
-        // reset runs before that failure, which is exactly what this proves.
-        val real = singlePackVehicle(
-            id = "v-real",
-            name = "Real",
+        // Pack and controller deliberately share ONE address with conflicting
+        // ProtocolKinds (JK vs. VESC) so planLinks throws BEFORE
+        // buildOrchestrator runs — see the doc comment above for why this is
+        // what makes the failure path a no-op instead of a confound.
+        val conflictingAddress = "AA:BB:CC:DD:EE:FF"
+        val conflicting = Vehicle(
+            id = "v-conflict",
+            name = "Conflict",
             iconKey = "generic",
-            bmsType = BmsType.JK_BMS,
-            bmsAddress = "AA:BB:CC:DD:EE:FF",
+            packs = listOf(
+                Pack(index = 0, label = "Battery", bmsType = BmsType.JK_BMS, bmsAddress = conflictingAddress)
+            ),
+            controllers = listOf(
+                Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC, address = conflictingAddress)
+            ),
+            topology = PackTopology.PARALLEL,
             chemistry = Chemistry.LI_ION_NMC,
             createdAt = Instant.fromEpochSeconds(0L)
         )
-        val result = repo.connect(real)
-        advanceUntilIdle()
-        assertTrue(result.isFailure, "no BLE in a unit test — the link cannot come up")
+
+        val result = repo.connect(conflicting)
+        runCurrent()
+
+        assertTrue(result.isFailure, "conflicting protocol kinds at one address must fail planLinks")
+        val message = result.exceptionOrNull()?.message ?: ""
+        assertTrue(
+            message.contains("conflicting protocol kinds"),
+            "expected planLinks' own error, got: $message"
+        )
 
         val vd = repo.activeVehicleData.value
-        assertTrue(vd.packs.isEmpty(), "stale demo packs must not leak into the real vehicle's snapshot")
-        assertFalse(vd.aggregate.isConnected, "stale demo aggregate must not leak into the real vehicle's Battery tile")
+        assertTrue(vd.packs.isEmpty(), "stale demo packs must not leak into the new (failed) connection's snapshot")
+        assertFalse(vd.aggregate.isConnected, "stale demo aggregate must not leak into the new connection's Battery tile")
         assertEquals(0f, vd.aggregate.soc, 0.001f, "stale demo SoC must not leak")
         assertFalse(vd.isPartial)
     }
