@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -43,6 +44,7 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.MovingAverage
+import ru.sodovaya.volty.domain.stats.PackAggregator
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -115,6 +117,20 @@ class KableBmsRepository private constructor(
         const val SAMPLE_FUNNEL_CAPACITY = 64
 
         /**
+         * Distinct BLE-style address for [DEMO_CONTROLLER]. The demo pack and
+         * the demo controller are two different sources on the (synthetic)
+         * vehicle, so they must NOT share [DEMO_VEHICLE_ID] as their address:
+         * [planLinks] requires one address to resolve to exactly one
+         * [ProtocolKind], and JK (pack) + VESC (controller) at the same
+         * address would throw `IllegalArgumentException` if this vehicle ever
+         * reached link planning. It doesn't today (`connectDemo` bypasses the
+         * orchestrator entirely and the demo vehicle is never persisted, so it
+         * can never reach `connect(vehicle)`), but the model should still be
+         * coherent on its own terms rather than relying on that bypass forever.
+         */
+        private const val DEMO_CONTROLLER_ADDRESS = "demo-controller"
+
+        /**
          * Synthetic controller backing "Try demo" mode's motion feed (Task 12):
          * a single VESC-shaped source so the demo vehicle has a coherent
          * controller behind the ride curve, the same way it has a stored pack
@@ -126,7 +142,7 @@ class KableBmsRepository private constructor(
             index = 0,
             label = "Demo motor",
             controllerType = ControllerType.VESC,
-            address = DEMO_VEHICLE_ID
+            address = DEMO_CONTROLLER_ADDRESS
         )
 
         /**
@@ -134,7 +150,10 @@ class KableBmsRepository private constructor(
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
          * never confused with a saved or guest vehicle and is never persisted.
          * Carries [DEMO_CONTROLLER] alongside its single pack so the demo
-         * exercises the motion path end-to-end, not just the battery one.
+         * exercises the motion path end-to-end, not just the battery one. The
+         * pack and controller use distinct addresses ([DEMO_VEHICLE_ID] vs.
+         * [DEMO_CONTROLLER_ADDRESS]) so the model would still pass [planLinks]
+         * if it ever reached link planning — see [DEMO_CONTROLLER_ADDRESS].
          */
         val DEMO_VEHICLE: Vehicle = singlePackVehicle(
             id = DEMO_VEHICLE_ID,
@@ -530,7 +549,28 @@ class KableBmsRepository private constructor(
                     // is coherent with the vehicle it is published under.
                     motionRingBuffer.push(motion)
                     _activeMotion.value = motion
+                    // Battery twin of the same idea: without this, packs/aggregate
+                    // stay at VehicleData()'s all-zero default for the whole demo
+                    // session (only _activeData — the Battery tab's own flow — saw
+                    // sample), so the Ride dashboard's BATTERY tile (which reads
+                    // activeVehicleData.aggregate, not activeData) would be stuck
+                    // at "0% / 0.0V" forever instead of tracking the demo's SoC
+                    // curve. Mirrors VehicleConnection.snapshot()'s battery half via
+                    // the same PackAggregator a real single-pack connection uses —
+                    // an identity transform here, but it keeps the demo on the one
+                    // true path rather than a bespoke shortcut.
+                    val demoPackState = PackState(
+                        pack = DEMO_VEHICLE.packs.first(),
+                        data = sample,
+                        isOnline = true,
+                        lastSeenAt = sample.timestamp
+                    )
+                    val demoBattery = PackAggregator.build(listOf(demoPackState), PackTopology.PARALLEL)
                     _activeVehicleData.value = _activeVehicleData.value.copy(
+                        packs = demoBattery.packs,
+                        aggregate = demoBattery.aggregate,
+                        topology = PackTopology.PARALLEL,
+                        isPartial = demoBattery.isPartial,
                         controllers = listOf(
                             ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
                         ),
