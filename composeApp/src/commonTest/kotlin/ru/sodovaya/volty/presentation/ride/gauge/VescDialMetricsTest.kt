@@ -34,8 +34,9 @@ class VescDialMetricsTest {
     @Test fun the_needle_base_stops_at_73_percent_of_the_radius_and_never_reaches_the_centre() {
         // tip 0.95R, blade 0.22R long -> base 0.73R. The single number this whole port turns on:
         // a needle drawn from the centre outward would put its root on the readout.
+        // (A `> 0.0` sanity check used to live here too; it is dead the moment the line above
+        // passes — 73.0 is trivially positive — so it added a line without adding coverage.)
         assertEquals(73.0, VescDialMetrics.needleBaseRadius(r), epsilon)
-        assertTrue(VescDialMetrics.needleBaseRadius(r) > 0.0)
     }
 
     @Test fun the_needle_never_even_reaches_the_ring_the_scale_numbers_sit_on() {
@@ -47,12 +48,12 @@ class VescDialMetricsTest {
         )
     }
 
-    @Test fun the_needle_blade_is_shorter_than_it_is_far_from_the_centre() {
-        // A sanity restatement of the same geometry that does not depend on the exact fractions:
-        // the blade's length (0.22R) is far less than the gap it leaves to the centre (0.73R).
-        val bladeLength = VescDialMetrics.needleTipRadius(r) - VescDialMetrics.needleBaseRadius(r)
-        assertTrue(bladeLength < VescDialMetrics.needleBaseRadius(r))
-    }
+    // A "the blade is shorter than it is far from the centre" restatement used to live here,
+    // computing bladeLength = needleTipRadius(r) - needleBaseRadius(r) < needleBaseRadius(r).
+    // Deleted: needleTipRadius(r)=95.0 and needleBaseRadius(r)=73.0 are already pinned exactly by
+    // the two tests immediately above (73.0 < 22.0's implied bladeLength is then pure arithmetic,
+    // not a fact this test could discover on its own) — nothing is lost that those two pins do not
+    // already cover, at the exact values rather than a looser inequality.
 
     @Test fun the_needle_is_narrower_than_it_is_long() {
         assertEquals(12.0, r * VescDialMetrics.NEEDLE_WIDTH_FRACTION, epsilon)
@@ -123,7 +124,19 @@ class VescDialMetricsTest {
         // Compose radial gradients always start their stop scale at the centre, so the QML's inner
         // radius r0 becomes a stop position — and it must not depend on the dial's size.
         assertEquals(0.87 / 0.95, VescDialMetrics.traceGlowInnerStop, epsilon)
-        assertTrue(VescDialMetrics.traceGlowInnerStop > 0.0 && VescDialMetrics.traceGlowInnerStop < 1.0)
+
+        // The assertion above is a real pin (it fails if either inset fraction drifts), but
+        // `traceGlowInnerStop` takes no radius parameter at all — it is a fixed `Double` computed
+        // once from the literal `1.0` — so a `> 0 && < 1` check on it, or comparing it against
+        // itself, proves nothing about "scale free"; there is no second radius to vary. The actual
+        // radius-dependent functions it stands in for are traceGlowInnerRadius/traceGlowOuterRadius
+        // (used together, with a real `outerRadius`, wherever the gradient is actually built) —
+        // check THEIR ratio is r-independent instead, which is the property that would genuinely
+        // break if either picked up a non-fractional (additive) term.
+        listOf(1.0, 10.0, 88.0, 250.0).forEach { radius ->
+            val ratio = VescDialMetrics.traceGlowInnerRadius(radius) / VescDialMetrics.traceGlowOuterRadius(radius)
+            assertEquals(VescDialMetrics.traceGlowInnerStop, ratio, epsilon, "ratio at outerRadius=$radius")
+        }
     }
 
     // --- the twelve-to-three o'clock conversion (QML:221-222, 456-457) ----------------------
@@ -137,11 +150,13 @@ class VescDialMetricsTest {
         assertEquals(0.0, VescDialGeometry.screenAngleRadians(90.0), epsilon)
     }
 
-    @Test fun the_conversion_is_a_pure_offset_so_it_preserves_angular_differences() {
-        val a = VescDialGeometry.screenAngleDegrees(210.0)
-        val b = VescDialGeometry.screenAngleDegrees(-15.0)
-        assertEquals(210.0 - (-15.0), a - b, epsilon)
-    }
+    // A "the conversion is a pure offset, so it preserves angular differences" test used to live
+    // here (asserting screenAngleDegrees(210) - screenAngleDegrees(-15) == 210 - (-15)). Deleted:
+    // that equality holds for `x -> x + c` at ANY constant `c`, including a wrong one, so it could
+    // never have caught a broken `-90` — which is exactly the number `a_gauge_angle_of_zero_...`
+    // and `a_gauge_angle_of_ninety_points_right` above already pin directly. Nothing between "the
+    // offset is exactly -90" (pinned) and "differences survive an additive offset" (true of every
+    // additive offset, not a Volty-specific fact) was left uncovered by removing it.
 
     // --- trace sweep replaces the QML's anticlockwise flag (QML:218-223) --------------------
 
@@ -288,8 +303,22 @@ class VescDialMetricsTest {
     }
 
     @Test fun the_trace_colour_is_the_nib_colour_lightened_by_one_and_a_half() {
+        // QML line 50: `traceColor: Qt.lighter(nibColor, 1.5)`. Hand-computed rather than routed
+        // back through VescNibShading.lighter(nib, 1.5) — comparing traceColor(nib) against a call
+        // to the exact expression it is defined as (`fun traceColor(nib) = lighter(nib, 1.5)`) can
+        // never fail: it would still pass if traceColor secretly called darker() or used a
+        // different factor, because both sides of the comparison run the SAME override.
+        //
+        // nib = (0.0, 0.6, 0.9): v = max = 0.9 (blue), scaled = v*1.5 = 1.35 overflows 1.0, so the
+        // overflow branch desaturates: newSaturation = 1 - (scaled - 1) = 1 - 0.35 = 0.65,
+        // newMin = 1 - 0.65 = 0.35. Red sits at the old minimum (t=0) -> stays at newMin = 0.35;
+        // blue sits at the old maximum (t=1) -> rises to 1.0; green's fractional position within
+        // the old range, (0.6-0.0)/(0.9-0.0), carries straight over onto the new range.
         val nib = Rgb(0.0, 0.6, 0.9)
-        assertEquals(VescNibShading.lighter(nib, 1.5), VescNibShading.traceColor(nib))
+        val out = VescNibShading.traceColor(nib)
+        assertEquals(0.35, out.r, epsilon)
+        assertEquals(0.35 + 0.65 * (0.6 / 0.9), out.g, epsilon)
+        assertEquals(1.0, out.b, epsilon)
     }
 
     @Test fun the_trace_colour_is_never_darker_than_the_nib_colour_it_came_from() {
@@ -311,7 +340,10 @@ class VescDialMetricsTest {
             VescDialMetrics.TICK_LABEL_FONT_FRACTION
         ).forEach { other ->
             assertEquals(0.12, other, epsilon)
-            assertEquals(2.5, VescDialMetrics.VALUE_FONT_FRACTION / other, 1e-9)
         }
+        // A third assertion used to live here — `assertEquals(2.5, VALUE_FONT_FRACTION / other,
+        // ...)` inside the loop above. Deleted: once the two pins above both hold, 0.3 / 0.12 = 2.5
+        // is arithmetic, not a fact this test could still get wrong — restating it added a line
+        // without adding a way to fail that the two literal pins do not already provide.
     }
 }

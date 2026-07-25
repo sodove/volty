@@ -126,19 +126,30 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     // actually shown this session instead — a deliberate divergence, and today's floors, not
     // targets, are what ClassicDialSpecs.currentDisplayMax/powerDisplayMax fall back to for a quiet
     // ride). Unlike speed, both readings are bipolar, so the tracker follows the ABSOLUTE value —
-    // regen braking grows the current scale exactly as much as accelerating does — and the raw
-    // running max is handed straight to ClassicDialSpecs, which does its own floor+snap (it needs
-    // no unit conversion, so it needs none of heroDisplayMax's extra snapping either).
-    var sessionMaxAbsCurrentA by remember(vehicle?.id) { mutableStateOf(0f) }
+    // regen braking grows the current scale exactly as much as accelerating does.
+    //
+    // Unlike the plain "grow on any bigger sample" speed tracker above, these two go through
+    // SessionPeakTracker rather than a bare `if (x > max) max = x`: a scale with no ceiling AND no
+    // debounce lets one spurious decode (a single frame reporting, say, 5000 A) peg the dial for
+    // the rest of the ride. ClassicDialSpecs.currentDisplayMax/powerDisplayMax now cap how far that
+    // peg can reach (see their tickCapCeiling doc), but capping the DAMAGE still is not the same as
+    // preventing it — SessionPeakTracker keeps a rising reading from being committed at all until
+    // several consecutive samples corroborate it, so a one-frame glitch never reaches
+    // ClassicDialSpecs in the first place. See SessionPeakTracker's own doc for why a consecutive-
+    // sample debounce was chosen over a percentile or a decay, and why the confirmed value is the
+    // RUN's minimum rather than its maximum. The confirmed value is still handed to ClassicDialSpecs
+    // raw — it does its own floor+snap+ceiling, needing no unit conversion the way speed does.
+    var currentPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
-        val absCurrent = abs(motion.batteryCurrentA)
-        if (absCurrent > sessionMaxAbsCurrentA) sessionMaxAbsCurrentA = absCurrent
+        currentPeakTracker = currentPeakTracker.accept(abs(motion.batteryCurrentA))
     }
-    var sessionMaxAbsPowerW by remember(vehicle?.id) { mutableStateOf(0f) }
+    val sessionMaxAbsCurrentA = currentPeakTracker.committed
+
+    var powerPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
-        val absPower = abs(motion.powerW)
-        if (absPower > sessionMaxAbsPowerW) sessionMaxAbsPowerW = absPower
+        powerPeakTracker = powerPeakTracker.accept(abs(motion.powerW))
     }
+    val sessionMaxAbsPowerW = powerPeakTracker.committed
 
     val recentSpeeds = remember(vehicle?.id) { mutableStateListOf<Float>() }
     LaunchedEffect(vehicle?.id, motion.timestamp) {

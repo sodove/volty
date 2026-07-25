@@ -45,7 +45,7 @@ data class VescGaugeRange(
      */
     val tickmarkCount: Int
         get() = if (labelStep > 0.0) {
-            min(100, floor((maximumValue - minimumValue) / labelStep + 1.0).toInt())
+            min(MAX_TICKMARK_COUNT, floor((maximumValue - minimumValue) / labelStep + 1.0).toInt())
         } else {
             0
         }
@@ -91,9 +91,19 @@ data class VescGaugeRange(
      * Normalises [value] into the gauge's value range, clamps to 0..1, then maps that fraction
      * onto the angle range. Clamping happens BEFORE the angle mapping, so a value beyond the
      * gauge's range pins the needle at [minAngle] or [maxAngle] rather than overshooting.
+     *
+     * Guards the degenerate `maximumValue == minimumValue` span explicitly: every range this
+     * project actually BUILDS has `max > min`, so this is unreachable today (like the QML, which
+     * gets away with a silent `x/0 == Infinity` in JavaScript), but the predecessor this file
+     * replaced (`DialGeometry.fraction`) carried the same guard and a test pinning it, and both
+     * vanished together in the rewrite. A zero-span range now rests the needle at [minAngle] —
+     * the same answer a real, merely-very-narrow range gives a [value] at its minimum — rather
+     * than propagating a `NaN` into the Canvas layer.
      */
     fun valueToAngle(value: Double): Double {
-        val normalised = (value - minimumValue) / (maximumValue - minimumValue)
+        val span = maximumValue - minimumValue
+        if (span == 0.0) return minAngle
+        val normalised = (value - minimumValue) / span
         val clamped = when {
             normalised > 1.0 -> 1.0
             normalised < 0.0 -> 0.0
@@ -148,6 +158,20 @@ data class VescGaugeRange(
      * round" flag exists to provide.
      */
     fun traceSweepDegrees(value: Double): Double = valueToAngle(value) - valueToAngle(0.0)
+
+    companion object {
+        /**
+         * QML line 40's own `Math.min(100, …)` — VESC Tool's hard ceiling on major-tick count,
+         * ported verbatim. Named (rather than left as the bare literal it was) because
+         * [ru.sodovaya.volty.presentation.ride.ClassicDialSpecs]'s session auto-scale derives its
+         * own ceiling from exactly this number: once a range's NATURAL tick count (before this cap
+         * applies) would exceed it, [tickmarkCount] silently swaps `labelStep`'s own division for
+         * `(maximumValue - minimumValue) / (MAX_TICKMARK_COUNT - 1)` — a divisor a growing span was
+         * never snapped to divide evenly, which is exactly the ragged-ring regression a session
+         * scale that grows without bound would eventually walk into.
+         */
+        const val MAX_TICKMARK_COUNT = 100
+    }
 }
 
 /**

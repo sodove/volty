@@ -148,20 +148,39 @@ palette otherwise). The renderer is chosen **per vehicle** (§7.3):
   needles + swept arcs, red danger segments) — not the original grey/white.
 
 ### 7.1 Reusable gauge composables (`presentation/ride/gauge/`)
-- `RadialGauge` — the Clean arc gauge (outer speed + inner secondary rings), Canvas.
-- `DialGauge` — the Classic skeuomorphic dial: Canvas ticks (minor+major), sparse
-  numeric labels placed collision-free around the rim, needle + hub, a swept value
-  arc, an optional red danger segment, and a clean center readout (label/value/unit).
-  Parameterised by min/max/value/majors/colors/danger. **This component is what
-  makes the Classic view legible where the static mockup couldn't.**
-- `ClusterLayout` — a custom `Layout` positioning the eight `DialGauge`s in the
-  overlapping fan/nest composition, scaling to width (not absolute px).
+**Superseded by B3 (2026-07-25) — see §15.1.** This section originally specced `DialGauge` (a
+single skeuomorphic dial: ticks, needle + hub, a swept value arc, an optional red danger segment)
+and `ClusterLayout` (positioning eight of them). B2 shipped exactly that and the product owner
+rejected it on a device: right composition, wrong dial — the needle ran from the centre through the
+readout, the value text was half the intended size, and an invented red danger wedge doesn't exist
+on the real instrument. What actually ships instead, both Compose-free-and-tested where the
+arithmetic lives and Canvas-only where it draws:
+- `RadialGauge` — the Clean arc gauge (outer speed + inner secondary rings), Canvas. Unchanged.
+- `VescDialGauge` (Canvas) + `VescDialGeometry` / `VescDialMetrics` / `VescNibShading` (pure
+  geometry, radius fractions and Qt-compatible colour math) — a faithful, line-by-line port of
+  VESC Tool's own `mobile/CustomGauge.qml`. The needle is a short blade riding at the rim
+  (`0.73R..0.95R`) on a rotation origin pushed down to the dial's centre, so it can never cover the
+  centre readout **by geometry**, not by z-order or a hub cap; the dial face is the theme
+  background (not a separate plate), so overlapping dials read as one instrument instead of eight
+  floating discs; there is **no red danger wedge** — VESC has none, severity is carried by the
+  needle's colour alone (`nibColor`, §7.4).
+- `VescClusterLayout` (a custom `Layout`) + `VescClusterGeometry` (pure placement) — the eight
+  dials' overlapping fan/nest composition, matching `RtDataSetup.qml`'s own nested offsets
+  (Current→Duty→Power, ESC→Motor→Consumption, Speed→Battery) exactly rather than approximately.
 
 ### 7.2 Configurable inner / secondary gauge (per vehicle)
 The rider picks what the secondary gauge shows — a wheel wants **Duty/ШИМ**, a
 scooter **Battery**, a bike **Power** or **Motor °C**:
 `enum SecondaryGauge { DUTY, BATTERY, POWER, CURRENT, MOTOR_TEMP, ESC_TEMP, CONSUMPTION }`.
-In Clean it drives the hero inner ring; in Classic it emphasises the chosen dial.
+**In Clean it drives the hero inner ring. It does NOT apply to Classic — reversed by B3
+(2026-07-25), see §15.1.** The original plan (and B2) applied the setting to Classic too, drawing
+the chosen dial at `1.12×` and painting it front-most. That fought the composition it was supposed
+to live inside: Classic shows all eight VESC dials at once, so there is nothing to single out, and
+the emphasis routinely covered Power's own caption while fighting the QML's own hero ordering
+(Power is the top trio's hero, painted last — and therefore in front — by the QML itself). Vehicle
+Edit's "Inner gauge" control stays visible and enabled for a Classic vehicle rather than being
+hidden (a rider who switches a vehicle **to** Clean should not find their earlier choice silently
+gone); it is simply inert until they do.
 
 ### 7.3 Per-vehicle dashboard config + persistence
 `enum DashboardStyle { CLEAN, CLASSIC }`. Persist `dashboardStyle` + `secondaryGauge`
@@ -216,7 +235,10 @@ canonical (km/h, km, °C). Settings gets a toggle.
 1. **Two dashboard styles**, both Material You: **Clean** (M3 Expressive) +
    **Classic VESC** (skeuomorphic overlapping cluster). Selectable **per vehicle**
    (app default + per-vehicle override). Both ship in Part B; sequence Clean first
-   (simpler, approved), Classic second (`DialGauge`/`ClusterLayout`).
+   (simpler, approved), Classic second (`DialGauge`/`ClusterLayout` — the component
+   names as planned here; B3 replaced both with a faithful port under new names,
+   see §15.1, after B2 shipped this plan literally and the product owner rejected
+   the result on a device).
 2. **Secondary/inner gauge is configurable, per vehicle** — menu
    Duty · Battery · Power · Current · Motor °C · ESC °C · Consumption.
 3. **Duty color bands**: green <75 / amber 75–90 / red >90 — the SAME thresholds
@@ -254,45 +276,57 @@ the Ride dashboard, and do not re-derive it.
   upgrades.
 
 ### 12.2 Untestable in this repo today
-- **The Classic emphasis wiring is not covered.** `ClassicEmphasis`
-  (`SecondaryGauge → ClusterSlot`) is tested, but deleting the
-  `emphasized = spec.slot == emphasizedSlot` line in `ClassicRideCluster`
-  leaves the whole suite green — i.e. the exact regression §7.2 guards
-  against (the cluster ignoring `state.secondary`) is undetected. There is
-  **no Compose UI-test dependency** in the project; adding one for a single
-  line was judged not worth it at a merge gate. Whoever adds Compose UI
-  tests first should claim this.
-- **`DialGeometry.centreScale`'s acceptance test estimates glyph metrics.**
-  Real text measurement needs Compose, so the test derives its inputs from
-  the committed font fractions plus two documented estimate constants
-  (`EstimatedAvgGlyphWidthEm`, `EstimatedLineHeightEm`) and asserts a
-  *range* (0.75–0.99), not a pinned decimal. It proves "no collision, shrink
-  stays far from its 0.5 floor" — it does not prove an exact number.
+- **RESOLVED by B3 (2026-07-25) — see §15.2.** ~~The Classic emphasis wiring is not
+  covered.~~ `ClassicEmphasis` and the `emphasized` concept it wired up are deleted
+  entirely, not merely re-covered: `VescClusterGeometry.place` takes no "which dial is
+  emphasised" parameter at all, so the untestable gap this bullet described (a one-line
+  deletion in `ClassicRideCluster` leaving the suite green) cannot recur structurally,
+  regardless of whether a Compose UI-test dependency ever gets added.
+- **RESOLVED, in altered form, by B3 — see §15.2 and new debt item 4 in §15.3.**
+  ~~`DialGeometry.centreScale`'s acceptance test estimates glyph metrics.~~ `DialGeometry`
+  itself is deleted along with the B2 renderer. Its successor, `VescDialGeometry.centerTextScale`
+  / `centerTextMaxWidth`, DOES now have a pinned-decimal test using real per-character Roboto
+  advances (not a range estimate) — but the two-pass measurement that feeds it
+  (`VescDialGauge.fitCenterTextLine`) still runs through Compose's `TextMeasurer` and so still has
+  **zero** test coverage, for the same "no Compose UI-test dependency" reason as the bullet above.
+  The specific complaint (an estimate instead of a measurement) is fixed; the underlying gap (the
+  measuring code itself is untested) persists under a new name — see §15.3 item 4.
 
 ### 12.3 Known cosmetic compromises (safe to ship, worth a polish pass)
-- **Imperial hero ticks are round but oddly stepped.** The display-unit max
-  snaps up to a multiple of 5, so a 70 km/h floor becomes 45 mph → labels
-  step by 9 (0, 9, 18, 27, 36, 45). Integer and evenly spaced, but no real
-  speedometer steps by 9. Snapping to 10 would read better at the cost of
-  dial arc. Metric is unaffected (already round).
-- **Russian dial labels engage the shrink guard.** `ТЕМП. МОТОРА` (12 chars)
-  on the small corner dial puts `centreScale` at ≈0.92 on a 360dp screen —
-  visually fine (6%), but the "no shrink needed by construction" property
-  from B2 Task 2 no longer strictly holds for RU. Shortening the dial-face
-  labels (`Мотор`, `ESC`) would restore it and arguably suits skeuomorphic
-  faces better; deliberately not done at the merge gate.
+- **RESOLVED by B3 (2026-07-25) — see §15.2.** ~~Imperial hero ticks are round but oddly
+  stepped.~~ `ClassicDialSpecs.heroLabelStep` no longer accepts whatever step the QML's own
+  snap-to-5 happens to produce; it tries the QML's preferred step first and, if that would not
+  divide the snapped span evenly, falls back through a coarsest-first list of genuinely round
+  steps (`HERO_FALLBACK_LABEL_STEPS = [50, 25, 20, 10]`). A 70 km/h floor now labels its 50 mph
+  imperial scale by 10 (0, 10, 20, 30, 40, 50), not 9. Pinned by
+  `the_hero_tick_labels_stay_round_in_imperial_too`.
+- **Likely resolved by B3, not one of the three the task-7 review named — flagged here rather
+  than silently dropped.** ~~Russian dial labels engage the shrink guard.~~ `centreScale` (the B2
+  property this bullet names) is deleted along with the rest of `DialGeometry`. Its B3 successor,
+  `VescDialGeometry.centerTextScale`, is exercised against the actual shipped captions —
+  `МОЩНОСТЬ`, `РАСХОД`, `МОТОРА` (the split half of `ТЕМП. МОТОРА` this bullet was about),
+  `CONSUMPTION` — by `every_shipped_caption_fits_its_dial_at_full_size_with_the_margin_recorded`,
+  which asserts a scale of exactly `1.0` (no shrink at all) for all four, at both real cluster
+  radii, with the tightest using ~79% of its budget. Recorded as "likely" rather than flatly
+  resolved because B3's caption budget (`0.66R` chord, §12.2/15.3 item 4) is a different formula
+  from B2's, not merely a re-measurement of the same one — worth a device check, not just a test
+  read, before fully retiring this line.
 - **`CONSUMPTION` means slightly different things per style**: instant with
   a session fallback on Classic, instant-only on Clean. Pick one in F.
 - Hoisting the Graph link out of the style switch made Clean ~26dp taller.
 
 ### 12.4 Latent, not currently reachable
-- **`ClusterLayout` uses `placeRelative`**, so the Classic cluster mirrors
-  under RTL — dial positions would flip. No RTL locale ships yet.
-- **`DialGauge` reads a one-frame-lagged `radius`** (via `onSizeChanged`)
-  while `center` reads live `size`. Inert in a fixed cluster; would show as
-  a transient stale frame during continuous resize (desktop window).
+- **Carried forward, retargeted, by B3 — see new debt item 5 in §15.3.** `ClusterLayout` is
+  deleted; its successor `VescClusterLayout` still uses `placeRelative` at line 100, so the same
+  RTL mirroring risk applies to the new component under its new name. No RTL locale ships yet.
+- **RESOLVED by B3 (2026-07-25) — see §15.2.** ~~`DialGauge` reads a one-frame-lagged
+  `radius`~~ (via `onSizeChanged`) while `center` reads live `size`. `DialGauge` is deleted;
+  its successor `VescClusterLayout`/`VescDialGauge` derive every dial's size from
+  `VescClusterGeometry.fit(width, height)` at layout time — a single measurement pass, not two
+  properties fed by two different update mechanisms — so there is no second, lagging `radius` to
+  disagree with `center`.
 - **Clean's hero ring has no `speedKnown` guard**, unlike Classic. Pre-dates
-  B2 and belongs to whoever revisits the Clean hero.
+  B2 and belongs to whoever revisits the Clean hero. Untouched by B3 (Classic-only rewrite).
 
 ### 12.5 Owed to Part G (already noted in `G-vehicle-composer.md`)
 The `Vehicle.bmsType` / `bmsAddress` / `cellCount` shims still call
@@ -390,3 +424,103 @@ Three consequences we do not currently reproduce:
 - **Open when that lands:** whether the ESC/motor needle colour should follow
   `l_temp_fet_start` (VESC's meaning) or stay on our `TempBands` (shared with the
   audible alarms). Two sources of truth for "when is it hot" is a defect; pick one.
+
+---
+
+## 15. Debt carried out of B3 (recorded at merge, 2026-07-25)
+
+Part B shipped a third branch, **B3** (`feat/classic-faithful-port`), because the product owner
+ran B2's Classic renderer on a device and rejected it: the composition (§7's eight-dial fan/nest
+layout) was right, but the dial itself was wrong in ways a screenshot review never caught — a
+needle drawn from the centre through the readout instead of a short blade at the rim, half-size
+value text, an invented red danger wedge VESC's real instrument does not have. B3 deleted the B2
+renderer (`DialGauge`, `ClusterLayout`, `ClassicEmphasis`, `DialGeometry`) entirely and replaced it
+with a line-by-line port of VESC Tool's own `mobile/CustomGauge.qml` (`VescDialGauge`,
+`VescDialGeometry`, `VescDialMetrics`, `VescNibShading`, `VescClusterLayout`,
+`VescClusterGeometry`). §7.1 and §7.2 above now describe what actually ships; this section is what
+changed as a RESULT of that rewrite, plus what a whole-branch review + merge-gate pass (task-7)
+found and fixed, or chose not to, on 2026-07-25. As with §12/§13, this records superseded decisions
+rather than erasing them — read it before touching the Classic renderer again.
+
+### 15.1 What replaced what
+| B1/B2 (deleted) | B3 (ships) |
+|---|---|
+| `DialGauge` (Canvas dial: ticks, needle+hub, danger wedge, centre stack) | `VescDialGauge` + `VescDialGeometry`/`VescDialMetrics`/`VescNibShading` |
+| `ClusterLayout` (custom `Layout`) | `VescClusterLayout` + `VescClusterGeometry` |
+| `ClassicEmphasis` (`SecondaryGauge → ClusterSlot`, the "Inner gauge" setting applied to Classic) | deleted outright — Classic has no emphasis concept; §7.2's setting now applies to Clean only |
+| `DialGeometry.centreScale` (glyph-estimate acceptance test) | `VescDialGeometry.centerTextScale`/`centerTextMaxWidth` (real per-character advances in its test) |
+
+The §7.2 reversal is the one worth restating outside the table: **B1/B2 had "Inner gauge" apply to
+both styles** (Clean's hero ring AND a `1.12×` emphasised Classic dial). B3 makes it Clean-only,
+deliberately — Classic shows all eight metrics at once, so there is nothing to single out, and the
+emphasis cue covered Power's caption while fighting the QML's own hero ordering. Vehicle Edit's
+copy and the setting's enabled/visible state did not change (see §7.2); only what Classic does with
+the value did.
+
+### 15.2 Resolved / removable from §12 (see the inline markers at each bullet, above)
+- §12.2 "Classic emphasis wiring is not covered" — **resolved structurally**, not just re-tested:
+  the untestable concept (`ClassicEmphasis`) is gone, not merely covered better.
+- §12.2 "`DialGeometry.centreScale`'s acceptance test estimates glyph metrics" — **resolved in
+  altered form**: the estimate is gone (real advances now), but the underlying "the actual measuring
+  code has zero coverage" gap persists under a new name, `fitCenterTextLine` — see item 4 below.
+- §12.3 "Imperial hero ticks are round but oddly stepped" — **resolved**: `heroLabelStep`'s
+  coarsest-first fallback list replaces the QML's bare snap-to-5 with a genuinely round step.
+- §12.4 "`DialGauge` reads a one-frame-lagged `radius`" — **resolved**: sizes now come from one
+  `VescClusterGeometry.fit` call at layout time, not two independently-updated properties.
+- §12.4's `placeRelative` RTL bullet and §12.3's Russian-shrink-guard / CONSUMPTION-differs-by-style
+  bullets are **NOT resolved** — the first is carried forward as item 5 below (same defect, new
+  class name); the others are untouched by a Classic-only rewrite and still stand as originally
+  recorded. §12.4's Clean-hero `speedKnown` bullet likewise stands, untouched.
+
+### 15.3 New debt (found at the B3 merge gate, task-7, 2026-07-25)
+1. **The session auto-scale's ceiling and outlier-rejection were added at this same merge gate,
+   so most of what this item would have said is fixed rather than owed.** What is NOT fully closed:
+   the 990 A / 99000 W ceiling (`ClassicDialSpecs.tickCapCeiling`, derived from
+   `VescGaugeRange.MAX_TICKMARK_COUNT`) and `SessionPeakTracker`'s 3-consecutive-sample debounce are
+   both a Now-divergence in the same spirit as §14's floors — `GET_MCCONF` supersedes them the day
+   Part C lands, the same day it supersedes the floors. And the debounce was applied **only to
+   current and power**, per this task's scope: Speed's own `sessionMaxSpeedKmh` tracker
+   (`RideDashboardScreen`) still commits on a single sample with no analogous ceiling derivation, so
+   a corrupted speed frame could still transiently distort the hero scale — just not into a ragged
+   ring, since `heroLabelStep`'s fallback steps keep any magnitude round (§12.3, resolved above).
+2. **"Session" means two different things on this screen, spelled the same way.** The dial
+   auto-scale trackers (`RideDashboardScreen`'s `sessionMaxSpeedKmh`/`currentPeakTracker`/
+   `powerPeakTracker`) key their reset on the VEHICLE — they reset when the rider switches vehicles,
+   and survive a BLE reconnect to the same one. The uptime clock (`RideDashboardComponent`'s
+   `sessionStartedAt`/`uptimeSeconds`) keys its reset on the CONNECTION — it resets on every
+   transition away from `Connected`, including a reconnect to the same vehicle. Both are correct for
+   what they are individually documented to do; nothing enforces that a reader picks the right
+   mental model for which "session" a given piece of state means.
+3. **`VescDialGeometry.valueToAngle` had no degenerate-range guard.** Found and fixed within this
+   same merge gate: the predecessor this file replaced (`DialGeometry.fraction`) guarded
+   `max == min` and had a test pinning it; both vanished in the rewrite. No range this project
+   actually builds is degenerate today, so this was latent, not reachable — restored anyway (the
+   guard now short-circuits to `minAngle` instead of dividing by zero) along with its test,
+   rather than left as a second silent gap alongside item 4 below.
+4. **The caption-fit tests model Roboto advances and a 1.17 line height rather than measuring, and
+   the two-pass measurement it stands in for has no coverage at all.** `VescDialGeometryTest`'s
+   `captionBudget`/`width` helpers hand-model Roboto Regular's per-character advances (real numbers,
+   not the estimate constants §12.2 used to flag) to keep the arithmetic Compose-free and testable —
+   but `VescDialGauge.fitCenterTextLine`, the actual two-pass `TextMeasurer` call the renderer
+   draws with, is exercised by nothing, for the same "no Compose UI-test dependency in this project"
+   reason §12.2 gave for the emphasis-wiring gap. Whoever adds Compose UI tests first should claim
+   this alongside that one.
+5. **RTL: `VescClusterLayout.kt:100` uses `placeRelative`, so the Classic cluster mirrors under an
+   RTL locale.** Carried forward from §12.4's identical note about the deleted `ClusterLayout`,
+   retargeted to its successor — the defect moved house, unchanged, across the rewrite. No RTL
+   locale ships yet.
+6. **Imperial consumption is converted inconsistently between the two styles.** Classic's
+   consumption dial (`ClassicDialSpecs.build`, via `UnitFormatter.consumptionValue`/
+   `consumptionUnit`) genuinely converts to Wh/mi for an imperial rider. Clean's consumption card
+   (`RideDashboardScreen.ConsumptionCard`) hardcodes the literal `" Wh/km"` suffix regardless of
+   `state.units` — an imperial rider reading Clean sees a km/h speedometer next to a Wh/km
+   consumption card. Distinct from §12.3's already-recorded "CONSUMPTION means slightly different
+   things per style" bullet (that one is about instant-vs-session-fallback semantics, not units);
+   both are open, both belong to whoever picks one behaviour for F.
+7. **`ClassicDialLabels`' default captions are unpinned.** `default_labels_match_the_
+   pre_localization_english_faces` — the test that once pinned `ClassicDialLabels()`'s defaults
+   (`"CURRENT"`, `"POWER"`, `"DUTY"`, …) against the pre-localization English dial faces — was
+   deleted with the B2 renderer (`b1bffba`) and never replaced. The defaults still exist (every
+   `ClassicRideCluster` call site supplies its own localized labels, so they are not exercised in
+   production) and only really matter as a fallback for a test fixture or a future non-Compose
+   caller, but nothing stops one of them drifting from the English face it is supposed to match.

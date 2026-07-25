@@ -291,15 +291,62 @@ class ClassicDialSpecsTest {
      * on their own, which is the point: the snapping in `currentDisplayMax`/`powerDisplayMax` is
      * what has to make them round, not luck.
      */
+    /**
+     * Extended past the tick cap (task-7, Fix 1): 990/1000/5000 A straddle the exact point where
+     * `VescGaugeRange`'s own `min(100, …)` tick-count cap starts overriding the label-step division
+     * — 990 A is the LAST round one (natural count is exactly 100, so the cap has nothing to clip),
+     * 1000 A is the first one that would have gone ragged (natural count 101, capped to 100,
+     * `tickmarkSectionValue = 2000/99 = 20.2…`) had `currentDisplayMax` not ceilinged the scale at
+     * 990. Every value at or above 990 must therefore clamp to 990 and stay round.
+     */
     @Test fun current_tick_labels_stay_round_at_several_auto_scaled_maxima() {
-        listOf(0f, 5f, 55f, 65f, 251f, 505f).forEach { maxA ->
+        listOf(0f, 5f, 55f, 65f, 251f, 505f, 990f, 991f, 1000f, 5000f, 50_000f).forEach { maxA ->
             assertRoundTickLabels(specs(maxCurrentA = maxA).getValue(VescClusterSlot.CURRENT).range, "current maxA=$maxA")
         }
     }
 
+    /** Power's half of the same coverage — 99000 W is the ceiling, 100000 W the first ragged value it now clamps away. */
     @Test fun power_tick_labels_stay_round_at_several_auto_scaled_maxima() {
-        listOf(0f, 500f, 9500f, 12500f, 40200f).forEach { maxW ->
+        listOf(0f, 500f, 9500f, 12500f, 40200f, 99_000f, 99_001f, 100_000f, 1_000_000f).forEach { maxW ->
             assertRoundTickLabels(specs(maxPowerW = maxW).getValue(VescClusterSlot.POWER).range, "power maxW=$maxW")
+        }
+    }
+
+    // --- the ceiling itself (task-7, Fix 1): a session reading has no upper bound the way a real ---
+    // --- vehicle's speed does, so nothing before this stopped it walking into the tick-count cap ---
+
+    /**
+     * The exact boundary, derived the same way `ClassicDialSpecs.tickCapCeiling` derives it:
+     * `(VescGaugeRange.MAX_TICKMARK_COUNT - 1) * snapStep` = `99 * 10` = 990 A / `99 * 1000` =
+     * 99000 W. Pinned directly against `VescGaugeRange.tickmarkCount`/`tickmarkSectionValue` so a
+     * future change to the tick cap or either snap step is forced to re-derive this number rather
+     * than let it drift.
+     */
+    @Test fun the_auto_scale_ceiling_sits_exactly_where_the_tick_cap_would_start_ragging_the_ring() {
+        assertEquals(990.0, ClassicDialSpecs.currentDisplayMax(990f), 1e-9)
+        val atCeiling = specs(maxCurrentA = 990f).getValue(VescClusterSlot.CURRENT).range
+        assertEquals(100, atCeiling.tickmarkCount, "natural count must still equal the cap exactly, not exceed it")
+        assertEquals(20.0, atCeiling.tickmarkSectionValue, 1e-9)
+
+        assertEquals(99_000.0, ClassicDialSpecs.powerDisplayMax(99_000f), 1e-9)
+        val powerAtCeiling = specs(maxPowerW = 99_000f).getValue(VescClusterSlot.POWER).range
+        assertEquals(100, powerAtCeiling.tickmarkCount)
+        assertEquals(2000.0, powerAtCeiling.tickmarkSectionValue, 1e-9)
+    }
+
+    /**
+     * The actual defect this fixes: before the ceiling existed, `currentDisplayMax`/`powerDisplayMax`
+     * grew without bound, so a single spurious sample (a bad decode reporting thousands of amps)
+     * left the rider with a scale pegged at that spurious value — and, above ~991 A / 99 kW, a
+     * RAGGED one (see the round-label test above). Now no session reading, however extreme, can
+     * grow the display max past the ceiling.
+     */
+    @Test fun current_and_power_never_grow_past_the_ceiling_for_an_extreme_or_spurious_reading() {
+        listOf(991f, 1000f, 5000f, 50_000f, 5_000_000f).forEach { maxA ->
+            assertEquals(990.0, ClassicDialSpecs.currentDisplayMax(maxA), 1e-9, "current maxA=$maxA")
+        }
+        listOf(99_001f, 100_000f, 1_000_000f, 100_000_000f).forEach { maxW ->
+            assertEquals(99_000.0, ClassicDialSpecs.powerDisplayMax(maxW), 1e-9, "power maxW=$maxW")
         }
     }
 

@@ -89,6 +89,23 @@ class VescDialGeometryTest {
         assertEquals(-15.0, duty.valueToAngle(999.0), epsilon)
     }
 
+    /**
+     * Restores a guard the rewrite dropped along with its old home: the predecessor this file
+     * replaced (`DialGeometry.fraction`) divided by `(max - min)` behind an explicit
+     * `if (span <= 0f) return 0f`, pinned by its own `a_degenerate_scale_does_not_divide_by_zero`.
+     * No range this project actually builds has `max == min`, so this is unreachable today — the
+     * point is that it stays caught rather than silently reappearing as a `NaN` needle angle the
+     * next time someone builds a [VescGaugeRange] by hand (a test fixture, a future caller).
+     */
+    @Test fun a_degenerate_zero_span_range_rests_the_needle_at_minAngle_instead_of_dividing_by_zero() {
+        val flat = VescGaugeRange(minAngle = -225.0, maxAngle = 45.0, minimumValue = 5.0, maximumValue = 5.0, labelStep = 10.0)
+        assertEquals(-225.0, flat.valueToAngle(5.0), epsilon)
+        assertTrue(flat.valueToAngle(5.0).isFinite())
+        // Not just the exact value that produced the old NaN — any value must resolve finitely.
+        assertTrue(flat.valueToAngle(999.0).isFinite())
+        assertTrue(flat.valueToAngle(-999.0).isFinite())
+    }
+
     // --- isCovered (QML:72-83) ---
     // positive gauge value: tick in [0, gaugeValue] is covered.
     // negative gauge value: tick in [gaugeValue, 0] is covered.
@@ -395,23 +412,19 @@ class VescDialGeometryTest {
         }
     }
 
-    /**
-     * The dial is scale-free — every length in it is a fraction of R — so the same caption must
-     * come out at the same factor on a `g2` dial and on the 5% larger Power dial. If it ever did
-     * not, some length in the centre stack would have stopped being a fraction of the radius.
-     */
-    @Test fun the_scale_factor_does_not_depend_on_how_big_the_dial_is() {
-        listOf("МОЩНОСТЬ", "CONSUMPTION", OVERLONG_CAPTION)
-            .forEach { caption ->
-                val factors = clusterRadii.map { (_, r) ->
-                    VescDialGeometry.centerTextScale(
-                        width(caption, VescDialMetrics.CAPTION_FONT_FRACTION * r),
-                        captionBudget(r)
-                    )
-                }
-                assertEquals(factors.first(), factors.last(), epsilon, "$caption scaled differently by dial size")
-            }
-    }
+    // A "the scale factor does not depend on how big the dial is" test used to live here: it
+    // computed centerTextScale(width(caption, r), captionBudget(r)) at the cluster's two real radii
+    // and asserted the two factors equal. Deleted, not strengthened: `centerTextScale`'s own
+    // branches key ONLY on the ratio `maxWidth / measuredWidth` (see its definition below), and
+    // both `width()` and `captionBudget()` are linear in `r` by construction (the first is a sum of
+    // per-character advances times a fontSize that is itself `fraction * r`; the second is a chord
+    // of a ring radius that is `0.66 * r`) — so `width(k*r) / captionBudget(k*r) ==
+    // width(r) / captionBudget(r)` for ANY `k`, by algebra, independent of whether the underlying
+    // fractions (0.66, the font sizes, …) are the CORRECT ones. A wrong-but-still-proportional
+    // constant — the only kind of bug this whole codebase's "everything is a fraction of R"
+    // convention would plausibly introduce — passes this comparison exactly as well as a correct
+    // one, so it discriminates nothing beyond what `a_caption_wider_than_its_dial_is_scaled_by_...`
+    // above already covers by computing the expected ratio independently at each radius.
 
     // --- the budget itself: a chord, not a diameter, and it never goes negative -----------------
 

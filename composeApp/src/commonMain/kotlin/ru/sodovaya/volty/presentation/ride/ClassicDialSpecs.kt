@@ -13,6 +13,7 @@ import ru.sodovaya.volty.util.UnitSystem
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.roundToInt
 
 /** Everything one dial of the faithful VESC cluster needs, bound to its slot. */
@@ -217,19 +218,59 @@ object ClassicDialSpecs {
     // floor (today's constant, so a quiet ride still shows VESC's familiar scale), snapped up to a
     // step that keeps the tick labels round, and never allowed to shrink. `GET_MCCONF` supersedes
     // this the day Part C lands.
+    //
+    // UNLIKE the hero, this scale is also given a CEILING (see [tickCapCeiling]) — the hero's own
+    // fallback label steps (50/25/20/10, [HERO_FALLBACK_LABEL_STEPS]) keep its span well clear of
+    // [VescGaugeRange.MAX_TICKMARK_COUNT] for any speed a vehicle could plausibly reach, but a
+    // session peak here has no upper bound at all short of a decode error, so nothing stops it
+    // walking into that cap the way the hero never does.
     // ---------------------------------------------------------------------------------------
 
     /**
+     * The largest a [sessionScaledMax] result is allowed to snap to, for a scale whose "large"
+     * label step (the one [tenOrTwentyLabelStep]/[powerLabelStep] switch to once the reading grows
+     * past 60 A / 6000 W) is `2 * snapStep`.
+     *
+     * Derived from [VescGaugeRange.MAX_TICKMARK_COUNT] rather than a hardcoded number, because that
+     * is what actually produces the ragged ring this exists to prevent: [VescGaugeRange.tickmarkCount]
+     * is `min(MAX_TICKMARK_COUNT, naturalCount)`, and the label-step arithmetic above only stays
+     * round because [snapStep] makes `naturalCount = span/labelStep + 1` an exact integer — the
+     * `min()` has never had anything to clip. The INSTANT `naturalCount` exceeds
+     * [VescGaugeRange.MAX_TICKMARK_COUNT], the displayed count is pinned at the cap instead, and
+     * `(cap - 1)` has no reason to divide a span that was only ever snapped to be a multiple of the
+     * label step — e.g. a 1000 A max: span 2000, labelStep 20, natural count 101, capped to 100,
+     * `tickmarkSectionValue = 2000 / 99 = 20.2…`, not round.
+     *
+     * So the ceiling is the largest max whose NATURAL count still equals the cap exactly:
+     * `naturalCount <= MAX_TICKMARK_COUNT`, i.e. (writing `span = 2 * max` and
+     * `labelStep = 2 * snapStep`, both true once the reading is past the "large step" threshold)
+     * `max <= (MAX_TICKMARK_COUNT - 1) * snapStep`. At exactly that ceiling the natural count IS
+     * the cap (100 for 990 A, 100 for 99000 W) and the ring is still perfectly round — one unit
+     * higher and it silently becomes 101-capped-to-100 and ragged.
+     */
+    private fun tickCapCeiling(snapStep: Double): Double =
+        (VescGaugeRange.MAX_TICKMARK_COUNT - 1) * snapStep
+
+    /**
      * The shared shape behind [currentDisplayMax] and [powerDisplayMax]: floor at VESC's own
-     * default, then snap UP to [snapStep] so the label-step functions below always divide the
-     * resulting (symmetric, `-max..+max`) span evenly. Never shrinks for a growing [sessionMaxAbs]
-     * — `max` and `ceil` are both monotonically non-decreasing — so a caller that only ever grows
-     * its own high-water mark (see `RideDashboardScreen`'s session trackers) gets a scale that only
-     * grows too.
+     * default, snap UP to [snapStep] so the label-step functions below always divide the resulting
+     * (symmetric, `-max..+max`) span evenly, then clamp to [tickCapCeiling] so the snap can never
+     * carry the max PAST the point where [VescGaugeRange]'s own tick-count cap would make that
+     * division ragged again (see [tickCapCeiling]'s doc). Monotonic — `max`, `ceil` and `min` are
+     * all non-decreasing in [sessionMaxAbs] up to the ceiling and constant beyond it — so a caller
+     * that only ever grows its own high-water mark (see `RideDashboardScreen`'s session trackers)
+     * still gets a scale that only grows, it just stops growing at the ceiling instead of forever.
+     *
+     * The ceiling does not, by itself, stop ONE spurious sample from pinning the scale there for
+     * the rest of the ride — merely capping how far wrong it can go. That is
+     * [SessionPeakTracker]'s job, upstream of this function: it withholds a rising reading from
+     * ever reaching [sessionMaxAbs] until several consecutive samples corroborate it, so a single
+     * bad decode never gets this far in the first place.
      */
     private fun sessionScaledMax(sessionMaxAbs: Float, floor: Double, snapStep: Double): Double {
         val floored = max(floor, sessionMaxAbs.toDouble())
-        return ceil(floored / snapStep) * snapStep
+        val snapped = ceil(floored / snapStep) * snapStep
+        return min(snapped, tickCapCeiling(snapStep))
     }
 
     /**
@@ -250,12 +291,16 @@ object ClassicDialSpecs {
      * Current's bipolar scale maximum in AMPS — see the divergence note above and §14. Bipolar
      * because the dial is `-max..+max` (QML :77-78); the caller therefore tracks the largest
      * ABSOLUTE battery current seen, not the largest signed one, so regen braking grows the scale
-     * exactly as much as acceleration does.
+     * exactly as much as acceleration does. Ceilinged at 990 A ([tickCapCeiling] of
+     * [CURRENT_SNAP_STEP]) — see [sessionScaledMax].
      */
     fun currentDisplayMax(sessionMaxAbsCurrentA: Float): Double =
         sessionScaledMax(sessionMaxAbsCurrentA, CURRENT_MAX_A, CURRENT_SNAP_STEP)
 
-    /** Power's bipolar scale maximum in WATTS — see the divergence note above and §14. */
+    /**
+     * Power's bipolar scale maximum in WATTS — see the divergence note above and §14. Ceilinged at
+     * 99000 W ([tickCapCeiling] of [POWER_SNAP_STEP]) — see [sessionScaledMax].
+     */
     fun powerDisplayMax(sessionMaxAbsPowerW: Float): Double =
         sessionScaledMax(sessionMaxAbsPowerW, POWER_MAX_W, POWER_SNAP_STEP)
 
