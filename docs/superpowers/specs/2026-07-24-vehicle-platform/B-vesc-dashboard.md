@@ -346,3 +346,47 @@ knowingly left behind:
   compiler-driven sweep found five sites `§6.1` had missed, including a file
   that was not mentioned at all. Delete the symbol and let the build
   enumerate.
+
+---
+
+## 14. Gauge ranges are hardcoded; VESC computes them (found 2026-07-25)
+
+**What we ship.** `ClassicDialSpecs` hardcodes `CURRENT_MAX_A = 60`, `POWER_MAX_W = 10000`
+and `0..100 °C` on both temperature dials. Only the speed dial adapts, from the
+session maximum. These are VESC Tool's *default* numbers, transcribed from the
+gauge declarations in `RtDataSetup.qml`.
+
+**What VESC actually does.** Every range is recomputed at runtime from the
+controller's motor configuration, in the data handler further down the same file
+(`RtDataSetup.qml:665-763`) — which is why reading only the declarations misses it:
+
+```qml
+currentMaxRound = ceil(l_current_max / 5) * 5 * values.num_vescs
+powerMax        = min(v_in * min(l_in_current_max, l_current_max), l_watt_max) * num_vescs
+escTempGauge.maximumValue       = ceil(l_temp_fet_end / 5) * 5
+escTempGauge.throttleStartValue = ceil(l_temp_fet_start / 5) * 5
+speedFact       = (si_motor_poles/2 * 60 * si_gear_ratio) / (si_wheel_diameter * PI)
+```
+
+Three consequences we do not currently reproduce:
+1. **`× num_vescs`** — limits scale with the number of controllers on the bus. A
+   2×uBox scooter's current dial should be twice a single controller's.
+2. **The temperature warning thresholds come from the controller** —
+   `l_temp_fet_start` is where the ESC begins cutting power, and it is what
+   colours the needle. We use our own `TempBands` (70/40), shared with Part F's
+   alarms, so our needle colour does not mean what VESC's means on the same
+   hardware.
+3. **Speed's maximum is derived from motor geometry**, not from the session peak.
+
+**Decision (2026-07-25, product owner delegated the sequencing):**
+- **Now:** apply the session-maximum auto-scale — already built and tested for the
+  speed dial — to the current and power dials, with today's constants as floors.
+  A deliberate divergence from the port: VESC scales from configuration, we scale
+  from what we have seen. Better than a dial that pegs at 60 A on a 500 A scooter.
+- **With Part C:** read the real limits via `COMM_GET_MCCONF` and reproduce the
+  formulas above, including `× num_vescs`. The multiplier only has meaning once
+  multiple controllers exist, which is Part C's subject — pulling `GET_MCCONF`
+  earlier would mean writing a config parser with nowhere to apply its main term.
+- **Open when that lands:** whether the ESC/motor needle colour should follow
+  `l_temp_fet_start` (VESC's meaning) or stay on our `TempBands` (shared with the
+  audible alarms). Two sources of truth for "when is it hot" is a defect; pick one.
