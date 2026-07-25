@@ -42,8 +42,19 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
 )
 
 /**
- * The one label that names what a vehicle's telemetry comes from: the motor
- * controller (VESC / FarDriver / …) when it has one, else its BMS.
+ * Which of a vehicle's two possible names a subtitle leads with when the
+ * vehicle has BOTH a motor controller and a BMS. This is a presentation
+ * choice, not a fact about the vehicle: a screen showing motion telemetry
+ * wants the controller named, while one showing cells, faults and chemistry
+ * wants the BMS named. Either way the *other* source is the fallback, so a
+ * vehicle with only one source reads the same under both preferences.
+ */
+enum class SourcePreference { CONTROLLER, BMS }
+
+/**
+ * The one label that names what a vehicle's telemetry comes from — the motor
+ * controller (VESC / FarDriver / …) or the BMS, led by [prefer] and falling
+ * back to whichever is present.
  *
  * Null when neither is available — no vehicle at all, or (not reachable today)
  * a vehicle with no sources. Callers must then OMIT the segment rather than
@@ -53,11 +64,20 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
  *
  * Single source of truth on purpose: this fallback used to be copy-pasted, and
  * divergent copies of exactly this kind produced the Clean/Classic parity bugs.
+ * [prefer] parameterises the *order* of the one chain — it does not fork it.
  */
 @Composable
-fun vehicleSourceLabel(vehicle: Vehicle?): String? =
-    vehicle?.primaryController?.controllerType?.label
-        ?: vehicle?.bmsTypeOrNull?.let { bmsTypeLabel(it) }
+fun vehicleSourceLabel(
+    vehicle: Vehicle?,
+    prefer: SourcePreference = SourcePreference.CONTROLLER
+): String? {
+    val controller = vehicle?.primaryController?.controllerType?.label
+    val bms = vehicle?.bmsTypeOrNull?.let { bmsTypeLabel(it) }
+    return when (prefer) {
+        SourcePreference.CONTROLLER -> controller ?: bms
+        SourcePreference.BMS -> bms ?: controller
+    }
+}
 
 @Composable
 fun chemistryLabel(chemistry: Chemistry): String = stringResource(

@@ -94,6 +94,21 @@ class VehicleEditComponentTest {
         secondaryGauge = SecondaryGauge.POWER
     )
 
+    /**
+     * Zero packs, one controller — legal since Part A, and the shape Tasks 3-5
+     * will start creating. Same id as [existingVehicle] so the shared
+     * [component] helper loads it.
+     */
+    private fun controllerOnlyVehicle() = Vehicle(
+        id = "v1",
+        name = "Scooter",
+        iconKey = "scooter",
+        packs = emptyList(),
+        controllers = originalControllers,
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Clock.System.now()
+    )
+
     private fun component(vehicleRepo: FakeVehicleRepo): DefaultVehicleEditComponent {
         val ctx = DefaultComponentContext(LifecycleRegistry())
         return DefaultVehicleEditComponent(
@@ -137,6 +152,61 @@ class VehicleEditComponentTest {
         // must survive the save unchanged.
         assertEquals(originalControllers, saved.controllers)
         assertEquals(PackTopology.SERIES, saved.topology)
+    }
+
+    /**
+     * The round trip that must not invent a battery.
+     *
+     * onSave() builds through singlePackVehicle(), which ALWAYS synthesizes
+     * exactly one pack. For a controller-only vehicle that pack would be built
+     * from the edit form's placeholder defaults — the JK_BMS / "" that
+     * initialize() falls back to when there is no pack to describe — so simply
+     * opening Edit and pressing Save would hand the vehicle a battery it does
+     * not have, and put "" into its allAddresses.
+     *
+     * Loading and saving an unchanged controller-only vehicle must therefore
+     * be an identity on its sources.
+     */
+    @Test
+    fun `saving an unchanged controller-only vehicle does not invent a pack`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // The form loaded: name is the vehicle's, and the BMS fields hold the
+        // placeholder defaults precisely because there is no pack behind them.
+        assertEquals("Scooter", c.state.value.name)
+        assertEquals(BmsType.JK_BMS, c.state.value.bmsType)
+        assertEquals("", c.state.value.bmsAddress)
+
+        // Save with nothing edited — the plainest possible round trip.
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(emptyList(), saved.packs, "no phantom pack may be synthesized")
+        assertEquals(originalControllers, saved.controllers, "the controller is what keeps it valid")
+        assertEquals("Scooter", saved.name)
+    }
+
+    @Test
+    fun `saving a pack-only vehicle still writes its pack unchanged`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        // The other half of the same branch: a vehicle that HAS packs must be
+        // rebuilt exactly as before, so the phantom-pack guard cannot cost the
+        // BMS path its battery.
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(1, saved.packs.size)
+        assertEquals(BmsType.VESC_BMS, saved.packs.single().bmsType)
+        assertEquals("AA:BB", saved.packs.single().bmsAddress)
     }
 
     @Test

@@ -473,14 +473,20 @@ class KableBmsRepository private constructor(
         // If a caller hands a transient guest Vehicle back to connect(), route
         // it through the guest path so it stays unpersisted and the touch /
         // saved-vehicle observers leave it alone.
-        // bmsTypeOrNull, not the `packs.first()` shim: connectGuest() needs a
-        // pack template and every guest built by [buildGuestVehicle] has one,
-        // so this branch is taken for every guest that can exist today and
-        // behaves exactly as before. A hypothetical pack-less guest falls
-        // through to doConnect below, which still receives the same guest
-        // Vehicle and so keeps it unpersisted (see the isGuest guards there).
-        val guestPackType = vehicle.bmsTypeOrNull
-        if (vehicle.isGuest && guestPackType != null) {
+        // bmsTypeOrNull, not the `packs.first()` shim, which would THROW on a
+        // zero-pack vehicle. connectGuest() needs a pack template, and every
+        // guest [buildGuestVehicle] can produce has exactly one pack, so this
+        // is the same call as before for every guest that can exist. A
+        // pack-less guest is an impossible state rather than a supported one:
+        // fail loudly here instead of falling through to doConnect and
+        // silently skipping connectGuest's setup.
+        if (vehicle.isGuest) {
+            val guestPackType = vehicle.bmsTypeOrNull
+                ?: error(
+                    "guest vehicle ${vehicle.id} has zero packs — connectGuest() " +
+                        "needs a pack template, and buildGuestVehicle() always " +
+                        "supplies one, so this guest was built by something else"
+                )
             return connectGuest(vehicle.primaryAddress, guestPackType)
         }
         // primaryAddress / packs.firstOrNull(), NOT the bmsAddress / bmsType

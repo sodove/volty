@@ -46,6 +46,7 @@ import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.PowerRangeBar
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
+import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.util.formatFixed
@@ -98,10 +99,15 @@ fun DashboardScreen(component: DashboardComponent) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
-        // Shared with Ride's status line — see [vehicleSourceLabel]. The em-dash
-        // is the "no vehicle connected at all" placeholder the format string
-        // needs, exactly as before; it never stands in for a real source.
-        val bmsLabel = vehicleSourceLabel(vehicle) ?: "—"
+        // BMS-first on THIS screen specifically: everything below renders cell
+        // voltages, BMS faults and chemistry, so naming the battery is what
+        // tells the user something. Ride leads with the controller for the
+        // mirror-image reason. Same helper, same fallback chain — only the
+        // order differs, and either way a single-source vehicle reads the same.
+        // The em-dash is the "no vehicle connected at all" placeholder the
+        // format string needs, exactly as before; it never stands in for a
+        // real source.
+        val bmsLabel = vehicleSourceLabel(vehicle, prefer = SourcePreference.BMS) ?: "—"
         val (statusLabel, statusColor) = when (val c = state.connection) {
             is ConnectionState.Connected -> ("● " + stringResource(Res.string.status_connected, bmsLabel)) to MaterialTheme.colorScheme.tertiary
             is ConnectionState.Connecting -> ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
