@@ -453,4 +453,46 @@ class VescDialGeometryTest {
         /** Twice `МОЩНОСТЬ`: longer than any caption any locale ships, and it does overflow. */
         const val OVERLONG_CAPTION = "МОЩНОСТЬМОЩНОСТЬ"
     }
+
+    // =============================================================================================
+    // The unit line's casing: CustomGauge.qml:123 (`Font.AllUppercase`), narrowed to Latin units
+    // =============================================================================================
+    //
+    // On a Russian device the consumption unit is `Вт·ч/км` (correct SI case). VESC's blanket
+    // upper-case rule turns it into `ВТ·Ч/КМ`, which is wrong, not merely a style choice — the
+    // narrowed rule below must leave it exactly as authored while still upper-casing every Latin
+    // unit the QML ever shipped (`A`, `%`, `W`, `KM/H`, `WH/KM`).
+
+    @Test fun a_latin_unit_is_still_uppercased_exactly_as_the_QML_intends() {
+        // The two discriminating cases: mixed/lower-case Latin units must come back shouting,
+        // which is what would fail if the narrowing were applied backwards or too broadly.
+        assertEquals("KM/H", VescDialGeometry.uppercaseUnitIfLatin("km/h"))
+        assertEquals("WH/KM", VescDialGeometry.uppercaseUnitIfLatin("wh/km"))
+    }
+
+    @Test fun a_non_latin_unit_keeps_its_authored_case_instead_of_being_shouted() {
+        // The regression this whole predicate exists for: the OLD code (`unitText.uppercase()`
+        // unconditionally) turns this into "ВТ·Ч/КМ" and fails this assertion; only a script-aware
+        // rule can leave a correctly-cased SI unit alone.
+        assertEquals("Вт·ч/км", VescDialGeometry.uppercaseUnitIfLatin("Вт·ч/км"))
+    }
+
+    @Test fun a_unit_with_no_letters_at_all_passes_through_either_way() {
+        // Not discriminating on its own (uppercase() is already a no-op on these strings, so the
+        // old blanket rule passed them too) — kept because the task specifically calls them out as
+        // cases that must not be mangled, and a future change to the predicate could still break them.
+        assertEquals("°C", VescDialGeometry.uppercaseUnitIfLatin("°C"))
+        assertEquals("%", VescDialGeometry.uppercaseUnitIfLatin("%"))
+    }
+
+    @Test fun the_latin_predicate_itself_is_letter_by_letter_not_string_by_string() {
+        assertTrue(VescDialGeometry.isAsciiLetters("km/h"))
+        assertTrue(VescDialGeometry.isAsciiLetters("%")) // no letters at all -> vacuously true
+        assertTrue(VescDialGeometry.isAsciiLetters("°C")) // one Latin letter, one symbol
+        assertFalse(VescDialGeometry.isAsciiLetters("Вт·ч/км")) // Cyrillic letters present
+        // A single non-Latin letter anywhere in an otherwise-Latin string disqualifies the whole
+        // unit, rather than only the offending character — there is no such thing as a half-shouted
+        // unit on a real dial face.
+        assertFalse(VescDialGeometry.isAsciiLetters("kmС/h"))
+    }
 }

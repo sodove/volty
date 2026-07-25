@@ -501,6 +501,33 @@ object VescDialGeometry {
         measuredWidth <= maxWidth -> 1.0
         else -> (maxWidth / measuredWidth).coerceAtLeast(MIN_CENTER_TEXT_SCALE)
     }
+
+    // ------------------------------------------------------------------------------------------
+    // The unit line's casing — narrowing CustomGauge.qml:123's blanket rule to Latin units
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * True when every LETTER in [text] is a plain Latin/ASCII one (`A-Z` / `a-z`). Characters that
+     * are not letters at all — `%`, `°`, `/`, `.`, digits — never disqualify it, since upper-casing
+     * them is a no-op either way; a single Cyrillic (or other non-Latin) letter does.
+     *
+     * This is the predicate [uppercaseUnitIfLatin] narrows `Font.AllUppercase` with. VESC's own
+     * units are short Latin/symbolic tokens (`A`, `W`, `%`, `KM/H`) where all-caps is the intended
+     * look; a spelled-out, localized unit like `Вт·ч/км` is not one of those — SI symbol case is
+     * DEFINED (capital `В`, lower `т`/`ч`/`км`), so upper-casing it to `ВТ·Ч/КМ` is wrong, not
+     * merely a style choice, the same way it would be wrong to render `mph` as `MPH·BUT·WRONG` if
+     * that were somehow the unit's actual spelling.
+     */
+    fun isAsciiLetters(text: String): Boolean = text.all { !it.isLetter() || it in 'A'..'Z' || it in 'a'..'z' }
+
+    /**
+     * `CustomGauge.qml:123`: `font.capitalization: Font.AllUppercase`, applied unconditionally to
+     * every gauge's unit line. That blanket rule is correct for VESC's own Latin units and wrong
+     * for a spelled-out non-Latin one — see [isAsciiLetters]. Narrowing it here, rather than at
+     * every call site, keeps the QML's rule intact for every unit it was ever written for and
+     * leaves an authored non-Latin unit exactly as the caller spelled it.
+     */
+    fun uppercaseUnitIfLatin(text: String): String = if (isAsciiLetters(text)) text.uppercase() else text
 }
 
 /**

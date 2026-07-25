@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
+import ru.sodovaya.volty.presentation.ride.gauge.VescGaugeRange
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.math.abs
 import kotlin.math.roundToInt
@@ -33,8 +34,11 @@ class ClassicDialSpecsTest {
         m: ControllerData = motion,
         b: BmsData = battery,
         u: UnitSystem = UnitSystem.METRIC,
-        maxKmh: Float = 70f
-    ) = ClassicDialSpecs.build(m, b, u, maxKmh).associateBy { it.slot }
+        maxKmh: Float = 70f,
+        maxCurrentA: Float = 0f,
+        maxPowerW: Float = 0f
+    ) = ClassicDialSpecs.build(m, b, u, maxKmh, maxCurrentA = maxCurrentA, maxPowerW = maxPowerW)
+        .associateBy { it.slot }
 
     private fun spec(slot: VescClusterSlot, u: UnitSystem = UnitSystem.METRIC) = specs(u = u).getValue(slot)
 
@@ -221,6 +225,104 @@ class ClassicDialSpecsTest {
         val range = specs(maxKmh = 0f).getValue(VescClusterSlot.SPEED).range
         assertTrue(range.maximumValue > range.minimumValue)
         assertTrue(range.hasTickmarks)
+    }
+
+    // --- Current and Power's session auto-scale (§14's "Now" divergence from the port) ---------
+    //
+    // VESC derives these two ranges from the connected controller's motor config (`l_current_max`,
+    // `l_watt_max`) times `num_vescs`; Volty cannot read that yet (needs COMM_GET_MCCONF, deferred
+    // to Part C — B-vesc-dashboard.md §14), so it grows the scale from the largest ABSOLUTE reading
+    // the session has actually shown instead, floored at VESC's own defaults so a quiet ride still
+    // looks like the familiar port.
+
+    /** A quiet ride (no args -> `0f`) must look exactly like the un-scaled port always has. */
+    @Test fun current_and_power_floor_at_VESCs_own_defaults_when_nothing_has_been_seen() {
+        val current = spec(VescClusterSlot.CURRENT).range
+        assertEquals(-60.0, current.minimumValue, 1e-9)
+        assertEquals(60.0, current.maximumValue, 1e-9)
+        assertEquals(10.0, current.labelStep, 1e-9)
+
+        val power = spec(VescClusterSlot.POWER).range
+        assertEquals(-10000.0, power.minimumValue, 1e-9)
+        assertEquals(10000.0, power.maximumValue, 1e-9)
+        assertEquals(2000.0, power.labelStep, 1e-9)
+    }
+
+    /** A session reading well under the floor must not shrink the dial below it. */
+    @Test fun current_and_power_never_shrink_below_VESCs_floor_for_a_small_session_reading() {
+        val current = specs(maxCurrentA = 5f).getValue(VescClusterSlot.CURRENT).range
+        assertEquals(60.0, current.maximumValue, 1e-9)
+
+        val power = specs(maxPowerW = 500f).getValue(VescClusterSlot.POWER).range
+        assertEquals(10000.0, power.maximumValue, 1e-9)
+    }
+
+    /**
+     * The product owner's actual scooter: two uBox 250 A controllers. A session peak north of the
+     * 60 A / 10000 W floor must grow the dial to cover it, not peg at the floor and stay there.
+     */
+    @Test fun current_and_power_grow_to_cover_a_reading_the_floor_does_not_reach() {
+        val current = specs(maxCurrentA = 251f).getValue(VescClusterSlot.CURRENT).range
+        assertEquals(260.0, current.maximumValue, 1e-9) // ceil(251/10)*10
+        assertTrue(current.maximumValue >= 251.0, "the scale must cover the real session peak")
+
+        val power = specs(maxPowerW = 40200f).getValue(VescClusterSlot.POWER).range
+        assertEquals(41000.0, power.maximumValue, 1e-9) // ceil(40200/1000)*1000
+        assertTrue(power.maximumValue >= 40200.0)
+    }
+
+    /** Both dials are bipolar: whatever the session grows the max to, the range stays symmetric. */
+    @Test fun current_and_power_stay_symmetric_around_zero_at_every_auto_scaled_maximum() {
+        listOf(0f, 55f, 251f, 505f).forEach { maxA ->
+            val range = specs(maxCurrentA = maxA).getValue(VescClusterSlot.CURRENT).range
+            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "current maxA=$maxA")
+        }
+        listOf(0f, 9500f, 40200f).forEach { maxW ->
+            val range = specs(maxPowerW = maxW).getValue(VescClusterSlot.POWER).range
+            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "power maxW=$maxW")
+        }
+    }
+
+    /**
+     * The real discriminating check: [tenOrTwentyLabelStep]/[powerLabelStep]'s chosen step must
+     * divide the (symmetric) span `max - min` exactly at every auto-scaled maximum this session can
+     * produce, or the ring goes ragged — the same shipped-twice defect `assertRoundTicks` above
+     * guards for the hero. None of the maxima below are already round multiples of the label step
+     * on their own, which is the point: the snapping in `currentDisplayMax`/`powerDisplayMax` is
+     * what has to make them round, not luck.
+     */
+    @Test fun current_tick_labels_stay_round_at_several_auto_scaled_maxima() {
+        listOf(0f, 5f, 55f, 65f, 251f, 505f).forEach { maxA ->
+            assertRoundTickLabels(specs(maxCurrentA = maxA).getValue(VescClusterSlot.CURRENT).range, "current maxA=$maxA")
+        }
+    }
+
+    @Test fun power_tick_labels_stay_round_at_several_auto_scaled_maxima() {
+        listOf(0f, 500f, 9500f, 12500f, 40200f).forEach { maxW ->
+            assertRoundTickLabels(specs(maxPowerW = maxW).getValue(VescClusterSlot.POWER).range, "power maxW=$maxW")
+        }
+    }
+
+    /** Feeding a growing sequence of session peaks must never produce a smaller display max. */
+    @Test fun the_current_and_power_maxima_never_decrease_as_the_session_reading_grows() {
+        val currentMaxima = listOf(10f, 55f, 65f, 200f, 251f, 505f).map { ClassicDialSpecs.currentDisplayMax(it) }
+        assertEquals(currentMaxima, currentMaxima.sorted())
+        val powerMaxima = listOf(1000f, 9500f, 12500f, 40200f).map { ClassicDialSpecs.powerDisplayMax(it) }
+        assertEquals(powerMaxima, powerMaxima.sorted())
+    }
+
+    /** Shared by the two round-label tests above: whole-number labels, one consistent step. */
+    private fun assertRoundTickLabels(range: VescGaugeRange, context: String) {
+        val values = (0 until range.tickmarkCount).map { range.tickmarkValueFromIndex(it) }
+        assertTrue(values.size >= 4, "$context: only ${values.size} tick labels")
+        values.forEach { v ->
+            assertTrue(
+                abs(v - v.roundToInt()) < 1e-6,
+                "$context: tick $v is not a whole number (max=${range.maximumValue})"
+            )
+        }
+        val steps = values.map { it.roundToInt() }.zipWithNext { a, b -> b - a }.distinct()
+        assertEquals(1, steps.size, "$context: uneven tick steps $steps")
     }
 
     // --- unknown readings are never drawn as zero ----------------------------------------------

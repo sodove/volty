@@ -153,8 +153,17 @@ fun rememberVescDialColors(): VescDialColors {
  *   together, exactly as the QML's single `Behavior on value` does.
  * @param range the gauge's angle sweep and value range (Task 1's port of the QML property block).
  * @param typeText the caption above the readout, upper-cased (QML lines 126-140). Honours `\n`,
- *   and the block grows *upward* from the readout's top edge.
- * @param unitText the unit below the readout, upper-cased (QML lines 112-124).
+ *   and the block grows *upward* from the readout's top edge. Unlike [unitText], this is NOT
+ *   narrowed to Latin scripts: every caller ([ClassicRideCluster]) already resolves its localized
+ *   caption through `stringResource(...).uppercase()` before it ever reaches this composable, so a
+ *   Russian caption ("МОЩНОСТЬ") arrives already correctly upper-cased and the second `.uppercase()`
+ *   here is an idempotent no-op — captions are meant to render all-caps in every language (a
+ *   heading, not a unit symbol), so there is no authored case for a blanket uppercase to violate.
+ * @param unitText the unit below the readout. Upper-cased (QML lines 112-124) only when it is a
+ *   Latin/ASCII unit ([VescDialGeometry.uppercaseUnitIfLatin]) — narrowing the QML's blanket rule,
+ *   because a spelled-out non-Latin unit has a CORRECT case (`Вт·ч/км`) that upper-casing it
+ *   (`ВТ·Ч/КМ`) destroys, unlike VESC's own Latin units (`A`, `%`, `KM/H`), where all-caps is the
+ *   intended look and is kept exactly as the QML wrote it.
  * @param nibColor the needle's colour, and — lightened 1.5x (QML line 50) — the trace glow's.
  * @param precision decimal places for the readout (QML line 105, `value.toFixed(precision)`).
  * @param centerTextVisible QML line 57. The Battery gauge sets this false and overlays its own
@@ -215,7 +224,7 @@ fun VescDialGauge(
                 textMeasurer = textMeasurer,
                 caption = typeText.uppercase(),
                 valueText = valueTextOverride ?: formatFixed(animated, precision),
-                unit = unitText.uppercase(),
+                unit = VescDialGeometry.uppercaseUnitIfLatin(unitText),
                 color = colors.text
             )
         }
