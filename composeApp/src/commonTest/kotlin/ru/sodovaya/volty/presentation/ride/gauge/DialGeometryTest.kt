@@ -72,4 +72,14 @@ class DialGeometryTest {
     @Test fun a_danger_threshold_above_the_scale_yields_no_band() {
         assertNull(DialGeometry.dangerSweep(from = 150f, scale = zeroToHundred))
     }
+
+    @Test fun a_danger_threshold_at_the_scale_minimum_bands_the_whole_dial() {
+        val (start, sweep) = DialGeometry.dangerSweep(from = zeroToHundred.min, scale = zeroToHundred)!!
+        assertEquals(DialGeometry.START_ANGLE, start)
+        assertEquals(DialGeometry.SWEEP, sweep)
+    }
+
+    @Test fun a_danger_threshold_at_the_scale_maximum_yields_no_band() {
+        assertNull(DialGeometry.dangerSweep(from = zeroToHundred.max, scale = zeroToHundred))
+    }
 }

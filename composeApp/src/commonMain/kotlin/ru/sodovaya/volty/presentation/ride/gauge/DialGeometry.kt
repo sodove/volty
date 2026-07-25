@@ -66,6 +66,14 @@ object DialGeometry {
      * the scale, or null when the threshold sits outside the dial (a gauge
      * whose scale never reaches its danger level shows no band rather than a
      * misleading zero-width one).
+     *
+     * Boundaries: `from >= scale.max` yields null (a band starting at the very
+     * end of the scale would have zero width, so it is treated as no band at
+     * all rather than an invisible one). `from == scale.min` is NOT rejected —
+     * it yields a band spanning the entire dial (start = [START_ANGLE], sweep
+     * = [SWEEP]), i.e. the whole gauge reads as danger. That is intentional
+     * for a scale that is danger from its very minimum, but callers wiring up
+     * real thresholds should not pass `from == scale.min` by accident.
      */
     fun dangerSweep(from: Float, scale: DialScale): Pair<Float, Float>? {
         if (from >= scale.max || from < scale.min) return null
