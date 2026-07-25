@@ -38,7 +38,7 @@
     <string name="picker_add_title">Add new battery</string>
     <string name="picker_guest_title">Quick connect</string>
     <string name="picker_cold_title">Pick a battery</string>
-    <string name="picker_guest_subtitle">Guest mode — won\'t save</string>
+    <string name="picker_guest_subtitle">Guest mode — won't save</string>
     <string name="picker_found_nearby">%1$d found nearby</string>
     <string name="picker_my_in_range">My batteries · in range</string>
     <string name="picker_other_nearby">Other BMS nearby</string>
@@ -172,7 +172,7 @@
     <string name="settings_add_new_battery">+ Add new battery</string>
     <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_send_logs">Send app logs</string>
-    <string name="settings_send_logs_subtitle">Share the app\'s logcat for troubleshooting</string>
+    <string name="settings_send_logs_subtitle">Share the app's logcat for troubleshooting</string>
     <string name="settings_delete">Delete</string>
     <string name="settings_delete_title">Delete \"%1$s\"?</string>
     <string name="settings_delete_text">This will remove the saved profile.</string>
@@ -197,7 +197,7 @@
     <string name="vehicle_field_cell_low">Cell V low</string>
     <string name="vehicle_field_temp_warn">Temperature warning (°C)</string>
     <string name="vehicle_field_temp_high">Temperature high (°C)</string>
-    <string name="vehicle_field_soc_low">SOC low (%%)</string>
+    <string name="vehicle_field_soc_low">SOC low (%)</string>
     <string name="vehicle_section_motor">Motor</string>
     <string name="vehicle_field_pole_pairs">Pole pairs</string>
     <string name="vehicle_field_wheel_diameter">Wheel diameter (mm)</string>

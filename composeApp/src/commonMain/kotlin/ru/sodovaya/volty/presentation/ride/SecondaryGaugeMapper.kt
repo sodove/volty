@@ -22,6 +22,27 @@ data class SecondaryReadout(
 )
 
 /**
+ * The seven secondary-gauge labels, resolved by the caller. Mirrors [ClassicDialLabels]:
+ * defaults are the plain-English labels this mapper shipped with before localization (the
+ * literal single-language strings [SecondaryGaugeMapper] used to hardcode, including a plain
+ * "DUTY" rather than the old bilingual "DUTY · ШИМ") — they keep [SecondaryGaugeMapper] callable,
+ * and testable, without dragging Compose or a string-resource resolver into this pure object.
+ * [RideDashboardScreen] is the one real caller and passes `stringResource(...).uppercase()` for
+ * each field instead of relying on these defaults, reusing the exact same string keys Classic's
+ * own dial labels resolve from (`secondary_gauge_duty`, `secondary_gauge_battery`, …) so a
+ * Russian rider reads Russian on both renderers for the same metric.
+ */
+data class SecondaryGaugeLabels(
+    val duty: String = "DUTY",
+    val battery: String = "BATTERY",
+    val power: String = "POWER",
+    val current: String = "CURRENT",
+    val motorTemp: String = "MOTOR",
+    val escTemp: String = "ESC",
+    val consumption: String = "CONSUMPTION"
+)
+
+/**
  * Turns the rider's chosen secondary metric into everything the gauge needs.
  * Pure, so the choice logic is tested without a screen. Severity is what colors
  * the ring: duty uses the shared [DutyBands], temperatures their own ceilings,
@@ -43,34 +64,35 @@ object SecondaryGaugeMapper {
         gauge: SecondaryGauge,
         motion: ControllerData,
         battery: BmsData,
-        units: UnitSystem
+        units: UnitSystem,
+        labels: SecondaryGaugeLabels = SecondaryGaugeLabels()
     ): SecondaryReadout = when (gauge) {
         SecondaryGauge.DUTY -> SecondaryReadout(
-            "DUTY · ШИМ", motion.dutyPercent.roundToInt().toString(), "%",
+            labels.duty, motion.dutyPercent.roundToInt().toString(), "%",
             frac(motion.dutyPercent, 100f), DutyBands.level(motion.dutyPercent)
         )
         SecondaryGauge.BATTERY -> SecondaryReadout(
-            "BATTERY",
+            labels.battery,
             if (battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
             if (battery.socKnown) frac(battery.soc, 100f) else 0f,
             DutyLevel.NORMAL
         )
         SecondaryGauge.POWER -> SecondaryReadout(
-            "POWER", formatFixed(motion.powerW / 1000f, 1), "kW",
+            labels.power, formatFixed(motion.powerW / 1000f, 1), "kW",
             frac(abs(motion.powerW), MAX_POWER_W), DutyLevel.NORMAL
         )
         SecondaryGauge.CURRENT -> SecondaryReadout(
-            "CURRENT", motion.batteryCurrentA.roundToInt().toString(), "A",
+            labels.current, motion.batteryCurrentA.roundToInt().toString(), "A",
             frac(abs(motion.batteryCurrentA), MAX_CURRENT_A), DutyLevel.NORMAL
         )
         SecondaryGauge.MOTOR_TEMP -> SecondaryReadout(
-            "MOTOR",
+            labels.motorTemp,
             if (motion.hasMotorTemp) motion.motorTempC.roundToInt().toString() else "—", "°C",
             if (motion.hasMotorTemp) frac(motion.motorTempC, TempBands.MOTOR_CRITICAL_C + 20f) else 0f,
             TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
         )
         SecondaryGauge.ESC_TEMP -> SecondaryReadout(
-            "ESC",
+            labels.escTemp,
             if (motion.hasEscTemp) motion.escTempC.roundToInt().toString() else "—", "°C",
             if (motion.hasEscTemp) frac(motion.escTempC, TempBands.ESC_CRITICAL_C + 20f) else 0f,
             TempBands.escLevel(motion.escTempC)
@@ -79,7 +101,7 @@ object SecondaryGaugeMapper {
             val wh = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
                 ?: RideMetrics.sessionWhPerKm(motion.consumedWh, motion.tripKm)
             SecondaryReadout(
-                "CONSUMPTION", wh?.let { formatFixed(it, 1) } ?: "—", "Wh/km",
+                labels.consumption, wh?.let { formatFixed(it, 1) } ?: "—", "Wh/km",
                 wh?.let { frac(it, MAX_WH_PER_KM) } ?: 0f, DutyLevel.NORMAL
             )
         }

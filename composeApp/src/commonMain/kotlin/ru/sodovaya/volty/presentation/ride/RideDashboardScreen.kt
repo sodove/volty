@@ -73,6 +73,13 @@ import volty.composeapp.generated.resources.ride_power
 import volty.composeapp.generated.resources.ride_speed_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
+import volty.composeapp.generated.resources.secondary_gauge_battery
+import volty.composeapp.generated.resources.secondary_gauge_consumption
+import volty.composeapp.generated.resources.secondary_gauge_current
+import volty.composeapp.generated.resources.secondary_gauge_duty
+import volty.composeapp.generated.resources.secondary_gauge_esc_temp
+import volty.composeapp.generated.resources.secondary_gauge_motor_temp
+import volty.composeapp.generated.resources.secondary_gauge_power
 import volty.composeapp.generated.resources.status_connected
 import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
@@ -215,7 +222,22 @@ internal fun severityColor(level: DutyLevel): Color = when (level) {
 @Composable
 private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float) {
     val motion = state.motion
-    val secondary = state.secondaryReadout
+    // Defect 1 fix: state.secondaryReadout (computed by RideDashboardComponent, which is not
+    // Composable) carries SecondaryGaugeMapper's default, unlocalized label — that's how the
+    // hardcoded, sometimes-bilingual "DUTY · ШИМ" leaked onto the hero's inner ring. Mirrors
+    // ClassicRideCluster/ClassicDialSpecs: the pure mapper stays Compose-free, and the Composable
+    // that actually renders resolves the same string_gauge_* keys Classic's dial faces use and
+    // recomputes the readout with them, so both renderers agree on language for the same metric.
+    val secondaryLabels = SecondaryGaugeLabels(
+        duty = stringResource(Res.string.secondary_gauge_duty).uppercase(),
+        battery = stringResource(Res.string.secondary_gauge_battery).uppercase(),
+        power = stringResource(Res.string.secondary_gauge_power).uppercase(),
+        current = stringResource(Res.string.secondary_gauge_current).uppercase(),
+        motorTemp = stringResource(Res.string.secondary_gauge_motor_temp).uppercase(),
+        escTemp = stringResource(Res.string.secondary_gauge_esc_temp).uppercase(),
+        consumption = stringResource(Res.string.secondary_gauge_consumption).uppercase()
+    )
+    val secondary = SecondaryGaugeMapper.map(state.secondary, motion, state.battery, state.units, secondaryLabels)
     val speedFraction = motion.speedKmh / vehicleMaxSpeed
     val secondaryColor = severityColor(secondary.severity)
 
