@@ -17,7 +17,11 @@ data class Vehicle(
     val alertConfig: AlertConfig = AlertConfig(),
     val createdAt: Instant,
     val lastConnectedAt: Instant? = null,
-    val isPinned: Boolean = false
+    val isPinned: Boolean = false,
+    /** Which Ride renderer this vehicle uses. Null = follow the app-level default. */
+    val dashboardStyle: DashboardStyle? = null,
+    /** What the secondary gauge shows on this vehicle's dashboard. */
+    val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }

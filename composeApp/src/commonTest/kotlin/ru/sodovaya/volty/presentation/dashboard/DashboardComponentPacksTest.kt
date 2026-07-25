@@ -68,7 +68,7 @@ class DashboardComponentPacksTest {
             componentContext = DefaultComponentContext(LifecycleRegistry()),
             bmsRepository = repo,
             vehicleRepository = FakeVehicleRepo(),
-            onOpenGraph = {},
+            onOpenGraphRequested = {},
             onOpenSettings = {},
             onOpenAddBattery = {},
             onOpenPackDetail = {},

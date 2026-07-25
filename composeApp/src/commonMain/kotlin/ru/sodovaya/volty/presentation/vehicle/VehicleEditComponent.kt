@@ -5,6 +5,8 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
@@ -39,6 +41,8 @@ interface VehicleEditComponent {
     fun onTemperatureWarnChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
+    fun onDashboardStyleChanged(style: DashboardStyle?)
+    fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
     fun onSave()
     fun onCancel()
     fun onDelete()
@@ -56,6 +60,9 @@ interface VehicleEditComponent {
         val temperatureWarnC: Float? = 50f,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
+        /** Null = follow the app-level default. */
+        val dashboardStyle: DashboardStyle? = null,
+        val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
         val nameError: Boolean = false,
         val saving: Boolean = false
     )
@@ -101,7 +108,9 @@ class DefaultVehicleEditComponent(
                     cellLowV = v.alertConfig.cellLowV,
                     temperatureWarnC = v.alertConfig.temperatureWarnC,
                     temperatureHighC = v.alertConfig.temperatureHighC,
-                    socLowPercent = v.alertConfig.socLowPercent
+                    socLowPercent = v.alertConfig.socLowPercent,
+                    dashboardStyle = v.dashboardStyle,
+                    secondaryGauge = v.secondaryGauge
                 )
                 return
             }
@@ -125,6 +134,8 @@ class DefaultVehicleEditComponent(
     override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
+    override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
+    override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
 
     override fun onSave() {
         val s = _state.value
@@ -135,7 +146,7 @@ class DefaultVehicleEditComponent(
             // notify toggles, pin, last-connected) — rebuilding from defaults
             // would silently wipe them on every save.
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
-            val v = singlePackVehicle(
+            val built = singlePackVehicle(
                 id = vehicleId ?: "v-${Random.nextLong()}",
                 name = s.name,
                 iconKey = s.iconKey,
@@ -156,6 +167,17 @@ class DefaultVehicleEditComponent(
                 createdAt = existing?.createdAt ?: Clock.System.now(),
                 lastConnectedAt = existing?.lastConnectedAt,
                 isPinned = existing?.isPinned ?: false
+            )
+            // singlePackVehicle() only knows the single-pack shape — it can't
+            // forward controllers/topology (not editable from this screen yet)
+            // or dashboardStyle/secondaryGauge (edited here, via the state).
+            // Without this .copy(), every save through this screen silently
+            // wiped a vehicle's VESC controllers and reset its dashboard prefs.
+            val v = built.copy(
+                controllers = existing?.controllers ?: emptyList(),
+                topology = existing?.topology ?: built.topology,
+                dashboardStyle = s.dashboardStyle,
+                secondaryGauge = s.secondaryGauge
             )
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the

@@ -20,7 +20,9 @@ CREATE TABLE VehicleRow (
     chargeCompleteNotify     INTEGER NOT NULL DEFAULT 1,
     createdAt                TEXT NOT NULL,    -- ISO-8601
     lastConnectedAt          TEXT,             -- ISO-8601 or NULL
-    isPinned                 INTEGER NOT NULL DEFAULT 0
+    isPinned                 INTEGER NOT NULL DEFAULT 0,
+    dashboardStyle           TEXT,             -- enum name: CLEAN | CLASSIC, NULL = follow app default
+    secondaryGauge           TEXT              -- enum name: DUTY | BATTERY | POWER | CURRENT | MOTOR_TEMP | ESC_TEMP | CONSUMPTION
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -35,11 +37,11 @@ upsert:
 INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
-    disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned
+    disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
-    :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned
+    :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge
 );
 
 delete:

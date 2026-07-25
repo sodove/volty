@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.ControllerType
 
 object BmsTypeDetector {
 
@@ -60,6 +61,36 @@ object BmsTypeDetector {
                 name.startsWith("MTEN", ignoreCase = true) ||
                 name.startsWith("Master", ignoreCase = true) ||
                 name.startsWith("T4", ignoreCase = true) -> BmsType.BEGODE
+            else -> null
+        }
+    }
+
+    /**
+     * Controller detection, deliberately separate from [detect]: a controller is
+     * not a BMS, and the Nordic UART service is generic enough (any nRF-based
+     * gadget exposes it) that this is a CANDIDATE signal only — the picker
+     * confirms it by a successful GET_VALUES_SETUP handshake. Kept out of
+     * [detect] so no battery flow can ever be handed a controller type.
+     */
+    fun detectController(name: String?, serviceUuids: List<String>): ControllerType? {
+        // A device that already looks like a known BMS is never a controller.
+        // Must run BEFORE controllerNameMatch: a VESC retrofit renamed into a
+        // Begode wheel (e.g. "GW-VESC" — this app's actual audience) matches
+        // both the "GW" BMS name prefix AND the "VESC" controller substring, so
+        // checking the name match first would hand it back both a bmsType and
+        // a controllerType.
+        if (detect(name, serviceUuids) != null) return null
+        controllerNameMatch(name)?.let { return it }
+        val hasNus = serviceUuids.any { it.equals(VescProtocol.NUS_SERVICE, ignoreCase = true) }
+        return if (hasNus) ControllerType.VESC else null
+    }
+
+    private fun controllerNameMatch(name: String?): ControllerType? {
+        if (name.isNullOrEmpty()) return null
+        return when {
+            name.contains("VESC", ignoreCase = true) ||
+                name.startsWith("uBox", ignoreCase = true) ||
+                name.startsWith("ubox", ignoreCase = true) -> ControllerType.VESC
             else -> null
         }
     }

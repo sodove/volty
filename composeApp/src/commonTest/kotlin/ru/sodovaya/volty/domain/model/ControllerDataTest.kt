@@ -25,4 +25,14 @@ class ControllerDataTest {
         assertFalse(c.providesDerivedBattery)
         assertEquals(15, c.motor.polePairs)
     }
+
+    @Test fun hasEscTemp_is_false_only_for_the_no_sensor_sentinel() {
+        // A controller that never reports temp_mos (or reports VESC's "no
+        // sensor wired" sentinel) must not read as a confident value.
+        assertFalse(ControllerData(escTempC = -60f).hasEscTemp)
+        assertFalse(ControllerData(escTempC = -50f).hasEscTemp)
+        assertTrue(ControllerData(escTempC = -49.9f).hasEscTemp)
+        assertTrue(ControllerData(escTempC = 0f).hasEscTemp)
+        assertTrue(ControllerData(escTempC = 42f).hasEscTemp)
+    }
 }

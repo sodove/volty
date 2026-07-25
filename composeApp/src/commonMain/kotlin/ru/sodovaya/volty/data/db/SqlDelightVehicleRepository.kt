@@ -7,9 +7,11 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.Dispatchers
@@ -89,7 +91,9 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 chargeCompleteNotify = if (a.chargeCompleteNotify) 1L else 0L,
                 createdAt = vehicle.createdAt.toString(),
                 lastConnectedAt = vehicle.lastConnectedAt?.toString(),
-                isPinned = if (vehicle.isPinned) 1L else 0L
+                isPinned = if (vehicle.isPinned) 1L else 0L,
+                dashboardStyle = vehicle.dashboardStyle?.name,
+                secondaryGauge = vehicle.secondaryGauge.name
             )
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
@@ -189,5 +193,8 @@ private fun VehicleRow.toDomain(
     ),
     createdAt = Instant.parse(createdAt),
     lastConnectedAt = lastConnectedAt?.let { Instant.parse(it) },
-    isPinned = isPinned == 1L
+    isPinned = isPinned == 1L,
+    dashboardStyle = dashboardStyle?.let { runCatching { DashboardStyle.valueOf(it) }.getOrNull() },
+    secondaryGauge = secondaryGauge?.let { runCatching { SecondaryGauge.valueOf(it) }.getOrNull() }
+        ?: SecondaryGauge.DUTY
 )

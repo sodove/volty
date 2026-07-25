@@ -1,0 +1,5 @@
+-- v4 -> v5: the Ride dashboard is configurable per vehicle.
+-- Both columns are nullable with no default: an existing vehicle follows the
+-- app-level default style and the DUTY secondary gauge until the rider picks.
+ALTER TABLE VehicleRow ADD COLUMN dashboardStyle TEXT;
+ALTER TABLE VehicleRow ADD COLUMN secondaryGauge TEXT;

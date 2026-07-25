@@ -77,13 +77,26 @@
     <string name="cells_v_avg">%1$s В средн.</string>
     <string name="power_last_5_min">МОЩНОСТЬ · ПОСЛЕДНИЕ 5 МИН</string>
 
-    <string name="tab_live">Сейчас</string>
+    <string name="tab_ride">Поездка</string>
+    <string name="tab_battery">Батарея</string>
     <string name="tab_cells">Ячейки</string>
     <string name="tab_graph">График</string>
 
     <string name="sheet_my_batteries">Мои батареи</string>
     <string name="sheet_add_battery">+ Добавить батарею</string>
     <string name="sheet_disconnect">Отключить</string>
+
+    <!-- Ride dashboard (Clean) -->
+    <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <string name="ride_odometer">Одометр</string>
+    <string name="ride_trip">Поездка</string>
+    <string name="ride_uptime">В пути</string>
+    <string name="ride_consumption">Расход</string>
+    <string name="ride_consumption_avg">средн. %1$s Вт·ч/км</string>
+    <string name="ride_power">Мощность</string>
+    <string name="ride_battery">Батарея</string>
+    <string name="ride_esc_temp">Темп. ESC</string>
+    <string name="ride_motor_temp">Темп. мотора</string>
 
     <!-- Cells screen -->
     <string name="cells_title">Ячейки · %1$ds</string>
@@ -147,6 +160,10 @@
     <string name="settings_scan_timeout">Таймаут сканирования</string>
     <string name="settings_auto_connect_countdown">Обратный отсчёт автоподключения</string>
     <string name="settings_seconds">%1$d с</string>
+    <string name="settings_units">Единицы измерения</string>
+    <string name="settings_units_metric">Метрические</string>
+    <string name="settings_units_imperial">Имперские</string>
+    <string name="settings_dashboard_style">Стиль приборной панели</string>
     <string name="settings_my_batteries">Мои батареи</string>
     <string name="settings_add_new_battery">+ Добавить новую батарею</string>
     <string name="settings_diagnostics">Диагностика</string>
@@ -175,6 +192,8 @@
     <string name="vehicle_field_temp_warn">Предупреждение по температуре (°C)</string>
     <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
     <string name="vehicle_field_soc_low">Низкий SOC (%%)</string>
+    <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
+    <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_delete">Удалить батарею</string>
     <string name="vehicle_delete_confirm_title">Удалить эту батарею?</string>
     <string name="vehicle_delete_confirm_text">Это нельзя отменить.</string>
@@ -192,6 +211,21 @@
     <string name="bms_daly">Daly BMS</string>
     <string name="bms_begode">Begode</string>
     <string name="bms_vesc">VESC BMS</string>
+
+    <!-- Dashboard style labels (shared by Settings' app default and per-vehicle picker) -->
+    <string name="dashboard_style_clean">Clean</string>
+    <string name="dashboard_style_classic">Classic</string>
+    <string name="dashboard_style_default">По умолчанию</string>
+    <string name="dashboard_style_classic_soon">Classic скоро появится — пока отображается как Clean.</string>
+
+    <!-- Secondary gauge labels (per-vehicle "Inner gauge" picker) -->
+    <string name="secondary_gauge_duty">ШИМ</string>
+    <string name="secondary_gauge_battery">Батарея</string>
+    <string name="secondary_gauge_power">Мощность</string>
+    <string name="secondary_gauge_current">Ток</string>
+    <string name="secondary_gauge_motor_temp">Темп. мотора</string>
+    <string name="secondary_gauge_esc_temp">Темп. ESC</string>
+    <string name="secondary_gauge_consumption">Расход</string>
 
     <!-- Notifications -->
     <string name="notif_monitoring_title">Volty · %1$s</string>

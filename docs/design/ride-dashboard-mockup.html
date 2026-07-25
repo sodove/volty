@@ -1,0 +1,273 @@
+<title>Volty — Ride dashboard mockup</title>
+<style>
+  :root{
+    --ground:#0b0b11; --studio:#0f0e16; --surf:#16151f; --surf-2:#1e1c2b; --line:#2a2740;
+    --hi:#f3f2f8; --mid:#a7a4bb; --dim:#6f6c86;
+    --accent:#7b74ff; --accent-dim:#5b53d4; --accent-soft:#3a3663;
+    --good:#37d99a; --warn:#ffbb45; --crit:#ff5c72;
+    --mono: ui-monospace,"Cascadia Code","SF Mono",Consolas,monospace;
+    --sans: "Segoe UI Variable","Segoe UI",Roboto,-apple-system,system-ui,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0}
+  body{font-family:var(--sans);
+    background:radial-gradient(120% 80% at 50% -10%, #171528 0%, var(--studio) 55%, var(--ground) 100%);
+    color:var(--hi); min-height:100vh; padding:40px 20px 64px; -webkit-font-smoothing:antialiased;}
+  .wrap{max-width:1120px; margin:0 auto}
+  .masthead{display:flex; align-items:baseline; gap:14px; flex-wrap:wrap; margin-bottom:28px}
+  .brand{font-weight:800; letter-spacing:.14em; font-size:14px; color:var(--accent)}
+  .masthead h1{font-size:19px; font-weight:650; margin:0; letter-spacing:-.01em}
+  .masthead .sub{font-size:13px; color:var(--dim); margin-left:auto}
+  .stage{display:grid; grid-template-columns:392px 1fr; gap:44px; align-items:start}
+  @media (max-width:860px){ .stage{grid-template-columns:1fr; gap:32px; justify-items:center} }
+
+  .phone{width:392px; border-radius:40px; padding:14px; background:linear-gradient(#26243a,#0d0c15);
+    box-shadow:0 40px 80px -30px #000, 0 0 0 1px #ffffff10;}
+  .screen{background:var(--ground); border-radius:28px; overflow:hidden; display:flex; flex-direction:column; height:812px; position:relative;}
+  .status{display:flex; justify-content:space-between; align-items:center; padding:12px 20px 2px; font-size:12px; color:var(--mid); font-variant-numeric:tabular-nums}
+  .status b{font-weight:600; color:var(--hi)}
+  .body{flex:1; padding:6px 16px 0; display:flex; flex-direction:column; gap:11px; overflow:hidden}
+
+  .pill{display:flex; align-items:center; gap:11px; background:var(--surf); border:1px solid var(--line); border-radius:18px; padding:9px 12px}
+  .ava{width:34px;height:34px;border-radius:11px;display:grid;place-items:center;font-size:18px;background:linear-gradient(135deg,var(--accent),#4f3fb0);box-shadow:0 4px 14px -4px var(--accent)}
+  .who{display:flex;flex-direction:column;line-height:1.2}
+  .who b{font-size:14px;font-weight:650}
+  .who span{font-size:11px;color:var(--dim);letter-spacing:.04em}
+  .conn{margin-left:auto;display:flex;align-items:center;gap:7px;font-size:11.5px;color:var(--good);background:#0f2a20;border:1px solid #1e5540;padding:5px 10px;border-radius:11px;font-weight:600}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--good);box-shadow:0 0 8px var(--good)}
+
+  .seg{display:flex;background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:4px;gap:4px}
+  .seg button{flex:1;border:0;background:transparent;color:var(--mid);font-family:inherit;font-size:12.5px;font-weight:600;padding:8px;border-radius:10px;cursor:pointer;letter-spacing:.02em;transition:.15s}
+  .seg button.on{background:linear-gradient(#2a2646,#211d3b);color:var(--hi);box-shadow:0 2px 8px -2px #000}
+  .seg button:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+  .view{display:flex;flex-direction:column;gap:11px;flex:1;min-height:0}
+  .view[hidden]{display:none}
+
+  /* CLEAN */
+  .hero{position:relative; display:grid; place-items:center; padding:2px 0}
+  .hero svg{width:250px;height:250px;display:block}
+  .track{fill:none;stroke:#211f31;stroke-linecap:round}
+  .arc{fill:none;stroke-linecap:round;stroke-dasharray:var(--dash);stroke-dashoffset:var(--len);animation:draw 1.2s cubic-bezier(.2,.7,.2,1) forwards}
+  @keyframes draw{to{stroke-dashoffset:0}}
+  .center{position:absolute;text-align:center}
+  .center .kmh{font-size:11px;letter-spacing:.22em;color:var(--dim);font-weight:600}
+  .center .spd{font-size:72px;font-weight:800;line-height:.92;letter-spacing:-.03em;font-variant-numeric:tabular-nums}
+  .center .duty{margin-top:5px;font-size:14px;font-weight:650;color:var(--warn);font-variant-numeric:tabular-nums}
+  .center .duty small{display:block;font-size:9px;letter-spacing:.18em;color:var(--dim);font-weight:600;margin-bottom:1px}
+  .center .gear{margin-top:6px;font-size:9.5px;color:var(--accent);letter-spacing:.05em;opacity:.9}
+  .grid{display:grid;grid-template-columns:1fr 1fr;gap:9px}
+  .card{background:var(--surf);border:1px solid var(--line);border-radius:16px;padding:11px 12px;display:flex;flex-direction:column;gap:1px;position:relative;overflow:hidden}
+  .card .lab{font-size:10px;letter-spacing:.12em;color:var(--dim);font-weight:600;text-transform:uppercase}
+  .card .val{font-size:24px;font-weight:750;letter-spacing:-.02em;font-variant-numeric:tabular-nums}
+  .card .val u{font-style:normal;font-size:12px;color:var(--mid);font-weight:600;margin-left:3px}
+  .card .sub{font-size:10.5px;color:var(--dim);font-variant-numeric:tabular-nums}
+  .tstripe{position:absolute;right:11px;top:11px;width:8px;height:8px;border-radius:50%}
+  .spark svg{width:100%;height:24px;display:block;overflow:visible;margin-top:3px}
+
+  /* CLASSIC cluster */
+  .cluster{position:relative;width:356px;height:444px;margin:8px auto 0}
+  .cluster .dialwrap{position:absolute;filter:drop-shadow(0 6px 12px #0009)}
+
+  .strip{display:grid;grid-template-columns:repeat(3,1fr);background:var(--surf-2);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  .strip div{padding:8px;text-align:center;border-right:1px solid var(--line)}
+  .strip div:last-child{border-right:0}
+  .strip .k{font-size:9px;letter-spacing:.14em;color:var(--dim);font-weight:600}
+  .strip .v{font-family:var(--mono);font-size:14px;font-weight:600;margin-top:2px;color:#d9d6ee}
+
+  .nav{margin-top:auto;display:flex;padding:8px 12px;gap:6px;border-top:1px solid var(--line);background:#0c0b13}
+  .nav a{flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;padding:7px 0;border-radius:14px;color:var(--dim);text-decoration:none;font-size:10.5px}
+  .nav a.on{color:var(--hi);background:linear-gradient(#211d3b,#191634)}
+  .nav a.on svg{color:var(--accent)}
+  .nav svg{width:20px;height:20px}
+  .home{height:5px;width:118px;border-radius:3px;background:#ffffff26;margin:7px auto 6px}
+
+  .notes{display:flex;flex-direction:column;gap:15px;padding-top:2px}
+  .note{background:#ffffff08;border:1px solid #ffffff12;border-left:3px solid var(--accent);border-radius:14px;padding:14px 16px}
+  .note h3{margin:0 0 5px;font-size:14px;font-weight:650}
+  .note p{margin:0;font-size:13px;line-height:1.55;color:var(--mid)}
+  .note.q{border-left-color:var(--warn)}
+  .note.q h3{color:var(--warn)}
+  .note ul{margin:7px 0 0;padding-left:18px;color:var(--mid);font-size:13px;line-height:1.6}
+  .note ul b{color:var(--hi)}
+  .peek{background:var(--surf);border:1px solid var(--line);border-radius:14px;padding:13px 15px}
+  .peek .row{display:flex;align-items:center;justify-content:space-between;padding:9px 0;border-bottom:1px solid var(--line)}
+  .peek .row:last-child{border-bottom:0}
+  .peek .row .t{font-size:12.5px}
+  .peek .row .t small{display:block;color:var(--dim);font-size:11px;margin-top:1px}
+  .peek .chips{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
+  .chip{font-size:11px;padding:5px 10px;border-radius:20px;border:1px solid var(--line);color:var(--mid);white-space:nowrap}
+  .chip.sel{background:var(--accent-soft);border-color:var(--accent);color:#dcd9ff;font-weight:600}
+  .foot{margin-top:32px;font-size:12px;color:var(--dim);text-align:center}
+  @media (prefers-reduced-motion:reduce){ .arc{animation:none;stroke-dashoffset:0} }
+</style>
+
+<div class="wrap">
+  <div class="masthead">
+    <span class="brand">VOLTY</span>
+    <h1>Ride dashboard — layout mockup</h1>
+    <span class="sub">two styles, both Material You · tap the toggle</span>
+  </div>
+
+  <div class="stage">
+    <div class="phone">
+      <div class="screen">
+        <div class="status"><b>6:05</b><span>CAN&nbsp;→ · BLE · <b>4G</b> ▮</span></div>
+        <div class="body">
+          <div class="pill">
+            <div class="ava">🛴</div>
+            <div class="who"><b>Scooter</b><span>uBox · VESC</span></div>
+            <div class="conn"><span class="dot"></span>Connected</div>
+          </div>
+
+          <div class="seg" role="tablist">
+            <button class="on" id="tClean" role="tab" aria-selected="true">Clean</button>
+            <button id="tClassic" role="tab" aria-selected="false">Classic VESC</button>
+          </div>
+
+          <!-- CLEAN -->
+          <div class="view" id="clean">
+            <div class="hero">
+              <svg viewBox="0 0 240 240" aria-label="Speed 47, duty 76">
+                <circle class="track" cx="120" cy="120" r="104" stroke-width="14" transform="rotate(135 120 120)" stroke-dasharray="490 654"/>
+                <circle class="arc" cx="120" cy="120" r="104" stroke-width="14" stroke="var(--accent)" transform="rotate(135 120 120)" style="--dash:490 654;--len:161"/>
+                <circle class="track" cx="120" cy="120" r="82" stroke-width="12" transform="rotate(135 120 120)" stroke-dasharray="386 515"/>
+                <circle class="arc" cx="120" cy="120" r="82" stroke-width="12" stroke="var(--warn)" transform="rotate(135 120 120)" style="--dash:386 515;--len:93"/>
+              </svg>
+              <div class="center">
+                <div class="kmh">KM/H</div>
+                <div class="spd">47</div>
+                <div class="duty"><small>ШИМ · DUTY</small>76%</div>
+                <div class="gear">⚙ inner gauge · per-vehicle</div>
+              </div>
+            </div>
+            <div class="grid">
+              <div class="card"><span class="lab">Power</span><span class="val">3.1<u>kW</u></span><span class="sub">−52.4 A batt</span></div>
+              <div class="card"><span class="lab">Battery</span><span class="val">84<u>%</u></span><span class="sub">78.2 V · 20s</span></div>
+              <div class="card"><span class="tstripe" style="background:var(--good)"></span><span class="lab">ESC temp</span><span class="val">52<u>°C</u></span><span class="sub">FET</span></div>
+              <div class="card"><span class="tstripe" style="background:var(--good)"></span><span class="lab">Motor temp</span><span class="val">68<u>°C</u></span><span class="sub">nominal</span></div>
+            </div>
+            <div class="card">
+              <div style="display:flex;justify-content:space-between;align-items:baseline"><span class="lab">Consumption</span><span class="sub">avg 16.9 · trip</span></div>
+              <span class="val" style="font-size:21px">18.4<u>Wh/km</u></span>
+              <div class="spark"><svg viewBox="0 0 300 28" preserveAspectRatio="none">
+                <defs><linearGradient id="g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="var(--accent)" stop-opacity=".35"/><stop offset="1" stop-color="var(--accent)" stop-opacity="0"/></linearGradient></defs>
+                <path d="M0,20 26,16 52,18 78,9 104,13 130,6 156,15 182,8 208,12 234,5 260,11 286,7 300,10" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round"/>
+                <path d="M0,20 26,16 52,18 78,9 104,13 130,6 156,15 182,8 208,12 234,5 260,11 286,7 300,10 300,28 0,28Z" fill="url(#g)"/>
+                <circle cx="300" cy="10" r="3" fill="var(--accent)"/></svg></div>
+            </div>
+          </div>
+
+          <!-- CLASSIC -->
+          <div class="view" id="classic" hidden>
+            <div class="cluster">
+              <div class="dialwrap" data-dial="speed"   style="left:44px; top:104px; z-index:1"></div>
+              <div class="dialwrap" data-dial="battery" style="left:200px;top:170px; z-index:4"></div>
+              <div class="dialwrap" data-dial="current" style="left:14px; top:22px;  z-index:2"></div>
+              <div class="dialwrap" data-dial="power"   style="left:109px;top:4px;   z-index:3"></div>
+              <div class="dialwrap" data-dial="duty"    style="left:216px;top:22px;  z-index:2"></div>
+              <div class="dialwrap" data-dial="tesc"    style="left:14px; top:294px; z-index:2"></div>
+              <div class="dialwrap" data-dial="consump" style="left:109px;top:306px; z-index:3"></div>
+              <div class="dialwrap" data-dial="tmotor"  style="left:216px;top:294px; z-index:2"></div>
+            </div>
+          </div>
+
+          <div class="strip">
+            <div><div class="k">ODOMETER</div><div class="v">1284.6</div></div>
+            <div><div class="k">TRIP</div><div class="v">12.4</div></div>
+            <div><div class="k">UP-TIME</div><div class="v">00:47:12</div></div>
+          </div>
+
+          <nav class="nav">
+            <a class="on" href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 12l4-3" stroke-linecap="round"/></svg>Ride</a>
+            <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="8" width="15" height="9" rx="2"/><path d="M19 11h2v3h-2" stroke-linecap="round"/></svg>Battery</a>
+            <a href="#"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3.2"/><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" stroke-linecap="round"/></svg>Settings</a>
+          </nav>
+          <div class="home"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="note">
+        <h3>Two styles, one palette</h3>
+        <p>Toggle between <b>Clean</b> (Material 3 Expressive cards) and <b>Classic VESC</b> — the overlapping dial cluster of the RT-DATA screen, but bezels, ticks, needles and arcs all take <b>Material You</b> colors instead of the original grey/white.</p>
+      </div>
+      <div class="note">
+        <h3>The inner gauge is the rider's choice — per vehicle</h3>
+        <p>A wheel needs <b>duty/ШИМ</b> in the middle; a scooter wants <b>battery</b>; a bike maybe <b>power</b> or <b>motor temp</b>. Secondary gauge is a per-vehicle setting — pick once, it sticks.</p>
+      </div>
+      <div class="note">
+        <h3>Settings that drive it</h3>
+        <div class="peek" style="margin-top:9px">
+          <div class="row"><div class="t">Dashboard style<small>app default</small></div><div class="chips"><span class="chip sel">Clean</span><span class="chip">Classic</span></div></div>
+          <div class="row"><div class="t">Inner gauge<small>Scooter · per-vehicle</small></div><div class="chips"><span class="chip">Duty</span><span class="chip sel">Battery</span><span class="chip">Power</span><span class="chip">Current</span><span class="chip">Motor °C</span></div></div>
+        </div>
+      </div>
+      <div class="note q">
+        <h3>Your calls before I code it</h3>
+        <ul>
+          <li><b>Dashboard style</b> — app-wide default with a per-vehicle override, or purely global?</li>
+          <li><b>Inner-gauge menu</b> — Duty · Battery · Power · Current · Motor °C · ESC °C · Consumption — miss anything?</li>
+          <li><b>Duty color bands</b> — green &lt;75 / amber 75–90 / red &gt;90? (also the Part F alarm thresholds)</li>
+          <li><b>Ride = home</b> when a controller's present; pure-BMS vehicles keep Battery as home. Good?</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+  <p class="foot">Static mockup · real screen is Compose + Material You (light + dark) · numbers illustrative</p>
+</div>
+
+<script>
+(function(){
+  var TAU=Math.PI/180;
+  function P(c,r,a){return [c + r*Math.sin(a*TAU), c - r*Math.cos(a*TAU)];}
+  function xy(p){return p[0].toFixed(1)+' '+p[1].toFixed(1);}
+  function dial(o){
+    var s=o.size,c=s/2,R=c-2,A0=225,SW=270;
+    var aOf=function(v){return A0+(v-o.min)/(o.max-o.min)*SW;};
+    var g='<svg viewBox="0 0 '+s+' '+s+'" width="'+s+'" height="'+s+'">';
+    g+='<defs><radialGradient id="f'+o.id+'" cx="50%" cy="38%" r="72%"><stop offset="0" stop-color="#25232f"/><stop offset=".72" stop-color="#141320"/><stop offset="1" stop-color="#0b0a10"/></radialGradient></defs>';
+    g+='<circle cx="'+c+'" cy="'+c+'" r="'+R+'" fill="url(#f'+o.id+')" stroke="#332f45" stroke-width="1.5"/>';
+    g+='<circle cx="'+c+'" cy="'+c+'" r="'+(R-2.5)+'" fill="none" stroke="#ffffff0e" stroke-width="1"/>';
+    var rr=R-4;
+    // swept value arc (thin, tinted)
+    if(o.value>o.min){var a1=aOf(o.min),a2=aOf(o.value),la=(a2-a1)>180?1:0,p1=P(c,rr,a1),p2=P(c,rr,a2);
+      g+='<path d="M'+xy(p1)+' A'+rr+' '+rr+' 0 '+la+' 1 '+xy(p2)+'" fill="none" stroke="'+o.arc+'" stroke-width="'+(s*0.026)+'" stroke-linecap="round" opacity=".8"/>';}
+    // danger segment
+    if(o.danger!=null){var d1=aOf(o.danger),d2=aOf(o.max),ld=(d2-d1)>180?1:0,q1=P(c,rr,d1),q2=P(c,rr,d2);
+      g+='<path d="M'+xy(q1)+' A'+rr+' '+rr+' 0 '+ld+' 1 '+xy(q2)+'" fill="none" stroke="var(--crit)" stroke-width="'+(s*0.026)+'" stroke-linecap="round"/>';}
+    // ticks
+    var nMin=o.majors*4;
+    for(var i=0;i<=nMin;i++){var v=o.min+(o.max-o.min)*i/nMin,a=aOf(v),mj=(i%4===0),ra=R-s*0.085,rb=R-s*(mj?0.18:0.135),pa=P(c,ra,a),pb=P(c,rb,a);
+      g+='<line x1="'+pa[0].toFixed(1)+'" y1="'+pa[1].toFixed(1)+'" x2="'+pb[0].toFixed(1)+'" y2="'+pb[1].toFixed(1)+'" stroke="'+(mj?'#c6c3d8':'#4c4960')+'" stroke-width="'+(mj?1.6:1)+'"/>';}
+    // numbers
+    for(var j=0;j<=o.majors;j++){var vv=o.min+(o.max-o.min)*j/o.majors,aa=aOf(vv),pl=P(c,R-s*0.245,aa);
+      g+='<text x="'+pl[0].toFixed(1)+'" y="'+pl[1].toFixed(1)+'" fill="#817e96" font-size="'+(s*0.076)+'" text-anchor="middle" dominant-baseline="central">'+Math.round(vv)+'</text>';}
+    // needle
+    var an=aOf(o.value),tip=P(c,R-s*0.155,an),bl=P(c,s*0.05,an-90),br=P(c,s*0.05,an+90);
+    g+='<polygon points="'+tip[0].toFixed(1)+','+tip[1].toFixed(1)+' '+bl[0].toFixed(1)+','+bl[1].toFixed(1)+' '+br[0].toFixed(1)+','+br[1].toFixed(1)+'" fill="'+(o.needle||o.arc)+'"/>';
+    g+='<circle cx="'+c+'" cy="'+c+'" r="'+(s*0.052)+'" fill="#100f18" stroke="'+(o.needle||o.arc)+'" stroke-width="1.5"/>';
+    // center readout
+    g+='<text x="'+c+'" y="'+(c-s*0.165)+'" fill="#928fa6" font-size="'+(s*0.076)+'" letter-spacing=".6" text-anchor="middle">'+o.label+'</text>';
+    g+='<text x="'+c+'" y="'+(c+s*0.055)+'" fill="#f3f2f8" font-size="'+(s*0.17)+'" font-weight="750" text-anchor="middle" style="font-variant-numeric:tabular-nums">'+o.value+'</text>';
+    g+='<text x="'+c+'" y="'+(c+s*0.19)+'" fill="#817e96" font-size="'+(s*0.068)+'" text-anchor="middle">'+o.unit+'</text>';
+    g+='</svg>';return g;
+  }
+  var cfg={
+    current:{id:1,size:126,min:-60,max:60,value:45,label:"CURRENT",unit:"A",majors:6,arc:"var(--accent)"},
+    power:  {id:2,size:138,min:-1, max:4, value:3.1,label:"POWER", unit:"kW",majors:5,arc:"var(--accent)"},
+    duty:   {id:3,size:126,min:0,  max:100,value:76,label:"DUTY",  unit:"%", majors:5,arc:"var(--warn)",needle:"var(--warn)",danger:90},
+    speed:  {id:4,size:200,min:0,  max:70, value:47,label:"SPEED", unit:"KM/H",majors:7,arc:"var(--accent)"},
+    battery:{id:5,size:130,min:0,  max:100,value:84,label:"BATTERY",unit:"%",majors:5,arc:"var(--good)",needle:"var(--good)"},
+    tesc:   {id:6,size:126,min:0,  max:100,value:52,label:"ESC",   unit:"°C",majors:5,arc:"var(--good)",needle:"var(--good)",danger:85},
+    consump:{id:7,size:138,min:0,  max:50, value:18,label:"WH/KM", unit:"avg 16.9",majors:5,arc:"var(--accent)"},
+    tmotor: {id:8,size:126,min:0,  max:120,value:68,label:"MOTOR", unit:"°C",majors:6,arc:"var(--good)",needle:"var(--good)",danger:100}
+  };
+  document.querySelectorAll('[data-dial]').forEach(function(el){var k=el.getAttribute('data-dial');if(cfg[k])el.innerHTML=dial(cfg[k]);});
+  var clean=document.getElementById('clean'),classic=document.getElementById('classic'),bc=document.getElementById('tClean'),bx=document.getElementById('tClassic');
+  function show(isClean){clean.hidden=!isClean;classic.hidden=isClean;bc.classList.toggle('on',isClean);bx.classList.toggle('on',!isClean);bc.setAttribute('aria-selected',isClean);bx.setAttribute('aria-selected',!isClean);}
+  bc.addEventListener('click',function(){show(true);});
+  bx.addEventListener('click',function(){show(false);});
+})();
+</script>

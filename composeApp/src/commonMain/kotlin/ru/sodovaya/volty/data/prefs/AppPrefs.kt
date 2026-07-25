@@ -13,6 +13,8 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.util.UnitSystem
 
 class AppPrefs(private val store: DataStore<Preferences>) {
 
@@ -46,6 +48,14 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .map { it[Keys.GUEST_MODE_SHOW_SAVED] ?: true }
         .stateIn(scope, SharingStarted.Eagerly, true)
 
+    val unitSystem: StateFlow<UnitSystem> = store.data
+        .map { runCatching { UnitSystem.valueOf(it[Keys.UNIT_SYSTEM] ?: "METRIC") }.getOrDefault(UnitSystem.METRIC) }
+        .stateIn(scope, SharingStarted.Eagerly, UnitSystem.METRIC)
+
+    val defaultDashboardStyle: StateFlow<DashboardStyle> = store.data
+        .map { runCatching { DashboardStyle.valueOf(it[Keys.DASHBOARD_STYLE] ?: "CLEAN") }.getOrDefault(DashboardStyle.CLEAN) }
+        .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.CLEAN)
+
     suspend fun setLastVehicleId(id: String?) = store.edit { p ->
         if (id == null) p.remove(Keys.LAST_VEHICLE_ID) else p[Keys.LAST_VEHICLE_ID] = id
     }
@@ -55,6 +65,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setScanTimeoutSec(sec: Int) = store.edit { it[Keys.SCAN_TIMEOUT_SEC] = sec }
     suspend fun setAutoConnectCountdownSec(sec: Int) = store.edit { it[Keys.AUTO_CONNECT_COUNTDOWN_SEC] = sec }
     suspend fun setGuestModeShowSaved(show: Boolean) = store.edit { it[Keys.GUEST_MODE_SHOW_SAVED] = show }
+    suspend fun setUnitSystem(system: UnitSystem) = store.edit { it[Keys.UNIT_SYSTEM] = system.name }
+    suspend fun setDefaultDashboardStyle(style: DashboardStyle) = store.edit { it[Keys.DASHBOARD_STYLE] = style.name }
 
     private object Keys {
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
@@ -64,5 +76,7 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val SCAN_TIMEOUT_SEC = intPreferencesKey("scan_timeout_sec")
         val AUTO_CONNECT_COUNTDOWN_SEC = intPreferencesKey("auto_connect_countdown_sec")
         val GUEST_MODE_SHOW_SAVED = booleanPreferencesKey("guest_mode_show_saved")
+        val UNIT_SYSTEM = stringPreferencesKey("unit_system")
+        val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
     }
 }

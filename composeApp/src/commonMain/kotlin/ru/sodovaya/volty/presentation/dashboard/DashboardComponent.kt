@@ -33,10 +33,9 @@ interface DashboardComponent {
     fun onSwitchVehicle(v: Vehicle)
     fun onAddBattery()
     fun onDisconnect()
-    fun onTabClicked(tab: Tab)
+    /** Graph is no longer a top-level tab — every dashboard carries a button to it. */
+    fun onOpenGraph()
     fun onPackClicked(packIndex: Int)
-
-    enum class Tab { Live, Graph, Settings }
 
     data class State(
         val vehicle: Vehicle? = null,
@@ -76,7 +75,10 @@ class DefaultDashboardComponent(
     componentContext: ComponentContext,
     private val bmsRepository: BmsRepository,
     private val vehicleRepository: VehicleRepository,
-    private val onOpenGraph: () -> Unit,
+    // Renamed from onOpenGraph so it doesn't collide with the interface's
+    // onOpenGraph() method (a same-named property would make `onOpenGraph()`
+    // resolve to the function and recurse forever).
+    private val onOpenGraphRequested: () -> Unit,
     private val onOpenSettings: () -> Unit,
     private val onOpenAddBattery: () -> Unit,
     private val onOpenPackDetail: (packIndex: Int) -> Unit,
@@ -214,13 +216,7 @@ class DefaultDashboardComponent(
 
     override fun onPackClicked(packIndex: Int) { onOpenPackDetail(packIndex) }
 
-    override fun onTabClicked(tab: DashboardComponent.Tab) {
-        when (tab) {
-            DashboardComponent.Tab.Live -> {} // already on Live
-            DashboardComponent.Tab.Graph -> onOpenGraph()
-            DashboardComponent.Tab.Settings -> onOpenSettings()
-        }
-    }
+    override fun onOpenGraph() { onOpenGraphRequested() }
 }
 
 // Helper math: time remaining (to-empty when discharging, to-full when charging)

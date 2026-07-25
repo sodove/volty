@@ -12,6 +12,15 @@
 > roles, motor/wheel config, topology, derived-battery and alias rules. It must
 > make the common case trivial and the 2×uBox+2×ANT case possible.
 
+> **INHERITED FROM PART B1 (decided 2026-07-25).** Part B ships VESC detection but
+> **no way to create a controller-bearing vehicle** — see `B-vesc-dashboard.md §6.1`
+> for the full handover, including the exact list of `packs.first()` shim sites that
+> must be fixed in ONE pass together with the creation flow (two of them —
+> `PickerComponent.kt:79`, `ScanningComponent.kt:63` — take down a whole screen, not
+> just a tap, the moment a zero-pack vehicle can exist). Until Part G lands, the VESC
+> path is reachable only via the demo vehicle and tests. This is the first thing
+> Part G must deliver, not an afterthought.
+
 ## 1. Scope
 **In:** the composer UI + component; scan/type detection for controllers
 (VESC/FarDriver/Kelly) alongside BMS; assigning a discovered device to

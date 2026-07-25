@@ -9,6 +9,7 @@ import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
+import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
@@ -21,7 +22,9 @@ import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
+import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -30,8 +33,10 @@ import ru.sodovaya.volty.domain.model.bmsAddress
 import ru.sodovaya.volty.domain.model.bmsType
 import ru.sodovaya.volty.domain.model.cellCount
 import ru.sodovaya.volty.domain.model.expandedTo
+import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -39,6 +44,7 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.MovingAverage
+import ru.sodovaya.volty.domain.stats.PackAggregator
 import ru.sodovaya.volty.domain.stats.VoltageSocEstimator
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
@@ -111,6 +117,20 @@ class KableBmsRepository private constructor(
         const val SAMPLE_FUNNEL_CAPACITY = 64
 
         /**
+         * Distinct BLE-style address for [DEMO_CONTROLLER]. The demo pack and
+         * the demo controller are two different sources on the (synthetic)
+         * vehicle, so they must NOT share [DEMO_VEHICLE_ID] as their address:
+         * [planLinks] requires one address to resolve to exactly one
+         * [ProtocolKind], and JK (pack) + VESC (controller) at the same
+         * address would throw `IllegalArgumentException` if this vehicle ever
+         * reached link planning. It doesn't today (`connectDemo` bypasses the
+         * orchestrator entirely and the demo vehicle is never persisted, so it
+         * can never reach `connect(vehicle)`), but the model should still be
+         * coherent on its own terms rather than relying on that bypass forever.
+         */
+        private const val DEMO_CONTROLLER_ADDRESS = "demo-controller"
+
+        /**
          * Synthetic controller backing "Try demo" mode's motion feed (Task 12):
          * a single VESC-shaped source so the demo vehicle has a coherent
          * controller behind the ride curve, the same way it has a stored pack
@@ -122,7 +142,7 @@ class KableBmsRepository private constructor(
             index = 0,
             label = "Demo motor",
             controllerType = ControllerType.VESC,
-            address = DEMO_VEHICLE_ID
+            address = DEMO_CONTROLLER_ADDRESS
         )
 
         /**
@@ -130,7 +150,10 @@ class KableBmsRepository private constructor(
          * [DEMO_VEHICLE_ID] (see [ru.sodovaya.volty.domain.model.isDemo]) so it is
          * never confused with a saved or guest vehicle and is never persisted.
          * Carries [DEMO_CONTROLLER] alongside its single pack so the demo
-         * exercises the motion path end-to-end, not just the battery one.
+         * exercises the motion path end-to-end, not just the battery one. The
+         * pack and controller use distinct addresses ([DEMO_VEHICLE_ID] vs.
+         * [DEMO_CONTROLLER_ADDRESS]) so the model would still pass [planLinks]
+         * if it ever reached link planning — see [DEMO_CONTROLLER_ADDRESS].
          */
         val DEMO_VEHICLE: Vehicle = singlePackVehicle(
             id = DEMO_VEHICLE_ID,
@@ -283,7 +306,8 @@ class KableBmsRepository private constructor(
     private data class ConnectionTarget(
         val vehicle: Vehicle?,
         val address: String,
-        val type: BmsType
+        /** Null for a vehicle with no stored pack — see [connect]. */
+        val type: BmsType?
     )
     @Volatile
     private var lastConnectionTarget: ConnectionTarget? = null
@@ -363,7 +387,14 @@ class KableBmsRepository private constructor(
         if (observedCellCountStreak < cellCountStableSamples) return
         val vehicle = _activeVehicle.value ?: return
         if (vehicle.isGuest || vehicle.isDemo) return
-        if (vehicle.cellCount == n) return
+        // packs.firstOrNull(), not the `Vehicle.cellCount` shim: that is
+        // `packs.first()` and THROWS on a zero-pack (controller-only) vehicle.
+        // This runs inside the _activeData collector on the repo's
+        // SupervisorJob scope with no exception handler, so a throw here is
+        // app-fatal on Android. Unreachable only by accident today (a derived
+        // VESC pack carries no cells, so `n == 0` short-circuits above) —
+        // exactly the kind of accident a later protocol change would undo.
+        if (vehicle.packs.firstOrNull()?.cellCount == n) return
         if (lastPersistedCellCount == vehicle.id to n) return
         lastPersistedCellCount = vehicle.id to n
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")
@@ -397,8 +428,14 @@ class KableBmsRepository private constructor(
             ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
-        val knownAddresses: Map<String, Vehicle> =
-            vehicleRepository.vehicles.first().associateBy { it.bmsAddress }
+        // Keyed by the stored BMS address for every vehicle that has a pack —
+        // exactly as before — and by [Vehicle.primaryAddress] for one that has
+        // none. `bmsAddress` is a `packs.first()` shim and would THROW on a
+        // controller-only vehicle (legal since Part A), taking the whole scan
+        // flow down with it; the fallback is also the only address such a
+        // vehicle can be recognised by.
+        val knownAddresses: Map<String, Vehicle> = vehicleRepository.vehicles.first()
+            .associateBy { it.packs.firstOrNull()?.bmsAddress ?: it.primaryAddress }
         // A scan can run WHILE a connection is live (the Picker seeds itself
         // with the connected device and keeps scanning for others). Don't let
         // it clobber the Connected / Connecting / Reconnecting state machine —
@@ -417,6 +454,7 @@ class KableBmsRepository private constructor(
             // May be null: the picker now lists every device and lets the user
             // pick the type manually, so we no longer drop unrecognized ads.
             val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
+            val controllerType = BmsTypeDetector.detectController(name = name, serviceUuids = serviceList)
             val id = ad.identifier.toString()
             cacheAdvertisement(id, ad)
             emit(
@@ -425,6 +463,7 @@ class KableBmsRepository private constructor(
                     name = name,
                     rssi = ad.rssi,
                     bmsType = type,
+                    controllerType = controllerType,
                     knownVehicle = knownAddresses[id]
                 )
             )
@@ -435,8 +474,16 @@ class KableBmsRepository private constructor(
         // If a caller hands a transient guest Vehicle back to connect(), route
         // it through the guest path so it stays unpersisted and the touch /
         // saved-vehicle observers leave it alone.
-        if (vehicle.isGuest) return connectGuest(vehicle.bmsAddress, vehicle.bmsType)
-        return doConnect(vehicle.bmsAddress, vehicle.bmsType, vehicle)
+        if (vehicle.isGuest) return connectGuest(vehicle.primaryAddress, vehicle.bmsType)
+        // primaryAddress / packs.firstOrNull(), NOT the bmsAddress / bmsType
+        // shims: both are `packs.first()` and a controller-only vehicle (a
+        // VESC whose battery is derived at runtime) legally stores ZERO packs
+        // since Part A — the shims THROW on it before a single link is
+        // planned. The links themselves are planned from the VEHICLE (packs
+        // AND controllers, see [effectiveLinkSpecs]), so [address] is only
+        // this connection's identity and [type] only the guest fallback's
+        // pack template — null when there is no stored pack to describe.
+        return doConnect(vehicle.primaryAddress, vehicle.packs.firstOrNull()?.bmsType, vehicle)
     }
 
     override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> =
@@ -502,7 +549,28 @@ class KableBmsRepository private constructor(
                     // is coherent with the vehicle it is published under.
                     motionRingBuffer.push(motion)
                     _activeMotion.value = motion
+                    // Battery twin of the same idea: without this, packs/aggregate
+                    // stay at VehicleData()'s all-zero default for the whole demo
+                    // session (only _activeData — the Battery tab's own flow — saw
+                    // sample), so the Ride dashboard's BATTERY tile (which reads
+                    // activeVehicleData.aggregate, not activeData) would be stuck
+                    // at "0% / 0.0V" forever instead of tracking the demo's SoC
+                    // curve. Mirrors VehicleConnection.snapshot()'s battery half via
+                    // the same PackAggregator a real single-pack connection uses —
+                    // an identity transform here, but it keeps the demo on the one
+                    // true path rather than a bespoke shortcut.
+                    val demoPackState = PackState(
+                        pack = DEMO_VEHICLE.packs.first(),
+                        data = sample,
+                        isOnline = true,
+                        lastSeenAt = sample.timestamp
+                    )
+                    val demoBattery = PackAggregator.build(listOf(demoPackState), PackTopology.PARALLEL)
                     _activeVehicleData.value = _activeVehicleData.value.copy(
+                        packs = demoBattery.packs,
+                        aggregate = demoBattery.aggregate,
+                        topology = demoBattery.topology,
+                        isPartial = demoBattery.isPartial,
                         controllers = listOf(
                             ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
                         ),
@@ -571,10 +639,21 @@ class KableBmsRepository private constructor(
      * to [VehicleConnection] as LATENT and appear only once they report, so a
      * Begode without a smart BMS (which never fills its second branch) shows
      * one pack instead of a permanently-offline phantom "Pack 2".
+     *
+     * [type] is the fallback slot's BMS type and may be null: a controller-only
+     * vehicle names no BMS at all. Such a vehicle gets NO fallback slot — a
+     * fabricated pack would sit at the controller's own address and
+     * [planLinks] would then reject the vehicle outright ("conflicting
+     * protocol kinds"), since a BMS type can never resolve to a controller
+     * kind. Its battery, when the controller derives one, arrives as a derived
+     * slot from [planLinkPacks] instead.
      */
-    private fun storedPacks(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> =
-        vehicle?.packs?.takeIf { it.isNotEmpty() }
-            ?: listOf(Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address))
+    private fun storedPacks(vehicle: Vehicle?, address: String, type: BmsType?): List<Pack> {
+        val stored = vehicle?.packs.orEmpty()
+        if (stored.isNotEmpty()) return stored
+        if (vehicle?.hasControllers == true || type == null) return emptyList()
+        return listOf(Pack(index = 0, label = "Battery", bmsType = type, bmsAddress = address))
+    }
 
     // ----- Discovered-pack auto-fill -----
 
@@ -612,7 +691,19 @@ class KableBmsRepository private constructor(
         if (discovered.size <= vehicle.packs.size) return
         // Only the slots this vehicle does not know about need proving; the
         // stored ones are user configuration and may legitimately be offline.
+        //
+        // A slot only counts as DISCOVERED HARDWARE when it sits behind a link
+        // the profile already names a pack on — which is exactly what
+        // [expandedTo] synthesises, and what this auto-fill has always meant.
+        // A slot behind a CONTROLLER link (a VESC's derived battery, see
+        // [planLinkPacks]) is computed from the controller's own telemetry,
+        // not a battery the profile is missing: persisting it would store a
+        // pack at the controller's address whose BmsType can never resolve to
+        // the controller's protocol kind, and the NEXT connect's [planLinks]
+        // would reject the vehicle outright.
         val extraSlots = discovered.drop(vehicle.packs.size)
+            .filter { slot -> vehicle.packs.any { it.bmsAddress == slot.pack.bmsAddress } }
+        if (extraSlots.isEmpty()) return
         if (extraSlots.any { !it.isOnline }) return
         if (lastPersistedPackVehicleId == vehicle.id) return
         lastPersistedPackVehicleId = vehicle.id
@@ -651,7 +742,7 @@ class KableBmsRepository private constructor(
     private fun buildSamplePipeline(
         vehicle: Vehicle?,
         address: String,
-        type: BmsType,
+        type: BmsType?,
         protocol: BmsProtocol,
         localToGlobal: (localIndex: Int) -> Int = { it }
     ): SamplePipeline {
@@ -673,35 +764,87 @@ class KableBmsRepository private constructor(
      * single-address vehicle this is exactly the old
      * `stored.expandedTo(protocol.packCount)`.
      *
-     * Known limit, deliberate for sub-project A: [expandedTo] synthesises
-     * global indices after the link's own highest index, which is
-     * collision-free while multi-address vehicles only combine
-     * single-pack-protocol links (no way to CREATE anything else exists
-     * until sub-project B).
+     * Includes the DERIVED slot of a controller link that backs a battery of
+     * its own — see [planLinkPacks], which is where both this and
+     * [effectiveLinkSpecs] come from.
+     *
+     * Known limit, still deliberate: [expandedTo] synthesises global indices
+     * after the LINK's own highest index, which is collision-free while
+     * multi-address vehicles only combine single-pack-protocol links (no way
+     * to CREATE anything else exists yet). Derived slots do not share that
+     * limit — [planLinkPacks] numbers them after every expanded index.
      */
-    private fun expandedVehiclePacks(vehicle: Vehicle?, address: String, type: BmsType): List<Pack> {
-        val stored = storedPacks(vehicle, address, type)
-        return planLinks(stored).flatMap { spec ->
-            stored.filter { it.bmsAddress == spec.address }
-                .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
-        }.sortedBy { it.index }
-    }
+    private fun expandedVehiclePacks(vehicle: Vehicle?, address: String, type: BmsType?): List<Pack> =
+        planLinkPacks(vehicle, address, type).flatMap { it.packs }.sortedBy { it.index }
 
     /**
      * The link plan for one connection, with each link's owned indices grown
      * to its protocol's pack count — [planLinks] only sees the STORED packs,
      * but a Begode session speaks local indices up to packCount - 1, so the
      * link must own the synthesised branch slots too or
-     * [LinkSpec.globalPackIndex] could not translate them.
+     * [LinkSpec.globalPackIndex] could not translate them. The controllers a
+     * link owns come straight from [planLinks] — this is what makes
+     * [ConnectionSession.onMotionSample] fire at all.
      */
-    private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType): List<LinkSpec> {
+    private fun effectiveLinkSpecs(vehicle: Vehicle?, address: String, type: BmsType?): List<LinkSpec> =
+        planLinkPacks(vehicle, address, type).map { (spec, packs) ->
+            spec.copy(ownedPacks = packs.map { OwnedSource(it.index) })
+        }
+
+    /** One link's spec paired with the pack slots it is responsible for. */
+    private data class LinkPacks(val spec: LinkSpec, val packs: List<Pack>)
+
+    /**
+     * THE single source of truth for "which links does this vehicle have and
+     * which pack slots does each own" — [expandedVehiclePacks] and
+     * [effectiveLinkSpecs] are both projections of it, so the orchestrator's
+     * slots and the links' index translation can never drift apart.
+     *
+     * Planning runs over the vehicle's packs AND its controllers, so a
+     * controller shares its address's link with the packs behind it (a Begode
+     * multiplexes both over one address) or raises its own (a VESC beside a
+     * separate BMS).
+     *
+     * Two passes, because pack indices are vehicle-global and must stay unique:
+     *  1. every link that owns STORED packs grows them to its protocol's
+     *     [BmsProtocol.packCount] — bit-for-bit the pre-controller behaviour;
+     *  2. a link with NO stored pack behind it but whose protocol still backs
+     *     one (a VESC with `providesDerivedBattery`) gets freshly numbered
+     *     DERIVED slots, allocated after every index pass 1 produced so they
+     *     can never collide with an [expandedTo] slot. They reach
+     *     [VehicleConnection] as latent slots and materialise on their first
+     *     sample, exactly like a Begode's second branch.
+     */
+    private fun planLinkPacks(vehicle: Vehicle?, address: String, type: BmsType?): List<LinkPacks> {
         val stored = storedPacks(vehicle, address, type)
-        return planLinks(stored).map { spec ->
-            val linkPacks = stored.filter { it.bmsAddress == spec.address }
-                .sortedBy { it.index }
-                .expandedTo(createProtocol(spec.protocolKind.toBmsType()).packCount)
-            spec.copy(ownedPacks = linkPacks.map { OwnedSource(it.index) })
+        val specs = planLinks(stored, vehicle?.controllers ?: emptyList())
+        val counts = specs.map { createProtocol(it, vehicle).packCount }
+        val sized = specs.mapIndexed { i, spec ->
+            LinkPacks(
+                spec = spec,
+                packs = stored.filter { it.bmsAddress == spec.address }
+                    .sortedBy { it.index }
+                    .expandedTo(counts[i])
+            )
+        }
+        var nextDerivedIndex = (sized.flatMap { it.packs }.maxOfOrNull { it.index } ?: -1) + 1
+        return sized.mapIndexed { i, linkPacks ->
+            if (linkPacks.packs.isNotEmpty() || counts[i] == 0) return@mapIndexed linkPacks
+            linkPacks.copy(
+                packs = List(counts[i]) {
+                    val index = nextDerivedIndex++
+                    Pack(
+                        index = index,
+                        label = if (index == 0) "Battery" else "Pack ${index + 1}",
+                        // The controller IS the battery source for a derived
+                        // pack; VESC_BMS is the closest honest label. It is
+                        // never persisted (see [maybePersistPacks]) so it can
+                        // never be fed back into [planLinks].
+                        bmsType = BmsType.VESC_BMS,
+                        bmsAddress = linkPacks.spec.address
+                    )
+                }
+            )
         }
     }
 
@@ -715,14 +858,14 @@ class KableBmsRepository private constructor(
      * reports capacity — HALVES the wheel's state of charge, feeding the
      * same halved value into the SOC_LOW / SOC_CUTOFF alerts.
      */
-    private fun socVehicleFor(vehicle: Vehicle?, address: String, type: BmsType): Vehicle? =
+    private fun socVehicleFor(vehicle: Vehicle?, address: String, type: BmsType?): Vehicle? =
         vehicle?.copy(packs = expandedVehiclePacks(vehicle, address, type))
 
     /**
      * Build the ONE orchestrator of a connection, sized from the full vehicle
      * pack list ([expandedVehiclePacks]) regardless of how many links feed it.
      */
-    private fun buildOrchestrator(vehicle: Vehicle?, address: String, type: BmsType): VehicleConnection {
+    private fun buildOrchestrator(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection {
         val stored = storedPacks(vehicle, address, type)
         val expanded = expandedVehiclePacks(vehicle, address, type)
         return VehicleConnection(
@@ -797,6 +940,31 @@ class KableBmsRepository private constructor(
             val sent = channel.trySend(PackSample(packIndex, enriched, sections))
             if (sent.isFailure) {
                 println("[VOLTY-BLE] sample funnel: dropped sample for pack=$packIndex (channel closed or full)")
+            }
+        }
+
+    /**
+     * The motion twin of [makeLinkOnSample]: translate the session's LOCAL
+     * controller index to the vehicle-global one (through this link's
+     * [LinkSpec.ownedControllers]) and funnel it as a [MotionSample] into the
+     * SAME channel, so battery and motion cross one serialisation barrier.
+     *
+     * Fires only when the link's protocol is a
+     * [ru.sodovaya.volty.data.bms.MotionSource] — a battery-only link's
+     * `ownedControllers` is empty and this is never invoked for it. Factored
+     * out for the same reason [makeLinkOnSample] is: the test seam drives the
+     * production lambda rather than a copy that can drift.
+     */
+    private fun makeLinkOnMotionSample(
+        spec: LinkSpec,
+        channel: Channel<Sample>
+    ): (controllerIndex: Int, data: ControllerData) -> Unit =
+        { localCtrlIndex, data ->
+            val sent = channel.trySend(
+                MotionSample(spec.globalControllerIndex(localCtrlIndex), data)
+            )
+            if (sent.isFailure) {
+                println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
             }
         }
 
@@ -1019,7 +1187,7 @@ class KableBmsRepository private constructor(
 
     // ----- Connect: one vehicle, N links -----
 
-    private suspend fun doConnect(address: String, type: BmsType, vehicle: Vehicle?): Result<Unit> {
+    private suspend fun doConnect(address: String, type: BmsType?, vehicle: Vehicle?): Result<Unit> {
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
         // Tracks the orchestrator THIS attempt installed, so every failure
         // path (including the catch-all below) can undo exactly its own
@@ -1047,7 +1215,10 @@ class KableBmsRepository private constructor(
             // disconnect, or a real connect right after demo) must not mix the
             // previous battery's samples into the new graph. Reconnects to the
             // same address keep the buffer so the graph survives link drops.
-            val previousAddress = _activeVehicle.value?.bmsAddress
+            // primaryAddress, the same identity [connect] hands us as
+            // [address] — and the only one that does not throw when the
+            // previously active vehicle stores no packs.
+            val previousAddress = _activeVehicle.value?.primaryAddress
             if (previousAddress != null && previousAddress != address) {
                 ringBuffer.clear()
                 _activeData.value = BmsData()
@@ -1055,6 +1226,14 @@ class KableBmsRepository private constructor(
                 // motion must not bleed into the new vehicle's graph / flow.
                 motionRingBuffer.clear()
                 _activeMotion.value = ControllerData()
+                // Same reasoning on the vehicle-level snapshot: without this,
+                // a stale demo (or previous real vehicle's) packs/aggregate
+                // survive into the new connection and RideDashboardComponent's
+                // BATTERY tile shows the WRONG vehicle's SoC/voltage until the
+                // new vehicle's first sample overwrites it. Reachable via the
+                // Picker's "+ Add battery" from a live demo session, which
+                // connects without disconnecting first.
+                _activeVehicleData.value = VehicleData()
             }
             // Initial state, written directly: the links are not installed yet,
             // so the fold cannot own this first transition. From installation
@@ -1159,7 +1338,10 @@ class KableBmsRepository private constructor(
     ): Result<Unit> {
         val vehicle = link.vehicle
         val address = link.spec.address
-        val type = link.spec.protocolKind.toBmsType()
+        // NOT `protocolKind.toBmsType()`: that THROWS for a controller kind by
+        // design. Downstream this value is only the guest fallback's pack
+        // template, which a controller link never needs.
+        val type = link.spec.protocolKind.batteryBmsTypeOrNull()
         // Tracks the orchestrator THIS attempt installed (rebuild path only),
         // so every failure path can undo exactly its own installation.
         var installedOrchestrator: VehicleConnection? = null
@@ -1173,8 +1355,11 @@ class KableBmsRepository private constructor(
             setLinkState(link, LinkStatus.CONNECTING)
             // The protocol instance is shared by the enrichment funnel and
             // the session — both must read the same decode state. Plain
-            // object, no I/O; constructing it this early cannot fail.
-            val protocol = createProtocol(type)
+            // object, no I/O; constructing it this early cannot fail. Built
+            // from the SPEC (not a bare BmsType) so a controller link gets its
+            // controller's own VescProtocol — a MotionSource, which is what
+            // makes ConnectionSession.onMotionSample fire.
+            val protocol = createProtocol(link.spec, vehicle)
             val channel: Channel<Sample> = sessionLock.withLock {
                 if (links.none { it === link }) {
                     return Result.failure(IllegalStateException("Link superseded"))
@@ -1216,20 +1401,7 @@ class KableBmsRepository private constructor(
                 vehicle = vehicle,
                 connectionState = _connectionState,
                 onSample = onSample,
-                // Motion twin of onSample: translate the session's LOCAL
-                // controller index to the vehicle-global one (through this
-                // link's ownedControllers) and funnel it as a MotionSample
-                // into the SAME channel. Fires only when the protocol is a
-                // MotionSource; in Part A none is, and a battery-only link's
-                // ownedControllers is empty, so this never runs here.
-                onMotionSample = { localCtrlIndex, data ->
-                    val sent = channel.trySend(
-                        MotionSample(link.spec.globalControllerIndex(localCtrlIndex), data)
-                    )
-                    if (sent.isFailure) {
-                        println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
-                    }
-                },
+                onMotionSample = makeLinkOnMotionSample(link.spec, channel),
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule THIS link's
                     // reconnect — unless the user disconnected in the meantime.
@@ -1312,7 +1484,7 @@ class KableBmsRepository private constructor(
      * block doConnect runs, minus the link list (the links persist across
      * their attempts).
      */
-    private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType): VehicleConnection {
+    private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection {
         val orchestrator = buildOrchestrator(vehicle, address, type)
         val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
         vehicleConnection = orchestrator
@@ -1646,6 +1818,67 @@ class KableBmsRepository private constructor(
     override fun movingAverage(window: Duration): Flow<MovingAvg> =
         _activeData.map { MovingAverage.over(ringBuffer.within(window), window) }
 
+    /**
+     * The decode protocol ONE link speaks — the controller-aware factory.
+     *
+     * A controller kind has no [BmsType] at all ([ProtocolKind.toBmsType]
+     * throws for it by design), so the VESC branch must come BEFORE any
+     * `toBmsType()` call: a VESC link built through the battery factory would
+     * crash there. The controller behind the link is the one this link owns
+     * (its first [LinkSpec.ownedControllers] entry, matched against the
+     * vehicle's controllers by index), so its own motor geometry and
+     * derived-battery choice reach the protocol.
+     *
+     * Every battery kind delegates to [createProtocol] (BmsType) unchanged.
+     */
+    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol =
+        when (spec.protocolKind) {
+            ProtocolKind.VESC -> {
+                val ctrlIndex = spec.ownedControllers.firstOrNull()?.globalIndex
+                val controller = vehicle?.controllers?.firstOrNull { it.index == ctrlIndex }
+                VescProtocol(
+                    // A lone controller with no battery source of its own backs
+                    // a derived pack; the composer (Part G) turns this off once
+                    // a real BMS covers the same battery. Written as `== true ||`
+                    // rather than `?:` so the no-packs fallback stays LIVE even
+                    // though `controller` is never null here in practice (every
+                    // planned VESC link's controller is found in
+                    // `vehicle.controllers`) — a plain elvis on a non-null
+                    // Boolean can never reach its right-hand side, which would
+                    // silently strand a controller-only vehicle with
+                    // `providesDerivedBattery = false` (its own default) at
+                    // `packCount = 0` and the derived-slot machinery off.
+                    deriveBattery = controller?.providesDerivedBattery == true ||
+                        vehicle?.packs.isNullOrEmpty(),
+                    motor = controller?.motor ?: MotorConfig()
+                )
+            }
+            else -> createProtocol(spec.protocolKind.toBmsType())
+        }
+
+    /**
+     * The [BmsType] a link's battery half decodes with, or null for a
+     * controller kind that has none. The non-throwing sibling of
+     * [ProtocolKind.toBmsType] — the branches must stay in step: every kind
+     * `toBmsType` rejects is a kind that must land in null here.
+     *
+     * Deliberately exhaustive with NO `else` branch: `toBmsType()` is itself
+     * exhaustive over [ProtocolKind], so an `else -> toBmsType()` here would
+     * silently route any future controller kind through the throwing branch
+     * instead of failing to compile — exactly the pairing this KDoc promises
+     * stays in step. Adding a [ProtocolKind] entry now forces a decision here
+     * at compile time, not a runtime `error()` inside [connectLinkAttempt].
+     */
+    private fun ProtocolKind.batteryBmsTypeOrNull(): BmsType? = when (this) {
+        ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
+        ProtocolKind.JK -> BmsType.JK_BMS
+        ProtocolKind.JBD -> BmsType.JBD_BMS
+        ProtocolKind.ANT -> BmsType.ANT_BMS
+        ProtocolKind.DALY -> BmsType.DALY_BMS
+        ProtocolKind.BEGODE -> BmsType.BEGODE
+        ProtocolKind.VESC_BMS -> BmsType.VESC_BMS
+    }
+
     private fun createProtocol(type: BmsType): BmsProtocol = when (type) {
         BmsType.JK_BMS -> JkBmsProtocol()
         BmsType.JBD_BMS -> JbdBmsProtocol()
@@ -1813,7 +2046,7 @@ class KableBmsRepository private constructor(
     internal fun installLinksForTest(
         vehicle: Vehicle?,
         address: String,
-        type: BmsType
+        type: BmsType?
     ): List<(packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> {
         val newLinks = effectiveLinkSpecs(vehicle, address, type)
             .map { PackLink(spec = it, vehicle = vehicle) }
@@ -1830,13 +2063,38 @@ class KableBmsRepository private constructor(
         val socVehicle = socVehicleFor(vehicle, address, type)
         return newLinks.map { link ->
             makeLinkOnSample(
-                protocol = createProtocol(link.spec.protocolKind.toBmsType()),
+                protocol = createProtocol(link.spec, vehicle),
                 socVehicle = socVehicle,
                 channel = channel,
                 localToGlobal = link.spec::globalPackIndex
             )
         }
     }
+
+    /**
+     * Test-only: the MOTION funnels of the installed links, in link order —
+     * the motion twin of what [installLinksForTest] returns for the battery
+     * side. Built through the production [makeLinkOnMotionSample] against the
+     * live channel, so a test drives the exact lambda a [ConnectionSession]
+     * is handed. Empty when no funnel is installed.
+     */
+    internal fun linkMotionFunnelsForTest(): List<(controllerIndex: Int, data: ControllerData) -> Unit> {
+        val channel = sampleChannel ?: return emptyList()
+        return links.map { makeLinkOnMotionSample(it.spec, channel) }
+    }
+
+    /**
+     * Test-only: the specs of the installed links — how the vehicle's packs
+     * and controllers were actually planned into BLE links.
+     */
+    internal fun linkSpecsForTest(): List<LinkSpec> = links.map { it.spec }
+
+    /**
+     * Test-only: the protocol [connectLinkAttempt] would build for one link,
+     * through the production controller-aware factory.
+     */
+    internal fun createProtocolForTest(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol =
+        createProtocol(spec, vehicle)
 
     /** Test-only: how many links the current connection holds. */
     internal fun linkCountForTest(): Int = links.size
