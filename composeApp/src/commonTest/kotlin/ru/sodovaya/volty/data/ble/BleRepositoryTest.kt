@@ -44,7 +44,7 @@ import kotlinx.coroutines.test.runTest
  * here and handed to [body], and its scope is cancelled whatever [body] does.
  * A test that never starts a loop pays nothing for it.
  */
-@OptIn(ExperimentalCoroutinesApi::class)
+@OptIn(ExperimentalCoroutinesApi::class, DelicateBmsRepositoryTestApi::class)
 internal fun bleRepositoryTest(
     vehicleRepository: VehicleRepository = EmptyVehicleRepository(),
     serviceStart: () -> Unit = {},

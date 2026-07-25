@@ -77,6 +77,41 @@ import kotlin.time.Instant
 import kotlin.uuid.ExperimentalUuidApi
 import kotlin.uuid.Uuid
 
+/**
+ * Opt-in gate on [KableBmsRepository.forTesting] — a compile-time forcing
+ * function for [ru.sodovaya.volty.data.ble.bleRepositoryTest]'s "own it
+ * through the harness" contract (`BleRepositoryTest.kt`).
+ *
+ * [KableBmsRepository.forTesting] hands back a repository whose reconnect
+ * loop (`startLinkReconnectLoop`) is `while (isActive) { attempt;
+ * delay(backoff) }` — an unbounded stream of *delayed* tasks. A test that
+ * builds one directly and drives it inside `runTest` does not fail: `runTest`
+ * advances virtual time until every coroutine on its scheduler is idle, and
+ * the loop is never idle, so the test **wedges the build** — spinning a fresh
+ * connect attempt per virtual iteration until the Gradle daemon dies of an
+ * OOM with no test XML written at all. That happened once already, for over
+ * an hour, and cost far more than the bug it was hiding.
+ *
+ * Neither `@AfterTest { repo.close() }` (runs AFTER `runTest` returns, i.e.
+ * after the wedge) nor a `repo.disconnect()` as the test's last line (skipped
+ * the moment an assertion above it fails) actually prevents this. The only
+ * fix that cannot be forgotten is making the repository unobtainable without
+ * a harness that cancels its scope in a `finally` — that is
+ * `bleRepositoryTest`, the sole opt-in site. Reach for that instead of
+ * `forTesting` directly; that is the entire point of this annotation existing.
+ */
+@RequiresOptIn(
+    message = "KableBmsRepository.forTesting() builds a repository whose reconnect loop is an " +
+        "unbounded stream of delayed coroutines; driving it inside runTest without owning its " +
+        "lifetime wedges the build (advanceUntilIdle never finds the scheduler idle, and the " +
+        "Gradle daemon eventually OOMs with no test XML written) instead of failing a test. " +
+        "Use bleRepositoryTest { repo -> ... } instead — it cancels the repository's scope in a " +
+        "finally so the loop always stops. See BleRepositoryTest.kt.",
+    level = RequiresOptIn.Level.ERROR
+)
+@Retention(AnnotationRetention.BINARY)
+internal annotation class DelicateBmsRepositoryTestApi
+
 @OptIn(ExperimentalUuidApi::class, ExperimentalTime::class)
 class KableBmsRepository private constructor(
     private val vehicleRepository: VehicleRepository,
@@ -188,6 +223,7 @@ class KableBmsRepository private constructor(
          * test dispatcher. Used by [KableBmsRepositoryDisconnectRaceTest] to
          * avoid the platform `ServiceController` expect/actual.
          */
+        @DelicateBmsRepositoryTestApi
         internal fun forTesting(
             vehicleRepository: VehicleRepository,
             serviceStart: () -> Unit,
