@@ -37,8 +37,25 @@ data class VescBmsTotals(
  * zeroes both (`ant_bms.c:657` sets `v_charge = 0.0f`; nothing ever writes
  * `hum`), which is byte-identical to a BMS genuinely reporting 0. **This
  * decoder cannot distinguish those two cases and does not pretend to** — it
- * reports the raw value and offers [vChargeOrNull] / [humidityPercentOrNull]
- * for callers that need a value safe to display.
+ * reports the raw value and offers [vChargeIfReporting] / [humidityIfSensed]
+ * beside it.
+ *
+ * ### Two kinds of `null` — do not confuse them
+ * This class returns `null` for two unrelated reasons, so the names are kept
+ * deliberately distinct:
+ * - **Not on the wire.** The nullable *fields* — [soc], [soh], [canId],
+ *   [totals], [pressure], [dataVersion], [status]. `null` is a statement about
+ *   the frame's length, and says nothing about any value.
+ * - **On the wire, but reading exactly zero, which means nothing is
+ *   reporting.** The `…IfReporting` / `…IfSensed` *accessors* —
+ *   [vChargeIfReporting], [humidityIfSensed]. `null` is a statement about the
+ *   value, and the bytes were always there. These are an inference, not wire
+ *   truth.
+ *
+ * **A UI must bind to [vChargeIfReporting] and [humidityIfSensed], never to
+ * [vCharge] or [humidityPercent].** The raw fields exist for callers that want
+ * the wire value and understand it is very often a placeholder; rendering them
+ * directly puts "0.0 V" and "0 %" on the Battery screen as if measured.
  *
  * Pinned against the gateway serialiser (`vesc_express/src/bms.c:298-360`) and
  * VESC Tool's parser (`commands.cpp:709-772`); see
@@ -49,8 +66,9 @@ data class VescBmsFrame(
     /** Pack voltage, V. */
     val vTot: Float,
     /**
-     * Charger voltage, V. **Zero does not mean "no charger" reliably** — an ANT
-     * battery behind the gateway hardcodes it to 0. Prefer [vChargeOrNull].
+     * Charger voltage, V, exactly as the frame carried it. **Zero does not mean
+     * "no charger" reliably** — an ANT battery behind the gateway hardcodes it
+     * to 0. A UI must bind to [vChargeIfReporting] instead.
      */
     val vCharge: Float,
     /** Pack current, A. **Positive means charging** (spec §10.4). */
@@ -58,11 +76,18 @@ data class VescBmsFrame(
     /** Pack current as measured by the BMS IC, A. Same sign convention as [iIn]. */
     val iInIc: Float,
     /**
-     * The BMS amp-hour counter, Ah. **Meaning is firmware-dependent**: a stock
-     * VESC BMS reports a cumulative, resettable coulomb count, whereas the
-     * user's head unit overwrites it with the pack's *remaining* capacity
-     * (`ant_bms.c:663`, `val->ah_cnt = remaining_ah`). Deliberately **not**
-     * mapped into [BmsData.charge] by [toBmsData] for that reason.
+     * The BMS amp-hour counter, Ah. **Meaning is firmware-dependent, and the
+     * two meanings map to different `BmsData` fields**:
+     * - a *stock* VESC BMS reports a cumulative, resettable coulomb count,
+     *   which belongs in [BmsData.cycleCapacityAh] ("cumulative Ah cycled");
+     * - the user's head unit overwrites it with the pack's **remaining**
+     *   capacity (`ant_bms.c:663`, `val->ah_cnt = remaining_ah`), which belongs
+     *   in [BmsData.charge].
+     *
+     * Nothing in the frame says which firmware produced it, and putting a
+     * lifetime total where a remaining charge is expected (or vice versa) is
+     * badly wrong in both directions — so [toBmsData] maps it to **neither**.
+     * A caller that knows which gateway it is talking to can map it itself.
      */
     val ahCnt: Float,
     /** The BMS watt-hour counter, Wh. Same firmware-dependent meaning as [ahCnt]. */
@@ -78,9 +103,9 @@ data class VescBmsFrame(
     /** Temperature at the humidity sensor, °C. */
     val tempHumSensorC: Float,
     /**
-     * Relative humidity, %. **Zero does not mean "dry"** — it is what a BMS
-     * with no humidity sensor, and every ANT battery, reports. See
-     * [humidityPercentOrNull].
+     * Relative humidity, %, exactly as the frame carried it. **Zero does not
+     * mean "dry"** — it is what a BMS with no humidity sensor, and every ANT
+     * battery, reports. A UI must bind to [humidityIfSensed] instead.
      */
     val humidityPercent: Float,
     /** Highest cell temperature, °C — derived by the BMS from [temperatures]. */
@@ -121,21 +146,30 @@ data class VescBmsFrame(
     val status: String?
 ) {
     /**
-     * [vCharge] unless it is exactly zero. Zero is what an ANT battery, and any
-     * BMS with no charger attached, reports — so it is never a charger voltage
-     * worth showing. This *also* swallows the (physically uninteresting) case
-     * of a charger genuinely sitting at 0.000000 V; that trade is deliberate,
-     * because the alternative is presenting "0.0 V" as a live measurement.
+     * [vCharge] unless it is exactly zero, in which case **null means "nothing
+     * is reporting a charger voltage"** — not "the field was absent". The bytes
+     * are always on the wire; this is an inference from the value.
+     *
+     * Zero is what an ANT battery behind the gateway hardcodes, and what any
+     * BMS with no charger attached reports, so it is never a charger voltage
+     * worth showing. The inference *also* swallows a charger genuinely sitting
+     * at 0.000000 V; that trade is deliberate, because the alternative is
+     * presenting "0.0 V" on the Battery screen as a live measurement.
+     *
+     * Named to be unmistakable from the wire-presence nulls ([vCharge] is never
+     * absent) — see the class KDoc's "two kinds of `null`".
      */
-    val vChargeOrNull: Float? get() = vCharge.takeIf { it != 0f }
+    val vChargeIfReporting: Float? get() = vCharge.takeIf { it != 0f }
 
     /**
-     * [humidityPercent] unless it is exactly zero, which is what a BMS with no
-     * humidity sensor — and every ANT battery — reports. Same deliberate trade
-     * as [vChargeOrNull]: a true 0 % RH is not physically reachable indoors,
-     * so nothing real is lost.
+     * [humidityPercent] unless it is exactly zero, in which case **null means
+     * "no humidity sensor is reporting"** — not "the field was absent". Zero is
+     * what a BMS without the sensor, and every ANT battery, reports.
+     *
+     * Same deliberate inference as [vChargeIfReporting], and the same caveat: a
+     * true 0 % RH is not physically reachable, so nothing real is lost.
      */
-    val humidityPercentOrNull: Float? get() = humidityPercent.takeIf { it != 0f }
+    val humidityIfSensed: Float? get() = humidityPercent.takeIf { it != 0f }
 
     /**
      * Project the frame onto the shared battery model.
@@ -241,13 +275,23 @@ object VescBmsValues {
      * The **optional tail** is a fixed sequence of all-or-nothing blocks —
      * `soc`, `soh`, `can_id`, the 16-byte totals, `pressure`, `data_version`,
      * `status` — each taken only if it fits in what is left, exactly the gating
-     * VESC Tool applies (`commands.cpp:738-770`). Reading stops at the first
-     * block that does not fit: because the order is fixed, bytes too few for a
-     * block cannot belong to a later one. (VESC Tool's literal code would fall
-     * through and read, say, `pressure` out of a half-delivered totals block;
-     * that only differs on frames no firmware emits, and silently inventing a
-     * plausible reading out of leftover bytes is exactly what this decoder
-     * exists to avoid.)
+     * VESC Tool applies (`commands.cpp:738-770`). **Reading stops at the first
+     * block that does not fit.**
+     *
+     * VESC Tool's literal code does not stop: with 15 of the 16 totals bytes
+     * delivered its `>= 16` gate fails and the very next `>= 2` gate succeeds,
+     * so it reads `pressure` out of the half-delivered totals block and reports
+     * `0x4148 × 10 = 167,120` as a pressure reading. Stopping is safe, and not
+     * merely "safe on the frames we have seen":
+     *
+     * VESC's tail is **positional, with no presence bitmap**, so the format can
+     * only ever grow by appending and a conforming frame can only ever be
+     * *prefix*-truncated. A frame that contains `pressure` therefore
+     * necessarily contains all 16 totals bytes ahead of it. Stop-at-first-gap
+     * consequently cannot drop a field that any conforming firmware — present
+     * **or future** — could send: the two decoders provably agree on the entire
+     * space of well-formed frames, and differ only on prefix-invalid input,
+     * where VESC Tool manufactures a reading out of unrelated float bytes.
      */
     fun decode(payload: ByteArray): VescBmsFrame? {
         val r = VescReader(payload)

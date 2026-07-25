@@ -128,6 +128,10 @@ class VescBmsValuesTest {
      * builder and the offset table ever disagree, the truncation tests would
      * silently cut at the wrong place and still "pass"; this makes that a
      * failure instead.
+     *
+     * **This test never calls the decoder** — it is evidence about the test
+     * fixture, not about `VescBmsValues`, and should not be counted as decoder
+     * coverage. It earns its place by protecting the tests that *are*.
      */
     @Test fun hand_counted_frame_layout_matches_the_field_table() {
         assertEquals(70, frame().size, "1 + 24 + 1 + 4 + 2 + 1 + 2 + 8 + 4 + 1 + 16 + 2 + 1 + 3")
@@ -281,7 +285,14 @@ class VescBmsValuesTest {
      * Fifteen of the sixteen totals bytes present. The block is all-or-nothing,
      * so `totals` is absent — **and the leftover 15 bytes must not be re-read
      * as the next field**. A decoder that falls through to the `>= 2` pressure
-     * gate would happily report `0x4148 x 10 = 166,480` as a pressure reading.
+     * gate (as VESC Tool's literal code does) would report
+     * `0x4148 x 10 = 167,120` as a pressure reading.
+     *
+     * Safe in general, not just here: the tail is positional with no presence
+     * bitmap, so it is append-only and a conforming frame can only be
+     * prefix-truncated — anything carrying `pressure` necessarily carries all
+     * 16 totals bytes before it. Stopping can therefore never drop a field a
+     * conforming firmware could send.
      */
     @Test fun a_partial_totals_block_yields_no_totals_and_no_pressure() {
         val f = assertNotNull(VescBmsValues.decode(frame().copyOf(endOfCanId + 15)))
@@ -394,13 +405,17 @@ class VescBmsValuesTest {
      * BMS reporting a genuine 0. The decoder therefore reports the raw value
      * and offers the documented "exactly zero means nothing is reporting"
      * reading separately, so a screen has something safe to bind to.
+     *
+     * These accessors' `null` means *"the value says nothing is reporting"*,
+     * **not** *"the field was absent"* — the opposite of every nullable field
+     * on the frame, which is why they are not named `…OrNull`.
      */
     @Test fun mandatory_zero_fields_expose_both_the_raw_value_and_a_safe_reading() {
         val f = assertNotNull(VescBmsValues.decode(frame(vChargeRaw = 0, humidityRaw = 0)))
         assertEquals(0f, f.vCharge)
         assertEquals(0f, f.humidityPercent)
-        assertNull(f.vChargeOrNull, "0 V charger voltage must not surface as a reading")
-        assertNull(f.humidityPercentOrNull, "0 % humidity must not surface as a reading")
+        assertNull(f.vChargeIfReporting, "0 V charger voltage must not surface as a reading")
+        assertNull(f.humidityIfSensed, "0 % humidity must not surface as a reading")
     }
 
     /** A BMS that really does report a charger and a humidity sensor. */
@@ -408,8 +423,8 @@ class VescBmsValuesTest {
         val f = assertNotNull(
             VescBmsValues.decode(frame(vChargeRaw = 84_000_000, humidityRaw = 4_150))
         )
-        assertEquals(84.0f, assertNotNull(f.vChargeOrNull), 0.001f)
-        assertEquals(41.5f, assertNotNull(f.humidityPercentOrNull), 0.001f)
+        assertEquals(84.0f, assertNotNull(f.vChargeIfReporting), 0.001f)
+        assertEquals(41.5f, assertNotNull(f.humidityIfSensed), 0.001f)
     }
 
     // =====================================================================
@@ -432,8 +447,8 @@ class VescBmsValuesTest {
      *  - 0x44FA0000: e=137, sig_i=0x7A0000=7995392 -> sig=0.9765625,
      *                exp=11 -> * 2048 = 2000.0
      *
-     * A fixed-divisor reading (the trap: `d32(1e3)`) would report 0x41480000 as
-     * 1,095,761.9 instead of 12.5.
+     * A fixed-divisor reading (the trap: `d32(1e3)`) would report 0x41480000 —
+     * 1,095,237,632 as a plain int — as 1,095,237.6 instead of 12.5.
      */
     @Test fun float32_auto_words_decode_to_their_hand_derived_values() {
         assertEquals(12.5f, VescReader(word(0x4148_0000L)).f32auto(), 0.0001f)

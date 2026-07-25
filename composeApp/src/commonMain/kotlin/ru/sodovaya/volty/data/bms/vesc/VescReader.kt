@@ -32,9 +32,15 @@ class VescReader(private val p: ByteArray, private var i: Int = 0) {
      * That happens to be bit-identical to IEEE-754 binary32 for every value the
      * serialiser can produce (`(sig_i/2^24 + 0.5)·2^(e-126) == 1.f·2^(e-127)`),
      * but this is deliberately **not** implemented as `Float.fromBits`: the two
-     * disagree on words the encoder never emits — `e == 0` with a non-zero
-     * significand reads as `sig × 2^-126` here and as an IEEE subnormal there,
-     * and `e == 255` reads as a finite number here and as infinity/NaN there.
+     * disagree on words the encoder never emits.
+     * - `e == 0` with a non-zero significand reads as `sig × 2^-126` here
+     *   (≈5.88e-39 for word `0x00000001`) and as an IEEE subnormal there
+     *   (2^-149, ≈1.4e-45) — six orders apart.
+     * - `e == 255` overflows either way, since `sig × 2^129 ≥ 2^128 > Float.MAX`,
+     *   so this returns ±Infinity; `Float.fromBits` returns Infinity only when
+     *   the significand is zero and NaN otherwise. The divergence there is
+     *   Infinity-vs-NaN, not finite-vs-infinite.
+     *
      * Following the firmware keeps a corrupt word decoding the way every other
      * VESC client decodes it.
      */
