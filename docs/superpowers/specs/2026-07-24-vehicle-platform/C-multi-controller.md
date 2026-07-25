@@ -247,3 +247,78 @@ as much: *"skips empty STATUS_1..5, CHG/DIS totals"*.
 This is the user's own battery path, so it is the case that matters: the decoder
 must distinguish "field absent" from "field is zero", or the Battery screen will
 report a real 0.0 V charge voltage and 0% humidity.
+
+---
+
+## 11. Debt carried out of Part C (recorded at merge, 2026-07-26)
+
+Merged at `65c62cb`, 822 tests. Every open question in §9 was pinned from the
+gateway firmware before implementation (§10). What follows is what the reviews
+found and we consciously did **not** fix — read it before touching this area.
+
+### 11.1 There is no CI, and three parts now depend on one
+`B-vesc-dashboard.md §12.1`, `G1`'s register and this part all say "CI must run
+`verifyCommonMainVoltyDatabaseMigration` before shipping". **That instruction is
+currently unexecutable**: the repo has no `.github/` and no CI configuration of
+any kind. Worse, even once the local `NativeDB._open_utf8` failure is fixed, the
+task has nothing to migrate *from* — `composeApp/build.gradle.kts` sets no
+`schemaOutputDirectory` and no `.db` snapshots are committed.
+
+The schema is now at **v6** with five migrations. They are checked by hand-written
+JDBC chain tests, which catch a missing or misnamed column but **cannot** catch
+`NOT NULL`-ness, `DEFAULT`s or declared-type drift, and whose frozen base DDL is
+hand-copied rather than produced by running the migrations.
+
+**Prerequisite, not a follow-up:** wire `schemaOutputDirectory`, commit the
+snapshots, stand up any CI, then run the verifier.
+
+### 11.2 The oversized-plan guard fails in the direction it was meant to prevent
+`VescGatewayProtocol` throws at construction when a plan exceeds ~10 sources,
+because the serialised poll cycle could not meet the watchdog budget. On the
+**reconnect** path `connectLinkAttempt` catches that into a FAILED link whose loop
+retries a construction that can never succeed — "reconnect forever", exactly the
+outcome the guard exists to prevent. Unreachable today (nothing can author an
+11-source plan; `VehicleEditComponent` never writes a `canId`), and it surfaces as
+`ConnectionState.Failed` with an actionable message rather than a crash.
+Prefer clamping `replyTimeoutMs` to fit the budget, or moving the check to
+`planLinks`/vehicle-save so it fails at authoring rather than on the road.
+`KableBmsRepository.kt:1923`'s "constructing it this early cannot fail" is now false.
+
+### 11.3 Timing constants are reasoned, never measured
+Every number in the poll loop — reply timeout, pacing, the silence budget, the
+handoff hold-down — was derived from the firmware's behaviour, not from a capture.
+`WATCHDOG_SILENCE_BUDGET_MS` also duplicates `BleConfig.staleSampleMs` (equal
+today) with nothing pinning them together; a one-line `assertEquals` in commonTest
+would remove the drift risk.
+
+### 11.4 Smaller, all confirmed by review
+- **`ah_cnt` is unmapped on purpose.** nyxdash means *remaining* Ah, stock VESC
+  means *cumulative*, and nothing on the wire identifies the firmware (§10.5
+  zeroes every field that could). `BmsData.cycleCapacityAh` is the stock-VESC
+  destination if a discriminator ever appears. Deciding a vehicle's head-unit
+  firmware is composer work (G2).
+- **No derived battery on a gateway link** — deriving from one uBox would halve
+  the current. A head-unit vehicle with no BMS shows no battery until G2.
+- **The "yield BMS to head unit" toggle has no UI.** It is persisted and honoured,
+  but `VehicleEditScreen.onSave` would collapse the vehicle's two packs and
+  destroy the alias group, so exposing it there would break the configuration
+  underneath it. G2 owns the screen that can.
+- **`parsePingCan` has no production caller.** CAN discovery is G2's composer
+  feature; the codec is spec'd (§2) and tested, waiting for it.
+- **`VescBmsValues.BMS_TYPE` has no reader** — remove it, or reintroduce it with
+  the consumer that needs it.
+- **Flapping is damped but the damper rode in on a merge-fix wave** without its own
+  review. A 60 s hold-down; failure direction is safe (both links up = battery
+  present) and it clears on plan reset.
+- **`≥10` consecutive silent sources × 500 ms would exceed `staleSampleMs`** with
+  no guard. Fine at 4; unguarded as plans grow.
+- **Vehicle Edit describes one pack and one controller** for a mixed vehicle (G2).
+- **"Device not found" is hardcoded English** in an otherwise localized UI.
+
+### 11.5 What only the real head unit can settle
+1. the forwarded-reply timing budget against a live capture;
+2. whether `PING_CAN`'s ~2.55 s block disturbs the poll loop in practice;
+3. which fields an ANT behind the gateway actually populates;
+4. release/re-raise and flapping behaviour on real radios;
+5. that a live connect really selects `VescGatewayProtocol` with real data;
+6. `ah_cnt`'s meaning on the actual firmware.
