@@ -174,7 +174,7 @@
     <string name="settings_send_logs">Send app logs</string>
     <string name="settings_send_logs_subtitle">Share the app's logcat for troubleshooting</string>
     <string name="settings_delete">Delete</string>
-    <string name="settings_delete_title">Delete \"%1$s\"?</string>
+    <string name="settings_delete_title">Delete “%1$s”?</string>
     <string name="settings_delete_text">This will remove the saved profile.</string>
     <string name="action_cancel">Cancel</string>
 
