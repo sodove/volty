@@ -569,7 +569,7 @@ class KableBmsRepository private constructor(
                     _activeVehicleData.value = _activeVehicleData.value.copy(
                         packs = demoBattery.packs,
                         aggregate = demoBattery.aggregate,
-                        topology = PackTopology.PARALLEL,
+                        topology = demoBattery.topology,
                         isPartial = demoBattery.isPartial,
                         controllers = listOf(
                             ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
@@ -1226,6 +1226,14 @@ class KableBmsRepository private constructor(
                 // motion must not bleed into the new vehicle's graph / flow.
                 motionRingBuffer.clear()
                 _activeMotion.value = ControllerData()
+                // Same reasoning on the vehicle-level snapshot: without this,
+                // a stale demo (or previous real vehicle's) packs/aggregate
+                // survive into the new connection and RideDashboardComponent's
+                // BATTERY tile shows the WRONG vehicle's SoC/voltage until the
+                // new vehicle's first sample overwrites it. Reachable via the
+                // Picker's "+ Add battery" from a live demo session, which
+                // connects without disconnecting first.
+                _activeVehicleData.value = VehicleData()
             }
             // Initial state, written directly: the links are not installed yet,
             // so the fold cannot own this first transition. From installation

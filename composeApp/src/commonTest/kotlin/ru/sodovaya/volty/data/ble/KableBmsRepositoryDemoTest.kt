@@ -1,9 +1,12 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
+import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.isDemo
+import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -11,6 +14,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.AfterTest
@@ -20,6 +24,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 /**
  * Verifies the "Try demo" lifecycle on [KableBmsRepository]: connectDemo brings
@@ -107,5 +112,55 @@ class KableBmsRepositoryDemoTest {
         assertNull(repo.activeVehicle.value, "active vehicle cleared after disconnect")
         assertFalse(repo.activeData.value.isConnected, "activeData reset after disconnect")
         assertEquals(1, stops.size, "service stop invoked once")
+    }
+
+    /**
+     * Review regression (Task 14, round 1): [PickerComponent]'s "+ Add battery"
+     * is reachable from a live demo session and connects a real vehicle WITHOUT
+     * calling [KableBmsRepository.disconnect] first (unlike
+     * `DashboardComponent.onSwitchVehicle`). Before this fix, `doConnect`'s
+     * address-transition reset cleared [KableBmsRepository.activeData] /
+     * [KableBmsRepository.activeMotion] but left [KableBmsRepository.activeVehicleData]
+     * holding the demo's `packs`/`aggregate` — exactly what
+     * `RideDashboardComponent` reads for the BATTERY tile — so a plausible but
+     * WRONG SoC/voltage from the demo would show on the real vehicle until its
+     * first sample arrived.
+     */
+    @Test
+    fun `connecting a real vehicle after demo does not leak the demo's battery snapshot`() = runTest {
+        val repo = newRepo(this).also { underTest = it }
+
+        // Demo populates activeVehicleData.packs/aggregate (Task 14's own fix).
+        repo.connectDemo()
+        advanceTimeBy(DemoBmsSimulator.TICK_INTERVAL_MS + 50L)
+        runCurrent()
+        val demoAggregate = repo.activeVehicleData.value.aggregate
+        assertTrue(demoAggregate.isConnected, "demo should have populated the aggregate before the real connect")
+        assertTrue(demoAggregate.soc > 0f, "demo SoC should be nonzero so a leak would be visible")
+
+        // Mirrors PickerComponent.onConnectKnown/onConnectWithType: connect a
+        // REAL vehicle at a DIFFERENT address with no preceding disconnect().
+        // No real BLE stack exists in a unit test, so the connect itself fails
+        // fast (see KableBmsRepositoryVescTest / KableBmsRepositoryDisconnectRaceTest
+        // for the same fail-fast pattern) — but doConnect's address-transition
+        // reset runs before that failure, which is exactly what this proves.
+        val real = singlePackVehicle(
+            id = "v-real",
+            name = "Real",
+            iconKey = "generic",
+            bmsType = BmsType.JK_BMS,
+            bmsAddress = "AA:BB:CC:DD:EE:FF",
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        val result = repo.connect(real)
+        advanceUntilIdle()
+        assertTrue(result.isFailure, "no BLE in a unit test — the link cannot come up")
+
+        val vd = repo.activeVehicleData.value
+        assertTrue(vd.packs.isEmpty(), "stale demo packs must not leak into the real vehicle's snapshot")
+        assertFalse(vd.aggregate.isConnected, "stale demo aggregate must not leak into the real vehicle's Battery tile")
+        assertEquals(0f, vd.aggregate.soc, 0.001f, "stale demo SoC must not leak")
+        assertFalse(vd.isPartial)
     }
 }
