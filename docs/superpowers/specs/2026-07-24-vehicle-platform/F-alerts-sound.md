@@ -121,8 +121,9 @@ for them by vehicle type is a guess dressed as a default.
   exists. Kelly reports no duty (`H §7`), so `DUTY_*` cannot arm on it. A vehicle
   with no motion source keeps battery alerts only. A controller with no motor
   temperature sensor cannot raise `MOTOR_TEMP_HIGH`. This gating stays exactly as
-  §3 describes it and is **not** negotiable by settings — an unavailable alert is
-  hidden, not merely defaulted off.
+  §3 describes it and is **not** negotiable by settings — an unavailable alert
+  cannot be switched on at all. It is still *shown*, greyed with its reason (see
+  the UI bullets below); what is fixed is that no setting can arm it.
 - **Preference — entirely the rider's.** Every *available* alert is offered on
   every vehicle, each independently switchable, each with its own editable
   threshold. No alert is withheld because of what kind of vehicle the app thinks
