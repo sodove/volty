@@ -232,3 +232,71 @@ Still deferred: Graph placement (a button off Ride/Battery, not a top tab —
 confirm interaction at build); `COMM_GET_MCCONF` auto-read of `MotorConfig`
 (nice-to-have; `MotorConfig` is only needed for the GET_VALUES DERIVED fallback,
 may defer to G).
+
+---
+
+## 12. Debt carried out of B1/B2 (recorded at merge, 2026-07-25)
+
+Part B shipped in two branches: **B1** (VESC decode + the Clean M3 dashboard,
+merged `147958d`) and **B2** (the Classic eight-dial renderer, merged
+`5095440`). Both passed a whole-branch review. What follows is what those
+reviews found and we consciously did **not** fix — read this before touching
+the Ride dashboard, and do not re-derive it.
+
+### 12.1 Must happen before the migration ships
+- **`:composeApp:verifyCommonMainVoltyDatabaseMigration` has never run
+  green.** It fails locally with `org.sqlite.core.NativeDB._open_utf8` — an
+  environment defect, confirmed by running it on an unmodified checkout. The
+  **v4→v5** migration (`4.sqm`, `dashboardStyle` + `secondaryGauge`) was
+  therefore verified only by a manual schema diff plus a hand-written v2→v5
+  JDBC chain test. **Re-run this task on CI before shipping.** If it fails
+  there, `.sq` and `.sqm` disagree and fresh installs will diverge from
+  upgrades.
+
+### 12.2 Untestable in this repo today
+- **The Classic emphasis wiring is not covered.** `ClassicEmphasis`
+  (`SecondaryGauge → ClusterSlot`) is tested, but deleting the
+  `emphasized = spec.slot == emphasizedSlot` line in `ClassicRideCluster`
+  leaves the whole suite green — i.e. the exact regression §7.2 guards
+  against (the cluster ignoring `state.secondary`) is undetected. There is
+  **no Compose UI-test dependency** in the project; adding one for a single
+  line was judged not worth it at a merge gate. Whoever adds Compose UI
+  tests first should claim this.
+- **`DialGeometry.centreScale`'s acceptance test estimates glyph metrics.**
+  Real text measurement needs Compose, so the test derives its inputs from
+  the committed font fractions plus two documented estimate constants
+  (`EstimatedAvgGlyphWidthEm`, `EstimatedLineHeightEm`) and asserts a
+  *range* (0.75–0.99), not a pinned decimal. It proves "no collision, shrink
+  stays far from its 0.5 floor" — it does not prove an exact number.
+
+### 12.3 Known cosmetic compromises (safe to ship, worth a polish pass)
+- **Imperial hero ticks are round but oddly stepped.** The display-unit max
+  snaps up to a multiple of 5, so a 70 km/h floor becomes 45 mph → labels
+  step by 9 (0, 9, 18, 27, 36, 45). Integer and evenly spaced, but no real
+  speedometer steps by 9. Snapping to 10 would read better at the cost of
+  dial arc. Metric is unaffected (already round).
+- **Russian dial labels engage the shrink guard.** `ТЕМП. МОТОРА` (12 chars)
+  on the small corner dial puts `centreScale` at ≈0.92 on a 360dp screen —
+  visually fine (6%), but the "no shrink needed by construction" property
+  from B2 Task 2 no longer strictly holds for RU. Shortening the dial-face
+  labels (`Мотор`, `ESC`) would restore it and arguably suits skeuomorphic
+  faces better; deliberately not done at the merge gate.
+- **`CONSUMPTION` means slightly different things per style**: instant with
+  a session fallback on Classic, instant-only on Clean. Pick one in F.
+- Hoisting the Graph link out of the style switch made Clean ~26dp taller.
+
+### 12.4 Latent, not currently reachable
+- **`ClusterLayout` uses `placeRelative`**, so the Classic cluster mirrors
+  under RTL — dial positions would flip. No RTL locale ships yet.
+- **`DialGauge` reads a one-frame-lagged `radius`** (via `onSizeChanged`)
+  while `center` reads live `size`. Inert in a fixed cluster; would show as
+  a transient stale frame during continuous resize (desktop window).
+- **Clean's hero ring has no `speedKnown` guard**, unlike Classic. Pre-dates
+  B2 and belongs to whoever revisits the Clean hero.
+
+### 12.5 Owed to Part G (already noted in `G-vehicle-composer.md`)
+The `Vehicle.bmsType` / `bmsAddress` / `cellCount` shims still call
+`packs.first()`. Four call sites were fixed in B1; the rest — including
+`PickerComponent.kt` and `ScanningComponent.kt`, which take down a whole
+screen rather than a single tap — must be fixed in one pass together with
+the controller-vehicle creation flow, per §6.1.
