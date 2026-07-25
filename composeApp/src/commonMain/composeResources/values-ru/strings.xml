@@ -187,6 +187,8 @@
     <string name="vehicle_field_icon">Иконка</string>
     <string name="vehicle_field_bms_type">Тип BMS</string>
     <string name="vehicle_field_bms_address">Адрес BMS</string>
+    <string name="vehicle_field_controller_type">Тип контроллера</string>
+    <string name="vehicle_field_controller_address">Адрес контроллера</string>
     <string name="vehicle_field_chemistry">Химия</string>
     <string name="vehicle_field_cell_count">Кол-во ячеек (опц.)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>

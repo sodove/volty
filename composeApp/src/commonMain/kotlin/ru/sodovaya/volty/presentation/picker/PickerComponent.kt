@@ -5,8 +5,10 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.model.controllerVehicle
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.primaryController
@@ -15,6 +17,7 @@ import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -178,15 +181,92 @@ class DefaultPickerComponent(
     override fun onConnectWithType(device: DiscoveredDevice, choice: SourceChoice) {
         if (_state.value.connecting != null) return
         when (choice) {
-            // Building and connecting a controller vehicle is not this component's
-            // job yet: controllerVehicle(...) (Task 4) and the creation/connect/
-            // rollback sequence for it (Task 5) don't exist. Until they land, a
-            // Controller pick is an explicit, inert no-op — it just closes the
-            // sheet, same as dismissing it, and starts nothing.
-            is SourceChoice.Controller -> _state.update { it.copy(typePickerFor = null) }
+            is SourceChoice.Controller -> connectWithControllerType(device, choice.type)
             is SourceChoice.Battery -> connectWithBmsType(device, choice.type)
         }
     }
+
+    /**
+     * The controller twin of [connectWithBmsType]: build → upsert → connect →
+     * edit-on-success / delete-on-failure, the same four steps in the same
+     * order, so a controller vehicle is created and rolled back exactly like a
+     * battery one and there is only one creation sequence to reason about.
+     *
+     * Two deliberate differences from the battery branch, both forced:
+     *
+     * 1. No `mode == "add"` fork. [BmsRepository.connectGuest] takes a
+     *    [BmsType] and `buildGuestVehicle` always produces a one-PACK guest, so
+     *    there is no unpersisted way to talk to a controller at all. Rather
+     *    than leave the default ("cold") picker — the app's own entry point —
+     *    with a dead tap, a Controller pick always creates. That is also the
+     *    outcome the user asked for: they named the device's type, and the very
+     *    next screen is its edit form.
+     * 2. The connect goes through [connectController], which refuses a
+     *    controller kind with no protocol behind it and shields the rollback
+     *    from an escaping throw.
+     */
+    private fun connectWithControllerType(device: DiscoveredDevice, type: ControllerType) {
+        scope.launch {
+            _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
+            scanJob?.cancel()
+            val v = controllerVehicle(
+                id = newVehicleId(),
+                // Named after the controller kind, not "BMS", when the device
+                // advertises no name of its own.
+                name = device.name ?: "${type.label} ${device.address.takeLast(4)}",
+                iconKey = "generic",
+                controllerType = type,
+                address = device.address,
+                chemistry = Chemistry.LI_ION_NMC,
+                createdAt = Clock.System.now()
+            )
+            vehicleRepository.upsert(v)
+            val result = connectController(v, type)
+            if (result.isSuccess) onConnectedForEdit(v.id)
+            else {
+                // Same rollback as the battery branch: a connect that never
+                // came up must not leave a row behind in the vehicle list.
+                vehicleRepository.delete(v.id)
+                _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
+            }
+        }
+    }
+
+    /**
+     * [BmsRepository.connect] for a controller vehicle, made total.
+     *
+     * The gate runs AFTER the upsert on purpose: the unsupported case then
+     * travels the identical persist → fail → roll back path an unreachable
+     * device does, so there is one failure shape, one rollback, and no branch
+     * that is only exercised when a radio is present.
+     *
+     * The catch is the other half. `KableBmsRepository.doConnect` wraps its own
+     * body, but the caller-side preamble in `connect(vehicle)` does not, and a
+     * controller vehicle is a shape that path has never carried before. An
+     * escape here would leave the picker with `connecting` stuck and an orphan
+     * vehicle row — so it is caught where the rollback can still run.
+     * [CancellationException] is rethrown rather than swallowed: it means this
+     * component's scope is going away, not that the connect failed.
+     *
+     * Deliberately NOT applied to [connectWithBmsType] — that path is unchanged
+     * by this task, down to which throwables it lets through.
+     */
+    private suspend fun connectController(vehicle: Vehicle, type: ControllerType): Result<Unit> {
+        unsupportedControllerReason(type)?.let {
+            return Result.failure(UnsupportedOperationException(it))
+        }
+        return try {
+            bmsRepository.connect(vehicle)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /** The id every vehicle this picker creates gets — one expression, two callers. */
+    private fun newVehicleId(): String =
+        "v-" + kotlin.random.Random.nextLong().toString(16).removePrefix("-")
 
     private fun connectWithBmsType(device: DiscoveredDevice, type: BmsType) {
         scope.launch {
@@ -194,7 +274,7 @@ class DefaultPickerComponent(
             scanJob?.cancel()
             if (mode == "add") {
                 val v = singlePackVehicle(
-                    id = "v-" + kotlin.random.Random.nextLong().toString(16).removePrefix("-"),
+                    id = newVehicleId(),
                     name = device.name ?: "BMS ${device.address.takeLast(4)}",
                     iconKey = "generic",
                     bmsType = type,

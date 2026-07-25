@@ -3,7 +3,6 @@ package ru.sodovaya.volty.domain.model
 import ru.sodovaya.volty.data.ble.planLinks
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime

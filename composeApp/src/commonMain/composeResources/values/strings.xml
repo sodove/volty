@@ -187,6 +187,8 @@
     <string name="vehicle_field_icon">Icon</string>
     <string name="vehicle_field_bms_type">BMS type</string>
     <string name="vehicle_field_bms_address">BMS address</string>
+    <string name="vehicle_field_controller_type">Controller type</string>
+    <string name="vehicle_field_controller_address">Controller address</string>
     <string name="vehicle_field_chemistry">Chemistry</string>
     <string name="vehicle_field_cell_count">Cell count (optional)</string>
     <string name="vehicle_field_averaging_window">Averaging window</string>

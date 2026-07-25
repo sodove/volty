@@ -42,7 +42,11 @@ import kotlin.time.Instant
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class PickerComponentTest {
 
-    private class FakeBmsRepo(private val scan: List<DiscoveredDevice>) : BmsRepository {
+    private class FakeBmsRepo(
+        private val scan: List<DiscoveredDevice>,
+        /** What [connect] answers — a failure stands in for an unreachable device. */
+        private val connectResult: Result<Unit> = Result.success(Unit)
+    ) : BmsRepository {
         val guestConnects = mutableListOf<Pair<String, BmsType>>()
         val vehicleConnects = mutableListOf<Vehicle>()
         override val activeVehicleData = MutableStateFlow(VehicleData())
@@ -51,7 +55,7 @@ class PickerComponentTest {
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         override fun scanAll(): Flow<DiscoveredDevice> = scan.asFlow()
-        override suspend fun connect(vehicle: Vehicle): Result<Unit> { vehicleConnects += vehicle; return Result.success(Unit) }
+        override suspend fun connect(vehicle: Vehicle): Result<Unit> { vehicleConnects += vehicle; return connectResult }
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> { guestConnects += address to type; return Result.success(Unit) }
         override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
@@ -61,13 +65,23 @@ class PickerComponentTest {
         override suspend fun onAppResumed() {}
     }
 
+    /**
+     * Keeps a real store, not just a call log: "the connect rolled back" has to
+     * be asserted as *the repository holds no vehicle*, which a `deletes`
+     * counter cannot tell apart from a delete of the wrong id.
+     */
     private class FakeVehicleRepo(private val saved: List<Vehicle>) : VehicleRepository {
+        private val store = saved.associateBy { it.id }.toMutableMap()
         val upserts = mutableListOf<Vehicle>()
         val deletes = mutableListOf<String>()
+
+        /** Everything the store holds right now — an orphan row shows up here. */
+        val stored: List<Vehicle> get() = store.values.toList()
+
         override val vehicles: Flow<List<Vehicle>> = flowOf(saved)
-        override suspend fun get(id: String): Vehicle? = saved.firstOrNull { it.id == id }
-        override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle }
-        override suspend fun delete(id: String) { deletes += id }
+        override suspend fun get(id: String): Vehicle? = store[id]
+        override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle; store[vehicle.id] = vehicle }
+        override suspend fun delete(id: String) { deletes += id; store.remove(id) }
         override suspend fun touch(id: String) {}
     }
 
@@ -106,6 +120,8 @@ class PickerComponentTest {
         saved: List<Vehicle> = emptyList(),
         bmsRepo: FakeBmsRepo = FakeBmsRepo(scan),
         vehicleRepo: FakeVehicleRepo = FakeVehicleRepo(saved),
+        /** Vehicle ids the component routed to the edit form. */
+        editRoutes: MutableList<String> = mutableListOf(),
     ): Pair<DefaultPickerComponent, FakeBmsRepo> {
         val ctx = DefaultComponentContext(LifecycleRegistry())
         val c = DefaultPickerComponent(
@@ -114,7 +130,7 @@ class PickerComponentTest {
             bmsRepository = bmsRepo,
             vehicleRepository = vehicleRepo,
             onConnectedKnown = {},
-            onConnectedForEdit = {},
+            onConnectedForEdit = { editRoutes += it },
             onConnectedGuestNoSave = {},
             onAddNewBatteryRequested = {},
             onDemoConnected = {},
@@ -216,22 +232,187 @@ class PickerComponentTest {
         assertEquals(null, opened?.let(::preselectedChoice))
     }
 
+    // ----- G1 Task 5: a Controller pick actually creates and connects -----
+
+    /**
+     * The headline of the whole part: the tap that used to close the sheet and
+     * do nothing now produces a persisted, connected, controller-only vehicle
+     * and hands the user to its edit form. Every assertion here is one the
+     * inert placeholder failed.
+     */
     @Test
-    fun `onConnectWithType with a Controller choice is an explicit inert no-op (Task 5 wires the connect path)`() = runTest {
+    fun `picking a controller creates a zero-pack vehicle, connects it and routes to its edit form`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val d = device("CTRL:VESC", type = null, controllerType = ControllerType.VESC)
         val vehicleRepo = FakeVehicleRepo(emptyList())
-        val (c, bmsRepo) = component(mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo)
+        val edits = mutableListOf<String>()
+        val (c, bmsRepo) = component(
+            mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo, editRoutes = edits
+        )
         advanceUntilIdle()
         c.onDeviceTapped(d)
 
         c.onConnectWithType(d, SourceChoice.Controller(ControllerType.VESC))
         advanceUntilIdle()
 
-        assertEquals(null, c.state.value.typePickerFor, "the sheet still closes")
-        assertEquals(null, c.state.value.connecting, "but no connection attempt is made")
-        assertTrue(vehicleRepo.upserts.isEmpty(), "no vehicle is created — that is Task 4/5's job")
-        assertTrue(bmsRepo.vehicleConnects.isEmpty())
+        val created = vehicleRepo.upserts.single()
+        assertTrue(created.packs.isEmpty(), "a controller vehicle stores no pack")
+        val ctrl = created.controllers.single()
+        assertEquals(ControllerType.VESC, ctrl.controllerType)
+        assertEquals("CTRL:VESC", ctrl.address)
+        assertTrue(ctrl.providesDerivedBattery, "its controller is the only possible battery source")
+        assertEquals(null, ctrl.canId, "G1 never writes a CAN id")
+
+        // Connected as THE vehicle just built — not a guest, not a rebuilt copy.
+        assertEquals(listOf(created.id), bmsRepo.vehicleConnects.map { it.id })
+        assertEquals(listOf(created.id), edits, "and the user lands on its edit form")
+        assertEquals(listOf(created), vehicleRepo.stored, "the row survives a successful connect")
+        assertTrue(vehicleRepo.deletes.isEmpty())
+        assertEquals(null, c.state.value.typePickerFor)
+    }
+
+    /**
+     * `createProtocol` has no controller implementation for FarDriver (Part D),
+     * Kelly (Part E) or Begode (Part H) — see [unsupportedControllerReason] for
+     * why the last one is the dangerous case rather than the loud one. The pick
+     * is still offered, so it must land in the ordinary connection-failure
+     * state AND leave the store exactly as it found it.
+     */
+    @Test
+    fun `an unsupported controller pick fails cleanly and leaves no orphan vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("CTRL:FD", type = null, controllerType = ControllerType.FARDRIVER)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val edits = mutableListOf<String>()
+        val (c, bmsRepo) = component(
+            mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo, editRoutes = edits
+        )
+        advanceUntilIdle()
+
+        c.onConnectWithType(d, SourceChoice.Controller(ControllerType.FARDRIVER))
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals(null, s.connecting, "the spinner clears, exactly as on an unreachable device")
+        assertTrue(
+            s.error?.contains("FarDriver") == true,
+            "the error names the type the user picked, was: ${s.error}"
+        )
+        assertTrue(vehicleRepo.stored.isEmpty(), "the persisted vehicle is rolled back — no orphan row")
+        assertTrue(edits.isEmpty(), "and the user is not sent to an edit form for a vehicle that is gone")
+        assertTrue(bmsRepo.vehicleConnects.isEmpty(), "no radio work is attempted for a type with no protocol")
+    }
+
+    /**
+     * The rollback must also fire for a SUPPORTED controller that simply did
+     * not answer — otherwise the previous test would only be proving that the
+     * unsupported-type gate short-circuits, not that the failure path works.
+     */
+    @Test
+    fun `a supported controller that fails to connect is rolled back too`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("CTRL:VESC", type = null, controllerType = ControllerType.VESC)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val edits = mutableListOf<String>()
+        val (c, bmsRepo) = component(
+            mode = "add",
+            scan = listOf(d),
+            bmsRepo = FakeBmsRepo(listOf(d), Result.failure(IllegalStateException("out of range"))),
+            vehicleRepo = vehicleRepo,
+            editRoutes = edits
+        )
+        advanceUntilIdle()
+
+        c.onConnectWithType(d, SourceChoice.Controller(ControllerType.VESC))
+        advanceUntilIdle()
+
+        assertEquals(1, bmsRepo.vehicleConnects.size, "this one DID reach the repository")
+        assertEquals("out of range", c.state.value.error)
+        assertTrue(vehicleRepo.stored.isEmpty(), "and the row it wrote first is gone again")
+        assertTrue(edits.isEmpty())
+    }
+
+    /**
+     * Pins a decision rather than an accident: there is no guest path for a
+     * controller ([BmsRepository.connectGuest] takes a BmsType and every guest
+     * vehicle is pack-shaped), so a Controller pick creates in EVERY mode —
+     * including "cold", the app's own default entry point, where a
+     * mode-gated branch would have left the tap dead.
+     */
+    @Test
+    fun `a controller pick creates a vehicle even outside add mode`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("CTRL:VESC", type = null, controllerType = ControllerType.VESC)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val (c, bmsRepo) = component(mode = "cold", scan = listOf(d), vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+
+        c.onConnectWithType(d, SourceChoice.Controller(ControllerType.VESC))
+        advanceUntilIdle()
+
+        assertEquals(1, vehicleRepo.stored.size)
+        assertEquals(1, bmsRepo.vehicleConnects.size)
+        assertTrue(bmsRepo.guestConnects.isEmpty(), "and never through the pack-shaped guest path")
+    }
+
+    /**
+     * The other side of the same branch: picking a BmsType in "add" mode must
+     * still do precisely what it did before Task 5 touched this method.
+     */
+    @Test
+    fun `the add-mode BMS path still creates a single-pack vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("BATT:JK", type = BmsType.JK_BMS)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val edits = mutableListOf<String>()
+        val (c, bmsRepo) = component(
+            mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo, editRoutes = edits
+        )
+        advanceUntilIdle()
+
+        c.onConnectWithType(d, SourceChoice.Battery(BmsType.JK_BMS))
+        advanceUntilIdle()
+
+        val created = vehicleRepo.upserts.single()
+        assertEquals(BmsType.JK_BMS, created.packs.single().bmsType)
+        assertEquals("BATT:JK", created.packs.single().bmsAddress)
+        assertTrue(created.controllers.isEmpty())
+        assertEquals(listOf(created.id), bmsRepo.vehicleConnects.map { it.id })
+        assertEquals(listOf(created.id), edits)
+    }
+
+    @Test
+    fun `the add-mode BMS path still rolls back a failed connect`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val d = device("BATT:JK", type = BmsType.JK_BMS)
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val (c, _) = component(
+            mode = "add",
+            scan = listOf(d),
+            bmsRepo = FakeBmsRepo(listOf(d), Result.failure(IllegalStateException("out of range"))),
+            vehicleRepo = vehicleRepo
+        )
+        advanceUntilIdle()
+
+        c.onConnectWithType(d, SourceChoice.Battery(BmsType.JK_BMS))
+        advanceUntilIdle()
+
+        assertTrue(vehicleRepo.stored.isEmpty())
+        assertEquals("out of range", c.state.value.error)
+    }
+
+    @Test
+    fun `every unsupported controller type is named in its own refusal`() {
+        // A pure check on the gate itself, so the three types the picker offers
+        // but cannot connect are all covered without three component tests.
+        assertEquals(null, unsupportedControllerReason(ControllerType.VESC))
+        listOf(ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE).forEach { t ->
+            val reason = unsupportedControllerReason(t)
+            assertTrue(
+                reason != null && reason.contains(t.label),
+                "$t must be refused by name, was: $reason"
+            )
+        }
     }
 
     // ----- G1: the picker must see a controller vehicle, and must not die on one -----

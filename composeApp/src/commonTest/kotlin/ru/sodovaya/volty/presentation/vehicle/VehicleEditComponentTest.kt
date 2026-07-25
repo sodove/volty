@@ -209,6 +209,62 @@ class VehicleEditComponentTest {
         assertEquals("AA:BB", saved.packs.single().bmsAddress)
     }
 
+    // ----- G1 Task 5: the read-only source header must not fabricate a BMS -----
+
+    /**
+     * `initialize()` fed the header row `bmsTypeOrNull ?: JK_BMS` and
+     * `bmsAddressOrNull ?: ""`, so opening a controller-only vehicle's form
+     * showed "BMS type: JK BMS" and an em-dash address — a source the vehicle
+     * does not have, stated as fact. The header now reads [State.sourceVehicle]
+     * (through the shared `vehicleSourceLabel`) and [State.sourceAddress].
+     *
+     * Note the pack fields are asserted to STAY at their placeholders: they
+     * feed the pack `singlePackVehicle` builds in `onSave()`, and a
+     * controller's address must never leak into one.
+     */
+    @Test
+    fun `a controller-only vehicle's header describes its controller, not a phantom BMS`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(controllerOnlyVehicle())))
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals("AA:BB", s.sourceAddress, "the controller's own address, not an em-dash")
+        // What the row renders is vehicleSourceLabel(sourceVehicle, BMS) — a
+        // @Composable, so the reachable assertion is that the vehicle it reads
+        // is present and controller-only. (No Compose test harness exists; the
+        // rendering itself is uncovered.)
+        assertEquals(ControllerType.VESC, s.sourceVehicle?.controllers?.single()?.controllerType)
+        assertEquals(true, s.sourceVehicle?.packs?.isEmpty())
+        // Untouched: these are the pack builder's inputs, not the header's.
+        assertEquals(BmsType.JK_BMS, s.bmsType)
+        assertEquals("", s.bmsAddress)
+    }
+
+    /**
+     * The half that must not move. A vehicle with a pack — including one that
+     * ALSO has a controller at a different address — keeps naming its BMS and
+     * showing the PACK's address, because `primaryAddress` prefers the
+     * controller and is therefore only safe as the fallback.
+     */
+    @Test
+    fun `a vehicle with a pack still shows the pack's address, even beside a controller`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val dualSource = existingVehicle().copy(
+            packs = listOf(Pack(index = 0, label = "P0", bmsType = BmsType.JK_BMS, bmsAddress = "PACK:01")),
+            controllers = listOf(
+                Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC, address = "CTRL:01")
+            )
+        )
+        val c = component(FakeVehicleRepo(listOf(dualSource)))
+        advanceUntilIdle()
+
+        val s = c.state.value
+        assertEquals("PACK:01", s.sourceAddress, "the controller's address must not win here")
+        assertEquals(BmsType.JK_BMS, s.bmsType)
+        assertEquals("PACK:01", s.bmsAddress)
+    }
+
     @Test
     fun `dashboard style Default option saves null`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))

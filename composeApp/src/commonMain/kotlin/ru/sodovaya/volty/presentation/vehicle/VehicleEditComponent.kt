@@ -55,6 +55,29 @@ interface VehicleEditComponent {
         val chemistry: Chemistry = Chemistry.LI_ION_NMC,
         val bmsType: BmsType = BmsType.JK_BMS,
         val bmsAddress: String = "",
+        /**
+         * The loaded vehicle, carried ONLY so the read-only source header can
+         * name it through the one shared
+         * [ru.sodovaya.volty.presentation.common.vehicleSourceLabel] chain
+         * instead of growing a second fallback of its own. A controller-only
+         * vehicle has no [bmsType] to describe, and rendering the placeholder
+         * default made the form claim a JK BMS that does not exist.
+         *
+         * Null while CREATING — there is no vehicle yet, and the (possibly
+         * prefilled) [bmsType] above is genuinely the answer there.
+         */
+        val sourceVehicle: Vehicle? = null,
+        /**
+         * The address that header shows. The primary PACK's whenever there is
+         * one — byte-for-byte what the row displayed before — else the
+         * vehicle's identity address, which for a controller-only vehicle is
+         * its controller's.
+         *
+         * Separate from [bmsAddress] on purpose: that one feeds the pack
+         * [singlePackVehicle] builds in [onSave], and a controller's address
+         * must never reach it. "" (rendered as an em-dash) when neither exists.
+         */
+        val sourceAddress: String = "",
         val averagingWindowMin: Int = 5,
         val cellHighV: Float? = null,
         val cellLowV: Float? = null,
@@ -106,9 +129,16 @@ class DefaultVehicleEditComponent(
                     // form's BMS fields fall back to their own defaults (the
                     // same ones the "create" branch below uses) instead of
                     // throwing on init. onSave() will not invent a pack for it
-                    // — see the packs preservation there.
+                    // — see the packs preservation there. These two stay the
+                    // PACK's; what the read-only header shows is sourceVehicle
+                    // / sourceAddress below, which do describe a controller.
                     bmsType = v.bmsTypeOrNull ?: VehicleEditComponent.State().bmsType,
                     bmsAddress = v.bmsAddressOrNull ?: VehicleEditComponent.State().bmsAddress,
+                    sourceVehicle = v,
+                    // primaryAddress prefers the CONTROLLER, so it is only
+                    // correct as the fallback: a vehicle with both sources must
+                    // keep showing its pack's address, exactly as before.
+                    sourceAddress = v.bmsAddressOrNull ?: v.primaryAddress,
                     averagingWindowMin = v.averagingWindowMin,
                     cellHighV = v.alertConfig.cellHighV,
                     cellLowV = v.alertConfig.cellLowV,
@@ -125,7 +155,10 @@ class DefaultVehicleEditComponent(
             isEditing = false,
             name = prefilledName ?: "",
             bmsType = prefilledBmsType ?: BmsType.JK_BMS,
-            bmsAddress = prefilledBmsAddress ?: ""
+            bmsAddress = prefilledBmsAddress ?: "",
+            // No vehicle to describe yet — the header falls back to the
+            // prefilled BMS fields, which is what it always showed here.
+            sourceAddress = prefilledBmsAddress ?: ""
         )
     }
 
