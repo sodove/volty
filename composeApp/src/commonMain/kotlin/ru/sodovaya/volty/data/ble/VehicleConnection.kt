@@ -238,6 +238,33 @@ internal class VehicleConnection(
         emit()
     }
 
+    /**
+     * Has [packIndex] stopped reporting? **The same staleness rule [submit]'s
+     * own sweep applies** — the same [BleConfig.packOfflineAfterMs] threshold
+     * measured against the same injected [clock] — asked on demand instead of
+     * having to wait for a sibling pack's submit to run the sweep.
+     *
+     * That "instead of" is the whole reason this exists (Part C §5). The sweep
+     * is folded into [submit] and only ever runs over the OTHER packs, so a
+     * vehicle whose only battery is the one that went quiet is never swept at
+     * all: a head unit that keeps delivering its CAN controllers while the
+     * battery it hosts drops out of range produces motion samples forever and
+     * pack samples never, and the hosted pack would sit `isOnline = true` on a
+     * frozen reading for the rest of the ride. The alias handoff asks this on
+     * every sample of either kind, so the answer arrives on the head unit's
+     * own traffic without a second clock or a timer.
+     *
+     * A pack that has never reported is NOT stale — it is simply unseen, and
+     * treating the two alike would fire the handoff's re-raise before the
+     * hosted battery had ever said anything.
+     */
+    fun isPackStale(packIndex: Int): Boolean {
+        val slot = states.firstOrNull { it.pack.index == packIndex } ?: return false
+        val seenAt = slot.lastSeenAt ?: return false
+        if (!slot.isOnline) return true
+        return (clock() - seenAt).inWholeMilliseconds > BleConfig.packOfflineAfterMs
+    }
+
     fun markOnline(packIndex: Int) {
         val slot = states.indexOfFirst { it.pack.index == packIndex }
         if (slot < 0 || states[slot].isOnline) return

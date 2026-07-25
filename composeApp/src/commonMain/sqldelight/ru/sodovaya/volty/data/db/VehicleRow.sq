@@ -22,7 +22,8 @@ CREATE TABLE VehicleRow (
     lastConnectedAt          TEXT,             -- ISO-8601 or NULL
     isPinned                 INTEGER NOT NULL DEFAULT 0,
     dashboardStyle           TEXT,             -- enum name: CLEAN | CLASSIC, NULL = follow app default
-    secondaryGauge           TEXT              -- enum name: DUTY | BATTERY | POWER | CURRENT | MOTOR_TEMP | ESC_TEMP | CONSUMPTION
+    secondaryGauge           TEXT,             -- enum name: DUTY | BATTERY | POWER | CURRENT | MOTOR_TEMP | ESC_TEMP | CONSUMPTION
+    yieldBmsToHeadUnit       INTEGER           -- 1 = yes, 0 = no, NULL = follow the default (yes). See Vehicle.yieldBmsToHeadUnit.
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -37,11 +38,13 @@ upsert:
 INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
-    disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge
+    disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
+    yieldBmsToHeadUnit
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
-    :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge
+    :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
+    :yieldBmsToHeadUnit
 );
 
 delete:

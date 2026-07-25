@@ -12,11 +12,8 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -43,19 +40,12 @@ class KableBmsRepositoryCellCountTest {
     }
 
     private val vehicleRepo = RecordingVehicleRepository()
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = vehicleRepo,
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     private fun vehicle(id: String = "v1", cellCount: Int? = null) = singlePackVehicle(
@@ -84,8 +74,7 @@ class KableBmsRepositoryCellCountTest {
     }
 
     @Test
-    fun `stable cell count is persisted into the saved vehicle`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `stable cell count is persisted into the saved vehicle`() = repoTest { repo ->
         val v = vehicle(cellCount = null)
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -98,8 +87,7 @@ class KableBmsRepositoryCellCountTest {
     }
 
     @Test
-    fun `unstable cell count is not persisted`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `unstable cell count is not persisted`() = repoTest { repo ->
         val v = vehicle(cellCount = null)
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -113,8 +101,7 @@ class KableBmsRepositoryCellCountTest {
     }
 
     @Test
-    fun `matching profile count is not re-persisted`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `matching profile count is not re-persisted`() = repoTest { repo ->
         val v = vehicle(cellCount = 4)
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -125,8 +112,7 @@ class KableBmsRepositoryCellCountTest {
     }
 
     @Test
-    fun `guest vehicles are never persisted`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `guest vehicles are never persisted`() = repoTest { repo ->
         val guest = vehicle(id = "${GUEST_VEHICLE_ID_PREFIX}AA:BB", cellCount = null)
         repo.primeConnectedForTest(guest, guest.primaryAddress, guest.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()

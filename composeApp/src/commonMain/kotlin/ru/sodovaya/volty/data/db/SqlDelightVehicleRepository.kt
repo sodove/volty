@@ -93,7 +93,11 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 lastConnectedAt = vehicle.lastConnectedAt?.toString(),
                 isPinned = if (vehicle.isPinned) 1L else 0L,
                 dashboardStyle = vehicle.dashboardStyle?.name,
-                secondaryGauge = vehicle.secondaryGauge.name
+                secondaryGauge = vehicle.secondaryGauge.name,
+                // Three-valued on purpose (see Vehicle.yieldBmsToHeadUnit):
+                // NULL is "unset / follow the default", NOT the same row state
+                // as an explicit 0 or 1.
+                yieldBmsToHeadUnit = vehicle.yieldBmsToHeadUnit?.let { if (it) 1L else 0L }
             )
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
@@ -196,5 +200,8 @@ private fun VehicleRow.toDomain(
     isPinned = isPinned == 1L,
     dashboardStyle = dashboardStyle?.let { runCatching { DashboardStyle.valueOf(it) }.getOrNull() },
     secondaryGauge = secondaryGauge?.let { runCatching { SecondaryGauge.valueOf(it) }.getOrNull() }
-        ?: SecondaryGauge.DUTY
+        ?: SecondaryGauge.DUTY,
+    // NULL stays null (unset) rather than collapsing to false: `yieldsBmsToHeadUnit`
+    // is what resolves the default, and it must be able to tell the two apart.
+    yieldBmsToHeadUnit = yieldBmsToHeadUnit?.let { it != 0L }
 )

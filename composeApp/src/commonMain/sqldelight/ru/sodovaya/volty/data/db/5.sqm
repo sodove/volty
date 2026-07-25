@@ -1,0 +1,12 @@
+-- v5 -> v6: "yield BMS to head unit while riding" (Part C §5).
+--
+-- Nullable with NO default, exactly like 4.sqm's dashboardStyle: NULL means
+-- "follow the default", which resolves to ON. A `NOT NULL DEFAULT 1` would be
+-- wrong in a way that is invisible until someone opts out — it would record
+-- every pre-existing vehicle as having explicitly chosen the handoff, so a
+-- later change of default could never distinguish "unset" from "the rider
+-- wants this on".
+--
+-- ALTER TABLE ADD COLUMN only; no table recreate is needed (and none is safe
+-- to add casually — see 2.sqm for what a recreate costs).
+ALTER TABLE VehicleRow ADD COLUMN yieldBmsToHeadUnit INTEGER;

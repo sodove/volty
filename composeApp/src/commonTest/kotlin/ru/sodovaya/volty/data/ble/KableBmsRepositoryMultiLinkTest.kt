@@ -14,12 +14,9 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -52,19 +49,12 @@ class KableBmsRepositoryMultiLinkTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     /** Two independent BMS at two distinct addresses — the sub-project's raison d'être. */
@@ -87,8 +77,7 @@ class KableBmsRepositoryMultiLinkTest {
     // ----- Fan-out + the shared funnel -----
 
     @Test
-    fun `two links interleaved from separate coroutines aggregate both branches`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `two links interleaved from separate coroutines aggregate both branches`() = repoTest { repo ->
         val v = twoLinkVehicle()
         val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertEquals(2, funnels.size, "two distinct addresses must raise two links")
@@ -116,8 +105,7 @@ class KableBmsRepositoryMultiLinkTest {
     }
 
     @Test
-    fun `a Begode link owns both branches through one address`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a Begode link owns both branches through one address`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-begode", name = "Wheel", iconKey = "unicycle",
             bmsType = BmsType.BEGODE, bmsAddress = ADDR_A,
@@ -138,8 +126,7 @@ class KableBmsRepositoryMultiLinkTest {
     // ----- The state fold -----
 
     @Test
-    fun `first link online is Connected and partial until the second lands`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `first link online is Connected and partial until the second lands`() = repoTest { repo ->
         val v = twoLinkVehicle()
         val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertTrue(repo.connectionState.value is ConnectionState.Connecting)
@@ -162,8 +149,7 @@ class KableBmsRepositoryMultiLinkTest {
     }
 
     @Test
-    fun `all links failing the initial connect folds to Failed`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `all links failing the initial connect folds to Failed`() = repoTest { repo ->
         val v = twoLinkVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
@@ -181,9 +167,8 @@ class KableBmsRepositoryMultiLinkTest {
     // ----- Per-link reconnect -----
 
     @Test
-    fun `a dropped link leaves the vehicle Connected and only its own loop running`() = runTest {
+    fun `a dropped link leaves the vehicle Connected and only its own loop running`() = repoTest { repo ->
         var nowMs = 1_000_000L
-        val repo = newRepo(this).also { underTest = it }
         repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
         val v = twoLinkVehicle()
         val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
@@ -219,8 +204,7 @@ class KableBmsRepositoryMultiLinkTest {
     }
 
     @Test
-    fun `both links down folds to Reconnecting`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `both links down folds to Reconnecting`() = repoTest { repo ->
         val v = twoLinkVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
@@ -242,8 +226,7 @@ class KableBmsRepositoryMultiLinkTest {
     }
 
     @Test
-    fun `initial partial connect keeps the vehicle Connected while the missing link retries`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `initial partial connect keeps the vehicle Connected while the missing link retries`() = repoTest { repo ->
         val v = twoLinkVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
@@ -271,8 +254,7 @@ class KableBmsRepositoryMultiLinkTest {
     // ----- Degenerate single-link vehicle -----
 
     @Test
-    fun `a single-address vehicle raises exactly one link with identity routing`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a single-address vehicle raises exactly one link with identity routing`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-one", name = "Solo", iconKey = "scooter",
             bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,

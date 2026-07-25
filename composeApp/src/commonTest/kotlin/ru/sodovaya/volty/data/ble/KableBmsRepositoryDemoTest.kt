@@ -14,12 +14,9 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -51,24 +48,16 @@ class KableBmsRepositoryDemoTest {
     private val stops = mutableListOf<Unit>()
     private val vehicleRepo = StubVehicleRepository()
 
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = vehicleRepo,
         serviceStart = { starts += Unit },
         serviceStop = { stops += Unit },
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
     @Test
-    fun `connectDemo sets demo vehicle connected and starts service`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `connectDemo sets demo vehicle connected and starts service`() = repoTest { repo ->
 
         val result = repo.connectDemo()
         runCurrent()
@@ -96,8 +85,7 @@ class KableBmsRepositoryDemoTest {
     }
 
     @Test
-    fun `disconnect tears down the demo session`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnect tears down the demo session`() = repoTest { repo ->
 
         repo.connectDemo()
         advanceTimeBy(DemoBmsSimulator.TICK_INTERVAL_MS + 50L)
@@ -161,8 +149,7 @@ class KableBmsRepositoryDemoTest {
      * awaited directly.
      */
     @Test
-    fun `connecting a real vehicle after demo does not leak the demo's battery snapshot`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `connecting a real vehicle after demo does not leak the demo's battery snapshot`() = repoTest { repo ->
 
         // Demo populates activeVehicleData.packs/aggregate (Task 14's own fix).
         repo.connectDemo()

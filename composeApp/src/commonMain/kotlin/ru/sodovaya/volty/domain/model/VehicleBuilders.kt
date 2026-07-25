@@ -9,8 +9,10 @@ import kotlin.time.Instant
  * naming, `createdAt` threaded straight through, the sole source named after
  * the vehicle) but for the controller shape instead of the single-pack one.
  *
- * [Controller.canId] is always null here — `planLinks` rejects CAN-forwarded
- * sources until Part C, so this builder must never set one.
+ * [Controller.canId] is always null here — this builder produces a
+ * single-controller vehicle with no gateway to forward through, so it must
+ * never set one. `planLinks` itself accepts CAN-forwarded sources since Part
+ * C; nothing about that lifts this builder's own no-CAN-id contract.
  *
  * [Controller.providesDerivedBattery] is unconditionally `true` and
  * deliberately NOT a parameter: a vehicle built by this function has no pack,

@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.GatewaySource
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
@@ -33,13 +35,40 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  * Exhaustive with NO `else`, like [ProtocolKind.toBmsType] and
  * `KableBmsRepository.batteryBmsTypeOrNull`: a new [ProtocolKind] must force a
  * decision here at compile time.
+ *
+ * ### Gateway links
+ * [link] is the spec of the link being built, when there is one — the picker's
+ * coverage probe has no link and passes none. A VESC link that is a
+ * [LinkSpec.isGatewayLink] (CAN-forwarded sources, a hosted battery, or several
+ * controllers on one address) gets [VescGatewayProtocol] instead of the plain
+ * [VescProtocol]. That choice lives HERE, inside the same exhaustive `when`, so
+ * there is still exactly one statement of controller coverage: the picker's
+ * gate keeps deriving from it (a gateway link's kind is still `VESC`, which is
+ * still supported), and no second list can drift out of step.
+ *
+ * [motorFor] resolves a controller's wheel geometry by its vehicle-global
+ * index, because a gateway carries several controllers and each has its own.
+ * It defaults to [motor] for the single-controller case, which is every
+ * existing caller.
  */
 fun controllerMotionProtocol(
     kind: ProtocolKind,
     deriveBattery: Boolean,
-    motor: MotorConfig
+    motor: MotorConfig,
+    link: LinkSpec? = null,
+    motorFor: (globalControllerIndex: Int) -> MotorConfig = { motor }
 ): BmsProtocol? = when (kind) {
-    ProtocolKind.VESC -> VescProtocol(deriveBattery = deriveBattery, motor = motor)
+    ProtocolKind.VESC ->
+        if (link != null && link.isGatewayLink) {
+            VescGatewayProtocol(
+                controllers = link.ownedControllers.map {
+                    GatewaySource(it.globalIndex, it.canId, motorFor(it.globalIndex))
+                },
+                packs = link.ownedPacks.map { GatewaySource(it.globalIndex, it.canId) }
+            )
+        } else {
+            VescProtocol(deriveBattery = deriveBattery, motor = motor)
+        }
     // No motion decoder yet — Parts D (FarDriver) and E (Kelly).
     ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
     // Battery kinds: not a controller protocol at all. See the KDoc on BEGODE.

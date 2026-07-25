@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.demo
 
 import ru.sodovaya.volty.data.ble.KableBmsRepository
+import ru.sodovaya.volty.data.ble.bleRepositoryTest
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -9,11 +10,9 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -46,14 +45,6 @@ class DemoRideTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
     @Test
     fun the_demo_vehicle_has_a_controller_so_ride_is_its_home() = runTest {
         val demo = KableBmsRepository.DEMO_VEHICLE
@@ -72,14 +63,8 @@ class DemoRideTest {
     }
 
     @Test
-    fun connecting_the_demo_produces_motion_on_activeMotion() = runTest {
-        val repo = KableBmsRepository.forTesting(
-            vehicleRepository = StubVehicleRepository(),
-            serviceStart = {},
-            serviceStop = {},
-            coroutineContext = StandardTestDispatcher(testScheduler),
-        ).also { underTest = it }
-
+    fun connecting_the_demo_produces_motion_on_activeMotion() = bleRepositoryTest(vehicleRepository = StubVehicleRepository()) { repo ->
+        
         val result = repo.connectDemo()
         runCurrent()
         assertTrue(result.isSuccess)
@@ -103,7 +88,7 @@ class DemoRideTest {
     }
 
     @Test
-    fun connecting_the_demo_also_produces_battery_data_on_activeVehicleData() = runTest {
+    fun connecting_the_demo_also_produces_battery_data_on_activeVehicleData() = bleRepositoryTest(vehicleRepository = StubVehicleRepository()) { repo ->
         // Regression test: connectDemo() used to publish motion into
         // activeVehicleData (controllers/motion/motionPartial) but leave
         // packs/aggregate at VehicleData()'s all-zero default — so the Ride
@@ -112,12 +97,6 @@ class DemoRideTest {
         // even though the simulator's battery sample was flowing fine into
         // activeData (the Battery tab's own flow). Caught by actually running
         // the app and watching the Ride dashboard's 2x2 cluster.
-        val repo = KableBmsRepository.forTesting(
-            vehicleRepository = StubVehicleRepository(),
-            serviceStart = {},
-            serviceStop = {},
-            coroutineContext = StandardTestDispatcher(testScheduler),
-        ).also { underTest = it }
 
         repo.connectDemo()
         runCurrent()

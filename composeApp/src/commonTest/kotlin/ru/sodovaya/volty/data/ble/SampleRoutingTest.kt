@@ -17,10 +17,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -201,19 +198,12 @@ class SampleRoutingTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = NoopVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     private fun funnelVehicle(type: BmsType) = singlePackVehicle(
@@ -227,8 +217,7 @@ class SampleRoutingTest {
     )
 
     @Test
-    fun `an enriched sample crosses the channel into the shared state intact`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `an enriched sample crosses the channel into the shared state intact`() = repoTest { repo ->
         // A Begode reports no SoC; the estimator runs on the SESSION side of
         // the channel, so the enrichment must arrive at the shared state
         // intact. 40 cells at 3.75 V map linearly between LI_ION_NMC's
@@ -252,8 +241,7 @@ class SampleRoutingTest {
     }
 
     @Test
-    fun `the graph window already holds a sample when activeData announces it`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the graph window already holds a sample when activeData announces it`() = repoTest { repo ->
         val funnel = repo.installSampleFunnelForTest(
             funnelVehicle(BmsType.JK_BMS), FUNNEL_ADDRESS, BmsType.JK_BMS
         )
@@ -276,8 +264,7 @@ class SampleRoutingTest {
     }
 
     @Test
-    fun `a PackSample sent straight into the channel reaches the shared state through the consumer`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a PackSample sent straight into the channel reaches the shared state through the consumer`() = repoTest { repo ->
         // Bypass onSample and inject a post-enrichment PackSample directly —
         // the exact shape a second link's session will produce in Task 3.
         // Index 1 proves the consumer submits the GLOBAL pack index.
@@ -298,8 +285,7 @@ class SampleRoutingTest {
     }
 
     @Test
-    fun `a burst at sample rate is never dropped by the channel`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a burst at sample rate is never dropped by the channel`() = repoTest { repo ->
         val funnel = repo.installSampleFunnelForTest(
             funnelVehicle(BmsType.JK_BMS), FUNNEL_ADDRESS, BmsType.JK_BMS
         )

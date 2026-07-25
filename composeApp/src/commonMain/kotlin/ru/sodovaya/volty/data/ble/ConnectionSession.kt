@@ -6,6 +6,7 @@ import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.data.bms.SerialPollSource
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -197,21 +198,46 @@ internal class ConnectionSession(
         // above — NOT here — so it can never race ahead of the live
         // notification subscription. Poll-based protocols still (re)send their
         // poll commands below; that path self-heals by design.
-        val pollCmds = protocol.pollCommands()
-        if (pollCmds.isNotEmpty()) {
+        //
+        // Two poll shapes, and the protocol picks which one it is. A
+        // [SerialPollSource] owns its own request/reply dialogue — a CAN
+        // gateway must keep exactly ONE forwarded request in flight and match
+        // each bare reply to what it asked for, which a fire-and-forget burst
+        // cannot express. Everything else keeps the burst path bit-for-bit:
+        // `as?` is null for every protocol that does not opt in.
+        val serial = protocol as? SerialPollSource
+        if (serial != null) {
             pollingJob = parentScope.launch {
-                while (isActive) {
-                    try {
-                        for (cmd in pollCmds) {
-                            peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
-                            delay(BleConfig.writeSpacingMs)
-                        }
-                    } catch (e: kotlinx.coroutines.CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        // retry next cycle
+                try {
+                    serial.runPollLoop { cmd ->
+                        peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
                     }
-                    delay(protocol.pollIntervalMs)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    // The loop paces itself around write failures; anything
+                    // that still escapes ends polling and lets the watchdog
+                    // judge the link, rather than spinning here.
+                    println("[VOLTY-BLE] serial poll loop: ${e::class.simpleName}: ${e.message}")
+                }
+            }
+        } else {
+            val pollCmds = protocol.pollCommands()
+            if (pollCmds.isNotEmpty()) {
+                pollingJob = parentScope.launch {
+                    while (isActive) {
+                        try {
+                            for (cmd in pollCmds) {
+                                peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
+                                delay(BleConfig.writeSpacingMs)
+                            }
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            // retry next cycle
+                        }
+                        delay(protocol.pollIntervalMs)
+                    }
                 }
             }
         }

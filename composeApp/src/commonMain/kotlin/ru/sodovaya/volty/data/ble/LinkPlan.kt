@@ -50,17 +50,34 @@ fun ProtocolKind.toBmsType(): BmsType = when (this) {
 
 /**
  * One source a link owns: its vehicle-global index (within its own kind — packs
- * and controllers are numbered separately) and, in a later part, the CAN id it
- * is forwarded under. [canId] is always null in Part A — direct BLE only.
+ * and controllers are numbered separately), the CAN id it is forwarded under
+ * (null for a direct BLE source or a HOSTED one the gateway answers itself —
+ * e.g. `BMS_GET_VALUES`), and, when it decodes differently from the link's own
+ * [LinkSpec.protocolKind], the [ProtocolKind] that actually decodes it (C §6).
+ *
+ * [kind] is left null for the ordinary case — a direct source whose own kind
+ * IS the link's kind, exactly like every source before Part C — so an
+ * `OwnedSource(index)` built the old way still equals a freshly planned one.
+ * It is populated for a CAN-forwarded source (even when its own kind happens
+ * to match the link's, e.g. a uBox controller behind its own VESC gateway) and
+ * for a hosted source whose kind genuinely differs from the link's (the
+ * gateway's own hosted VESC-BMS battery behind a VESC link) — the two cases
+ * C's gateway multiplexer needs to tell apart from a plain pass-through.
  */
-data class OwnedSource(val globalIndex: Int, val canId: Int? = null)
+data class OwnedSource(val globalIndex: Int, val canId: Int? = null, val kind: ProtocolKind? = null)
 
 /**
- * One BLE link: a distinct address, the [ProtocolKind] spoken behind it, and
- * the vehicle-global pack / controller sources it is responsible for, in local
+ * One BLE link: a distinct address, the [ProtocolKind] the LINK itself speaks
+ * (its wire protocol — what a session actually dials in over BLE), and the
+ * vehicle-global pack / controller sources it is responsible for, in local
  * order. A session speaks local indices (0-based within its own protocol);
  * [globalPackIndex] / [globalControllerIndex] map them to the vehicle's global
  * indices the orchestrator is keyed by.
+ *
+ * Since Part C a link's owned sources may be decoded differently from the
+ * link's own [protocolKind] — see [OwnedSource.kind]: a gateway link still
+ * speaks ONE protocol over the air, but a CAN-forwarded controller or a hosted
+ * battery behind it can carry its own decode kind.
  */
 data class LinkSpec(
     val address: String,
@@ -72,8 +89,65 @@ data class LinkSpec(
     fun globalControllerIndex(local: Int): Int = ownedControllers[local].globalIndex
 }
 
+/**
+ * Whether this link is a **gateway** — one BLE address fronting several
+ * sources — and therefore needs the multiplexer
+ * ([ru.sodovaya.volty.data.bms.VescGatewayProtocol]) rather than the plain
+ * single-source protocol. Three independent triggers, each of which the single
+ * protocol cannot serve:
+ *
+ *  - **any CAN-forwarded source** — reaching it at all means wrapping the
+ *    request in `COMM_FORWARD_CAN`, which only the multiplexer does;
+ *  - **a hosted battery** (a pack whose own kind is [ProtocolKind.VESC_BMS] on
+ *    a link that speaks something else) — it answers `COMM_BMS_GET_VALUES`, a
+ *    command the single-controller protocol never sends;
+ *  - **more than one controller** on one address — nothing else can even
+ *    address the second one.
+ *
+ * Read off the SPEC, and deliberately blind to how many PACKS a link owns
+ * beyond their tags: a plain single VESC link owns one controller and, once
+ * `planLinkPacks` has given it a derived battery slot, one untagged pack too.
+ * Counting sources naively would flip every existing single-VESC vehicle onto
+ * the gateway — and, worse, would answer differently before and after that
+ * expansion, so the protocol used to SIZE the pack list and the protocol the
+ * session actually speaks could disagree. Every trigger above is invariant
+ * across the expansion (`KableBmsRepository.effectiveLinkSpecs` preserves each
+ * planned source's `canId`/`kind`, and synthesised slots carry neither).
+ */
+val LinkSpec.isGatewayLink: Boolean
+    get() = (ownedPacks + ownedControllers).any { it.canId != null } ||
+        ownedPacks.any { it.kind == ProtocolKind.VESC_BMS } ||
+        ownedControllers.size > 1
+
 /** Battery-only overload — any caller that has no controllers compiles unchanged. */
 fun planLinks(packs: List<Pack>): List<LinkSpec> = planLinks(packs, emptyList())
+
+/**
+ * Resolve the ONE wire protocol a link speaks from the distinct [ProtocolKind]s
+ * observed among its owned sources. A single BLE link still speaks exactly one
+ * protocol (unchanged since Part A) — with one sanctioned exception, added by
+ * Part C §6: a hosted VESC-BMS battery (`BMS_GET_VALUES`, answered by the
+ * gateway itself — never forwarded) shares its VESC controllers' link without
+ * being a conflict, because it is fundamentally the SAME wire protocol
+ * (VESC's own binary framing), just a different command/decode once hosted.
+ * That pairing resolves to [ProtocolKind.VESC] — the link's own kind — while
+ * the battery keeps its true kind on its own [OwnedSource.kind] (C §6).
+ *
+ * Every other combination of distinct kinds — including two CAN-forwarded
+ * controllers of genuinely different kinds — is still rejected: lifting the
+ * `canId == null` restriction only adds this one pairing, it does not open the
+ * door to arbitrary mixed kinds at one address.
+ */
+private fun resolveLinkKind(address: String, kinds: Set<ProtocolKind>): ProtocolKind = when {
+    kinds.size == 1 -> kinds.first()
+    kinds == setOf(ProtocolKind.VESC, ProtocolKind.VESC_BMS) -> ProtocolKind.VESC
+    else -> throw IllegalArgumentException(
+        "Address $address resolves to conflicting protocol kinds $kinds"
+    )
+}
+
+/** A source's own kind, its vehicle-global index and its CAN id, before the link's own kind is known. */
+private data class RawSource(val index: Int, val canId: Int?, val kind: ProtocolKind)
 
 /**
  * Group a vehicle's packs AND controllers into links by distinct address. A
@@ -81,35 +155,58 @@ fun planLinks(packs: List<Pack>): List<LinkSpec> = planLinks(packs, emptyList())
  * two independent BMS at two addresses form two links. Link order follows each
  * address's first appearance; each link's owned sources are ascending by index.
  *
- * Requires every source to be direct (canId == null): CAN-forwarded sources are
- * Part C. Throws if the direct sources at one address resolve to more than one
- * [ProtocolKind] — a single BLE link speaks exactly one protocol. Pure — no
- * BLE, no ordering assumption on the input.
+ * Since Part C, a source may be CAN-forwarded (`canId != null`, relayed via
+ * `FORWARD_CAN`) or hosted (`canId == null`, answered by the gateway itself,
+ * e.g. `BMS_GET_VALUES`) — see [OwnedSource] and C §6. [resolveLinkKind] still
+ * throws if the address's sources resolve to more than one [ProtocolKind],
+ * except the one sanctioned VESC/VESC_BMS pairing — a single BLE link speaks
+ * exactly one wire protocol, CAN forwarding does not change that. Also throws
+ * if two sources at the same address claim the same CAN id — two nodes cannot
+ * physically share one id behind one gateway. Pure — no BLE, no ordering
+ * assumption on the input.
  */
 fun planLinks(packs: List<Pack>, controllers: List<Controller>): List<LinkSpec> {
-    require(packs.all { it.canId == null } && controllers.all { it.canId == null }) {
-        "CAN-forwarded sources (canId != null) are not supported until Part C"
-    }
     data class Acc(
-        val packs: MutableList<OwnedSource> = mutableListOf(),
-        val controllers: MutableList<OwnedSource> = mutableListOf(),
+        val packs: MutableList<RawSource> = mutableListOf(),
+        val controllers: MutableList<RawSource> = mutableListOf(),
         val kinds: MutableSet<ProtocolKind> = linkedSetOf()
     )
     val byAddress = LinkedHashMap<String, Acc>()
     for (p in packs.sortedBy { it.index }) {
         val acc = byAddress.getOrPut(p.bmsAddress) { Acc() }
-        acc.packs += OwnedSource(p.index, p.canId)
-        acc.kinds += p.bmsType.protocolKind()
+        val kind = p.bmsType.protocolKind()
+        acc.packs += RawSource(p.index, p.canId, kind)
+        acc.kinds += kind
     }
     for (c in controllers.sortedBy { it.index }) {
         val acc = byAddress.getOrPut(c.address) { Acc() }
-        acc.controllers += OwnedSource(c.index, c.canId)
-        acc.kinds += c.controllerType.protocolKind()
+        val kind = c.controllerType.protocolKind()
+        acc.controllers += RawSource(c.index, c.canId, kind)
+        acc.kinds += kind
     }
     return byAddress.map { (address, acc) ->
-        require(acc.kinds.size == 1) {
-            "Address $address resolves to conflicting protocol kinds ${acc.kinds}"
+        val resolvedKind = resolveLinkKind(address, acc.kinds)
+        val allCanIds = (acc.packs + acc.controllers).mapNotNull { it.canId }
+        val duplicates = allCanIds.groupingBy { it }.eachCount().filterValues { it > 1 }.keys
+        require(duplicates.isEmpty()) {
+            "Address $address assigns duplicate CAN id(s) $duplicates to more than one source"
         }
-        LinkSpec(address, acc.kinds.first(), acc.packs.toList(), acc.controllers.toList())
+        fun RawSource.toOwned() = OwnedSource(
+            globalIndex = index,
+            canId = canId,
+            // Only tag when it actually carries information beyond the link's
+            // own kind: a CAN-forwarded source (canId != null) or a source
+            // whose own kind differs from the resolved link kind (the hosted
+            // VESC_BMS battery). A plain direct source that matches the link
+            // stays untagged, so every pre-Part-C plan is byte-for-byte the
+            // same OwnedSource it always was.
+            kind = if (canId != null || kind != resolvedKind) kind else null
+        )
+        LinkSpec(
+            address = address,
+            protocolKind = resolvedKind,
+            ownedPacks = acc.packs.map { it.toOwned() },
+            ownedControllers = acc.controllers.map { it.toOwned() }
+        )
     }
 }
