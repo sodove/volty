@@ -1,7 +1,10 @@
 package ru.sodovaya.volty.presentation.ride.gauge
 
+import kotlin.math.PI
 import kotlin.math.floor
+import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /**
  * One VESC gauge's angle sweep and value range — the faithful port of the property block at the
@@ -44,6 +47,15 @@ data class VescGaugeRange(
         } else {
             0
         }
+
+    /**
+     * True when there are at least two major ticks, i.e. when [tickmarkSectionSize] and friends
+     * are actually defined — every one of them divides by `tickmarkCount - 1`. The QML gets away
+     * without this guard because a QML `Repeater` with a model of 0 or 1 simply instantiates
+     * nothing interesting and JavaScript's `x/0` is a silent `Infinity`; Kotlin would happily
+     * produce `NaN` angles and hand them to the Canvas, so the drawing layer asks this first.
+     */
+    val hasTickmarks: Boolean get() = tickmarkCount > 1
 
     /** QML lines 336-338: `rangeUsed(count, stepSize)`. */
     private fun rangeUsed(count: Int, stepSize: Double): Double =
@@ -111,6 +123,241 @@ data class VescGaugeRange(
         val relativeMinorIndex = minorIndex % minorTickmarkCount
         return tickmarkValueFromIndex(majorIndex) + (relativeMinorIndex * minorTickmarkSectionValue + minorTickmarkSectionValue)
     }
+
+    /**
+     * The SIGNED sweep, in degrees, of the trace glow: QML lines 218-223 draw an arc from
+     * `valueToAngle(0.0)` to the needle's angle.
+     *
+     * The QML has to pass HTML5 canvas `arc()` an explicit direction flag —
+     * `(gauge.value * isInverted) < 0` (line 223) — because that API takes two absolute angles and
+     * cannot know which way round to go. Compose's `drawArc` takes a *signed sweep* instead, and
+     * the plain signed difference below already carries exactly the direction that flag selects,
+     * so the flag needs no separate port:
+     *
+     *   sweep = angleRange * (normalise(value) - normalise(0))
+     *
+     * `sign(angleRange)` is `+1` precisely when `maxAngle > minAngle`, which is the QML's
+     * `isInverted == 1`; and `normalise(value) - normalise(0)` carries the sign of `value` (the
+     * normalisation is monotonically increasing in `value`, and where the clamp pins one of the
+     * two terms to an endpoint it can only pin it on the side that already agrees). Their product
+     * is therefore negative — an anticlockwise sweep — exactly when `value * isInverted < 0`.
+     *
+     * `|sweep| <= |angleRange|`, so this never needs the modulo-360 disambiguation the "short way
+     * round" flag exists to provide.
+     */
+    fun traceSweepDegrees(value: Double): Double = valueToAngle(value) - valueToAngle(0.0)
+}
+
+/**
+ * Every length in `mobile/CustomGauge.qml` as a fraction of the dial's outer radius `R`, plus the
+ * radii derived from them. Nothing here is a device-independent pixel or a scale-independent
+ * pixel: the QML sizes its entire instrument — including all four of its fonts — off
+ * `outerRadius`, which is what lets one dial definition serve a 40 dp corner gauge and a hero
+ * gauge without a single per-size tweak. The drawing layer converts these to `sp` only at the
+ * last moment, and only by cancelling the density it is about to be multiplied by again.
+ */
+object VescDialMetrics {
+
+    // --- ticks: QML lines 33-34 (inset), 319-320 (major), 329-330 (minor), 390, 412 ---
+    /** QML lines 33-34: `tickmarkInset`/`minorTickmarkInset`, both `outerRadius * 0.07`. */
+    const val TICKMARK_INSET_FRACTION = 0.07
+    /** QML line 319: major tick `implicitWidth`. */
+    const val MAJOR_TICK_WIDTH_FRACTION = 0.02
+    /** QML line 320: major tick `implicitHeight`. */
+    const val MAJOR_TICK_LENGTH_FRACTION = 0.1
+    /** QML line 329: minor tick `implicitWidth`. */
+    const val MINOR_TICK_WIDTH_FRACTION = 0.015
+    /** QML line 330: minor tick `implicitHeight`. */
+    const val MINOR_TICK_LENGTH_FRACTION = 0.07
+
+    // --- bezel: QML lines 230, 245, 258 ---
+    /** QML line 230: `borderWidth: outerRadius * 0.035`, the stroke of BOTH bezel rings. */
+    const val BEZEL_STROKE_FRACTION = 0.035
+
+    // --- needle: QML lines 144-151 ---
+    /** QML line 144: `y: outerRadius * 0.05` — the blade's tip sits this far IN from the rim. */
+    const val NEEDLE_TIP_INSET_FRACTION = 0.05
+    /** QML line 146: `height: outerRadius * 0.22` — the blade's length. */
+    const val NEEDLE_LENGTH_FRACTION = 0.22
+    /** QML line 147: `width: outerRadius * 0.12` — the blade's width at its base. */
+    const val NEEDLE_WIDTH_FRACTION = 0.12
+
+    // --- trace glow: QML lines 212-220 ---
+    /** QML line 220: the arc's own radius, `outerRadius - outerRadius * 0.12`. */
+    const val TRACE_RADIUS_INSET_FRACTION = 0.12
+    /** QML line 217: `lineWidth = outerRadius * 0.2`. */
+    const val TRACE_STROKE_FRACTION = 0.2
+    /** QML line 212: the radial gradient's inner (fully transparent) radius. */
+    const val TRACE_GLOW_INNER_INSET_FRACTION = 0.13
+    /** QML line 212: the radial gradient's outer (fully coloured) radius. */
+    const val TRACE_GLOW_OUTER_INSET_FRACTION = 0.05
+
+    // --- fonts: QML lines 107, 119, 135, 309 ---
+    /** QML line 107: the centre readout. The loudest thing on the dial, by a factor of 2.5. */
+    const val VALUE_FONT_FRACTION = 0.3
+    /** QML line 135: the caption above the readout. */
+    const val CAPTION_FONT_FRACTION = 0.12
+    /** QML line 119: the unit below the readout. */
+    const val UNIT_FONT_FRACTION = 0.12
+    /** QML line 309: the numbers on the scale. */
+    const val TICK_LABEL_FONT_FRACTION = 0.12
+
+    /**
+     * QML lines 385-395: a tick's outer end. The `Translate { y: -outerRadius + tickmarkInset }`
+     * puts the rectangle's TOP edge here and the rectangle then grows *inward*, so this is the
+     * end nearest the rim for both major and minor ticks.
+     */
+    fun tickOuterRadius(outerRadius: Double): Double =
+        outerRadius - outerRadius * TICKMARK_INSET_FRACTION
+
+    /** The inner end of a major tick — [tickOuterRadius] less the 0.1R the rectangle is tall. */
+    fun majorTickInnerRadius(outerRadius: Double): Double =
+        tickOuterRadius(outerRadius) - outerRadius * MAJOR_TICK_LENGTH_FRACTION
+
+    /** The inner end of a minor tick — [tickOuterRadius] less the 0.07R the rectangle is tall. */
+    fun minorTickInnerRadius(outerRadius: Double): Double =
+        tickOuterRadius(outerRadius) - outerRadius * MINOR_TICK_LENGTH_FRACTION
+
+    /**
+     * The radius of the needle's TIP — QML line 144, `y: outerRadius * 0.05`, measured from the
+     * top of a `2R` box, i.e. `0.05R` in from the rim.
+     */
+    fun needleTipRadius(outerRadius: Double): Double =
+        outerRadius - outerRadius * NEEDLE_TIP_INSET_FRACTION
+
+    /**
+     * The radius of the needle's BASE — its tip radius less the blade's own `0.22R` length.
+     *
+     * This is the number the whole "faithful port" turns on: it is `0.73R`, not `0`. VESC's
+     * needle is a short blade riding at the rim on a rotation whose origin was pushed all the way
+     * down to the dial centre (QML line 151, `origin.y: outerRadius*(1-0.05)`, which is `0.95R`
+     * measured from the blade's own top edge and therefore lands exactly on the centre). The blade
+     * pivots about the centre without ever reaching it, which is why the centre readout is never
+     * covered. A needle drawn *from* the centre outward — the shape this project shipped and had
+     * rejected — always sits on the readout, and no hub cap or z-order can undo that.
+     */
+    fun needleBaseRadius(outerRadius: Double): Double =
+        needleTipRadius(outerRadius) - outerRadius * NEEDLE_LENGTH_FRACTION
+
+    /** QML line 230. */
+    fun bezelStroke(outerRadius: Double): Double = outerRadius * BEZEL_STROKE_FRACTION
+
+    /** QML line 245: `outerRadius - borderWidth/2` — the outer ring's centreline. */
+    fun bezelOuterRingRadius(outerRadius: Double): Double =
+        outerRadius - bezelStroke(outerRadius) / 2.0
+
+    /**
+     * QML line 258: `outerRadius - borderWidth*3/2 + 1` — the inner ring's centreline, so the two
+     * rings sit flush. The trailing `+ 1` is a literal single pixel in the original (not a
+     * fraction of anything, not a dp) that nudges the inner ring out to close the hairline seam
+     * antialiasing leaves between two abutting strokes; it is ported verbatim rather than
+     * "cleaned up", because dropping it reopens the seam and rounding it to a fraction of `R`
+     * would make the seam size vary with the dial.
+     */
+    fun bezelInnerRingRadius(outerRadius: Double): Double =
+        outerRadius - bezelStroke(outerRadius) * 3.0 / 2.0 + 1.0
+
+    /** QML line 220: the radius of the trace glow's own arc. */
+    fun traceRadius(outerRadius: Double): Double =
+        outerRadius - outerRadius * TRACE_RADIUS_INSET_FRACTION
+
+    /** QML line 217. */
+    fun traceStroke(outerRadius: Double): Double = outerRadius * TRACE_STROKE_FRACTION
+
+    /** QML line 212: `outerRadius - outerRadius * 0.13`, where the glow is still transparent. */
+    fun traceGlowInnerRadius(outerRadius: Double): Double =
+        outerRadius - outerRadius * TRACE_GLOW_INNER_INSET_FRACTION
+
+    /** QML line 212: `outerRadius - outerRadius * 0.05`, where the glow reaches full colour. */
+    fun traceGlowOuterRadius(outerRadius: Double): Double =
+        outerRadius - outerRadius * TRACE_GLOW_OUTER_INSET_FRACTION
+
+    /**
+     * Where the glow's transparent inner edge falls as a STOP POSITION in a Compose
+     * `Brush.radialGradient`, which — unlike the QML's `createRadialGradient(x,y,r0,x,y,r1)` —
+     * always starts its stop scale at the centre rather than at an inner radius `r0`. Emitting a
+     * transparent stop here reproduces `r0`: `0.87R / 0.95R`, a constant independent of the dial's
+     * size.
+     */
+    val traceGlowInnerStop: Double
+        get() = traceGlowInnerRadius(1.0) / traceGlowOuterRadius(1.0)
+}
+
+/**
+ * The needle's angle-dependent shading and the trace's tint — the two `Qt.darker` / `Qt.lighter`
+ * calls in `mobile/CustomGauge.qml` (lines 50, 173-174, 191-192), as pure arithmetic on plain
+ * `0f..1f` RGB components so it stays testable and Compose-free like everything else in this file.
+ *
+ * Qt's colour math is not a per-channel multiply: it works in HSV and touches only the `value`
+ * component, and when brightening would overflow it *desaturates* toward white instead of
+ * clipping each channel separately. Clipping per channel would shift the hue of a saturated nib
+ * colour (a red needle would drift orange as it brightened); Qt's rule keeps the hue and washes
+ * the colour out, which is what makes the blade read as lit metal rather than as a flat triangle.
+ */
+object VescNibShading {
+
+    /** A colour as three `0f..1f` components. Deliberately not `androidx.compose.ui.graphics.Color`. */
+    data class Rgb(val r: Double, val g: Double, val b: Double)
+
+    /**
+     * QML lines 173-174 and 191-192: `1.0 + 0.5 * Math.sin(d2r(gAngle + offset))`, the factor fed
+     * to `Qt.darker`. It sweeps 0.5..1.5 as the needle turns, so each blade half brightens on the
+     * swing where it faces the (imaginary, fixed) light and dims on the other — the reason the
+     * needle appears to catch the light as it moves rather than being a solid wedge of one colour.
+     * The four offsets the QML uses are -36, 0 (right half) and +144, +180 (left half).
+     */
+    fun shadeFactor(needleAngleDegrees: Double, offsetDegrees: Double): Double =
+        1.0 + 0.5 * sin((needleAngleDegrees + offsetDegrees) * PI / 180.0)
+
+    /**
+     * `Qt.darker(color, factor)` — `QColor::darker`, which divides the HSV *value* by `factor`.
+     * Because HSV value is `max(r, g, b)` and hue/saturation are ratios within the triple,
+     * dividing the value is exactly dividing all three components — until it would clip, which is
+     * only possible in the brightening direction, and Qt delegates that case to [lighter] (its
+     * `if (factor < 100) return lighter(10000/factor)`).
+     */
+    fun darker(color: Rgb, factor: Double): Rgb = when {
+        factor <= 0.0 -> color
+        factor < 1.0 -> lighter(color, 1.0 / factor)
+        else -> Rgb(color.r / factor, color.g / factor, color.b / factor)
+    }
+
+    /**
+     * `Qt.lighter(color, factor)` — `QColor::lighter`: multiply the HSV value by `factor`, and if
+     * that overflows, pin the value at maximum and subtract the overflow from the saturation
+     * (`s = s - (v - USHRT_MAX)`), i.e. wash out toward white while preserving hue.
+     *
+     * The rebuild avoids computing a hue angle at all: for any HSV triple, `max = v`,
+     * `min = v*(1-s)`, and the middle component sits at a hue-determined fraction
+     * `t = (mid - min)/(max - min)` of the way between them. `t` is invariant under any change of
+     * `v` and `s`, so recolouring is `newMin = 1 - s'`, `newMax = 1`, `newMid = newMin + s'*t`.
+     */
+    fun lighter(color: Rgb, factor: Double): Rgb = when {
+        factor <= 0.0 -> color
+        factor < 1.0 -> darker(color, 1.0 / factor)
+        else -> {
+            val v = max(color.r, max(color.g, color.b))
+            val scaled = v * factor
+            if (scaled <= 1.0) {
+                Rgb(color.r * factor, color.g * factor, color.b * factor)
+            } else {
+                val m = min(color.r, min(color.g, color.b))
+                val saturation = if (v <= 0.0) 0.0 else (v - m) / v
+                val newSaturation = max(0.0, saturation - (scaled - 1.0))
+                val newMin = 1.0 - newSaturation
+                if (v == m) {
+                    // Achromatic: no hue to preserve, and the fraction below is 0/0.
+                    Rgb(1.0, 1.0, 1.0)
+                } else {
+                    fun rebuild(component: Double) = newMin + newSaturation * ((component - m) / (v - m))
+                    Rgb(rebuild(color.r), rebuild(color.g), rebuild(color.b))
+                }
+            }
+        }
+    }
+
+    /** QML line 50: `traceColor: Qt.lighter(nibColor, 1.5)`. */
+    fun traceColor(nib: Rgb): Rgb = lighter(nib, 1.5)
 }
 
 /**
@@ -149,4 +396,18 @@ object VescDialGeometry {
      * is left to the Canvas layer, which is the only place trigonometry meets pixels.
      */
     fun labelRadius(outerRadius: Double): Double = outerRadius - labelInset(outerRadius)
+
+    /**
+     * Gauge angles -> the drawing surface's angles. The QML measures every gauge angle from
+     * TWELVE o'clock (its ticks are laid out by translating `-outerRadius` along `y`, i.e. up,
+     * and then rotating), while both HTML5 canvas and Compose measure from THREE o'clock — hence
+     * the `- 90` that appears at QML lines 221-222 and 456-457 wherever an angle finally meets a
+     * trigonometric call. Both conventions run clockwise-positive, so the offset is the whole of
+     * the conversion.
+     */
+    fun screenAngleDegrees(gaugeAngleDegrees: Double): Double = gaugeAngleDegrees - 90.0
+
+    /** [screenAngleDegrees] in radians, ready for `cos`/`sin`. */
+    fun screenAngleRadians(gaugeAngleDegrees: Double): Double =
+        screenAngleDegrees(gaugeAngleDegrees) * PI / 180.0
 }
