@@ -9,12 +9,9 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -44,20 +41,13 @@ class KableBmsRepositoryDisconnectRaceTest {
     private val starts = mutableListOf<Unit>()
     private val stops = mutableListOf<Unit>()
 
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = { starts += Unit },
         serviceStop = { stops += Unit },
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
-
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
 
     private fun vehicle() = singlePackVehicle(
         id = "v1",
@@ -70,8 +60,7 @@ class KableBmsRepositoryDisconnectRaceTest {
     )
 
     @Test
-    fun `disconnect during reconnect loop does not resurrect the connection`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnect during reconnect loop does not resurrect the connection`() = repoTest { repo ->
         val v = vehicle()
 
         // Simulate the situation right after a link drop: the repo enters the
@@ -129,10 +118,9 @@ class KableBmsRepositoryDisconnectRaceTest {
     }
 
     @Test
-    fun `simulateConnectionDrop starts a reconnect job`() = runTest {
+    fun `simulateConnectionDrop starts a reconnect job`() = repoTest { repo ->
         // Sanity check that the simulation hook actually drives the loop —
         // otherwise the race test above could pass trivially.
-        val repo = newRepo(this).also { underTest = it }
         val v = vehicle()
 
         repo.simulateConnectionDropForTest(
@@ -147,7 +135,8 @@ class KableBmsRepositoryDisconnectRaceTest {
         assertTrue(reconnectJob != null, "reconnect job must start after a drop")
         assertTrue(reconnectJob.isActive, "reconnect job must be active after a drop")
 
-        // Clean up so the test runner doesn't hang on the still-active loop.
+        // The assertion below is about disconnect() itself — bleRepositoryTest
+        // cancels the loop either way.
         repo.disconnect()
         runCurrent()
         assertTrue(reconnectJob.isActive.not(), "disconnect must terminate the reconnect job")

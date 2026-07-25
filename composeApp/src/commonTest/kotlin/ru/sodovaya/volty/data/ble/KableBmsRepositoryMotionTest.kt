@@ -15,11 +15,8 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -53,19 +50,12 @@ class KableBmsRepositoryMotionTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     /** A vehicle with one battery pack AND one motor controller (global index 0). */
@@ -87,8 +77,7 @@ class KableBmsRepositoryMotionTest {
     )
 
     @Test
-    fun `motion sample through the funnel surfaces on activeMotion`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `motion sample through the funnel surfaces on activeMotion`() = repoTest { repo ->
         val v = motionVehicle()
         // Installs the exact production wiring: one orchestrator (now sized
         // with the vehicle's controllers), one channel, one consumer.
@@ -117,8 +106,7 @@ class KableBmsRepositoryMotionTest {
     }
 
     @Test
-    fun `activeMotion emits the reported speed via Turbine`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `activeMotion emits the reported speed via Turbine`() = repoTest { repo ->
         val v = motionVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val channel = assertNotNull(repo.sampleFunnelChannelForTest())

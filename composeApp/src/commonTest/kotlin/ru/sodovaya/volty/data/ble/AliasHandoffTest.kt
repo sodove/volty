@@ -150,24 +150,42 @@ class AliasHandoffTest {
 
     /**
      * Both paths on ONE address is not a two-path battery at all — it is one
-     * link the gateway already multiplexes. Releasing it would disconnect the
-     * head unit that is serving the battery.
+     * link the gateway already multiplexes (C §6: a gateway may own several
+     * packs). Releasing it would disconnect the head unit that is serving the
+     * battery.
+     *
+     * Shaped so `spec.address != gateway.address` is the ONLY clause that can
+     * refuse it, because a version of this test that any other guard also
+     * catches pins nothing: there are TWO links, so the `specs.size < 2` early
+     * return cannot fire; the gateway owns no controllers and every pack it
+     * owns is in this alias group, so neither "the direct link owns something
+     * else" guard can answer either. Delete the address clause and this plans
+     * a handoff whose direct address IS the gateway's — releasing the head
+     * unit to itself, mid-ride.
      */
     @Test
     fun `an alias group entirely inside one gateway link plans nothing`() {
-        val both = LinkSpec(
+        val hostedBoth = LinkSpec(
             address = HU,
             protocolKind = ProtocolKind.VESC,
             ownedPacks = listOf(
                 OwnedSource(0, kind = ProtocolKind.VESC_BMS),
                 OwnedSource(1, kind = ProtocolKind.VESC_BMS)
-            ),
-            ownedControllers = listOf(OwnedSource(0, canId = 41))
+            )
+        )
+        val unrelated = LinkSpec(
+            address = ANT,
+            protocolKind = ProtocolKind.JBD,
+            ownedPacks = listOf(OwnedSource(2))
         )
         assertTrue(
             planAliasHandoffs(
-                specs = listOf(both),
-                packs = listOf(directPack(address = HU), hostedPack(address = HU))
+                specs = listOf(hostedBoth, unrelated),
+                packs = listOf(
+                    directPack(address = HU),
+                    hostedPack(address = HU),
+                    directPack(alias = null, index = 2).copy(label = "Aux")
+                )
             ).isEmpty()
         )
     }
@@ -176,5 +194,76 @@ class AliasHandoffTest {
     @Test
     fun `a single link plans nothing`() {
         assertTrue(planAliasHandoffs(listOf(gatewaySpec(packIndex = 0)), listOf(hostedPack(index = 0))).isEmpty())
+    }
+
+    // ----- The other direction: which released links may be raised again -----
+
+    /**
+     * [yieldedLinksToRaise]'s three refusals, one test each.
+     *
+     * They live here, and not on the repository, because that is where the
+     * guards themselves live — and because on the repository they are
+     * unreachable individually: `onLinkDrop` returns on its own
+     * `userInitiatedDisconnect` check before the re-raise is entered at all,
+     * and `disconnect()` sets that flag and empties the link list inside ONE
+     * critical section, so no repository-level sequence can produce
+     * "disconnected but links still installed" to tell the first refusal from
+     * the second. Each case below fails if — and only if — its own clause is
+     * deleted.
+     */
+    private fun yielded(address: String = ANT) =
+        YieldedLink(spec = directSpec(address = address), vehicle = null, gatewayAddress = HU)
+
+    @Test
+    fun `a released link is raised back into a live connection`() {
+        assertEquals(
+            listOf(yielded()),
+            yieldedLinksToRaise(
+                owed = listOf(yielded()),
+                installedAddresses = listOf(HU),
+                userInitiatedDisconnect = false
+            ),
+            "the head unit is still installed and the direct link is not — that is exactly the re-raise"
+        )
+    }
+
+    @Test
+    fun `nothing is raised once the user has disconnected`() {
+        assertTrue(
+            yieldedLinksToRaise(
+                owed = listOf(yielded()),
+                // Links still installed, so ONLY the user-disconnect clause
+                // can refuse this one.
+                installedAddresses = listOf(HU),
+                userInitiatedDisconnect = true
+            ).isEmpty(),
+            "a drop report racing a user disconnect must not leave one link live behind it"
+        )
+    }
+
+    @Test
+    fun `nothing is raised into a connection that is already gone`() {
+        assertTrue(
+            yieldedLinksToRaise(
+                owed = listOf(yielded()),
+                installedAddresses = emptyList(),
+                // Not user-initiated: the connection can be swept without the
+                // rider having asked, and this clause is what covers that.
+                userInitiatedDisconnect = false
+            ).isEmpty(),
+            "an empty link list means the connection is gone — re-adding a link rebuilds half of one"
+        )
+    }
+
+    @Test
+    fun `a link that is back by some other route is not raised a second time`() {
+        assertTrue(
+            yieldedLinksToRaise(
+                owed = listOf(yielded()),
+                installedAddresses = listOf(HU, ANT),
+                userInitiatedDisconnect = false
+            ).isEmpty(),
+            "a second PackLink for one address would give it two reconnect loops fighting over the peripheral"
+        )
     }
 }

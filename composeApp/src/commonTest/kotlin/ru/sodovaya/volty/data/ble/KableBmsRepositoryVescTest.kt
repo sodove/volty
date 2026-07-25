@@ -25,15 +25,12 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
 import kotlin.math.abs
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -70,19 +67,12 @@ class KableBmsRepositoryVescTest {
     }
 
     private val vehicleRepo = RecordingVehicleRepository()
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = vehicleRepo,
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     /**
@@ -128,8 +118,7 @@ class KableBmsRepositoryVescTest {
     // ----- 1. A controller-only vehicle must connect -----
 
     @Test
-    fun `controller-only vehicle plans a controller link and does not touch packs first`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `controller-only vehicle plans a controller link and does not touch packs first`() = repoTest { repo ->
         val v = vescOnlyVehicle()
 
         // The trap, pinned. The throwing `packs.first()` shims that used to sit
@@ -189,8 +178,7 @@ class KableBmsRepositoryVescTest {
      * goes red the moment anyone reintroduces a separate list.
      */
     @Test
-    fun `the picker's gate agrees with the real connect factory for every controller type`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the picker's gate agrees with the real connect factory for every controller type`() = repoTest { repo ->
         ControllerType.entries.forEach { type ->
             val v = controllerOnly(type)
             val spec = planLinks(v.packs, v.controllers).single()
@@ -224,8 +212,7 @@ class KableBmsRepositoryVescTest {
      * would have connected onto a Ride dashboard that can never show motion.
      */
     @Test
-    fun `a Begode controller yields a battery decoder, which is why it is refused`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a Begode controller yields a battery decoder, which is why it is refused`() = repoTest { repo ->
         val v = controllerOnly(ControllerType.BEGODE)
         val spec = planLinks(v.packs, v.controllers).single()
 
@@ -238,8 +225,7 @@ class KableBmsRepositoryVescTest {
     // ----- 2. A VESC link builds a VescProtocol that is a MotionSource -----
 
     @Test
-    fun `a vesc link builds a VescProtocol that is a MotionSource`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a vesc link builds a VescProtocol that is a MotionSource`() = repoTest { repo ->
         val v = vescOnlyVehicle(providesDerivedBattery = true)
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -256,12 +242,11 @@ class KableBmsRepositoryVescTest {
     }
 
     @Test
-    fun `a controller beside a real BMS builds a VescProtocol with no pack`() = runTest {
+    fun `a controller beside a real BMS builds a VescProtocol with no pack`() = repoTest { repo ->
         // "Backs no battery" only means something when a real battery source
         // exists ELSEWHERE — a zero-pack vehicle with the flag off is a
         // different scenario (see the next test): there the fallback must
         // derive a battery regardless of the flag.
-        val repo = newRepo(this).also { underTest = it }
         val v = Vehicle(
             id = "v-vesc-with-bms",
             name = "Scooter",
@@ -297,8 +282,7 @@ class KableBmsRepositoryVescTest {
      * else for one to come from.
      */
     @Test
-    fun `a controller-only vehicle derives a battery even when its own flag is off`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a controller-only vehicle derives a battery even when its own flag is off`() = repoTest { repo ->
         val v = vescOnlyVehicle(providesDerivedBattery = false)
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -312,8 +296,7 @@ class KableBmsRepositoryVescTest {
     // ----- 3. Motion from a VESC link reaches activeMotion -----
 
     @Test
-    fun `motion from a vesc link reaches activeMotion`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `motion from a vesc link reaches activeMotion`() = repoTest { repo ->
         val v = vescOnlyVehicle()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -358,8 +341,7 @@ class KableBmsRepositoryVescTest {
      * forever. This pins the slot AND that a sample actually lands in it.
      */
     @Test
-    fun `a derived-battery VESC link owns pack 0 and its sample materialises the latent slot`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a derived-battery VESC link owns pack 0 and its sample materialises the latent slot`() = repoTest { repo ->
         val v = vescOnlyVehicle(providesDerivedBattery = true)
         val funnels = repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -400,8 +382,7 @@ class KableBmsRepositoryVescTest {
      * reject the vehicle outright ("conflicting protocol kinds").
      */
     @Test
-    fun `a BMS beside a derived-battery VESC numbers the derived slot 1 and never persists it`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a BMS beside a derived-battery VESC numbers the derived slot 1 and never persists it`() = repoTest { repo ->
         val v = Vehicle(
             id = "v-mixed-derived",
             name = "Scooter",
@@ -459,8 +440,7 @@ class KableBmsRepositoryVescTest {
      * method: it happens iff the collector survived the shim.
      */
     @Test
-    fun `the cell-count auto-fill survives a zero-pack vehicle`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the cell-count auto-fill survives a zero-pack vehicle`() = repoTest { repo ->
         val v = vescOnlyVehicle()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -487,8 +467,7 @@ class KableBmsRepositoryVescTest {
     // ----- 4. A battery-only vehicle plans exactly as before -----
 
     @Test
-    fun `a battery-only vehicle plans exactly as before`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a battery-only vehicle plans exactly as before`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-ant", name = "Rig", iconKey = "battery",
             bmsType = BmsType.ANT_BMS, bmsAddress = ADDR,
@@ -510,8 +489,7 @@ class KableBmsRepositoryVescTest {
     }
 
     @Test
-    fun `a Begode still owns both branches through one address`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a Begode still owns both branches through one address`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-begode", name = "Wheel", iconKey = "unicycle",
             bmsType = BmsType.BEGODE, bmsAddress = ADDR,
@@ -526,8 +504,7 @@ class KableBmsRepositoryVescTest {
     }
 
     @Test
-    fun `a BMS plus a VESC at two addresses raise one link each`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a BMS plus a VESC at two addresses raise one link each`() = repoTest { repo ->
         val v = Vehicle(
             id = "v-mixed",
             name = "Mixed",
@@ -601,8 +578,7 @@ class KableBmsRepositoryVescTest {
     }
 
     @Test
-    fun `a gateway link builds the multiplexer instead of a plain VescProtocol`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a gateway link builds the multiplexer instead of a plain VescProtocol`() = repoTest { repo ->
         val v = gatewayScooter()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -625,8 +601,7 @@ class KableBmsRepositoryVescTest {
      * than on the one `planLinkPacks` sized the pack list from.
      */
     @Test
-    fun `effectiveLinkSpecs keeps the hosted battery's kind through the pack resize`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `effectiveLinkSpecs keeps the hosted battery's kind through the pack resize`() = repoTest { repo ->
         val v = gatewayScooter()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -651,8 +626,7 @@ class KableBmsRepositoryVescTest {
      * it would be.
      */
     @Test
-    fun `a head unit hosting a battery is a gateway even with no CAN ids`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a head unit hosting a battery is a gateway even with no CAN ids`() = repoTest { repo ->
         val v = Vehicle(
             id = "v-hosted-only",
             name = "Scooter",
@@ -679,8 +653,7 @@ class KableBmsRepositoryVescTest {
 
     /** A plain, non-gateway VESC link must be untouched by any of this. */
     @Test
-    fun `a lone VESC link is not a gateway and still builds VescProtocol`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a lone VESC link is not a gateway and still builds VescProtocol`() = repoTest { repo ->
         val v = vescOnlyVehicle(providesDerivedBattery = true)
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
@@ -698,8 +671,7 @@ class KableBmsRepositoryVescTest {
      * wheel — a wrong number that looks perfectly plausible.
      */
     @Test
-    fun `every controller's own motor config reaches the gateway`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `every controller's own motor config reaches the gateway`() = repoTest { repo ->
         val v = gatewayScooter()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
         val gateway = assertIs<VescGatewayProtocol>(

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.Vehicle
 
 /**
  * One battery reachable over TWO links of the same vehicle — the contention
@@ -93,4 +94,50 @@ internal fun planAliasHandoffs(specs: List<LinkSpec>, packs: List<Pack>): List<A
         }
     }
     return handoffs
+}
+
+/**
+ * A link the app has RELEASED to a head unit and owes a re-raise on, kept
+ * whole so it can come back exactly as planned — the [LinkSpec] carries the
+ * owned pack's **global** index, which is what makes the returning link feed
+ * the same orchestrator slot it fed before.
+ *
+ * [gatewayAddress] is the head unit whose hosted battery displaced it: the
+ * re-raise is keyed by it, so a vehicle with two head units brings back only
+ * the links the failing one took.
+ */
+internal data class YieldedLink(
+    val spec: LinkSpec,
+    val vehicle: Vehicle?,
+    val gatewayAddress: String
+)
+
+/**
+ * Decide which of the [owed] released links may actually be raised against
+ * the connection's live state — the three refusals of the re-raise, stated
+ * once, purely, where each can be pinned by a test of its own. Every one of
+ * them is a guard against resurrecting a link behind a connection that no
+ * longer wants it:
+ *
+ *  - **[userInitiatedDisconnect]** — the rider closed the connection. A drop
+ *    report racing that must not leave one link live behind it;
+ *  - **no links installed at all** — `disconnect()` swept the connection;
+ *    re-adding a link here would rebuild half a connection nobody asked for.
+ *    Distinct from the case above because the flag and the sweep are not the
+ *    same fact: a connection can be gone without the rider having asked;
+ *  - **already installed** — the address is back in the link list by some
+ *    other route (a rebuild in `onAppResumed`, a second drop report for one
+ *    death). A duplicate [PackLink] for one address would give it two
+ *    reconnect loops fighting over the same peripheral.
+ *
+ * @param installedAddresses the addresses of the links currently installed.
+ */
+internal fun yieldedLinksToRaise(
+    owed: List<YieldedLink>,
+    installedAddresses: List<String>,
+    userInitiatedDisconnect: Boolean
+): List<YieldedLink> {
+    if (userInitiatedDisconnect) return emptyList()
+    if (installedAddresses.isEmpty()) return emptyList()
+    return owed.filterNot { it.spec.address in installedAddresses }
 }

@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
@@ -18,11 +19,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertContains
@@ -36,7 +34,8 @@ import kotlin.time.Instant
 /**
  * Part C Task 5 — the alias-path handoff: the app lets go of its own direct
  * link to the ANT while the head unit is serving the same battery, and takes
- * it back when the head unit goes away.
+ * it back when the head unit goes away — whether it goes away by dropping the
+ * link or by staying up and no longer serving the battery.
  *
  * **The property these tests exist for is the last one: no gap in the
  * aggregated battery across the swap.** Everything else here is mechanism, and
@@ -63,19 +62,12 @@ class KableBmsRepositoryAliasHandoffTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     /**
@@ -100,28 +92,6 @@ class KableBmsRepositoryAliasHandoffTest {
         createdAt = Instant.fromEpochSeconds(0L),
         yieldBmsToHeadUnit = yieldToHeadUnit
     )
-
-    /**
-     * Run [body], then cancel the repository's scope **whatever happens**.
-     *
-     * A reconnect loop schedules delayed work forever, and `runTest` advances
-     * virtual time until every coroutine on its scheduler is idle — so ONE
-     * loop left running past the test body makes the test hang instead of
-     * finishing, allocating until the Gradle daemon dies. The first draft of
-     * this file did exactly that and wedged the build for over an hour.
-     *
-     * A plain `repo.disconnect()` at the end of the body is not enough,
-     * because it is skipped when an assertion above it fails: a broken
-     * expectation would then WEDGE the suite instead of reporting itself. This
-     * wrapper is what makes a failure in these tests fail fast.
-     */
-    private inline fun withReconnectLoopsStopped(repo: KableBmsRepository, body: () -> Unit) {
-        try {
-            body()
-        } finally {
-            repo.close()
-        }
-    }
 
     /**
      * Distinct voltages per path on purpose: they are how a test tells WHICH
@@ -152,8 +122,7 @@ class KableBmsRepositoryAliasHandoffTest {
     // ----- 1. The trigger is the hosted BMS REPORTING, not the link coming up -----
 
     @Test
-    fun `a head-unit link that is up but silent does not cost us the direct link`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a head-unit link that is up but silent does not cost us the direct link`() = repoTest { repo ->
         val v = twoPathScooter()
         repo.rideReady(v)
 
@@ -170,8 +139,7 @@ class KableBmsRepositoryAliasHandoffTest {
     }
 
     @Test
-    fun `the hosted battery reporting releases the direct link`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the hosted battery reporting releases the direct link`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
@@ -204,8 +172,7 @@ class KableBmsRepositoryAliasHandoffTest {
      * catches at every step below.
      */
     @Test
-    fun `the aggregated battery never gaps across the swap`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the aggregated battery never gaps across the swap`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
@@ -266,8 +233,7 @@ class KableBmsRepositoryAliasHandoffTest {
      * beside it. Stale-but-plausible, which is worse than absent.
      */
     @Test
-    fun `the aggregate follows the hosted path the moment the direct link is released`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the aggregate follows the hosted path the moment the direct link is released`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
@@ -293,8 +259,7 @@ class KableBmsRepositoryAliasHandoffTest {
     // ----- 3. Re-raise -----
 
     @Test
-    fun `dropping the head-unit link re-raises the direct BMS link`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `dropping the head-unit link re-raises the direct BMS link`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
@@ -302,26 +267,97 @@ class KableBmsRepositoryAliasHandoffTest {
         runCurrent()
         assertEquals(listOf(HU_ADDR), repo.linkAddressesForTest())
 
-        withReconnectLoopsStopped(repo) {
-            repo.simulateLinkDropForTest(HU_ADDR, "Link dropped")
-            runCurrent()
+        repo.simulateLinkDropForTest(HU_ADDR, "Link dropped")
+        runCurrent()
 
-            assertContains(
-                repo.linkAddressesForTest(),
-                ANT_ADDR,
-                "the released link must come back when the head unit goes away"
-            )
-            assertEquals(2, repo.linkCountForTest())
-            val antLoop = assertNotNull(
-                repo.linkReconnectJobForTest(ANT_ADDR),
-                "the returning link is handed to the ordinary reconnect loop, not left idle"
-            )
-            assertTrue(antLoop.isActive)
+        assertContains(
+            repo.linkAddressesForTest(),
+            ANT_ADDR,
+            "the released link must come back when the head unit goes away"
+        )
+        assertEquals(2, repo.linkCountForTest())
+        val antLoop = assertNotNull(
+            repo.linkReconnectJobForTest(ANT_ADDR),
+            "the returning link is handed to the ordinary reconnect loop, not left idle"
+        )
+        assertTrue(antLoop.isActive)
 
-            repo.disconnect()
-            runCurrent()
-            assertFalse(antLoop.isActive, "disconnect must stop the re-raised link's loop")
+        repo.disconnect()
+        runCurrent()
+        assertFalse(antLoop.isActive, "disconnect must stop the re-raised link's loop")
+    }
+
+    /**
+     * **The hole this task's first cut left open, and the harm it costs.**
+     *
+     * The head unit stays connected to the phone and keeps delivering its CAN
+     * uBoxes; what it stops delivering is the battery — the ANT drifting out of
+     * the HEAD UNIT's range, or unplugged from it. The link never drops, so a
+     * re-raise triggered only by `onLinkDrop` never fires, and with our own
+     * direct link already released the rider has no battery data for the rest
+     * of the ride. That is precisely the §9.4 harm the release side is guarded
+     * against, arriving from the other direction.
+     *
+     * Asserted on the AGGREGATE, because "the direct link came back" is
+     * mechanism and "the battery the rider sees comes back" is the property.
+     * The recovery step drives [KableBmsRepository.linkSampleFunnelsForTest] —
+     * the funnels of the links the app *currently holds* — rather than the
+     * install-time funnels the other tests use, precisely so it cannot pass by
+     * feeding a link the app no longer has: with the re-raise removed, the ANT
+     * is not among them, nothing is driven, and the assertions below see the
+     * head unit's frozen 73.4 V instead of a live 74.0 V.
+     */
+    @Test
+    fun `a hosted battery that goes silent under a live head unit brings the direct link back`() = repoTest { repo ->
+        var nowMs = 1_000_000L
+        repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
+        val v = twoPathScooter()
+        val funnels = repo.rideReady(v)
+        repo.markLinkOnlineForTest(HU_ADDR)
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+        assertEquals(listOf(HU_ADDR), repo.linkAddressesForTest(), "the direct link is released, as it should be")
+
+        // The ride continues: the head unit's uBoxes keep reporting, so its
+        // link stays healthy and its own stale-sample watchdog never fires.
+        // The battery behind it has gone quiet for longer than any pack is
+        // allowed to.
+        nowMs += BleConfig.packOfflineAfterMs + 1_000L
+        repo.linkMotionFunnelsForTest().single()(0, ControllerData(speedKmh = 31f, isConnected = true))
+        runCurrent()
+
+        assertContains(
+            repo.linkAddressesForTest(),
+            ANT_ADDR,
+            "the head unit is up but no longer serving the battery — the direct link has to come back"
+        )
+        assertTrue(
+            assertNotNull(repo.linkReconnectJobForTest(ANT_ADDR)).isActive,
+            "and through the ordinary reconnect loop, exactly as on the drop path"
+        )
+        assertFalse(
+            repo.activeVehicleData.value.aggregate.isConnected,
+            "meanwhile the path we gave up on must not keep showing its frozen last reading — " +
+                "absent is honest, stale-but-plausible is not"
+        )
+
+        // The ANT answers directly again. Only the links the app actually
+        // holds can report, and the hosted path is still silent.
+        val live = repo.linkSampleFunnelsForTest()
+        repo.linkAddressesForTest().forEachIndexed { i, address ->
+            if (address == ANT_ADDR) live[i](0, parkedSample(), emptyList())
         }
+        runCurrent()
+
+        val snap = repo.activeVehicleData.value
+        assertTrue(snap.aggregate.isConnected, "the rider's battery is back")
+        assertEquals(
+            74.0f,
+            snap.aggregate.voltage,
+            absoluteTolerance = 0.001f,
+            message = "and it is the direct path's live reading, not the head unit's frozen one"
+        )
+        assertEquals(1, snap.packs.size, "still one battery — the alias group is counted once")
     }
 
     /**
@@ -332,62 +368,63 @@ class KableBmsRepositoryAliasHandoffTest {
      * copy fights the first for the same address.
      */
     @Test
-    fun `a duplicate drop report does not raise the direct link twice`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a duplicate drop report does not raise the direct link twice`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
         funnels[1](0, hostedSample(), emptyList())
         runCurrent()
 
-        withReconnectLoopsStopped(repo) {
-            repo.simulateLinkDropForTest(HU_ADDR, "state observer")
-            repo.simulateLinkDropForTest(HU_ADDR, "watchdog")
-            runCurrent()
+        repo.simulateLinkDropForTest(HU_ADDR, "state observer")
+        repo.simulateLinkDropForTest(HU_ADDR, "watchdog")
+        runCurrent()
 
-            assertEquals(
-                listOf(ANT_ADDR),
-                repo.linkAddressesForTest().filter { it == ANT_ADDR },
-                "exactly one direct link, however many times the drop is reported"
-            )
-            assertEquals(2, repo.linkCountForTest())
-        }
+        assertEquals(
+            listOf(ANT_ADDR),
+            repo.linkAddressesForTest().filter { it == ANT_ADDR },
+            "exactly one direct link, however many times the drop is reported"
+        )
+        assertEquals(2, repo.linkCountForTest())
     }
 
     /**
      * A full user disconnect must not be undone by a drop report racing it —
      * the re-raise resurrects a link, and doing that after the sweep would
      * leave a live link behind a connection the user closed.
+     *
+     * What this pins, precisely: `onLinkDrop`'s OWN `userInitiatedDisconnect`
+     * guard, which returns before the re-raise is ever entered — the outcome,
+     * not the mechanism. The three refusals inside the re-raise itself are
+     * unreachable from here (`disconnect()` sets the flag and empties the link
+     * list in one critical section, so it can never present them one at a
+     * time) and are pinned individually against [yieldedLinksToRaise] in
+     * [AliasHandoffTest].
      */
     @Test
-    fun `a released link is not re-raised after the user disconnects`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a released link is not re-raised after the user disconnects`() = repoTest { repo ->
         val v = twoPathScooter()
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
         funnels[1](0, hostedSample(), emptyList())
         runCurrent()
 
-        withReconnectLoopsStopped(repo) {
-            // Report the drop FIRST — simulateLinkDropForTest reads the live
-            // link list, and after the sweep there is nothing left to name —
-            // then let the user's disconnect win the race before the drop is
-            // delivered.
-            repo.simulateLinkDropForTest(HU_ADDR, "late drop racing disconnect")
-            repo.disconnect()
-            runCurrent()
+        // Report the drop FIRST — simulateLinkDropForTest reads the live
+        // link list, and after the sweep there is nothing left to name —
+        // then let the user's disconnect win the race before the drop is
+        // delivered.
+        repo.simulateLinkDropForTest(HU_ADDR, "late drop racing disconnect")
+        repo.disconnect()
+        runCurrent()
 
-            assertEquals(0, repo.linkCountForTest(), "no link may be resurrected behind a user disconnect")
-            assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
-            assertNull(repo.linkReconnectJobForTest(ANT_ADDR))
-        }
+        assertEquals(0, repo.linkCountForTest(), "no link may be resurrected behind a user disconnect")
+        assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
+        assertNull(repo.linkReconnectJobForTest(ANT_ADDR))
     }
 
     // ----- 4. The toggle -----
 
     @Test
-    fun `an alias group spanning direct and hosted plans the handoff by default`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `an alias group spanning direct and hosted plans the handoff by default`() = repoTest { repo ->
         val v = twoPathScooter(yieldToHeadUnit = null)
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
@@ -407,8 +444,7 @@ class KableBmsRepositoryAliasHandoffTest {
     }
 
     @Test
-    fun `turning the toggle off keeps both links up when the hosted battery reports`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `turning the toggle off keeps both links up when the hosted battery reports`() = repoTest { repo ->
         val v = twoPathScooter(yieldToHeadUnit = false)
         val funnels = repo.rideReady(v)
         repo.markLinkOnlineForTest(HU_ADDR)
@@ -431,8 +467,7 @@ class KableBmsRepositoryAliasHandoffTest {
      * extra emission — the sample path is byte-identical to what it was.
      */
     @Test
-    fun `a one-BMS vehicle with no gateway plans nothing and keeps its link`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a one-BMS vehicle with no gateway plans nothing and keeps its link`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-solo", name = "Solo", iconKey = "battery",
             bmsType = BmsType.JK_BMS, bmsAddress = ANT_ADDR,
@@ -473,8 +508,7 @@ class KableBmsRepositoryAliasHandoffTest {
      * both keep feeding the aggregate.
      */
     @Test
-    fun `an ordinary two-BMS vehicle is untouched`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `an ordinary two-BMS vehicle is untouched`() = repoTest { repo ->
         val v = Vehicle(
             id = "v-two-bms", name = "Rig", iconKey = "battery",
             packs = listOf(

@@ -19,11 +19,8 @@ import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
@@ -57,19 +54,12 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     private val vehicleRepo = RecordingVehicleRepository()
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = vehicleRepo,
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     private fun vehicle(
@@ -89,8 +79,7 @@ class KableBmsRepositoryPackSizingTest {
     // --- Sizing the orchestrator to the protocol ---
 
     @Test
-    fun `a one-pack Begode vehicle gets a second pack slot`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a one-pack Begode vehicle gets a second pack slot`() = repoTest { repo ->
         val v = vehicle()
         assertEquals(1, v.packs.size, "precondition: the stored vehicle has one pack")
 
@@ -109,8 +98,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `a sample for the synthesised pack is not dropped`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a sample for the synthesised pack is not dropped`() = repoTest { repo ->
         val v = vehicle()
         val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
@@ -131,8 +119,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `two parallel branches aggregate to the wheel's real current`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `two parallel branches aggregate to the wheel's real current`() = repoTest { repo ->
         val v = vehicle()
         val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val orchestrator = VehicleConnection(
@@ -155,8 +142,7 @@ class KableBmsRepositoryPackSizingTest {
     // --- SoC estimation through the real sample funnel ---
 
     @Test
-    fun `estimated SoC survives the synthesised Begode branch instead of halving`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `estimated SoC survives the synthesised Begode branch instead of halving`() = repoTest { repo ->
         // Stored single-pack Begode vehicle: the protocol reports two branches,
         // so slot 1 is synthesised at connect time and the estimator must be
         // able to find it. This drives the SAME funnel a live session uses
@@ -192,8 +178,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `sections travel the production funnel into the pack state`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `sections travel the production funnel into the pack state`() = repoTest { repo ->
         val v = vehicle()
         // The exact funnel doConnect wires into a ConnectionSession — sections
         // enter beside the sample and must come out on PackState.sections.
@@ -219,8 +204,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `a single-pack BMS is left exactly as stored`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a single-pack BMS is left exactly as stored`() = repoTest { repo ->
         val v = vehicle(type = BmsType.JK_BMS)
 
         val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
@@ -230,8 +214,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `a guest connection with no vehicle still gets both Begode slots`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a guest connection with no vehicle still gets both Begode slots`() = repoTest { repo ->
         val packs = repo.connectionPacksForTest(null, ADDRESS, BmsType.BEGODE)
         assertEquals(2, packs.size)
         assertTrue(packs.all { it.bmsAddress == ADDRESS })
@@ -254,8 +237,7 @@ class KableBmsRepositoryPackSizingTest {
         )
 
     @Test
-    fun `the discovered pack list is persisted once the extra pack reports`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the discovered pack list is persisted once the extra pack reports`() = repoTest { repo ->
         val v = vehicle()
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -272,8 +254,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `packs are not persisted while the extra pack is still silent`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `packs are not persisted while the extra pack is still silent`() = repoTest { repo ->
         val v = vehicle()
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -290,8 +271,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `persistence happens once, not on every sample`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `persistence happens once, not on every sample`() = repoTest { repo ->
         val v = vehicle()
         repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -306,8 +286,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `a vehicle that already stores both packs is not rewritten`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a vehicle that already stores both packs is not rewritten`() = repoTest { repo ->
         val v = vehicle()
         val packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         val twoPackVehicle = v.copy(packs = packs)
@@ -327,8 +306,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `cell count auto-fill stores one branch, not both branches merged`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `cell count auto-fill stores one branch, not both branches merged`() = repoTest { repo ->
         val v = vehicle()
         // Already stores both packs, so only the cell-count auto-fill can fire.
         val twoPackVehicle = v.copy(packs = repo.connectionPacksForTest(v, v.primaryAddress, v.packs.first().bmsType))
@@ -368,8 +346,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `guest vehicles are never persisted`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `guest vehicles are never persisted`() = repoTest { repo ->
         val guest = vehicle(id = "${GUEST_VEHICLE_ID_PREFIX}$ADDRESS")
         repo.primeConnectedForTest(guest, guest.primaryAddress, guest.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()
@@ -384,8 +361,7 @@ class KableBmsRepositoryPackSizingTest {
     }
 
     @Test
-    fun `the demo vehicle is never persisted`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the demo vehicle is never persisted`() = repoTest { repo ->
         val demo = vehicle(id = DEMO_VEHICLE_ID)
         repo.primeConnectedForTest(demo, demo.primaryAddress, demo.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
         runCurrent()

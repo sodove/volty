@@ -9,10 +9,7 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -42,19 +39,12 @@ class KableBmsRepositoryDumbBegodeTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = NoopVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     private fun vehicle(cellCount: Int?) = singlePackVehicle(
@@ -87,8 +77,7 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `a dumb wheel with a known cell count shows scaled voltage, SoC, current and temperature`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a dumb wheel with a known cell count shows scaled voltage, SoC, current and temperature`() = repoTest { repo ->
         val wire = Wire(repo, vehicle(cellCount = 40))
 
         // A dumb wheel's whole vocabulary: live frames and the odometer.
@@ -115,8 +104,7 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `a dumb wheel with no known cell count connects but never fabricates a voltage`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a dumb wheel with no known cell count connects but never fabricates a voltage`() = repoTest { repo ->
         // A brand-new guest profile: no user-set and no auto-filled cell count.
         val wire = Wire(repo, vehicle(cellCount = null))
 
@@ -140,11 +128,10 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `a dumb wheel with no cell count publishes an unknown SoC end to end`() = runTest {
+    fun `a dumb wheel with no cell count publishes an unknown SoC end to end`() = repoTest { repo ->
         // The false-alarm regression this flag exists for: soc = 0 with
         // socKnown = false must reach activeData, so AlertEngine skips the
         // SoC alerts instead of crying "Battery low" on a full wheel.
-        val repo = newRepo(this).also { underTest = it }
         val wire = Wire(repo, vehicle(cellCount = null))
 
         wire.notify(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
@@ -156,8 +143,7 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `a dumb wheel with a known cell count publishes a known estimated SoC`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `a dumb wheel with a known cell count publishes a known estimated SoC`() = repoTest { repo ->
         val wire = Wire(repo, vehicle(cellCount = 40))
 
         wire.notify(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
@@ -168,8 +154,7 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `the smart-BMS capture publishes a known SoC`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the smart-BMS capture publishes a known SoC`() = repoTest { repo ->
         val wire = Wire(repo, vehicle(cellCount = 40))
 
         BegodeDumpFixture.chunks().forEach { wire.notify(it) }
@@ -180,8 +165,7 @@ class KableBmsRepositoryDumbBegodeTest {
     }
 
     @Test
-    fun `the smart-BMS capture through the same pipeline is completely unaffected`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `the smart-BMS capture through the same pipeline is completely unaffected`() = repoTest { repo ->
         val wire = Wire(repo, vehicle(cellCount = 40))
 
         BegodeDumpFixture.chunks().forEach { wire.notify(it) }

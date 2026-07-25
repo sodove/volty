@@ -13,11 +13,8 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -50,19 +47,12 @@ class KableBmsRepositoryDisconnectLinkTest {
         override suspend fun touch(id: String) {}
     }
 
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
-
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
 
     private fun twoLinkVehicle(): Vehicle = Vehicle(
@@ -82,8 +72,7 @@ class KableBmsRepositoryDisconnectLinkTest {
         BmsData(voltage = voltage, current = current, isConnected = true)
 
     @Test
-    fun `disconnectLink drops one link, keeps the other Connected and producing`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnectLink drops one link, keeps the other Connected and producing`() = repoTest { repo ->
         val v = twoLinkVehicle()
         val funnels = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
@@ -108,8 +97,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     }
 
     @Test
-    fun `disconnectLink cancels a reconnecting link's own loop`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnectLink cancels a reconnecting link's own loop`() = repoTest { repo ->
         val v = twoLinkVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)
@@ -129,8 +117,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     }
 
     @Test
-    fun `disconnectLink on the last link degenerates to a full disconnect`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnectLink on the last link degenerates to a full disconnect`() = repoTest { repo ->
         val v = singlePackVehicle(
             id = "v-one", name = "Solo", iconKey = "scooter",
             bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
@@ -149,8 +136,7 @@ class KableBmsRepositoryDisconnectLinkTest {
     }
 
     @Test
-    fun `disconnectLink is a no-op for an address with no installed link`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `disconnectLink is a no-op for an address with no installed link`() = repoTest { repo ->
         val v = twoLinkVehicle()
         repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
         repo.markLinkOnlineForTest(ADDR_A)

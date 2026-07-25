@@ -10,11 +10,8 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
-import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
-import kotlinx.coroutines.test.runTest
-import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -38,20 +35,13 @@ class KableBmsRepositoryOnAppResumedTest {
         override suspend fun touch(id: String) {}
     }
 
-    private fun newRepo(testScope: TestScope): KableBmsRepository = KableBmsRepository.forTesting(
+    /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */
+    private fun repoTest(body: suspend TestScope.(KableBmsRepository) -> Unit) = bleRepositoryTest(
         vehicleRepository = StubVehicleRepository(),
         serviceStart = {},
         serviceStop = {},
-        coroutineContext = StandardTestDispatcher(testScope.testScheduler),
+        body = body
     )
-
-    private var underTest: KableBmsRepository? = null
-
-    @AfterTest
-    fun tearDown() {
-        underTest?.close()
-        underTest = null
-    }
 
     private fun vehicle() = singlePackVehicle(
         id = "v1",
@@ -64,8 +54,7 @@ class KableBmsRepositoryOnAppResumedTest {
     )
 
     @Test
-    fun `onAppResumed with stale sample triggers reconnect loop`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `onAppResumed with stale sample triggers reconnect loop`() = repoTest { repo ->
         val v = vehicle()
 
         // Connected pre-background, but the last sample is well past staleSampleMs.
@@ -86,15 +75,15 @@ class KableBmsRepositoryOnAppResumedTest {
         assertTrue(job != null, "expected reconnect job to be started by onAppResumed")
         assertTrue(job.isActive, "expected reconnect job to be active")
 
-        // Clean shutdown so the runTest doesn't hang on the live loop.
+        // The assertion below is about disconnect(), not about cleanup —
+        // bleRepositoryTest cancels the loop either way.
         repo.disconnect()
         runCurrent()
         assertTrue(!job.isActive, "disconnect must terminate the reconnect job")
     }
 
     @Test
-    fun `onAppResumed with fresh sample is a no-op`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `onAppResumed with fresh sample is a no-op`() = repoTest { repo ->
         val v = vehicle()
 
         // Sample arrived a moment ago — well within staleSampleMs.
@@ -120,8 +109,7 @@ class KableBmsRepositoryOnAppResumedTest {
     }
 
     @Test
-    fun `onAppResumed while Disconnected is a no-op`() = runTest {
-        val repo = newRepo(this).also { underTest = it }
+    fun `onAppResumed while Disconnected is a no-op`() = repoTest { repo ->
 
         // Default state is Idle; explicit disconnect drops to Disconnected.
         repo.disconnect()
