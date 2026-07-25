@@ -59,7 +59,16 @@ data class ClassicDialLabels(
     val battery: String = "BATTERY",
     val esc: String = "TEMP ESC",
     val consumption: String = "CONSUMP.",
-    val motor: String = "TEMP MOTOR"
+    val motor: String = "TEMP MOTOR",
+    /**
+     * The consumption dial's UNIT, resolved by the caller because — alone among the eight units on
+     * this cluster — it is spelled rather than symbolic, and Russian spells it `Вт·ч/км`. (`A`,
+     * `%`, `W`, `°C` are the same in every locale; `km/h`/`mph` is the unit system's own business
+     * and [UnitFormatter] owns it.) Null falls back to [UnitFormatter.consumptionUnit], which is
+     * English-only and exists so this object stays callable, and testable, without a resource
+     * resolver.
+     */
+    val consumptionUnit: String? = null
 )
 
 /**
@@ -392,7 +401,8 @@ object ClassicDialSpecs {
                 ),
                 value = whPerKm?.let { UnitFormatter.consumptionValue(it, units) } ?: 0f,
                 caption = labels.consumption,
-                unit = UnitFormatter.consumptionUnit(units), // QML :500
+                // QML :500. Localized by the caller when it has a resolver; see ClassicDialLabels.
+                unit = labels.consumptionUnit ?: UnitFormatter.consumptionUnit(units),
                 valueTextOverride = if (whPerKm == null) UNKNOWN else null,
                 severity = consumptionLevel(whPerKm)
             )

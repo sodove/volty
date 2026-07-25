@@ -47,15 +47,13 @@ private data class VescClusterSlotElement(val slot: VescClusterSlot) : ParentDat
  * `motTempGauge`) and therefore painted after it, i.e. on top; `batteryGauge` is nested inside
  * `speedGauge` the same way. Across trios/pairs the paint order does not matter because the
  * geometry keeps them apart (see [VescClusterGeometry]'s overlap doc), so no z-index bookkeeping
- * is needed — Compose paints same-layer siblings in the order they were placed.
- *
- * @param emphasized the dial the rider's "Inner gauge" setting picks out, drawn at
- *   [VescClusterGeometry.EMPHASIS_SIZE_FACTOR] and brought to the front. Null for none.
+ * is needed — Compose paints same-layer siblings in the order they were placed. Nothing is ever
+ * hoisted out of that order: see [VescClusterGeometry.place] for why the "Inner gauge" setting no
+ * longer resizes or re-stacks a dial here.
  */
 @Composable
 fun VescClusterLayout(
     modifier: Modifier = Modifier,
-    emphasized: VescClusterSlot? = null,
     content: @Composable VescClusterScope.() -> Unit
 ) {
     Layout(content = { VescClusterScopeInstance.content() }, modifier = modifier) { measurables, constraints ->
@@ -73,11 +71,12 @@ fun VescClusterLayout(
             return@Layout layout(width.coerceAtLeast(0), constraints.minHeight) {}
         }
 
-        val boxes = VescClusterGeometry.place(sizes.g, sizes.g2, emphasized)
-        // An emphasised Power or Consumption dial reaches slightly past its row, so the cluster is
-        // sized and shifted by the REAL extent rather than by totalHeight — the same class of bug
-        // as the one this layout's own sizing used to have, one level down.
-        val extent = VescClusterGeometry.verticalExtent(sizes.g, sizes.g2, emphasized)
+        val boxes = VescClusterGeometry.place(sizes.g, sizes.g2)
+        // Sized and shifted by the REAL extent of the placed dials rather than by totalHeight, so
+        // a dial that ever reaches past its own row moves the cluster instead of being clipped by
+        // the container — the same class of bug as the one this layout's own sizing used to have,
+        // one level down.
+        val extent = VescClusterGeometry.verticalExtent(sizes.g, sizes.g2)
         // Inside the incoming height by construction (see the class doc); coerced only to satisfy
         // a minHeight larger than the cluster, which pads rather than clips.
         val height = (extent.endInclusive - extent.start)
@@ -94,7 +93,7 @@ fun VescClusterLayout(
         }
 
         layout(width, height) {
-            VescClusterGeometry.paintOrder(emphasized).forEach { slot ->
+            VescClusterGeometry.paintOrder.forEach { slot ->
                 val (placeable, box) = placed[slot] ?: return@forEach
                 val left = (centreX + box.centerX - box.size / 2.0).roundToInt()
                 val top = (box.centerY - box.size / 2.0 - extent.start).roundToInt()

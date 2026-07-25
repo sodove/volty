@@ -1,10 +1,12 @@
 package ru.sodovaya.volty.presentation.ride.gauge
 
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.sin
+import kotlin.math.sqrt
 
 /**
  * One VESC gauge's angle sweep and value range — the faithful port of the property block at the
@@ -242,12 +244,12 @@ object VescDialMetrics {
     /**
      * QML line 230.
      *
-     * Note for anyone reaching for this as an emphasis cue (spec B §7.2 wants the rider's chosen
-     * dial picked out without using colour): there is no room. The two rings this stroke draws
-     * already fill the entire band between [tickOuterRadius] (`0.93R`) and the rim — `2 * 0.035R`
-     * is exactly the `0.07R` available — so any heavier bezel grows inward over the tick marks and
-     * reads as a clipping bug rather than as emphasis. The cue lives in
-     * [VescClusterGeometry.EMPHASIS_SIZE_FACTOR] instead, where there is room to spare.
+     * Note for anyone reaching for this as a "pick this dial out" cue: there is no room. The two
+     * rings this stroke draws already fill the entire band between [tickOuterRadius] (`0.93R`) and
+     * the rim — `2 * 0.035R` is exactly the `0.07R` available (pinned in `VescDialMetricsTest`) —
+     * so any heavier bezel grows inward over the tick marks and reads as a clipping bug. The
+     * Classic cluster no longer has an emphasis cue at all: it renders exactly the composition
+     * `RtDataSetup.qml` describes, with no size or paint-order deviation.
      */
     fun bezelStroke(outerRadius: Double): Double = outerRadius * BEZEL_STROKE_FRACTION
 
@@ -440,6 +442,64 @@ object VescDialGeometry {
             captionTop = valueTop - captionHeight,
             unitTop = valueTop + valueHeight
         )
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Fitting the caption and the unit — the one thing the QML never had to solve
+    // ------------------------------------------------------------------------------------------
+
+    /**
+     * The floor [centerTextScale] will not shrink past.
+     *
+     * A caption that needs less than half its nominal size is not a layout problem any more, it is
+     * a translation that does not belong on a dial face, and rendering it at a size nobody can read
+     * hides that. Below this the text is left slightly wide instead: visibly wrong beats invisibly
+     * present.
+     */
+    const val MIN_CENTER_TEXT_SCALE: Double = 0.5
+
+    /**
+     * The width available to a centre-stack line whose outer edge sits [halfHeight] away from the
+     * dial's centre: the chord of [labelRadius] (`0.66R`, the ring the scale numbers are centred
+     * on) at that height.
+     *
+     * `CustomGauge.qml` never needed this because every caption it draws is an English word of five
+     * or six letters at `0.12R`, which fits any dial in the cluster with room to spare. Ours are
+     * localized — `МОЩНОСТЬ` is eight characters and `CONSUMPTION` eleven — and the caption is the
+     * one line of the stack that can afford to give ground: the readout is the reading and stays at
+     * [VescDialMetrics.VALUE_FONT_FRACTION] (`0.3R`, QML line 107) whatever happens around it.
+     *
+     * The chord, not the diameter: the line's own far edge is what has to clear the ring, and at
+     * `halfHeight` above (or below) the centre the ring is `2 * sqrt(0.66R² - halfHeight²)` across,
+     * not `1.32R`. A caption at the top of the stack sits roughly a third of the radius up, where
+     * that costs it about 12% of the width the diameter would suggest.
+     */
+    fun centerTextMaxWidth(outerRadius: Double, halfHeight: Double): Double {
+        val ring = labelRadius(outerRadius)
+        val h = abs(halfHeight)
+        if (ring <= 0.0 || h >= ring) return 0.0
+        return 2.0 * sqrt(ring * ring - h * h)
+    }
+
+    /**
+     * The factor a centre-stack line of [measuredWidth] must be drawn at to fit [maxWidth] — `1.0`
+     * when it already fits, never below [MIN_CENTER_TEXT_SCALE].
+     *
+     * Scaling, not wrapping. `МОЩНОСТЬ` is a single word: wrapping it means hyphenating it or
+     * breaking it mid-word, and on a `g2` cluster dial a two-line caption also pushes the stack's
+     * outer edge further from the centre, which shrinks the very chord it was trying to fit into.
+     * (`ClassicDialSpecs.twoLineCaption` does split the two temperature captions, but at a real
+     * space between two words, which is a different operation.)
+     *
+     * Deliberately takes the MEASURED width rather than the text: measurement needs a font, a
+     * density and Compose; choosing a factor from two numbers needs none of that, and this is the
+     * half that a test can hold still.
+     */
+    fun centerTextScale(measuredWidth: Double, maxWidth: Double): Double = when {
+        measuredWidth <= 0.0 -> 1.0
+        maxWidth <= 0.0 -> MIN_CENTER_TEXT_SCALE
+        measuredWidth <= maxWidth -> 1.0
+        else -> (maxWidth / measuredWidth).coerceAtLeast(MIN_CENTER_TEXT_SCALE)
     }
 }
 

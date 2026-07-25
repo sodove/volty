@@ -17,6 +17,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.luminance
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.TextMeasurer
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.drawText
@@ -55,24 +57,46 @@ data class VescDialColors(
 )
 
 /**
+ * M3's standard disabled-content opacity, and what an unswept tick gets in the DARK theme — the
+ * theme VESC's own `disabledText` was picked for, a mid-grey against near-white `lightText`.
+ */
+private const val UNCOVERED_ALPHA_DARK = 0.38f
+
+/**
+ * The same step in the LIGHT theme, where 38% is not enough.
+ *
+ * Opacity is not symmetric between the two themes: dark `onSurface` at 38% over a light `surface`
+ * fades toward the background much faster than light `onSurface` at 38% over a dark one, because
+ * contrast is a ratio of luminances and the light theme starts from a near-white face with nowhere
+ * to go. At 38% an unswept `0.12R` tick numeral on a cluster dial measures roughly 2.5:1 — thin at
+ * that size, and these are the smallest numbers on the screen. 50% brings it back to about 3.4:1
+ * while still reading as clearly behind the swept ticks, which is the distinction the two colours
+ * exist to make. The dark theme is left exactly as it was.
+ */
+private const val UNCOVERED_ALPHA_LIGHT = 0.50f
+
+/**
  * The default mapping of [VescDialColors] onto the active scheme.
  *
  * Not wrapped in `remember`: M3's `ColorScheme` mutates its slots in place (a dynamic-colour or
  * light/dark switch does not change the object's identity), so keying a `remember` on it would
- * risk serving stale colours — the same reasoning as `rememberDialColors`.
+ * risk serving stale colours — the same reasoning as `rememberDialColors`. That same mutability is
+ * why the light/dark split below is read off the scheme's own [face] luminance rather than from
+ * `isSystemInDarkTheme()`: the app has a three-way theme preference (`VoltyTheme`), so the system
+ * setting is not the answer, and the scheme is the thing actually being drawn against.
  */
 @Composable
 fun rememberVescDialColors(): VescDialColors {
     val scheme = MaterialTheme.colorScheme
+    val lightFace = scheme.surface.luminance() > 0.5f
     return VescDialColors(
         face = scheme.surface,
         bezelLight = scheme.surfaceBright,
         bezelDark = scheme.surfaceDim,
         covered = scheme.onSurface,
-        // VESC's `disabledText` is a flat mid-grey against near-white `lightText`. M3 expresses
-        // the same "present but inactive" step as its standard 38% disabled-content opacity,
-        // which keeps the contrast ratio between swept and unswept ticks at every theme.
-        uncovered = scheme.onSurface.copy(alpha = 0.38f),
+        uncovered = scheme.onSurface.copy(
+            alpha = if (lightFace) UNCOVERED_ALPHA_LIGHT else UNCOVERED_ALPHA_DARK
+        ),
         text = scheme.onSurface
     )
 }
@@ -319,10 +343,15 @@ private fun DrawScope.drawVescTickLabels(
  * half instead of shoving the number down; the unit hangs off the value's BOTTOM edge
  * (`anchors.top: speedLabel.bottom`, line 117). All three are horizontally centred.
  *
- * There is no shrink-to-fit transform here, and there must not be one: at `0.3R` for the value
- * and `0.12R` for the other two, the whole stack is comfortably inside the `0.66R` number ring by
- * construction. A dial that needs to shrink its own readout to avoid its own scale has the wrong
- * proportions, and hiding that behind a scale factor hides the bug rather than fixing it.
+ * **The value is never scaled; the caption and the unit are, when they have to be.** At `0.3R` the
+ * readout IS the instrument, so it keeps its size unconditionally (QML line 107) — a dial that
+ * shrinks its own number to make room for a word has its priorities backwards. The other two lines
+ * are `0.12R` labels and can give ground, which they have to: `CustomGauge.qml` only ever draws
+ * five- and six-letter English captions, while ours are localized (`МОЩНОСТЬ`, `CONSUMPTION`) and
+ * a long one on a `g2` cluster dial can reach the `0.66R` number ring. [fitCenterTextLine] measures
+ * each of the two at its nominal size and, only if it is too wide for the chord available at its
+ * own height, re-measures it one notch smaller — see [VescDialGeometry.centerTextMaxWidth] and
+ * [VescDialGeometry.centerTextScale], where the arithmetic lives and is tested.
  */
 private fun DrawScope.drawVescCenterText(
     center: Offset,
@@ -350,8 +379,11 @@ private fun DrawScope.drawVescCenterText(
     )
 
     val valueLayout = textMeasurer.measure(valueText, valueStyle)
-    val captionLayout = if (caption.isNotEmpty()) textMeasurer.measure(caption, captionStyle) else null
-    val unitLayout = if (unit.isNotEmpty()) textMeasurer.measure(unit, unitStyle) else null
+    // Both `0.12R` lines hang off an edge of the value block, so both sit the same distance out
+    // from the centre for a given height of their own — one up, one down.
+    val valueHalfHeight = valueLayout.size.height / 2.0
+    val captionLayout = fitCenterTextLine(textMeasurer, caption, captionStyle, outerRadius, valueHalfHeight)
+    val unitLayout = fitCenterTextLine(textMeasurer, unit, unitStyle, outerRadius, valueHalfHeight)
 
     // The anchoring itself — is a pure function of centerY plus two measured heights, tested in
     // VescDialGeometryTest — not computed inline here.
@@ -382,6 +414,38 @@ private fun DrawScope.drawVescCenterText(
             topLeft = Offset(center.x - unitLayout.size.width / 2f, stack.unitTop.toFloat())
         )
     }
+}
+
+/**
+ * Measures one `0.12R` centre-stack line ([caption] or [unit]) and, if it is too wide for the room
+ * the dial leaves at its own height, re-measures it at a font size scaled to fit. Null for an empty
+ * string, so a dial with no caption draws none rather than an empty box.
+ *
+ * The two-pass measure is the whole reason this cannot live in [VescDialGeometry]: only Compose can
+ * say how wide `МОЩНОСТЬ` is at a given font size on a given device. The budget and the factor
+ * derived from it are pure, and are computed there.
+ *
+ * The height fed to the budget is the line's NOMINAL height, not its scaled one. A scaled line is
+ * shorter, so its outer edge is closer to the centre, where the chord is wider — meaning this
+ * errs, if at all, on the side of shrinking slightly more than strictly necessary. Iterating to a
+ * fixed point would recover a percent or two of font size and cost a measure pass per frame.
+ */
+private fun fitCenterTextLine(
+    textMeasurer: TextMeasurer,
+    text: String,
+    style: TextStyle,
+    outerRadius: Float,
+    valueHalfHeight: Double
+): TextLayoutResult? {
+    if (text.isEmpty()) return null
+    val nominal = textMeasurer.measure(text, style)
+    val maxWidth = VescDialGeometry.centerTextMaxWidth(
+        outerRadius = outerRadius.toDouble(),
+        halfHeight = valueHalfHeight + nominal.size.height
+    )
+    val scale = VescDialGeometry.centerTextScale(nominal.size.width.toDouble(), maxWidth)
+    if (scale >= 1.0) return nominal
+    return textMeasurer.measure(text, style.copy(fontSize = style.fontSize * scale.toFloat()))
 }
 
 /**

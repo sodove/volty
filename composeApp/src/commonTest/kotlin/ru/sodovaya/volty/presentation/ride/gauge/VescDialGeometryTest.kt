@@ -290,4 +290,167 @@ class VescDialGeometryTest {
         assertTrue(tall.captionTop < short.captionTop, "a taller value must push the caption further up")
         assertTrue(tall.unitTop > short.unitTop, "a taller value must push the unit further down")
     }
+
+    // =============================================================================================
+    // Caption / unit fit — the localized captions CustomGauge.qml never had to draw
+    // =============================================================================================
+    //
+    // This replaces the shrink-to-fit regression pin the previous renderer carried and Task 4
+    // deleted with that renderer's files. It is not the same pin: the old one shrank the READOUT,
+    // which is the one line that must never move (QML :107 makes it 0.3R, two and a half times
+    // everything else on the dial). What is pinned here is the budget the two 0.12R lines get and
+    // the factor they are scaled by when they exceed it.
+
+    /**
+     * Advance widths in units of 1/2048 em for the characters that appear in the four captions
+     * below, read off Roboto Regular — the family Compose falls back to on Android, and therefore
+     * the one the real measurement uses. Modelling the width rather than measuring it is the point
+     * of the split the fix is built on: measurement needs a font, a density and a Compose
+     * `TextMeasurer`; choosing a scale factor from a measured width needs none of those, and only
+     * the second half belongs in a pure test.
+     */
+    private val robotoAdvance: Map<Char, Int> = mapOf(
+        // Latin (CONSUMPTION)
+        'C' to 1381, 'O' to 1520, 'N' to 1560, 'S' to 1370, 'U' to 1509,
+        'M' to 2103, 'P' to 1290, 'T' to 1251, 'I' to 596,
+        // Cyrillic (МОЩНОСТЬ, РАСХОД, ТЕМП. МОТОРА)
+        'М' to 2103, 'О' to 1520, 'Щ' to 2100, 'Н' to 1502, 'С' to 1381,
+        'Т' to 1251, 'Ь' to 1290, 'Р' to 1290, 'А' to 1336, 'Х' to 1319,
+        'Д' to 1450, 'Е' to 1247, 'П' to 1502, '.' to 569
+    )
+
+    /** The width of [text] set at [fontSize], in the same unit as [fontSize]. */
+    private fun width(text: String, fontSize: Double): Double =
+        text.sumOf { requireNotNull(robotoAdvance[it]) { "no advance for '$it'" } } / 2048.0 * fontSize
+
+    /**
+     * The two dial sizes the eight-gauge cluster is built from on a 1080 px phone: `g2` for the six
+     * ordinary dials and `1.05 * g2` for Power and Consumption (`RtDataSetup.qml` :103-104,
+     * :489-490). Taken from the real fit rather than invented, so these are the radii a rider's
+     * device actually draws.
+     */
+    private val clusterRadii: List<Pair<String, Double>> = run {
+        val sizes = VescClusterGeometry.fit(1080.0, Double.POSITIVE_INFINITY)
+        listOf("g2" to sizes.g2 / 2.0, "1.05*g2" to 1.05 * sizes.g2 / 2.0)
+    }
+
+    /**
+     * The budget one 0.12R line gets on a dial of radius [r], measured the way the renderer does:
+     * the value block is 0.3R tall (plus Roboto's own 1.17 line height) and the caption hangs off
+     * its top edge, so the caption's outer edge sits `valueHeight/2 + captionHeight` from centre.
+     */
+    private fun captionBudget(r: Double): Double {
+        val lineHeight = 1.17 // Roboto's ascent+descent, i.e. what a one-line layout measures
+        val valueHeight = lineHeight * VescDialMetrics.VALUE_FONT_FRACTION * r
+        val captionHeight = lineHeight * VescDialMetrics.CAPTION_FONT_FRACTION * r
+        return VescDialGeometry.centerTextMaxWidth(r, valueHeight / 2.0 + captionHeight)
+    }
+
+    /**
+     * The real worst cases, at the two sizes the cluster actually uses. `ТЕМП. МОТОРА` is listed as
+     * the single line it is drawn as: `ClassicDialSpecs.twoLineCaption` splits it at its space, so
+     * the widest line the renderer ever measures for it is `МОТОРА`.
+     *
+     * All four fit at their nominal 0.12R, and the assertion records by how much — the widest, EN
+     * `CONSUMPTION`, uses about 79% of the budget. That is the pin: this is the margin a change to
+     * `CAPTION_FONT_FRACTION`, `VALUE_FONT_FRACTION` or `labelInset` would eat into, and the number
+     * to look at before adding a longer caption or a new locale.
+     */
+    @Test fun every_shipped_caption_fits_its_dial_at_full_size_with_the_margin_recorded() {
+        val captions = listOf("МОЩНОСТЬ", "РАСХОД", "МОТОРА", "CONSUMPTION")
+        clusterRadii.forEach { (name, r) ->
+            val budget = captionBudget(r)
+            captions.forEach { caption ->
+                val w = width(caption, VescDialMetrics.CAPTION_FONT_FRACTION * r)
+                assertEquals(
+                    1.0,
+                    VescDialGeometry.centerTextScale(w, budget),
+                    epsilon,
+                    "$caption should not need shrinking on a $name dial (${w} of $budget)"
+                )
+                assertTrue(w / budget < 0.85, "$caption uses ${w / budget} of the $name budget")
+            }
+            // ...and CONSUMPTION really is the tight one, so the margin above is not measuring the
+            // wrong string.
+            val widest = captions.maxByOrNull { width(it, VescDialMetrics.CAPTION_FONT_FRACTION * r) }
+            assertEquals("CONSUMPTION", widest)
+            assertTrue(
+                width("CONSUMPTION", VescDialMetrics.CAPTION_FONT_FRACTION * r) / budget > 0.75,
+                "the worst case should be close enough to the budget for this test to be worth having"
+            )
+        }
+    }
+
+    /**
+     * The case the fix exists for: a caption longer than any shipped one is scaled down instead of
+     * running out over the scale, and the factor is exactly the ratio of the two widths.
+     */
+    @Test fun a_caption_wider_than_its_dial_is_scaled_by_exactly_the_ratio_it_overflows_by() {
+        clusterRadii.forEach { (name, r) ->
+            val budget = captionBudget(r)
+            val w = width(OVERLONG_CAPTION, VescDialMetrics.CAPTION_FONT_FRACTION * r)
+            assertTrue(w > budget, "the test string must actually overflow on a $name dial")
+            assertEquals(budget / w, VescDialGeometry.centerTextScale(w, budget), epsilon)
+            assertTrue(VescDialGeometry.centerTextScale(w, budget) < 1.0)
+        }
+    }
+
+    /**
+     * The dial is scale-free — every length in it is a fraction of R — so the same caption must
+     * come out at the same factor on a `g2` dial and on the 5% larger Power dial. If it ever did
+     * not, some length in the centre stack would have stopped being a fraction of the radius.
+     */
+    @Test fun the_scale_factor_does_not_depend_on_how_big_the_dial_is() {
+        listOf("МОЩНОСТЬ", "CONSUMPTION", OVERLONG_CAPTION)
+            .forEach { caption ->
+                val factors = clusterRadii.map { (_, r) ->
+                    VescDialGeometry.centerTextScale(
+                        width(caption, VescDialMetrics.CAPTION_FONT_FRACTION * r),
+                        captionBudget(r)
+                    )
+                }
+                assertEquals(factors.first(), factors.last(), epsilon, "$caption scaled differently by dial size")
+            }
+    }
+
+    // --- the budget itself: a chord, not a diameter, and it never goes negative -----------------
+
+    @Test fun the_budget_is_the_chord_of_the_number_ring_at_the_lines_own_height() {
+        // At the centre line the chord IS the ring's diameter, 2 * 0.66R.
+        assertEquals(132.0, VescDialGeometry.centerTextMaxWidth(100.0, 0.0), epsilon)
+        // 0.66R = 66; at 33 out, half-chord = sqrt(66^2 - 33^2) = 57.157...
+        assertEquals(2.0 * 57.15767664977295, VescDialGeometry.centerTextMaxWidth(100.0, 33.0), 1e-9)
+        // Higher up is always narrower — this is the whole reason it is a chord.
+        assertTrue(
+            VescDialGeometry.centerTextMaxWidth(100.0, 40.0) <
+                VescDialGeometry.centerTextMaxWidth(100.0, 20.0)
+        )
+    }
+
+    @Test fun a_line_taller_than_the_number_ring_gets_a_zero_budget_rather_than_a_NaN() {
+        assertEquals(0.0, VescDialGeometry.centerTextMaxWidth(100.0, 66.0), epsilon)
+        assertEquals(0.0, VescDialGeometry.centerTextMaxWidth(100.0, 999.0), epsilon)
+        assertEquals(0.0, VescDialGeometry.centerTextMaxWidth(0.0, 0.0), epsilon)
+        // ...and a zero budget floors the scale instead of collapsing the text to nothing.
+        assertEquals(
+            VescDialGeometry.MIN_CENTER_TEXT_SCALE,
+            VescDialGeometry.centerTextScale(50.0, 0.0),
+            epsilon
+        )
+    }
+
+    @Test fun the_scale_never_drops_below_the_floor_however_absurd_the_caption() {
+        assertEquals(VescDialGeometry.MIN_CENTER_TEXT_SCALE, VescDialGeometry.centerTextScale(10_000.0, 100.0), epsilon)
+        assertTrue(VescDialGeometry.MIN_CENTER_TEXT_SCALE > 0.0)
+    }
+
+    @Test fun an_empty_or_unmeasurable_line_is_left_alone_rather_than_scaled_to_zero() {
+        assertEquals(1.0, VescDialGeometry.centerTextScale(0.0, 100.0), epsilon)
+        assertEquals(1.0, VescDialGeometry.centerTextScale(-1.0, 100.0), epsilon)
+    }
+
+    private companion object {
+        /** Twice `МОЩНОСТЬ`: longer than any caption any locale ships, and it does overflow. */
+        const val OVERLONG_CAPTION = "МОЩНОСТЬМОЩНОСТЬ"
+    }
 }

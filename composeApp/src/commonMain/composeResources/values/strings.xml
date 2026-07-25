@@ -97,6 +97,10 @@
     <string name="ride_uptime">Uptime</string>
     <string name="ride_consumption">Consumption</string>
     <string name="ride_consumption_avg">avg %1$s Wh/km</string>
+    <!-- Energy per distance, spelled out: the one unit on the Classic cluster that is a word
+         rather than a symbol, so it needs translating (ru: Вт·ч/км). -->
+    <string name="unit_wh_per_km">Wh/km</string>
+    <string name="unit_wh_per_mi">Wh/mi</string>
     <string name="ride_power">Power</string>
     <string name="ride_battery">Battery</string>
     <string name="ride_esc_temp">ESC temp</string>
@@ -204,6 +208,7 @@
     <string name="vehicle_field_gear_ratio">Gear ratio</string>
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
+    <string name="vehicle_field_secondary_gauge_caption">Clean style only — Classic shows every gauge at once.</string>
     <string name="vehicle_delete">Delete battery</string>
     <string name="vehicle_delete_confirm_title">Delete this battery?</string>
     <string name="vehicle_delete_confirm_text">This cannot be undone.</string>

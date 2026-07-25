@@ -97,6 +97,8 @@
     <string name="ride_uptime">В пути</string>
     <string name="ride_consumption">Расход</string>
     <string name="ride_consumption_avg">средн. %1$s Вт·ч/км</string>
+    <string name="unit_wh_per_km">Вт·ч/км</string>
+    <string name="unit_wh_per_mi">Вт·ч/миля</string>
     <string name="ride_power">Мощность</string>
     <string name="ride_battery">Батарея</string>
     <string name="ride_esc_temp">Темп. ESC</string>
@@ -204,6 +206,7 @@
     <string name="vehicle_field_gear_ratio">Передаточное число</string>
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
+    <string name="vehicle_field_secondary_gauge_caption">Только для стиля Clean — Classic показывает все индикаторы сразу.</string>
     <string name="vehicle_delete">Удалить батарею</string>
     <string name="vehicle_delete_confirm_title">Удалить эту батарею?</string>
     <string name="vehicle_delete_confirm_text">Это нельзя отменить.</string>

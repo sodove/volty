@@ -20,6 +20,7 @@ import androidx.compose.ui.unit.TextUnit
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterLayout
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.presentation.ride.gauge.VescDialGauge
+import ru.sodovaya.volty.util.UnitSystem
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.ride_battery
@@ -30,6 +31,8 @@ import volty.composeapp.generated.resources.ride_motor_temp
 import volty.composeapp.generated.resources.ride_power
 import volty.composeapp.generated.resources.secondary_gauge_current
 import volty.composeapp.generated.resources.secondary_gauge_duty
+import volty.composeapp.generated.resources.unit_wh_per_km
+import volty.composeapp.generated.resources.unit_wh_per_mi
 
 /**
  * The Classic dashboard: a faithful port of VESC Tool's RT-Data screen — eight overlapping dials
@@ -42,6 +45,9 @@ import volty.composeapp.generated.resources.secondary_gauge_duty
  *  1. **Label resolution.** [ClassicDialSpecs] stays Compose-free, so the localized captions are
  *     resolved here, from the exact same string keys Clean's own labels use (`ride_power`,
  *     `secondary_gauge_duty`, …) — so a Russian rider reads Russian dial faces on both styles.
+ *     The consumption dial's UNIT is resolved the same way, for the same reason: `Wh/km` is a word
+ *     as much as a symbol and a Russian rider expects `Вт·ч/км`, which is what Clean's own
+ *     consumption card has always printed (`ride_consumption_avg`).
  *  2. **Severity -> colour, animated.** `RtDataSetup.qml` puts a `Behavior on nibColor`
  *     (`ColorAnimation`, `Easing.InOutSine`) on every gauge whose nib can change colour (:362-368,
  *     :450-456, :480-486, :528-533), so a needle fades between states instead of snapping. The
@@ -49,8 +55,10 @@ import volty.composeapp.generated.resources.secondary_gauge_duty
  *  3. **The Battery overlay.** QML :312 hides that dial's own centre text and :317-361 draws its
  *     own content there instead.
  *
- * Emphasis (spec §7.2's Classic "Inner gauge") is NOT one of them: it is geometry, so it belongs
- * to [VescClusterLayout] and is passed straight through.
+ * The rider's "Inner gauge" setting is deliberately NOT read here. It picks the one secondary
+ * metric Clean's hero ring has room for; Classic shows all eight at once, so there is nothing for
+ * it to select and the cluster renders exactly the composition `RtDataSetup.qml` describes — see
+ * [ru.sodovaya.volty.presentation.ride.gauge.VescClusterGeometry.place].
  */
 @Composable
 fun ClassicRideCluster(
@@ -66,7 +74,10 @@ fun ClassicRideCluster(
         battery = stringResource(Res.string.ride_battery).uppercase(),
         esc = stringResource(Res.string.ride_esc_temp).uppercase(),
         consumption = stringResource(Res.string.ride_consumption).uppercase(),
-        motor = stringResource(Res.string.ride_motor_temp).uppercase()
+        motor = stringResource(Res.string.ride_motor_temp).uppercase(),
+        consumptionUnit = stringResource(
+            if (state.units == UnitSystem.IMPERIAL) Res.string.unit_wh_per_mi else Res.string.unit_wh_per_km
+        )
     )
 
     val specs = ClassicDialSpecs.build(
@@ -77,13 +88,7 @@ fun ClassicRideCluster(
         labels = labels
     )
 
-    // Spec §7.2: the "Inner gauge" picker emphasises a dial in Classic rather than driving an
-    // inner ring the way it does in Clean. The cue is SIZE plus front-most paint order, never
-    // colour — see ClassicEmphasis and VescClusterGeometry.EMPHASIS_SIZE_FACTOR. Both halves live
-    // in the layout, which is why nothing about emphasis is passed to a dial here.
-    val emphasizedSlot = ClassicEmphasis.slotFor(state.secondary)
-
-    VescClusterLayout(modifier = modifier, emphasized = emphasizedSlot) {
+    VescClusterLayout(modifier = modifier) {
         specs.forEach { spec ->
             // Keyed so each dial keeps its own animation state across recompositions; without it
             // the animateColorAsState calls below would be positional and could swap dials.
