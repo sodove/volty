@@ -473,16 +473,38 @@ the value did.
   recorded. §12.4's Clean-hero `speedKnown` bullet likewise stands, untouched.
 
 ### 15.3 New debt (found at the B3 merge gate, task-7, 2026-07-25)
-1. **The session auto-scale's ceiling and outlier-rejection were added at this same merge gate,
-   so most of what this item would have said is fixed rather than owed.** What is NOT fully closed:
-   the 990 A / 99000 W ceiling (`ClassicDialSpecs.tickCapCeiling`, derived from
-   `VescGaugeRange.MAX_TICKMARK_COUNT`) and `SessionPeakTracker`'s 3-consecutive-sample debounce are
-   both a Now-divergence in the same spirit as §14's floors — `GET_MCCONF` supersedes them the day
-   Part C lands, the same day it supersedes the floors. And the debounce was applied **only to
-   current and power**, per this task's scope: Speed's own `sessionMaxSpeedKmh` tracker
-   (`RideDashboardScreen`) still commits on a single sample with no analogous ceiling derivation, so
-   a corrupted speed frame could still transiently distort the hero scale — just not into a ragged
-   ring, since `heroLabelStep`'s fallback steps keep any magnitude round (§12.3, resolved above).
+1. **The session auto-scale's ceiling and outlier-rejection were added at this same merge gate, so
+   most of what this item would have said is fixed rather than owed — but the ceiling itself was
+   originally wired into Current and Power only, and this item's own justification for leaving
+   Speed out was wrong.** ~~Speed's own `sessionMaxSpeedKmh` tracker (`RideDashboardScreen`) still
+   commits on a single sample with no analogous ceiling derivation, so a corrupted speed frame could
+   still transiently distort the hero scale — just not into a ragged ring, since `heroLabelStep`'s
+   fallback steps keep any magnitude round (§12.3, resolved above).~~ **That claim was false and is
+   corrected here rather than silently rewritten:** `heroLabelStep`'s fallback list only guarantees
+   the label step it picks divides the (snapped) span evenly — it does nothing about
+   `VescGaugeRange.tickmarkCount`'s own `min(MAX_TICKMARK_COUNT, naturalCount)` cap. A single bad
+   speed sample (e.g. a display max of 2000 km/h-or-mph: labelStep 20, natural count 101, capped to
+   100, `tickmarkSectionValue = 2000/99 = 20.2…`) produced exactly the ragged ring this bullet
+   claimed could not happen — on the hero, the largest dial in the cluster, from a single sample,
+   permanent for the rest of the session. Worse than Current/Power's original version of the same
+   defect, because `vehicleMaxSpeed` feeds BOTH renderers (Clean's hero ring and Classic's hero
+   dial), not Classic alone. **Fixed** (task-7 addendum, same date): `ClassicDialSpecs.heroDisplayMax`
+   now clamps to `tickCapCeiling(HERO_SNAP_STEP)` (990 km/h or mph) exactly as Current/Power already
+   did, `tickCapCeiling` itself generalized to document why the same bound holds for the hero's
+   unipolar range with `heroLabelStep`'s fallback — see `ClassicDialSpecsTest.kt`'s
+   `the_hero_ceiling_sits_exactly_where_the_tick_cap_would_start_ragging_the_ring`, which pins the
+   990 boundary and shows 1010/2000 both clamp back to it.
+
+   **What genuinely remains deferred**, now that all three runtime scales share one ceiling: it
+   is a Now-divergence in the same spirit as §14's floors — `GET_MCCONF` supersedes it the day
+   Part C lands, same as the floors — and `SessionPeakTracker`'s 3-consecutive-sample debounce is
+   still wired to Current and Power only. Speed's own `sessionMaxSpeedKmh` tracker
+   (`RideDashboardScreen`) still commits on a single sample, so one corrupted speed frame can still
+   move the hero scale within the now-clamped `0..990` range — it can no longer push the scale past
+   that ceiling, and (per the correction above) it was never true that this could produce a ragged
+   ring either way; what is left is ordinary transient distortion within a bounded, still-round
+   range, the same category of risk Current/Power carried before `SessionPeakTracker` existed for
+   them.
 2. **"Session" means two different things on this screen, spelled the same way.** The dial
    auto-scale trackers (`RideDashboardScreen`'s `sessionMaxSpeedKmh`/`currentPeakTracker`/
    `powerPeakTracker`) key their reset on the VEHICLE — they reset when the rider switches vehicles,

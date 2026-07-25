@@ -8,6 +8,7 @@ import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.presentation.ride.gauge.VescGaugeRange
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.math.abs
+import kotlin.math.floor
 import kotlin.math.roundToInt
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -325,13 +326,54 @@ class ClassicDialSpecsTest {
     @Test fun the_auto_scale_ceiling_sits_exactly_where_the_tick_cap_would_start_ragging_the_ring() {
         assertEquals(990.0, ClassicDialSpecs.currentDisplayMax(990f), 1e-9)
         val atCeiling = specs(maxCurrentA = 990f).getValue(VescClusterSlot.CURRENT).range
-        assertEquals(100, atCeiling.tickmarkCount, "natural count must still equal the cap exactly, not exceed it")
+        // The NATURAL count, computed independently of VescGaugeRange.tickmarkCount's own
+        // min(cap, natural) — tickmarkCount alone cannot prove the natural count didn't exceed the
+        // cap, since it is defined to hide exactly that (task-7 review, Minor 3).
+        val naturalCount = floor((atCeiling.maximumValue - atCeiling.minimumValue) / atCeiling.labelStep + 1.0).toInt()
+        assertEquals(100, naturalCount, "natural count (uncapped) must equal the cap exactly, not exceed it")
+        assertEquals(100, atCeiling.tickmarkCount)
         assertEquals(20.0, atCeiling.tickmarkSectionValue, 1e-9)
 
         assertEquals(99_000.0, ClassicDialSpecs.powerDisplayMax(99_000f), 1e-9)
         val powerAtCeiling = specs(maxPowerW = 99_000f).getValue(VescClusterSlot.POWER).range
+        val powerNaturalCount =
+            floor((powerAtCeiling.maximumValue - powerAtCeiling.minimumValue) / powerAtCeiling.labelStep + 1.0).toInt()
+        assertEquals(100, powerNaturalCount, "natural count (uncapped) must equal the cap exactly, not exceed it")
         assertEquals(100, powerAtCeiling.tickmarkCount)
         assertEquals(2000.0, powerAtCeiling.tickmarkSectionValue, 1e-9)
+    }
+
+    /**
+     * The hero's own version of the boundary test above. `heroDisplayMax` shares [tickCapCeiling]
+     * with Current/Power (990, in DISPLAY units — km/h or mph, since [HERO_SNAP_STEP] is the same
+     * 10 either way), but the hero's range is unipolar (`span = max`, not `2 * max`) and
+     * [ClassicDialSpecs.heroLabelStep] can fall back all the way to [HERO_SNAP_STEP] itself, so the
+     * value that actually goes ragged pre-fix is not simply "one [HERO_SNAP_STEP] above 990":
+     * 1000 km/h still resolves to labelStep 20 (1000 is a multiple of 20) and stays round with
+     * naturalCount 51. 1010 is the very next multiple of [HERO_SNAP_STEP] above the ceiling and the
+     * first one that actually breaks: it is not a multiple of 20 or 50, so `heroLabelStep` falls
+     * through to labelStep 10, giving naturalCount 102 — capped to 100,
+     * `tickmarkSectionValue = 1010 / 99 = 10.202...`, not round. This is the same shape as the
+     * task's own reported example (a display max of 2000 also picks labelStep 20 but overshoots the
+     * cap the other way: naturalCount 101, `tickmarkSectionValue = 2000 / 99 = 20.2...`) — both
+     * pre-fix failures are pinned here directly against the ceiling.
+     */
+    @Test fun the_hero_ceiling_sits_exactly_where_the_tick_cap_would_start_ragging_the_ring() {
+        assertEquals(990f, ClassicDialSpecs.heroDisplayMax(990f, UnitSystem.METRIC), 1e-6f)
+        val atCeiling = specs(maxKmh = 990f).getValue(VescClusterSlot.SPEED).range
+        val naturalCount = floor((atCeiling.maximumValue - atCeiling.minimumValue) / atCeiling.labelStep + 1.0).toInt()
+        assertEquals(100, naturalCount, "natural count (uncapped) must equal the cap exactly, not exceed it")
+        assertEquals(100, atCeiling.tickmarkCount)
+        assertEquals(10.0, atCeiling.tickmarkSectionValue, 1e-9)
+
+        // One step (10 km/h/mph) above the ceiling is NOT enough by itself to prove the clamp is
+        // doing work — 1000 falls back to labelStep 20 and would stay round even unclamped — so the
+        // demonstration uses 1010 (the next multiple of HERO_SNAP_STEP, and the first that actually
+        // resolves to the ragged labelStep-10 case) and 2000 (the task's own reported example).
+        assertEquals(990f, ClassicDialSpecs.heroDisplayMax(1010f, UnitSystem.METRIC), 1e-6f)
+        assertRoundTickLabels(specs(maxKmh = 1010f).getValue(VescClusterSlot.SPEED).range, "hero maxKmh=1010 (clamped)")
+        assertEquals(990f, ClassicDialSpecs.heroDisplayMax(2000f, UnitSystem.METRIC), 1e-6f)
+        assertRoundTickLabels(specs(maxKmh = 2000f).getValue(VescClusterSlot.SPEED).range, "hero maxKmh=2000 (clamped)")
     }
 
     /**

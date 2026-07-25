@@ -92,17 +92,18 @@ data class VescGaugeRange(
      * onto the angle range. Clamping happens BEFORE the angle mapping, so a value beyond the
      * gauge's range pins the needle at [minAngle] or [maxAngle] rather than overshooting.
      *
-     * Guards the degenerate `maximumValue == minimumValue` span explicitly: every range this
+     * Guards the degenerate `maximumValue <= minimumValue` span explicitly: every range this
      * project actually BUILDS has `max > min`, so this is unreachable today (like the QML, which
      * gets away with a silent `x/0 == Infinity` in JavaScript), but the predecessor this file
-     * replaced (`DialGeometry.fraction`) carried the same guard and a test pinning it, and both
-     * vanished together in the rewrite. A zero-span range now rests the needle at [minAngle] —
-     * the same answer a real, merely-very-narrow range gives a [value] at its minimum — rather
-     * than propagating a `NaN` into the Canvas layer.
+     * replaced (`DialGeometry.fraction`) carried the same guard — `span <= 0f` — and a test pinning
+     * it, and both vanished together in the rewrite. Restored at parity with that guard (not
+     * narrowed to `span == 0.0`, which would miss a negative span the same way): a zero-or-negative
+     * span range now rests the needle at [minAngle] — the same answer a real, merely-very-narrow
+     * range gives a [value] at its minimum — rather than propagating a `NaN` into the Canvas layer.
      */
     fun valueToAngle(value: Double): Double {
         val span = maximumValue - minimumValue
-        if (span == 0.0) return minAngle
+        if (span <= 0.0) return minAngle
         val normalised = (value - minimumValue) / span
         val clamped = when {
             normalised > 1.0 -> 1.0

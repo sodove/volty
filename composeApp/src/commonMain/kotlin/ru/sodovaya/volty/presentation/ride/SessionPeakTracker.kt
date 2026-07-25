@@ -56,7 +56,14 @@ data class SessionPeakTracker(
 
     /** Folds one new (already non-negative, e.g. `abs`-ed) sample in. */
     fun accept(sample: Float): SessionPeakTracker {
-        if (sample <= committed) {
+        // `sample.isNaN()` is checked explicitly because `NaN <= committed` is IEEE-754 false for
+        // every `committed`, so a NaN sample would otherwise fall through to the "accepted" branch
+        // below and poison `runMinimum`/`committed` (`kotlin.math.min` propagates NaN) — the same
+        // NaN a plain `if (x > max) max = x` (the code this class replaced) silently rejected for
+        // free, since `NaN > x` is false too. No NaN source exists in the decode path today, so
+        // this is latent, not reachable — guarded anyway, since one bad sample would otherwise
+        // permanently poison the session's dial range.
+        if (sample.isNaN() || sample <= committed) {
             // Back at or under the confirmed peak — whatever run was building is no longer
             // consecutive, so it is discarded rather than allowed to resume later.
             return if (runLength == 0) this else SessionPeakTracker(committed = committed)

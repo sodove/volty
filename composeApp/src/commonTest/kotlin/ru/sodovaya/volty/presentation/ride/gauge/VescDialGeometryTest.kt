@@ -93,9 +93,12 @@ class VescDialGeometryTest {
      * Restores a guard the rewrite dropped along with its old home: the predecessor this file
      * replaced (`DialGeometry.fraction`) divided by `(max - min)` behind an explicit
      * `if (span <= 0f) return 0f`, pinned by its own `a_degenerate_scale_does_not_divide_by_zero`.
-     * No range this project actually builds has `max == min`, so this is unreachable today — the
-     * point is that it stays caught rather than silently reappearing as a `NaN` needle angle the
-     * next time someone builds a [VescGaugeRange] by hand (a test fixture, a future caller).
+     * The restored guard (`VescGaugeRange.valueToAngle`) is `span <= 0.0`, at parity with that `<= 0f`
+     * — not narrowed to `span == 0.0`, which would let a genuinely NEGATIVE span (`maximumValue <
+     * minimumValue`) fall through to the real division again. No range this project actually builds
+     * has `max <= min`, so either case is unreachable today — the point is that both stay caught
+     * rather than silently reappearing as a `NaN` needle angle the next time someone builds a
+     * [VescGaugeRange] by hand (a test fixture, a future caller).
      */
     @Test fun a_degenerate_zero_span_range_rests_the_needle_at_minAngle_instead_of_dividing_by_zero() {
         val flat = VescGaugeRange(minAngle = -225.0, maxAngle = 45.0, minimumValue = 5.0, maximumValue = 5.0, labelStep = 10.0)
@@ -104,6 +107,15 @@ class VescDialGeometryTest {
         // Not just the exact value that produced the old NaN — any value must resolve finitely.
         assertTrue(flat.valueToAngle(999.0).isFinite())
         assertTrue(flat.valueToAngle(-999.0).isFinite())
+    }
+
+    /** The same guard, at parity with the deleted predecessor's `span <= 0f` rather than `== 0f`. */
+    @Test fun a_negative_span_range_also_rests_the_needle_at_minAngle_instead_of_dividing_by_zero() {
+        val inverted = VescGaugeRange(minAngle = -225.0, maxAngle = 45.0, minimumValue = 10.0, maximumValue = 5.0, labelStep = 10.0)
+        assertEquals(-225.0, inverted.valueToAngle(5.0), epsilon)
+        assertTrue(inverted.valueToAngle(5.0).isFinite())
+        assertTrue(inverted.valueToAngle(999.0).isFinite())
+        assertTrue(inverted.valueToAngle(-999.0).isFinite())
     }
 
     // --- isCovered (QML:72-83) ---

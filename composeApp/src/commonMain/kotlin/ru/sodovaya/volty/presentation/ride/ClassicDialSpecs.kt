@@ -151,6 +151,43 @@ object ClassicDialSpecs {
         if (maximumValue > 6000.0) 2000.0 else 1000.0
 
     // ---------------------------------------------------------------------------------------
+    // The tick-count ceiling every runtime scale shares — Hero, Current and Power all grow from a
+    // session reading with no natural upper bound, and VescGaugeRange.tickmarkCount's own
+    // `min(MAX_TICKMARK_COUNT, naturalCount)` caps every one of them the same way once they grow
+    // too far, so all three derive the same ceiling from it below rather than each hardcoding one.
+    // ---------------------------------------------------------------------------------------
+
+    /**
+     * The largest a runtime-scaled max is allowed to snap to, for a scale whose FINEST possible
+     * label step is [snapStep].
+     *
+     * Derived from [VescGaugeRange.MAX_TICKMARK_COUNT] rather than a hardcoded number, because that
+     * is what actually produces the ragged ring this exists to prevent: [VescGaugeRange.tickmarkCount]
+     * is `min(MAX_TICKMARK_COUNT, naturalCount)`, and the label-step arithmetic elsewhere in this
+     * object only stays round because [snapStep] makes `naturalCount = span/labelStep + 1` an exact
+     * integer — the `min()` has never had anything to clip. The INSTANT `naturalCount` exceeds
+     * [VescGaugeRange.MAX_TICKMARK_COUNT], the displayed count is pinned at the cap instead, and
+     * `(cap - 1)` has no reason to divide a span that was only ever snapped to be a multiple of the
+     * label step — e.g. a 1000 A max: span 2000, labelStep 20, natural count 101, capped to 100,
+     * `tickmarkSectionValue = 2000 / 99 = 20.2…`, not round.
+     *
+     * So the ceiling is the largest max whose NATURAL count still equals the cap exactly:
+     * `naturalCount <= MAX_TICKMARK_COUNT`. Current and Power are bipolar (`span = 2 * max`) with a
+     * label step that is always exactly `2 * snapStep` once past their own floor, so those two
+     * factors of 2 cancel, giving `max <= (MAX_TICKMARK_COUNT - 1) * snapStep` exactly. The hero is
+     * unipolar (`span = max`, not `2 * max`) and [heroLabelStep]'s own fallback list bottoms out at
+     * [HERO_SNAP_STEP] itself when nothing coarser divides the snapped span evenly — the identical
+     * worst case (the label step chosen equal to `snapStep` itself) that drives the Current/Power
+     * bound, so the same formula, `max <= (MAX_TICKMARK_COUNT - 1) * HERO_SNAP_STEP`, holds for it
+     * too even though its range is not bipolar. At exactly the ceiling the natural count IS the cap
+     * (100 for 990 A, 100 for 99000 W, 100 for 990 km/h-or-mph) and the ring is still perfectly
+     * round — one step past it, for whichever of the three lands on the case where its label step is
+     * this fine, `naturalCount` silently becomes 101-capped-to-100 and the ring ragges.
+     */
+    private fun tickCapCeiling(snapStep: Double): Double =
+        (VescGaugeRange.MAX_TICKMARK_COUNT - 1) * snapStep
+
+    // ---------------------------------------------------------------------------------------
     // The hero's runtime scale — the one thing here that is not a fixed constant
     // ---------------------------------------------------------------------------------------
 
@@ -182,12 +219,22 @@ object ClassicDialSpecs {
 
     /**
      * The hero's scale maximum in DISPLAY units: the km/h maximum converted first, then snapped
-     * up. Public because it is the thing worth pinning in a test — that the scale never shrinks
-     * below the speed it was asked to show, in either unit system.
+     * up, then clamped to [tickCapCeiling] of [HERO_SNAP_STEP] — 990 (km/h or mph) — for exactly
+     * the reason [tickCapCeiling]'s own doc gives: a session's speed has no upper bound short of a
+     * decode error, and past that ceiling the ring goes ragged the same way Current/Power's did
+     * before they got this same clamp (e.g. a display max of 2000 picks label step 20, natural
+     * count 101, capped to 100, `tickmarkSectionValue = 2000 / 99 = 20.2…`) — on the hero, the
+     * largest dial in the cluster, from a single sample, permanent for the rest of the session.
+     * `ceil()`/`min()` stay non-decreasing in the reading, so the scale still only grows, it just
+     * stops growing at the ceiling instead of forever, same as Current/Power.
+     *
+     * Public because it is the thing worth pinning in a test — that the scale never shrinks below
+     * the speed it was asked to show, in either unit system, up to that ceiling.
      */
     fun heroDisplayMax(maxSpeedKmh: Float, units: UnitSystem): Float {
         val display = UnitFormatter.speedValue(maxSpeedKmh.coerceAtLeast(HERO_MIN_MAX_KMH), units)
-        return ceil(display / HERO_SNAP_STEP) * HERO_SNAP_STEP
+        val snapped = ceil(display / HERO_SNAP_STEP) * HERO_SNAP_STEP
+        return min(snapped.toDouble(), tickCapCeiling(HERO_SNAP_STEP.toDouble())).toFloat()
     }
 
     /** The label step for a hero scale of [displayMax] — the QML's rule, then a divisor that works. */
@@ -219,37 +266,14 @@ object ClassicDialSpecs {
     // step that keeps the tick labels round, and never allowed to shrink. `GET_MCCONF` supersedes
     // this the day Part C lands.
     //
-    // UNLIKE the hero, this scale is also given a CEILING (see [tickCapCeiling]) — the hero's own
-    // fallback label steps (50/25/20/10, [HERO_FALLBACK_LABEL_STEPS]) keep its span well clear of
-    // [VescGaugeRange.MAX_TICKMARK_COUNT] for any speed a vehicle could plausibly reach, but a
-    // session peak here has no upper bound at all short of a decode error, so nothing stops it
-    // walking into that cap the way the hero never does.
+    // Like the hero, this scale is given a CEILING too — [tickCapCeiling], shared by all three (see
+    // its doc, above). What Current and Power do NOT share with the hero is a debounce:
+    // `SessionPeakTracker`, upstream of these two functions, withholds a rising reading from ever
+    // reaching [sessionScaledMax] until several consecutive samples corroborate it, so a single bad
+    // decode never reaches the ceiling in the first place. Speed's own tracker
+    // (`RideDashboardScreen.sessionMaxSpeedKmh`) has no such debounce — see `B-vesc-dashboard.md`
+    // §15.3 item 1 for what that leaves open now that the ceiling itself is no longer one of them.
     // ---------------------------------------------------------------------------------------
-
-    /**
-     * The largest a [sessionScaledMax] result is allowed to snap to, for a scale whose "large"
-     * label step (the one [tenOrTwentyLabelStep]/[powerLabelStep] switch to once the reading grows
-     * past 60 A / 6000 W) is `2 * snapStep`.
-     *
-     * Derived from [VescGaugeRange.MAX_TICKMARK_COUNT] rather than a hardcoded number, because that
-     * is what actually produces the ragged ring this exists to prevent: [VescGaugeRange.tickmarkCount]
-     * is `min(MAX_TICKMARK_COUNT, naturalCount)`, and the label-step arithmetic above only stays
-     * round because [snapStep] makes `naturalCount = span/labelStep + 1` an exact integer — the
-     * `min()` has never had anything to clip. The INSTANT `naturalCount` exceeds
-     * [VescGaugeRange.MAX_TICKMARK_COUNT], the displayed count is pinned at the cap instead, and
-     * `(cap - 1)` has no reason to divide a span that was only ever snapped to be a multiple of the
-     * label step — e.g. a 1000 A max: span 2000, labelStep 20, natural count 101, capped to 100,
-     * `tickmarkSectionValue = 2000 / 99 = 20.2…`, not round.
-     *
-     * So the ceiling is the largest max whose NATURAL count still equals the cap exactly:
-     * `naturalCount <= MAX_TICKMARK_COUNT`, i.e. (writing `span = 2 * max` and
-     * `labelStep = 2 * snapStep`, both true once the reading is past the "large step" threshold)
-     * `max <= (MAX_TICKMARK_COUNT - 1) * snapStep`. At exactly that ceiling the natural count IS
-     * the cap (100 for 990 A, 100 for 99000 W) and the ring is still perfectly round — one unit
-     * higher and it silently becomes 101-capped-to-100 and ragged.
-     */
-    private fun tickCapCeiling(snapStep: Double): Double =
-        (VescGaugeRange.MAX_TICKMARK_COUNT - 1) * snapStep
 
     /**
      * The shared shape behind [currentDisplayMax] and [powerDisplayMax]: floor at VESC's own
