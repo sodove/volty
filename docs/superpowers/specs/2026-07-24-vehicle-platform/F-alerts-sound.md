@@ -317,3 +317,54 @@ check its shape, which it cannot do inside a JSON blob.
 never stops on focus loss. Tone design is not settled on paper: the settings
 screen ships a **"проверить сигнал"** button that plays each level on the real
 phone, and the curve is tuned from hearing it.
+
+---
+
+## 12. Urgency is a step function for three of four kinds (2026-07-26)
+
+Found in Task 5's review, and it changes what Task 7 may assume.
+
+§4 asks the tone to climb continuously with urgency. The engine delivers that —
+urgency ramps 0..1 across the band between two adjacent levels. But **a ramp needs
+two levels to ramp between**, and §10.2's defaults ship exactly one level for ESC
+temperature (90 °C) and one for motor temperature (110 °C):
+
+```
+escDefault@91  → level=1, urgency=1.0
+escDefault@200 → level=1, urgency=1.0
+```
+
+So out of the box only duty has a ramp (80→90, flat above 90). A rider who never
+opens the settings screen never hears a climbing tone at all.
+
+**Ruling: the defaults stay as they are.** Temperature is not a gradient the way
+duty is. Duty climbs continuously toward a hard physical limit and the rider can
+back off proportionally; a motor at 111 °C is not "slightly" over 110 — the rider
+picked 110 as the number at which they want to be told. Adding a second, lower
+temperature level to manufacture a ramp would mean sounding *before* the rider's
+chosen threshold, which is the nagging failure §10.1 exists to prevent. A rider
+who wants a lead-in adds a level; that is what the 0..3 model is for.
+
+**What this obliges Task 7 to do.** The three audible steps must be
+distinguishable **on their own** — by pitch and repetition rate per level — and
+must not lean on the urgency ramp to convey escalation. Urgency is a refinement
+where it exists, never the carrier of the signal. Concretely: a tone design that
+only differs by a continuous parameter would make ESC temp and motor temp sound
+identical to each other and identical at 91 °C and 200 °C.
+
+Two related facts from the same review, worth knowing when tuning:
+- urgency is pinned at 0 for the whole hold band while a step is being released,
+  so the tone carries no information during a release;
+- flat urgency above the top step is deliberate — the rider chose where "as bad as
+  it gets" sits, and a rider wanting escalation past 90 % duty sets 80/90/95.
+
+### 12.1 Temperature hysteresis narrowed to 1 °C
+
+Task 5 shipped release bands of duty 3 pp, temperature 3 °C, speed 2 km/h. The
+temperature figure was wrong by the same reasoning as above: a thermistor reading
+is slow and heavily filtered with near-zero sample-to-sample jitter, so 3 °C buys
+almost no anti-chatter and instead adds thermal **lag** — a motor cooling from
+113 °C past a 110 °C threshold holds the alarm until 107 °C, tens of seconds of
+alarm after the condition cleared. An alarm that outlives its cause teaches the
+rider to dismiss it. Duty and speed keep their bands; those metrics genuinely
+jitter sample to sample.
