@@ -70,14 +70,30 @@ class MotionAlarmInvariantTest {
         }
     }
 
+    /**
+     * **This test is meant to be edited** — it is a notification, not a veto.
+     *
+     * The task brief asks that editing `DutyBands`/`TempBands` fail a test. The
+     * inequality above cannot deliver that on its own: moving a band *down*
+     * (dial warns even earlier against a fixed alarm) strengthens the ordering
+     * §10.1 asks for rather than violating it, so it stays green. This pin makes
+     * every band change surface, and it also catches a refactor that re-points a
+     * band constant at something else while still compiling.
+     *
+     * So a failure here is not "you broke the ordering". It is "a band moved —
+     * confirm the alarm still sits above it, then update the pin".
+     */
     @Test fun the_bands_this_test_pins_against_are_the_ones_the_dashboard_uses() {
-        // A guard on the guard: if someone renames or re-points a band constant,
-        // bandFor must follow it rather than quietly keep an old number.
-        assertEquals(75f, DutyBands.DEFAULT_WARN_PERCENT)
-        assertEquals(90f, DutyBands.DEFAULT_CRITICAL_PERCENT)
-        assertEquals(70f, TempBands.ESC_WARN_C)
-        assertEquals(85f, TempBands.ESC_CRITICAL_C)
-        assertEquals(85f, TempBands.MOTOR_WARN_C)
-        assertEquals(100f, TempBands.MOTOR_CRITICAL_C)
+        fun pin(expected: Float, actual: Float, name: String) = assertEquals(
+            expected, actual,
+            "$name changed. Moved it on purpose? Re-check AlarmDefaults still sits " +
+                "at or above it (see the test above), then update this pin to the new value."
+        )
+        pin(75f, DutyBands.DEFAULT_WARN_PERCENT, "DutyBands.DEFAULT_WARN_PERCENT")
+        pin(90f, DutyBands.DEFAULT_CRITICAL_PERCENT, "DutyBands.DEFAULT_CRITICAL_PERCENT")
+        pin(70f, TempBands.ESC_WARN_C, "TempBands.ESC_WARN_C")
+        pin(85f, TempBands.ESC_CRITICAL_C, "TempBands.ESC_CRITICAL_C")
+        pin(85f, TempBands.MOTOR_WARN_C, "TempBands.MOTOR_WARN_C")
+        pin(100f, TempBands.MOTOR_CRITICAL_C, "TempBands.MOTOR_CRITICAL_C")
     }
 }

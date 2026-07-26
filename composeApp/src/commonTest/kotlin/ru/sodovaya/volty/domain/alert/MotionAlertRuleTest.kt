@@ -46,21 +46,28 @@ class MotionAlertRuleTest {
         assertTrue(boom.message.orEmpty().contains("at most 3"), "unhelpful message: ${boom.message}")
     }
 
-    @Test fun three_levels_are_still_accepted_the_cap_is_three_not_two() {
-        val rule = AlertRule(
-            MotionAlertKind.MOTOR_TEMP,
-            listOf(AlertLevel(80f), AlertLevel(90f), AlertLevel(100f))
-        )
-        assertEquals(3, rule.levels.size)
-        assertEquals(3, AlertRule.MAX_LEVELS)
+    @Test fun copy_revalidates_the_guards_are_not_bypassable() {
+        // data class copy() runs init. Nothing today declares a private
+        // constructor + factory or an @Serializable no-arg path that would skip
+        // it; this pins that, because losing it would be silent.
+        val ok = AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(80f), AlertLevel(90f)))
+        assertFailsWith<IllegalArgumentException> {
+            ok.copy(levels = listOf(AlertLevel(90f), AlertLevel(80f)))
+        }
+        assertFailsWith<IllegalArgumentException> {
+            ok.copy(levels = listOf(AlertLevel(70f), AlertLevel(80f), AlertLevel(90f), AlertLevel(100f)))
+        }
+        assertFailsWith<IllegalArgumentException> { AlertLevel(80f).copy(thresholdValue = Float.NaN) }
     }
 
-    @Test fun normaliser_reorders_rider_input_90_80_100_becomes_80_90_100() {
-        val typed = listOf(AlertLevel(90f), AlertLevel(80f), AlertLevel(100f))
-        assertEquals(
-            listOf(80f, 90f, 100f),
-            sortedLevels(typed).map { it.thresholdValue }
-        )
+    @Test fun a_nan_threshold_is_rejected_it_would_arm_an_alert_that_can_never_fire() {
+        val boom = assertFailsWith<IllegalArgumentException> { AlertLevel(Float.NaN) }
+        assertTrue(boom.message.orEmpty().contains("finite"), "unhelpful message: ${boom.message}")
+    }
+
+    @Test fun an_infinite_threshold_is_rejected_in_both_directions() {
+        assertFailsWith<IllegalArgumentException> { AlertLevel(Float.POSITIVE_INFINITY) }
+        assertFailsWith<IllegalArgumentException> { AlertLevel(Float.NEGATIVE_INFINITY) }
     }
 
     @Test fun normaliser_output_is_always_ascending_for_every_input_order() {
