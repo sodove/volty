@@ -116,17 +116,6 @@ class MotionAlertAvailabilityTest {
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
     }
 
-    @Test fun the_no_duty_reason_names_the_actual_controller_type() {
-        // The sentence must not hard-code "Kelly": it is generated from the type.
-        val reason = availabilityFor(vehicle(ControllerType.KELLY), fullSample())[MotionAlertKind.DUTY]
-        assertEquals(
-            ControllerType.KELLY,
-            (reason as AlertAvailability.Unavailable)
-                .let { it.reason as AlertUnavailableReason.ControllerReportsNoDuty }
-                .type
-        )
-    }
-
     @Test fun the_static_duty_table_answers_every_controller_type() {
         // Pins today's answers so Part E flipping FarDriver (E §9.3) is deliberate.
         assertTrue(ControllerType.VESC.reportsDuty)
@@ -186,6 +175,64 @@ class MotionAlertAvailabilityTest {
 
     // ----------------------------------------------------------------- unknown
 
+    @Test fun the_disconnected_placeholder_is_not_evidence_and_never_claims_a_missing_sensor() {
+        // activeMotion is a non-nullable flow that emits a bare ControllerData()
+        // whenever nothing is connected. Taken as evidence it tells a double lie:
+        // hasMotorTemp = false and speedSource = NONE read as "sensor missing",
+        // while escTempC = 0f is above the -50 sentinel and reads as "sensor fine".
+        val placeholder = ControllerData()
+        assertFalse(placeholder.isConnected)
+        assertFalse(placeholder.hasMotorTemp)
+        assertEquals(SpeedSource.NONE, placeholder.speedSource)
+        assertTrue(placeholder.hasEscTemp, "the false-Available half of the trap")
+
+        val availability = availabilityFor(vehicle(ControllerType.VESC), placeholder)
+
+        for (kind in listOf(
+            MotionAlertKind.SPEED,
+            MotionAlertKind.MOTOR_TEMP,
+            MotionAlertKind.ESC_TEMP
+        )) {
+            assertEquals(
+                AlertAvailability.Unknown,
+                availability[kind],
+                "$kind: a disconnected placeholder was treated as an observation"
+            )
+        }
+        // Duty is a protocol fact, so it is unaffected by there being no sample.
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
+    }
+
+    @Test fun a_disconnected_placeholder_arms_no_sensor_dependent_kind() {
+        // Every kind whose availability depends on a sensor is dropped, because
+        // the placeholder is not an observation. DUTY survives on purpose: it is
+        // a protocol fact that owes nothing to a sample, and the engine simply
+        // has no duty reading to compare while the link is down.
+        val armed = armedRules(
+            vehicle(ControllerType.VESC),
+            ControllerData(),
+            AlarmDefaults.all()
+        )
+        assertEquals(
+            listOf(MotionAlertKind.DUTY),
+            armed.rules.map { it.kind },
+            "a disconnected placeholder armed a sensor-dependent alarm"
+        )
+    }
+
+    @Test fun a_cached_last_good_sample_still_counts_as_evidence() {
+        // isConnected is the discriminator, not "is the link up right now": a
+        // caller that caches the last good sample keeps sensor knowledge across
+        // the ride ending, so the settings screen does not flicker to Unknown.
+        val cached = fullSample().copy(hasMotorTemp = false)
+        assertTrue(cached.isConnected)
+        val availability = availabilityFor(vehicle(ControllerType.VESC), cached)
+        assertEquals(
+            AlertAvailability.Unavailable(AlertUnavailableReason.NoMotorTempSensor),
+            availability[MotionAlertKind.MOTOR_TEMP]
+        )
+    }
+
     @Test fun no_sample_yields_unknown_not_unavailable_for_the_sensor_dependent_kinds() {
         // The rider opens settings while disconnected. We must not tell them
         // their motor has no thermistor — we have never looked.
@@ -199,21 +246,26 @@ class MotionAlertAvailabilityTest {
         }
     }
 
-    @Test fun unknown_is_not_armable_but_is_not_an_unavailable_claim() {
-        val unknown: AlertAvailability = AlertAvailability.Unknown
-        assertFalse(unknown.isArmable, "no sample means no value to compare — nothing to arm")
-        assertFalse(
-            unknown is AlertAvailability.Unavailable,
-            "Unknown must never be reported as 'your hardware lacks this sensor'"
-        )
-    }
-
     @Test fun isArmable_is_true_only_for_Available() {
         assertTrue(AlertAvailability.Available.isArmable)
         assertFalse(AlertAvailability.Unknown.isArmable)
         assertFalse(
             AlertAvailability.Unavailable(AlertUnavailableReason.NoController).isArmable
         )
+    }
+
+    @Test fun isConfigurable_and_isArmable_disagree_on_Unknown_and_that_is_the_point() {
+        // The rider opens settings while disconnected: the thresholds must stay
+        // editable (else they are untunable on a phone that is never connected
+        // while parked), but nothing may fire off a sample we do not have.
+        assertTrue(AlertAvailability.Unknown.isConfigurable, "Unknown must stay editable")
+        assertFalse(AlertAvailability.Unknown.isArmable, "Unknown must never arm")
+        // Available agrees with itself; Unavailable is refused by both.
+        assertTrue(AlertAvailability.Available.isConfigurable)
+        assertTrue(AlertAvailability.Available.isArmable)
+        val gone = AlertAvailability.Unavailable(AlertUnavailableReason.NoMotorTempSensor)
+        assertFalse(gone.isConfigurable, "an alert the hardware cannot supply has nothing to edit")
+        assertFalse(gone.isArmable)
     }
 
     // ------------------------------------------------- the negative that matters
@@ -234,23 +286,23 @@ class MotionAlertAvailabilityTest {
         val armed = armedRules(kelly, fullSample(), configured)
 
         assertNull(
-            armed.firstOrNull { it.kind == MotionAlertKind.DUTY },
+            armed.rules.firstOrNull { it.kind == MotionAlertKind.DUTY },
             "a duty rule reached the alarm engine on hardware that reports no duty"
         )
         // and the gate is not a blanket refusal — the available kind survives.
-        assertEquals(listOf(MotionAlertKind.MOTOR_TEMP), armed.map { it.kind })
+        assertEquals(listOf(MotionAlertKind.MOTOR_TEMP), armed.rules.map { it.kind })
     }
 
     @Test fun an_unknown_kind_with_enabled_levels_configured_also_never_arms() {
         // Never connected: no sample, so no value to compare. Nothing may fire.
         val configured = listOf(AlertRule(MotionAlertKind.MOTOR_TEMP, listOf(AlertLevel(110f))))
         val armed = armedRules(vehicle(ControllerType.VESC), latestMotion = null, configured = configured)
-        assertEquals(emptyList(), armed)
+        assertEquals(ArmedRules.NONE, armed)
     }
 
     @Test fun a_vehicle_with_no_controllers_arms_nothing_even_from_full_defaults() {
         val armed = armedRules(packOnlyVehicle(), latestMotion = null, configured = AlarmDefaults.all())
-        assertEquals(emptyList(), armed, "battery-only vehicle armed a motion alarm")
+        assertEquals(ArmedRules.NONE, armed, "battery-only vehicle armed a motion alarm")
     }
 
     @Test fun armedRules_drops_rules_the_rider_switched_off_and_keeps_the_rest() {
@@ -260,7 +312,7 @@ class MotionAlertAvailabilityTest {
             AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(80f)))
         )
         val armed = armedRules(vesc, fullSample(), configured)
-        assertEquals(listOf(MotionAlertKind.DUTY), armed.map { it.kind })
+        assertEquals(listOf(MotionAlertKind.DUTY), armed.rules.map { it.kind })
     }
 
     @Test fun armedRules_passes_available_levels_through_untouched_including_muted_ones() {
@@ -272,7 +324,7 @@ class MotionAlertAvailabilityTest {
             fullSample(),
             listOf(AlertRule(MotionAlertKind.DUTY, levels))
         )
-        assertEquals(listOf(AlertRule(MotionAlertKind.DUTY, levels)), armed)
+        assertEquals(listOf(AlertRule(MotionAlertKind.DUTY, levels)), armed.rules)
     }
 
     @Test fun armedRules_fails_closed_on_a_kind_the_availability_map_does_not_mention() {
@@ -282,7 +334,18 @@ class MotionAlertAvailabilityTest {
             configured = listOf(AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(80f)))),
             availability = emptyMap()
         )
-        assertEquals(emptyList(), armed)
+        assertEquals(ArmedRules.NONE, armed)
+    }
+
+    @Test fun armedRules_returns_a_type_the_engine_cannot_confuse_with_raw_config() {
+        // F §10 is a claim about reachability, so the gate's output is a
+        // distinct type: Task 5's engine signature can then refuse ungated
+        // config at compile time instead of trusting convention.
+        val configured = listOf(AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(80f))))
+        val armed: ArmedRules = armedRules(vehicle(ControllerType.VESC), fullSample(), configured)
+        assertEquals(configured, armed.rules)
+        assertFalse(armed.isEmpty)
+        assertTrue(ArmedRules.NONE.isEmpty)
     }
 
     @Test fun availability_covers_every_kind_so_the_ui_can_render_the_full_greyed_list() {

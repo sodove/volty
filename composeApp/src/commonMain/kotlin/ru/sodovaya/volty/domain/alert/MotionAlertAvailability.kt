@@ -5,7 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
-import ru.sodovaya.volty.domain.model.primaryController
+import kotlin.jvm.JvmInline
 
 /**
  * Why a motion alert cannot be armed on this vehicle.
@@ -80,11 +80,38 @@ sealed interface AlertAvailability {
 }
 
 /**
- * True only for [AlertAvailability.Available]. [AlertAvailability.Unknown] is
- * deliberately false — see its doc for why "not armable" and "no sensor" are
- * different statements.
+ * **May the alarm engine fire this kind?** True only for
+ * [AlertAvailability.Available]. [AlertAvailability.Unknown] is deliberately
+ * false — see its doc for why "not armable" and "no sensor" are different
+ * statements.
+ *
+ * This is the *engine's* question, not the settings screen's. A screen that
+ * greys a row on `!isArmable` makes every motion threshold uneditable while
+ * disconnected, which is the normal state when a rider opens settings — use
+ * [isConfigurable] there.
  */
 val AlertAvailability.isArmable: Boolean get() = this is AlertAvailability.Available
+
+/**
+ * **May the rider edit this kind's thresholds?** True for
+ * [AlertAvailability.Available] *and* [AlertAvailability.Unknown], false only
+ * for [AlertAvailability.Unavailable].
+ *
+ * The two predicates deliberately disagree on [AlertAvailability.Unknown], and
+ * that disagreement is the whole point of having a third state:
+ *
+ *  - **editing is allowed** — the rider opens settings while disconnected, which
+ *    is the normal case. Refusing the edit would claim their hardware lacks a
+ *    sensor we have never looked for, and would leave the thresholds
+ *    permanently untunable on a phone that is never connected while parked;
+ *  - **arming is not** — there is no sample, so there is no value to compare a
+ *    threshold against, and nothing could fire anyway.
+ *
+ * `F §10`'s "impossible to arm" is enforced by [isArmable] and [armedRules]
+ * alone. Editability is a UI affordance and must never be used as the alarm
+ * gate: a kind can be configurable and still, correctly, never sound.
+ */
+val AlertAvailability.isConfigurable: Boolean get() = this !is AlertAvailability.Unavailable
 
 /**
  * Whether this controller protocol reports duty/ШИМ at all — a permanent
@@ -125,12 +152,28 @@ internal val ControllerType.reportsDuty: Boolean
  * when no sample has ever been observed**, which is the normal case on the
  * settings screen while disconnected.
  *
- * **Callers must pass null rather than a placeholder.** `activeMotion` emits a
- * default `ControllerData()` when nothing is connected, and that placeholder
- * carries `hasMotorTemp = false` and `speedSource = NONE` — feeding it in as if
- * it were evidence would tell a rider who has never connected that their motor
- * thermistor is missing. Task 5 and the Part G2 screen must gate on "have we
- * actually received a sample" before calling.
+ * **A disconnected placeholder is not evidence, and this function enforces
+ * that.** `activeMotion` is a non-nullable flow that emits a default
+ * `ControllerData()` whenever nothing is connected, and that placeholder carries
+ * `hasMotorTemp = false`, `speedSource = NONE` and `escTempC = 0f` — taken as
+ * evidence it would tell a rider who has never connected both that their motor
+ * thermistor is missing *and* that their ESC sensor is fine. So a sample with
+ * [ControllerData.isConnected] false is discarded here and treated exactly like
+ * null.
+ *
+ * That guard is sound rather than a lucky proxy:
+ * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate] is the only
+ * producer of the vehicle-level aggregate and sets `isConnected = true` if and
+ * only if at least one controller is online, and every reset path in
+ * `KableBmsRepository` writes the default `false`. `isConnected` therefore *is*
+ * the "this is a real observation" discriminator.
+ *
+ * Callers should still prefer passing null (or a cached last-good sample) rather
+ * than relying on the guard: a cached sample keeps `isConnected = true`, so
+ * sensor knowledge survives the ride ending and the settings screen stays stable
+ * instead of reverting to [AlertAvailability.Unknown] the moment the link drops.
+ * A caller that does not bother degrades to Unknown, which is merely uninformed
+ * rather than wrong, and is arming-neutral.
  *
  * The result always has an entry for every kind, in enum order, so the UI can
  * render the full list without deciding anything itself.
@@ -147,28 +190,40 @@ fun availabilityFor(
             AlertAvailability.Unavailable(AlertUnavailableReason.NoController)
         }
     }
+    val observedSample = latestMotion?.takeIf { it.isConnected }
     return MotionAlertKind.entries.associateWith { kind ->
-        availabilityOf(kind, controllers, vehicle.primaryController, latestMotion)
+        availabilityOf(kind, controllers, observedSample)
     }
 }
 
 private fun availabilityOf(
     kind: MotionAlertKind,
     controllers: List<Controller>,
-    primary: Controller?,
     latestMotion: ControllerData?
 ): AlertAvailability = when (kind) {
     // Duty is settled by the protocol alone — an ESC computes it, there is no
     // sensor to be missing — so it never resolves to Unknown. A vehicle whose
     // controllers ALL lack duty cannot have it; one controller that reports duty
     // is enough, because the vehicle-level aggregate folds them together.
+    //
+    // HAZARD for Part H (and any future non-duty decoder): MotionAggregator
+    // folds duty as `maxOf { it.dutyPercent }`. On a mixed VESC + Kelly vehicle
+    // DUTY is Available — correctly, the VESC supplies it — and the aggregate
+    // takes the max across BOTH controllers. A Kelly decoder that writes a
+    // non-zero `dutyPercent` into a field the protocol does not actually report
+    // would therefore raise the alarm on a number that is not a duty
+    // measurement. `H §7`'s table already says `dutyPercent = 0`; keep it there.
     MotionAlertKind.DUTY ->
         if (controllers.any { it.controllerType.reportsDuty }) {
             AlertAvailability.Available
         } else {
             AlertAvailability.Unavailable(
+                // Same "lowest index wins" rule as Vehicle.primaryController,
+                // spelled out because that helper's nullable type does not
+                // reflect the non-emptiness already established above — and a
+                // fallback elvis here would imply a nullability that cannot occur.
                 AlertUnavailableReason.ControllerReportsNoDuty(
-                    (primary ?: controllers.first()).controllerType
+                    controllers.minBy { it.index }.controllerType
                 )
             )
         }
@@ -197,6 +252,29 @@ private inline fun observed(
 }
 
 /**
+ * Rules that have been through [armedRules] — **the only shape an alarm engine
+ * may accept**.
+ *
+ * A distinct type rather than a bare `List<AlertRule>` because `F §10` makes a
+ * claim about *reachability*: an unavailable alert must be impossible to arm.
+ * Raw rider config and gated config have identical structure, so a
+ * `List<AlertRule>` parameter on Task 5's engine would accept either and the
+ * gate would be enforced by nothing but convention and code review. With this
+ * wrapper, handing the engine an ungated config does not compile.
+ *
+ * Zero runtime cost — it erases to the list it wraps.
+ */
+@JvmInline
+value class ArmedRules(val rules: List<AlertRule>) {
+    val isEmpty: Boolean get() = rules.isEmpty()
+
+    companion object {
+        /** Nothing may sound — a vehicle with no controllers, or nothing configured. */
+        val NONE: ArmedRules = ArmedRules(emptyList())
+    }
+}
+
+/**
  * The rules an alarm engine may actually arm — **the single gate** through which
  * rider configuration reaches Task 5's alarm engine and Task 6's motion
  * one-shots.
@@ -206,9 +284,15 @@ private inline fun observed(
  *    enabled levels for an unavailable kind — the rider tuned it, then swapped
  *    to hardware without the sensor, or a backup was restored onto a different
  *    vehicle. `F §10` says such an alert must be impossible to arm, so it is
- *    dropped here rather than trusted to a downstream `if`;
+ *    dropped here rather than trusted to a downstream `if`. Note this also drops
+ *    [AlertAvailability.Unknown], which stays *editable* ([isConfigurable]) but
+ *    never armed;
  *  - any [AlertRule.isOff] rule, which the rider switched off and which has no
  *    levels to compare against anyway.
+ *
+ * A kind missing from [availability] is dropped too: a gate that was never
+ * evaluated stays shut. [availabilityFor] always populates every kind, so this
+ * only bites a caller assembling a partial map by hand.
  *
  * Levels are otherwise passed through untouched — muted levels stay in place so
  * the engine can skip them without promoting the ones above (`F §10.2`).
@@ -216,13 +300,15 @@ private inline fun observed(
 fun armedRules(
     configured: List<AlertRule>,
     availability: Map<MotionAlertKind, AlertAvailability>
-): List<AlertRule> = configured.filter { rule ->
-    !rule.isOff && availability[rule.kind]?.isArmable == true
-}
+): ArmedRules = ArmedRules(
+    configured.filter { rule ->
+        !rule.isOff && availability[rule.kind]?.isArmable == true
+    }
+)
 
 /** [armedRules] against this vehicle's live availability. See [availabilityFor] on [latestMotion]. */
 fun armedRules(
     vehicle: Vehicle,
     latestMotion: ControllerData?,
     configured: List<AlertRule>
-): List<AlertRule> = armedRules(configured, availabilityFor(vehicle, latestMotion))
+): ArmedRules = armedRules(configured, availabilityFor(vehicle, latestMotion))
