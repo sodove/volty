@@ -175,6 +175,12 @@ enabled levels still produces no alarm and no notification.
   explicitly; do not let a rider's deliberate silence read as a default.
 - Migration test: a v6 database with existing vehicles opens at v7 and every
   vehicle reads back with defaults.
+- **Regenerate the schema snapshot after adding `6.sqm`** — run
+  `:composeApp:generateCommonMainVoltyDatabaseSchema` and commit the resulting
+  `7.db`. Task 1 committed `1.db`…`6.db`; because `1.db` is present every
+  migration replays on every verification run, so a missing `7.db` costs
+  redundancy rather than coverage — but the chain should stay complete. See the
+  comment in the `sqldelight` block of `composeApp/build.gradle.kts`.
 
 ### Task 5 — `AlarmController` (pure, commonMain)
 
