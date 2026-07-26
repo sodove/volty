@@ -74,3 +74,29 @@ synthesised batteries (existing behaviour) and gains motion.
    The motion scaling constants may need a profile entry like the battery side.
 3. **Current split** — does the frame separate battery vs phase current, or only
    one? Map accordingly (`batteryCurrentA` at minimum).
+
+---
+
+## 7. Two contracts inherited from Part F's availability gate (2026-07-26)
+
+Found while building `MotionAlertAvailability` (F Task 3). Both are silent
+failures — nothing throws, nothing logs, the rider simply gets an alarm that is
+displayed as armed and never fires.
+
+**7.1 — no ESC sensor means the sentinel, not zero.** `ControllerData.hasEscTemp`
+is computed as `escTempC > -50f`, which is VESC's "no sensor wired" sentinel
+generalised into a cross-protocol predicate. A decoder that leaves `escTempC` at
+its `0f` default when the wheel has no ESC thermistor therefore claims the sensor
+*exists*, and `ESC_TEMP` arms against a constant zero. **Write a value below
+−50 °C when the reading is absent.** The same applies to `hasMotorTemp`, which is
+an explicit flag — set it honestly.
+
+**7.2 — duty must be real or absent, never a placeholder.** `MotionAggregator`
+folds duty across controllers as `maxOf { dutyPercent }`. A decoder that writes
+an approximation into `dutyPercent` makes the ШИМ alarm — the headline safety
+feature for wheels — fire on a number that is not a duty measurement. If Begode's
+frame does not carry a trustworthy PWM (see §6.1), leave `dutyPercent` at `0f`
+and set `MotionAlertAvailability`'s static `reportsDuty` entry for `BEGODE` to
+`false`. That entry is currently `true`, **inferred from this spec's §2/§3 text
+rather than from hardware**, and is pinned by a test so this part has to decide
+it deliberately.

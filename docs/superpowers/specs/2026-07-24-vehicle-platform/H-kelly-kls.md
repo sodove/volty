@@ -111,3 +111,25 @@ never fire.
 4. **Power** — with only phase current (no battery current), true input power is
    unavailable. Show current/temps and omit or clearly estimate power. Confirm the
    UX with the user (his Kelly-app dashboard shows what KLS gives — reference it).
+
+---
+
+## 10. Two contracts inherited from Part F's availability gate (2026-07-26)
+
+Found while building `MotionAlertAvailability` (F Task 3).
+
+**10.1 — leave `dutyPercent` at `0f`, and rely on the static gate.** KLS reports
+no duty (§7), and `MotionAlertAvailability` already encodes that permanently:
+`DUTY` is `Unavailable` on a Kelly vehicle even when a live sample arrives. But
+`MotionAggregator` folds duty across controllers as `maxOf { dutyPercent }`, so
+on a mixed VESC + Kelly vehicle `DUTY` *is* available — one duty-reporting
+controller is enough — and the aggregate takes the maximum of both. If the Kelly
+decoder ever writes a non-zero approximation into `dutyPercent`, the ШИМ alarm
+fires on a number that is not a duty measurement, on a vehicle where the alarm is
+legitimately armed. Write nothing into that field.
+
+**10.2 — no ESC sensor means the sentinel, not zero.** `ControllerData.hasEscTemp`
+is computed as `escTempC > -50f` (VESC's "no sensor wired" sentinel, generalised).
+A decoder leaving `escTempC` at its `0f` default when the reading is absent claims
+the sensor exists, and `ESC_TEMP` arms against a constant zero — displayed as
+armed, permanently silent. Write a sub-−50 value. Same for `hasMotorTemp`.

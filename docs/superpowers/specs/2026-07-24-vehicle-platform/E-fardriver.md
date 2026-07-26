@@ -69,3 +69,23 @@ Subject to capture confirmation:
 3. **Duty availability** — is a true PWM/duty exposed? If not, gate the ШИМ alarm
    off for FarDriver vehicles (F §3).
 4. **Current sign & scaling** — confirm regen/discharge sign per capture.
+
+---
+
+## 7. Two contracts inherited from Part F's availability gate (2026-07-26)
+
+Found while building `MotionAlertAvailability` (F Task 3). Both fail silently:
+the alert renders as armed and never fires, and nothing throws.
+
+**7.1 — no sensor means the sentinel, not zero.** `ControllerData.hasEscTemp` is
+computed as `escTempC > -50f` — VESC's "no sensor wired" sentinel generalised
+across protocols. Leaving `escTempC` at its `0f` default when FarDriver reports
+no ESC temperature claims the sensor exists and arms `ESC_TEMP` against a
+constant zero. Write a sub-−50 value instead, and set `hasMotorTemp` honestly.
+
+**7.2 — `reportsDuty` for `FARDRIVER` is currently `true` and unverified.**
+`MotionAlertAvailability`'s static table says FarDriver reports duty; that is a
+placeholder standing on §6.3, which is open. If the capture shows no true
+PWM/duty, **flip the table entry to `false`** — it is pinned by a test, so the
+change cannot be inherited by accident. Leaving it `true` while writing `0f` into
+`dutyPercent` gives the rider a ШИМ alarm shown as armed and permanently silent.
