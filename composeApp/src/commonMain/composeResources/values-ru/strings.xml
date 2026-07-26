@@ -267,4 +267,12 @@
     <string name="alert_soc_cutoff_text">%1$d%% — остановитесь (%2$s)</string>
     <string name="alert_charge_complete_title">Заряд завершён</string>
     <string name="alert_charge_complete_text">%1$s достигла 100%%</string>
+
+    <!-- Доступность моторных алертов (F §10) — почему пункт недоступен -->
+    <string name="alert_unavailable_no_controller">У этого транспорта нет контроллера</string>
+    <string name="alert_unavailable_no_duty">Контроллеры %1$s не сообщают ШИМ</string>
+    <string name="alert_unavailable_no_motor_temp">На этом контроллере нет датчика температуры мотора</string>
+    <string name="alert_unavailable_no_esc_temp">На этом контроллере нет датчика температуры контроллера</string>
+    <string name="alert_unavailable_no_speed">Этот контроллер не сообщает скорость</string>
+    <string name="alert_availability_unknown">Данных ещё нет — подключитесь, чтобы проверить датчик</string>
 </resources>

@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.presentation.common
 
 import androidx.compose.runtime.Composable
+import ru.sodovaya.volty.domain.alert.AlertAvailability
+import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -10,6 +12,12 @@ import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.primaryController
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.alert_availability_unknown
+import volty.composeapp.generated.resources.alert_unavailable_no_controller
+import volty.composeapp.generated.resources.alert_unavailable_no_duty
+import volty.composeapp.generated.resources.alert_unavailable_no_esc_temp
+import volty.composeapp.generated.resources.alert_unavailable_no_motor_temp
+import volty.composeapp.generated.resources.alert_unavailable_no_speed
 import volty.composeapp.generated.resources.bms_ant
 import volty.composeapp.generated.resources.bms_begode
 import volty.composeapp.generated.resources.bms_daly
@@ -95,6 +103,46 @@ fun dashboardStyleLabel(style: DashboardStyle): String = stringResource(
         DashboardStyle.CLASSIC -> Res.string.dashboard_style_classic
     }
 )
+
+/**
+ * The rider-facing sentence for a motion alert the hardware cannot supply
+ * (`F §10`). The reason text *is* the point — a greyed row with no explanation
+ * is the version that invites "why can't I turn this on?".
+ *
+ * The mapping lives here, not in `domain/alert`, for the same reason every other
+ * label in this file does: `domain/` imports nothing from Compose (verified — no
+ * file under `domain/` imports `data` or resources), and the Russian wording
+ * belongs in `values-ru/strings.xml` beside every other translated string rather
+ * than as a literal in a pure module.
+ */
+@Composable
+fun alertUnavailableReasonLabel(reason: AlertUnavailableReason): String = when (reason) {
+    AlertUnavailableReason.NoController ->
+        stringResource(Res.string.alert_unavailable_no_controller)
+    is AlertUnavailableReason.ControllerReportsNoDuty ->
+        stringResource(Res.string.alert_unavailable_no_duty, reason.type.label)
+    AlertUnavailableReason.NoMotorTempSensor ->
+        stringResource(Res.string.alert_unavailable_no_motor_temp)
+    AlertUnavailableReason.NoEscTempSensor ->
+        stringResource(Res.string.alert_unavailable_no_esc_temp)
+    AlertUnavailableReason.NoSpeedSource ->
+        stringResource(Res.string.alert_unavailable_no_speed)
+}
+
+/**
+ * The explanatory line under a motion alert row, or null when the alert is
+ * available and needs no explanation.
+ *
+ * [AlertAvailability.Unknown] gets its own wording on purpose: it must never
+ * read as "your hardware lacks this sensor", because on a vehicle that has
+ * simply never been connected that is a claim we have not earned.
+ */
+@Composable
+fun alertAvailabilityNote(availability: AlertAvailability): String? = when (availability) {
+    AlertAvailability.Available -> null
+    AlertAvailability.Unknown -> stringResource(Res.string.alert_availability_unknown)
+    is AlertAvailability.Unavailable -> alertUnavailableReasonLabel(availability.reason)
+}
 
 @Composable
 fun secondaryGaugeLabel(gauge: SecondaryGauge): String = stringResource(
