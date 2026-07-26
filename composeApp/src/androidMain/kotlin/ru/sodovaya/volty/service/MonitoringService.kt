@@ -215,6 +215,13 @@ class MonitoringService : Service() {
      * `${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` — a
      * `signature`-level permission declared and held by this app alone, so a
      * broadcast from any other package is dropped by the system.
+     *
+     * **This protection is androidx.core version-dependent and fails silently.**
+     * Only core **1.18.0 and above** applies that permission below API 33; 1.16.0
+     * passes the flag straight to a platform that ignores it. This build resolves
+     * 1.18.0 transitively, not by an explicit pin — so a future dependency change
+     * that drags core below 1.18.0 reopens the hole on API 26–32 with no compile
+     * error and no failing test. If you touch dependency versions, re-check this.
      */
     private fun registerNotificationAction(receiver: BroadcastReceiver, action: String) {
         ContextCompat.registerReceiver(

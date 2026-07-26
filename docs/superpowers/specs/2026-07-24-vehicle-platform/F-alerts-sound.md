@@ -453,3 +453,51 @@ sounding through `ConnectionState.Reconnecting`, on the belief that the state
 could coexist with a live link. It cannot — the fold is `any ONLINE → Connected`
 first, so `Reconnecting` means *nothing* is delivering, and the alarm now stops
 there.
+
+---
+
+## 15. Part F debt carried to `main` (2026-07-27)
+
+Everything below was found, adjudicated and deliberately not fixed in Part F.
+
+**15.1 — The notification surface is English while the app is Russian.** The
+Silence/Disconnect actions and every one-shot alert body (`"Motor temperature
+high"`, `"Cell voltage high"`) are hardcoded English literals. `Notifier.showLive`
+is not `suspend`, Compose Resources' `getString` is, and there is no Android
+`res/` source set — so a locale-aware notifier means restructuring the whole
+notification path, not translating three constants. It is at least *self*-
+consistent today: everything there is English. Fix it as one piece, or not at all.
+
+**15.2 — The receiver hardening is androidx.core version-dependent and fails
+silently.** `ContextCompat.registerReceiver` only applies the signature-level
+permission below API 33 from core **1.18.0**; 1.16.0 passes the flag to a platform
+that ignores it. This build resolves 1.18.0 transitively, not by an explicit pin,
+so a dependency change dragging it lower reopens the hole on API 26–32 with no
+compile error and no failing test. An explicit version constraint would nail it;
+the caveat is on the registration KDoc meanwhile.
+
+**15.3 — `the_four_triggers_share_exactly_one_collector` is a weaker guard than
+its name.** It counts direct children of the outer scope, and `merge`'s internal
+per-flow coroutines are children of the collector's own channelFlow scope — so it
+would still read 1 if someone nested a `scope.launch` inside the `collect` block.
+The single-collector property is real (verified independently); the test does not
+fence it as tightly as it claims.
+
+**15.4 — Duty's 3 pp release band has no physical argument behind it.**
+Temperature was narrowed to 1 °C on a thermal-lag argument and speed's 2 km/h is
+plausible for erpm-derived speed; duty's figure is judgement. It is the likeliest
+field adjustment, and §13 item 12 is the check that would prompt it.
+
+**15.5 — `AudibleAlarm` RESTART is unrate-limited.** A duty reading jittering more
+than the release band flaps between steps at sample rate, tearing down and
+rebuilding an `AudioTrack` each time. Bounded, not a leak. If real VESC data shows
+it, the fix is a minimum dwell per step — not a wider release band.
+
+**15.6 — Speed thresholds are km/h even for a rider on Imperial units.** Labelled
+honestly rather than converted; the dial shows mph for the same rider, so the
+mismatch is visible. Converting on display while storing km/h is the larger
+correctness risk, which is why it was left.
+
+**15.7 — CI has no signal on a branch without a PR.** `push` is restricted to
+`main`, so CI is a post-merge safety net rather than a gate. Acceptable while
+every merge runs the full suite locally first.
