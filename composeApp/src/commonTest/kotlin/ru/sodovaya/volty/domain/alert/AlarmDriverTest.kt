@@ -28,7 +28,6 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -57,8 +56,16 @@ class AlarmDriverTest {
         override fun update(state: AlarmState) { states += state }
         override fun setModalities(modalities: AlarmModalities) { switches += modalities }
 
-        /** The level the speaker was last told to play. */
-        val level: Int get() = states.lastOrNull()?.level ?: 0
+        /**
+         * The level the speaker was last told to play.
+         *
+         * Deliberately **throws** when the speaker was never told anything, rather
+         * than answering 0: "silent" and "nobody ever spoke to the speaker" are
+         * different facts, and folding them together would make every
+         * `assertEquals(0, alarm.level)` guard pass against an implementation that
+         * emits nothing at all.
+         */
+        val level: Int get() = states.last().level
     }
 
     private class StubBmsRepository : BmsRepository {
@@ -356,16 +363,30 @@ class AlarmDriverTest {
     }
 
     /**
-     * The independent belt. `activeMotion` silencing is a *push* — it needs the
-     * repository to emit — and a link that dies without a final emission would
-     * leave the last hot reading standing and the tone with it. Nothing here
-     * touches `activeMotion` after the alarm starts sounding.
+     * The independent belt, and the case it exists for.
+     *
+     * `activeMotion` silencing is a *push*, and **a dropped link does not push**:
+     * `onLinkDrop` marks the link reconnecting and starts an unbounded retry loop
+     * without writing `activeMotion`, which only ever changes when a sample is
+     * submitted. So the last hot reading sits in the StateFlow indefinitely and
+     * mechanism 1 can never fire. Nothing in this test touches `activeMotion`
+     * after the alarm starts sounding, because in the real failure nothing does.
+     *
+     * Every state but `Connected` is in this list, and that is exactly right
+     * rather than merely cautious: `refoldConnectionStateLocked` answers
+     * `Connected` whenever **any** link is online, so each of these is reachable
+     * only when nothing at all is up. `Reconnecting` is the one that matters — a
+     * rider at 95 % duty whose wheel drops out sits in that state for as long as
+     * the retry loop runs, which is forever.
      */
     @Test
-    fun link_states_that_mean_nothing_is_connected_silence_the_alarm() = runTest {
+    fun every_state_but_connected_silences_the_alarm() = runTest {
         val dead = listOf(
             ConnectionState.Idle,
+            ConnectionState.Scanning,
+            ConnectionState.Connecting(null),
             ConnectionState.Disconnected,
+            ConnectionState.Reconnecting(attempt = 1, reason = "link lost"),
             ConnectionState.Failed("out of range")
         )
         for (state in dead) {
@@ -383,32 +404,45 @@ class AlarmDriverTest {
     }
 
     /**
-     * And the other direction, which matters just as much. The vehicle-level state
-     * is a fold over every link, so a multi-link vehicle whose *battery* link
-     * dropped reads `Reconnecting` while the controller link is still delivering
-     * duty. Silencing on anything short of "nothing is connected" would cut a live
-     * alarm off at 95 % duty because an unrelated BMS blinked.
+     * The other direction: the belt must not fire while a link really is up, or a
+     * `Connected → Connected(otherVehicle)` re-emission would chop a live alarm
+     * into fragments. Silence is owed to a dead link, not to every state change.
      */
     @Test
-    fun a_link_that_is_still_trying_leaves_a_live_alarm_sounding() = runTest {
-        val stillLive = listOf(
-            ConnectionState.Scanning,
-            ConnectionState.Connecting(null),
-            ConnectionState.Connected(null),
-            ConnectionState.Reconnecting(attempt = 1, reason = "link lost")
-        )
-        for (state in stillLive) {
-            val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f)))
-            val alarm = drive(repo)
-            repo.activeMotion.value = motion(dutyPercent = 95f)
-            runCurrent()
-            assertEquals(1, alarm.level, "fixture guard for $state: the alarm must be sounding first")
+    fun a_connected_link_never_silences_on_the_state_alone() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f)))
+        val alarm = drive(repo)
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        assertEquals(1, alarm.level, "fixture guard: the alarm must be sounding first")
 
-            repo.connectionState.value = state
-            runCurrent()
+        repo.connectionState.value = ConnectionState.Connected(null)
+        runCurrent()
 
-            assertEquals(1, alarm.level, "$state does not prove the controller stopped reporting — keep sounding")
-        }
+        assertEquals(1, alarm.level, "a link that is up keeps delivering, so the state alone silences nothing")
+    }
+
+    /**
+     * The reconnect case end to end, stated as the rider experiences it. Separate
+     * from the loop above because this is the scenario the belt was written for
+     * and it deserves to fail by name.
+     */
+    @Test
+    fun a_link_dropping_mid_alarm_silences_it_even_though_no_sample_follows() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f)))
+        val alarm = drive(repo)
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        assertEquals(1, alarm.level, "fixture guard: 95 % duty, alarm sounding, phone in a pocket")
+
+        // Exactly what onLinkDrop does: the state moves and `activeMotion` is left
+        // holding the 95 % reading, because no sample was submitted. Nothing below
+        // touches it — that stale hot value staying put IS the hazard, and
+        // asserting it would only restate a line this test never executes.
+        repo.connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link lost")
+        runCurrent()
+
+        assertEquals(0, alarm.level, "the tone must not run in the rider's pocket until the link happens to return")
     }
 
     // ----------------------------------------------------------- the switches

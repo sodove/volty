@@ -89,21 +89,43 @@ interface AlarmOutput {
  * is prevented by two independent mechanisms:
  *
  *  1. **the sample itself.** `activeMotion` emits a placeholder with
- *     [ControllerData.isConnected] false whenever nothing is connected, and
- *     [AlarmController.update] silences and forgets on it. This is the path that
- *     runs for an ordinary link drop, and it re-arms on the first fresh sample;
- *  2. **[ConnectionState].** Mechanism 1 is a *push*: it needs the repository to
- *     emit. A link that dies without a final emission would leave the last hot
- *     sample standing and the tone with it — an alarm that nothing can clear,
- *     because clearing it needs the readings that just stopped arriving. A
- *     connection state of [ConnectionState.Idle], [ConnectionState.Disconnected]
- *     or [ConnectionState.Failed] is an independent statement that no link can be
- *     delivering anything, and it silences on its own.
+ *     [ControllerData.isConnected] false whenever a *reset path* runs —
+ *     `disconnect()`, a demo teardown, switching to another device — and
+ *     [AlarmController.update] silences and forgets on it;
+ *  2. **[ConnectionState].** Mechanism 1 is a *push*, and it needs somebody to
+ *     push. **A dropped link does not push.** `KableBmsRepository.onLinkDrop`
+ *     marks the link reconnecting and starts an unbounded retry loop without
+ *     touching `activeMotion`, which is written only from `onVehicleData` — i.e.
+ *     only when a sample is actually submitted. So a link that dies mid-alarm
+ *     leaves the last hot reading sitting in the StateFlow **indefinitely**, and
+ *     mechanism 1 cannot fire because the readings that would clear it are
+ *     exactly the ones that stopped arriving. Anything other than
+ *     [ConnectionState.Connected] therefore silences on its own; see
+ *     [canDeliverSamples] for why that set is exactly right.
  *
  * Service **destruction** is not on this list, and cannot be: cancelling the
  * scope stops the collector rather than the speaker. That is `onDestroy`'s job
  * (`AudibleAlarm.release()`), and it is the reason `release` is not on
  * [AlarmOutput].
+ *
+ * ### One gap the two mechanisms do NOT close, recorded rather than papered over
+ *
+ * On a vehicle with **both** a BMS and a controller, where the *controller* link
+ * dies while the BMS keeps delivering: the vehicle-level state stays
+ * [ConnectionState.Connected] — correctly, a link really is up — so mechanism 2
+ * must not fire, and mechanism 1 cannot, because
+ * `VehicleConnection.submit` sweeps only `states` (packs) for staleness and
+ * `submitMotion` only `ctrlStates` (controllers). Nothing marks a controller
+ * stale from the battery path, so its `isOnline` stays true, and
+ * [ru.sodovaya.volty.domain.stats.MotionAggregator] keeps folding the last hot
+ * reading with `isConnected = true`. The alarm would go on sounding on a duty
+ * number nobody is measuring any more.
+ *
+ * The fix belongs in `VehicleConnection` — a cross-kind staleness sweep, or a
+ * clock-driven one — and is deliberately **not** made here: a second staleness
+ * rule living in the alarm would be a second answer to a question that already
+ * has an owner. Recorded as a follow-up; do not close it by adding a timeout to
+ * this class.
  */
 class AlarmDriver(
     private val repository: BmsRepository,
@@ -154,18 +176,12 @@ class AlarmDriver(
     }
 
     /**
-     * The liveness belt described in the class doc. Silences only on the states
-     * that mean *nothing at all is connected*, and re-arms on the next sample.
+     * The liveness belt described in the class doc: anything but
+     * [ConnectionState.Connected] silences, immediately and unconditionally.
      *
-     * [ConnectionState.Reconnecting] and [ConnectionState.Connecting] are
-     * deliberately not among them, and this is not caution for its own sake: the
-     * vehicle-level state is a fold over every link, so a multi-link vehicle whose
-     * *battery* link dropped reads Reconnecting while the controller link is still
-     * delivering duty. Silencing there would cut a live alarm off at 95 % duty
-     * because an unrelated BMS blinked. The already-connected links keep supplying
-     * samples, and [ru.sodovaya.volty.domain.stats.MotionAggregator] folds only the
-     * controllers that are actually online, so mechanism 1 is both sufficient and
-     * more precise while any link survives.
+     * Silencing costs nothing that has to be paid back. Attack is immediate and
+     * only release is damped, so a link that comes back sounds again on its very
+     * first reading — the alarm is silenced, not disarmed.
      */
     private fun onLink(state: ConnectionState) {
         if (state.canDeliverSamples) return
@@ -176,25 +192,40 @@ class AlarmDriver(
 
 /**
  * Whether this state leaves any possibility of a telemetry sample arriving.
+ * **Only [ConnectionState.Connected] does.**
  *
- * Exhaustive with no `else` so a new [ConnectionState] has to answer the question
- * rather than inherit an answer — and note the two directions are not equally
- * costly. A new state wrongly marked `true` merely leans on the disconnected
- * placeholder (mechanism 1); wrongly marked `false` it silences a live alarm.
+ * That reads like a blunt rule and it is in fact the precise one, because of what
+ * the vehicle-level fold actually is. `KableBmsRepository.refoldConnectionStateLocked`
+ * tests **`any link ONLINE` first**, so `Connected` is the answer whenever a
+ * single link of any number is up. Every other state is therefore reachable *only
+ * when nothing at all is online*:
+ *
+ *  - `Connecting` — some link is dialling and none is up;
+ *  - `Reconnecting` — some link is retrying and none is up. This is the dangerous
+ *    one: `onLinkDrop` starts an unbounded `while (isActive)` retry loop that
+ *    never gives up, so the state can sit here for the rest of the ride while
+ *    `activeMotion` still holds the last hot reading;
+ *  - `Scanning` — the picker only writes it when the state is *not* already
+ *    Connected/Connecting/Reconnecting, so it too implies nothing is up;
+ *  - `Idle`, `Disconnected`, `Failed` — self-evidently nothing.
+ *
+ * An earlier version of this file excluded `Reconnecting` on the belief that a
+ * multi-link vehicle could read Reconnecting while a surviving link kept
+ * delivering duty. **That state is unreachable** — such a vehicle reads
+ * `Connected` — and the exclusion left exactly the hole the belt exists to close:
+ * a rider at 95 % duty whose link drops would have kept the tone in their pocket
+ * until the link returned or they stopped and hit disconnect.
+ *
+ * Exhaustive with no `else`, one arm per state, so a new [ConnectionState] has to
+ * answer the question rather than inherit an answer.
  */
 private val ConnectionState.canDeliverSamples: Boolean
     get() = when (this) {
-        // Nothing is connected and nothing is being attempted.
-        is ConnectionState.Idle -> false
-        is ConnectionState.Disconnected -> false
-        // The repository has given up; no further sample is coming.
-        is ConnectionState.Failed -> false
-        // A scan runs with nothing connected, but it is also reachable from the
-        // picker mid-ride; the placeholder covers the former and silencing here
-        // would break the latter.
-        is ConnectionState.Scanning -> true
-        is ConnectionState.Connecting -> true
         is ConnectionState.Connected -> true
-        // One link of possibly several is retrying — see [AlarmDriver.onLink].
-        is ConnectionState.Reconnecting -> true
+        is ConnectionState.Idle -> false
+        is ConnectionState.Scanning -> false
+        is ConnectionState.Connecting -> false
+        is ConnectionState.Disconnected -> false
+        is ConnectionState.Reconnecting -> false
+        is ConnectionState.Failed -> false
     }

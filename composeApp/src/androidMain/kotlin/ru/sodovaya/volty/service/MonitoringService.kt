@@ -15,7 +15,6 @@ import ru.sodovaya.volty.notification.AudibleAlarmHolder
 import ru.sodovaya.volty.notification.LiveSummary
 import ru.sodovaya.volty.notification.NotificationChannels
 import ru.sodovaya.volty.notification.Notifier
-import ru.sodovaya.volty.notification.asAlarmOutput
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
@@ -97,7 +96,7 @@ class MonitoringService : Service() {
         AlarmDriver(
             repository = bmsRepository,
             modalities = appPrefs.alarmModalities,
-            alarm = alarms.acquire().asAlarmOutput()
+            alarm = alarms.openOutput()
         ).start(scope)
 
         scope.launch {
