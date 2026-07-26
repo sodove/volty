@@ -1,7 +1,12 @@
 package ru.sodovaya.volty.domain.usecase
 
+import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.armedRules
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.notification.Notifier
 import ru.sodovaya.volty.util.formatFixed
@@ -15,6 +20,15 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
+/**
+ * The **one-shot** half of the alert system (F §2): a discrete event crossed a
+ * line, so post a notification once, then stay quiet until it clears.
+ *
+ * The continuous, graded audible alarm is
+ * [ru.sodovaya.volty.domain.alert.AlarmController]'s job and is not a
+ * notification at all. Duty and speed belong entirely to it — see
+ * [evaluateMotion] for why they raise no notification here.
+ */
 @OptIn(ExperimentalTime::class)
 class AlertEngine(
     private val bmsRepository: BmsRepository,
@@ -24,6 +38,18 @@ class AlertEngine(
 
     private val lastFired = mutableMapOf<Pair<String, AlertKind>, Instant>()
     private val armed = mutableMapOf<Pair<String, AlertKind>, Boolean>()
+
+    /**
+     * The highest level a levelled kind has reached during its **current arming
+     * episode**, per (vehicle, kind); 0 between episodes.
+     *
+     * Needed because the notification is posted once per episode but its
+     * severity must describe the worst the metric got, and the two instants can
+     * differ: while [debounce] is holding a fire back, the reading may climb to
+     * level 2 and fall back to level 1 without ever reaching level 0, so the
+     * level *at the moment of firing* would understate the episode.
+     */
+    private val peakLevel = mutableMapOf<Pair<String, AlertKind>, Int>()
 
     private val debounce = 3.seconds
 
@@ -38,9 +64,30 @@ class AlertEngine(
                 .distinctUntilChanged()
                 .collect { (data, vehicle) -> evaluate(data, vehicle) }
         }
+        // A SECOND collector rather than folding `activeMotion` into the combine
+        // above, and that is the point rather than an accident of style. A
+        // three-way combine re-runs the *battery* evaluation on every motion
+        // sample, which arrives an order of magnitude more often than a BMS
+        // frame, and that is not neutral: a battery alert blocked by [debounce]
+        // would then be released by the next motion tick instead of the next BMS
+        // frame, so a motion source the rider added would change when their cell
+        // alerts fire. Battery alert timing is out of this task's scope (F §1
+        // "battery alert logic (already exists, unchanged)"), so the two streams
+        // stay independent — each kind of alert is evaluated exactly when its own
+        // data changes. The shared arm/recover/debounce maps are keyed by kind,
+        // and no kind is written by both paths, so the collectors never contend.
+        scope.launch {
+            bmsRepository.activeMotion
+                .combine(bmsRepository.activeVehicle) { m, v -> m to v }
+                .distinctUntilChanged()
+                .collect { (motion, vehicle) -> evaluateMotion(motion, vehicle) }
+        }
     }
 
     fun evaluateForTest(data: BmsData, vehicle: Vehicle?) = evaluate(data, vehicle)
+
+    fun evaluateMotionForTest(motion: ControllerData, vehicle: Vehicle?) =
+        evaluateMotion(motion, vehicle)
 
     private fun evaluate(data: BmsData, vehicle: Vehicle?) {
         if (vehicle == null || !data.isConnected) return
@@ -141,6 +188,108 @@ class AlertEngine(
         }
     }
 
+    /**
+     * The motion one-shots (F §2, §3): controller fault, and the two temperature
+     * kinds. Same debounce/arm/recover machinery as the battery alerts above —
+     * only the source of the readings differs.
+     *
+     * **Duty and speed raise nothing here on purpose.** They are the continuous
+     * alarm's metrics: a duty excursion past 80 % is ordinary riding and happens
+     * repeatedly in a single ride, so one notification per excursion would be
+     * dozens of notifications per ride — F §10's train-the-rider-to-ignore-it
+     * failure. They are already served, live and graded, by [ru.sodovaya.volty.domain.alert.AlarmController].
+     * Temperature is the opposite shape: slow, near-monotone, and genuinely the
+     * "discrete event crossed a line" F §2 describes.
+     *
+     * **A disconnected sample fires nothing and changes nothing.**
+     * `activeMotion` emits a zero-filled placeholder `ControllerData()` while
+     * nothing is connected (see [ru.sodovaya.volty.domain.alert.availabilityFor]),
+     * and that is not a measurement. Returning before touching [armed] or
+     * [peakLevel] is what keeps a kind from being left permanently armed (a
+     * placeholder read as "recovered", re-arming a kind whose real reading never
+     * dropped) or permanently silent (a placeholder read as "still triggered",
+     * holding the arm down through the whole gap). The same judgement
+     * [ru.sodovaya.volty.domain.alert.AlarmController] makes for the alarm,
+     * differing only in that the alarm has live output to silence and this has
+     * only memory to leave alone.
+     */
+    private fun evaluateMotion(motion: ControllerData, vehicle: Vehicle?) {
+        if (vehicle == null || !motion.isConnected) return
+        val now = clock()
+
+        // Always CRITICAL: a fault is the controller saying it has stopped
+        // trusting itself, and there is no rider-set threshold to grade it
+        // against. It needs no availability gate of its own either — a fault
+        // list can only be non-empty because a controller decoder put something
+        // in it, and `isConnected` above is true only when a controller is
+        // actually online (MotionAggregator sets it).
+        fire(AlertKind.CONTROLLER_FAULT, vehicle, now,
+            triggered = motion.faults.isNotEmpty(),
+            recovered = motion.faults.isEmpty(),
+            severity = AlertSeverity.CRITICAL,
+            title = "Controller fault",
+            text = "${motion.faults.joinToString(", ")} on ${vehicle.name}"
+        )
+
+        // Recomputed from THIS sample, every sample — never cached. Every
+        // sensor-backed kind is AlertAvailability.Unknown until the first sample
+        // arrives and `armedRules` drops Unknown, so a value computed once when
+        // the engine starts would arm no temperature alert for the whole ride,
+        // and nothing would report it (AlarmController's KDoc states the same
+        // obligation for the alarm). It also follows the vehicle: the rules and
+        // the availability both come from the `vehicle` this sample arrived with.
+        val rules = armedRules(vehicle, motion, vehicle.motionAlertRules)
+        for (rule in rules.rules) when (rule.kind) {
+            MotionAlertKind.MOTOR_TEMP -> fireLevelled(
+                AlertKind.MOTOR_TEMP_HIGH, rule, vehicle, now,
+                value = motion.motorTempC,
+                title = "Motor temperature high",
+                text = "Motor ${motion.motorTempC.toInt()}°C on ${vehicle.name}"
+            )
+            MotionAlertKind.ESC_TEMP -> fireLevelled(
+                AlertKind.ESC_TEMP_HIGH, rule, vehicle, now,
+                value = motion.escTempC,
+                title = "Controller temperature high",
+                text = "ESC ${motion.escTempC.toInt()}°C on ${vehicle.name}"
+            )
+            // Exhaustive and deliberately empty — see the KDoc above. Listed
+            // rather than `else` so a new MotionAlertKind has to answer this
+            // question instead of silently inheriting "no notification".
+            MotionAlertKind.DUTY, MotionAlertKind.SPEED -> Unit
+        }
+    }
+
+    /**
+     * [fire] for a kind whose rider config carries 0..3 levels: **one**
+     * notification per arming episode, at whichever level first engages, and it
+     * re-arms only once the reading has fallen below *every* level.
+     *
+     * Posting per level instead would turn one continuous climb through a
+     * rider's three steps into three notifications (F §10). What the levels do
+     * carry is the [AlertSeverity]: the rider's most urgent enabled step is
+     * CRITICAL, anything below it WARNING — relative to their own list, so a
+     * single-step rule (the shipped temperature defaults) reads CRITICAL rather
+     * than being permanently demoted for having only one step.
+     */
+    private fun fireLevelled(
+        kind: AlertKind, rule: AlertRule, vehicle: Vehicle, now: Instant,
+        value: Float, title: String, text: String
+    ) {
+        val key = vehicle.id to kind
+        val level = rule.engagedLevel(value)
+        // 0 both clears the episode's peak and is the recovery condition below,
+        // which is why they cannot drift apart.
+        val peak = if (level == 0) 0 else maxOf(level, peakLevel[key] ?: 0)
+        peakLevel[key] = peak
+        fire(kind, vehicle, now,
+            triggered = level > 0,
+            recovered = level == 0,
+            severity = if (peak >= rule.topEnabledLevel) AlertSeverity.CRITICAL else AlertSeverity.WARNING,
+            title = title,
+            text = text
+        )
+    }
+
     private fun fire(
         kind: AlertKind, vehicle: Vehicle, now: Instant,
         triggered: Boolean, recovered: Boolean,
@@ -159,3 +308,33 @@ class AlertEngine(
 
     private fun formatV(v: Float): String = formatFixed(v, 2)
 }
+
+/**
+ * The highest **enabled** level [value] has reached — 1-based, 0 when it has
+ * reached none, which is also "this alert is not currently engaged".
+ *
+ * No hysteresis, unlike [ru.sodovaya.volty.domain.alert.AlarmController]'s
+ * release bands: a one-shot's anti-chatter is arm/recover plus the debounce, and
+ * adding a second damping mechanism on top would only delay the *re-arm*, i.e.
+ * make the engine slower to notice the next genuine episode.
+ *
+ * Levels ascend ([AlertRule] enforces it), so the last engaged one is the
+ * highest. A disabled level is skipped without shifting the ones above it, so
+ * the position is the level's index in the rider's list rather than a count of
+ * the enabled ones — the same rule the alarm follows. A NaN reading fails `>=`
+ * and so reads as below every level, silencing rather than latching.
+ */
+private fun AlertRule.engagedLevel(value: Float): Int {
+    var engaged = 0
+    for ((index, level) in levels.withIndex()) {
+        if (level.enabled && value >= level.thresholdValue) engaged = index + 1
+    }
+    return engaged
+}
+
+/**
+ * The position of the rider's most urgent **enabled** step — the one that means
+ * CRITICAL. 0 when every step is muted, which is unreachable as a severity
+ * because [engagedLevel] then returns 0 too and nothing fires.
+ */
+private val AlertRule.topEnabledLevel: Int get() = levels.indexOfLast { it.enabled } + 1

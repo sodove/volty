@@ -1,11 +1,17 @@
 package ru.sodovaya.volty.domain.usecase
 
+import ru.sodovaya.volty.domain.alert.AlertLevel
+import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -18,8 +24,11 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -284,5 +293,416 @@ class AlertEngineTest {
         // 3.70 V is fine for Li-ion (< 4.20) but HIGH for LiFePO4 (> 3.65)
         engine.evaluateForTest(bmsData(cells = listOf(3.7f, 3.7f)), v)
         assertEquals(1, notifier.alerts.size)
+    }
+
+    // ======================================================================
+    // Motion one-shots (Task 6)
+    // ======================================================================
+
+    /**
+     * A vehicle with one controller, so motion telemetry exists at all. [rules]
+     * null means "never configured", which resolves to [ru.sodovaya.volty.domain.alert.AlarmDefaults]
+     * (duty 80/90, ESC 90 °C, motor 110 °C, speed off).
+     */
+    private fun motionVehicle(
+        rules: List<AlertRule>? = null,
+        controllerType: ControllerType = ControllerType.VESC
+    ) = Vehicle(
+        id = "v1",
+        name = "Test",
+        iconKey = "generic",
+        packs = emptyList(),
+        controllers = listOf(Controller(index = 0, label = "ESC", controllerType = controllerType, address = "AA")),
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L),
+        motionAlerts = rules
+    )
+
+    /**
+     * A live motion sample. Both temperatures default to a cold 20 °C — well
+     * under every default threshold — so a test that raises one reading is the
+     * only thing that can fire, and `escTempC` stays above the "no sensor"
+     * sentinel so [ControllerData.hasEscTemp] is true unless a test says
+     * otherwise.
+     */
+    private fun motion(
+        motorTempC: Float = 20f,
+        escTempC: Float = 20f,
+        hasMotorTemp: Boolean = true,
+        faults: List<String> = emptyList(),
+        dutyPercent: Float = 0f,
+        speedKmh: Float = 0f,
+        isConnected: Boolean = true
+    ) = ControllerData(
+        speedKmh = speedKmh,
+        speedSource = SpeedSource.REPORTED,
+        dutyPercent = dutyPercent,
+        escTempC = escTempC,
+        motorTempC = motorTempC,
+        hasMotorTemp = hasMotorTemp,
+        faults = faults,
+        isConnected = isConnected
+    )
+
+    /** One rule for [kind], thresholds ascending, all enabled. */
+    private fun rule(kind: MotionAlertKind, vararg thresholds: Float) =
+        AlertRule(kind, thresholds.map { AlertLevel(it) })
+
+    /**
+     * A clock that advances [stepSeconds] per read. `evaluateMotionForTest`
+     * reads it exactly once per call, so sample *i* happens at *i × step*, and a
+     * step of 1 s puts the 3 s debounce three samples wide.
+     */
+    private fun fakeClockStepping(stepSeconds: Long): () -> Instant {
+        var nowEpoch = 1_000_000L
+        return {
+            val r = Instant.fromEpochSeconds(nowEpoch)
+            nowEpoch += stepSeconds
+            r
+        }
+    }
+
+    // ------------------------------------------------------------- fault
+
+    @Test
+    fun `a controller fault fires a critical one-shot naming the fault`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.evaluateMotionForTest(motion(faults = listOf("OVER_VOLTAGE")), motionVehicle())
+        assertEquals(1, notifier.alerts.size)
+        val (title, text, severity) = notifier.alerts.first()
+        assertEquals("Controller fault", title)
+        assertEquals("OVER_VOLTAGE on Test", text, "the fault is named, not merely counted")
+        assertEquals(AlertSeverity.CRITICAL, severity, "a fault has no levels and is never less than critical")
+    }
+
+    @Test
+    fun `every fault the controllers report is named, not just the first`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        engine.evaluateMotionForTest(
+            motion(faults = listOf("ESC0: OVER_TEMP_FET", "ESC1: DRV")),
+            motionVehicle()
+        )
+        assertEquals("ESC0: OVER_TEMP_FET, ESC1: DRV on Test", notifier.alerts.single().second)
+    }
+
+    @Test
+    fun `a persisting fault does not re-notify on every sample`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        repeat(3) { engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v) }
+        assertEquals(1, notifier.alerts.size, "one notification per arming episode, not one per sample")
+    }
+
+    @Test
+    fun `a fault re-arms once it clears and notifies again if it returns`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        engine.evaluateMotionForTest(motion(faults = emptyList()), v)
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        assertEquals(2, notifier.alerts.size)
+    }
+
+    // ------------------------------------------------------- levelled temps
+
+    @Test
+    fun `motor temperature past the rider's only step fires a critical one-shot`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        // Defaults: motor 110 °C, one step. 115 is past it; the ESC's 20 °C is not.
+        engine.evaluateMotionForTest(motion(motorTempC = 115f), motionVehicle())
+        assertEquals(1, notifier.alerts.size)
+        val (title, text, severity) = notifier.alerts.first()
+        assertEquals("Motor temperature high", title)
+        assertEquals("Motor 115°C on Test", text)
+        assertEquals(
+            AlertSeverity.CRITICAL, severity,
+            "the rider's most urgent step is critical even when it is their only step"
+        )
+    }
+
+    @Test
+    fun `esc temperature thresholds against the ESC reading and names it`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        // ESC 95 °C is past its 90 °C default; the motor's 20 °C is nowhere near 110.
+        engine.evaluateMotionForTest(motion(escTempC = 95f), motionVehicle())
+        assertEquals(1, notifier.alerts.size)
+        assertEquals("Controller temperature high", notifier.alerts.first().first)
+        assertEquals("ESC 95°C on Test", notifier.alerts.first().second)
+    }
+
+    @Test
+    fun `a climb through three levels posts one notification, not one per level`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // level 1
+        engine.evaluateMotionForTest(motion(motorTempC = 115f), v) // level 2
+        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // level 3
+        assertEquals(
+            1, notifier.alerts.size,
+            "three rider-defined levels are one alert, not three — F §10's alarm fatigue"
+        )
+    }
+
+    @Test
+    fun `a levelled alert re-arms only after the reading falls below every level`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 120f)))
+        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // fires at level 2
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // down to level 1 — still engaged
+        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // back up — no new episode
+        assertEquals(1, notifier.alerts.size, "dropping a level is not a recovery")
+        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // below every level — recovered
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
+        assertEquals(2, notifier.alerts.size, "and falling below every level does re-arm it")
+    }
+
+    @Test
+    fun `a level below the rider's top step notifies as a warning, not a critical`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
+        assertEquals(
+            AlertSeverity.WARNING, notifier.alerts.single().third,
+            "severity is the rider's own escalation, so step 1 of 3 is not yet critical"
+        )
+    }
+
+    @Test
+    fun `the severity is the highest level the episode reached, not the level at the moment it fires`() {
+        val notifier = TestNotifier()
+        // 1 s per sample, so the 3 s debounce spans exactly three samples.
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockStepping(1))
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // t=0 fires at level 1
+        assertEquals(AlertSeverity.WARNING, notifier.alerts.single().third, "the first episode was only step 1")
+        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // t=1 recovers, arming the next episode
+        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // t=2 level 3, but 2 s < the 3 s debounce
+        assertEquals(1, notifier.alerts.size, "still held back by the debounce")
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // t=3 back to level 1, debounce expired
+        assertEquals(2, notifier.alerts.size)
+        assertEquals(
+            AlertSeverity.CRITICAL, notifier.alerts[1].third,
+            "the episode touched step 3 while the debounce held the fire back, and the rider is owed that"
+        )
+    }
+
+    @Test
+    fun `a new episode is graded on its own peak, not the previous episode's`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
+        engine.evaluateMotionForTest(motion(motorTempC = 125f), v) // episode 1 reaches step 3
+        assertEquals(AlertSeverity.CRITICAL, notifier.alerts.single().third)
+        engine.evaluateMotionForTest(motion(motorTempC = 90f), v)  // recovers, ending the episode
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v) // episode 2 only reaches step 1
+        assertEquals(
+            AlertSeverity.WARNING, notifier.alerts[1].third,
+            "the peak is per episode — yesterday's step 3 must not make today's step 1 critical"
+        )
+    }
+
+    @Test
+    fun `a muted level is skipped and does not fire on its own threshold`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(
+            rules = listOf(
+                AlertRule(
+                    MotionAlertKind.MOTOR_TEMP,
+                    listOf(AlertLevel(100f, enabled = false), AlertLevel(120f))
+                )
+            )
+        )
+        engine.evaluateMotionForTest(motion(motorTempC = 110f), v)
+        assertEquals(0, notifier.alerts.size, "the rider muted that step; passing it is not an event")
+    }
+
+    @Test
+    fun `a muted top step leaves the highest step that can still sound as the critical one`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(
+            rules = listOf(
+                AlertRule(
+                    MotionAlertKind.MOTOR_TEMP,
+                    listOf(AlertLevel(100f), AlertLevel(120f, enabled = false))
+                )
+            )
+        )
+        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
+        assertEquals(
+            AlertSeverity.CRITICAL, notifier.alerts.single().third,
+            "with the step above muted, step 1 IS the rider's most urgent step"
+        )
+    }
+
+    // ------------------------------------------------------------ gating
+
+    @Test
+    fun `no motor thermistor means no motor temperature alert, however hot the field reads`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        // 200 °C in a field the hardware does not measure is not evidence of
+        // anything (F §10: an unavailable alert must be impossible to arm).
+        engine.evaluateMotionForTest(motion(motorTempC = 200f, hasMotorTemp = false), motionVehicle())
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    // There is deliberately NO `no ESC sensor means no ESC temperature alert`
+    // test. `ControllerData.hasEscTemp` is derived from `escTempC` itself
+    // (`> -50 °C`), so "no sensor" and "a reading past the 90 °C step" cannot
+    // both hold in one sample: the only fixture the gate can be tested with is
+    // one whose reading is far below every threshold, and such a test passes
+    // with the whole availability gate deleted. It would assert nothing. The
+    // ESC gate is covered where it is observable, in `MotionAlertAvailabilityTest`.
+
+    /**
+     * **A contract statement, not a proven assertion.** Nothing that exists can
+     * be mutated to fail it: a rule with no levels reaches no threshold, so it
+     * is silent whether or not `armedRules` drops it — the `!rule.isOff` filter
+     * is unobservable from this engine. It is kept because the alternative
+     * implementation it forbids is real and has been written before: resolving
+     * an empty level list back to [ru.sodovaya.volty.domain.alert.AlarmDefaults],
+     * which would override the one and only way a rider can say "off".
+     */
+    @Test
+    fun `a rule the rider switched off raises nothing`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle(rules = listOf(AlertRule(MotionAlertKind.MOTOR_TEMP, emptyList())))
+        engine.evaluateMotionForTest(motion(motorTempC = 200f), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `duty and speed raise no notification however high they go`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        // Both armed and both far past their steps. They belong to the
+        // continuous alarm (F §2); a notification per excursion would be dozens
+        // per ride.
+        val v = motionVehicle(
+            rules = listOf(rule(MotionAlertKind.DUTY, 80f, 90f), rule(MotionAlertKind.SPEED, 30f))
+        )
+        engine.evaluateMotionForTest(motion(dutyPercent = 100f, speedKmh = 90f), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    // ------------------------------------------------------- disconnection
+
+    @Test
+    fun `a disconnected sample fires nothing, whatever it still carries`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        // A STALE sample, not the zero-filled placeholder: a fault list and a
+        // 200 °C motor would both fire if the guard were missing, so this can
+        // actually detect the guard's absence.
+        engine.evaluateMotionForTest(
+            motion(motorTempC = 200f, faults = listOf("DRV"), isConnected = false),
+            motionVehicle()
+        )
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `a gap does not re-arm a fault that never cleared`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        assertEquals(1, notifier.alerts.size, "faulted, and notified once")
+        // The link drops. `activeMotion` falls back to a zero-filled placeholder
+        // whose empty fault list looks exactly like a recovery — and is not one.
+        // CONTROLLER_FAULT has no availability gate to hide behind, so the
+        // `isConnected` guard is the only thing standing here.
+        engine.evaluateMotionForTest(ControllerData(), v)
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)
+        assertEquals(
+            1, notifier.alerts.size,
+            "the fault never cleared; a dropout is not a recovery and must not re-notify"
+        )
+    }
+
+    // The same claim for the *levelled* kinds has no test, deliberately: a
+    // disconnected placeholder is stopped twice over — by the `isConnected`
+    // guard, and by `availabilityFor`, which discards a disconnected sample as
+    // evidence so every temperature kind resolves to Unknown and is dropped.
+    // Neither guard alone can be mutated away to make such a test fail, so it
+    // would assert only that two independent mechanisms are both present.
+    // CONTROLLER_FAULT has only the first of them, which is why the test above
+    // is written on the fault path.
+
+    @Test
+    fun `a gap does not consume an arming a real recovery had already earned`() {
+        // The other direction of the same rule: a dropout must not leave a kind
+        // permanently *silent* either. Muting everything for the duration of a
+        // gap — a plausible reading of "ignore what happened while offline" —
+        // would swallow the first real sample after it.
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = motionVehicle()
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)   // fires
+        engine.evaluateMotionForTest(motion(faults = emptyList()), v)     // genuinely cleared — re-armed
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV"), isConnected = false), v) // gap
+        engine.evaluateMotionForTest(motion(faults = listOf("DRV")), v)   // faulted again, on a real sample
+        assertEquals(
+            2, notifier.alerts.size,
+            "a gap must leave the arming alone — muting through one would silence the next real episode"
+        )
+    }
+
+    // -------------------------------------------------------- flow wiring
+
+    /**
+     * Two claims at once, and they need the same fixture:
+     *
+     *  1. motion samples reach the engine at all — there is a second collector;
+     *  2. battery alerts are **not** re-evaluated on motion samples. `activeMotion`
+     *     ticks far more often than a BMS frame, so folding it into the battery
+     *     `combine` would let a motion sample release a battery alert the
+     *     debounce was still holding — i.e. adding a controller to a vehicle
+     *     would change when its cell alerts fire. The clock steps 1 s per
+     *     evaluation, so the CELL_HIGH blocked at t=2 s becomes eligible at
+     *     t≥3 s, which is exactly when the motion sample lands.
+     */
+    @Test
+    fun `motion samples drive the motion alerts without re-evaluating the battery ones`() = runTest {
+        val repo = StubBmsRepository()
+        val notifier = TestNotifier()
+        val engine = AlertEngine(repo, notifier, clock = fakeClockStepping(1))
+        // backgroundScope: the collectors never complete, and runTest cancels it
+        // rather than waiting for them.
+        engine.start(backgroundScope)
+
+        repo.activeVehicle.value = motionVehicle()
+        runCurrent()
+        repo.activeData.value = bmsData(cells = listOf(4.21f, 4.25f))   // t=0 CELL_HIGH fires
+        runCurrent()
+        repo.activeData.value = bmsData(cells = listOf(4.05f, 4.10f))   // t=1 recovers, re-arms
+        runCurrent()
+        repo.activeData.value = bmsData(cells = listOf(4.21f, 4.26f))   // t=2 blocked by the 3 s debounce
+        runCurrent()
+        assertEquals(1, notifier.alerts.size, "one cell alert so far, the second held by the debounce")
+
+        repo.activeMotion.value = motion(faults = listOf("DRV"))        // t=3
+        runCurrent()
+
+        assertTrue(
+            notifier.alerts.any { it.first == "Controller fault" },
+            "the motion stream is collected at all"
+        )
+        assertEquals(
+            1, notifier.alerts.count { it.first == "Cell voltage high" },
+            "and a motion sample does not re-evaluate the battery alerts"
+        )
     }
 }
