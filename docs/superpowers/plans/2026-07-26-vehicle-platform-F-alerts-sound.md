@@ -173,6 +173,16 @@ enabled levels still produces no alarm and no notification.
 - **A vehicle with no rows means "never configured" → defaults apply**, which is
   distinct from "the rider deleted every level" → off. Represent that difference
   explicitly; do not let a rider's deliberate silence read as a default.
+- **Two hazards land here from Task 2's model** (found in its review):
+  - **Sort on read.** `AlertRule.init` requires ascending thresholds. If the
+    reader trusts stored `position` ordering and a row set's positions disagree
+    with its thresholds, loading the vehicle throws `IllegalArgumentException` —
+    a crash at startup, not a validation error. Map rows through
+    `sortedLevels` on the way in.
+  - **"Never configured" lives at the repository boundary, not in the model.**
+    Represent it as absence of rows (or a nullable list returned by the
+    repository) — never as a flag or nullable on `AlertRule`, which would give
+    "off" a second representation and kill §10.2's single-representation rule.
 - Migration test: a v6 database with existing vehicles opens at v7 and every
   vehicle reads back with defaults.
 - **Regenerate the schema snapshot after adding `6.sqm`** — run
