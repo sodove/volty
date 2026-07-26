@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.os.VibrationAttributes
 import android.os.VibrationEffect
 import android.os.Vibrator
@@ -77,6 +78,12 @@ actual class AudibleAlarm(context: Context) {
     private var vibrating = false
     private var released = false
 
+    /** The waveform currently looping, so an unchanged one is not re-issued. */
+    private var currentVibration: AlarmVibration? = null
+
+    /** When the last tone thread was started, for [reviveToneIfDead]'s backoff. */
+    private var lastToneStartMs = 0L
+
     private val attributes: AudioAttributes = AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_ALARM)
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
@@ -88,8 +95,9 @@ actual class AudibleAlarm(context: Context) {
         synchronized(lock) {
             // Only while something is actually sounding: re-requesting focus for
             // an alarm that has since stopped would duck the rider's music for
-            // nothing.
-            if (released || tonePlayer == null) return@synchronized
+            // nothing. A player whose thread has died counts as not sounding —
+            // holding focus for it would duck music for silence.
+            if (released || !isTonePlaying()) return@synchronized
             val request = focusRequest ?: return@synchronized
             runCatching { audioManager?.requestAudioFocus(request) }
         }
@@ -160,33 +168,84 @@ actual class AudibleAlarm(context: Context) {
         }
     }
 
-    /** The entire platform-side decision surface. See the class doc. */
+    /**
+     * The entire platform-side decision surface. See the class doc.
+     *
+     * Dispatches on the **command** first and the transition second, so "is there
+     * something to play" is answered by the type system rather than by a discarded
+     * null check. The combinations that cannot occur — a `Play` with `STOP`, a
+     * `Silent` with `RESTART` — are `Unit` arms required for exhaustiveness, not
+     * defensive guards: [alarmTransitionFor] decides both, and it is tested.
+     */
     private fun applyTransition(transition: AlarmTransition) {
-        when (transition) {
-            AlarmTransition.NONE -> Unit
-
-            AlarmTransition.RETUNE -> {
-                val play = planner.command as? AlarmCommand.Play ?: return
-                val tone = play.tone ?: return
-                tonePlayer?.retune(tone)
+        when (val command = planner.command) {
+            is AlarmCommand.Silent -> when (transition) {
+                AlarmTransition.STOP -> {
+                    startTone(null)
+                    startVibration(null)
+                    abandonFocus()
+                }
+                else -> Unit
             }
 
-            AlarmTransition.RESTART -> {
-                val play = planner.command as? AlarmCommand.Play ?: return
-                // Focus is about the speaker only: a vibration-only alarm has no
-                // reason to duck anybody's music.
-                if (play.tone != null) requestFocus() else abandonFocus()
-                startTone(play.tone)
-                startVibration(play.vibration)
-            }
+            is AlarmCommand.Play -> when (transition) {
+                // Not "do nothing": this is the common case — a steady level
+                // produces NONE on every sample — and so it is the only place a
+                // tone thread that died on its own can be noticed.
+                AlarmTransition.NONE -> reviveToneIfDead(command)
 
-            AlarmTransition.STOP -> {
-                startTone(null)
-                startVibration(null)
-                abandonFocus()
+                AlarmTransition.RETUNE ->
+                    if (!reviveToneIfDead(command)) {
+                        command.tone?.let { tone -> tonePlayer?.retune(tone) }
+                    }
+
+                AlarmTransition.RESTART -> {
+                    // Focus is about the speaker only: a vibration-only alarm has
+                    // no reason to duck anybody's music.
+                    if (command.tone != null) requestFocus() else abandonFocus()
+                    startTone(command.tone)
+                    // An unchanged waveform is left running. Toggling the *tone*
+                    // switch mid-alarm is a RESTART, and re-issuing an identical
+                    // pattern would restart the buzz from its first pulse for no
+                    // reason the rider asked for.
+                    if (command.vibration != currentVibration) startVibration(command.vibration)
+                }
+
+                AlarmTransition.STOP -> Unit
             }
         }
     }
+
+    /**
+     * Restart the tone when it should be sounding but its thread has ended.
+     * Returns whether it did.
+     *
+     * Without this the alarm can go **permanently** silent mid-ride: if the audio
+     * server restarts, `AudioTrack.write` fails, [AlarmTonePlayer] releases its
+     * track and exits, and every later sample is a `NONE` that touches nothing.
+     * F §12's single-level temperature defaults mean the level then never changes
+     * either — urgency is pinned at 1.0 from 91 °C to 200 °C — so nothing would
+     * ever restart it. With vibration switched off that is total, silent,
+     * unreported failure of the safety feature.
+     *
+     * Rate-limited by [TONE_REVIVE_MIN_INTERVAL_MS] so that an audio stack which
+     * is broken rather than merely interrupted cannot make this build an
+     * `AudioTrack` on every incoming sample.
+     */
+    private fun reviveToneIfDead(command: AlarmCommand.Play): Boolean {
+        val tone = command.tone ?: return false
+        val player = tonePlayer
+        if (player != null && !player.finished) return false
+        val now = SystemClock.uptimeMillis()
+        if (now - lastToneStartMs < TONE_REVIVE_MIN_INTERVAL_MS) return false
+        Log.w(TAG, "alarm tone thread ended while level ${command.level} was still sounding; restarting it")
+        requestFocus()
+        startTone(tone)
+        return true
+    }
+
+    /** Whether a tone thread exists and is still running its loop. */
+    private fun isTonePlaying(): Boolean = tonePlayer?.finished == false
 
     /** Replace the running tone, or stop it when [tone] is null. */
     private fun startTone(tone: AlarmTone?) {
@@ -195,6 +254,7 @@ actual class AudibleAlarm(context: Context) {
         if (tone == null) return
         val player = AlarmTonePlayer(tone, attributes)
         tonePlayer = player
+        lastToneStartMs = SystemClock.uptimeMillis()
         runCatching { player.start() }.onFailure {
             Log.e(TAG, "could not start the alarm tone thread", it)
             tonePlayer = null
@@ -204,6 +264,7 @@ actual class AudibleAlarm(context: Context) {
     /** Replace the running haptic, or cancel it when [vibration] is null. */
     private fun startVibration(vibration: AlarmVibration?) {
         stopVibration()
+        currentVibration = null
         if (vibration == null) return
         val vib = vibrator ?: return
         if (!vib.hasVibrator()) return
@@ -211,7 +272,10 @@ actual class AudibleAlarm(context: Context) {
         // full period, so the pattern repeats seamlessly until cancelled.
         val effect = VibrationEffect.createWaveform(vibration.waveformMs(), 0)
         runCatching { vibrate(vib, effect) }
-            .onSuccess { vibrating = true }
+            .onSuccess {
+                vibrating = true
+                currentVibration = vibration
+            }
             .onFailure { Log.e(TAG, "could not start the alarm vibration", it) }
     }
 
@@ -279,6 +343,16 @@ actual class AudibleAlarm(context: Context) {
 
         /** Upper bound on how long [release] waits for the tone thread to let go of its track. */
         const val TONE_JOIN_TIMEOUT_MS = 500L
+
+        /**
+         * Floor on how often a died-on-its-own tone thread is restarted.
+         *
+         * Recovery has to be prompt — a second of silence in a safety alarm is
+         * already too much — but an audio stack that is broken rather than briefly
+         * interrupted would otherwise have this building an `AudioTrack` on every
+         * incoming sample, several times a second, for the rest of the ride.
+         */
+        const val TONE_REVIVE_MIN_INTERVAL_MS = 1_000L
 
         @Suppress("DEPRECATION")
         fun resolveVibrator(context: Context): Vibrator? =

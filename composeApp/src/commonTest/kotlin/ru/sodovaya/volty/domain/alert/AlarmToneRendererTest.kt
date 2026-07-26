@@ -123,7 +123,25 @@ class AlarmToneRendererTest {
     // --- Level and edges -----------------------------------------------------
 
     @Test
-    fun the_peak_sits_at_the_configured_amplitude_with_headroom_left() {
+    fun the_alarm_is_loud_enough_to_be_heard_and_quiet_enough_not_to_clip() {
+        val tone = AlarmTone(frequencyHz = 1000f, pulseCount = 1, pulseOnMs = 100, pulseGapMs = 0, restMs = 0)
+        val peak = AlarmToneRenderer.burst(tone).maxOf { abs(it.toInt()) }
+
+        // **Literal floor, deliberately not AMPLITUDE * Short.MAX_VALUE.** An
+        // earlier version derived the expectation from the constant under test, so
+        // it moved with it: dropping AMPLITUDE from 0.85 to 0.60 — a 30 % quieter
+        // safety alarm — survived the entire suite. How loud the alarm has to be
+        // is a requirement, not a restatement of the code.
+        val floor = (0.8 * Short.MAX_VALUE).roundToInt()
+        assertTrue(peak >= floor, "peak sample $peak is below $floor — the alarm has been made quieter")
+        assertTrue(peak < Short.MAX_VALUE.toInt(), "the tone reaches full scale and will clip into a rasp")
+    }
+
+    @Test
+    fun the_renderer_actually_honours_its_own_amplitude_constant() {
+        // Separate from the floor above, and killable by a different mutation:
+        // this one fails if the renderer stops applying AMPLITUDE at all, which
+        // the literal floor would not notice while the constant stays high.
         val tone = AlarmTone(frequencyHz = 1000f, pulseCount = 1, pulseOnMs = 100, pulseGapMs = 0, restMs = 0)
         val peak = AlarmToneRenderer.burst(tone).maxOf { abs(it.toInt()) }
         val expected = (AlarmToneRenderer.AMPLITUDE * Short.MAX_VALUE).roundToInt()
@@ -131,7 +149,6 @@ class AlarmToneRendererTest {
             abs(peak - expected) <= expected / 50,
             "peak sample $peak is not near the configured $expected"
         )
-        assertTrue(peak < Short.MAX_VALUE.toInt(), "the tone reaches full scale and will clip into a rasp")
     }
 
     @Test
@@ -174,14 +191,21 @@ class AlarmToneRendererTest {
     }
 
     @Test
-    fun a_pulse_far_shorter_than_the_fade_still_renders_sound() {
-        // The fade is capped at a quarter of the pulse; without that cap a very
-        // short pulse would be all ramp and inaudible.
+    fun a_pulse_far_shorter_than_the_fade_still_reaches_full_volume() {
+        // The point of capping the fade at a quarter of the pulse: a pulse shorter
+        // than two fades would otherwise never reach full level, because the ramp
+        // in and the ramp out would meet in the middle.
+        //
+        // The threshold has to be the *full* level, not merely "audible". At
+        // `> MAX / 2` this test passed with the cap deleted outright — a 5 ms pulse
+        // still limps to 0.62 of full scale — so it certified a guard it was not
+        // actually exercising.
         val tone = AlarmTone(frequencyHz = 2000f, pulseCount = 1, pulseOnMs = 5, pulseGapMs = 0, restMs = 0)
         val samples = AlarmToneRenderer.burst(tone)
         assertTrue(samples.isNotEmpty(), "a 5 ms pulse rendered nothing")
         val peak = samples.maxOf { abs(it.toInt()) }
-        assertTrue(peak > Short.MAX_VALUE / 2, "a 5 ms pulse peaked at only $peak — the fade ate the whole pulse")
+        val floor = (0.8 * Short.MAX_VALUE).roundToInt()
+        assertTrue(peak >= floor, "a 5 ms pulse peaked at only $peak, below $floor — the fade ate most of the pulse")
     }
 
     /**

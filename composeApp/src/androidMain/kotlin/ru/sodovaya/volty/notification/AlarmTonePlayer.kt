@@ -47,6 +47,27 @@ internal class AlarmTonePlayer(
     @Volatile
     private var running: Boolean = true
 
+    /**
+     * Set once [run] has ended, for **any** reason — asked to stop, the track
+     * failed to open, a write returned an error, or the loop threw.
+     *
+     * This is the difference between an alarm that recovers and one that goes
+     * quiet for the rest of the ride. The loop can die on its own: if the audio
+     * server restarts mid-ride, `AudioTrack.write` returns `ERROR_DEAD_OBJECT`,
+     * the thread releases its track and exits — and [AudibleAlarm] would still be
+     * holding the dead object, seeing `NONE` on every subsequent sample and doing
+     * nothing. With F §12's single-level temperature defaults the level then never
+     * changes either, so nothing would ever restart it. [AudibleAlarm] polls this
+     * flag to notice and start a new player.
+     *
+     * Deliberately not `Thread.isAlive`: that is also false in the window between
+     * construction and the scheduler actually entering [run], which would read as
+     * "died" and cause a needless restart.
+     */
+    @Volatile
+    var finished: Boolean = false
+        private set
+
     init {
         isDaemon = true
         // Above default but below the audio-callback tiers: an underrun in a
@@ -71,6 +92,16 @@ internal class AlarmTonePlayer(
     }
 
     override fun run() {
+        // Outermost, so [finished] is set on every exit including the one where
+        // the track never opened at all.
+        try {
+            playLoop()
+        } finally {
+            finished = true
+        }
+    }
+
+    private fun playLoop() {
         val track = buildTrack() ?: return
         try {
             track.play()

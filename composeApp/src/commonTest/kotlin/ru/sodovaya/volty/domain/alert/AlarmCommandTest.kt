@@ -121,10 +121,10 @@ class AlarmCommandTest {
             val duration = alarmPreviewDurationMs(command)
             val period = maxOf(command.tone!!.periodMs, command.vibration!!.periodMs)
 
-            assertTrue(
-                duration >= PREVIEW_MIN_MS && duration <= PREVIEW_MAX_MS,
-                "step $level previews for $duration ms, outside $PREVIEW_MIN_MS..$PREVIEW_MAX_MS"
-            )
+            // (No `duration in PREVIEW_MIN_MS..PREVIEW_MAX_MS` assertion here:
+            // duration *is* the output of coerceIn on exactly those two bounds, so
+            // it could never fail. The bounds themselves are covered by the floor
+            // and ceiling tests below.)
             // Two whole cycles, unless the ceiling cuts in first.
             assertTrue(
                 duration >= minOf(period * requiredCycles, PREVIEW_MAX_MS),
