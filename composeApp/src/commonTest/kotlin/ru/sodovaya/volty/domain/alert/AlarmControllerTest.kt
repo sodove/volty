@@ -5,7 +5,6 @@ import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 class AlarmControllerTest {
 
@@ -171,16 +170,16 @@ class AlarmControllerTest {
         controller.update(sample(tempC = 105f, speed = 55f), rules)
         assertEquals(2, controller.state.contributors.size, "both kinds engaged first")
 
-        // 3 °C for temperature, 2 km/h for speed: one sample inside each band,
-        // one just outside. Swap the two constants and this test fails twice.
-        val held = controller.update(sample(tempC = 97f, speed = 48f), rules)
+        // 1 °C for temperature, 2 km/h for speed: one sample inside each band,
+        // one just outside. Swap the two constants and this test fails.
+        val held = controller.update(sample(tempC = 99.5f, speed = 48f), rules)
         assertEquals(
             listOf(MotionAlertKind.SPEED, MotionAlertKind.MOTOR_TEMP),
             held.contributors.map { it.kind }.sortedBy { it.ordinal },
-            "97 °C is still within 3 °C of 100, and 48 km/h within 2 km/h of 50"
+            "99.5 °C is still within 1 °C of 100, and 48 km/h within 2 km/h of 50"
         )
 
-        val released = controller.update(sample(tempC = 96.9f, speed = 47.9f), rules)
+        val released = controller.update(sample(tempC = 98.9f, speed = 47.9f), rules)
         assertEquals(AlarmState.SILENT, released, "a hair further and both let go")
     }
 
@@ -310,15 +309,33 @@ class AlarmControllerTest {
 
     // --------------------------------------------------------------- silence
 
+    /**
+     * `AlertRule(DUTY, emptyList())` is `isOff`; that claim belongs to
+     * `MotionAlertRuleTest` and is not restated here. What this test adds is that
+     * such a rule reaching the engine — which it can, `ArmedRules` is
+     * constructible — produces silence rather than an index-out-of-bounds from an
+     * implementation that reaches for `levels.last()`.
+     *
+     * The silence assertion is a **contract statement, not a proven one**: with
+     * an empty list there is no loop iteration to perturb, so no mutation of the
+     * code that exists can make it false. It is kept because the crash it guards
+     * against is a real alternative implementation, and deleting it would leave
+     * that hole uncovered.
+     */
     @Test fun a_rule_with_no_levels_never_raises_anything() {
         val off = ArmedRules(listOf(AlertRule(MotionAlertKind.DUTY, emptyList())))
-        assertTrue(off.rules.single().isOff, "the rule really is the 'off' shape")
-
         val state = AlarmController().update(duty(100f), off)
         assertEquals(AlarmState.SILENT, state, "a duty of 100% against no levels is silence")
         assertFalse(state.isSounding)
     }
 
+    /**
+     * Also a contract statement rather than a proven assertion — iterating an
+     * empty rule list cannot produce a contributor, so nothing that exists can be
+     * mutated to fail it. It records that the engine does **not** resolve
+     * `AlarmDefaults` behind the gate: "nothing armed" means silence, not "fall
+     * back to our opinion".
+     */
     @Test fun no_armed_rules_at_all_never_raises_anything() {
         val state = AlarmController().update(duty(100f), ArmedRules.NONE)
         assertEquals(AlarmState.SILENT, state)
@@ -328,10 +345,12 @@ class AlarmControllerTest {
         // Vehicle refuses a duplicated kind and armedRules cannot invent one, so
         // this only reaches the engine from a caller assembling rules by hand —
         // where quietly keeping whichever came last would drop a real alarm.
+        // Both rules fire on this reading, at different steps, so first-wins and
+        // last-wins give different answers and neither is the one asserted.
         val loudFirst = ArmedRules(
             listOf(
                 AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(70f), AlertLevel(80f))),
-                AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(90f)))
+                AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(70f)))
             )
         )
         assertEquals(2, AlarmController().update(duty(85f), loudFirst).level, "loud rule first")
@@ -339,6 +358,33 @@ class AlarmControllerTest {
             2,
             AlarmController().update(duty(85f), ArmedRules(loudFirst.rules.reversed())).level,
             "and the same the other way round, so it is not simply the first or the last"
+        )
+    }
+
+    @Test fun a_zero_width_band_between_tied_thresholds_is_full_urgency() {
+        // AlertRule allows two steps to share a threshold. Inside one rule the tie
+        // is unreachable — both positions engage on the same attack, so the higher
+        // wins and the ramp takes the "no step above" path. It becomes reachable
+        // through a duplicated kind: the [70] rule leaves DUTY holding step 1, and
+        // on the next sample the tied rule holds *its* step 1 by hysteresis, with
+        // the second 80 as the upper edge of a band of zero width.
+        val tied = ArmedRules(
+            listOf(
+                AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(80f), AlertLevel(80f))),
+                AlertRule(MotionAlertKind.DUTY, listOf(AlertLevel(70f)))
+            )
+        )
+        val controller = AlarmController()
+        controller.update(duty(78f), tied)
+        val state = controller.update(duty(78f), tied)
+
+        assertEquals(1, state.level, "held at step 1 by the tied rule's release band")
+        assertEquals(
+            1f,
+            state.urgency,
+            0.0001f,
+            "a band with nothing between its edges is already fully climbed — without the " +
+                "guard this divides by zero and reads as no urgency at all"
         )
     }
 

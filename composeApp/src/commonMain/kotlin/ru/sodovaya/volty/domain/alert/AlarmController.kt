@@ -7,13 +7,13 @@ import ru.sodovaya.volty.domain.model.ControllerData
  * [AlarmState] (F §10.2). Task 7 turns that state into sound; Task 8 feeds it
  * samples from the foreground service.
  *
- * **Pure and deterministic.** No clock, no coroutines, no platform API: the same
- * sequence of samples always produces the same sequence of states. The one piece
- * of memory it keeps is the step each kind is currently holding, which
- * hysteresis cannot be expressed without — [update] is therefore a function of
- * `(sample, rules, everything fed in before)`, and [reset] returns it to the
- * state it was constructed in. It is not thread-safe; drive it from one
- * collector.
+ * **Deterministic — not pure.** It holds one piece of mutable state, the step
+ * each kind is currently holding, which hysteresis cannot be expressed without.
+ * What it has instead of purity is that the state is *entirely* derived from the
+ * samples fed in: no clock, no coroutines, no platform API, so the same sequence
+ * of samples from a fresh controller always produces the same sequence of
+ * states, and [reset] returns it to the state it was constructed in. It is not
+ * thread-safe; drive it from one collector.
  *
  * **It takes [ArmedRules], not `List<AlertRule>`, and that is deliberate.**
  * `F §10` says an alert the hardware cannot supply must be *impossible* to arm.
@@ -22,10 +22,16 @@ import ru.sodovaya.volty.domain.model.ControllerData
  * class makes handing this engine ungated config a compile error. Do not unwrap
  * `.rules` at a call site to satisfy it — call [armedRules].
  *
- * **Availability is not re-derived here.** [ControllerData.hasMotorTemp] and
- * [ControllerData.hasEscTemp] are [availabilityFor]'s business, already settled
- * by the time an [ArmedRules] exists. A second check here would be a second
- * answer to a question that has one.
+ * **Availability is not re-derived here, so the caller must keep [ArmedRules]
+ * fresh — recompute it whenever `activeVehicle` or `activeMotion` changes.**
+ * [ControllerData.hasMotorTemp] and [ControllerData.hasEscTemp] are
+ * [availabilityFor]'s business, and a second answer to that question living here
+ * would be a second thing to keep in sync with it. The obligation that moves to
+ * the caller in exchange is real and silent when broken: every sensor-backed
+ * kind is [AlertAvailability.Unknown] until the first sample arrives, and
+ * [armedRules] drops Unknown, so a service that computes [ArmedRules] once at
+ * start-up **arms no temperature alert for the whole ride** — and nothing
+ * reports it, because the alarm simply never sounds.
  *
  * ### Escalation
  *
@@ -107,12 +113,20 @@ class AlarmController {
         for (rule in rules.rules) {
             val value = sample.valueFor(rule.kind)
             val step = rule.stepFor(value, heldSteps[rule.kind] ?: 0)
-            // `armedRules` preserves whatever it was given, and Vehicle already
-            // refuses a duplicated kind — but a caller assembling rules by hand
-            // could still repeat one, and the loudest reading is the honest
-            // answer to "what is this kind doing".
-            val already = steps[rule.kind]
-            if (already == null || step > already) {
+            // Two things at once, which is why there is no separate `step == 0`
+            // guard above it (that guard is an equivalent mutant — removing it
+            // changes no behaviour and no test, so it would be a second code path
+            // saying what this line already says):
+            //
+            //  - a kind below its first step never enters the map, because
+            //    `0 > 0` is false whether or not the kind is present. "Not
+            //    sounding" is the absence of an entry, so `heldSteps` carries
+            //    only what is actually held;
+            //  - `armedRules` preserves whatever it was given, and Vehicle already
+            //    refuses a duplicated kind — but a caller assembling rules by hand
+            //    could still repeat one, and the loudest reading is the honest
+            //    answer to "what is this kind doing".
+            if (step > (steps[rule.kind] ?: 0)) {
                 steps[rule.kind] = step
                 urgencies[rule.kind] = rule.urgencyAt(value, step)
                 values[rule.kind] = value
@@ -121,7 +135,7 @@ class AlarmController {
 
         heldSteps = steps
         val contributors = MotionAlertKind.entries
-            .filter { (steps[it] ?: 0) > 0 }
+            .filter { it in steps }
             .map { AlarmContributor(kind = it, level = steps.getValue(it), value = values.getValue(it)) }
             .sortedByDescending { it.level }
         val level = contributors.maxOfOrNull { it.level } ?: 0
@@ -193,9 +207,19 @@ private fun AlertRule.stepFor(value: Float, previousStep: Int): Int {
  *
  * **In the final band there is nothing above to ramp towards, so urgency is 1.**
  * That keeps it continuous — the ramp reaches 1 just as the top step engages,
- * and the alarm is already as urgent as it can be. Two steps that share a
- * threshold give a zero-width band, and 1 is the same answer for the same
- * reason.
+ * and the alarm is already as urgent as it can be.
+ *
+ * **A zero-width band answers 1 for the same reason, and the guard is not
+ * decorative.** [AlertRule] permits two steps to share a threshold (it requires
+ * non-decreasing, not strictly increasing). Within a single rule that tie is
+ * unreachable here — both positions engage on the same attack, so the higher one
+ * wins and `upper` comes back null on the line above instead. It becomes
+ * reachable through a duplicated kind, where one rule can leave a kind holding
+ * step 1 while a *different* rule supplies the tied pair: then `lower == upper`,
+ * and without the guard the division yields ±Infinity (or, if the reading landed
+ * exactly on the shared threshold, NaN — which would poison Task 7's tone the
+ * way Task 2's NaN threshold would have poisoned this ramp). Pinned by
+ * `a_zero_width_band_between_tied_thresholds_is_full_urgency`.
  *
  * Under hysteresis a held reading can sit *below* its own band, which would ramp
  * negative; that is clamped to 0.

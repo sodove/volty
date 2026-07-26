@@ -60,19 +60,36 @@ data class AlarmState(
  *
  * These are the only numbers this task introduces, and they live here rather
  * than beside [AlarmDefaults] because they are not thresholds a rider edits:
- * a release band is a property of the *measurement's* noise, not of the rider's
- * tolerance. Each is roughly the jitter a steady reading shows on real hardware
- * — big enough to stop chatter, small enough that the alarm does not linger
- * noticeably after the condition clears.
+ * a release band is a property of the *measurement*, not of the rider's
+ * tolerance.
+ *
+ * **A band is not "bigger is safer".** It buys silence against sample-to-sample
+ * jitter and pays for it in *lag*: the condition has cleared and the alarm is
+ * still sounding until the reading has crossed the whole band. An alarm that
+ * keeps going after the danger has passed is exactly how a rider learns to
+ * ignore alarms (`F §10`), so each band is sized against the jitter its own
+ * metric actually shows — which is why the temperature figure is the smallest
+ * of the three rather than the largest.
  */
 object AlarmHysteresis {
-    /** Duty, percentage points. Duty is computed per control loop and is the twitchiest of the four. */
+    /** Duty, percentage points. Duty is recomputed every control loop and is the twitchiest of the three. */
     const val DUTY_RELEASE_PERCENT: Float = 3f
 
-    /** Both temperatures, °C. Thermistor readings step in fractions of a degree; 3 °C is well clear of that. */
-    const val TEMP_RELEASE_C: Float = 3f
+    /**
+     * Both temperatures, °C — deliberately the *narrowest* band, and not for the
+     * reason the other two are sized.
+     *
+     * A thermistor reading is slow and heavily filtered: consecutive samples
+     * barely differ, so there is almost no chatter for a band to suppress. What
+     * a wide band does buy here is thermal lag — a motor cooling from 113 °C
+     * past a 110 °C step would hold the alarm all the way down to 107 °C, which
+     * on real hardware is tens of seconds of alarm after the rider has already
+     * backed off. 1 °C is clear of the quantisation and costs seconds, not
+     * tens of seconds.
+     */
+    const val TEMP_RELEASE_C: Float = 1f
 
-    /** Speed, km/h. Tighter than the rest because a speed limit is a number the rider set deliberately. */
+    /** Speed, km/h. Narrower than duty: a speed limit is a number the rider chose, and GPS/ERPM speed is steadier than duty. */
     const val SPEED_RELEASE_KMH: Float = 2f
 }
 
