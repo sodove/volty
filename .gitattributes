@@ -1,0 +1,5 @@
+# SQLDelight schema snapshots are SQLite database files. Git detects them as
+# binary today, but with core.autocrlf=true on Windows that detection is the
+# only thing standing between a checkout and a silently corrupted snapshot —
+# which would turn the migration verifier into a source of false failures.
+*.db binary
