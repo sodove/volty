@@ -273,3 +273,47 @@ Part G2 composer work that already has to touch this screen.
 - speed: no levels until the rider adds one
 
 The rider adds a third duty step, or a second motor step, or deletes any of them.
+
+---
+
+## 11. Corrections found at plan time (2026-07-26)
+
+Three defects surfaced while planning the implementation against the actual
+code. Resolved here; the plan
+(`plans/2026-07-26-vehicle-platform-F-alerts-sound.md`) carries the detail.
+
+**11.1 — §10.1's invariant is unsatisfiable as stated, and one of its claims is
+factually wrong.** It says `dutyWarnPercent = 80` "matches `DutyBands`' amber";
+`DutyBands.DEFAULT_WARN_PERCENT` is **75**. And the invariant `alarm ≥ band-red`
+fails immediately for duty: the first alarm level (80) is below the dial's red
+(90), so the alarm would sound while the dial is merely amber — the exact
+failure the invariant was written to prevent.
+
+Restated over the ends of the level list, which is what the reasoning requires:
+
+```
+first(levels).threshold >= band.warn
+last(levels).threshold  >= band.red
+```
+
+Holds for every metric under §10.1's numbers (duty 80 ≥ 75, 90 ≥ 90; ESC
+90 ≥ 70, 90 ≥ 85; motor 110 ≥ 85, 110 ≥ 100). Lives next to the constants as a
+test, so editing either set of numbers fails loudly.
+
+**11.2 — the alert editor ships in Part F, not G2.** §10.2 defers the migration
+to "the Part G2 composer work". Read literally that ships an alarm nobody can
+adjust — against the product owner's explicit *"все алерты должны быть
+редактируемыми, что вкл\выкл, что по лимитам"*, and it would put a fixed 110 °C
+motor alarm on a rider who runs to 130 °C by choice. That is §10's
+train-them-to-ignore-it failure, shipped deliberately. **F owns the model, the
+migration and the settings screen; G2 links to it.** G2's scope shrinks.
+
+**11.3 — persistence is a child table**, `AlertLevelRow`, not a serialised
+column: consistent with `PackRow`/`ControllerRow`, and the migration verifier can
+check its shape, which it cannot do inside a JSON blob.
+
+**Also decided rather than asked** (§9.2, §9.1): audio uses `USAGE_ALARM` with
+`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` — music ducks and continues, and the alarm
+never stops on focus loss. Tone design is not settled on paper: the settings
+screen ships a **"проверить сигнал"** button that plays each level on the real
+phone, and the curve is tuned from hearing it.
