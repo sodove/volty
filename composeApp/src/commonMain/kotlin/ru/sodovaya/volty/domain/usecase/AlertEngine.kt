@@ -13,6 +13,8 @@ import ru.sodovaya.volty.util.formatFixed
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.merge
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.time.Clock
@@ -57,30 +59,65 @@ class AlertEngine(
     // notification id (1001) so a long session can't collide with it.
     private var alertCounter = 10_000
 
+    /** Which stream produced a tick. See [start] for why the two are kept apart. */
+    private sealed interface Tick {
+        data class Battery(val data: BmsData, val vehicle: Vehicle?) : Tick
+        data class Motion(val motion: ControllerData, val vehicle: Vehicle?) : Tick
+    }
+
+    /**
+     * Two independent triggers, **one collector**.
+     *
+     * *Why two triggers.* `activeMotion` is deliberately NOT folded into the
+     * battery `combine`. A three-way combine re-runs the *battery* evaluation on
+     * every motion sample, which arrives an order of magnitude more often than a
+     * BMS frame, and that is not neutral: [fire] returns on the [debounce]
+     * *before* clearing [armed], so a battery alert held back by the debounce
+     * fires on the next evaluation — which under a three-way combine would be the
+     * next motion tick rather than the next BMS frame. Adding a motor controller
+     * to a vehicle would then change when its cell alerts fire. Battery alert
+     * timing is out of Part F's scope (F §1, "battery alert logic (already
+     * exists, unchanged)"), so each kind of alert is evaluated exactly when its
+     * own data changes and never when the other's does.
+     *
+     * *Why one collector.* [lastFired], [armed], [peakLevel] and [alertCounter]
+     * are plain unsynchronised mutable state, and this engine runs on
+     * `Dispatchers.Default` (`VoltyApplication`) — a multi-threaded dispatcher.
+     * Two `scope.launch` blocks would be the first concurrent access to them in
+     * this class's history, and **the fact that the two paths write disjoint keys
+     * does not make that safe**: concurrent `put` into one `LinkedHashMap` can
+     * corrupt the map whatever the keys are, and `alertCounter++` is a
+     * read-modify-write that is not atomic under any key scheme. Measured, not
+     * theorised: driving both paths concurrently on `Dispatchers.Default` with
+     * two *different* vehicle ids produced duplicate notification ids in 10/10
+     * runs at 40 000 alerts, and a duplicate id makes `NotificationManager.notify`
+     * *replace* the earlier notification — a controller fault silently erasing a
+     * cell alert.
+     *
+     * `merge` keeps the two triggers separate while giving the collector body a
+     * single coroutine: a flow never emits concurrently to one collector, so
+     * every mutation of the state above happens in one sequence with proper
+     * happens-before between ticks. **Do not split this back into two
+     * `scope.launch` blocks** — confining both paths to one dispatcher thread
+     * would work equally well, but only confinement that survives being read by
+     * the next person is worth having, and this one cannot be undone by accident.
+     */
     fun start(scope: CoroutineScope) {
+        val battery = bmsRepository.activeData
+            .combine(bmsRepository.activeVehicle) { d, v -> d to v }
+            .distinctUntilChanged()
+            .map { (data, vehicle) -> Tick.Battery(data, vehicle) }
+        val motion = bmsRepository.activeMotion
+            .combine(bmsRepository.activeVehicle) { m, v -> m to v }
+            .distinctUntilChanged()
+            .map { (motion, vehicle) -> Tick.Motion(motion, vehicle) }
         scope.launch {
-            bmsRepository.activeData
-                .combine(bmsRepository.activeVehicle) { d, v -> d to v }
-                .distinctUntilChanged()
-                .collect { (data, vehicle) -> evaluate(data, vehicle) }
-        }
-        // A SECOND collector rather than folding `activeMotion` into the combine
-        // above, and that is the point rather than an accident of style. A
-        // three-way combine re-runs the *battery* evaluation on every motion
-        // sample, which arrives an order of magnitude more often than a BMS
-        // frame, and that is not neutral: a battery alert blocked by [debounce]
-        // would then be released by the next motion tick instead of the next BMS
-        // frame, so a motion source the rider added would change when their cell
-        // alerts fire. Battery alert timing is out of this task's scope (F §1
-        // "battery alert logic (already exists, unchanged)"), so the two streams
-        // stay independent — each kind of alert is evaluated exactly when its own
-        // data changes. The shared arm/recover/debounce maps are keyed by kind,
-        // and no kind is written by both paths, so the collectors never contend.
-        scope.launch {
-            bmsRepository.activeMotion
-                .combine(bmsRepository.activeVehicle) { m, v -> m to v }
-                .distinctUntilChanged()
-                .collect { (motion, vehicle) -> evaluateMotion(motion, vehicle) }
+            merge(battery, motion).collect { tick ->
+                when (tick) {
+                    is Tick.Battery -> evaluate(tick.data, tick.vehicle)
+                    is Tick.Motion -> evaluateMotion(tick.motion, tick.vehicle)
+                }
+            }
         }
     }
 

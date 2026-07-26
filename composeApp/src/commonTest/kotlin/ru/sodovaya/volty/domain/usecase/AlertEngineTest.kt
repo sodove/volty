@@ -464,17 +464,10 @@ class AlertEngineTest {
         assertEquals(2, notifier.alerts.size, "and falling below every level does re-arm it")
     }
 
-    @Test
-    fun `a level below the rider's top step notifies as a warning, not a critical`() {
-        val notifier = TestNotifier()
-        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
-        val v = motionVehicle(rules = listOf(rule(MotionAlertKind.MOTOR_TEMP, 100f, 110f, 120f)))
-        engine.evaluateMotionForTest(motion(motorTempC = 105f), v)
-        assertEquals(
-            AlertSeverity.WARNING, notifier.alerts.single().third,
-            "severity is the rider's own escalation, so step 1 of 3 is not yet critical"
-        )
-    }
+    // There is no separate "step 1 of 3 notifies as a WARNING" test: the first
+    // assertion of the test below makes exactly that claim, on the same 105 °C
+    // reading against the same three-step rule, and is killed by the same
+    // mutation (severity always CRITICAL). Two tests, one claim.
 
     @Test
     fun `the severity is the highest level the episode reached, not the level at the moment it fires`() {
@@ -674,6 +667,7 @@ class AlertEngineTest {
      *     evaluation, so the CELL_HIGH blocked at t=2 s becomes eligible at
      *     t≥3 s, which is exactly when the motion sample lands.
      */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     @Test
     fun `motion samples drive the motion alerts without re-evaluating the battery ones`() = runTest {
         val repo = StubBmsRepository()

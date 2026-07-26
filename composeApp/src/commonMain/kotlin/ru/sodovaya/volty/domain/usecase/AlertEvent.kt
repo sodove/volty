@@ -24,10 +24,9 @@ enum class AlertKind {
     CONTROLLER_FAULT, MOTOR_TEMP_HIGH, ESC_TEMP_HIGH
 }
 
-data class AlertEvent(
-    val kind: AlertKind,
-    val severity: AlertSeverity,
-    val title: String,
-    val text: String,
-    val vehicleId: String
-)
+// `AlertEvent`, a data class carrying (kind, severity, title, text, vehicleId),
+// lived here and was constructed and consumed by nothing in the whole source
+// tree: AlertEngine builds its title/text inline and hands them straight to
+// Notifier.showAlert. Removed with Task 6 rather than extended along with
+// AlertKind — an unused shape that looks like the engine's event model invites
+// the next reader to route through it and find that nothing does.
