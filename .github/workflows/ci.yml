@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, verify migrations, assemble
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: the Android target compiles to JVM 11 bytecode, but AGP 8.13
+      # itself needs 17+. Verified locally against this exact task list.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Unit tests
+        run: ./gradlew :composeApp:testDebugUnitTest
+
+      # Replays every .sqm onto the committed schema snapshots and compares the
+      # result with the .sq definitions. Catches type / NOT NULL / DEFAULT drift
+      # that the repository tests cannot see.
+      - name: Verify SQLDelight migrations
+        run: ./gradlew :composeApp:verifySqlDelightMigration
+
+      - name: Assemble debug APK
+        run: ./gradlew :composeApp:assembleDebug
