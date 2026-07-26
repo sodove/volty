@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.common
 import androidx.compose.runtime.Composable
 import ru.sodovaya.volty.domain.alert.AlertAvailability
 import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
@@ -29,6 +30,10 @@ import volty.composeapp.generated.resources.chemistry_lifepo4
 import volty.composeapp.generated.resources.chemistry_li_ion_nmc
 import volty.composeapp.generated.resources.dashboard_style_classic
 import volty.composeapp.generated.resources.dashboard_style_clean
+import volty.composeapp.generated.resources.motion_alert_duty
+import volty.composeapp.generated.resources.motion_alert_esc_temp
+import volty.composeapp.generated.resources.motion_alert_motor_temp
+import volty.composeapp.generated.resources.motion_alert_speed
 import volty.composeapp.generated.resources.secondary_gauge_battery
 import volty.composeapp.generated.resources.secondary_gauge_consumption
 import volty.composeapp.generated.resources.secondary_gauge_current
@@ -36,6 +41,9 @@ import volty.composeapp.generated.resources.secondary_gauge_duty
 import volty.composeapp.generated.resources.secondary_gauge_esc_temp
 import volty.composeapp.generated.resources.secondary_gauge_motor_temp
 import volty.composeapp.generated.resources.secondary_gauge_power
+import volty.composeapp.generated.resources.unit_celsius
+import volty.composeapp.generated.resources.unit_kmh
+import volty.composeapp.generated.resources.unit_percent
 
 @Composable
 fun bmsTypeLabel(type: BmsType): String = stringResource(
@@ -143,6 +151,35 @@ fun alertAvailabilityNote(availability: AlertAvailability): String? = when (avai
     AlertAvailability.Unknown -> stringResource(Res.string.alert_availability_unknown)
     is AlertAvailability.Unavailable -> alertUnavailableReasonLabel(availability.reason)
 }
+
+/** The rider-facing name of a motion alert kind, for the settings screen's row header. */
+@Composable
+fun motionAlertKindLabel(kind: MotionAlertKind): String = stringResource(
+    when (kind) {
+        MotionAlertKind.DUTY -> Res.string.motion_alert_duty
+        MotionAlertKind.SPEED -> Res.string.motion_alert_speed
+        MotionAlertKind.MOTOR_TEMP -> Res.string.motion_alert_motor_temp
+        MotionAlertKind.ESC_TEMP -> Res.string.motion_alert_esc_temp
+    }
+)
+
+/**
+ * The unit a kind's threshold is entered in — the metric's own unit, as
+ * [ru.sodovaya.volty.domain.alert.AlertLevel.thresholdValue] defines it.
+ *
+ * Speed is **km/h regardless of the app's unit system**: the stored threshold is
+ * km/h (F §3's `speedLimitKmh`), and displaying mph while writing km/h would let
+ * a rider set 30 meaning mph and get an alarm at 30 km/h.
+ */
+@Composable
+fun motionAlertUnitLabel(kind: MotionAlertKind): String = stringResource(
+    when (kind) {
+        MotionAlertKind.DUTY -> Res.string.unit_percent
+        MotionAlertKind.SPEED -> Res.string.unit_kmh
+        MotionAlertKind.MOTOR_TEMP -> Res.string.unit_celsius
+        MotionAlertKind.ESC_TEMP -> Res.string.unit_celsius
+    }
+)
 
 @Composable
 fun secondaryGaugeLabel(gauge: SecondaryGauge): String = stringResource(

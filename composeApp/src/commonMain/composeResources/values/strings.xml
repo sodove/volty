@@ -277,4 +277,35 @@
     <string name="alert_unavailable_no_esc_temp">This controller has no ESC temperature sensor</string>
     <string name="alert_unavailable_no_speed">This controller reports no speed</string>
     <string name="alert_availability_unknown">No data yet — connect to check this sensor</string>
+
+    <!-- Motion alert kinds (F §10.2) -->
+    <string name="motion_alert_duty">Duty / PWM</string>
+    <string name="motion_alert_speed">Speed</string>
+    <string name="motion_alert_motor_temp">Motor temperature</string>
+    <string name="motion_alert_esc_temp">Controller temperature</string>
+    <string name="unit_percent">%</string>
+    <string name="unit_kmh">km/h</string>
+    <string name="unit_celsius">°C</string>
+
+    <!-- The per-vehicle alert settings screen (F §10.2, Task 9) -->
+    <string name="alerts_title">Alerts and sounds</string>
+    <string name="alerts_open">Alerts and sounds</string>
+    <string name="alerts_open_subtitle">Thresholds, levels, tone and vibration</string>
+    <string name="alerts_section_sound">Sound</string>
+    <string name="alerts_master">Audible alarm</string>
+    <string name="alerts_master_subtitle">Off means neither tone nor vibration</string>
+    <string name="alerts_tone">Tone</string>
+    <string name="alerts_vibration">Vibration</string>
+    <string name="alerts_preview">Test signal</string>
+    <string name="alerts_preview_subtitle">Play each level and hear them apart with the phone in a pocket</string>
+    <string name="alerts_preview_level">Level %1$d</string>
+    <string name="alerts_section_thresholds">Alert thresholds</string>
+    <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest.</string>
+    <string name="alerts_level">Level %1$d</string>
+    <string name="alerts_level_muted">Muted</string>
+    <string name="alerts_add_level">+ Add level</string>
+    <string name="alerts_remove_level">Remove</string>
+    <string name="alerts_threshold_invalid">Enter a number</string>
+    <string name="alerts_kind_off">Off</string>
+    <string name="alerts_save">Save</string>
 </resources>

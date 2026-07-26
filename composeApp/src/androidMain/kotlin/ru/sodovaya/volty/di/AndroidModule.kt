@@ -3,8 +3,10 @@ package ru.sodovaya.volty.di
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
 import ru.sodovaya.volty.diagnostics.LogExporter
+import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
 import ru.sodovaya.volty.notification.AudibleAlarmHolder
+import ru.sodovaya.volty.notification.HolderAlarmPreview
 import ru.sodovaya.volty.notification.Notifier
 import ru.sodovaya.volty.permissions.PermissionsChecker
 import ru.sodovaya.volty.service.ServiceController
@@ -25,6 +27,11 @@ val androidModule = module {
     // onwards. The holder keeps the one-instance-at-a-time guarantee and rebuilds
     // after a release — see AudibleAlarmHolder's KDoc.
     single { AudibleAlarmHolder(androidContext()) }
+    // The settings screen's "проверить сигнал" line to the speaker. Bound to the
+    // HOLDER, never to an AudibleAlarm: `release()` is terminal and the service
+    // calls it every time the rider parks, so a captured instance would be
+    // permanently, silently dead from the second ride on.
+    single<AlarmPreview> { HolderAlarmPreview(get()) }
     single { ServiceController(androidContext()) }
     single { LogExporter(androidContext()) }
 }
