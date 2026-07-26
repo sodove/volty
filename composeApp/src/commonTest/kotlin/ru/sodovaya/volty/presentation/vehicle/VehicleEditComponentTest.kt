@@ -2,6 +2,8 @@ package ru.sodovaya.volty.presentation.vehicle
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -16,6 +18,7 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
+import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -34,6 +37,8 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -92,7 +97,12 @@ class VehicleEditComponentTest {
         chemistry = Chemistry.LI_ION_NMC,
         createdAt = Clock.System.now(),
         dashboardStyle = DashboardStyle.CLASSIC,
-        secondaryGauge = SecondaryGauge.POWER
+        secondaryGauge = SecondaryGauge.POWER,
+        yieldBmsToHeadUnit = false,
+        // Every kind deliberately silenced (F §10.2: an empty level list is the
+        // only way to say "off"). Non-null, so it is an ANSWER — and a
+        // non-default one, which is what makes a dropped field visible below.
+        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) }
     )
 
     /**
@@ -153,6 +163,75 @@ class VehicleEditComponentTest {
         // must survive the save unchanged.
         assertEquals(originalControllers, saved.controllers)
         assertEquals(PackTopology.SERIES, saved.topology)
+    }
+
+    /**
+     * **The structural guard. Read this before adding a field to [Vehicle].**
+     *
+     * `onSave()` does not update the stored vehicle — it *rebuilds* one through
+     * `singlePackVehicle()`, which knows only the fields it was written for, and
+     * then hand-copies back the ones the form does not expose. Every field added
+     * to [Vehicle] since has had to be added to that copy list by hand, and each
+     * time it was forgotten the symptom was the same: a rider changes their
+     * vehicle's name and loses a setting somewhere else entirely.
+     *
+     * So this asserts the whole object. Loading a vehicle and saving it with
+     * nothing edited must be an identity — not "equal in the fields someone
+     * remembered to check". A new field dropped by `onSave()` fails here
+     * **provided [existingVehicle] gives it a non-default value**, which is the
+     * one thing a new field's author must remember to do.
+     */
+    @Test
+    fun `saving with nothing edited is an identity on the whole vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val original = existingVehicle()
+        val repo = FakeVehicleRepo(listOf(original))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(
+            original,
+            repo.upserts.single(),
+            "a save with no edits must change nothing — see this test's doc"
+        )
+    }
+
+    /**
+     * The same bug at the sharpest point it can bite, spelled out because
+     * `motionAlerts` is the one field where *losing* it is worse than losing a
+     * value: null does not mean "no alerts", it means "never configured", and
+     * the repository answers that with [AlarmDefaults]. Dropping it therefore
+     * does not silently forget the rider's choice — it silently reverses it, and
+     * an alarm they switched off starts sounding again after they renamed the
+     * vehicle.
+     */
+    @Test
+    fun `an unrelated edit does not resurrect an alarm the rider silenced`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // Something completely unrelated, from a screen that cannot even see
+        // the motion alerts.
+        c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(SecondaryGauge.BATTERY, saved.secondaryGauge, "the edit itself must land")
+        assertNotNull(
+            saved.motionAlerts,
+            "null would mean 'never configured' and hand the rider AlarmDefaults back"
+        )
+        assertTrue(saved.motionAlerts.all { it.isOff }, "the silence must survive verbatim")
+        assertTrue(
+            saved.motionAlertRules.all { it.isOff },
+            "and resolving it must not reintroduce the defaults"
+        )
     }
 
     /**

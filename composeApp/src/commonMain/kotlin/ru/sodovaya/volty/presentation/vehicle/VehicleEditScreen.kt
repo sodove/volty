@@ -61,6 +61,8 @@ import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.action_delete
+import volty.composeapp.generated.resources.alerts_open
+import volty.composeapp.generated.resources.alerts_open_subtitle
 import volty.composeapp.generated.resources.dashboard_style_default
 import volty.composeapp.generated.resources.vehicle_delete
 import volty.composeapp.generated.resources.vehicle_delete_confirm_text
@@ -211,6 +213,27 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
             FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
             IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
+
+            // Motion alerts live on their own screen (F Task 9): they are
+            // list-shaped — up to three rider-defined levels per kind — and every
+            // kind is shown even when the hardware cannot supply it, which does
+            // not fit between two numeric fields. Only offered for a SAVED
+            // vehicle: the alert screen persists onto a row that must exist.
+            if (state.isEditing) {
+                TextButton(
+                    onClick = component::onOpenAlerts,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        Text(stringResource(Res.string.alerts_open))
+                        Text(
+                            stringResource(Res.string.alerts_open_subtitle),
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                }
+            }
 
             // MOTOR — absent (not disabled) for a pack-only vehicle: it has no
             // controller for these numbers to configure. Manual entry only —

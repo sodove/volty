@@ -22,6 +22,8 @@ import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.permissions.PermissionsChecker
+import ru.sodovaya.volty.presentation.alerts.DefaultVehicleAlertsComponent
+import ru.sodovaya.volty.presentation.alerts.VehicleAlertsComponent
 import ru.sodovaya.volty.presentation.autoconnect.AutoConnectComponent
 import ru.sodovaya.volty.presentation.autoconnect.DefaultAutoConnectComponent
 import ru.sodovaya.volty.presentation.dashboard.DashboardComponent
@@ -82,6 +84,7 @@ interface RootComponent {
         data class Dashboard(val component: DashboardComponent) : Child
         data class PackDetail(val component: PackDetailComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
+        data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
         data class Settings(val component: SettingsComponent) : Child
     }
@@ -110,6 +113,12 @@ sealed class Config {
          */
         val prefillFromActiveConnection: Boolean = false
     ) : Config()
+    /**
+     * The per-vehicle alert settings screen (F Task 9). Pushed from
+     * [VehicleEdit], so [vehicleId] is always a saved vehicle — a vehicle that
+     * does not exist yet has nothing to configure alerts on.
+     */
+    @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     @Serializable data object Graph : Config()
     @Serializable data object Settings : Config()
 }
@@ -442,10 +451,30 @@ class DefaultRootComponent(
                         // nothing instead of throwing.
                         prefilledBmsType = prefillVehicle?.bmsTypeOrNull,
                         prefilledBmsAddress = prefillVehicle?.bmsAddressOrNull,
-                        prefilledName = prefilledName
+                        prefilledName = prefilledName,
+                        // push(), so the half-filled edit form stays alive
+                        // underneath and comes back with its unsaved fields
+                        // intact. Only reachable for a SAVED vehicle — the
+                        // alerts screen persists onto a row that must exist, and
+                        // VehicleEditScreen hides the entry while creating.
+                        onOpenAlertsRequested = {
+                            config.vehicleId?.let { id -> nav.push(Config.VehicleAlerts(id)) }
+                        }
                     )
                 )
             }
+            is Config.VehicleAlerts -> RootComponent.Child.VehicleAlerts(
+                DefaultVehicleAlertsComponent(
+                    componentContext = context,
+                    vehicleId = config.vehicleId,
+                    vehicleRepository = get(),
+                    bmsRepository = get(),
+                    appPrefs = get<AppPrefs>(),
+                    alarmPreview = get(),
+                    onSaved = { nav.pop() },
+                    onBackRequested = { nav.pop() }
+                )
+            )
             is Config.Graph -> RootComponent.Child.Graph(
                 DefaultGraphComponent(
                     componentContext = context,

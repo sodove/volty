@@ -273,3 +273,231 @@ Part G2 composer work that already has to touch this screen.
 - speed: no levels until the rider adds one
 
 The rider adds a third duty step, or a second motor step, or deletes any of them.
+
+---
+
+## 11. Corrections found at plan time (2026-07-26)
+
+Three defects surfaced while planning the implementation against the actual
+code. Resolved here; the plan
+(`plans/2026-07-26-vehicle-platform-F-alerts-sound.md`) carries the detail.
+
+**11.1 — §10.1's invariant is unsatisfiable as stated, and one of its claims is
+factually wrong.** It says `dutyWarnPercent = 80` "matches `DutyBands`' amber";
+`DutyBands.DEFAULT_WARN_PERCENT` is **75**. And the invariant `alarm ≥ band-red`
+fails immediately for duty: the first alarm level (80) is below the dial's red
+(90), so the alarm would sound while the dial is merely amber — the exact
+failure the invariant was written to prevent.
+
+Restated over the ends of the level list, which is what the reasoning requires:
+
+```
+first(levels).threshold >= band.warn
+last(levels).threshold  >= band.red
+```
+
+Holds for every metric under §10.1's numbers (duty 80 ≥ 75, 90 ≥ 90; ESC
+90 ≥ 70, 90 ≥ 85; motor 110 ≥ 85, 110 ≥ 100). Lives next to the constants as a
+test, so editing either set of numbers fails loudly.
+
+**11.2 — the alert editor ships in Part F, not G2.** §10.2 defers the migration
+to "the Part G2 composer work". Read literally that ships an alarm nobody can
+adjust — against the product owner's explicit *"все алерты должны быть
+редактируемыми, что вкл\выкл, что по лимитам"*, and it would put a fixed 110 °C
+motor alarm on a rider who runs to 130 °C by choice. That is §10's
+train-them-to-ignore-it failure, shipped deliberately. **F owns the model, the
+migration and the settings screen; G2 links to it.** G2's scope shrinks.
+
+**11.3 — persistence is a child table**, `AlertLevelRow`, not a serialised
+column: consistent with `PackRow`/`ControllerRow`, and the migration verifier can
+check its shape, which it cannot do inside a JSON blob.
+
+**Also decided rather than asked** (§9.2, §9.1): audio uses `USAGE_ALARM` with
+`AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` — music ducks and continues, and the alarm
+never stops on focus loss. Tone design is not settled on paper: the settings
+screen ships a **"проверить сигнал"** button that plays each level on the real
+phone, and the curve is tuned from hearing it.
+
+---
+
+## 12. Urgency is a step function for three of four kinds (2026-07-26)
+
+Found in Task 5's review, and it changes what Task 7 may assume.
+
+§4 asks the tone to climb continuously with urgency. The engine delivers that —
+urgency ramps 0..1 across the band between two adjacent levels. But **a ramp needs
+two levels to ramp between**, and §10.2's defaults ship exactly one level for ESC
+temperature (90 °C) and one for motor temperature (110 °C):
+
+```
+escDefault@91  → level=1, urgency=1.0
+escDefault@200 → level=1, urgency=1.0
+```
+
+So out of the box only duty has a ramp (80→90, flat above 90). A rider who never
+opens the settings screen never hears a climbing tone at all.
+
+**Ruling: the defaults stay as they are.** Temperature is not a gradient the way
+duty is. Duty climbs continuously toward a hard physical limit and the rider can
+back off proportionally; a motor at 111 °C is not "slightly" over 110 — the rider
+picked 110 as the number at which they want to be told. Adding a second, lower
+temperature level to manufacture a ramp would mean sounding *before* the rider's
+chosen threshold, which is the nagging failure §10.1 exists to prevent. A rider
+who wants a lead-in adds a level; that is what the 0..3 model is for.
+
+**What this obliges Task 7 to do.** The three audible steps must be
+distinguishable **on their own** — by pitch and repetition rate per level — and
+must not lean on the urgency ramp to convey escalation. Urgency is a refinement
+where it exists, never the carrier of the signal. Concretely: a tone design that
+only differs by a continuous parameter would make ESC temp and motor temp sound
+identical to each other and identical at 91 °C and 200 °C.
+
+Two related facts from the same review, worth knowing when tuning:
+- urgency is pinned at 0 for the whole hold band while a step is being released,
+  so the tone carries no information during a release;
+- flat urgency above the top step is deliberate — the rider chose where "as bad as
+  it gets" sits, and a rider wanting escalation past 90 % duty sets 80/90/95.
+
+### 12.1 Temperature hysteresis narrowed to 1 °C
+
+Task 5 shipped release bands of duty 3 pp, temperature 3 °C, speed 2 km/h. The
+temperature figure was wrong by the same reasoning as above: a thermistor reading
+is slow and heavily filtered with near-zero sample-to-sample jitter, so 3 °C buys
+almost no anti-chatter and instead adds thermal **lag** — a motor cooling from
+113 °C past a 110 °C threshold holds the alarm until 107 °C, tens of seconds of
+alarm after the condition cleared. An alarm that outlives its cause teaches the
+rider to dismiss it. Duty and speed keep their bands; those metrics genuinely
+jitter sample to sample.
+
+---
+
+## 13. Listening checklist — what only a device can answer (2026-07-26)
+
+The tone mapping is a pure, heavily tested table; the Android layer above it
+(`AudibleAlarm.android.kt`, `AlarmTonePlayer.kt`) has **zero automated coverage**,
+because this repo has no instrumented tests. Everything below is unverifiable
+without a phone and a rider, and none of it should be assumed to work.
+
+**The design being tested.** Three steps, deliberately disjoint on two axes so a
+step at full urgency never reaches its neighbour's plainest form:
+
+| Step | Pitch (Hz) | Pulses | Period (ms) |
+|---|---|---|---|
+| 1 | 1000–1120 | 1 | 963–1400 |
+| 2 | 1600–1792 | 2 | 625–800 |
+| 3 | 2400–2688 | 3 | 426–450 |
+
+0. **Top item.** Kill the audio server mid-alarm (`adb shell killall audioserver`)
+   and confirm the tone returns within about a second and the log carries the
+   "tone thread ended while level N was still sounding" warning. The revive path
+   and its 1 s backoff are reasoned but have never been observed running.
+1. Are the three steps actually tellable apart **through a jacket, at road speed,
+   with wind noise**? This is the whole point of §12 and the only question that
+   really matters.
+2. Is the alarm loud enough over traffic — is 0.85 of full scale right?
+3. Do the 4 ms fades genuinely remove the click at each pulse edge on a real
+   speaker?
+4. Does step 3 at ~2.2 bursts/s read as *urgent* rather than as noise?
+5. Is the haptic perceptible through clothing at step 3's 150 ms pulses?
+6. Does `USAGE_ALARM` stay audible with the phone silenced and DND on?
+7. Does the focus request **duck** a music app rather than pausing it, and does
+   the alarm survive a phone call arriving mid-alarm?
+8. Does the 500 ms focus re-request ping-pong with a music app that also
+   auto-re-requests? It can never silence the alarm, but it could stutter the
+   music for the alarm's duration.
+9. Does `createWaveform(..., repeat = 0)` loop seamlessly on real vibrator
+   hardware?
+10. The **API 26–32 vibration path** (`vibrate(effect, AudioAttributes)`) is the
+    least likely to have been exercised — worth a deliberate check on an old
+    device.
+11. Do the ~40 ms write chunks underrun on a loaded phone, and does
+    `pause/flush/stop/release` cut the sound promptly?
+12. A duty reading jittering more than the 3 pp release band flaps between steps
+    2 and 3 at sample rate, tearing down and rebuilding the track each time. It
+    is bounded and not a leak, but at 5–10 Hz it would machine-gun the burst
+    onsets. Does that happen on real VESC data? If it does, the fix is a minimum
+    dwell time per step, not a wider release band.
+
+---
+
+## 14. A controller link can die without anything noticing (2026-07-27)
+
+Found in Task 8's review. **The root cause is outside Part F** — it is in the
+multi-link staleness sweep — but Part F is what makes it audible, so it is
+recorded here as well as being work for whoever owns `VehicleConnection` next.
+
+`VehicleConnection.submit()` (the battery path) sweeps only `states`, the pack
+links; `submitMotion()` sweeps only `ctrlStates`, the controller links
+(`VehicleConnection.kt:130-212`). **Nothing marks a controller stale from the
+battery path.** So on a mixed vehicle — a BMS and a controller on separate links —
+where the *controller* link dies while the BMS keeps delivering:
+
+- `refoldConnectionStateLocked` reads `Connected`, correctly: a link *is* online;
+- `ctrlStates[i].isOnline` stays `true` forever, because only a motion sample
+  would clear it and none is coming;
+- `MotionAggregator.aggregate` keeps folding the last hot duty reading with
+  `isConnected = true`.
+
+The rider hears an alarm computed from a duty value frozen at the moment the
+controller went away, for the rest of the ride. Nothing in the app can tell that
+the number is stale.
+
+**The fix belongs in the staleness sweep, not in the alarm:** either sweep
+`ctrlStates` for staleness on the battery submit path too, or replace both with
+one shared sweep over all links. Part F must not paper over it with a second
+freshness heuristic — Task 8 already carries two answers to "is the link live",
+which is one more than it should need.
+
+Related and already fixed in Task 8's review round: the alarm used to keep
+sounding through `ConnectionState.Reconnecting`, on the belief that the state
+could coexist with a live link. It cannot — the fold is `any ONLINE → Connected`
+first, so `Reconnecting` means *nothing* is delivering, and the alarm now stops
+there.
+
+---
+
+## 15. Part F debt carried to `main` (2026-07-27)
+
+Everything below was found, adjudicated and deliberately not fixed in Part F.
+
+**15.1 — The notification surface is English while the app is Russian.** The
+Silence/Disconnect actions and every one-shot alert body (`"Motor temperature
+high"`, `"Cell voltage high"`) are hardcoded English literals. `Notifier.showLive`
+is not `suspend`, Compose Resources' `getString` is, and there is no Android
+`res/` source set — so a locale-aware notifier means restructuring the whole
+notification path, not translating three constants. It is at least *self*-
+consistent today: everything there is English. Fix it as one piece, or not at all.
+
+**15.2 — The receiver hardening is androidx.core version-dependent and fails
+silently.** `ContextCompat.registerReceiver` only applies the signature-level
+permission below API 33 from core **1.18.0**; 1.16.0 passes the flag to a platform
+that ignores it. This build resolves 1.18.0 transitively, not by an explicit pin,
+so a dependency change dragging it lower reopens the hole on API 26–32 with no
+compile error and no failing test. An explicit version constraint would nail it;
+the caveat is on the registration KDoc meanwhile.
+
+**15.3 — `the_four_triggers_share_exactly_one_collector` is a weaker guard than
+its name.** It counts direct children of the outer scope, and `merge`'s internal
+per-flow coroutines are children of the collector's own channelFlow scope — so it
+would still read 1 if someone nested a `scope.launch` inside the `collect` block.
+The single-collector property is real (verified independently); the test does not
+fence it as tightly as it claims.
+
+**15.4 — Duty's 3 pp release band has no physical argument behind it.**
+Temperature was narrowed to 1 °C on a thermal-lag argument and speed's 2 km/h is
+plausible for erpm-derived speed; duty's figure is judgement. It is the likeliest
+field adjustment, and §13 item 12 is the check that would prompt it.
+
+**15.5 — `AudibleAlarm` RESTART is unrate-limited.** A duty reading jittering more
+than the release band flaps between steps at sample rate, tearing down and
+rebuilding an `AudioTrack` each time. Bounded, not a leak. If real VESC data shows
+it, the fix is a minimum dwell per step — not a wider release band.
+
+**15.6 — Speed thresholds are km/h even for a rider on Imperial units.** Labelled
+honestly rather than converted; the dial shows mph for the same rider, so the
+mismatch is visible. Converting on display while storing km/h is the larger
+correctness risk, which is why it was left.
+
+**15.7 — CI has no signal on a branch without a PR.** `push` is restricted to
+`main`, so CI is a post-merge safety net rather than a gate. Acceptable while
+every merge runs the full suite locally first.

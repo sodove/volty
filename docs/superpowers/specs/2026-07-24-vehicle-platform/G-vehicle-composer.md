@@ -97,3 +97,35 @@ addresses (`01-linking §5`).
    avoid false "duplicate" prompts on two genuinely similar packs.
 3. **Icon/type presets** — extend `IconKey` for vehicle archetypes
    (scooter/EUC/bike) vs the current battery-centric icons.
+
+---
+
+## 8. The save path must stop rebuilding the vehicle (2026-07-26)
+
+Found in Part F Task 4's review, and it is the third instance of the same bug.
+
+`VehicleEditComponent.onSave()` does not update the vehicle it loaded — it
+**rebuilds one from scratch** with `singlePackVehicle(...)` and then hand-copies
+selected fields across from `existing`. Every field not named in that copy list is
+silently reset to its default on any save, including saves that never touched it:
+rename the vehicle, change the secondary gauge, edit pole pairs — and the field is
+gone.
+
+Fields it has already caught out: `controllers`/`topology`, then
+`yieldBmsToHeadUnit`, then `motionAlerts` (Part F). Each was fixed by adding one
+more line to the copy list, and the file now carries a comment explaining the
+pattern — which did not stop the third one, because the failure mode is *omission*
+and a comment cannot enforce omission.
+
+**Part G2 owns this screen and must replace the rebuild with an update in place**
+— start from the loaded `Vehicle` and `copy()` only what the form edited, so a new
+field is preserved by default rather than lost by default. The current polarity
+means every future field added to `Vehicle` is a data-loss bug until someone
+remembers this file.
+
+Part F left behind the test that catches the *class* of defect rather than the
+instance: `saving with nothing edited is an identity on the whole vehicle` asserts
+equality on the entire object, because field-by-field assertions are exactly how
+this reached review three times. Keep that test through the rewrite, and note its
+one weakness — it is only as strong as its fixture, so a new field whose default
+the fixture never overrides still slips through.

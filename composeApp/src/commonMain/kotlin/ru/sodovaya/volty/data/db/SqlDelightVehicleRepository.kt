@@ -2,6 +2,10 @@ package ru.sodovaya.volty.data.db
 
 import app.cash.sqldelight.coroutines.asFlow
 import app.cash.sqldelight.coroutines.mapToList
+import ru.sodovaya.volty.domain.alert.AlertLevel
+import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.sortedLevels
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -28,6 +32,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val queries = provider.database.vehicleRowQueries
     private val packQueries = provider.database.packRowQueries
     private val controllerQueries = provider.database.controllerRowQueries
+    private val alertLevelQueries = provider.database.alertLevelRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
         .asFlow()
@@ -41,10 +46,15 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         .asFlow()
         .mapToList(Dispatchers.Default)
 
+    private val alertLevelRows: Flow<List<AlertLevelRow>> = alertLevelQueries.selectAll()
+        .asFlow()
+        .mapToList(Dispatchers.Default)
+
     override val vehicles: Flow<List<Vehicle>> =
-        combine(vehicleRows, packRows, controllerRows) { rows, packs, ctrls ->
+        combine(vehicleRows, packRows, controllerRows, alertLevelRows) { rows, packs, ctrls, levels ->
             val packsByVehicle = packs.groupBy { it.vehicleId }
             val controllersByVehicle = ctrls.groupBy { it.vehicleId }
+            val levelsByVehicle = levels.groupBy { it.vehicleId }
             // A vehicle with neither packs nor controllers cannot be
             // constructed (Vehicle.init requires at least one source), and
             // would mean a broken migration — drop it rather than crash the
@@ -53,7 +63,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 val ownPacks = packsByVehicle[row.id].orEmpty()
                 val ownControllers = controllersByVehicle[row.id].orEmpty()
                 if (ownPacks.isEmpty() && ownControllers.isEmpty()) null
-                else row.toDomain(ownPacks, ownControllers)
+                else row.toDomain(ownPacks, ownControllers, levelsByVehicle[row.id].orEmpty())
             }
         }.flowOn(Dispatchers.Default)
 
@@ -62,7 +72,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         val packs = packQueries.selectByVehicle(id).executeAsList()
         val controllers = controllerQueries.selectByVehicle(id).executeAsList()
         if (packs.isEmpty() && controllers.isEmpty()) return null
-        return row.toDomain(packs, controllers)
+        return row.toDomain(packs, controllers, alertLevelQueries.selectByVehicle(id).executeAsList())
     }
 
     override suspend fun upsert(vehicle: Vehicle) {
@@ -97,7 +107,13 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 // Three-valued on purpose (see Vehicle.yieldBmsToHeadUnit):
                 // NULL is "unset / follow the default", NOT the same row state
                 // as an explicit 0 or 1.
-                yieldBmsToHeadUnit = vehicle.yieldBmsToHeadUnit?.let { if (it) 1L else 0L }
+                yieldBmsToHeadUnit = vehicle.yieldBmsToHeadUnit?.let { if (it) 1L else 0L },
+                // The "never configured" bit, and the reason it is a column and
+                // not `AlertLevelRow is empty`: a rider who switches every kind
+                // off writes zero level rows, exactly like a rider who has never
+                // opened the screen — and the two must not read back the same.
+                // See AlertLevelRow.sq / Vehicle.motionAlerts.
+                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L
             )
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
@@ -131,15 +147,56 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                     providesDerivedBattery = if (c.providesDerivedBattery) 1L else 0L
                 )
             }
+            // And for the alert levels. Inside the SAME transaction as the
+            // vehicle row on purpose: motionAlertsConfigured and the rows it
+            // vouches for are one fact split across two tables, and a crash
+            // between them would leave the flag set over a stale level set —
+            // i.e. the rider's alarm firing at somebody else's numbers.
+            //
+            // THE SECOND HALF OF THE DOWNGRADE PATH. `toRules()` below is
+            // non-destructively tolerant — it skips rows it cannot represent
+            // (an unknown `kind`, levels past MAX_LEVELS) and leaves them in the
+            // table, so a newer version's data survives being *read* by an older
+            // build. This write is not: it replaces the level set wholesale from
+            // the in-memory list, which by construction contains only what
+            // `toRules()` could represent. So on a downgrade those rows live
+            // exactly until the rider touches any vehicle setting, and are then
+            // deleted for good, silently and unrecoverably.
+            //
+            // Unreachable today — nothing writes an unknown kind and `upsert`
+            // cannot exceed MAX_LEVELS — and not worth a merge strategy now. But
+            // read-tolerance is NOT downgrade-safety, and a future release that
+            // wants it must fix this write, not just that read.
+            alertLevelQueries.deleteByVehicle(vehicle.id)
+            vehicle.motionAlerts?.forEach { rule ->
+                rule.levels.forEachIndexed { position, level ->
+                    alertLevelQueries.upsert(
+                        vehicleId = vehicle.id,
+                        kind = rule.kind.name,
+                        position = position.toLong(),
+                        threshold = level.thresholdValue.toDouble(),
+                        enabled = if (level.enabled) 1L else 0L
+                    )
+                }
+            }
         }
     }
 
     override suspend fun delete(id: String) {
         // Explicit rather than relying on ON DELETE CASCADE: foreign keys are
         // off by default in SQLite unless PRAGMA foreign_keys is enabled.
-        packQueries.deleteByVehicle(id)
-        controllerQueries.deleteByVehicle(id)
-        queries.delete(id)
+        //
+        // In one transaction for the same reason upsert is: four statements
+        // means three windows in which process death leaves child rows behind
+        // with no parent, and a recycled vehicle id would then adopt a stranger's
+        // packs, controllers and alarm thresholds. It also collapses four change
+        // notifications into one.
+        queries.transaction {
+            packQueries.deleteByVehicle(id)
+            controllerQueries.deleteByVehicle(id)
+            alertLevelQueries.deleteByVehicle(id)
+            queries.delete(id)
+        }
     }
 
     override suspend fun touch(id: String) {
@@ -150,7 +207,8 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 @OptIn(ExperimentalTime::class)
 private fun VehicleRow.toDomain(
     packRows: List<PackRow>,
-    controllerRows: List<ControllerRow>
+    controllerRows: List<ControllerRow>,
+    alertLevelRows: List<AlertLevelRow>
 ): Vehicle = Vehicle(
     id = id,
     name = name,
@@ -203,5 +261,48 @@ private fun VehicleRow.toDomain(
         ?: SecondaryGauge.DUTY,
     // NULL stays null (unset) rather than collapsing to false: `yieldsBmsToHeadUnit`
     // is what resolves the default, and it must be able to tell the two apart.
-    yieldBmsToHeadUnit = yieldBmsToHeadUnit?.let { it != 0L }
+    yieldBmsToHeadUnit = yieldBmsToHeadUnit?.let { it != 0L },
+    // Null — "never configured, use AlarmDefaults" — comes from the column, NOT
+    // from the row list being empty. `motionAlertsConfigured = 1` with no rows
+    // is a rider who switched everything off, and stays off.
+    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null
 )
+
+/**
+ * Rows -> one [AlertRule] per [MotionAlertKind], in enum order. A kind with no
+ * rows becomes an empty rule, which is exactly [AlertRule.isOff] — the caller
+ * only reaches here when the vehicle *has* been configured, so an absent kind
+ * means the rider removed its levels.
+ *
+ * **Every step below exists to keep a hostile row set from crashing the app at
+ * startup rather than merely failing to load a value.** [AlertRule] and
+ * [AlertLevel] enforce their invariants with `require`, so a database that
+ * violates one throws `IllegalArgumentException` out of `get()` / the vehicles
+ * flow — on the launch path, before any screen. Nothing here can be trusted:
+ * SQLite is a file on the device, backups get restored across app versions, and
+ * a future writer bug would land its damage here.
+ *
+ *  - **sorted by threshold, not by `position`.** [AlertRule] requires ascending
+ *    thresholds; stored positions are only what some past writer believed. A row
+ *    set whose positions disagree with its thresholds is the crash. `position`
+ *    survives as the tie-break, since [sortedLevels] is stable — two levels
+ *    sharing a threshold keep the order the rider typed;
+ *  - **non-finite thresholds dropped.** [AlertLevel] rejects them (a NaN level
+ *    can never fire and never release, while `isOff` stays false — an alarm that
+ *    silently does not exist). SQLite will happily hand back an infinity;
+ *  - **at most [AlertRule.MAX_LEVELS], keeping the HIGHEST.** Over-long row sets
+ *    are impossible through [upsert] but trivial to hand-edit. Dropping from the
+ *    top would discard the most urgent step, so the mildest goes instead;
+ *  - **unrecognised `kind` strings ignored** — same treatment `dashboardStyle`
+ *    gets above, and the path a downgrade takes.
+ */
+private fun List<AlertLevelRow>.toRules(): List<AlertRule> {
+    val byKind = groupBy { runCatching { MotionAlertKind.valueOf(it.kind) }.getOrNull() }
+    return MotionAlertKind.entries.map { kind ->
+        val levels = byKind[kind].orEmpty()
+            .sortedBy { it.position }
+            .filter { it.threshold.toFloat().isFinite() }
+            .map { AlertLevel(thresholdValue = it.threshold.toFloat(), enabled = it.enabled == 1L) }
+        AlertRule(kind = kind, levels = sortedLevels(levels).takeLast(AlertRule.MAX_LEVELS))
+    }
+}

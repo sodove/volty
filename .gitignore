@@ -19,3 +19,6 @@ keystore.properties
 /composeApp/build
 /dumper/build
 .superpowers/
+
+# Kotlin compiler daemon error dumps — build noise, never source.
+.kotlin/

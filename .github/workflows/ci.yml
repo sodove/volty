@@ -1,0 +1,63 @@
+name: CI
+
+# `push` is restricted to main so that a same-repo PR branch does not run the
+# whole workflow twice (once for the branch push, once for the PR) — the
+# concurrency group cannot dedupe those, because github.ref is refs/heads/x for
+# one and refs/pull/N/merge for the other. Restricting it also keeps tag pushes
+# from triggering a build.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A newer push to the same branch makes the in-flight run obsolete.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, verify migrations, assemble
+    runs-on: ubuntu-latest
+    # A wedged Gradle daemon would otherwise sit on a runner for the 6h default.
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: the Android target compiles to JVM 11 bytecode, but AGP 8.13
+      # itself needs 17+. Verified locally against this exact task list.
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      # No `:composeApp:` prefix on purpose: these run in every module, so
+      # :dumper is compiled and its tests run too. :dumper depends on the same
+      # Kable and coroutines versions as the app, and nothing else builds it.
+      - name: Unit tests (all modules)
+        run: ./gradlew testDebugUnitTest
+
+      # Replays every .sqm onto the committed schema snapshots and compares the
+      # result with the .sq definitions. Catches type / NOT NULL / DEFAULT drift
+      # that the repository tests cannot see. Only :composeApp has a database.
+      - name: Verify SQLDelight migrations
+        run: ./gradlew :composeApp:verifySqlDelightMigration
+
+      - name: Assemble debug APKs (all modules)
+        run: ./gradlew assembleDebug
+
+      # Without this a red run is just log text — the per-test XML and the HTML
+      # report say which assertion failed and how.
+      - name: Upload test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+          retention-days: 7
+          if-no-files-found: ignore

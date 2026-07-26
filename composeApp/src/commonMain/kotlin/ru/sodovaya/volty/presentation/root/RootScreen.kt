@@ -28,6 +28,7 @@ import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.arkivanov.decompose.extensions.compose.stack.animation.fade
 import com.arkivanov.decompose.extensions.compose.stack.animation.stackAnimation
 import com.arkivanov.decompose.extensions.compose.subscribeAsState
+import ru.sodovaya.volty.presentation.alerts.VehicleAlertsScreen
 import ru.sodovaya.volty.presentation.autoconnect.AutoConnectScreen
 import ru.sodovaya.volty.presentation.dashboard.DashboardScreen
 import ru.sodovaya.volty.presentation.pack.PackDetailScreen
@@ -69,6 +70,7 @@ fun RootScreen(component: RootComponent) {
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
+                    is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(instance.component)
                     is RootComponent.Child.Settings -> SettingsScreen(instance.component)
                 }

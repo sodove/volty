@@ -1,0 +1,40 @@
+-- One row per rider-defined motion alert *level* (Part F §10.2). A kind with
+-- three levels has three rows; a kind the rider switched off has none, because
+-- an empty level list is the only representation of "off"
+-- (domain/alert/MotionAlertRule.kt, AlertRule.isOff).
+--
+-- That makes "no rows for this kind" mean OFF, which is NOT the same statement
+-- as "this vehicle was never configured, apply AlarmDefaults". The two are told
+-- apart by VehicleRow.motionAlertsConfigured, not by anything in this table and
+-- not by anything in the domain model — see that column's comment.
+--
+-- `position` is the rider's ordering (0-based). It is written from the list
+-- order and read back only as a tie-breaker: SqlDelightVehicleRepository sorts
+-- by `threshold` on the way in, because AlertRule.init *requires* ascending
+-- thresholds and a row set whose positions disagree with its thresholds would
+-- otherwise crash the app at startup rather than fail validation.
+
+CREATE TABLE AlertLevelRow (
+    vehicleId  TEXT NOT NULL,
+    kind       TEXT NOT NULL,   -- enum name: DUTY | SPEED | MOTOR_TEMP | ESC_TEMP
+    position   INTEGER NOT NULL,
+    threshold  REAL NOT NULL,   -- the metric's own unit: % for duty, km/h, °C
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (vehicleId, kind, position),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+CREATE INDEX AlertLevelRow_vehicle ON AlertLevelRow(vehicleId, kind, position);
+
+selectAll:
+SELECT * FROM AlertLevelRow ORDER BY vehicleId, kind, position;
+
+selectByVehicle:
+SELECT * FROM AlertLevelRow WHERE vehicleId = :vehicleId ORDER BY kind, position;
+
+upsert:
+INSERT OR REPLACE INTO AlertLevelRow(vehicleId, kind, position, threshold, enabled)
+VALUES (:vehicleId, :kind, :position, :threshold, :enabled);
+
+deleteByVehicle:
+DELETE FROM AlertLevelRow WHERE vehicleId = :vehicleId;

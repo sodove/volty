@@ -130,6 +130,41 @@ sqldelight {
         create("VoltyDatabase") {
             packageName.set("ru.sodovaya.volty.data.db")
             generateAsync.set(false)
+
+            // Snapshots of the schema at each version, committed to the repo.
+            // `generateCommonMainVoltyDatabaseSchema` writes <currentVersion>.db
+            // here. Verification replays, for every committed N.db, the
+            // migrations numbered N and up, then diffs the result against the
+            // .sq definitions — so N.db is the schema *at* version N, and only
+            // migrations >= N are exercised by it. That is why 1.db..6.db are
+            // all committed: with only the newest snapshot no migration would
+            // run and the verifier would pass against anything.
+            //
+            // When adding migration N.sqm, N.db must already be here (it is the
+            // "before" state); afterwards run the generate task once more so
+            // (N+1).db lands here for the migration after that.
+            schemaOutputDirectory.set(file("src/commonMain/sqldelight/databases"))
+
+            // Makes `verifyCommonMainVoltyDatabaseMigration` — which `check`
+            // and the aggregate `verifySqlDelightMigration` both pull in —
+            // fail when a migration drifts from the .sq definitions: a
+            // NOT NULL, DEFAULT or column-type divergence that the repository
+            // tests cannot see.
+            //
+            // Windows: this puts the generate/verify tasks — and therefore
+            // `check` and `build`, which used to be green anywhere — on the
+            // sqlite-jdbc native library. The SQLDelight Gradle worker can start
+            // with an empty environment, so its java.io.tmpdir resolves to
+            // C:\WINDOWS, sqlite-jdbc cannot extract the .dll there, and the
+            // task dies with
+            //   AccessDeniedException: C:\WINDOWS\sqlite-...-sqlitejdbc.dll.lck
+            // Neither org.gradle.jvmargs nor _JAVA_OPTIONS reaches that worker.
+            // Fix: copy sqlitejdbc.dll (from the sqlite-jdbc jar in ~/.gradle
+            // caches, or from an earlier successful extraction in %TEMP%) into
+            // %USERPROFILE%\.gradle\workers\ — the worker's working directory,
+            // which is on its java.library.path, so the System.loadLibrary
+            // fallback finds it. Linux and macOS are unaffected.
+            verifyMigrations.set(true)
         }
     }
 }

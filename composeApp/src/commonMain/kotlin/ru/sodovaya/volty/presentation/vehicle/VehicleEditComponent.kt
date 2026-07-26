@@ -48,6 +48,18 @@ interface VehicleEditComponent {
     fun onMotorGearRatioChanged(v: Float?)
     fun onDashboardStyleChanged(style: DashboardStyle?)
     fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
+    /**
+     * Open the per-vehicle alert settings screen (F Task 9).
+     *
+     * Navigation only — **no state on this form**, deliberately. `onSave()`
+     * rebuilds the vehicle from scratch through `singlePackVehicle(...)` and
+     * hand-copies the rest across, a pattern that has already eaten three fields;
+     * the alert rules are edited and persisted by their own component, which
+     * re-reads the vehicle at save time, so nothing here can drop them. The
+     * `motionAlerts = existing?.motionAlerts` carry-through in [onSave] is what
+     * keeps a save from this form from resurrecting the defaults over them.
+     */
+    fun onOpenAlerts()
     fun onSave()
     fun onCancel()
     fun onDelete()
@@ -124,6 +136,8 @@ class DefaultVehicleEditComponent(
     private val onSaved: () -> Unit,
     private val onCancelled: () -> Unit,
     private val onDeleted: () -> Unit,
+    /** Defaulted so every existing caller (and test) compiles unchanged. */
+    private val onOpenAlertsRequested: () -> Unit = {},
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -207,6 +221,7 @@ class DefaultVehicleEditComponent(
     override fun onMotorGearRatioChanged(v: Float?) { _state.update { it.copy(motorGearRatio = v) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
+    override fun onOpenAlerts() { onOpenAlertsRequested() }
 
     override fun onSave() {
         val s = _state.value
@@ -277,7 +292,17 @@ class DefaultVehicleEditComponent(
                 // — see the Part C task-5 report). Carried through explicitly so a
                 // save from this form does not silently reset a rider's opt-out,
                 // exactly as topology and the controller list are above.
-                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit
+                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit,
+                // Also not editable here (F Task 5's own screen owns it), and
+                // carried through for a sharper reason than the fields above.
+                // singlePackVehicle() leaves motionAlerts null, and null does
+                // not mean "no alerts" — it means "never configured", which the
+                // repository answers with AlarmDefaults. So dropping it here
+                // does not merely lose the rider's numbers: it RESURRECTS the
+                // defaults over them. A rider who silenced every kind and then
+                // renamed the vehicle would have the alarm switch itself back
+                // on. See SqlDelightVehicleRepository / Vehicle.motionAlerts.
+                motionAlerts = existing?.motionAlerts
             )
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the
