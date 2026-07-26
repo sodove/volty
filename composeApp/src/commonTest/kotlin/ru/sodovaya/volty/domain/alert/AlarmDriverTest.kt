@@ -634,6 +634,80 @@ class AlarmDriverTest {
     }
 
     /**
+     * **A silence in force has to be visible**, because the one thing it looks
+     * like from the saddle is nothing being wrong.
+     *
+     * `AlarmSilencer` concedes that on the frozen-link case the button exists for
+     * the level never returns to 0, so the suppression can last the rest of the
+     * ride: a rider who silences a stuck duty alarm at km 5 arrives at km 40
+     * having had no duty alarm at all. The only cue is an alarm that never
+     * sounds. This flow is what the live notification reads to say so.
+     *
+     * All three phases in one test on purpose — a flag that is set but never
+     * cleared reads exactly like a correct one until the re-arm is asserted.
+     */
+    @Test
+    fun the_silenced_state_is_published_while_it_is_in_force_and_withdrawn_when_it_lifts() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+        assertEquals(false, driver.isSilenced.value, "nothing is silenced before anything is pressed")
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        assertEquals(2, alarm.level, "fixture guard: the alarm is sounding")
+        assertEquals(false, driver.isSilenced.value, "a sounding alarm is not a silenced one")
+
+        driver.silence()
+        runCurrent()
+        assertEquals(true, driver.isSilenced.value, "the press must be visible at once, not on some later sample")
+
+        // The frozen reading arrives again: the danger has not gone away, so
+        // neither has the suppression, and the rider must still be told.
+        repo.activeMotion.value = motion(dutyPercent = 95.5f)
+        runCurrent()
+        assertEquals(
+            true, driver.isSilenced.value,
+            "the suppression outlives the samples that re-raise it — that IS the thing worth showing"
+        )
+
+        repo.activeMotion.value = motion(dutyPercent = 10f)
+        runCurrent()
+        assertEquals(
+            false, driver.isSilenced.value,
+            "and it must be withdrawn the moment the engine recovers, or the notification lies for the rest of the ride"
+        )
+    }
+
+    /**
+     * The other re-arm, published as well as applied: a link the app can see drop
+     * lifts the silence, and a notification still saying "Silenced" afterwards
+     * would tell the rider they have no duty alarm when they do.
+     */
+    @Test
+    fun a_visible_dropout_withdraws_the_published_silence_too() = runTest {
+        val v = vehicle(rule(MotionAlertKind.DUTY, 80f, 90f))
+        val repo = ridingOn(v)
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        driver.silence()
+        runCurrent()
+        assertEquals(true, driver.isSilenced.value, "fixture guard: a silence really is in force")
+
+        repo.connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link dropped")
+        runCurrent()
+
+        assertEquals(false, driver.isSilenced.value, "the belt re-armed the alarm; the notification must follow")
+    }
+
+    /**
      * Pressing it with nothing sounding must not bank a silence for later — that
      * would be a disarm, and the master switch is the disarm.
      */

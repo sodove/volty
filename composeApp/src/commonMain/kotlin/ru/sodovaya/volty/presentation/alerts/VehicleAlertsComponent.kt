@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.alerts
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -58,8 +59,9 @@ interface VehicleAlertsComponent {
     fun onSave()
 
     /**
-     * The nav slot. **Not** an unconditional exit: with unsaved threshold edits it
-     * raises [State.discardPrompt] instead of dropping them silently.
+     * The nav slot **and the system back gesture**. **Not** an unconditional exit:
+     * with unsaved threshold edits it raises [State.discardPrompt] instead of
+     * dropping them silently.
      */
     fun onBack()
 
@@ -190,8 +192,34 @@ class DefaultVehicleAlertsComponent(
     /** The vehicle as loaded, kept only to name it in the app bar. Saving re-reads. */
     private var loadedVehicle: Vehicle? = null
 
+    /**
+     * **The way most Android riders actually leave a screen.**
+     *
+     * `RootComponent` builds its stack with `handleBackButton = true`, so a
+     * hardware or gesture back pops the stack without ever consulting the child.
+     * Without this callback the discard prompt guarded only the app bar's
+     * `Cancel` button, and an edge swipe dropped the rider's half-typed
+     * thresholds exactly as before it was written — the stated goal half met, in
+     * the half nobody uses.
+     *
+     * Registered **enabled unconditionally** and routed through the very same
+     * [onBack] the button calls, so the two cannot drift: `onBack` is where the
+     * "is there anything to lose?" decision lives, and its no-edits path calls
+     * `onBackRequested()`, which is the identical `nav.pop()` the stack would
+     * have performed. A callback that were instead enabled only while dirty
+     * would be a second copy of that decision.
+     *
+     * A child component's callback outranks the navigation's own: Decompose
+     * registers this one later than the stack's (the child is created, and its
+     * back handler started, after `childStack` registered its callback), and
+     * Essenty's dispatcher picks the last-registered enabled callback at equal
+     * priority.
+     */
+    private val backCallback = BackCallback(onBack = ::onBack)
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        backHandler.register(backCallback)
 
         scope.launch {
             val vehicle = vehicleRepository.get(vehicleId) ?: return@launch
@@ -312,6 +340,9 @@ class DefaultVehicleAlertsComponent(
      * whose muscle memory takes them back — loses it without a word. The two
      * commit models make that trap worse, not better: the switches above the
      * thresholds *did* save instantly, so the screen appears to save as you go.
+     *
+     * Reached from the app bar's `Cancel` **and** from [backCallback], so the
+     * gesture and the button are the same behaviour rather than two of them.
      *
      * The prompt is raised in the component rather than remembered in the
      * `@Composable`, because whether there is anything to lose is a decision and

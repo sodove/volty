@@ -5,6 +5,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -150,9 +151,14 @@ class VehicleAlertsComponentTest {
         preview: AlarmPreview = RecordingPreview(),
         prefs: AppPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
         onSaved: () -> Unit = {},
-        onBack: () -> Unit = {}
+        onBack: () -> Unit = {},
+        /**
+         * The system back gesture's dispatcher. Supplied only by the two tests
+         * that press it; everywhere else Decompose's default is fine.
+         */
+        backDispatcher: BackDispatcher? = null
     ) = DefaultVehicleAlertsComponent(
-        componentContext = DefaultComponentContext(lifecycle),
+        componentContext = DefaultComponentContext(lifecycle, backHandler = backDispatcher),
         vehicleId = "v1",
         vehicleRepository = repo,
         bmsRepository = bms,
@@ -410,6 +416,64 @@ class VehicleAlertsComponentTest {
 
         assertFalse(c.state.value.discardPrompt)
         assertTrue(backed)
+    }
+
+    /**
+     * **The way most Android riders actually leave a screen**, and the half the
+     * discard prompt used to miss entirely.
+     *
+     * `RootComponent` builds its stack with `handleBackButton = true`, so an edge
+     * swipe pops without consulting this component at all: the rider typed 85
+     * into a duty threshold, swiped, and the edit was gone with no dialog. The
+     * app bar's `Cancel` was guarded; the gesture nobody uses a button for was
+     * not.
+     *
+     * `BackDispatcher.back()` returning false is the shape of that regression —
+     * it means nothing here registered a callback and the stack would have popped
+     * — so it is asserted rather than ignored.
+     */
+    @Test
+    fun `the system back gesture raises the discard prompt just as the Cancel button does`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val back = BackDispatcher()
+        var backed = false
+        val c = component(FakeVehicleRepo(vehicle()), onBack = { backed = true }, backDispatcher = back)
+        advanceUntilIdle()
+
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85")
+        assertTrue(c.state.value.isDirty, "fixture check: there is an edit to lose, or this proves nothing")
+
+        assertTrue(back.back(), "the gesture must be intercepted — unhandled, Decompose pops the stack")
+
+        assertTrue(c.state.value.discardPrompt, "the rider must be told there is something to lose")
+        assertFalse(backed, "and must not have left yet")
+
+        c.onDiscardDismissed()
+        assertEquals(
+            "85",
+            c.state.value.kinds.single { it.kind == MotionAlertKind.DUTY }.levels.first().text,
+            "staying keeps the edit the swipe would have dropped"
+        )
+    }
+
+    /**
+     * And the gesture is the *same* path, not a second one: with nothing to lose
+     * it leaves at once, exactly as the button does. A callback that always
+     * prompted would train the dialog away.
+     */
+    @Test
+    fun `the system back gesture on an untouched screen leaves at once`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val back = BackDispatcher()
+        var backed = false
+        val c = component(FakeVehicleRepo(vehicle()), onBack = { backed = true }, backDispatcher = back)
+        advanceUntilIdle()
+
+        assertFalse(c.state.value.isDirty, "fixture check: nothing has been edited")
+        assertTrue(back.back(), "the callback is registered whether or not there is anything to lose")
+
+        assertFalse(c.state.value.discardPrompt)
+        assertTrue(backed, "an untouched screen must not stop the rider leaving")
     }
 
     // --------------------------------------------------------------- the save

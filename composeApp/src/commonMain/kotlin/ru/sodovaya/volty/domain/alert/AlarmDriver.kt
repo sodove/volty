@@ -9,6 +9,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
@@ -131,7 +134,8 @@ interface AlarmOutput {
  *
  * What *is* here is the survivability half — [silence], the live notification's
  * "Заглушить" action — so a rider caught by that gap can stop the noise without
- * ending the ride. [AlarmSilencer] documents what it means and what it costs.
+ * ending the ride, and [isSilenced], so they can see that they did.
+ * [AlarmSilencer] documents what it means and what it costs.
  */
 class AlarmDriver(
     private val repository: BmsRepository,
@@ -169,6 +173,30 @@ class AlarmDriver(
         onBufferOverflow = BufferOverflow.DROP_OLDEST
     )
 
+    private val _isSilenced = MutableStateFlow(false)
+
+    /**
+     * **Is a rider's silence in force right now?** — so the live notification can
+     * say so.
+     *
+     * [AlarmSilencer]'s own documentation concedes that on the frozen-link case
+     * the button exists for, the suppression can last the rest of the ride: the
+     * level never returns to 0, so it never lifts. The only cue the rider gets is
+     * that the alarm never sounds, which is indistinguishable from *nothing is
+     * wrong* — a rider who silences a stuck duty alarm at km 5 and arrives at km
+     * 40 has ridden 35 km with no duty alarm and no way to know it.
+     *
+     * This is that cue. A `StateFlow` rather than [AlarmSilencer.isSilenced]
+     * read directly, because the silencer is as unsynchronised as
+     * [AlarmController] and is mutated only on the one collector; this is
+     * published from that same collector and is safe to read from anywhere.
+     *
+     * Deliberately **not** a timeout. A suppression that outlives the danger is
+     * its own safety bug, and the trade was settled in [AlarmSilencer]: making it
+     * visible is the answer, not making it expire.
+     */
+    val isSilenced: StateFlow<Boolean> = _isSilenced.asStateFlow()
+
     /**
      * "Заглушить" — stop the sounding alarm without ending the ride.
      *
@@ -177,6 +205,19 @@ class AlarmDriver(
      * means over time and for the window it opens.
      */
     fun silence() { silenceRequests.tryEmit(Unit) }
+
+    /**
+     * The one way anything reaches the speaker: gate, play, publish.
+     *
+     * [AlarmSilencer.gate] both suppresses **and re-arms** — it clears itself on
+     * a level-0 state — so [isSilenced] can only be read honestly *after* the
+     * gate has run. Every path that sounds the alarm goes through here so that a
+     * silence lifting can never be a change the notification misses.
+     */
+    private fun publish(state: AlarmState) {
+        alarm.update(silencer.gate(state))
+        _isSilenced.value = silencer.isSilenced
+    }
 
     /** Start the one collector. Cancelled with [scope]; the caller still owes the speaker a teardown. */
     fun start(scope: CoroutineScope) {
@@ -215,7 +256,7 @@ class AlarmDriver(
         // must not disturb hysteresis, so the engine goes on grading the ride and
         // only what reaches the speaker is suppressed. That is also what lets the
         // silence lift by itself the moment the engine says level 0.
-        alarm.update(silencer.gate(controller.update(motion, rules)))
+        publish(controller.update(motion, rules))
     }
 
     /**
@@ -232,7 +273,7 @@ class AlarmDriver(
         // The reset state is level 0, so this is also where a rider's silence is
         // lifted: a link the app *can* see drop re-arms the alarm rather than
         // leaving it suppressed into the next stretch of the ride.
-        alarm.update(silencer.gate(controller.state))
+        publish(controller.state)
     }
 
     /**
@@ -245,7 +286,7 @@ class AlarmDriver(
      */
     private fun onSilence() {
         silencer.silence()
-        alarm.update(silencer.gate(controller.state))
+        publish(controller.state)
     }
 }
 

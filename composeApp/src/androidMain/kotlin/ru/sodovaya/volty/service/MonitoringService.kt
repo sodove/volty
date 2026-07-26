@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.alert.AlarmDriver
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -126,28 +127,35 @@ class MonitoringService : Service() {
         // duty spike is a fraction of a second of warning, and spending two of
         // them waiting for a throttle window would be spending most of it. The
         // driver reads `activeMotion` directly, on every sample.
-        alarmDriver = AlarmDriver(
+        val driver = AlarmDriver(
             repository = bmsRepository,
             modalities = appPrefs.alarmModalities,
             alarm = alarms.openOutput()
         ).also { it.start(scope) }
+        alarmDriver = driver
 
         scope.launch {
             bmsRepository.activeData
                 .combine(bmsRepository.activeVehicle) { d, v -> d to v }
                 .sample(2.seconds)
-                .collect { (data, vehicle) ->
-                    if (vehicle == null) return@collect
-                    notifier.showLive(
-                        LiveSummary(
-                            vehicleName = vehicle.name,
-                            socPercent = data.soc.toInt(),
-                            voltageV = data.voltage,
-                            currentA = data.current,
-                            etaText = null
-                        )
+                // Combined AFTER the throttle, deliberately. A silence is a press,
+                // not telemetry: folding it in before `sample` would hold the
+                // rider's own action back for up to two seconds, and on the frozen
+                // link this button exists for the next battery sample is the only
+                // thing that would ever release it. After the throttle it repaints
+                // the notification on the press, against the last ride figures.
+                .combine(driver.isSilenced) { (data, vehicle), silenced ->
+                    if (vehicle == null) null
+                    else LiveSummary(
+                        vehicleName = vehicle.name,
+                        socPercent = data.soc.toInt(),
+                        voltageV = data.voltage,
+                        currentA = data.current,
+                        etaText = null,
+                        alarmSilenced = silenced
                     )
                 }
+                .collect { summary -> summary?.let(notifier::showLive) }
         }
     }
 
@@ -191,18 +199,29 @@ class MonitoringService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
     /**
-     * One notification action's receiver, registered app-internal.
+     * One notification action's receiver, registered app-internal — **on every
+     * API this app runs on**.
      *
-     * `RECEIVER_NOT_EXPORTED` from API 33: these actions end a ride and silence a
-     * safety alarm, so nothing outside the app has any business sending them.
+     * A dynamically registered receiver is **exported by default** below API 33,
+     * and `minSdk` is 26. The hand-rolled version this replaces passed
+     * `RECEIVER_NOT_EXPORTED` only from API 33 and registered bare below it, so
+     * on API 26–32 any installed app could
+     * `sendBroadcast(Intent(ACTION_SILENCE).setPackage("ru.sodovaya.volty"))` and
+     * mute a rider's safety alarm, or send [ACTION_DISCONNECT] and cut their
+     * telemetry, holding no permission at all.
+     *
+     * `ContextCompat` closes it back to 26: from 33 it passes the platform flag,
+     * and on 26–32 it registers the receiver behind androidx.core's
+     * `${applicationId}.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` — a
+     * `signature`-level permission declared and held by this app alone, so a
+     * broadcast from any other package is dropped by the system.
      */
     private fun registerNotificationAction(receiver: BroadcastReceiver, action: String) {
-        val filter = IntentFilter(action)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(receiver, filter)
-        }
+        ContextCompat.registerReceiver(
+            this,
+            receiver,
+            IntentFilter(action),
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
     }
 }
