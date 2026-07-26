@@ -417,3 +417,39 @@ step at full urgency never reaches its neighbour's plainest form:
     is bounded and not a leak, but at 5–10 Hz it would machine-gun the burst
     onsets. Does that happen on real VESC data? If it does, the fix is a minimum
     dwell time per step, not a wider release band.
+
+---
+
+## 14. A controller link can die without anything noticing (2026-07-27)
+
+Found in Task 8's review. **The root cause is outside Part F** — it is in the
+multi-link staleness sweep — but Part F is what makes it audible, so it is
+recorded here as well as being work for whoever owns `VehicleConnection` next.
+
+`VehicleConnection.submit()` (the battery path) sweeps only `states`, the pack
+links; `submitMotion()` sweeps only `ctrlStates`, the controller links
+(`VehicleConnection.kt:130-212`). **Nothing marks a controller stale from the
+battery path.** So on a mixed vehicle — a BMS and a controller on separate links —
+where the *controller* link dies while the BMS keeps delivering:
+
+- `refoldConnectionStateLocked` reads `Connected`, correctly: a link *is* online;
+- `ctrlStates[i].isOnline` stays `true` forever, because only a motion sample
+  would clear it and none is coming;
+- `MotionAggregator.aggregate` keeps folding the last hot duty reading with
+  `isConnected = true`.
+
+The rider hears an alarm computed from a duty value frozen at the moment the
+controller went away, for the rest of the ride. Nothing in the app can tell that
+the number is stale.
+
+**The fix belongs in the staleness sweep, not in the alarm:** either sweep
+`ctrlStates` for staleness on the battery submit path too, or replace both with
+one shared sweep over all links. Part F must not paper over it with a second
+freshness heuristic — Task 8 already carries two answers to "is the link live",
+which is one more than it should need.
+
+Related and already fixed in Task 8's review round: the alarm used to keep
+sounding through `ConnectionState.Reconnecting`, on the belief that the state
+could coexist with a live link. It cannot — the fold is `any ONLINE → Connected`
+first, so `Reconnecting` means *nothing* is delivering, and the alarm now stops
+there.
