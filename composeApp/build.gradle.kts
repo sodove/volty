@@ -150,6 +150,20 @@ sqldelight {
             // fail when a migration drifts from the .sq definitions: a
             // NOT NULL, DEFAULT or column-type divergence that the repository
             // tests cannot see.
+            //
+            // Windows: this puts the generate/verify tasks — and therefore
+            // `check` and `build`, which used to be green anywhere — on the
+            // sqlite-jdbc native library. The SQLDelight Gradle worker can start
+            // with an empty environment, so its java.io.tmpdir resolves to
+            // C:\WINDOWS, sqlite-jdbc cannot extract the .dll there, and the
+            // task dies with
+            //   AccessDeniedException: C:\WINDOWS\sqlite-...-sqlitejdbc.dll.lck
+            // Neither org.gradle.jvmargs nor _JAVA_OPTIONS reaches that worker.
+            // Fix: copy sqlitejdbc.dll (from the sqlite-jdbc jar in ~/.gradle
+            // caches, or from an earlier successful extraction in %TEMP%) into
+            // %USERPROFILE%\.gradle\workers\ — the worker's working directory,
+            // which is on its java.library.path, so the System.loadLibrary
+            // fallback finds it. Linux and macOS are unaffected.
             verifyMigrations.set(true)
         }
     }
