@@ -1,0 +1,291 @@
+package ru.sodovaya.volty.notification
+
+import android.content.Context
+import android.media.AudioAttributes
+import android.media.AudioFocusRequest
+import android.media.AudioManager
+import android.os.Build
+import android.os.Handler
+import android.os.Looper
+import android.os.VibrationAttributes
+import android.os.VibrationEffect
+import android.os.Vibrator
+import android.os.VibratorManager
+import android.util.Log
+import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.AlarmModalities
+import ru.sodovaya.volty.domain.alert.AlarmSignalPlanner
+import ru.sodovaya.volty.domain.alert.AlarmState
+import ru.sodovaya.volty.domain.alert.AlarmTone
+import ru.sodovaya.volty.domain.alert.AlarmTransition
+import ru.sodovaya.volty.domain.alert.AlarmVibration
+import ru.sodovaya.volty.domain.alert.alarmPreviewDurationMs
+
+/**
+ * Android's audible alarm: an [AlarmTonePlayer] for the tone, a [Vibrator] for
+ * the haptic, and an audio-focus request that ducks music without ever silencing
+ * either.
+ *
+ * ### This class decides nothing
+ *
+ * Every question with an edge case — did anything change, may a preview play,
+ * what does a modality switch do to a running alarm — is answered by
+ * [AlarmSignalPlanner] in `commonMain`, where it is covered by tests. What is
+ * left here is [applyTransition]: a four-branch `when` over the answer. If you
+ * find yourself adding an `if` to this file, check first whether it belongs in
+ * the planner.
+ *
+ * ### Resource ownership
+ *
+ * - **The `AudioTrack` is owned by the tone thread, never by this class.** See
+ *   [AlarmTonePlayer]: it opens one and releases it in its own `finally`. This
+ *   class holds only a reference to the *player*, and drops it the instant it
+ *   calls `quit()`.
+ * - **Nothing is retained while silent.** A `STOP` ends the thread, cancels the
+ *   vibrator and abandons focus, so `update()` at level 0 leaves zero audio
+ *   resources open — and a *long* silence is not a different case, because there
+ *   is no idle-retention path and no timer keeping anything warm. The cost is one
+ *   `AudioTrack` construction (order of ten milliseconds) on the transition out
+ *   of silence, paid once per alarm rather than continuously.
+ * - **[release] is the hard teardown** and briefly joins the tone thread, so a
+ *   service's `onDestroy` returns with the track provably gone rather than
+ *   probably gone.
+ *
+ * ### Focus policy (F §11, §5)
+ *
+ * `USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION`, focus requested as
+ * `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` so music ducks and keeps playing. **Losing
+ * focus never stops the alarm** — see [onFocusChange]. Safety beats politeness;
+ * the request is a courtesy to the music app, not a permission slip.
+ *
+ * Thread-safe: every entry point serialises on [lock].
+ */
+actual class AudibleAlarm(context: Context) {
+
+    private val appContext = context.applicationContext
+    private val audioManager = appContext.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+    private val vibrator = resolveVibrator(appContext)
+
+    /** Delivers the focus callback and the preview timeout. Main looper — neither does real work. */
+    private val handler = Handler(Looper.getMainLooper())
+
+    private val planner = AlarmSignalPlanner()
+    private val lock = Any()
+
+    private var tonePlayer: AlarmTonePlayer? = null
+    private var focusRequest: AudioFocusRequest? = null
+    private var vibrating = false
+    private var released = false
+
+    private val attributes: AudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ALARM)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
+
+    private val endPreviewTask = Runnable { endPreview() }
+
+    private val regainFocusTask = Runnable {
+        synchronized(lock) {
+            // Only while something is actually sounding: re-requesting focus for
+            // an alarm that has since stopped would duck the rider's music for
+            // nothing.
+            if (released || tonePlayer == null) return@synchronized
+            val request = focusRequest ?: return@synchronized
+            runCatching { audioManager?.requestAudioFocus(request) }
+        }
+    }
+
+    private val focusListener = AudioManager.OnAudioFocusChangeListener { change -> onFocusChange(change) }
+
+    actual fun update(state: AlarmState) {
+        synchronized(lock) {
+            if (released) return
+            applyTransition(planner.update(state))
+        }
+    }
+
+    actual fun setModalities(modalities: AlarmModalities) {
+        synchronized(lock) {
+            if (released) return
+            applyTransition(planner.setModalities(modalities))
+        }
+    }
+
+    actual fun preview(level: Int) {
+        synchronized(lock) {
+            if (released) return
+            applyTransition(planner.preview(level))
+            handler.removeCallbacks(endPreviewTask)
+            // Asking the planner rather than the transition: previewing the same
+            // level twice is a NONE, and the second press should still extend the
+            // preview rather than let the first one's timer cut it short.
+            if (!planner.isPreviewing) return
+            val durationMs = alarmPreviewDurationMs(planner.command)
+            if (durationMs > 0) handler.postDelayed(endPreviewTask, durationMs.toLong())
+        }
+    }
+
+    actual fun stop() {
+        synchronized(lock) {
+            if (released) return
+            handler.removeCallbacks(endPreviewTask)
+            applyTransition(planner.stop())
+        }
+    }
+
+    actual fun release() {
+        val player = synchronized(lock) {
+            if (released) return
+            released = true
+            handler.removeCallbacks(endPreviewTask)
+            handler.removeCallbacks(regainFocusTask)
+            planner.stop()
+            stopVibration()
+            abandonFocus()
+            val current = tonePlayer
+            tonePlayer = null
+            current?.quit()
+            current
+        }
+        // Joined outside the lock — the tone thread never takes it, but blocking a
+        // caller inside a lock is how deadlocks get written later. Bounded, so a
+        // wedged audio stack delays onDestroy rather than hanging it.
+        runCatching { player?.join(TONE_JOIN_TIMEOUT_MS) }
+    }
+
+    private fun endPreview() {
+        synchronized(lock) {
+            if (released) return
+            applyTransition(planner.endPreview())
+        }
+    }
+
+    /** The entire platform-side decision surface. See the class doc. */
+    private fun applyTransition(transition: AlarmTransition) {
+        when (transition) {
+            AlarmTransition.NONE -> Unit
+
+            AlarmTransition.RETUNE -> {
+                val play = planner.command as? AlarmCommand.Play ?: return
+                val tone = play.tone ?: return
+                tonePlayer?.retune(tone)
+            }
+
+            AlarmTransition.RESTART -> {
+                val play = planner.command as? AlarmCommand.Play ?: return
+                // Focus is about the speaker only: a vibration-only alarm has no
+                // reason to duck anybody's music.
+                if (play.tone != null) requestFocus() else abandonFocus()
+                startTone(play.tone)
+                startVibration(play.vibration)
+            }
+
+            AlarmTransition.STOP -> {
+                startTone(null)
+                startVibration(null)
+                abandonFocus()
+            }
+        }
+    }
+
+    /** Replace the running tone, or stop it when [tone] is null. */
+    private fun startTone(tone: AlarmTone?) {
+        tonePlayer?.quit()
+        tonePlayer = null
+        if (tone == null) return
+        val player = AlarmTonePlayer(tone, attributes)
+        tonePlayer = player
+        runCatching { player.start() }.onFailure {
+            Log.e(TAG, "could not start the alarm tone thread", it)
+            tonePlayer = null
+        }
+    }
+
+    /** Replace the running haptic, or cancel it when [vibration] is null. */
+    private fun startVibration(vibration: AlarmVibration?) {
+        stopVibration()
+        if (vibration == null) return
+        val vib = vibrator ?: return
+        if (!vib.hasVibrator()) return
+        // repeat = 0: loop the whole timing array, which is built to sum to one
+        // full period, so the pattern repeats seamlessly until cancelled.
+        val effect = VibrationEffect.createWaveform(vibration.waveformMs(), 0)
+        runCatching { vibrate(vib, effect) }
+            .onSuccess { vibrating = true }
+            .onFailure { Log.e(TAG, "could not start the alarm vibration", it) }
+    }
+
+    private fun stopVibration() {
+        if (!vibrating) return
+        vibrating = false
+        runCatching { vibrator?.cancel() }
+    }
+
+    private fun requestFocus() {
+        if (focusRequest != null) return
+        val manager = audioManager ?: return
+        val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)
+            .setAudioAttributes(attributes)
+            // We will not pause for a ducking request; see onFocusChange.
+            .setWillPauseWhenDucked(false)
+            .setOnAudioFocusChangeListener(focusListener, handler)
+            .build()
+        focusRequest = request
+        // The result is ignored **on purpose** (F §11): whether or not the system
+        // grants focus, the alarm plays. USAGE_ALARM is audible regardless, and a
+        // denied request is not a reason to leave a rider unwarned.
+        runCatching { manager.requestAudioFocus(request) }
+    }
+
+    private fun abandonFocus() {
+        handler.removeCallbacks(regainFocusTask)
+        val request = focusRequest ?: return
+        focusRequest = null
+        runCatching { audioManager?.abandonAudioFocusRequest(request) }
+    }
+
+    /**
+     * **Nothing here stops the alarm, and that is the whole point** (F §5, §11).
+     *
+     * The only action taken on a loss is to ask for focus again after a short
+     * delay, so that whatever grabbed it gets a moment to settle and we go back to
+     * ducking it rather than fighting it in a tight loop. A `CAN_DUCK` loss is
+     * ignored outright: it asks *us* to duck, and a safety alarm does not.
+     */
+    private fun onFocusChange(change: Int) {
+        if (change == AudioManager.AUDIOFOCUS_GAIN ||
+            change == AudioManager.AUDIOFOCUS_LOSS_TRANSIENT_CAN_DUCK
+        ) {
+            return
+        }
+        handler.removeCallbacks(regainFocusTask)
+        handler.postDelayed(regainFocusTask, FOCUS_REGAIN_DELAY_MS)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun vibrate(vib: Vibrator, effect: VibrationEffect) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            vib.vibrate(effect, VibrationAttributes.createForUsage(VibrationAttributes.USAGE_ALARM))
+        } else {
+            vib.vibrate(effect, attributes)
+        }
+    }
+
+    private companion object {
+        const val TAG = "AudibleAlarm"
+
+        /** How long to wait after a focus loss before asking for it back. */
+        const val FOCUS_REGAIN_DELAY_MS = 500L
+
+        /** Upper bound on how long [release] waits for the tone thread to let go of its track. */
+        const val TONE_JOIN_TIMEOUT_MS = 500L
+
+        @Suppress("DEPRECATION")
+        fun resolveVibrator(context: Context): Vibrator? =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                (context.getSystemService(Context.VIBRATOR_MANAGER_SERVICE) as? VibratorManager)?.defaultVibrator
+            } else {
+                context.getSystemService(Context.VIBRATOR_SERVICE) as? Vibrator
+            }
+    }
+}

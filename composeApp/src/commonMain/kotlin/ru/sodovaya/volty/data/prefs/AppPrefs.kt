@@ -11,8 +11,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.util.UnitSystem
 
@@ -56,6 +58,39 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .map { runCatching { DashboardStyle.valueOf(it[Keys.DASHBOARD_STYLE] ?: "CLEAN") }.getOrDefault(DashboardStyle.CLEAN) }
         .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.CLEAN)
 
+    // --- The audible alarm's three switches (F §4). All default **true**: the
+    // alarm is the feature a rider depends on when they are not looking at the
+    // screen, so a fresh install must warn them without being configured first.
+    // Every one of them is a "turn it off" decision the rider makes deliberately.
+
+    /** Master switch. Off means neither tone nor vibration, whatever the other two say. */
+    val alarmEnabled: StateFlow<Boolean> = store.data
+        .map { it[Keys.ALARM_ENABLED] ?: true }
+        .stateIn(scope, SharingStarted.Eagerly, true)
+
+    val alarmToneEnabled: StateFlow<Boolean> = store.data
+        .map { it[Keys.ALARM_TONE_ENABLED] ?: true }
+        .stateIn(scope, SharingStarted.Eagerly, true)
+
+    val alarmVibrationEnabled: StateFlow<Boolean> = store.data
+        .map { it[Keys.ALARM_VIBRATION_ENABLED] ?: true }
+        .stateIn(scope, SharingStarted.Eagerly, true)
+
+    /**
+     * The three switches as the one value `AudibleAlarm.setModalities` takes.
+     *
+     * Combined here rather than at the call site so the service wires up one
+     * collector instead of three, and so it cannot receive a half-applied
+     * combination (tone already off, master not yet). The initial value is
+     * [AlarmModalities.DEFAULT] — everything on — which is also what the flows
+     * above report before DataStore has read from disk, so the alarm is never
+     * briefly muted at start-up by prefs that simply have not loaded yet.
+     */
+    val alarmModalities: StateFlow<AlarmModalities> =
+        combine(alarmEnabled, alarmToneEnabled, alarmVibrationEnabled) { master, tone, vibration ->
+            AlarmModalities(alarmEnabled = master, toneEnabled = tone, vibrationEnabled = vibration)
+        }.stateIn(scope, SharingStarted.Eagerly, AlarmModalities.DEFAULT)
+
     suspend fun setLastVehicleId(id: String?) = store.edit { p ->
         if (id == null) p.remove(Keys.LAST_VEHICLE_ID) else p[Keys.LAST_VEHICLE_ID] = id
     }
@@ -67,6 +102,9 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setGuestModeShowSaved(show: Boolean) = store.edit { it[Keys.GUEST_MODE_SHOW_SAVED] = show }
     suspend fun setUnitSystem(system: UnitSystem) = store.edit { it[Keys.UNIT_SYSTEM] = system.name }
     suspend fun setDefaultDashboardStyle(style: DashboardStyle) = store.edit { it[Keys.DASHBOARD_STYLE] = style.name }
+    suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
+    suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
+    suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
 
     private object Keys {
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
@@ -78,5 +116,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val GUEST_MODE_SHOW_SAVED = booleanPreferencesKey("guest_mode_show_saved")
         val UNIT_SYSTEM = stringPreferencesKey("unit_system")
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
+        val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
+        val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
+        val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")
     }
 }
