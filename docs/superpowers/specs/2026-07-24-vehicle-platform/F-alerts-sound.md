@@ -387,6 +387,10 @@ step at full urgency never reaches its neighbour's plainest form:
 | 2 | 1600–1792 | 2 | 625–800 |
 | 3 | 2400–2688 | 3 | 426–450 |
 
+0. **Top item.** Kill the audio server mid-alarm (`adb shell killall audioserver`)
+   and confirm the tone returns within about a second and the log carries the
+   "tone thread ended while level N was still sounding" warning. The revive path
+   and its 1 s backoff are reasoned but have never been observed running.
 1. Are the three steps actually tellable apart **through a jacket, at road speed,
    with wind noise**? This is the whole point of §12 and the only question that
    really matters.
