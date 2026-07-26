@@ -368,3 +368,48 @@ almost no anti-chatter and instead adds thermal **lag** — a motor cooling from
 alarm after the condition cleared. An alarm that outlives its cause teaches the
 rider to dismiss it. Duty and speed keep their bands; those metrics genuinely
 jitter sample to sample.
+
+---
+
+## 13. Listening checklist — what only a device can answer (2026-07-26)
+
+The tone mapping is a pure, heavily tested table; the Android layer above it
+(`AudibleAlarm.android.kt`, `AlarmTonePlayer.kt`) has **zero automated coverage**,
+because this repo has no instrumented tests. Everything below is unverifiable
+without a phone and a rider, and none of it should be assumed to work.
+
+**The design being tested.** Three steps, deliberately disjoint on two axes so a
+step at full urgency never reaches its neighbour's plainest form:
+
+| Step | Pitch (Hz) | Pulses | Period (ms) |
+|---|---|---|---|
+| 1 | 1000–1120 | 1 | 963–1400 |
+| 2 | 1600–1792 | 2 | 625–800 |
+| 3 | 2400–2688 | 3 | 426–450 |
+
+1. Are the three steps actually tellable apart **through a jacket, at road speed,
+   with wind noise**? This is the whole point of §12 and the only question that
+   really matters.
+2. Is the alarm loud enough over traffic — is 0.85 of full scale right?
+3. Do the 4 ms fades genuinely remove the click at each pulse edge on a real
+   speaker?
+4. Does step 3 at ~2.2 bursts/s read as *urgent* rather than as noise?
+5. Is the haptic perceptible through clothing at step 3's 150 ms pulses?
+6. Does `USAGE_ALARM` stay audible with the phone silenced and DND on?
+7. Does the focus request **duck** a music app rather than pausing it, and does
+   the alarm survive a phone call arriving mid-alarm?
+8. Does the 500 ms focus re-request ping-pong with a music app that also
+   auto-re-requests? It can never silence the alarm, but it could stutter the
+   music for the alarm's duration.
+9. Does `createWaveform(..., repeat = 0)` loop seamlessly on real vibrator
+   hardware?
+10. The **API 26–32 vibration path** (`vibrate(effect, AudioAttributes)`) is the
+    least likely to have been exercised — worth a deliberate check on an old
+    device.
+11. Do the ~40 ms write chunks underrun on a loaded phone, and does
+    `pause/flush/stop/release` cut the sound promptly?
+12. A duty reading jittering more than the 3 pp release band flaps between steps
+    2 and 3 at sample rate, tearing down and rebuilding the track each time. It
+    is bounded and not a leak, but at 5–10 Hz it would machine-gun the burst
+    onsets. Does that happen on real VESC data? If it does, the fix is a minimum
+    dwell time per step, not a wider release band.
