@@ -12,8 +12,11 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.alert.availabilityFor
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -53,7 +56,18 @@ interface VehicleAlertsComponent {
     fun onPreview(level: Int)
 
     fun onSave()
+
+    /**
+     * The nav slot. **Not** an unconditional exit: with unsaved threshold edits it
+     * raises [State.discardPrompt] instead of dropping them silently.
+     */
     fun onBack()
+
+    /** The rider chose to leave anyway. Their threshold edits are gone. */
+    fun onDiscardConfirmed()
+
+    /** The rider chose to stay. Nothing changes. */
+    fun onDiscardDismissed()
 
     data class State(
         /** False until the vehicle has been read. The screen shows a spinner and no rows. */
@@ -61,24 +75,81 @@ interface VehicleAlertsComponent {
         val vehicleName: String = "",
         /** One entry per [MotionAlertKind], in enum order, always. */
         val kinds: List<AlertKindDraft> = emptyList(),
+        /**
+         * The rows **as last persisted** — what [isDirty] compares against.
+         *
+         * Set when the vehicle is read and again after a successful save, so the
+         * two commit models on this screen (see [isDirty]) can each say honestly
+         * whether they have anything outstanding.
+         */
+        val savedLevels: Map<MotionAlertKind, List<AlertLevelDraft>> = emptyMap(),
         val alarmEnabled: Boolean = true,
         val toneEnabled: Boolean = true,
         val vibrationEnabled: Boolean = true,
-        val saving: Boolean = false
+        val saving: Boolean = false,
+        /** True while the "leave without saving?" dialog is up. */
+        val discardPrompt: Boolean = false
     ) {
         /**
-         * Blocked while any visible row is half-typed.
+         * Has the rider changed a threshold since the last write?
          *
-         * This is what keeps "an empty level list is the only off" honest: a
-         * blank threshold parses to nothing, [toRule] would drop the row, and a
-         * kind the rider had just switched **on** would be persisted **off**
-         * without a word. Refusing the save asks for the number instead.
+         * **This screen has two commit models and this covers exactly one of
+         * them.** The three sound switches at the top are written to prefs the
+         * instant they move (a rider reaching for "tone off" mid-alarm means
+         * now), so they are never outstanding and never make this true. The
+         * per-vehicle thresholds below are written on Save, and those are what
+         * can be lost by backing out — which is what this exists to prevent.
+         * The captions on both sections say which is which.
+         *
+         * Availability is deliberately not part of the comparison: a link coming
+         * up mid-edit re-derives it ([refreshAvailability]) and would otherwise
+         * mark an untouched screen dirty. Neither is [AlertKindDraft.stashed] —
+         * it is an undo buffer that is never persisted.
+         */
+        val isDirty: Boolean get() = loaded && editedLevels(kinds) != savedLevels
+
+        /**
+         * Blocked while any visible row is half-typed, and **blocked when nothing
+         * has been edited**.
+         *
+         * The half-typed half is what keeps "an empty level list is the only off"
+         * honest: a blank threshold parses to nothing, [toRule] would drop the
+         * row, and a kind the rider had just switched **on** would be persisted
+         * **off** without a word. Refusing the save asks for the number instead.
+         *
+         * The dirty half closes the other one: a vehicle whose `motionAlerts` is
+         * null reads the shipped [ru.sodovaya.volty.domain.alert.AlarmDefaults],
+         * so an idle tap on Save would *materialise* those defaults onto it —
+         * null becomes non-null — and later changes to the shipped numbers would
+         * stop reaching that vehicle for ever, silently. Opening a screen and
+         * touching nothing must not pin anything.
          */
         val canSave: Boolean
-            get() = loaded && !saving && kinds.none { it.hasInvalidThreshold }
+            get() = loaded && !saving && isDirty && kinds.none { it.hasInvalidThreshold }
 
         /** The steps "проверить сигнал" offers — the whole range the rider can configure. */
         val previewLevels: List<Int> get() = (1..AlertRule.MAX_LEVELS).toList()
+
+        /** The three switches as the one value the alarm's gate takes. */
+        val modalities: AlarmModalities
+            get() = AlarmModalities(alarmEnabled, toneEnabled, vibrationEnabled)
+
+        /**
+         * Can pressing a preview button produce anything at all?
+         *
+         * With the master switch on but **both** tone and vibration off,
+         * [alarmPreviewCommand] returns [AlarmCommand.Silent] and the platform
+         * plans nothing — so a rider who pressed "Уровень 1" would feel and hear
+         * nothing and conclude the alarm is broken. `AlarmSignal.kt` says the
+         * button is to be greyed in that case rather than gated a second time
+         * here; this is that greying, asked of the same function the live alarm
+         * goes through, so the two can never disagree.
+         *
+         * Asked at level 1 because the modality gate is level-independent: it
+         * runs before any tone is looked up, so every step answers alike.
+         */
+        val canPreview: Boolean
+            get() = alarmPreviewCommand(1, modalities) is AlarmCommand.Play
     }
 }
 
@@ -125,11 +196,18 @@ class DefaultVehicleAlertsComponent(
         scope.launch {
             val vehicle = vehicleRepository.get(vehicleId) ?: return@launch
             loadedVehicle = vehicle
+            val drafts = alertDraftsFor(vehicle, availabilityFor(vehicle, lastObservedMotion))
             _state.update {
                 it.copy(
                     loaded = true,
                     vehicleName = vehicle.name,
-                    kinds = alertDraftsFor(vehicle, availabilityFor(vehicle, lastObservedMotion))
+                    kinds = drafts,
+                    // The baseline both dirty checks read. Taken from the drafts
+                    // rather than from the vehicle so that a never-configured
+                    // vehicle — which opens on the shipped defaults — starts out
+                    // *clean*: those defaults are what it already behaves as, so
+                    // showing them is not an edit and must not arm Save.
+                    savedLevels = editedLevels(drafts)
                 )
             }
         }
@@ -218,9 +296,41 @@ class DefaultVehicleAlertsComponent(
                 return@launch
             }
             vehicleRepository.upsert(current.copy(motionAlerts = commitRules(s.kinds)))
+            // The rows are now what is stored, so the screen is clean again: if
+            // navigation is deferred or refused, backing out afterwards must not
+            // ask about edits that have already been written.
+            _state.update { it.copy(saving = false, savedLevels = editedLevels(s.kinds)) }
             onSaved()
         }
     }
 
-    override fun onBack() = onBackRequested()
+    /**
+     * Backing out with unsaved threshold edits **asks** instead of discarding.
+     *
+     * The nav slot is a `Cancel` button and the thresholds only exist in memory
+     * until Save, so without this a rider who edits a number and taps Cancel — or
+     * whose muscle memory takes them back — loses it without a word. The two
+     * commit models make that trap worse, not better: the switches above the
+     * thresholds *did* save instantly, so the screen appears to save as you go.
+     *
+     * The prompt is raised in the component rather than remembered in the
+     * `@Composable`, because whether there is anything to lose is a decision and
+     * decisions are what this class is for.
+     */
+    override fun onBack() {
+        if (_state.value.isDirty) {
+            _state.update { it.copy(discardPrompt = true) }
+            return
+        }
+        onBackRequested()
+    }
+
+    override fun onDiscardConfirmed() {
+        _state.update { it.copy(discardPrompt = false) }
+        onBackRequested()
+    }
+
+    override fun onDiscardDismissed() {
+        _state.update { it.copy(discardPrompt = false) }
+    }
 }

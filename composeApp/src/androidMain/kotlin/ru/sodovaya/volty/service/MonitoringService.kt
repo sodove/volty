@@ -31,6 +31,17 @@ class MonitoringService : Service() {
 
     companion object {
         const val ACTION_DISCONNECT = "ru.sodovaya.volty.ACTION_DISCONNECT"
+
+        /**
+         * "Заглушить" on the live notification: stop the sounding alarm and
+         * **keep riding** (F §14).
+         *
+         * Deliberately separate from [ACTION_DISCONNECT], which is the only
+         * escape a rider had before it and which ends the BLE session. See
+         * [ru.sodovaya.volty.domain.alert.AlarmSilencer] for what the silence
+         * means over time and what it costs.
+         */
+        const val ACTION_SILENCE = "ru.sodovaya.volty.ACTION_SILENCE"
         private const val FOREGROUND_ID = 1001
     }
 
@@ -39,6 +50,19 @@ class MonitoringService : Service() {
     private val appPrefs: AppPrefs by inject()
     private val alarms: AudibleAlarmHolder by inject()
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
+
+    /**
+     * The live driver, kept so [silenceReceiver] can reach it.
+     *
+     * Not an `AudibleAlarm` and not resolved from Koin: the alarm binding is the
+     * holder's, and an instance captured here would be dead from the first
+     * service restart ([AudibleAlarmHolder]). Null until the driver is built, and
+     * on the early-return path below it never is — a silence press then finds
+     * nothing to silence, which is the truth.
+     *
+     * Written in `onCreate` and read in `onReceive`, both on the main thread.
+     */
+    private var alarmDriver: AlarmDriver? = null
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -49,16 +73,25 @@ class MonitoringService : Service() {
         }
     }
 
+    /**
+     * "Заглушить" (F §14): silence the alarm, **leave the session alone**.
+     *
+     * The only escape from a stuck alarm used to be `Disconnect`, which ends the
+     * ride's telemetry. This one goes to [AlarmDriver.silence], which hands the
+     * request to the driver's single collector rather than touching the speaker
+     * from here.
+     */
+    private val silenceReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            alarmDriver?.silence()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         NotificationChannels.ensureCreated(this)
-        val filter = IntentFilter(ACTION_DISCONNECT)
-        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(disconnectReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            @Suppress("UnspecifiedRegisterReceiverFlag")
-            registerReceiver(disconnectReceiver, filter)
-        }
+        registerNotificationAction(disconnectReceiver, ACTION_DISCONNECT)
+        registerNotificationAction(silenceReceiver, ACTION_SILENCE)
 
         val seed = NotificationCompat.Builder(this, NotificationChannels.LIVE)
             .setSmallIcon(android.R.drawable.ic_dialog_info)
@@ -93,11 +126,11 @@ class MonitoringService : Service() {
         // duty spike is a fraction of a second of warning, and spending two of
         // them waiting for a throttle window would be spending most of it. The
         // driver reads `activeMotion` directly, on every sample.
-        AlarmDriver(
+        alarmDriver = AlarmDriver(
             repository = bmsRepository,
             modalities = appPrefs.alarmModalities,
             alarm = alarms.openOutput()
-        ).start(scope)
+        ).also { it.start(scope) }
 
         scope.launch {
             bmsRepository.activeData
@@ -147,11 +180,29 @@ class MonitoringService : Service() {
      */
     override fun onDestroy() {
         scope.cancel()
+        alarmDriver = null
         try { unregisterReceiver(disconnectReceiver) } catch (_: Exception) {}
+        try { unregisterReceiver(silenceReceiver) } catch (_: Exception) {}
         alarms.release()
         notifier.cancelLive()
         super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * One notification action's receiver, registered app-internal.
+     *
+     * `RECEIVER_NOT_EXPORTED` from API 33: these actions end a ride and silence a
+     * safety alarm, so nothing outside the app has any business sending them.
+     */
+    private fun registerNotificationAction(receiver: BroadcastReceiver, action: String) {
+        val filter = IntentFilter(action)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            @Suppress("UnspecifiedRegisterReceiverFlag")
+            registerReceiver(receiver, filter)
+        }
+    }
 }

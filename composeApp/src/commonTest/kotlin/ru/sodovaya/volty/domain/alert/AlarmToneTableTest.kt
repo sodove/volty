@@ -146,12 +146,22 @@ class AlarmToneTableTest {
     fun urgency_is_quantized_so_a_wandering_reading_does_not_wobble_the_pitch() {
         // Two readings inside the same quantisation cell must produce the very
         // same tone, or every sample would be a new command.
-        val cell = 1f / AlarmToneTable.URGENCY_STEPS
+        //
+        // Both offsets are **literals**, and that is the whole test. Deriving
+        // them from URGENCY_STEPS — the constant under test — made the assertion
+        // move with the mutation: at 1000 steps the "neighbour" shrank to
+        // 1/4000 and the tones still matched, so `URGENCY_STEPS = 8 → 1000`
+        // survived the suite. That mutation *is* the defect the constant exists
+        // to prevent (pitch wobbling on sample noise) and nothing else catches
+        // it. 0.03125 is a quarter of the intended 1/8 cell; 0.125 is a whole
+        // one. Widening the cell has to fail here.
+        val quarterCell = 0.03125f
+        val wholeCell = 0.125f
         val a = AlarmToneTable.toneFor(2, urgency = 0.5f)
-        val b = AlarmToneTable.toneFor(2, urgency = 0.5f + cell / 4f)
-        assertEquals(a, b, "urgency $cell-cell neighbours produced different tones")
+        val b = AlarmToneTable.toneFor(2, urgency = 0.5f + quarterCell)
+        assertEquals(a, b, "readings $quarterCell apart produced different tones — the quantisation is too fine")
 
-        val far = AlarmToneTable.toneFor(2, urgency = 0.5f + cell)
+        val far = AlarmToneTable.toneFor(2, urgency = 0.5f + wholeCell)
         assertTrue(a != far, "a full quantisation step produced no change at all — urgency is being ignored")
     }
 

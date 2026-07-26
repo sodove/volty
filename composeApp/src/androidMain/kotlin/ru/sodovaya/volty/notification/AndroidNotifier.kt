@@ -7,6 +7,7 @@ import android.content.Intent
 import androidx.core.app.NotificationCompat
 import ru.sodovaya.volty.MainActivity
 import ru.sodovaya.volty.domain.usecase.AlertSeverity
+import ru.sodovaya.volty.service.MonitoringService
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
 
@@ -31,6 +32,10 @@ class AndroidNotifier(private val context: Context) : Notifier {
             .setOnlyAlertOnce(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .setContentIntent(openAppIntent())
+            // Silence comes first: it is the one a rider reaches for with the
+            // alarm sounding in their pocket, and the alternative next to it ends
+            // the ride's telemetry. See MonitoringService.ACTION_SILENCE.
+            .addAction(0, "Заглушить", silenceIntent())
             .addAction(0, "Disconnect", disconnectIntent())
         manager?.notify(LIVE_NOTIFICATION_ID, builder.build())
     }
@@ -64,6 +69,27 @@ class AndroidNotifier(private val context: Context) : Notifier {
         }
         return PendingIntent.getActivity(
             context, 0, intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+    }
+
+    /**
+     * "Заглушить" (F §14) — stop the alarm, keep the session.
+     *
+     * Request code 1, not 0: a `PendingIntent` is keyed on request code and the
+     * intent's action, and giving two broadcast intents from this file the same
+     * code makes them one edit away from aliasing each other under
+     * `FLAG_UPDATE_CURRENT` — where the failure would be the Silence button
+     * disconnecting the rider.
+     *
+     * The action name is taken from `MonitoringService` rather than spelled out
+     * again: a typo here would produce a button that silently does nothing, which
+     * is exactly the failure this action exists to remove.
+     */
+    private fun silenceIntent(): PendingIntent {
+        val intent = Intent(MonitoringService.ACTION_SILENCE).setPackage(context.packageName)
+        return PendingIntent.getBroadcast(
+            context, 1, intent,
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
     }

@@ -293,14 +293,14 @@
     <string name="alerts_open_subtitle">Thresholds, levels, tone and vibration</string>
     <string name="alerts_section_sound">Sound</string>
     <string name="alerts_master">Audible alarm</string>
-    <string name="alerts_master_subtitle">Off means neither tone nor vibration</string>
-    <string name="alerts_tone">Tone</string>
+    <string name="alerts_master_subtitle">Off means neither tone nor vibration. These three switches apply at once, without Save.</string>
+    <string name="alerts_tone">Tone signal</string>
     <string name="alerts_vibration">Vibration</string>
     <string name="alerts_preview">Test signal</string>
     <string name="alerts_preview_subtitle">Play each level and hear them apart with the phone in a pocket</string>
     <string name="alerts_preview_level">Level %1$d</string>
     <string name="alerts_section_thresholds">Alert thresholds</string>
-    <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest.</string>
+    <string name="alerts_section_thresholds_subtitle">Up to three levels per alert. Level 1 is the mildest. Unlike the switches above, thresholds are kept only when you press Save.</string>
     <string name="alerts_level">Level %1$d</string>
     <string name="alerts_level_muted">Muted</string>
     <string name="alerts_add_level">+ Add level</string>
@@ -308,4 +308,8 @@
     <string name="alerts_threshold_invalid">Enter a number</string>
     <string name="alerts_kind_off">Off</string>
     <string name="alerts_save">Save</string>
+    <string name="alerts_discard_title">Leave without saving?</string>
+    <string name="alerts_discard_text">The thresholds you edited will be lost. The sound switches are already saved.</string>
+    <string name="alerts_discard_confirm">Discard</string>
+    <string name="alerts_discard_keep">Keep editing</string>
 </resources>

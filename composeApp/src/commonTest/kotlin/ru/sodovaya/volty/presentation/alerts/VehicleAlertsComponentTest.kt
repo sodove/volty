@@ -19,6 +19,8 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.alert.AlertAvailability
 import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
@@ -103,6 +105,16 @@ class VehicleAlertsComponentTest {
     private class FakePreferencesDataStore(initial: Preferences) : DataStore<Preferences> {
         private val state = MutableStateFlow(initial)
         override val data: Flow<Preferences> = state
+
+        /**
+         * What is on "disk" right now.
+         *
+         * Asserted against instead of `AppPrefs`' StateFlows because those are
+         * `stateIn`-ed on `Dispatchers.Default`, which the test scheduler does not
+         * drive: their value after `advanceUntilIdle()` is a race, whereas the
+         * write itself runs on the component's (test) dispatcher and is settled.
+         */
+        val current: Preferences get() = state.value
         override suspend fun updateData(transform: suspend (Preferences) -> Preferences): Preferences {
             val next = transform(state.value)
             state.value = next
@@ -260,6 +272,146 @@ class VehicleAlertsComponentTest {
         )
     }
 
+    // ------------------------------------------------- what an idle screen is
+
+    /**
+     * Deferred item 9, closed. A vehicle whose `motionAlerts` is null opens on
+     * the shipped defaults, so an idle tap on Save would **materialise** them
+     * onto it — null becomes non-null — and every later change to the shipped
+     * numbers would stop reaching that vehicle, silently and for ever.
+     *
+     * Opening a screen and touching nothing must not pin anything.
+     */
+    @Test
+    fun `opening a never-configured vehicle and touching nothing leaves Save disarmed`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle(motionAlerts = null))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.loaded, "fixture check: the screen has actually opened")
+        assertTrue(
+            c.state.value.kinds.any { it.levels.isNotEmpty() },
+            "fixture check: it opened on the shipped defaults, which is what an idle save would pin"
+        )
+        assertFalse(c.state.value.isDirty, "showing the defaults is not editing them")
+        assertFalse(c.state.value.canSave)
+
+        c.onSave()
+        advanceUntilIdle()
+        assertTrue(repo.upserts.isEmpty(), "an idle tap must not write the defaults onto the vehicle")
+    }
+
+    /** And one keystroke arms it — the dirty check must not be a Save button that never works. */
+    @Test
+    fun `one edit arms Save and saving disarms it again`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85")
+        assertTrue(c.state.value.isDirty)
+        assertTrue(c.state.value.canSave)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(1, repo.upserts.size)
+        assertFalse(c.state.value.isDirty, "what was just written is not still outstanding")
+        assertFalse(c.state.value.canSave)
+    }
+
+    /**
+     * Availability is re-derived whenever a link comes up mid-edit. If the dirty
+     * check compared the whole draft, connecting would mark an untouched screen
+     * edited — and then backing out of it would ask about edits nobody made,
+     * which is how a confirmation dialog gets trained away.
+     */
+    @Test
+    fun `connecting mid-view does not make an untouched screen dirty`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(vehicle()), bms)
+        advanceUntilIdle()
+        assertFalse(c.state.value.isDirty)
+
+        bms.activeMotion.value = ControllerData(
+            speedKmh = 10f,
+            speedSource = SpeedSource.REPORTED,
+            motorTempC = 40f,
+            hasMotorTemp = true,
+            isConnected = true
+        )
+        advanceUntilIdle()
+
+        assertIs<AlertAvailability.Available>(
+            c.state.value.kinds.single { it.kind == MotionAlertKind.MOTOR_TEMP }.availability,
+            "fixture check: the sample really did change availability, or this proves nothing"
+        )
+        assertFalse(c.state.value.isDirty, "a sensor appearing is not the rider editing")
+    }
+
+    /** The stash is an undo buffer, so a switch flipped off and back on is not an edit. */
+    @Test
+    fun `toggling a kind off and back on again is not an edit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(vehicle()))
+        advanceUntilIdle()
+
+        c.onKindEnabledChanged(MotionAlertKind.DUTY, false)
+        assertTrue(c.state.value.isDirty, "turning it off is certainly an edit")
+        c.onKindEnabledChanged(MotionAlertKind.DUTY, true)
+
+        assertFalse(c.state.value.isDirty, "and putting it back leaves nothing to save")
+    }
+
+    // ------------------------------------------------------- leaving the screen
+
+    /**
+     * The nav slot is a `Cancel` button and the thresholds live only in memory
+     * until Save, so backing out used to drop them without a word — while the
+     * three switches above them had been saving instantly all along, which makes
+     * the screen look like it saves as you go.
+     */
+    @Test
+    fun `backing out of unsaved threshold edits asks instead of dropping them`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var backed = false
+        val c = component(FakeVehicleRepo(vehicle()), onBack = { backed = true })
+        advanceUntilIdle()
+
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85")
+        c.onBack()
+
+        assertTrue(c.state.value.discardPrompt, "the rider must be told there is something to lose")
+        assertFalse(backed, "and must not have left yet")
+
+        c.onDiscardDismissed()
+        assertFalse(c.state.value.discardPrompt)
+        assertFalse(backed, "dismissing keeps them on the screen with their edits")
+        assertEquals("85", c.state.value.kinds.single { it.kind == MotionAlertKind.DUTY }.levels.first().text)
+
+        c.onBack()
+        c.onDiscardConfirmed()
+        assertTrue(backed, "and confirming really does leave")
+        assertFalse(c.state.value.discardPrompt)
+    }
+
+    /** With nothing edited it must not nag: a prompt on every exit is a prompt nobody reads. */
+    @Test
+    fun `backing out of an untouched screen leaves at once`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var backed = false
+        val c = component(FakeVehicleRepo(vehicle()), onBack = { backed = true })
+        advanceUntilIdle()
+
+        c.onBack()
+
+        assertFalse(c.state.value.discardPrompt)
+        assertTrue(backed)
+    }
+
     // --------------------------------------------------------------- the save
 
     @Test
@@ -329,6 +481,10 @@ class VehicleAlertsComponentTest {
         advanceUntilIdle()
 
         repo.replaceStored(vehicle(name = "New"))
+        // An edit is what arms Save now (State.canSave is dirty-aware), so the
+        // rider has to have changed something for there to be a save to re-read
+        // the vehicle for.
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85")
         c.onSave()
         advanceUntilIdle()
 
@@ -349,6 +505,7 @@ class VehicleAlertsComponentTest {
         advanceUntilIdle()
 
         repo.delete("v1")
+        c.onThresholdChanged(MotionAlertKind.DUTY, 0, "85") // Save is armed by an edit — see canSave.
         c.onSave()
         advanceUntilIdle()
 
@@ -389,6 +546,11 @@ class VehicleAlertsComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
+        // The save has to be armed by an edit (canSave is dirty-aware), and it
+        // has to be an edit to a kind this hardware *can* supply — which is the
+        // shape of the case anyway: the rider came here to change something else
+        // and the untouchable kind's numbers have to ride along unharmed.
+        c.onThresholdChanged(MotionAlertKind.ESC_TEMP, 0, "95")
         c.onSave()
         advanceUntilIdle()
 
@@ -401,7 +563,8 @@ class VehicleAlertsComponentTest {
     @Test
     fun `the master switch and both modalities write through to prefs`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val prefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf()))
+        val store = FakePreferencesDataStore(mutablePreferencesOf())
+        val prefs = AppPrefs(store)
         val c = component(FakeVehicleRepo(vehicle()), prefs = prefs)
         advanceUntilIdle()
 
@@ -413,9 +576,15 @@ class VehicleAlertsComponentTest {
         c.onVibrationEnabledChanged(false)
         advanceUntilIdle()
 
-        assertFalse(prefs.alarmEnabled.first { !it })
-        assertFalse(prefs.alarmToneEnabled.first { !it })
-        assertFalse(prefs.alarmVibrationEnabled.first { !it })
+        // `assertFalse(prefs.alarmEnabled.first { !it })` used to stand here, three
+        // times over: `first { !it }` returns `false` by construction, so all
+        // three passed for every implementation — a no-op `onAlarmEnabledChanged`
+        // failed only by `runTest` timing out, which is a wedge and not a
+        // verdict. These read what was actually written, under the keys it has to
+        // be written under for the setting to survive a restart.
+        assertEquals(false, store.current[booleanPreferencesKey("alarm_enabled")], "the master switch never reached the store")
+        assertEquals(false, store.current[booleanPreferencesKey("alarm_tone_enabled")], "the tone switch never reached the store")
+        assertEquals(false, store.current[booleanPreferencesKey("alarm_vibration_enabled")], "the vibration switch never reached the store")
 
         // And the switches move with them: prefs are the source of truth, so the
         // screen mirrors them back rather than keeping a local copy that could
@@ -473,8 +642,70 @@ class VehicleAlertsComponentTest {
         advanceUntilIdle()
 
         assertEquals(listOf(1, 2, 3), c.state.value.previewLevels, "one button per rider-definable step")
+        assertTrue(c.state.value.canPreview, "with everything on, the buttons must be live")
         c.state.value.previewLevels.forEach { c.onPreview(it) }
 
         assertEquals(listOf(1, 2, 3), preview.played)
+    }
+
+    /**
+     * `AlarmSignal.kt`'s instruction, unimplemented until now: with the master
+     * switch **on** but tone and vibration both **off**, `alarmCommandFor`
+     * returns `Silent` and the platform plans nothing. A live button that
+     * provably cannot make a sound teaches the rider that the alarm is broken —
+     * the one conclusion this screen must never invite.
+     */
+    @Test
+    fun `the preview buttons go dead when tone and vibration are both off`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val prefs = AppPrefs(
+            FakePreferencesDataStore(
+                mutablePreferencesOf(
+                    booleanPreferencesKey("alarm_tone_enabled") to false,
+                    booleanPreferencesKey("alarm_vibration_enabled") to false
+                )
+            )
+        )
+        prefs.alarmToneEnabled.first { !it }
+        prefs.alarmVibrationEnabled.first { !it }
+        val c = component(FakeVehicleRepo(vehicle()), prefs = prefs)
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.alarmEnabled, "fixture check: the master switch is on, so this is not that")
+        assertIs<AlarmCommand.Silent>(
+            alarmPreviewCommand(1, c.state.value.modalities),
+            "fixture check: the gate really does return Silent here, or the button has something to play"
+        )
+        assertFalse(c.state.value.canPreview, "a button that cannot make a sound must not look live")
+    }
+
+    /** One modality is enough — a rider who kept only the buzz still gets to feel it. */
+    @Test
+    fun `vibration alone still previews`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val prefs = AppPrefs(
+            FakePreferencesDataStore(mutablePreferencesOf(booleanPreferencesKey("alarm_tone_enabled") to false))
+        )
+        prefs.alarmToneEnabled.first { !it }
+        val c = component(FakeVehicleRepo(vehicle()), prefs = prefs)
+        advanceUntilIdle()
+
+        assertFalse(c.state.value.toneEnabled, "fixture check: tones really are off")
+        assertTrue(c.state.value.canPreview)
+    }
+
+    /** And the master switch still wins over both, exactly as it does for a live alarm. */
+    @Test
+    fun `the master switch alone is enough to kill the preview`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val prefs = AppPrefs(
+            FakePreferencesDataStore(mutablePreferencesOf(booleanPreferencesKey("alarm_enabled") to false))
+        )
+        prefs.alarmEnabled.first { !it }
+        val c = component(FakeVehicleRepo(vehicle()), prefs = prefs)
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.toneEnabled && c.state.value.vibrationEnabled, "fixture check: only the master is off")
+        assertFalse(c.state.value.canPreview)
     }
 }

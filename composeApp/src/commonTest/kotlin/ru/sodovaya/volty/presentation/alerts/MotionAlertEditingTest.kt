@@ -177,10 +177,13 @@ class MotionAlertEditingTest {
 
         val on = off.withEnabled(true)
 
-        assertEquals(
-            AlarmDefaults.rule(MotionAlertKind.MOTOR_TEMP).levels.map { formatThreshold(it.thresholdValue) },
-            on.levels.map { it.text }
-        )
+        // The literal "110", not `AlarmDefaults.rule(MOTOR_TEMP).levels.map {
+        // formatThreshold(...) }` — which is `defaultLevelDrafts`' own body, so
+        // both sides moved together and any change to the shipped default, or to
+        // the formatting, was agreed with rather than caught. F §10.1 picked
+        // 110 °C deliberately (90 would nag a rider who runs to 130 by choice);
+        // if it ever changes, this test is one of the places that should say so.
+        assertEquals(listOf("110"), on.levels.map { it.text })
     }
 
     /**
@@ -372,10 +375,11 @@ class MotionAlertEditingTest {
         val drafts = alertDraftsFor(vehicle(motionAlerts = null), availability = emptyMap())
 
         val duty = drafts.single { it.kind == MotionAlertKind.DUTY }
-        assertEquals(
-            AlarmDefaults.rule(MotionAlertKind.DUTY).levels.map { formatThreshold(it.thresholdValue) },
-            duty.levels.map { it.text }
-        )
+        // Literals for the same reason as `switching on a never-configured kind
+        // opens on its defaults`: the expression this replaces was
+        // `defaultLevelDrafts`' own body, so it agreed with any change instead of
+        // catching it. 80/90 are F §10.1's duty steps.
+        assertEquals(listOf("80", "90"), duty.levels.map { it.text })
         assertTrue(duty.isOn)
     }
 

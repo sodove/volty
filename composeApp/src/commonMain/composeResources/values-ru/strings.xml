@@ -291,14 +291,14 @@
     <string name="alerts_open_subtitle">Пороги, уровни, звук и вибрация</string>
     <string name="alerts_section_sound">Звук</string>
     <string name="alerts_master">Звуковой сигнал</string>
-    <string name="alerts_master_subtitle">Выключено — не будет ни звука, ни вибрации</string>
-    <string name="alerts_tone">Звук</string>
+    <string name="alerts_master_subtitle">Выключено — не будет ни звука, ни вибрации. Эти три переключателя применяются сразу, без «Сохранить».</string>
+    <string name="alerts_tone">Тональный сигнал</string>
     <string name="alerts_vibration">Вибрация</string>
     <string name="alerts_preview">Проверить сигнал</string>
     <string name="alerts_preview_subtitle">Проиграет каждый уровень — послушайте, отличаются ли они с телефоном в кармане</string>
     <string name="alerts_preview_level">Уровень %1$d</string>
     <string name="alerts_section_thresholds">Пороги алертов</string>
-    <string name="alerts_section_thresholds_subtitle">До трёх уровней на алерт. Уровень 1 — самый мягкий.</string>
+    <string name="alerts_section_thresholds_subtitle">До трёх уровней на алерт. Уровень 1 — самый мягкий. В отличие от переключателей выше, пороги сохраняются только по кнопке «Сохранить».</string>
     <string name="alerts_level">Уровень %1$d</string>
     <string name="alerts_level_muted">Заглушен</string>
     <string name="alerts_add_level">+ Добавить уровень</string>
@@ -306,4 +306,8 @@
     <string name="alerts_threshold_invalid">Введите число</string>
     <string name="alerts_kind_off">Выключено</string>
     <string name="alerts_save">Сохранить</string>
+    <string name="alerts_discard_title">Выйти без сохранения?</string>
+    <string name="alerts_discard_text">Изменённые пороги будут потеряны. Переключатели звука уже сохранены.</string>
+    <string name="alerts_discard_confirm">Не сохранять</string>
+    <string name="alerts_discard_keep">Продолжить правку</string>
 </resources>

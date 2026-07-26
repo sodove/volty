@@ -506,11 +506,16 @@ class AlarmDriverTest {
      * [AlarmController] is mutable and not thread-safe, and this runs on
      * `Dispatchers.Default`. Task 6's review measured the harm on exactly this
      * shape: two `scope.launch` collectors over shared unsynchronised state
-     * produced corruption in 10/10 runs. The three triggers must therefore share
+     * produced corruption in 10/10 runs. The four triggers must therefore share
      * one collector, and this counts them.
+     *
+     * The silence requests are the newest of the four and the one with the most
+     * obvious shortcut: it arrives from a `BroadcastReceiver` on the main thread,
+     * and flipping a flag on [AlarmSilencer] from there would race the collector
+     * exactly as a second `launch` would.
      */
     @Test
-    fun the_three_triggers_share_exactly_one_collector() = runTest {
+    fun the_four_triggers_share_exactly_one_collector() = runTest {
         val scope = CoroutineScope(UnconfinedTestDispatcher(testScheduler))
         try {
             AlarmDriver(
@@ -521,10 +526,131 @@ class AlarmDriverTest {
 
             assertEquals(
                 1, scope.coroutineContext.job.children.count(),
-                "samples, switches and link state must be merged into one collector, not launched separately"
+                "samples, switches, link state and silences must be merged into one collector, not launched separately"
             )
         } finally {
             scope.cancel()
         }
+    }
+
+    // ------------------------------------------------------------- "Заглушить"
+
+    /**
+     * **The scenario the button exists for** (F §14). A rider at 92 % duty whose
+     * *controller* link dies on a vehicle whose BMS keeps delivering: the
+     * vehicle-level state stays `Connected`, `activeMotion` keeps carrying the
+     * frozen hot reading with `isConnected = true`, and both of the driver's stop
+     * mechanisms are defeated. Step 2 then plays on `USAGE_ALARM` — through silent
+     * mode and DND — for the rest of the ride, and the only escape before this
+     * was the notification's `Disconnect`, which ends the session.
+     *
+     * The frozen link is modelled exactly: the readings that keep arriving are
+     * the same danger over again. The silence has to survive them, and the
+     * session has to survive the silence.
+     */
+    @Test
+    fun the_notification_action_silences_the_running_alarm_without_ending_the_ride() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 92f)
+        runCurrent()
+        assertEquals(2, alarm.level, "fixture guard: the alarm is sounding")
+
+        driver.silence()
+        runCurrent()
+        assertEquals(0, alarm.level, "the press must reach the speaker at once — a frozen link sends no next sample")
+
+        // The frozen reading arrives again, a hair different so the StateFlow
+        // actually emits. It is the same danger and must stay silenced.
+        repo.activeMotion.value = motion(dutyPercent = 92.5f)
+        runCurrent()
+        assertEquals(0, alarm.level, "the next sample re-raised it — the button is useless in the case it exists for")
+
+        assertEquals(
+            ConnectionState.Connected(repo.activeVehicle.value!!), repo.connectionState.value,
+            "and the session is untouched: silencing is not disconnecting"
+        )
+    }
+
+    /**
+     * A silence is not a disarm. Once the engine recovers on its own the
+     * suppression lifts, so the **next** danger sounds normally — otherwise the
+     * rider would finish the ride with no duty alarm at all.
+     */
+    @Test
+    fun a_silenced_alarm_re_arms_once_the_reading_recovers() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        driver.silence()
+        runCurrent()
+        assertEquals(0, alarm.level)
+
+        repo.activeMotion.value = motion(dutyPercent = 10f)
+        runCurrent()
+        assertEquals(0, alarm.level, "fixture guard: a calm reading is silent either way")
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        assertEquals(2, alarm.level, "a fresh danger after a recovery must be audible")
+    }
+
+    /**
+     * The other re-arm, and the one that matters on a dropout the app *can* see:
+     * a link state that is not `Connected` resets the engine, and the level-0
+     * state that produces lifts the silence on its way to the speaker.
+     */
+    @Test
+    fun a_link_the_app_can_see_drop_re_arms_a_silenced_alarm() = runTest {
+        val v = vehicle(rule(MotionAlertKind.DUTY, 80f, 90f))
+        val repo = ridingOn(v)
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        driver.silence()
+        runCurrent()
+
+        repo.connectionState.value = ConnectionState.Reconnecting(attempt = 1, reason = "link dropped")
+        runCurrent()
+        repo.connectionState.value = ConnectionState.Connected(v)
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 96f)
+        runCurrent()
+        assertEquals(2, alarm.level, "a visible dropout must leave the alarm armed for what comes next")
+    }
+
+    /**
+     * Pressing it with nothing sounding must not bank a silence for later — that
+     * would be a disarm, and the master switch is the disarm.
+     */
+    @Test
+    fun silencing_a_quiet_alarm_does_not_swallow_the_next_one() = runTest {
+        val repo = ridingOn(vehicle(rule(MotionAlertKind.DUTY, 80f, 90f)))
+        val alarm = RecordingAlarm()
+        val driver = AlarmDriver(repo, MutableStateFlow(AlarmModalities.DEFAULT), alarm)
+        driver.start(backgroundScope)
+        runCurrent()
+        assertEquals(0, alarm.level, "fixture guard: nothing is sounding")
+
+        driver.silence()
+        runCurrent()
+
+        repo.activeMotion.value = motion(dutyPercent = 95f)
+        runCurrent()
+        assertEquals(2, alarm.level, "a silence pressed against silence must not mute the next real alarm")
     }
 }

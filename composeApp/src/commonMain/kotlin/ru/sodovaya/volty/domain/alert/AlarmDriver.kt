@@ -6,7 +6,9 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.merge
@@ -126,20 +128,55 @@ interface AlarmOutput {
  * rule living in the alarm would be a second answer to a question that already
  * has an owner. Recorded as a follow-up; do not close it by adding a timeout to
  * this class.
+ *
+ * What *is* here is the survivability half — [silence], the live notification's
+ * "Заглушить" action — so a rider caught by that gap can stop the noise without
+ * ending the ride. [AlarmSilencer] documents what it means and what it costs.
  */
 class AlarmDriver(
     private val repository: BmsRepository,
     private val modalities: Flow<AlarmModalities>,
     private val alarm: AlarmOutput,
-    private val controller: AlarmController = AlarmController()
+    private val controller: AlarmController = AlarmController(),
+    private val silencer: AlarmSilencer = AlarmSilencer()
 ) {
 
-    /** Which stream produced a tick. See the class doc for why all three share one collector. */
+    /** Which stream produced a tick. See the class doc for why all four share one collector. */
     private sealed interface Tick {
         data class Sample(val motion: ControllerData, val vehicle: Vehicle?) : Tick
         data class Switches(val modalities: AlarmModalities) : Tick
         data class Link(val state: ConnectionState) : Tick
+        data object Silence : Tick
     }
+
+    /**
+     * The rider's silence requests, as a stream rather than a flag.
+     *
+     * It arrives from a `BroadcastReceiver` on Android's main thread while the
+     * collector is running on `Dispatchers.Default`, and [AlarmSilencer] is as
+     * unsynchronised as [AlarmController] is. Routing the request through the one
+     * collector is what keeps that safe — the same reason the class doc gives for
+     * merging rather than launching a second collector.
+     *
+     * Conflating: one buffered request, oldest dropped. Two presses a millisecond
+     * apart are one silence, and there is nothing to gain from queueing the
+     * second. `replay = 0` means a press before [start] is dropped, which is
+     * right — nothing was sounding to silence.
+     */
+    private val silenceRequests = MutableSharedFlow<Unit>(
+        replay = 0,
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+
+    /**
+     * "Заглушить" — stop the sounding alarm without ending the ride.
+     *
+     * Safe to call from any thread: it only offers a request to the collector,
+     * which is where the decision is made. See [AlarmSilencer] for what silence
+     * means over time and for the window it opens.
+     */
+    fun silence() { silenceRequests.tryEmit(Unit) }
 
     /** Start the one collector. Cancelled with [scope]; the caller still owes the speaker a teardown. */
     fun start(scope: CoroutineScope) {
@@ -147,12 +184,14 @@ class AlarmDriver(
             .combine(repository.activeVehicle) { motion, vehicle -> Tick.Sample(motion, vehicle) }
         val switches = modalities.map { Tick.Switches(it) }
         val link = repository.connectionState.map { Tick.Link(it) }
+        val silences = silenceRequests.map { Tick.Silence }
         scope.launch {
-            merge(samples, switches, link).collect { tick ->
+            merge(samples, switches, link, silences).collect { tick ->
                 when (tick) {
                     is Tick.Sample -> onSample(tick.motion, tick.vehicle)
                     is Tick.Switches -> alarm.setModalities(tick.modalities)
                     is Tick.Link -> onLink(tick.state)
+                    is Tick.Silence -> onSilence()
                 }
             }
         }
@@ -172,7 +211,11 @@ class AlarmDriver(
         val rules =
             if (vehicle == null) ArmedRules.NONE
             else armedRules(vehicle, motion, vehicle.motionAlertRules)
-        alarm.update(controller.update(motion, rules))
+        // Through the silencer on the way out, never into the engine: a silence
+        // must not disturb hysteresis, so the engine goes on grading the ride and
+        // only what reaches the speaker is suppressed. That is also what lets the
+        // silence lift by itself the moment the engine says level 0.
+        alarm.update(silencer.gate(controller.update(motion, rules)))
     }
 
     /**
@@ -186,7 +229,23 @@ class AlarmDriver(
     private fun onLink(state: ConnectionState) {
         if (state.canDeliverSamples) return
         controller.reset()
-        alarm.update(controller.state)
+        // The reset state is level 0, so this is also where a rider's silence is
+        // lifted: a link the app *can* see drop re-arms the alarm rather than
+        // leaving it suppressed into the next stretch of the ride.
+        alarm.update(silencer.gate(controller.state))
+    }
+
+    /**
+     * The rider pressed "Заглушить" on the live notification.
+     *
+     * The current engine state is pushed through the silencer at once rather than
+     * waiting for the next sample, so the speaker stops on the press. On a frozen
+     * link — the case this exists for — there is no next sample, so waiting would
+     * mean never.
+     */
+    private fun onSilence() {
+        silencer.silence()
+        alarm.update(silencer.gate(controller.state))
     }
 }
 

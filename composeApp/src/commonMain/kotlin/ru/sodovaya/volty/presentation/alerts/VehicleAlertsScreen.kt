@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -43,6 +44,10 @@ import ru.sodovaya.volty.presentation.common.motionAlertUnitLabel
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.alerts_add_level
+import volty.composeapp.generated.resources.alerts_discard_confirm
+import volty.composeapp.generated.resources.alerts_discard_keep
+import volty.composeapp.generated.resources.alerts_discard_text
+import volty.composeapp.generated.resources.alerts_discard_title
 import volty.composeapp.generated.resources.alerts_kind_off
 import volty.composeapp.generated.resources.alerts_level
 import volty.composeapp.generated.resources.alerts_level_muted
@@ -156,7 +161,11 @@ fun VehicleAlertsScreen(component: VehicleAlertsComponent) {
                 state.previewLevels.forEach { level ->
                     OutlinedButton(
                         onClick = { component.onPreview(level) },
-                        enabled = state.alarmEnabled
+                        // canPreview, not alarmEnabled: with the master on but
+                        // tone and vibration both off the preview provably makes
+                        // no sound, and a live button that does nothing reads as
+                        // a broken alarm. The component owns that decision.
+                        enabled = state.canPreview
                     ) { Text(stringResource(Res.string.alerts_preview_level, level)) }
                 }
             }
@@ -182,6 +191,31 @@ fun VehicleAlertsScreen(component: VehicleAlertsComponent) {
             }
 
             Spacer(Modifier.height(24.dp))
+        }
+
+        // Backing out of unsaved threshold edits asks first. Whether there is
+        // anything to lose is the component's answer (State.isDirty), not a
+        // `remember` here — the two commit models on this screen make it a
+        // decision worth testing.
+        if (state.discardPrompt) {
+            AlertDialog(
+                onDismissRequest = component::onDiscardDismissed,
+                confirmButton = {
+                    TextButton(onClick = component::onDiscardConfirmed) {
+                        Text(
+                            stringResource(Res.string.alerts_discard_confirm),
+                            color = MaterialTheme.colorScheme.error
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = component::onDiscardDismissed) {
+                        Text(stringResource(Res.string.alerts_discard_keep))
+                    }
+                },
+                title = { Text(stringResource(Res.string.alerts_discard_title)) },
+                text = { Text(stringResource(Res.string.alerts_discard_text)) }
+            )
         }
     }
 }

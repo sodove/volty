@@ -74,8 +74,16 @@ class AlarmToneRendererTest {
 
     @Test
     fun silence_is_the_length_it_says_and_contains_nothing() {
+        // Pinned against a **literal**, not against samplesFor. Comparing the two
+        // reduced to `n == ShortArray(n).size`, which is true for every possible
+        // implementation: `/ 1000L → / 100L` — ten times too much silence, i.e.
+        // a step-3 burst rate of one every 700 ms instead of every 450 ms —
+        // survived it, and this is the only test that pins the positive branch of
+        // samplesFor at all. 250 ms at 44 100 Hz is 11 025 samples, by hand.
         val block = AlarmToneRenderer.silence(250, rate)
-        assertEquals(AlarmToneRenderer.samplesFor(250, rate), block.size)
+        assertEquals(44_100, rate, "fixture check: the arithmetic below is worked out at 44.1 kHz")
+        assertEquals(11_025, block.size, "250 ms of silence is 11 025 samples at 44.1 kHz")
+        assertEquals(11_025, AlarmToneRenderer.samplesFor(250, rate), "and samplesFor must agree with it")
         assertTrue(block.all { it.toInt() == 0 })
     }
 
@@ -155,15 +163,45 @@ class AlarmToneRendererTest {
     fun every_pulse_starts_and_ends_at_zero_so_there_is_no_click() {
         // A pulse cut off mid-cycle steps the speaker cone instantaneously, which
         // is heard as a click on top of every beep — six a second at step 3.
+        //
+        // The **first sample** of a pulse says nothing about the fade-in: the
+        // sine starts at sin(0) = 0 whatever the envelope does, so `samples[start]
+        // == 0` held even with the fade-in half of pulseEnvelope deleted
+        // (`edge = min(fromStart, fromEnd)` → `edge = fromEnd`). The last sample
+        // is a real assertion — the sine is nowhere near a zero crossing there,
+        // so only the envelope can bring it to 0 — and it stays.
+        //
+        // What replaces the vacuous half is a measurement of the ramp itself: over
+        // the first half of the fade the envelope may not have passed halfway, so
+        // the loudest sample in that window is far below the pulse's own peak.
+        // Without a fade-in the very first cycle reaches full amplitude, and the
+        // window spans several cycles at every step's pitch, so it is guaranteed
+        // to catch one.
+        val fadeSamples = AlarmToneRenderer.samplesFor(AlarmToneRenderer.FADE_MS, rate)
         (1..AlarmToneTable.STEPS).forEach { level ->
             val tone = AlarmToneTable.toneFor(level, urgency = 0f)
             val samples = AlarmToneRenderer.burst(tone)
             val pulse = AlarmToneRenderer.samplesFor(tone.pulseOnMs, rate)
             val gap = AlarmToneRenderer.samplesFor(tone.pulseGapMs, rate)
+            val peak = samples.maxOf { abs(it.toInt()) }
+            val half = fadeSamples / 2
+            val cycle = (rate / tone.frequencyHz).toInt()
+            assertTrue(
+                half >= cycle,
+                "fixture check: step $level's half-fade is $half samples and one cycle is $cycle — " +
+                    "the window must contain a crest, or an un-faded pulse could slip through it"
+            )
             repeat(tone.pulseCount) { index ->
                 val start = index * (pulse + gap)
-                assertEquals(0, samples[start].toInt(), "step $level pulse $index starts with a step, not a fade")
+                assertEquals(0, samples[start].toInt(), "step $level pulse $index does not start at zero")
                 assertEquals(0, samples[start + pulse - 1].toInt(), "step $level pulse $index ends with a click")
+
+                val rampingIn = samples.copyOfRange(start, start + half).maxOf { abs(it.toInt()) }
+                assertTrue(
+                    rampingIn <= peak * 0.6,
+                    "step $level pulse $index reaches $rampingIn of $peak within half a fade — " +
+                        "it is switching on, not fading in, and that is the click"
+                )
             }
         }
     }
