@@ -277,7 +277,17 @@ class DefaultVehicleEditComponent(
                 // — see the Part C task-5 report). Carried through explicitly so a
                 // save from this form does not silently reset a rider's opt-out,
                 // exactly as topology and the controller list are above.
-                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit
+                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit,
+                // Also not editable here (F Task 5's own screen owns it), and
+                // carried through for a sharper reason than the fields above.
+                // singlePackVehicle() leaves motionAlerts null, and null does
+                // not mean "no alerts" — it means "never configured", which the
+                // repository answers with AlarmDefaults. So dropping it here
+                // does not merely lose the rider's numbers: it RESURRECTS the
+                // defaults over them. A rider who silenced every kind and then
+                // renamed the vehicle would have the alarm switch itself back
+                // on. See SqlDelightVehicleRepository / Vehicle.motionAlerts.
+                motionAlerts = existing?.motionAlerts
             )
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the

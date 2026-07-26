@@ -152,6 +152,21 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
             // vouches for are one fact split across two tables, and a crash
             // between them would leave the flag set over a stale level set —
             // i.e. the rider's alarm firing at somebody else's numbers.
+            //
+            // THE SECOND HALF OF THE DOWNGRADE PATH. `toRules()` below is
+            // non-destructively tolerant — it skips rows it cannot represent
+            // (an unknown `kind`, levels past MAX_LEVELS) and leaves them in the
+            // table, so a newer version's data survives being *read* by an older
+            // build. This write is not: it replaces the level set wholesale from
+            // the in-memory list, which by construction contains only what
+            // `toRules()` could represent. So on a downgrade those rows live
+            // exactly until the rider touches any vehicle setting, and are then
+            // deleted for good, silently and unrecoverably.
+            //
+            // Unreachable today — nothing writes an unknown kind and `upsert`
+            // cannot exceed MAX_LEVELS — and not worth a merge strategy now. But
+            // read-tolerance is NOT downgrade-safety, and a future release that
+            // wants it must fix this write, not just that read.
             alertLevelQueries.deleteByVehicle(vehicle.id)
             vehicle.motionAlerts?.forEach { rule ->
                 rule.levels.forEachIndexed { position, level ->
@@ -170,10 +185,18 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     override suspend fun delete(id: String) {
         // Explicit rather than relying on ON DELETE CASCADE: foreign keys are
         // off by default in SQLite unless PRAGMA foreign_keys is enabled.
-        packQueries.deleteByVehicle(id)
-        controllerQueries.deleteByVehicle(id)
-        alertLevelQueries.deleteByVehicle(id)
-        queries.delete(id)
+        //
+        // In one transaction for the same reason upsert is: four statements
+        // means three windows in which process death leaves child rows behind
+        // with no parent, and a recycled vehicle id would then adopt a stranger's
+        // packs, controllers and alarm thresholds. It also collapses four change
+        // notifications into one.
+        queries.transaction {
+            packQueries.deleteByVehicle(id)
+            controllerQueries.deleteByVehicle(id)
+            alertLevelQueries.deleteByVehicle(id)
+            queries.delete(id)
+        }
     }
 
     override suspend fun touch(id: String) {

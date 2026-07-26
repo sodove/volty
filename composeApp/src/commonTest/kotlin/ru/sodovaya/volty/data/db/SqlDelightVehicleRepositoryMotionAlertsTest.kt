@@ -72,12 +72,10 @@ class SqlDelightVehicleRepositoryMotionAlertsTest {
 
         val back = assertNotNull(repo.get("v-fresh"))
         assertNull(back.motionAlerts, "no answer was ever given, so storage must not invent one")
+        // No spot-check on DUTY's two default thresholds follows: it would be
+        // strictly implied by the equality above, so no implementation could
+        // fail it while reaching it. An assertion that cannot fail is noise.
         assertEquals(AlarmDefaults.all(), back.motionAlertRules, "and the defaults resolve it")
-        // Spot-check that these really are the defaults and not an empty stand-in.
-        assertEquals(
-            listOf(AlarmDefaults.DUTY_LEVEL_1_PERCENT, AlarmDefaults.DUTY_LEVEL_2_PERCENT),
-            back.motionAlertRules.single { it.kind == MotionAlertKind.DUTY }.levels.map { it.thresholdValue }
-        )
     }
 
     // ---------------------------------------------------------------- deliberate silence
@@ -89,14 +87,12 @@ class SqlDelightVehicleRepositoryMotionAlertsTest {
         val back = assertNotNull(repo.get("v-quiet"))
         assertNotNull(back.motionAlerts, "the rider answered — with silence. That is still an answer.")
         assertTrue(back.motionAlerts.all { it.isOff }, "every kind must come back off")
+        // Likewise no follow-up on DUTY specifically: "all rules are off" already
+        // entails "duty's levels are empty", so such an assertion could never be
+        // reached in a failing state.
         assertTrue(
             back.motionAlertRules.all { it.isOff },
             "and resolving must not smuggle AlarmDefaults back over the top"
-        )
-        assertEquals(
-            emptyList(),
-            back.motionAlertRules.single { it.kind == MotionAlertKind.DUTY }.levels,
-            "duty in particular, which ships with two default levels, must stay empty"
         )
     }
 
@@ -347,6 +343,32 @@ class SqlDelightVehicleRepositoryMotionAlertsTest {
             duty.levels.map { it.thresholdValue },
             "the delete-then-insert must roll back together, or a failed edit silences the alarm"
         )
+    }
+
+    /**
+     * `delete()` is four statements, so it is one transaction. Process death
+     * between them would strand child rows under no parent, and a recycled
+     * vehicle id would then adopt a stranger's packs, controllers and alarm
+     * thresholds — an alarm configured by somebody else's ride.
+     */
+    @Test fun a_failed_delete_leaves_no_orphaned_children() = runTest {
+        val driver = FailOnDriver(newDriver(), failWhenSqlContains = "DELETE FROM VehicleRow")
+        driver.armed = false
+        val repo = repoOn(driver)
+        repo.upsert(scooter("v-halfdead", alerts = AlarmDefaults.all()))
+
+        driver.armed = true
+        assertFailsWith<IllegalStateException> { repo.delete("v-halfdead") }
+
+        driver.armed = false
+        val db = VoltyDatabase(driver)
+        assertTrue(
+            db.alertLevelRowQueries.selectByVehicle("v-halfdead").executeAsList().isNotEmpty(),
+            "the level rows must roll back with the vehicle row, not outlive it"
+        )
+        assertTrue(db.packRowQueries.selectByVehicle("v-halfdead").executeAsList().isNotEmpty())
+        assertTrue(db.controllerRowQueries.selectByVehicle("v-halfdead").executeAsList().isNotEmpty())
+        assertNotNull(repo.get("v-halfdead"), "and the vehicle itself is still there, intact")
     }
 
     // ---------------------------------------------------------------- migration
