@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.domain.model
 
+import ru.sodovaya.volty.domain.alert.AlarmDefaults
+import ru.sodovaya.volty.domain.alert.AlertRule
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -42,12 +44,42 @@ data class Vehicle(
      * statement as an explicit `true`, and a NOT NULL DEFAULT 1 would claim
      * every pre-existing vehicle had opted in.
      */
-    val yieldBmsToHeadUnit: Boolean? = null
+    val yieldBmsToHeadUnit: Boolean? = null,
+    /**
+     * The rider's motion alert configuration (F §10.2), or **null when they have
+     * never configured one** — in which case [ru.sodovaya.volty.domain.alert.AlarmDefaults]
+     * apply. Use [motionAlertRules] rather than reading this directly.
+     *
+     * The nullability is the whole point and it is *not* a second way to say
+     * "off". "Off" is an [AlertRule][ru.sodovaya.volty.domain.alert.AlertRule]
+     * with no levels, and only that — so a rider who deletes every level of
+     * every kind gets `listOf(AlertRule(DUTY, []), ...)`, an empty-*ish* but
+     * non-null list, and silence survives a restart. Null is the strictly
+     * different statement "nobody has ever answered this question", which only
+     * the storage layer can make; nothing inside
+     * [AlertRule][ru.sodovaya.volty.domain.alert.AlertRule] knows about it.
+     */
+    val motionAlerts: List<AlertRule>? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }
+        // One rule per kind. Storage keys AlertLevelRow by (vehicleId, kind,
+        // position), so a duplicated kind would be silently half-overwritten on
+        // save and come back as something the caller never asked for. Refusing
+        // it here turns a silent round-trip corruption into a caller bug.
+        require(motionAlerts == null || motionAlerts.distinctBy { it.kind }.size == motionAlerts.size) {
+            "duplicate MotionAlertKind in motionAlerts: ${motionAlerts?.map { it.kind }}"
+        }
     }
 }
+
+/**
+ * This vehicle's motion alert rules with "never configured" already resolved to
+ * [AlarmDefaults] — the form every consumer wants. Still ungated: pass it
+ * through [ru.sodovaya.volty.domain.alert.armedRules] before an alarm engine
+ * sees it.
+ */
+val Vehicle.motionAlertRules: List<AlertRule> get() = motionAlerts ?: AlarmDefaults.all()
 
 /** True when this vehicle has at least one motor controller wired in. */
 val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()

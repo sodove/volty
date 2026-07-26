@@ -1,0 +1,40 @@
+-- v6 -> v7: rider-defined motion alert levels (Part F §10.2).
+--
+-- AlertLevelRow mirrors PackRow/ControllerRow exactly: composite PK on
+-- (vehicleId, ...), a declared ON DELETE CASCADE, and a covering index. The
+-- cascade is documentation of intent only — SQLite leaves PRAGMA foreign_keys
+-- OFF by default and the app never turns it on, so SqlDelightVehicleRepository
+-- deletes children explicitly. Both statements are true of the two existing
+-- child tables too; this migration adds no third convention.
+CREATE TABLE AlertLevelRow (
+    vehicleId  TEXT NOT NULL,
+    kind       TEXT NOT NULL,
+    position   INTEGER NOT NULL,
+    threshold  REAL NOT NULL,
+    enabled    INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (vehicleId, kind, position),
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+CREATE INDEX AlertLevelRow_vehicle ON AlertLevelRow(vehicleId, kind, position);
+
+-- The "has this rider ever configured motion alerts?" bit, and the reason it
+-- cannot be inferred from AlertLevelRow being empty:
+--
+--   * a vehicle nobody has configured must come up on AlarmDefaults;
+--   * a rider who deletes every level of every kind means "silence", and must
+--     get silence back after a restart.
+--
+-- Both are zero rows in AlertLevelRow. Inferring from row count would resurrect
+-- the defaults over a rider's deliberate choice — the loudest possible failure
+-- mode for a feature whose entire job is to make noise. So the distinction gets
+-- its own bit, and it lives HERE, at the storage boundary, never as a flag or a
+-- nullable on AlertRule (Part F §10.2 allows exactly one representation of
+-- "off", and that is the empty level list).
+--
+-- DEFAULT 0 is the correct reading of history: every vehicle that existed
+-- before this migration has, by definition, never been configured, so all of
+-- them come up on defaults. NOT NULL because — unlike dashboardStyle or
+-- yieldBmsToHeadUnit — there is no third state to keep room for; "not
+-- configured" is already the unset state and 0 says it exactly.
+ALTER TABLE VehicleRow ADD COLUMN motionAlertsConfigured INTEGER NOT NULL DEFAULT 0;
