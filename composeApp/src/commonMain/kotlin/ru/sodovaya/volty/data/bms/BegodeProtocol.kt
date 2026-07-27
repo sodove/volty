@@ -22,12 +22,13 @@ import kotlin.math.abs
  * bearing, not defensive.
  *
  * Frame types (byte 18):
- *   0x00 — live motherboard frame (scaled voltage, phase current, MPU temp)
+ *   0x00 — live motherboard frame (scaled voltage, speed, trip distance,
+ *          phase current, MPU temp)
  *   0x01 — smart-BMS telemetry; byte 19 is bmsnum 0..3 (branch = bmsnum shr 1,
  *          section within the branch = bmsnum and 1)
  *   0x02 / 0x03 — cell voltages of branch 0 / branch 1, 8 cells per frame,
  *          packet index at byte 19
- *   0x04 — total distance (ignored: BmsData has no odometer field)
+ *   0x04 — total odometer (see [odometerMeters])
  *   0x07 — undocumented, ignored (see the multi-pack design spec)
  *
  * The battery is two parallel branches, each two sections in series
@@ -69,6 +70,26 @@ class BegodeProtocol : BmsProtocol() {
     private var liveVoltageRaw: Int = 0
     private var phaseCurrentA: Float = 0f
     private var boardTempC: Float = 0f
+
+    // --- Motion, decoded but NOT published as battery data ---
+    // A wheel's speed, trip and odometer belong to a controller, not to a pack:
+    // BmsData is a sample of ONE battery and has no field for any of them.
+    // They live on the protocol until a MotionSource surfaces them.
+
+    /** Last decoded speed, km/h — see [speedKmh] for what "last" means. */
+    private var speedKmhValue: Float = 0f
+
+    /** Last decoded trip distance in metres — see [tripDistanceMeters]. */
+    private var tripMetersValue: Long = 0L
+
+    /** True once a genuine (non-boot) live frame supplied speed and trip. */
+    private var sawLiveMotion = false
+
+    /** Last decoded lifetime odometer in metres — see [odometerMeters]. */
+    private var odometerMetersValue: Long = 0L
+
+    /** True once any 0x04 frame arrived. */
+    private var sawOdometer = false
 
     /**
      * True once ANY smart-BMS frame (0x01/0x02/0x03) was decoded. Not every
@@ -155,6 +176,42 @@ class BegodeProtocol : BmsProtocol() {
         if (!smartBmsSeen && liveVoltageRaw > 0) liveVoltageRaw * 0.01f else null
 
     /**
+     * Wheel speed in km/h from the live frame, or null when no genuine live
+     * frame has been decoded yet (see [parseLiveFrame]'s boot gate).
+     *
+     * Null, never 0f: a zero here is a real measurement — a wheel standing
+     * still — and a caller that cannot tell it from "not measured" would
+     * publish a confident 0 km/h for a wheel that has said nothing. Absent is
+     * absent (spec §7.1).
+     *
+     * NEGATIVE while the wheel rolls backwards: the field is signed (see
+     * [SPEED_KMH_PER_UNIT]). Callers that want a magnitude take abs; a caller
+     * that wants direction has it.
+     */
+    fun speedKmh(): Float? = if (sawLiveMotion) speedKmhValue else null
+
+    /**
+     * Trip distance in METRES since the wheel was powered on, from the live
+     * frame, or null before any genuine live frame — same reasoning as
+     * [speedKmh], and 61 m is a perfectly ordinary trip value.
+     *
+     * Metres, not kilometres, because metres is what the frame carries; the
+     * unit conversion is a presentation concern.
+     */
+    fun tripDistanceMeters(): Long? = if (sawLiveMotion) tripMetersValue else null
+
+    /**
+     * Lifetime odometer in METRES from the 0x04 frame, or null before one
+     * arrives. 0 is a legitimate reading (a wheel out of its box), so it
+     * cannot double as "unknown".
+     *
+     * This is why the 0x04 frame is decoded onto the protocol rather than into
+     * [BmsData]: an odometer is not a property of a battery pack, and BmsData
+     * has no field for one. A MotionSource surfaces it.
+     */
+    fun odometerMeters(): Long? = if (sawOdometer) odometerMetersValue else null
+
+    /**
      * The two physical assemblies of branch [packIndex], wired in series
      * (bmsnum's low bit — see [parseBmsTelemetry]).
      *
@@ -235,6 +292,13 @@ class BegodeProtocol : BmsProtocol() {
         liveVoltageRaw = 0
         phaseCurrentA = 0f
         boardTempC = 0f
+        // Motion is per-connection state too: a reconnect may face a different
+        // wheel, and the previous one's speed and mileage must not survive it.
+        speedKmhValue = 0f
+        tripMetersValue = 0L
+        sawLiveMotion = false
+        odometerMetersValue = 0L
+        sawOdometer = false
         // A reconnect may face a different wheel: a protocol stuck in
         // "smart BMS seen" would leave a dumb wheel dataless again.
         smartBmsSeen = false
@@ -294,24 +358,52 @@ class BegodeProtocol : BmsProtocol() {
             0x01 -> parseBmsTelemetry(frame)
             0x02 -> parseCells(frame, branch = 0)
             0x03 -> parseCells(frame, branch = 1)
-            // 0x04: total distance (u32 BE at 2..5, metres). BmsData has no
-            // odometer field, so it is dropped for now.
+            0x04 -> parseOdometerFrame(frame)
             // 0x07: undocumented; WheelLog does not decode it either. Ignored
             // deliberately — see the design spec.
         }
     }
 
     /**
-     * Live motherboard frame. Bytes 2..3 BE: voltage on the 67.2 V scale (NOT
-     * pack volts — see [liveVoltageRaw]); bytes 10..11 signed BE: phase current
-     * in 0.01 A; bytes 12..13 signed BE: raw MPU6050 die temperature, converted
-     * with WheelLog's `raw / 340 + 36.53` formula. Speed/trip/PWM are ignored
-     * in this task.
+     * Live motherboard frame — the wheel's whole moving picture in 24 bytes:
+     *
+     * ```
+     * 55 aa | 17 04 | 00 00 | 00 3d 00 00 | fe b6 | f4 06 | 00 a9 | 00 01 | 00 | 18 | 5a5a5a5a
+     *  hdr    volt    speed     trip        current  temp     ?       ?    type
+     * ```
+     *
+     * (a real frame of the ET Max capture, see BegodeDumpFixture)
+     *
+     * - bytes 2..3 BE: voltage on the 67.2 V scale (NOT pack volts — see
+     *   [liveVoltageRaw]). `0x1704` = 5892 → 58.92 V for a wheel whose cells
+     *   independently sum to 148.4 V, i.e. the documented 168 / 67.2 factor.
+     * - bytes 4..5 signed BE: speed, see [SPEED_KMH_PER_UNIT].
+     * - bytes 6..9: trip distance in metres, see [tripMetersOf].
+     * - bytes 10..11 signed BE: phase current in 0.01 A. `0xfeb6` = −330 →
+     *   −3.30 A, the idle draw of the stationary capture.
+     * - bytes 12..13 signed BE: raw MPU6050 die temperature, converted with
+     *   WheelLog's `raw / 340 + 36.53` formula. `0xf406` → 27.5 °C.
+     * - bytes 14..15: **not decoded.** `0x00a9` in every frame of the capture
+     *   while current and temperature move — a constant is what a version or
+     *   config word looks like, not the PWM this byte range is sometimes
+     *   claimed to hold. Asserting duty from it would be a guess, and duty
+     *   feeds the ШИМ alarm (spec §7.2): real or absent, never a placeholder.
      */
     private fun parseLiveFrame(frame: ByteArray) {
         liveVoltageRaw = frame.u16BE(2)
+        val speedRaw = frame.i16BE(4)
+        val tripMeters = tripMetersOf(frame)
         phaseCurrentA = frame.i16BE(10) * 0.01f
         boardTempC = frame.i16BE(12) / 340f + 36.53f
+        // Motion takes the same genuineness gate as the synthetic pack below:
+        // a zero-padded boot frame would otherwise publish "0.00 km/h, 0 m"
+        // as measurement. Independent of [smartBmsSeen] — motion belongs to the
+        // wheel, and a wheel with a smart BMS still moves.
+        if (liveVoltageRaw > 0) {
+            speedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
+            tripMetersValue = tripMeters
+            sawLiveMotion = true
+        }
         // While no smart-BMS frame has arrived, this frame IS the battery
         // telemetry: synthesise pack 0 from it so a wheel without a smart BMS
         // connects at all instead of staying null forever. Gated on a genuine
@@ -338,6 +430,56 @@ class BegodeProtocol : BmsProtocol() {
                 isConnected = true
             )
         }
+    }
+
+    /**
+     * Trip distance in metres from the live frame's bytes 6..9, which are a
+     * 32-bit value with its two 16-bit words in the WRONG order for a naive
+     * big-endian read: **high word at 8..9, low word at 6..7**, big-endian
+     * inside each word.
+     *
+     * The capture settles this, and it is the one motion field it does settle.
+     * Every live frame carries `00 3d 00 00`, and the three candidate readings
+     * are wildly apart:
+     *
+     * | reading | value |
+     * |---|---|
+     * | word-swapped (this one) | 61 m |
+     * | naive big-endian | 3 997 696 m = 3 998 km |
+     * | fully little-endian | 15 616 m |
+     *
+     * 61 m is the only one a wheel can produce in the first 13 seconds of a
+     * session (and the trip counter resets at power-on); 3 998 km is half the
+     * wheel's LIFETIME odometer — which the 0x04 frame reports separately as
+     * 8 565 km — and 15.6 km would mean a ride that had already happened
+     * before the capture's own trip counter started.
+     *
+     * The consequence of getting it wrong is silent: a trip of 3 998 km is
+     * still a plausible-looking number on a dashboard, so a test pins this
+     * against the naive reading rather than trusting the comment.
+     */
+    private fun tripMetersOf(frame: ByteArray): Long =
+        (frame.u16BE(8).toLong() shl 16) or frame.u16BE(6).toLong()
+
+    /**
+     * Lifetime odometer (0x04): u32 big-endian at bytes 2..5, metres. The
+     * capture reads `00 82 b2 5d` = 8 565 341 m = 8 565 km, constant across
+     * all 13 seconds, as a lifetime counter of a stationary wheel must be.
+     *
+     * Unlike the trip field this word order is NOT proven by the capture — a
+     * word-swapped read of the same bytes gives 2 992 439 426 m (2.99 million
+     * km), which is absurd rather than merely wrong, so the plain big-endian
+     * reading is the only one whose magnitude is possible. That is weaker
+     * evidence than the trip field's: it rules out one alternative by
+     * plausibility, it does not measure anything. A wheel whose displayed
+     * odometer is known would confirm it outright.
+     *
+     * The rest of the frame (pedal mode, alarms, miles/km, tiltback settings)
+     * is deliberately not decoded: Volty never writes settings to a wheel.
+     */
+    private fun parseOdometerFrame(frame: ByteArray) {
+        odometerMetersValue = frame.u32BE(2)
+        sawOdometer = true
     }
 
     /**
@@ -509,6 +651,31 @@ class BegodeProtocol : BmsProtocol() {
          */
         fun scaleLiveVoltage(voltageOn672ScaleV: Float, cellCount: Int): Float =
             voltageOn672ScaleV * (cellCount * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V)
+
+        /**
+         * Km/h per unit of the live frame's signed speed field (bytes 4..5).
+         *
+         * **UNVERIFIED — this is the one constant in this file that no capture
+         * backs.** Begode/Gotway is commonly documented as reporting speed in
+         * hundredths of km/h, which is what 0.01 encodes. The ET Max capture
+         * cannot confirm it and never will: bytes 4..5 read `00 00` in every
+         * live frame of it, because those are 13 seconds of a wheel standing
+         * still. The tests therefore pin the field's OFFSET and its SIGNEDNESS
+         * with synthetic frames, and pin this scale only to itself.
+         *
+         * A competing scale exists and differs by 3.6x: WheelLog's
+         * `GotwayAdapter` is reported to convert the same field as
+         * `raw * 3.6 / 100` (i.e. the raw unit is cm/s, 0.036 km/h per unit).
+         * That source is not available in this repository and the claim is
+         * second-hand, so it is recorded rather than adopted — but if it is
+         * right, every speed here reads 3.6x LOW.
+         *
+         * **What would verify it:** one `:dumper` capture of a moving wheel
+         * next to a known reference speed (GPS, or the wheel's own app). The
+         * two candidates are 3.6x apart, so a single frame at any real riding
+         * speed settles it — no precision needed.
+         */
+        private const val SPEED_KMH_PER_UNIT = 0.01f
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150

@@ -224,7 +224,10 @@ class BegodeNoBmsProtocolTest {
         return frame(0x00, 24, p)
     }
 
-    /** Odometer 0x04 frame — a dumb wheel's only other frame type. Ignored. */
+    /**
+     * Odometer 0x04 frame — a dumb wheel's only other frame type. It carries
+     * no battery data; its decode is pinned in [BegodeMotionProtocolTest].
+     */
     private fun odometerFrame(): ByteArray {
         val p = ByteArray(16)
         p[0] = 0x00; p[1] = 0x82.toByte(); p[2] = 0xB2.toByte(); p[3] = 0x5D
