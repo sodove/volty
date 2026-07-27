@@ -11,7 +11,7 @@ import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
-import ru.sodovaya.volty.domain.stats.RideMetrics
+import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -113,7 +113,7 @@ class DefaultRideDashboardComponent(
                 secondaryReadout = SecondaryGaugeMapper.map(
                     initialSecondary, initialMotion, initialVehicleData.aggregate, initialUnits
                 ),
-                sessionWhPerKm = RideMetrics.sessionWhPerKm(initialMotion.consumedWh, initialMotion.tripKm),
+                sessionWhPerKm = MotionReadings.sessionWhPerKm(initialMotion),
                 uptimeSeconds = sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
             )
         )
@@ -131,7 +131,7 @@ class DefaultRideDashboardComponent(
                     current.copy(
                         motion = motion,
                         uptimeSeconds = uptime,
-                        sessionWhPerKm = RideMetrics.sessionWhPerKm(motion.consumedWh, motion.tripKm),
+                        sessionWhPerKm = MotionReadings.sessionWhPerKm(motion),
                         secondaryReadout = SecondaryGaugeMapper.map(current.secondary, motion, current.battery, current.units)
                     )
                 }

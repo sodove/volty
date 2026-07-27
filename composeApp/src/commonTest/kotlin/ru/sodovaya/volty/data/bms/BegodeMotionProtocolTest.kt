@@ -651,9 +651,31 @@ class BegodeMotionProtocolTest {
         val m = assertNotNull(protocol.latestMotion(0))
         assertEquals(0f, m.inputVoltageV, 0f, "0 means UNKNOWN here, and 58.92 would be a lie")
         assertEquals(0f, m.powerW, 0f, "power is voltage-derived and exactly as unknown")
+        // …and G §9's contract is what makes that 0 legible downstream. Without
+        // these two flags the dashboard rendered it as a confident "0.0 kW" and
+        // MotionAggregator averaged it into a mixed vehicle's real rail.
+        assertFalse(m.hasInputVoltage, "an unscalable rail is not a measured 0 V")
+        assertFalse(m.hasPower, "…and neither is the power built from it")
         // Everything the wheel DID report is unaffected by the missing scale.
         assertEquals(0.67f, m.batteryCurrentA, 1e-4f)
         assertEquals(2f, m.dutyPercent, 0f)
+    }
+
+    @Test
+    fun aWheelReportsNoEnergyCountersAtAllRatherThanZeroOfThem() {
+        // G §9.1. The frames carry no consumed/regen fields, so all four read 0
+        // forever — and `RideMetrics.sessionWhPerKm` turned that into a
+        // well-formed "0.0 Wh/km" the instant the trip counter moved, for the
+        // whole ride, on every Begode. A full capture, so tripKm is non-zero and
+        // the old fallback would genuinely have been live.
+        val protocol = BegodeProtocol(cellCount = 40)
+        BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, m.consumedAh, 0f)
+        assertEquals(0f, m.consumedWh, 0f)
+        assertEquals(0f, m.regenAh, 0f)
+        assertEquals(0f, m.regenWh, 0f)
+        assertFalse(m.hasEnergyCounters, "zero-because-unreported, not zero-because-idle")
     }
 
     @Test
@@ -669,6 +691,11 @@ class BegodeMotionProtocolTest {
         assertEquals(147.20f, m.inputVoltageV, 0.01f)
         // Power follows: 147.20 V x 0.67 A drawn.
         assertEquals(98.62f, m.powerW, 0.05f)
+        // The positive half of G §9's contract — a decoder that hardcoded the
+        // flags to false would pass the no-cell-count test above and show a
+        // rider with a correctly configured wheel a permanent dash.
+        assertTrue(m.hasInputVoltage)
+        assertTrue(m.hasPower)
         // AND it survives the smart-BMS hand-over. liveVoltageOn672ScaleV()
         // goes null there — that gate exists to stop the synthetic PACK
         // overriding real branches — but the wheel's rail voltage is still the
@@ -686,12 +713,17 @@ class BegodeMotionProtocolTest {
         val unset = BegodeProtocol(cellCount = 0)
         unset.onNotification(liveFrame(voltageRaw = 5892))
         assertEquals(0f, assertNotNull(unset.latestMotion(0)).inputVoltageV, 0f)
+        assertFalse(assertNotNull(unset.latestMotion(0)).hasInputVoltage)
 
         val nonsense = BegodeProtocol(cellCount = -40)
         nonsense.onNotification(liveFrame(voltageRaw = 5892))
         assertEquals(
             0f, assertNotNull(nonsense.latestMotion(0)).inputVoltageV, 0f,
             "an unguarded scale would report -147.30 V"
+        )
+        assertFalse(
+            assertNotNull(nonsense.latestMotion(0)).hasInputVoltage,
+            "a guard that only zeroed the number would leave the flag claiming a measurement"
         )
     }
 

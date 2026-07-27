@@ -43,7 +43,6 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
-import ru.sodovaya.volty.domain.stats.RideMetrics
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
@@ -56,7 +55,6 @@ import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
-import ru.sodovaya.volty.util.formatSigned
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.max
@@ -339,8 +337,8 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
         ) {
             MetricCard(
                 label = stringResource(Res.string.ride_power),
-                value = "${formatFixed(motion.powerW / 1000f, 1)} kW",
-                sub = "${formatSigned(motion.batteryCurrentA, 1)} A",
+                value = CleanMetricMapper.powerValue(motion),
+                sub = CleanMetricMapper.powerSub(motion),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             MetricCard(
@@ -404,7 +402,11 @@ private fun ConsumptionCard(
     sessionWhPerKm: Float?,
     recentSpeeds: List<Float>
 ) {
-    val instantWhPerKm = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
+    // Both strings come from CleanMetricMapper rather than being formatted here:
+    // Compose is not unit-testable in this repo, and these two readouts are where
+    // `G §9`'s "0.0 kW" and `§9.1`'s "avg 0.0 Wh/km" lived.
+    val instantConsumption = CleanMetricMapper.instantConsumptionValue(motion)
+    val sessionConsumption = CleanMetricMapper.sessionConsumptionValue(sessionWhPerKm)
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -423,9 +425,9 @@ private fun ConsumptionCard(
                 fontWeight = FontWeight.SemiBold,
                 color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
             )
-            if (sessionWhPerKm != null) {
+            if (sessionConsumption != null) {
                 Text(
-                    text = stringResource(Res.string.ride_consumption_avg, formatFixed(sessionWhPerKm, 1)),
+                    text = stringResource(Res.string.ride_consumption_avg, sessionConsumption),
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
                 )
@@ -434,7 +436,7 @@ private fun ConsumptionCard(
         Spacer(Modifier.height(4.dp))
         Row(verticalAlignment = Alignment.Bottom) {
             Text(
-                text = instantWhPerKm?.let { formatFixed(it, 1) } ?: "—",
+                text = instantConsumption,
                 style = MaterialTheme.typography.headlineMedium.copy(
                     fontFamily = FontFamily.Monospace,
                     fontWeight = FontWeight.Bold

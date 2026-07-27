@@ -161,8 +161,15 @@ class AlarmController {
     }
 }
 
-/** The reading a kind thresholds against, in the kind's own unit. */
-private fun ControllerData.valueFor(kind: MotionAlertKind): Float = when (kind) {
+/**
+ * The reading a kind thresholds against, in the kind's own unit.
+ *
+ * `internal` rather than private so `MotionAggregatorTest` can assert that
+ * `G §9.3`'s new voltage fold leaves every one of these untouched — the claim
+ * "this task does not change what the alarm sees" is only worth anything if the
+ * test asks the alarm's own accessor rather than a copy of it that could drift.
+ */
+internal fun ControllerData.valueFor(kind: MotionAlertKind): Float = when (kind) {
     MotionAlertKind.DUTY -> dutyPercent
     MotionAlertKind.SPEED -> speedKmh
     MotionAlertKind.MOTOR_TEMP -> motorTempC

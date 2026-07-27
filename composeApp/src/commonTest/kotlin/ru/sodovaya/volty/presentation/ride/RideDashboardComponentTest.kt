@@ -42,6 +42,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -224,6 +225,18 @@ class RideDashboardComponentTest {
         c.state.test {
             val s = awaitItem()
             assertTrue(kotlin.math.abs(s.sessionWhPerKm!! - 16.9f) < 0.05f)
+        }
+
+        // G §9.1: a protocol that keeps NO energy counters must produce an
+        // absence, not a 0.0 the card then prints as "avg 0.0 Wh/km" for the
+        // whole ride. The trip has moved, so the old `tripKm <= 0` guard — the
+        // only one this used to have — does not fire.
+        repo.emitMotion(
+            ControllerData(consumedWh = 0f, hasEnergyCounters = false, tripKm = 58f, isConnected = true)
+        )
+        advanceUntilIdle()
+        c.state.test {
+            assertNull(awaitItem().sessionWhPerKm, "a counterless wheel consumes an unknown amount")
         }
     }
 

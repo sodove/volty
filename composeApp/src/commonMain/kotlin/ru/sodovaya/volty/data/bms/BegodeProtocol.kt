@@ -634,7 +634,7 @@ class BegodeProtocol(
         val speed = speedKmh()
         val batteryCurrent = batteryCurrentA()
         val motorTemp = motorTempC()
-        val voltage = inputVoltageV()
+        val voltage = inputVoltageOrNull()
         // Negated into the controller convention — see the KDoc on sign.
         val controllerBatteryCurrent = if (batteryCurrent != null) -batteryCurrent else 0f
         motion = ControllerData(
@@ -657,11 +657,18 @@ class BegodeProtocol(
             // as a motion→motion leak, where before it was a dead store.
             motorCurrentA = if (sawLiveMotion) -phaseCurrentA else 0f,
             batteryCurrentA = controllerBatteryCurrent,
-            inputVoltageV = voltage,
+            inputVoltageV = voltage ?: 0f,
+            // The same latch shape as hasDuty, one field over (G §9.3): a
+            // missing cell count leaves no honest voltage, 0 V is what the
+            // non-nullable field has to carry, and this is what stops the fold
+            // averaging that 0 into a mixed vehicle's real rail.
+            hasInputVoltage = voltage != null,
             // Voltage-derived, so it is exactly as unknown as the voltage: 0 W
             // whenever the cell count is missing. Spec D §2's `powerW =
-            // voltage x current`.
-            powerW = voltage * controllerBatteryCurrent,
+            // voltage x current`. G §9: the dashboard used to render that 0 as
+            // a confident "0.0 kW", so it now travels with a flag too.
+            powerW = (voltage ?: 0f) * controllerBatteryCurrent,
+            hasPower = voltage != null,
             escTempC = if (sawLiveMotion) boardTempC else NO_TEMP_SENSOR_C,
             motorTempC = motorTemp ?: NO_TEMP_SENSOR_C,
             hasMotorTemp = motorTemp != null,
@@ -669,13 +676,22 @@ class BegodeProtocol(
             // The SESSION delta, not the wheel's own power-on counter — see
             // [sessionTripKm] and [powerOnDistanceMeters].
             tripKm = sessionTripKm(),
+            // A Begode's frames carry no energy counters at all — consumedAh,
+            // consumedWh, regenAh and regenWh stay at their 0f defaults not
+            // because nothing has been consumed but because nothing is
+            // reported. Without this flag `RideMetrics.sessionWhPerKm` turns
+            // that 0 into a well-formed "0.0 Wh/km" the instant the trip
+            // counter moves, for the whole ride (G §9.1).
+            hasEnergyCounters = false,
             faults = faultsValue,
             isConnected = true
         )
     }
 
     /**
-     * The wheel's rail voltage in real volts, or **0** meaning UNKNOWN.
+     * The wheel's rail voltage in real volts, or **null** meaning UNKNOWN —
+     * published as `inputVoltageV = 0f` with `hasInputVoltage = false`, which is
+     * `G §9`'s contract for a field whose type cannot carry an absence.
      *
      * The live frame reports voltage against Begode's 67.2 V reference (every
      * wheel pretends to be 16S), and turning that into volts needs the pack's
@@ -694,10 +710,10 @@ class BegodeProtocol(
      * measurement of its rail and stays valid whether or not a smart BMS is
      * also reporting cells.
      */
-    private fun inputVoltageV(): Float {
-        if (!sawLiveMotion) return 0f
-        val cells = cellCount ?: return 0f
-        if (cells <= 0) return 0f
+    private fun inputVoltageOrNull(): Float? {
+        if (!sawLiveMotion) return null
+        val cells = cellCount ?: return null
+        if (cells <= 0) return null
         return scaleLiveVoltage(liveVoltageRaw * 0.01f, cells)
     }
 

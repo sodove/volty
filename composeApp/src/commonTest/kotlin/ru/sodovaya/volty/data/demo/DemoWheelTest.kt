@@ -214,10 +214,16 @@ class DemoWheelTest {
         assertEquals(0f, m.consumedWh, "a Begode reports no consumed Wh")
         assertEquals(0f, m.regenAh, "a Begode reports no regen Ah")
         assertEquals(0f, m.regenWh, "a Begode reports no regen Wh")
+        // …said out loud, so the dashboard can tell it from a ride that has
+        // just started (G §9.1). Without this the demo wheel's consumption card
+        // reads "avg 0.0 Wh/km" for the whole simulated ride, which is exactly
+        // the defect the wheel profile exists to reproduce.
+        assertFalse(m.hasEnergyCounters, "zero-because-unreported, not zero-because-idle")
 
         // The contrast: the scooter profile DOES carry energy counters, so the
         // zeros above are a property of the wheel, not of the simulator.
         val s = scooter.motionAt(cruiseTick)
+        assertTrue(s.hasEnergyCounters, "the scooter measures what it counts")
         assertTrue(s.consumedWh > 0f, "the scooter curve must be untouched, consumedWh was ${s.consumedWh}")
         assertTrue(s.eRpm > 0f, "the scooter curve must be untouched, eRpm was ${s.eRpm}")
     }

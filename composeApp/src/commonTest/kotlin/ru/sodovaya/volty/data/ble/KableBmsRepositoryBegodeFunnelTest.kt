@@ -551,7 +551,15 @@ class KableBmsRepositoryBegodeFunnelTest {
             motorCurrentA = 61.25f,
             batteryCurrentA = 33.75f,
             inputVoltageV = 147.2f,
+            // FALSE for the same reason `hasDuty` is, and paired with a real
+            // voltage for the same reason: a fold moves every field whether or
+            // not the combination could occur on hardware. It also pins the
+            // ONE case `G §9.3`'s new voltage fold could have got wrong — with
+            // no controller measuring, the average has nothing to prefer, so it
+            // must keep averaging what it has rather than substituting a 0.
+            hasInputVoltage = false,
             powerW = 4968.0f,
+            hasPower = false,
             eRpm = 12345f,
             escTempC = 52.5f,
             motorTempC = 71.5f,
@@ -562,22 +570,15 @@ class KableBmsRepositoryBegodeFunnelTest {
             consumedWh = 640.5f,
             regenAh = 0.25f,
             regenWh = 36.5f,
+            hasEnergyCounters = false,
             faults = listOf("OVER_TEMPERATURE"),
-            // Deliberately left null. `MotionAggregator.aggregate` does NOT
-            // carry `batteryLevelFraction` — a real, currently-harmless gap
-            // (nothing reads it off the aggregate; the two VESC decoders read
-            // it from their own `latestMotion`). Setting it here would make
-            // this test fail for the aggregator's bug rather than for the
-            // fold under test, and pinning the drop as expected would block
-            // the fix. It is reported instead: see D Task 5's report.
-            //
-            // KNOWN HOLE, and the exception to this test's name: null is also
-            // the MODEL's default, so this field is defaulted on both sides and
-            // the equality below cannot see it either way. That is accepted
-            // here rather than fixed, because the only way to pin it is to
-            // assert the current (wrong) behaviour. Every OTHER field above is
-            // non-default precisely so that it is not in the same position.
-            batteryLevelFraction = null,
+            // The hole this test used to name and leave open: `aggregate` did
+            // NOT carry `batteryLevelFraction` (`A-foundation`), and null is
+            // also the model's default, so leaving it null here made the field
+            // invisible to the equality below in both directions. G2 Task 6
+            // added it to the fold, so it is non-default now like every other
+            // field and the identity claim is finally true of the whole class.
+            batteryLevelFraction = 0.62f,
             isConnected = true
         )
 

@@ -451,11 +451,14 @@ class DemoBmsSimulator(
             odometerKm = (WHEEL_ODOMETER_START_KM + distanceKm).toFloat(),
             tripKm = distanceKm.toFloat(),
             // A Begode reports no energy counters — not zero-because-idle, zero
-            // because the frames carry no such field.
+            // because the frames carry no such field. The flag is what says so
+            // out loud (G §9.1): without it the demo wheel's consumption card
+            // reads "avg 0.0 Wh/km" for the whole simulated ride.
             consumedAh = 0f,
             consumedWh = 0f,
             regenAh = 0f,
             regenWh = 0f,
+            hasEnergyCounters = false,
             faults = emptyList(),
             isConnected = true,
             timestamp = Clock.System.now()

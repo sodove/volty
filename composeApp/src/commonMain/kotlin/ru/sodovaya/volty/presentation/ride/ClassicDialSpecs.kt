@@ -4,7 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
-import ru.sodovaya.volty.domain.stats.RideMetrics
+import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.presentation.ride.gauge.VescGaugeRange
@@ -377,7 +377,12 @@ object ClassicDialSpecs {
 
     // ---------------------------------------------------------------------------------------
 
-    private const val UNKNOWN = "—"
+    /**
+     * The shared marker, not a private copy: `G §9`'s whole point is that all
+     * three renderers say "unknown" the same way, and two literals that happen
+     * to match today are exactly how the Clean and Classic gauges would drift.
+     */
+    private const val UNKNOWN = UNKNOWN_READOUT
 
     /**
      * QML :458 / :474 write their temperature captions on two lines (`"TEMP\nESC"`) because one
@@ -416,8 +421,14 @@ object ClassicDialSpecs {
 
         // The canonical Wh/km drives the COLOUR (see CONSUMPTION_WARN_WH_PER_KM); the display
         // conversion drives the needle and the readout, exactly as the speed dial does.
-        val whPerKm = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
-            ?: RideMetrics.sessionWhPerKm(motion.consumedWh, motion.tripKm)
+        // Through MotionReadings, so the `—` override below is finally reachable: this fallback
+        // used to be spelled out here and returned a well-formed 0.0 on every Begode (G §9.1).
+        val whPerKm = MotionReadings.whPerKm(motion)
+        val duty = MotionReadings.dutyPercent(motion)
+        val power = MotionReadings.powerW(motion)
+        val speed = MotionReadings.speedKmh(motion)
+        val escTemp = MotionReadings.escTempC(motion)
+        val motorTemp = MotionReadings.motorTempC(motion)
 
         return listOf(
             // QML :70-85. `values.current_motor` feeds this gauge in VESC Tool; Volty shows the
@@ -449,11 +460,16 @@ object ClassicDialSpecs {
                     maximumValue = DUTY_MAX_PERCENT,  // QML :92
                     labelStep = 25.0                  // QML :96
                 ),
-                value = motion.dutyPercent,
+                value = duty ?: 0f,
                 caption = labels.duty,
                 unit = "%",                           // QML :98
+                // G §9: a wheel whose firmware has never reported a PWM used to show a confident
+                // 0 % here while the alarm correctly refused to arm on the same sample.
+                valueTextOverride = if (duty == null) UNKNOWN else null,
                 // OURS WINS: VESC gives duty a fixed accent (:100) and no threshold at all.
-                severity = DutyBands.level(motion.dutyPercent)
+                // An unobserved duty gets no band: an absent number is not an alarming one, the
+                // same call consumptionLevel and batteryLevel already make.
+                severity = duty?.let { DutyBands.level(it) } ?: DutyLevel.NORMAL
             ),
             // QML :101-117. Declares no angles, so it takes CustomGauge's own -140..140.
             VescDialSpec(
@@ -467,9 +483,11 @@ object ClassicDialSpecs {
                     maximumValue = powerMax,
                     labelStep = powerLabelStep(powerMax) // QML :112
                 ),
-                value = motion.powerW,
+                value = power ?: 0f,
                 caption = labels.power,
                 unit = "W",                           // QML :114
+                // G §9: an unavailable voltage scale used to render as a confident 0 W.
+                valueTextOverride = if (power == null) UNKNOWN else null,
                 tickmarkScale = 0.001,                // QML :110 — label the watts as kilowatts
                 tickmarkSuffix = "k"                  // QML :111
             ),
@@ -485,10 +503,10 @@ object ClassicDialSpecs {
                 ),
                 // Value AND scale both in display units — the shipped defect was converting only
                 // the readout, leaving an mph number over a km/h-labelled ring.
-                value = if (motion.speedKnown) UnitFormatter.speedValue(motion.speedKmh, units) else 0f,
+                value = speed?.let { UnitFormatter.speedValue(it, units) } ?: 0f,
                 caption = labels.speed,
                 unit = UnitFormatter.speedUnit(units), // QML :141
-                valueTextOverride = if (motion.speedKnown) null else UNKNOWN
+                valueTextOverride = if (speed == null) UNKNOWN else null
             ),
             // QML :301-369. Hides its own centre text (:312) for the overlay ClassicRideCluster
             // draws in its place; declares no labelStep, so it takes CustomGauge's 10.
@@ -518,12 +536,12 @@ object ClassicDialSpecs {
                     maximumValue = TEMP_MAX_C,        // QML :442
                     labelStep = 20.0                  // QML :444
                 ),
-                value = if (motion.hasEscTemp) motion.escTempC else 0f,
+                value = escTemp ?: 0f,
                 caption = twoLineCaption(labels.esc),
                 unit = "°C",                          // QML :457
-                valueTextOverride = if (motion.hasEscTemp) null else UNKNOWN,
+                valueTextOverride = if (escTemp == null) UNKNOWN else null,
                 // OURS WINS: VESC reddens at 70 and ambers at 40 (:449); TempBands says 85/70.
-                severity = if (motion.hasEscTemp) TempBands.escLevel(motion.escTempC) else DutyLevel.NORMAL
+                severity = escTemp?.let { TempBands.escLevel(it) } ?: DutyLevel.NORMAL
             ),
             // QML :461-486. Inverted sweep, like Duty.
             VescDialSpec(
@@ -535,10 +553,10 @@ object ClassicDialSpecs {
                     maximumValue = TEMP_MAX_C,        // QML :467
                     labelStep = 20.0                  // QML :471
                 ),
-                value = if (motion.hasMotorTemp) motion.motorTempC else 0f,
+                value = motorTemp ?: 0f,
                 caption = twoLineCaption(labels.motor),
                 unit = "°C",                          // QML :473
-                valueTextOverride = if (motion.hasMotorTemp) null else UNKNOWN,
+                valueTextOverride = if (motorTemp == null) UNKNOWN else null,
                 // OURS WINS: VESC reddens at 70 (:479); TempBands says 100/85 for a motor.
                 severity = TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
             ),

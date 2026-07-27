@@ -42,7 +42,46 @@ data class ControllerData(
     val motorCurrentA: Float = 0f,
     val batteryCurrentA: Float = 0f,
     val inputVoltageV: Float = 0f,
+    /**
+     * Whether [inputVoltageV] is a MEASUREMENT rather than a placeholder — the
+     * voltage member of the unknown-vs-zero contract ([hasDuty] is the first;
+     * see [ru.sodovaya.volty.domain.stats.MotionReadings] for the whole rule).
+     *
+     * Voltage has no "absent" encoding either: a rail voltage is a non-negative
+     * magnitude, so an unavailable one has to be published as `0f`, which is
+     * indistinguishable from a dead pack. `BegodeProtocol.inputVoltageV` is the
+     * first producer that genuinely cannot answer — the wheel reports against a
+     * fixed 67.2 V reference and turning that into volts needs the pack's cell
+     * count, which the rider may not have supplied (`D §2`).
+     *
+     * Folded across controllers with `any`, because
+     * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate] AVERAGES the
+     * voltage over the controllers that measure it: one measurement is a
+     * vehicle-level answer. This is the fold `G §9.3` is about — a head-unit row
+     * answering a 0 V rail used to be averaged in as though it were a
+     * measurement, reporting two thirds of a three-controller vehicle's real
+     * pack voltage.
+     *
+     * **Defaults to `true`**, like [hasDuty]: a decoder that says nothing here
+     * keeps exactly the behaviour it had.
+     */
+    val hasInputVoltage: Boolean = true,
     val powerW: Float = 0f,
+    /**
+     * Whether [powerW] is a MEASUREMENT rather than a placeholder.
+     *
+     * Separate from [hasInputVoltage] even though every producer today computes
+     * `powerW = inputVoltageV * batteryCurrentA` and therefore sets the two
+     * together, because **the two flags fold differently** and the aggregate is
+     * itself a [ControllerData]: voltage is averaged (so `any` measurement
+     * answers for the vehicle) while power is SUMMED (so a total is only a
+     * measurement when EVERY term is one — see
+     * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate]). Collapsing
+     * them into one flag would force the aggregate to lie about one of the two.
+     *
+     * **Defaults to `true`** — see [hasDuty].
+     */
+    val hasPower: Boolean = true,
     val eRpm: Float = 0f,
     val escTempC: Float = 0f,
     val motorTempC: Float = 0f,
@@ -77,6 +116,28 @@ data class ControllerData(
     val consumedWh: Float = 0f,
     val regenAh: Float = 0f,
     val regenWh: Float = 0f,
+    /**
+     * Whether [consumedAh], [consumedWh], [regenAh] and [regenWh] are
+     * MEASUREMENTS rather than placeholders — the third member of the
+     * unknown-vs-zero contract, and the one `G §9.1` is about.
+     *
+     * A Begode's frames carry no energy counters at all, so all four read `0f`
+     * forever. `0 Wh consumed` is also a real reading (a ride that has just
+     * started), so the number cannot carry the distinction — and without it
+     * `RideMetrics.sessionWhPerKm` returns `0f / tripKm` = a well-formed
+     * **0.0 Wh/km** the instant the trip counter moves, on every Begode, for the
+     * whole ride.
+     *
+     * One flag for all four counters rather than four: no producer has ever
+     * reported a subset, and the question they answer ("does this protocol keep
+     * energy counters?") is one question.
+     *
+     * Folded across controllers with `all`, because the counters are SUMMED —
+     * see [hasPower] for why a summed field cannot use `any`.
+     *
+     * **Defaults to `true`** — see [hasDuty].
+     */
+    val hasEnergyCounters: Boolean = true,
     val faults: List<String> = emptyList(),
     /**
      * Controller-computed battery level 0..1 from COMM_GET_VALUES_SETUP, or null

@@ -5,7 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
-import ru.sodovaya.volty.domain.stats.RideMetrics
+import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
@@ -47,6 +47,12 @@ data class SecondaryGaugeLabels(
  * Pure, so the choice logic is tested without a screen. Severity is what colors
  * the ring: duty uses the shared [DutyBands], temperatures their own ceilings,
  * everything else is neutral — semantic color is spent only on safety.
+ *
+ * Every motion reading is taken through [MotionReadings], never off
+ * [ControllerData] directly: an unobserved value arrives here as null and
+ * renders as [UNKNOWN_READOUT] with a zero ring and a [DutyLevel.NORMAL]
+ * severity — the same three things the temperature gauges have always done, now
+ * reaching duty, power and consumption too (`G §9`).
  */
 object SecondaryGaugeMapper {
 
@@ -67,41 +73,56 @@ object SecondaryGaugeMapper {
         units: UnitSystem,
         labels: SecondaryGaugeLabels = SecondaryGaugeLabels()
     ): SecondaryReadout = when (gauge) {
-        SecondaryGauge.DUTY -> SecondaryReadout(
-            labels.duty, motion.dutyPercent.roundToInt().toString(), "%",
-            frac(motion.dutyPercent, 100f), DutyBands.level(motion.dutyPercent)
-        )
+        SecondaryGauge.DUTY -> {
+            // G §9: hasDuty used to be read nowhere in presentation/, so a wheel
+            // whose truePWM latch has never closed — the exact case Part F's
+            // alarm refuses to arm on — showed a confident 0 %.
+            val duty = MotionReadings.dutyPercent(motion)
+            SecondaryReadout(
+                labels.duty, duty.readoutOr { it.roundToInt().toString() }, "%",
+                duty?.let { frac(it, 100f) } ?: 0f,
+                duty?.let { DutyBands.level(it) } ?: DutyLevel.NORMAL
+            )
+        }
         SecondaryGauge.BATTERY -> SecondaryReadout(
             labels.battery,
             if (battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
             if (battery.socKnown) frac(battery.soc, 100f) else 0f,
             DutyLevel.NORMAL
         )
-        SecondaryGauge.POWER -> SecondaryReadout(
-            labels.power, formatFixed(motion.powerW / 1000f, 1), "kW",
-            frac(abs(motion.powerW), MAX_POWER_W), DutyLevel.NORMAL
-        )
+        SecondaryGauge.POWER -> {
+            val power = MotionReadings.powerW(motion)
+            SecondaryReadout(
+                labels.power, power.readoutOr { formatFixed(it / 1000f, 1) }, "kW",
+                power?.let { frac(abs(it), MAX_POWER_W) } ?: 0f, DutyLevel.NORMAL
+            )
+        }
         SecondaryGauge.CURRENT -> SecondaryReadout(
             labels.current, motion.batteryCurrentA.roundToInt().toString(), "A",
             frac(abs(motion.batteryCurrentA), MAX_CURRENT_A), DutyLevel.NORMAL
         )
-        SecondaryGauge.MOTOR_TEMP -> SecondaryReadout(
-            labels.motorTemp,
-            if (motion.hasMotorTemp) motion.motorTempC.roundToInt().toString() else "—", "°C",
-            if (motion.hasMotorTemp) frac(motion.motorTempC, TempBands.MOTOR_CRITICAL_C + 20f) else 0f,
-            TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
-        )
-        SecondaryGauge.ESC_TEMP -> SecondaryReadout(
-            labels.escTemp,
-            if (motion.hasEscTemp) motion.escTempC.roundToInt().toString() else "—", "°C",
-            if (motion.hasEscTemp) frac(motion.escTempC, TempBands.ESC_CRITICAL_C + 20f) else 0f,
-            TempBands.escLevel(motion.escTempC)
-        )
-        SecondaryGauge.CONSUMPTION -> {
-            val wh = RideMetrics.instantWhPerKm(motion.powerW, motion.speedKmh)
-                ?: RideMetrics.sessionWhPerKm(motion.consumedWh, motion.tripKm)
+        SecondaryGauge.MOTOR_TEMP -> {
+            val temp = MotionReadings.motorTempC(motion)
             SecondaryReadout(
-                labels.consumption, wh?.let { formatFixed(it, 1) } ?: "—", "Wh/km",
+                labels.motorTemp,
+                temp.readoutOr { it.roundToInt().toString() }, "°C",
+                temp?.let { frac(it, TempBands.MOTOR_CRITICAL_C + 20f) } ?: 0f,
+                TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
+            )
+        }
+        SecondaryGauge.ESC_TEMP -> {
+            val temp = MotionReadings.escTempC(motion)
+            SecondaryReadout(
+                labels.escTemp,
+                temp.readoutOr { it.roundToInt().toString() }, "°C",
+                temp?.let { frac(it, TempBands.ESC_CRITICAL_C + 20f) } ?: 0f,
+                TempBands.escLevel(motion.escTempC)
+            )
+        }
+        SecondaryGauge.CONSUMPTION -> {
+            val wh = MotionReadings.whPerKm(motion)
+            SecondaryReadout(
+                labels.consumption, wh.readoutOr { formatFixed(it, 1) }, "Wh/km",
                 wh?.let { frac(it, MAX_WH_PER_KM) } ?: 0f, DutyLevel.NORMAL
             )
         }
