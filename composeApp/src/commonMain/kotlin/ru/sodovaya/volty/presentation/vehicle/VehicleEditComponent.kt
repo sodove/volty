@@ -11,7 +11,6 @@ import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
-import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.isGuest
@@ -51,13 +50,12 @@ interface VehicleEditComponent {
     /**
      * Open the per-vehicle alert settings screen (F Task 9).
      *
-     * Navigation only — **no state on this form**, deliberately. `onSave()`
-     * rebuilds the vehicle from scratch through `singlePackVehicle(...)` and
-     * hand-copies the rest across, a pattern that has already eaten three fields;
-     * the alert rules are edited and persisted by their own component, which
-     * re-reads the vehicle at save time, so nothing here can drop them. The
-     * `motionAlerts = existing?.motionAlerts` carry-through in [onSave] is what
-     * keeps a save from this form from resurrecting the defaults over them.
+     * Navigation only — **no state on this form**, deliberately. The alert rules
+     * are edited and persisted by their own component, which is PUSHED on top of
+     * this one (RootComponent) and therefore writes while this component is still
+     * alive holding a stale snapshot. [onSave] re-reads the vehicle from the
+     * repository at save time and edits THAT, so the rules written while this
+     * form was in the background are the ones a later save carries forward.
      */
     fun onOpenAlerts()
     fun onSave()
@@ -90,8 +88,9 @@ interface VehicleEditComponent {
          * its controller's.
          *
          * Separate from [bmsAddress] on purpose: that one feeds the pack
-         * [singlePackVehicle] builds in [onSave], and a controller's address
-         * must never reach it. "" (rendered as an em-dash) when neither exists.
+         * [singlePackVehicle] builds when CREATING, and a controller's address
+         * must never reach it. (Editing never builds a pack — see [onSave].)
+         * "" (rendered as an em-dash) when neither exists.
          */
         val sourceAddress: String = "",
         val averagingWindowMin: Int = 5,
@@ -165,10 +164,11 @@ class DefaultVehicleEditComponent(
                     // A controller-only vehicle has no pack to describe, so the
                     // form's BMS fields fall back to their own defaults (the
                     // same ones the "create" branch below uses) instead of
-                    // throwing on init. onSave() will not invent a pack for it
-                    // — see the packs preservation there. These two stay the
-                    // PACK's; what the read-only header shows is sourceVehicle
-                    // / sourceAddress below, which do describe a controller.
+                    // throwing on init. Harmless: an edit never reads them back
+                    // — onSave() only ever builds a pack when CREATING. These
+                    // two stay the PACK's; what the read-only header shows is
+                    // sourceVehicle / sourceAddress below, which do describe a
+                    // controller.
                     bmsType = v.bmsTypeOrNull ?: VehicleEditComponent.State().bmsType,
                     bmsAddress = v.bmsAddressOrNull ?: VehicleEditComponent.State().bmsAddress,
                     sourceVehicle = v,
@@ -228,82 +228,14 @@ class DefaultVehicleEditComponent(
         if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
         scope.launch {
             _state.update { it.copy(saving = true) }
-            // Preserve everything the edit form doesn't expose (cutoff / delta /
-            // notify toggles, pin, last-connected) — rebuilding from defaults
-            // would silently wipe them on every save.
+            // Re-read rather than reuse State.sourceVehicle: the alerts screen
+            // (F Task 9) is PUSHED on top of this one, so it persists
+            // motionAlerts while this component is still alive holding the
+            // snapshot initialize() took. Editing the stored row is the point —
+            // editing a stale copy of it would be the same defect wearing a
+            // different hat.
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
-            val built = singlePackVehicle(
-                id = vehicleId ?: "v-${Random.nextLong()}",
-                name = s.name,
-                iconKey = s.iconKey,
-                bmsType = s.bmsType,
-                bmsAddress = s.bmsAddress,
-                chemistry = s.chemistry,
-                // Auto-filled from live telemetry by the repo (see
-                // KableBmsRepository.maybePersistCellCount) — never edited here.
-                cellCount = existing?.cellCountOrNull,
-                averagingWindowMin = s.averagingWindowMin,
-                alertConfig = (existing?.alertConfig ?: AlertConfig()).copy(
-                    cellHighV = s.cellHighV,
-                    cellLowV = s.cellLowV,
-                    temperatureWarnC = s.temperatureWarnC,
-                    temperatureHighC = s.temperatureHighC,
-                    socLowPercent = s.socLowPercent
-                ),
-                createdAt = existing?.createdAt ?: Clock.System.now(),
-                lastConnectedAt = existing?.lastConnectedAt,
-                isPinned = existing?.isPinned ?: false
-            )
-            // singlePackVehicle() only knows the single-pack shape — it can't
-            // forward controllers/topology (not editable from this screen yet)
-            // or dashboardStyle/secondaryGauge (edited here, via the state).
-            // Without this .copy(), every save through this screen silently
-            // wiped a vehicle's VESC controllers and reset its dashboard prefs.
-            val v = built.copy(
-                // singlePackVehicle() ALWAYS synthesizes one pack. For a
-                // controller-only vehicle (zero packs) that pack would be built
-                // from this form's placeholder defaults — a phantom JK_BMS at
-                // address "" — so a save from this screen would silently invent
-                // a battery the vehicle doesn't have. Keep it pack-less; the
-                // controllers copied below satisfy Vehicle's "needs a source".
-                packs = if (existing != null && existing.packs.isEmpty()) emptyList() else built.packs,
-                // Preserve every existing controller field (address, type,
-                // canId, providesDerivedBattery...) EXCEPT motor: this screen
-                // is the only place that edits MotorConfig, and it only ever
-                // edits controllers[0] (G1: exactly one controller per
-                // vehicle). Blank fields fall back to MotorConfig()'s own
-                // defaults rather than persisting a hole.
-                controllers = (existing?.controllers ?: emptyList()).mapIndexed { i, c ->
-                    if (i == 0) {
-                        c.copy(
-                            motor = MotorConfig(
-                                polePairs = s.motorPolePairs ?: MotorConfig().polePairs,
-                                wheelDiameterMm = s.motorWheelDiameterMm ?: MotorConfig().wheelDiameterMm,
-                                gearRatio = s.motorGearRatio ?: MotorConfig().gearRatio
-                            )
-                        )
-                    } else c
-                },
-                topology = existing?.topology ?: built.topology,
-                dashboardStyle = s.dashboardStyle,
-                secondaryGauge = s.secondaryGauge,
-                // Not editable here (this screen is single-pack / single-controller
-                // and cannot express the two-path alias group the toggle is about
-                // — see the Part C task-5 report). Carried through explicitly so a
-                // save from this form does not silently reset a rider's opt-out,
-                // exactly as topology and the controller list are above.
-                yieldBmsToHeadUnit = existing?.yieldBmsToHeadUnit,
-                // Also not editable here (F Task 5's own screen owns it), and
-                // carried through for a sharper reason than the fields above.
-                // singlePackVehicle() leaves motionAlerts null, and null does
-                // not mean "no alerts" — it means "never configured", which the
-                // repository answers with AlarmDefaults. So dropping it here
-                // does not merely lose the rider's numbers: it RESURRECTS the
-                // defaults over them. A rider who silenced every kind and then
-                // renamed the vehicle would have the alarm switch itself back
-                // on. See SqlDelightVehicleRepository / Vehicle.motionAlerts.
-                motionAlerts = existing?.motionAlerts
-            )
+            val v = existing?.withEdits(s) ?: newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
             vehicleRepository.upsert(v)
             // If the user saved while a guest connection was live, swap the
             // active connection to the freshly-persisted Vehicle so the
@@ -337,3 +269,92 @@ class DefaultVehicleEditComponent(
         }
     }
 }
+
+/**
+ * Applies this form's edits **to the vehicle it loaded** — and touches nothing
+ * else.
+ *
+ * The direction is the whole point, and it is the opposite of what this file
+ * used to do. Saving once rebuilt the vehicle from scratch through
+ * `singlePackVehicle(...)` and then hand-copied back the fields the form does
+ * not expose; every field missing from that list was reset to its default on
+ * *any* save, including one that never touched it. It ate `controllers` /
+ * `topology`, then `yieldBmsToHeadUnit`, then `motionAlerts`, and a comment
+ * warning about it did not stop the third (G-vehicle-composer.md §8).
+ *
+ * A `copy()` on the stored vehicle inverts the failure mode instead of
+ * documenting it: **a field nobody names here is preserved**, so forgetting one
+ * is a no-op rather than data loss, and a field can only be lost by someone
+ * deliberately writing its name below. That also means this list is
+ * self-limiting — the only correct entries are the ones
+ * [VehicleEditComponent.State] actually edits, and adding a field to [Vehicle]
+ * requires no change here at all.
+ *
+ * Everything not listed follows from that: `packs` beyond index 0 (a Begode
+ * wheel's auto-filled second branch — §8.1), `cellCount`, `canId`,
+ * `aliasGroup`, `topology`, `createdAt`, `lastConnectedAt`, `isPinned`,
+ * `yieldBmsToHeadUnit`, `motionAlerts`.
+ */
+private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
+    name = s.name,
+    iconKey = s.iconKey,
+    chemistry = s.chemistry,
+    averagingWindowMin = s.averagingWindowMin,
+    alertConfig = alertConfig.withEdits(s),
+    // The name field has always renamed the primary pack too — `singlePackVehicle`
+    // labels pack 0 after the vehicle, and for a single-pack vehicle that label is
+    // what the pack card shows (`packLabelFor`). Index 0 ONLY: a wheel's second
+    // branch keeps the positional label `expandedTo` gave it, and a pack-less
+    // vehicle maps an empty list to an empty list — no phantom battery, and no
+    // `packs.isEmpty()` special case to forget.
+    packs = packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p },
+    // Motor config for controllers[0] — G1 has exactly one controller per
+    // vehicle, and this screen is the only place that edits a MotorConfig. A
+    // blank field falls back to MotorConfig()'s own default rather than
+    // persisting a hole. Every other controller field is untouched.
+    controllers = controllers.mapIndexed { i, c ->
+        if (i == 0) c.copy(motor = s.motorConfig()) else c
+    },
+    dashboardStyle = s.dashboardStyle,
+    secondaryGauge = s.secondaryGauge
+)
+
+/** The five thresholds this form exposes; the rest of [AlertConfig] is not its business. */
+private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = copy(
+    cellHighV = s.cellHighV,
+    cellLowV = s.cellLowV,
+    temperatureWarnC = s.temperatureWarnC,
+    temperatureHighC = s.temperatureHighC,
+    socLowPercent = s.socLowPercent
+)
+
+private fun VehicleEditComponent.State.motorConfig(): MotorConfig = MotorConfig(
+    polePairs = motorPolePairs ?: MotorConfig().polePairs,
+    wheelDiameterMm = motorWheelDiameterMm ?: MotorConfig().wheelDiameterMm,
+    gearRatio = motorGearRatio ?: MotorConfig().gearRatio
+)
+
+/**
+ * The CREATE path, and the only place this screen still calls a constructor.
+ *
+ * A vehicle that does not exist yet has nothing to preserve, so a builder is
+ * exactly right here — and [singlePackVehicle] is the right one because this
+ * form only ever originates the single-BMS shape (a controller vehicle is
+ * created by the Picker, `pickedControllerVehicle`, which then navigates
+ * straight to this screen to EDIT it).
+ */
+@OptIn(ExperimentalTime::class)
+private fun newVehicle(s: VehicleEditComponent.State, id: String): Vehicle = singlePackVehicle(
+    id = id,
+    name = s.name,
+    iconKey = s.iconKey,
+    bmsType = s.bmsType,
+    bmsAddress = s.bmsAddress,
+    chemistry = s.chemistry,
+    averagingWindowMin = s.averagingWindowMin,
+    alertConfig = AlertConfig().withEdits(s),
+    createdAt = Clock.System.now()
+).copy(
+    dashboardStyle = s.dashboardStyle,
+    secondaryGauge = s.secondaryGauge
+)
