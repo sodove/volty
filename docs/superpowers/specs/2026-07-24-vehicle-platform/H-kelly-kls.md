@@ -133,3 +133,24 @@ is computed as `escTempC > -50f` (VESC's "no sensor wired" sentinel, generalised
 A decoder leaving `escTempC` at its `0f` default when the reading is absent claims
 the sensor exists, and `ESC_TEMP` arms against a constant zero — displayed as
 armed, permanently silent. Write a sub-−50 value. Same for `hasMotorTemp`.
+
+---
+
+## A vehicle of this type can be locked out of its own Ride dashboard, silently
+
+Found in Part D Task 5's review (2026-07-27).
+
+`RootComponent.homeConfigFor` is the single rule behind every landing decision
+and the Ride tab's visibility, and it is **type-agnostic** —
+`vehicle?.hasControllers == true`. Every test of it used a VESC until Part D
+added one for Begode.
+
+The reviewer ran a mutant that returns the battery `Dashboard` for a
+`FARDRIVER` or `KELLY` controller: **1160 tests, 0 failures.** So a vehicle of
+this type can be routed away from the Ride dashboard — with no Ride tab left to
+escape by — and nothing in the suite objects. A green build says everything is
+fine while the rider cannot reach their own instruments.
+
+**This part must add the test for its own controller type**, in the same shape
+Part D used: a mutant that sends this type to the battery dashboard has to fail
+something. One test, and it closes the quarter of the hole this part owns.
