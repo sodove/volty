@@ -168,6 +168,34 @@ refused it **on purpose**: Begode maps to a real `BmsType`, so returning a
 battery decoder would have put a dead dashboard in front of a rider. That reason
 expires the moment `BegodeProtocol` is a `MotionSource`.
 
+**This task is a gate, not just a wiring change: it makes two latent hazards
+reachable, and neither may ship unguarded.** Tasks 2 and 3 both flagged them.
+
+1. **The duty alarm must not be armable against a duty we have never seen.**
+   `truePWM` latches on the first non-zero PWM, and before that latch
+   `dutyPercent` reads `0f` — indistinguishable from a genuine 0 %. A firmware
+   that never fills the field therefore leaves the ШИМ alarm **displayed as
+   armed and permanently unable to fire**, which is precisely the silent failure
+   Part F spent a task eliminating. It is unreachable today only because
+   `availabilityFor` short-circuits while `vehicle.controllers` is empty — and
+   this task ends that. So this task also lands the **observed layer**, mirroring
+   what `hasMotorTemp`/`hasEscTemp` already do:
+   - a flag on `ControllerData` (default `true`, so no other decoder changes),
+     set by `BegodeProtocol` from the latch;
+   - the fold in `MotionAggregator.aggregate` — **`hasDuty = d.any { it.hasDuty }`
+     beside line 53**, or a mixed VESC + Begode vehicle loses duty availability
+     entirely;
+   - the second gate in `MotionAlertAvailability`'s DUTY branch, which today
+     answers from the static table alone.
+2. **`cellCount` must reach `createProtocol` in the same commit.** Task 2 added
+   the optional parameter; `KableBmsRepository.kt:2522` still constructs
+   `BegodeProtocol()`. Without it `inputVoltageV` stays 0 and `powerW` renders as
+   a confident **"0.0 kW"** with consumption at "0.0 Wh/km" — not a blank, not a
+   dash. Task 2's review called landing the picker branch without the cell count
+   a correctness bug, not an untidiness.
+
+Then the wiring itself:
+
 - Return the Begode motion protocol for `ProtocolKind.BEGODE`.
 - A wheel is **one link owning `controllers = [0]` + `packs = [0,1]`** at one
   address (spec §4, `01-linking §3` archetype 3). Confirm `planLinks` already
@@ -175,6 +203,9 @@ expires the moment `BegodeProtocol` is a `MotionSource`.
   Begode packs; if it does not, that is this task's work.
 - The picker's support gate is *derived* from the protocol factory, so it should
   follow automatically — assert that it does rather than assuming.
+- **Two tests in `KableBmsRepositoryVescTest` are designed to fail when this task
+  lands** — a deliberate tripwire from Task 2. Deleting the `BEGODE` exception
+  and the retired assertion is the correct fix, not working around them.
 
 ### Task 5 — the funnel, end to end
 
