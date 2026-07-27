@@ -31,7 +31,7 @@ import kotlin.math.abs
  *   0x02 / 0x03 — cell voltages of branch 0 / branch 1, 8 cells per frame,
  *          packet index at byte 19
  *   0x04 — total odometer, wheel settings and an alert bitmap
- *          (only the odometer is decoded — see [parseOdometerFrame])
+ *          (odometer, alert bitmap and tiltback speed — see [parseOdometerFrame])
  *   0x07 — motion telemetry: battery current, motor temperature and the
  *          wheel's HARDWARE PWM (see [parseMotionFrame])
  *
@@ -120,6 +120,18 @@ class BegodeProtocol(
     /** True once any 0x04 frame arrived. */
     private var sawOdometer = false
 
+    /** Last decoded 0x04 alert bitmap (byte 14) — see [parseOdometerFrame]. */
+    private var alertBitmap: Int = 0
+
+    /**
+     * The subset of [alertBitmap] that belongs in [ControllerData.faults] —
+     * see [FAULT_BITS] for which bits those are and why the others are not.
+     */
+    private var faultsValue: List<String> = emptyList()
+
+    /** Last decoded tiltback speed, or null when unset — see [tiltbackSpeedKmh]. */
+    private var tiltbackSpeedValue: Float? = null
+
     /** Last decoded battery current, A — see [batteryCurrentA]. */
     private var batteryCurrentAValue: Float = 0f
 
@@ -128,6 +140,13 @@ class BegodeProtocol(
 
     /** True once any 0x07 frame arrived. */
     private var sawMotionFrame = false
+
+    /**
+     * The motor thermistor's own `truePWM` latch: true once the 0x07 motor
+     * temperature field has been seen NON-ZERO at least once. See [motorTempC]
+     * for why an unlatched field is withheld rather than published as 0 °C.
+     */
+    private var sawMotorTempEvidence = false
 
     /** Last decoded hardware duty, percent — see [dutyPercent]. */
     private var dutyPercentValue: Float = 0f
@@ -302,15 +321,91 @@ class BegodeProtocol(
     fun batteryCurrentA(): Float? = if (sawMotionFrame) batteryCurrentAValue else null
 
     /**
-     * MOTOR temperature in °C from the 0x07 frame, or null before one arrives.
+     * MOTOR temperature in °C from the 0x07 frame, or null while the wheel has
+     * not proved it has a motor thermistor at all.
      *
      * The ET Max reads 20 °C here against 27.5 °C on the mainboard sensor, so
-     * this wheel plainly HAS a motor thermistor — spec §2's "wheels usually
-     * expose one board temp, `hasMotorTemp = false`" does not hold for it, and
-     * Task 2 should set that flag from whether this returns null rather than
-     * from the spec's prose.
+     * this wheel plainly HAS one — spec §2's "wheels usually expose one board
+     * temp, `hasMotorTemp = false`" does not hold for it, and
+     * [ControllerData.hasMotorTemp] is set from whether this returns null
+     * rather than from the spec's prose.
+     *
+     * **Null until the field has been seen non-zero once**
+     * ([sawMotorTempEvidence]), which is the same latch [dutyPercent] applies
+     * to the hardware PWM and for the same reason. Frame arrival alone is not
+     * evidence of a sensor: a wheel whose motor thermistor is unwired or
+     * unfitted still emits 0x07 frames, with 0 in this field, and
+     * `hasMotorTemp = sawMotionFrame` would then CLAIM the sensor and arm Part
+     * F's MOTOR_TEMP alert against a constant zero — spec `D §7.1` one level
+     * up from the ESC-temperature case, an alarm shown as armed that can never
+     * fire.
+     *
+     * **A range gate cannot decide this and none is used.** 0 °C is a real
+     * winter reading, so any threshold either rejects genuine cold or accepts a
+     * dead sensor; there is no value that separates them. A LATCH separates
+     * them over time instead, and the asymmetry of the two mistakes is what
+     * makes it the right trade:
+     *  - **cost** — a wheel genuinely sitting at exactly 0 °C reports no motor
+     *    sensor, so MOTOR_TEMP shows greyed with a reason, until the first
+     *    reading off zero. The field is whole degrees, so that is the first
+     *    degree of warm-up, minutes at most — and a motor-overheat alarm is
+     *    precisely the alarm that cannot matter at 0 °C;
+     *  - **benefit** — a stuck-at-zero sensor is caught forever, instead of
+     *    arming an alarm that can never sound for the life of the wheel.
+     * Once latched the flag stays latched, so a later genuine 0 °C IS published
+     * and the alert stays armed: this withholds an unproven sensor, it does not
+     * filter readings.
+     *
+     * What it does NOT catch is a sensor stuck at some other constant (a shorted
+     * probe reading -1, say). Only the stuck-at-zero case has evidence behind it
+     * — an unwired field reads 0 — and inventing a variance test for the rest
+     * would be guessing about hardware nobody here has seen.
      */
-    fun motorTempC(): Float? = if (sawMotionFrame) motorTempCValue else null
+    fun motorTempC(): Float? =
+        if (sawMotionFrame && sawMotorTempEvidence) motorTempCValue else null
+
+    /**
+     * The wheel's own alarm bitmap from the 0x04 frame, as rider-readable
+     * labels — **every** set bit, including the ones [ControllerData.faults]
+     * deliberately does not carry (see [FAULT_BITS]). Empty when the wheel is
+     * reporting nothing and equally empty before the first 0x04 frame; the two
+     * are not distinguished because no caller acts differently on them.
+     *
+     * **Decoded but unsurfaced**, like [tiltbackSpeedKmh]: the four non-fault
+     * bits have no home on [ControllerData] and no consumer, and this accessor
+     * is where they are readable without inventing one.
+     */
+    fun wheelAlerts(): List<String> = alertLabels(alertBitmap)
+
+    /**
+     * The wheel's configured **tiltback speed** in the wheel's own unit, from
+     * the 0x04 frame bytes 10..11, or null when it is unset.
+     *
+     * WheelLog treats a value ≥ 100 as unset, and the ET Max capture reads
+     * exactly 200 in all 38 of its 0x04 frames — so on the only wheel we have,
+     * this is unset and the decode is pinned by synthetic frames. 0 is treated
+     * as unset too: a tiltback at 0 km/h would mean a wheel that tilts back
+     * standing still.
+     *
+     * **Decoded but NOT surfaced on [ControllerData], deliberately.** Three
+     * reasons, any one of them sufficient:
+     *  - there is **no field for it**. [ControllerData] is shared with VESC,
+     *    Kelly and FarDriver, and "the speed at which the controller starts
+     *    pushing back" is not a concept the other three have. Adding a field to
+     *    a shared type for one protocol's setting is not this task's call;
+     *  - there is **no consumer**. No dashboard tile, gauge or alert reads a
+     *    tiltback speed today, so a field would be written and never read;
+     *  - the **unit is not certain**. The same 0x04 frame carries an in-miles
+     *    flag in its settings word (bytes 6..7, bit 0), and this field is the
+     *    wheel's own setting expressed in whatever unit the wheel is set to.
+     *    Showing a rider "50" without knowing whether it means km/h or mph is
+     *    the kind of confident wrong number this part exists to avoid. The
+     *    capture cannot settle it: its wheel has the flag clear and the field
+     *    unset.
+     * If a later part wants it on the dashboard, it starts from a decode that
+     * already works and a written-down list of what still has to be answered.
+     */
+    fun tiltbackSpeedKmh(): Float? = tiltbackSpeedValue
 
     /**
      * The wheel's HARDWARE duty in percent (0..100), or null while the wheel
@@ -425,10 +520,11 @@ class BegodeProtocol(
      * negative distance would be worse. Both fields fill in within a second of
      * connecting.
      *
-     * [faults] stays empty: the 0x04 alert bitmap is decoded by a later task
-     * (see [parseOdometerFrame]). [eRpm] stays 0 — a Begode reports no eRPM at
-     * all, and the wheel reports GROUND speed directly, so [SpeedSource] is
-     * REPORTED and no `MotorConfig` is involved.
+     * **Faults** come from the 0x04 alert bitmap, filtered to the bits that are
+     * actually faults — see [FAULT_BITS], which is where the filter is argued.
+     * [eRpm] stays 0 — a Begode reports no eRPM at all, and the wheel reports
+     * GROUND speed directly, so [SpeedSource] is REPORTED and no `MotorConfig`
+     * is involved.
      */
     private fun rebuildMotion() {
         val speed = speedKmh()
@@ -462,6 +558,7 @@ class BegodeProtocol(
             hasMotorTemp = motorTemp != null,
             odometerKm = (odometerMeters() ?: 0L) / 1000f,
             tripKm = (tripDistanceMeters() ?: 0L) / 1000f,
+            faults = faultsValue,
             isConnected = true
         )
     }
@@ -581,9 +678,17 @@ class BegodeProtocol(
         sawLiveMotion = false
         odometerMetersValue = 0L
         sawOdometer = false
+        // A reconnect may face a healthy wheel: the previous one's alerts must
+        // not survive it, or a cleared fault would keep firing.
+        alertBitmap = 0
+        faultsValue = emptyList()
+        tiltbackSpeedValue = null
         batteryCurrentAValue = 0f
         motorTempCValue = 0f
         sawMotionFrame = false
+        // Per-wheel evidence, exactly like the duty latch: a wheel whose motor
+        // thermistor is unwired must not inherit the previous wheel's proof.
+        sawMotorTempEvidence = false
         dutyPercentValue = 0f
         // The duty latch is per-wheel evidence: a wheel that never proved it
         // reports duty must not inherit the previous wheel's proof.
@@ -758,17 +863,38 @@ class BegodeProtocol(
      * Neither check is a measurement — a wheel whose displayed odometer is
      * known would confirm it outright.
      *
-     * The REST of this frame is left alone on purpose, and it is not empty:
-     * bytes 6..7 pack pedal mode, speed alarms, roll angle and an in-miles
-     * flag; 8..9 the power-off timer; 10..11 the tiltback speed (the capture
-     * reads 200, which WheelLog treats as "unset"); byte 14 is an alert bitmap
-     * — speed alarm x2, low voltage, over voltage, over temperature,
-     * hall-sensor error, transport mode — and reads 0 here, i.e. no faults.
-     * That bitmap is a real `ControllerData.faults` source for a later task;
-     * it is recorded rather than decoded so that task starts from a fact.
+     * The rest of the frame, all of it read off WheelLog's `GotwayAdapter`:
+     * ```
+     * 55 aa | 00 82 b2 5d | 28 00 | 1c 1e | 00 c8 | 00 | 01 | 00 | 00 | 00 12 | 04 | 18 | 5a5a5a5a
+     *  hdr    odometer(m)   sett'gs  poweroff tiltbk  ?   led  alrt light   ?    type
+     * ```
+     * (a real frame of the ET Max capture)
+     *
+     * - bytes 6..7: settings word — pedal mode at bits 13..14, speed-alarm mode
+     *   at 10..11, roll angle at 7..8, an **in-miles** flag at bit 0.
+     *   **Not decoded**: every field of it is a wheel SETTING, and Volty never
+     *   writes to FFE1, so it could only ever be displayed. The in-miles flag is
+     *   the one that matters and it matters to [tiltbackSpeedKmh], which is
+     *   itself unsurfaced.
+     * - bytes 8..9: the power-off timer. Not decoded — a setting, no consumer.
+     * - bytes 10..11 signed BE: **tiltback speed**, see [tiltbackSpeedKmh].
+     * - byte 13: LED mode. Not decoded — a setting, no consumer.
+     * - byte 14: the **alert bitmap**, see [alertLabels] and [FAULT_BITS].
+     *   Reads `0x00` in all 38 of the capture's 0x04 frames — a healthy wheel,
+     *   which means the capture cannot exercise any fault and every fault test
+     *   is necessarily synthetic.
+     * - byte 15: light mode (low two bits). Not decoded — a setting.
      */
     private fun parseOdometerFrame(frame: ByteArray) {
         odometerMetersValue = frame.u32BE(2)
+        val tiltbackRaw = frame.i16BE(10)
+        // WheelLog's own rule: >= 100 is the wheel's "unset" marker rather than
+        // a speed. 0 is unset too — a wheel that tilts back at a standstill is
+        // not a configuration, it is a field nobody filled in.
+        tiltbackSpeedValue =
+            if (tiltbackRaw in 1 until TILTBACK_UNSET_AT) tiltbackRaw.toFloat() else null
+        alertBitmap = frame.u8(14)
+        faultsValue = alertLabels(alertBitmap and FAULT_BITS)
         sawOdometer = true
         rebuildMotion()
     }
@@ -799,7 +925,13 @@ class BegodeProtocol(
      */
     private fun parseMotionFrame(frame: ByteArray) {
         batteryCurrentAValue = -frame.i16BE(2) * BATTERY_CURRENT_A_PER_UNIT
-        motorTempCValue = frame.i16BE(6).toFloat()
+        val motorTempRaw = frame.i16BE(6)
+        // The thermistor's counterpart of the duty latch below: one non-zero
+        // reading is what proves a sensor is wired at all. See [motorTempC] for
+        // why frame arrival is not evidence and why no range gate can replace
+        // this.
+        if (motorTempRaw != 0) sawMotorTempEvidence = true
+        motorTempCValue = motorTempRaw.toFloat()
         val dutyRaw = frame.i16BE(8)
         // WheelLog's truePWM latch: one non-zero reading is what proves the
         // firmware fills this field in at all. Before that a zero is not a
@@ -1043,6 +1175,85 @@ class BegodeProtocol(
          * Named so the choice is greppable rather than a bare literal.
          */
         private const val DUTY_NOT_YET_REPORTED_PERCENT = 0f
+
+        /**
+         * The value of the 0x04 tiltback field at and above which the wheel
+         * means "unset" rather than a speed — WheelLog's own threshold
+         * (`if (tiltBackSpeed >= 100) tiltBackSpeed = 0`). The ET Max capture
+         * reads 200 in every 0x04 frame. See [tiltbackSpeedKmh].
+         */
+        private const val TILTBACK_UNSET_AT = 100
+
+        /**
+         * Rider-readable labels for every bit of the 0x04 alert byte, in bit
+         * order, or an empty list when nothing is set.
+         *
+         * Bit assignment from WheelLog's `GotwayAdapter` (GPL-3.0, layout
+         * only), which builds the same list as a space-separated string:
+         * bit 0 a general wheel alarm — routed to its own `setWheelAlarm` flag
+         * there, with its only proposed label ("HighPower") commented out, so
+         * the CAUSE is not actually documented and this names only the fact;
+         * bit 1 Speed2, bit 2 Speed1, bit 3 LowVoltage, bit 4 OverVoltage,
+         * bit 5 OverTemperature, bit 6 errHallSensors, bit 7 TransportMode.
+         *
+         * The wording follows [ru.sodovaya.volty.data.bms.vesc.VescFaults] —
+         * sentence-case English phrases ("Over voltage", "Over temp FET"), not
+         * screaming enum names and not bit indices — because that is the
+         * register [ControllerData.faults] already speaks, it is what
+         * `MotionAggregator` prefixes with a controller label
+         * (`"ESC0: Over voltage"`) on a multi-controller vehicle, and it is
+         * what `AlertEngine` drops verbatim into a notification a rider reads.
+         * "Over voltage" is deliberately the SAME string VESC produces for the
+         * same condition.
+         *
+         * **This is the whole byte. [FAULT_BITS] is the part that is a fault.**
+         */
+        private fun alertLabels(bits: Int): List<String> {
+            if (bits == 0) return emptyList()
+            return buildList {
+                if (bits and 0x01 != 0) add("Wheel alarm")
+                if (bits and 0x02 != 0) add("Speed alarm 2")
+                if (bits and 0x04 != 0) add("Speed alarm 1")
+                if (bits and 0x08 != 0) add("Low voltage")
+                if (bits and 0x10 != 0) add("Over voltage")
+                if (bits and 0x20 != 0) add("Over temperature")
+                if (bits and 0x40 != 0) add("Hall sensor error")
+                if (bits and 0x80 != 0) add("Transport mode")
+            }
+        }
+
+        /**
+         * The bits of the alert byte that are **faults**: low voltage (3), over
+         * voltage (4), over temperature (5), hall-sensor error (6). Only these
+         * reach [ControllerData.faults]; [wheelAlerts] still reports all eight.
+         *
+         * The four excluded bits are not faults, and putting them in the list
+         * would do two concrete harms — both in `AlertEngine`, whose ONLY use
+         * of [ControllerData.faults] is `triggered = faults.isNotEmpty()` on a
+         * CRITICAL `CONTROLLER_FAULT` notification:
+         *
+         *  - **bits 1 and 2, the speed alarms, are ordinary riding.** They are
+         *    the beeps the rider themselves configured (the same 0x04 frame
+         *    carries the speed-alarm mode at bytes 6..7), and they engage and
+         *    release on every brisk stretch. Each engagement would post a
+         *    CRITICAL notification and each release would re-arm it — dozens
+         *    per ride. `AlertEngine`'s own KDoc refuses exactly this for duty
+         *    and speed ("one notification per excursion would be dozens of
+         *    notifications per ride"), and routing the wheel's speed alarm
+         *    through `faults` would reintroduce it by the side door. Volty
+         *    already serves speed live and graded through `AlarmController`.
+         *  - **bits 0 and 7 latch, and a latched fault MASKS every later one.**
+         *    `AlertEngine.fire` disarms a kind after firing and re-arms it only
+         *    when `faults` goes EMPTY. A wheel left in transport mode — a mode,
+         *    not a failure; the wheel is being carried — would hold the list
+         *    non-empty indefinitely, so the one genuine over-temperature that
+         *    followed would raise nothing at all. Bit 0's general alarm has the
+         *    same shape and, per WheelLog above, not even a documented cause.
+         *
+         * Any bit that is arguable is INCLUDED: low voltage fires once at the
+         * end of a long ride and telling the rider to stop is the point.
+         */
+        private const val FAULT_BITS = 0x78
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150

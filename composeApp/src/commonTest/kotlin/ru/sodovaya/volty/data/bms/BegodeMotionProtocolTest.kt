@@ -1,6 +1,19 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.alert.AlarmDefaults
+import ru.sodovaya.volty.domain.alert.AlertAvailability
+import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.armedRules
+import ru.sodovaya.volty.domain.alert.availabilityFor
+import ru.sodovaya.volty.domain.alert.reportsDuty
+import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.presentation.alerts.alertDraftsFor
+import ru.sodovaya.volty.presentation.alerts.isEditable
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -9,6 +22,8 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 /**
  * Motion decode of the Begode live 0x00, odometer 0x04 and motion 0x07 frames.
@@ -43,6 +58,7 @@ import kotlin.test.assertTrue
  * not reported one yet, and a voltage whose scale is configuration rather than
  * frame data.
  */
+@OptIn(ExperimentalTime::class)
 class BegodeMotionProtocolTest {
 
     private fun protocolFedWithFixture(): BegodeProtocol {
@@ -762,6 +778,393 @@ class BegodeMotionProtocolTest {
         assertEquals(0L, protocol.pollIntervalMs)
     }
 
+    // --- The 0x04 alert bitmap: the wheel's own faults ---
+
+    @Test
+    fun theRealCaptureWheelIsHealthyAndReportsNoAlertAtAll() {
+        // REAL DATA, and it is why every other fault test below is synthetic:
+        // byte 14 reads 0x00 in ALL 38 of the capture's 0x04 frames, so the
+        // capture contains no fault to decode.
+        //
+        // Not a vacuous assertion despite the empty expectation — the bytes
+        // either side of 14 are NOT zero, so an off-by-one lands somewhere
+        // visible: byte 13 (LED mode) is 0x01 -> "Wheel alarm", byte 17 is 0x12
+        // -> "Speed alarm 2" + "Over voltage". Byte 15 is 0, so this cannot see
+        // a slip in that direction; the synthetic tests below pin the offset
+        // exactly.
+        val protocol = protocolFedWithFixture()
+        assertEquals(
+            emptyList(), protocol.wheelAlerts(),
+            "byte 13 holds 0x01 and byte 17 holds 0x12 — an off-by-one is visible here"
+        )
+        assertEquals(emptyList(), assertNotNull(protocol.latestMotion(0)).faults)
+    }
+
+    @Test
+    fun syntheticEveryAlertBitIsDecodedOnItsOwnAndNamedInWords() {
+        // SYNTHETIC — the capture is a healthy wheel. Each bit is fed alone, so
+        // a wrong mask, a swapped pair or a shifted bit fails on exactly the
+        // bits it got wrong instead of hiding behind a neighbour.
+        //
+        // Bit order and meanings are WheelLog's GotwayAdapter; the wording is
+        // VescFaults' register — sentence case, no bit indices, no enum names.
+        val expected = listOf(
+            0x01 to "Wheel alarm",
+            0x02 to "Speed alarm 2",
+            0x04 to "Speed alarm 1",
+            0x08 to "Low voltage",
+            0x10 to "Over voltage",
+            0x20 to "Over temperature",
+            0x40 to "Hall sensor error",
+            0x80 to "Transport mode"
+        )
+        for ((bit, label) in expected) {
+            val protocol = BegodeProtocol()
+            protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = bit))
+            assertEquals(listOf(label), protocol.wheelAlerts(), "alert bit ${bit.toString(2)}")
+        }
+
+        // …and all of them at once come back in bit order, none swallowed.
+        val all = BegodeProtocol()
+        all.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
+        assertEquals(expected.map { it.second }, all.wheelAlerts())
+    }
+
+    @Test
+    fun theAlertBitmapComesFromByteFourteenAndNoNeighbour() {
+        // SYNTHETIC and deliberately hostile: every byte around 14 carries a
+        // DIFFERENT non-zero value, so each candidate offset produces a
+        // different, recognisable answer —
+        //   byte 13 (LED mode, 0x03)   -> "Wheel alarm" + "Speed alarm 2"
+        //   byte 14 (correct, 0x20)    -> "Over temperature"
+        //   byte 15 (light mode, 0x01) -> "Wheel alarm"
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            odometerFrame(
+                etMaxOdometerBytes(),
+                settings = 0x2800,
+                powerOffTime = 0x1C1E,
+                tiltbackRaw = 200,
+                ledMode = 0x03,
+                alertBitmap = 0x20,
+                lightMode = 0x01
+            )
+        )
+        assertEquals(listOf("Over temperature"), protocol.wheelAlerts())
+    }
+
+    @Test
+    fun anOverheatingWheelPutsItsFaultOnTheControllerSample() {
+        // SYNTHETIC. The end of the road for a fault: ControllerData.faults is
+        // what AlertEngine turns into the rider's CRITICAL notification, whose
+        // text is the labels joined with commas — so this is the exact string a
+        // rider reads.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20 or 0x40)
+        )
+        val m = assertNotNull(protocol.latestMotion(0), "the 0x04 frame is a motion decode")
+        assertEquals(listOf("Over temperature", "Hall sensor error"), m.faults)
+    }
+
+    @Test
+    fun aClearedAlertClearsTheFaultListSoTheAlarmCanReArm() {
+        // SYNTHETIC, and the failure it prevents is silent: AlertEngine.fire
+        // disarms CONTROLLER_FAULT after firing and re-arms it only when the
+        // list goes EMPTY. A decode that latched the last fault would leave a
+        // wheel permanently faulted after one over-temperature — and the NEXT
+        // genuine fault would raise nothing.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
+        assertEquals(listOf("Over temperature"), assertNotNull(protocol.latestMotion(0)).faults)
+
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x00))
+        assertEquals(
+            emptyList(), assertNotNull(protocol.latestMotion(0)).faults,
+            "the wheel stopped reporting it, so the fault is over"
+        )
+    }
+
+    @Test
+    fun theRidingAlarmsAndTransportModeAreDecodedButAreNotFaults() {
+        // SYNTHETIC. Four of the eight bits are deliberately kept out of
+        // ControllerData.faults — see BegodeProtocol.FAULT_BITS for the full
+        // argument. In short: the two speed alarms engage and release on every
+        // brisk stretch, and one CRITICAL notification per excursion is the
+        // notification-fatigue failure AlertEngine already refuses for duty and
+        // speed; transport mode and the general wheel alarm LATCH, and a latched
+        // entry holds `faults` non-empty, which permanently disarms the alert
+        // and masks every real fault behind it.
+        //
+        // They are still decoded, and this asserts BOTH halves: present in
+        // wheelAlerts(), absent from faults.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x01 or 0x02 or 0x04 or 0x80)
+        )
+        assertEquals(
+            listOf("Wheel alarm", "Speed alarm 2", "Speed alarm 1", "Transport mode"),
+            protocol.wheelAlerts(),
+            "all four are decoded"
+        )
+        assertEquals(
+            emptyList(), assertNotNull(protocol.latestMotion(0)).faults,
+            "…and none of them is a controller fault"
+        )
+
+        // The genuine faults of the same byte still get through, so this is a
+        // filter and not a mute.
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0xFF))
+        assertEquals(
+            listOf("Low voltage", "Over voltage", "Over temperature", "Hall sensor error"),
+            assertNotNull(protocol.latestMotion(0)).faults
+        )
+    }
+
+    @Test
+    fun resetClearsTheWheelsAlerts() {
+        // A reconnect may face a healthy wheel. A fault surviving it would fire
+        // a CRITICAL notification about a wheel that never reported anything.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x20))
+        assertEquals(listOf("Over temperature"), protocol.wheelAlerts())
+
+        protocol.reset()
+        assertEquals(emptyList(), protocol.wheelAlerts())
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), alertBitmap = 0x00))
+        assertEquals(emptyList(), assertNotNull(protocol.latestMotion(0)).faults)
+    }
+
+    // --- Tiltback speed: decoded, and deliberately not surfaced ---
+
+    @Test
+    fun theRealCaptureTiltbackIsUnsetBecauseTheWheelReportsTwoHundred() {
+        // REAL DATA: bytes 10..11 read 0x00C8 = 200 in all 38 of the capture's
+        // 0x04 frames, and WheelLog treats anything >= 100 as the wheel's
+        // "unset" marker. So the only wheel we have cannot exercise a SET
+        // tiltback, and the tests that do are synthetic.
+        val protocol = protocolFedWithFixture()
+        assertNull(
+            protocol.tiltbackSpeedKmh(),
+            "200 is the wheel's unset marker, not a 200 km/h tiltback"
+        )
+    }
+
+    @Test
+    fun syntheticTiltbackComesFromBytesTenAndEleven() {
+        // SYNTHETIC and hostile: every neighbouring field carries a distinct
+        // value, so each wrong offset lands somewhere recognisable —
+        //   bytes 8..9  (power-off timer) -> 7198, which is >= 100 and so reads
+        //                                    as "unset", i.e. null
+        //   bytes 10..11 (correct)        -> 50
+        //   bytes 12..13 (unknown + LED)  -> 3
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            odometerFrame(
+                etMaxOdometerBytes(),
+                settings = 0x2800,
+                powerOffTime = 7198,
+                tiltbackRaw = 50,
+                ledMode = 0x03,
+                alertBitmap = 0x00
+            )
+        )
+        assertEquals(50f, assertNotNull(protocol.tiltbackSpeedKmh()), 0f)
+    }
+
+    @Test
+    fun syntheticTiltbackTreatsOneHundredAndAboveAsUnset() {
+        // SYNTHETIC. WheelLog's own threshold, and the boundary is asserted on
+        // both sides: a guard written as `> 100` would report a 100 as a
+        // tiltback speed.
+        fun tiltbackOf(raw: Int): Float? {
+            val protocol = BegodeProtocol()
+            protocol.onNotification(odometerFrame(etMaxOdometerBytes(), tiltbackRaw = raw))
+            return protocol.tiltbackSpeedKmh()
+        }
+        assertEquals(99f, assertNotNull(tiltbackOf(99), "99 is a real tiltback speed"), 0f)
+        assertNull(tiltbackOf(100), "100 is the first unset value")
+        assertNull(tiltbackOf(200), "…as the real wheel reports")
+        assertNull(tiltbackOf(0), "a wheel does not tilt back at a standstill")
+        assertNull(tiltbackOf(-5), "nor at a negative speed")
+    }
+
+    @Test
+    fun theTiltbackSpeedNeverReachesTheControllerSample() {
+        // The decision this task made explicit: ControllerData is shared with
+        // VESC, Kelly and FarDriver, it has no tiltback field, and nothing
+        // renders one — so the number is decoded and left on the protocol
+        // rather than smuggled into a field that means something else. This
+        // test is what makes "and it is not surfaced" checkable rather than a
+        // claim in a comment: it fails the moment someone parks it in
+        // `speedKmh` or `dutyPercent` on the way past.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 100))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        protocol.onNotification(odometerFrame(etMaxOdometerBytes(), tiltbackRaw = 50))
+
+        assertEquals(50f, assertNotNull(protocol.tiltbackSpeedKmh()), 0f)
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(3.6f, m.speedKmh, 1e-3f, "the wheel's speed, not its tiltback setting")
+        assertEquals(2f, m.dutyPercent, 0f)
+    }
+
+    // --- A motor thermistor has to prove it exists (spec D §7.1) ---
+
+    @Test
+    fun aWheelWhoseMotorTemperatureIsAlwaysZeroClaimsNoMotorSensor() {
+        // SYNTHETIC — the ET Max reads a steady 20 °C, so the capture cannot
+        // reach this. A wheel whose motor thermistor is unwired still emits
+        // 0x07 frames, with 0 in the temperature field; `hasMotorTemp =
+        // sawMotionFrame` would CLAIM the sensor and arm MOTOR_TEMP against a
+        // constant zero — an alarm shown as armed that can never fire.
+        //
+        // A range gate cannot decide this (0 °C is a real winter reading), so
+        // the discriminator is the same latch the duty field uses: one non-zero
+        // reading is what proves a sensor is there.
+        val protocol = BegodeProtocol()
+        repeat(5) {
+            protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 2))
+        }
+        assertNotNull(protocol.batteryCurrentA(), "precondition: the frames WERE decoded")
+        assertNotNull(protocol.dutyPercent(), "…and this wheel's duty is real")
+        assertNull(protocol.motorTempC(), "an always-zero field is not a temperature measurement")
+
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertFalse(m.hasMotorTemp, "the sensor has not proved it exists")
+        assertTrue(
+            m.motorTempC < -50f,
+            "unproved must read as the sentinel, not as 0 °C (was ${m.motorTempC})"
+        )
+    }
+
+    @Test
+    fun theMotorTemperatureLatchHoldsOnceProvedSoARealZeroIsStillPublished() {
+        // SYNTHETIC. The latch withholds an UNPROVEN sensor; it must not filter
+        // readings. A wheel ridden into a genuine 0 °C after a warm start keeps
+        // its alarm armed and its reading published — anything else would drop
+        // real data on the coldest day of the year.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        assertTrue(assertNotNull(protocol.latestMotion(0)).hasMotorTemp)
+
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 2))
+        val cold = assertNotNull(protocol.latestMotion(0))
+        assertTrue(cold.hasMotorTemp, "the sensor already proved itself")
+        assertEquals(0f, cold.motorTempC, 0f, "and 0 °C is a reading, not a silence")
+    }
+
+    @Test
+    fun resetClearsTheMotorTemperatureLatch() {
+        // Per-wheel evidence, exactly like the duty latch: a reconnect may face
+        // a wheel with no thermistor, and it must not inherit the ET Max's
+        // proof that one exists.
+        val protocol = protocolFedWithFixture()
+        assertNotNull(protocol.motorTempC(), "precondition: the capture proved the sensor")
+
+        protocol.reset()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 2))
+        assertNull(protocol.motorTempC(), "the latch must not survive a reset")
+        assertFalse(assertNotNull(protocol.latestMotion(0)).hasMotorTemp)
+    }
+
+    // --- Part F's availability gate, end to end on a real wheel ---
+
+    private fun wheelVehicle() = Vehicle(
+        id = "w", name = "ET Max", iconKey = "generic",
+        packs = emptyList(),
+        controllers = listOf(Controller(0, "ESC0", ControllerType.BEGODE, "AA:00")),
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Clock.System.now()
+    )
+
+    @Test
+    fun theRealWheelSuppliesEveryMotionAlertPartFOffers() {
+        // The first REAL consumer of the availability gate, driven by real
+        // bytes rather than a hand-built ControllerData: an ET Max supplies all
+        // four kinds, so a rider sees four live rows and no grey.
+        val protocol = protocolFedWithFixture()
+        val availability = availabilityFor(wheelVehicle(), protocol.latestMotion(0))
+        for (kind in MotionAlertKind.entries) {
+            assertEquals(AlertAvailability.Available, availability[kind], "$kind on a real wheel")
+        }
+        // Availability is not the same question as armed, and this is the one
+        // place the difference shows on a HEALTHY wheel: SPEED is Available —
+        // the wheel measures ground speed — but ships with no default threshold
+        // (F §10.1: a speed limit is meaningless without a rider-chosen number),
+        // so `armedRules` drops it as `isOff` until the rider types one. The
+        // other three arm on the shipped defaults.
+        assertEquals(
+            setOf(MotionAlertKind.DUTY, MotionAlertKind.MOTOR_TEMP, MotionAlertKind.ESC_TEMP),
+            armedRules(wheelVehicle(), protocol.latestMotion(0), AlarmDefaults.all())
+                .rules.map { it.kind }.toSet(),
+            "everything the hardware supplies AND the rider has a threshold for"
+        )
+    }
+
+    @Test
+    fun theWheelsDutyAlarmIsArmedOnMeasuredHardwarePwm() {
+        // reportsDuty[BEGODE] is a STATIC table entry, and this part was planned
+        // on the belief that it had to be turned off. The capture overturned
+        // that: the wheel reports true hardware PWM (2 % standing still), so the
+        // entry stays true ON EVIDENCE. Flipping it to false makes DUTY read
+        // Unavailable(ControllerReportsNoDuty(BEGODE)) and fails here — which is
+        // the point of asserting it through availabilityFor rather than only as
+        // a boolean.
+        val protocol = protocolFedWithFixture()
+        assertEquals(
+            2f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f,
+            "the evidence the table entry rests on"
+        )
+        assertEquals(
+            AlertAvailability.Available,
+            availabilityFor(wheelVehicle(), protocol.latestMotion(0))[MotionAlertKind.DUTY],
+            "a wheel's ШИМ alarm is Part F's headline feature and this wheel supplies it"
+        )
+        assertTrue(ControllerType.BEGODE.reportsDuty)
+    }
+
+    @Test
+    fun aWheelWithNoMotorThermistorGreysThatAlertWithTheReasonInWords() {
+        // The end-to-end path Part F built and a wheel is the first real
+        // consumer of: decode -> ControllerData -> availabilityFor -> a REASON,
+        // which presentation renders as a sentence under a greyed row
+        // (EnumLabels.alertUnavailableReasonLabel, exhaustive over the sealed
+        // interface so every reason has words).
+        val protocol = BegodeProtocol()
+        // A live frame (so the board sensor and speed ARE present) and a 0x07
+        // frame whose motor temperature is stuck at zero.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000, tempRaw = -3069))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 2))
+
+        val availability = availabilityFor(wheelVehicle(), protocol.latestMotion(0))
+        assertEquals(
+            AlertAvailability.Unavailable(AlertUnavailableReason.NoMotorTempSensor),
+            availability[MotionAlertKind.MOTOR_TEMP],
+            "greyed WITH a reason, not silently absent"
+        )
+        // Only that one. The neighbouring kinds are unaffected — an absent
+        // sensor must not take the rest of the screen with it.
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.ESC_TEMP])
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.SPEED])
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
+
+        // Greyed in the editor…
+        val drafts = alertDraftsFor(wheelVehicle(), availability)
+        val motorDraft = assertNotNull(drafts.firstOrNull { it.kind == MotionAlertKind.MOTOR_TEMP })
+        assertFalse(motorDraft.isEditable, "an unavailable kind is not editable")
+        assertTrue(
+            drafts.first { it.kind == MotionAlertKind.ESC_TEMP }.isEditable,
+            "…and its neighbour still is"
+        )
+        // …and impossible to arm, which is F §10's actual requirement.
+        assertFalse(
+            armedRules(wheelVehicle(), protocol.latestMotion(0), AlarmDefaults.all())
+                .rules.any { it.kind == MotionAlertKind.MOTOR_TEMP },
+            "an unavailable alert must be impossible to arm"
+        )
+    }
+
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
 
     private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {
@@ -809,13 +1212,36 @@ class BegodeMotionProtocolTest {
         return frame(0x07, 24, p)
     }
 
-    /** Odometer 0x04 frame: the 4 raw bytes at frame 2..5. */
-    private fun odometerFrame(meterBytes: ByteArray): ByteArray {
+    /**
+     * Odometer 0x04 frame. Payload index i is frame byte i + 2: odometer at
+     * frame 2..5, settings word at 6..7, power-off timer at 8..9, tiltback
+     * speed at 10..11, LED mode at 13, the alert bitmap at 14, light mode at
+     * 15. The defaults reproduce a healthy wheel with nothing set, so a test
+     * naming one field is testing that field alone.
+     */
+    private fun odometerFrame(
+        meterBytes: ByteArray,
+        settings: Int = 0,
+        powerOffTime: Int = 0,
+        tiltbackRaw: Int = 0,
+        ledMode: Int = 0,
+        alertBitmap: Int = 0,
+        lightMode: Int = 0
+    ): ByteArray {
         require(meterBytes.size == 4) { "the odometer field is 4 bytes" }
         val p = ByteArray(16)
         meterBytes.copyInto(p)
+        p[4] = (settings shr 8).toByte(); p[5] = settings.toByte()
+        p[6] = (powerOffTime shr 8).toByte(); p[7] = powerOffTime.toByte()
+        p[8] = (tiltbackRaw shr 8).toByte(); p[9] = tiltbackRaw.toByte()
+        p[11] = ledMode.toByte()
+        p[12] = alertBitmap.toByte()
+        p[13] = lightMode.toByte()
         return frame(0x04, 24, p)
     }
+
+    /** The capture's own odometer bytes, so a test can vary everything else. */
+    private fun etMaxOdometerBytes() = byteArrayOf(0x00, 0x82.toByte(), 0xB2.toByte(), 0x5D)
 
     /** 0x01 telemetry frame — layout as in [BegodeProtocolTest]. */
     private fun telemetryFrame(bmsnum: Int, packVoltageRaw: Int): ByteArray {
