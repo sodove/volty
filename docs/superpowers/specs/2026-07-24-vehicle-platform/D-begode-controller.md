@@ -183,3 +183,27 @@ signedness are pinned by synthetic frames** and its scale rests on WheelLog's
 source rather than on measurement. One `:dumper` capture of a moving wheel
 settles it, and would also confirm the odometer's unit (8 565 341 → 8 565 km is
 plausible for an ET Max; if the wheel's display reads ~856 km, the unit is wrong).
+
+### 8.6 Correction to §8.2 — the speed scale is ×0.036, not ×0.36
+
+Checked against the source while implementing Task 1, because §8.2's own
+instruction was to verify rather than trust. §8.2 says WheelLog stores speed in
+**tenths** of km/h, giving `km/h = raw × 0.36`. It stores **hundredths**:
+
+- `WheelData` has `private static final int RIDING_SPEED = 200; // 2km/h` — 200
+  units is 2 km/h — and a commented-out debug line setting the same field to
+  `50_00` for 50 km/h. `getSpeedDouble()` is `mSpeed / 100.0`.
+- `GotwayAdapter` computes `round(signedShortFromBytesBE(buff, 4) * 3.6)` into
+  that field.
+- WheelLog's own frame-layout comment at the foot of `GotwayAdapter.java` states
+  it outright: *"Bytes 4-5: BE speed, fixed point, 3.6 * value / 100 km/h"*.
+
+So **`km/h = raw × 3.6 / 100 = raw × 0.036`**, and the raw unit is cm/s, not
+0.1 m/s. `BegodeProtocol.SPEED_KMH_PER_UNIT` ships `0.036f`.
+
+What misleads here is `WheelData.getSpeed()`, which returns
+`round(mSpeed / 10.0)` and disagrees with the rest of its own file; it is used
+only in an `== 0` comparison, so nothing in WheelLog depends on it. Every reading
+of this field so far has been wrong in a different direction — 0.01 (3.6× low),
+then 0.36 (10× high) — which is the argument for the moving capture in §8.5
+rather than a fourth reading of the same source.
