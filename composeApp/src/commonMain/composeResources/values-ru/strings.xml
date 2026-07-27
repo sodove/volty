@@ -219,7 +219,10 @@
     <string name="vehicle_field_link">Линия (Bluetooth-адрес)</string>
     <string name="vehicle_field_link_same_as">Та же линия, что и у</string>
     <string name="vehicle_field_can_id">CAN id</string>
-    <string name="vehicle_field_alias_group">Группа</string>
+    <string name="vehicle_field_alias_group">Та же физическая батарея, что и</string>
+    <string name="vehicle_field_alias_group_caption">Отметьте другую батарею, если это тот же самый аккумулятор, но по другому пути — тогда он считается один раз, а не два.</string>
+    <string name="vehicle_field_yield_bms">Отдавать BMS приборке во время поездки</string>
+    <string name="vehicle_field_yield_bms_caption">Батарея доступна и напрямую, и через приборку, но держать её может только кто-то один. Включено: приложение отпускает прямую линию, как только приборка начинает отдавать данные.</string>
     <string name="vehicle_field_cell_count_auto">Ячеек (из телеметрии)</string>
     <string name="vehicle_field_derived_battery">Батарея по данным контроллера</string>
     <string name="vehicle_field_derived_battery_caption">По умолчанию включено, пока у транспорта нет своей BMS.</string>
@@ -236,6 +239,8 @@
     <string name="composer_issue_no_decoder">%1$s пока не читается — сохранить можно, но подключения не будет.</string>
     <string name="composer_issue_hostless_vesc_bms">VESC BMS читается только через VESC-контроллер на той же линии.</string>
     <string name="composer_issue_unroutable_gateway">Несколько источников по одной линии умеет вести только VESC — остальные останутся офлайн.</string>
+    <string name="composer_issue_duplicate_pack">Эти две батареи сообщают одинаковое число ячеек и одинаковое напряжение. Это один и тот же аккумулятор по двум путям? Если да — отметьте это ниже, иначе у транспорта будет посчитано вдвое больше батареи, чем есть.</string>
+    <string name="composer_issue_phantom_gateway">Эта приборка сама крутит мотор? Она ни разу не сообщила о моторе, хотя устройства на её шине CAN — сообщали. Если это только дисплей, удалите этот контроллер — иначе он занижает напряжение транспорта.</string>
 
     <!-- Composer discovery (G2 Task 5): the screen learns an address -->
     <string name="vehicle_source_scan">Найти рядом</string>

@@ -17,12 +17,14 @@ import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.data.ble.isGatewayLink
+import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
@@ -2344,6 +2346,202 @@ class VehicleEditComponentTest {
         assertEquals(listOf("HU:01", "AN:01"), links.map { it.address })
         assertTrue(links.first { it.address == "HU:01" }.isGatewayLink)
     }
+
+    // -----------------------------------------------------------------------
+    // Task 4 — alias groups, the handoff toggle, and what this form observes
+    // -----------------------------------------------------------------------
+
+    /**
+     * The product owner's scooter as a stored vehicle: the head unit hosting a
+     * VESC-BMS behind two CAN uBoxes, and the same ANT battery on its own direct
+     * BLE link. Nothing says the two batteries are one pack — that is what
+     * Task 4 lets him say.
+     */
+    private fun aliasScooter() = existingVehicle().copy(
+        name = "Scooter",
+        packs = listOf(
+            Pack(index = 0, label = "ANT", bmsType = BmsType.ANT_BMS, bmsAddress = "AN:01"),
+            Pack(index = 1, label = "Hosted", bmsType = BmsType.VESC_BMS, bmsAddress = "HU:01")
+        ),
+        controllers = listOf(
+            Controller(index = 0, label = "uBox 1", controllerType = ControllerType.VESC, address = "HU:01", canId = 41),
+            Controller(index = 1, label = "uBox 2", controllerType = ControllerType.VESC, address = "HU:01", canId = 42)
+        ),
+        yieldBmsToHeadUnit = null
+    )
+
+    /**
+     * The whole of Task 4's first deliverable, end to end: the rider marks the
+     * two battery sources as one physical pack and it is what gets stored.
+     */
+    @Test
+    fun `grouping two packs is persisted as one shared alias group`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(aliasScooter()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val keys = c.state.value.draft.packs.map { it.key }
+        c.onGroupPacks(keys[0], keys[1])
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        val groups = saved.packs.map { it.aliasGroup }
+        assertTrue(groups.all { it != null }, "both paths carry a group")
+        assertEquals(1, groups.toSet().size, "and it is the same one")
+        // The point of the group, spanning into the runtime that consumes it.
+        assertEquals(
+            listOf("AN:01"),
+            planAliasHandoffs(planLinks(saved.packs, saved.controllers), saved.packs)
+                .map { it.directAddress }
+        )
+    }
+
+    @Test
+    fun `ungrouping is persisted as a cleared alias group on both packs`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val grouped = aliasScooter().let { v ->
+            v.copy(packs = v.packs.map { it.copy(aliasGroup = "ant-72v") })
+        }
+        val repo = FakeVehicleRepo(listOf(grouped))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onUngroupPack(c.state.value.draft.packs.first().key)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(listOf(null, null), repo.upserts.single().packs.map { it.aliasGroup })
+    }
+
+    /**
+     * `C §5`'s toggle appears **where the group is**: only once the vehicle has
+     * an alias group spanning a direct BMS and a gateway-hosted one, because
+     * that is the only shape `planAliasHandoffs` acts on.
+     */
+    @Test
+    fun `the yield toggle appears only once an alias group spans both paths`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(aliasScooter()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertFalse(c.state.value.showYieldToggle, "no group yet, so nothing to yield")
+        assertTrue(c.state.value.yieldsBmsToHeadUnit, "and unset already resolves to ON (C §5)")
+
+        val keys = c.state.value.draft.packs.map { it.key }
+        c.onGroupPacks(keys[0], keys[1])
+        assertTrue(c.state.value.showYieldToggle)
+    }
+
+    @Test
+    fun `switching the handoff off is persisted, and unset stays unset`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(aliasScooter()))
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(null, c.state.value.yieldBmsToHeadUnit, "seeded three-valued, not resolved")
+
+        c.onYieldBmsToHeadUnitChanged(false)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(false, repo.upserts.single().yieldBmsToHeadUnit)
+
+        // A second form over the same vehicle, touching nothing: the column must
+        // come back exactly as stored rather than being claimed as an opt-in.
+        val untouched = FakeVehicleRepo(listOf(aliasScooter()))
+        val c2 = component(untouched)
+        advanceUntilIdle()
+        c2.onSave()
+        advanceUntilIdle()
+        assertEquals(null, untouched.upserts.single().yieldBmsToHeadUnit)
+    }
+
+    /**
+     * The duplicate offer, through the component: the form watches the live
+     * vehicle and, after the window fills, offers the grouping instead of
+     * letting the pack be counted twice.
+     */
+    @Test
+    fun `a duplicate pack is offered as a grouping once the window fills`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = aliasScooter()
+        val bms = FakeBmsRepo()
+        val repo = FakeVehicleRepo(listOf(vehicle))
+        val c = component(repo, bmsRepo = bms)
+        advanceUntilIdle()
+
+        bms.activeVehicle.value = vehicle
+        repeat(DUPLICATE_SAMPLES) { i ->
+            bms.activeVehicleData.value = VehicleData(
+                packs = listOf(
+                    packSample(vehicle.packs[0], 72.40f - i * 0.02f),
+                    packSample(vehicle.packs[1], 72.41f - i * 0.02f)
+                )
+            )
+            advanceUntilIdle()
+            if (i < DUPLICATE_SAMPLES - 1) {
+                assertFalse(
+                    c.state.value.issues.any { it is ComposerIssue.DuplicatePack },
+                    "not offered on ${i + 1} sample(s)"
+                )
+            }
+        }
+
+        val dup = c.state.value.issues.filterIsInstance<ComposerIssue.DuplicatePack>().single()
+        assertEquals(
+            c.state.value.draft.packs.map { it.key }.toSet(),
+            setOf(dup.keyA, dup.keyB)
+        )
+        assertTrue(c.state.value.canSave, "an advisory never refuses the save")
+
+        // An unrelated edit re-derives the issue list, and the observed half of
+        // it must survive that: `validate` is handed the window, not a fresh
+        // empty one, or the offer would blink out on the next keystroke.
+        c.onPackLabelChanged(c.state.value.draft.packs.first().key, "Передний")
+        assertTrue(
+            c.state.value.issues.any { it is ComposerIssue.DuplicatePack },
+            "an unrelated edit must not discard what the form has observed"
+        )
+
+        // Accepting the offer is the ordinary grouping, and it stops being asked.
+        c.onGroupPacks(dup.keyA, dup.keyB)
+        assertFalse(c.state.value.issues.any { it is ComposerIssue.DuplicatePack })
+    }
+
+    /**
+     * Sources are matched to draft rows by stored index, and two vehicles' pack
+     * indices collide by construction — so another vehicle's telemetry must
+     * never reach this form. Folding it in would answer "is this the same
+     * battery?" with somebody else's battery.
+     */
+    @Test
+    fun `telemetry from a different active vehicle is ignored`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = aliasScooter()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(vehicle)), bmsRepo = bms)
+        advanceUntilIdle()
+
+        bms.activeVehicle.value = vehicle.copy(id = "someone-else")
+        repeat(DUPLICATE_SAMPLES) {
+            bms.activeVehicleData.value = VehicleData(
+                packs = listOf(packSample(vehicle.packs[0], 72.4f), packSample(vehicle.packs[1], 72.4f))
+            )
+            advanceUntilIdle()
+        }
+
+        assertEquals(ComposerTelemetry(), c.state.value.telemetry)
+        assertEquals(emptyList(), c.state.value.issues)
+    }
+
+    /** One online pack, its voltage, and 20 cells — the shape the window folds. */
+    private fun packSample(pack: Pack, volts: Float) = PackState(
+        pack = pack,
+        data = BmsData(voltage = volts, cellVoltages = List(20) { volts / 20f }),
+        isOnline = true
+    )
 }
 
 /**

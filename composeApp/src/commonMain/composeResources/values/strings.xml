@@ -221,7 +221,10 @@
     <string name="vehicle_field_link">Link (Bluetooth address)</string>
     <string name="vehicle_field_link_same_as">Same link as</string>
     <string name="vehicle_field_can_id">CAN id</string>
-    <string name="vehicle_field_alias_group">Alias group</string>
+    <string name="vehicle_field_alias_group">Same physical battery as</string>
+    <string name="vehicle_field_alias_group_caption">Pick another battery if it is this same pack reached a different way — it is then counted once, not twice.</string>
+    <string name="vehicle_field_yield_bms">Yield the BMS to the head unit while riding</string>
+    <string name="vehicle_field_yield_bms_caption">The battery is reachable both directly and through the head unit, and only one of them can hold it. On: the app lets go of the direct link once the head unit is delivering.</string>
     <string name="vehicle_field_cell_count_auto">Cells (from telemetry)</string>
     <string name="vehicle_field_derived_battery">Battery from this controller</string>
     <string name="vehicle_field_derived_battery_caption">On by default while the vehicle has no BMS of its own.</string>
@@ -238,6 +241,8 @@
     <string name="composer_issue_no_decoder">%1$s cannot be read yet — it saves, but it will not connect.</string>
     <string name="composer_issue_hostless_vesc_bms">A VESC BMS can only be read through a VESC controller on the same link.</string>
     <string name="composer_issue_unroutable_gateway">Only VESC can carry several sources over one link, so the extra ones will stay offline.</string>
+    <string name="composer_issue_duplicate_pack">These two batteries report the same cell count and the same voltage. Are they one pack reached two ways? If so, mark them below — otherwise the vehicle is counted as twice the battery it has.</string>
+    <string name="composer_issue_phantom_gateway">Does this head unit drive a motor itself? It has never reported one, while the devices on its CAN bus have. If it is only a display, remove this controller — otherwise it drags the vehicle voltage down.</string>
 
     <!-- Composer discovery (G2 Task 5): the screen learns an address -->
     <string name="vehicle_source_scan">Scan nearby</string>

@@ -11,6 +11,7 @@ import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.isDemo
@@ -140,6 +141,42 @@ interface VehicleEditComponent {
 
     fun onTopologyChanged(topology: PackTopology)
 
+    // ----- Alias groups (G2 Task 4): two sources, one physical pack -----
+
+    /**
+     * Mark two battery sources as **the same physical pack** reached two ways
+     * (`G §5`, `01-linking §4`) — the product owner's ANT, reachable directly
+     * over BLE while parked and through the head unit while riding.
+     *
+     * The rider's word, and it has to be: nothing on the wire says two BLE
+     * endpoints lead to one battery. Without it the app counts the pack twice
+     * (doubled capacity, doubled energy) and the `C §5` handoff has no way to
+     * know which two links contend for it. See [VehicleDraft.groupPacks] for
+     * what happens when the pair spans two existing groups.
+     */
+    fun onGroupPacks(keyA: String, keyB: String)
+
+    /** Take a pack out of its alias group. See [VehicleDraft.ungroupPack]. */
+    fun onUngroupPack(key: String)
+
+    /**
+     * "Yield BMS to head unit while riding" (`C §5`).
+     *
+     * Belongs to an alias group rather than to the vehicle at large — it is
+     * about which of *two paths to one battery* the app gives up — so the screen
+     * shows it only where such a group exists
+     * ([VehicleDraft.handoffAliasGroups]). It is stored on [Vehicle] all the
+     * same, because a vehicle can have several such groups and the policy is one
+     * answer for all of them; splitting it per group would be a storage change
+     * for a distinction no rider has asked for.
+     *
+     * **Unset means ON** ([Vehicle.yieldBmsToHeadUnit]), so the toggle comes up
+     * checked on a group that has never been configured, which is the default
+     * `C §5` specifies. Tapping it writes an explicit answer; nothing here can
+     * write it back to "unset".
+     */
+    fun onYieldBmsToHeadUnitChanged(enabled: Boolean)
+
     // ----- Discovery (G2 Task 5): the composer learns an address -----
     //
     // Until this task, adding a second source meant typing a BLE MAC by hand,
@@ -231,6 +268,14 @@ interface VehicleEditComponent {
         /** How this vehicle's packs are wired. Editable since G2. */
         val topology: PackTopology = PackTopology.PARALLEL,
         /**
+         * `C §5`'s ride-time handoff, three-valued exactly as
+         * [Vehicle.yieldBmsToHeadUnit] is: **null means "follow the default",
+         * which is ON**. Seeded from the loaded vehicle and written straight
+         * back, so a vehicle whose rider never touched the toggle keeps its
+         * unset column rather than being claimed to have opted in.
+         */
+        val yieldBmsToHeadUnit: Boolean? = null,
+        /**
          * The editable source set (G2 Task 2). Seeded from the loaded vehicle
          * by [draftOf] and round-trips it exactly; empty while CREATING, which
          * still goes through [singlePackVehicle].
@@ -238,6 +283,18 @@ interface VehicleEditComponent {
         val draft: VehicleDraft = VehicleDraft(),
         /** Everything wrong with [draft] right now — see [ComposerIssue]. */
         val issues: List<ComposerIssue> = emptyList(),
+        /**
+         * What this sitting has observed of the vehicle being edited (G2 Task
+         * 4), and the second input to [issues].
+         *
+         * Two of the advisories are about the rider's **hardware** rather than
+         * their configuration — whether two battery sources are one pack, and
+         * whether a head unit is really an ESC — and neither can be decided from
+         * a draft. Bounded by construction (see [ComposerTelemetry]) and never
+         * persisted: it describes this sitting, which is also the only evidence
+         * the rider could be shown.
+         */
+        val telemetry: ComposerTelemetry = ComposerTelemetry(),
         /**
          * Whether the rider has touched the pack / controller list at all.
          *
@@ -320,6 +377,22 @@ interface VehicleEditComponent {
          * anything that wants to ask *before* the tap; nothing does today.
          */
         val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
+
+        /**
+         * Whether the "yield BMS to head unit while riding" toggle applies at
+         * all — i.e. whether this vehicle has an alias group that genuinely
+         * spans a direct BMS and a gateway-hosted one
+         * ([VehicleDraft.handoffAliasGroups]).
+         *
+         * Shown where the contention is, and nowhere else. A switch offered on
+         * a vehicle with one battery path would be a setting that can never do
+         * anything — `planAliasHandoffs` emits nothing for it — and a rider who
+         * turned it off would reasonably believe they had changed something.
+         */
+        val showYieldToggle: Boolean get() = canComposeSources && draft.handoffAliasGroups.isNotEmpty()
+
+        /** [yieldBmsToHeadUnit] resolved — unset is ON, same rule as [Vehicle.yieldBmsToHeadUnit]. */
+        val yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit != false
 
         /**
          * The offers from the last successful CAN scan, derived on read.
@@ -406,6 +479,36 @@ class DefaultVehicleEditComponent(
                 _state.update { it.copy(canScanTarget = canScanTarget(it.draft, addresses)) }
             }
         }
+        // What the vehicle is actually reporting, folded into the bounded window
+        // the two hardware advisories read (G2 Task 4). A StateFlow collect and
+        // a pure fold — nothing here schedules a delay, which is what keeps a
+        // multi-sample rule from being the unbounded loop that wedges `runTest`
+        // instead of failing it.
+        scope.launch {
+            combine(bmsRepository.activeVehicle, bmsRepository.activeVehicleData) { v, d -> v to d }
+                .collect { (active, data) -> observe(active, data) }
+        }
+    }
+
+    /**
+     * Fold one live emission into [VehicleEditComponent.State.telemetry].
+     *
+     * **Only when the connected vehicle IS the one being edited.** Sources are
+     * matched to draft rows by stored index, and two different vehicles' indices
+     * collide by construction — folding another vehicle's pack 0 into this
+     * form's pack 0 would answer "is this the same battery?" with somebody
+     * else's battery. Creating (no [vehicleId]) collects nothing at all: there
+     * is no stored row for any draft to have been observed as.
+     */
+    private fun observe(active: Vehicle?, data: VehicleData) {
+        if (vehicleId == null || active?.id != vehicleId) return
+        _state.update { s ->
+            if (!s.isEditing) return@update s
+            val t = s.telemetry.observing(s.draft, data)
+            // Re-validating on every emission would rebuild the issue list at
+            // the poll rate; nothing observable changed unless the window did.
+            if (t == s.telemetry) s else s.copy(telemetry = t, issues = validate(s.draft, t))
+        }
     }
 
     private suspend fun initialize() {
@@ -441,6 +544,12 @@ class DefaultVehicleEditComponent(
                     dashboardStyle = v.dashboardStyle,
                     secondaryGauge = v.secondaryGauge,
                     topology = v.topology,
+                    // Three-valued, and seeded rather than resolved: an unset
+                    // column is not the same statement as an explicit `true`,
+                    // and `onSave` writes this field back — so resolving it here
+                    // would make merely opening and saving the form claim every
+                    // rider had opted in. See [Vehicle.yieldBmsToHeadUnit].
+                    yieldBmsToHeadUnit = v.yieldBmsToHeadUnit,
                     // The composer's own view of the same vehicle. Seeded even
                     // when the rider never opens the source list, because
                     // [State.issues] must describe the vehicle as STORED —
@@ -513,7 +622,7 @@ class DefaultVehicleEditComponent(
             val d = block(s.draft)
             s.copy(
                 draft = d,
-                issues = validate(d),
+                issues = validate(d, s.telemetry),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
                 saveBlocked = false,
@@ -580,6 +689,19 @@ class DefaultVehicleEditComponent(
 
     override fun onTopologyChanged(topology: PackTopology) {
         _state.update { it.copy(topology = topology) }
+    }
+
+    // ----- Alias groups (G2 Task 4) -----
+
+    override fun onGroupPacks(keyA: String, keyB: String) =
+        mutateDraft(packs = true) { it.groupPacks(keyA, keyB) }
+
+    override fun onUngroupPack(key: String) = mutateDraft(packs = true) { it.ungroupPack(key) }
+
+    override fun onYieldBmsToHeadUnitChanged(enabled: Boolean) {
+        // An explicit true, not a return to null: "unset" is the statement
+        // "nobody has answered this", and the rider just did.
+        _state.update { it.copy(yieldBmsToHeadUnit = enabled) }
     }
 
     // ----- Discovery (G2 Task 5) -----
@@ -789,9 +911,15 @@ class DefaultVehicleEditComponent(
  * [VehicleEditComponent.State] actually edits, and adding a field to [Vehicle]
  * requires no change here at all.
  *
- * Everything not listed follows from that: `cellCount`, `aliasGroup`,
- * `createdAt`, `lastConnectedAt`, `isPinned`, `yieldBmsToHeadUnit`,
- * `motionAlerts`.
+ * Everything not listed follows from that: `cellCount`, `createdAt`,
+ * `lastConnectedAt`, `isPinned`, `motionAlerts`.
+ *
+ * `yieldBmsToHeadUnit` left that list in Task 4 and is now written from
+ * [VehicleEditComponent.State.yieldBmsToHeadUnit] — which is **seeded** from
+ * the loaded vehicle rather than resolved, so the three-valued column survives
+ * a save that never touched the toggle. `aliasGroup` left it too, but only
+ * per pack and only once the rider has touched that pack's grouping — see
+ * [PackDraft.aliasEdited].
  *
  * ### The two source lists (G2 Task 2)
  *
@@ -850,7 +978,8 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
         controllers
     },
     dashboardStyle = s.dashboardStyle,
-    secondaryGauge = s.secondaryGauge
+    secondaryGauge = s.secondaryGauge,
+    yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
 )
 
 /** The five thresholds this form exposes; the rest of [AlertConfig] is not its business. */

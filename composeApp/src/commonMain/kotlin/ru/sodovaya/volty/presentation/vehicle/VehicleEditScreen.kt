@@ -90,6 +90,8 @@ import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
 import volty.composeapp.generated.resources.vehicle_field_topology
+import volty.composeapp.generated.resources.vehicle_field_yield_bms
+import volty.composeapp.generated.resources.vehicle_field_yield_bms_caption
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_save_blocked
 import volty.composeapp.generated.resources.vehicle_section_alerts
@@ -408,9 +410,27 @@ private fun SourcesSection(state: VehicleEditComponent.State, component: Vehicle
                 issues = issues[pack.key].orEmpty(),
                 canRemove = state.canRemoveSource,
                 linkAddresses = links,
+                // Numbered as the cards are (1-based, draft order), so a chip
+                // reading "Battery 2" names the card headed "Battery 2".
+                otherPacks = state.draft.packs
+                    .mapIndexed { i, p -> (i + 1) to p }
+                    .filter { (_, p) -> p.key != pack.key },
                 component = component
             )
         }
+    }
+
+    // `C §5`, and it belongs HERE rather than beside the vehicle's own settings:
+    // it is a property of an alias group — which of two paths to one battery the
+    // app gives up while riding — so it appears under the sources, once such a
+    // group exists, and nowhere else. See [State.showYieldToggle].
+    if (state.showYieldToggle) {
+        SwitchRow(
+            label = stringResource(Res.string.vehicle_field_yield_bms),
+            subtitle = stringResource(Res.string.vehicle_field_yield_bms_caption),
+            checked = state.yieldsBmsToHeadUnit,
+            onChange = component::onYieldBmsToHeadUnitChanged
+        )
     }
 
     @OptIn(ExperimentalLayoutApi::class)

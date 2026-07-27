@@ -110,13 +110,26 @@ fun derivedBatteryChoiceFor(controller: Controller, default: Boolean): DerivedBa
  * [Pack] requires no change here.
  *
  * **[toPack] names exactly the fields this composer edits, and nothing else.**
- * [cellCount] and [aliasGroup] are carried on the draft so a row can *show*
- * them, but they are written by telemetry (`maybePersistCellCount`) and by Task
- * 4, not here — so they come off [origin], which [reanchoredTo] re-points at
- * the freshly-read row at save time. That is what stops a save from reverting a
- * cell count the auto-fill wrote while this form was open. Whoever makes either
- * field editable must add it to the `copy()` below **and** keep it out of
- * [reanchoredTo]'s refresh.
+ * [cellCount] is carried on the draft so a row can *show* it, but it is written
+ * by telemetry (`maybePersistCellCount`), not here — so it comes off [origin],
+ * which [reanchoredTo] re-points at the freshly-read row at save time. That is
+ * what stops a save from reverting a cell count the auto-fill wrote while this
+ * form was open.
+ *
+ * ### [aliasGroup] is editable since Task 4, and [aliasEdited] is why that is safe
+ *
+ * Grouping two battery sources as one physical pack (`G §5`, `01-linking §4`) is
+ * knowledge only the rider has, so the composer had to become a writer of this
+ * field. Making it an unconditional member of the `copy()` below would have
+ * inverted the guarantee above for it: a stale load-time value would be written
+ * back over whatever the stored row had grown underneath the form.
+ *
+ * So the rule is stated the other way round — **the draft writes this field only
+ * once the rider has touched it**. Until then it still comes off [origin], i.e.
+ * off the freshly-read row, exactly like [cellCount]. [aliasEdited] is that
+ * "once", per pack rather than per form ([VehicleEditComponent.State.packsEdited]
+ * is set by any edit at all, including renaming an unrelated pack, and would
+ * have made a rename claim ownership of the grouping).
  */
 data class PackDraft(
     val key: String,
@@ -126,18 +139,23 @@ data class PackDraft(
     val cellCount: Int? = null,
     val canId: Int? = null,
     val aliasGroup: String? = null,
+    /** Whether the RIDER set [aliasGroup] on this pack — see the class doc. */
+    val aliasEdited: Boolean = false,
     val origin: Pack? = null
 ) {
     val protocolKind: ProtocolKind get() = bmsType.protocolKind()
 
-    fun toPack(index: Int): Pack =
-        (origin ?: Pack(index = index, label = label, bmsType = bmsType, bmsAddress = address)).copy(
-            index = index,
-            label = label,
-            bmsType = bmsType,
-            bmsAddress = address,
-            canId = canId
-        )
+    fun toPack(index: Int): Pack {
+        val base =
+            (origin ?: Pack(index = index, label = label, bmsType = bmsType, bmsAddress = address)).copy(
+                index = index,
+                label = label,
+                bmsType = bmsType,
+                bmsAddress = address,
+                canId = canId
+            )
+        return if (aliasEdited) base.copy(aliasGroup = aliasGroup) else base
+    }
 }
 
 /**
@@ -271,6 +289,46 @@ data class VehicleDraft(
             DerivedBatteryChoice.AUTO -> derivedBatteryDefault
             DerivedBatteryChoice.ON -> true
             DerivedBatteryChoice.OFF -> false
+        }
+
+    /**
+     * Whether [pack] is reached **through a gateway** rather than over its own
+     * BLE link: some controller of this vehicle sits at the same address.
+     *
+     * That is what "hosted" means concretely once you admit a vehicle has more
+     * than one link (`01-linking §1`) — the head unit answers
+     * `COMM_BMS_GET_VALUES` for a battery it reads elsewhere, and the thing that
+     * makes its address a gateway address is the controller(s) on it. A pack on
+     * an address no controller shares is a plain direct BMS link.
+     *
+     * Used by [duplicatePackSuspects] and [handoffAliasGroups], both of which
+     * care about the *shape* `01-linking §4` describes: one direct path and one
+     * gateway-hosted path to one battery.
+     */
+    fun isHostedPack(pack: PackDraft): Boolean =
+        pack.address.isNotBlank() && controllers.any { it.address == pack.address }
+
+    /**
+     * The alias groups that span a **gateway-hosted** and a **direct** battery
+     * on two different links — the only shape the `C §5` ride-time handoff can
+     * act on, and therefore the only shape the "yield BMS to head unit while
+     * riding" toggle is about.
+     *
+     * A mirror of `planAliasHandoffs`' first three conditions, not a call into
+     * it: that function lives in `data/ble`, works on `LinkSpec`s the composer
+     * has not built yet, and its fourth condition (the direct link owns nothing
+     * else) is about what would be lost as collateral when the link is released
+     * rather than about whether the setting applies. Showing the toggle is
+     * cheap; showing it where there is no contention at all is what would be
+     * wrong. `a grouped alias pair is one the runtime plans a handoff for`
+     * spans the two layers on one fixture.
+     */
+    val handoffAliasGroups: List<String>
+        get() = packs.mapNotNull { it.aliasGroup }.distinct().filter { group ->
+            val members = packs.filter { it.aliasGroup == group }
+            val hosted = members.filter { isHostedPack(it) }
+            val direct = members.filter { !isHostedPack(it) }
+            hosted.isNotEmpty() && direct.any { d -> hosted.none { it.address == d.address } }
         }
 
     /** Pack indices are renumbered from the draft's own order — see [toControllers]. */
@@ -454,6 +512,72 @@ private fun <T> List<T>.moved(from: Int, to: Int): List<T> {
     return out
 }
 
+// ----- alias grouping (Task 4): two battery sources, one physical pack -----
+
+/**
+ * Mark the packs [keyA] and [keyB] as **the same physical battery reached two
+ * ways** (`01-linking §4`, `G §5`).
+ *
+ * This is the deliverable of Task 4 and the one the product owner's scooter
+ * needs: his ANT is reachable directly over BLE while parked and through the
+ * head unit while riding, and nothing on the wire says the two are one battery
+ * — only he knows. Without the shared group `PackAggregator` counts the pack
+ * twice (doubled capacity, doubled energy) and `planAliasHandoffs` has no way
+ * to tell which two links contend for it.
+ *
+ * **Merging, not pairing.** If either side already belongs to a group, that
+ * group's id wins and every member of *both* groups is moved onto it, so
+ * "A with B" then "B with C" leaves one group of three rather than two
+ * overlapping claims — the field holds a single id, so overlapping groups are
+ * not representable and pretending otherwise would silently drop a member.
+ * [keyA]'s id is preferred purely so the operation is deterministic.
+ *
+ * A fresh id comes from [VehicleDraft.nextKey], the same monotonic counter row
+ * keys come from: deterministic, so the whole draft stays comparable in tests,
+ * and unique within the vehicle, which is all `aliasGroup` has to be
+ * (`PackAggregator.collapseAliases` groups by it inside one vehicle).
+ *
+ * Grouping a pack with itself, or with a key that is not in the draft, is a
+ * no-op — like every other mutation here, an impossible request changes nothing.
+ */
+fun VehicleDraft.groupPacks(keyA: String, keyB: String): VehicleDraft {
+    if (keyA == keyB) return this
+    val a = packs.firstOrNull { it.key == keyA } ?: return this
+    val b = packs.firstOrNull { it.key == keyB } ?: return this
+    val group = a.aliasGroup ?: b.aliasGroup ?: "alias-$nextKey"
+    val absorbed = setOfNotNull(a.aliasGroup, b.aliasGroup)
+    return copy(
+        packs = packs.map { p ->
+            if (p.key == keyA || p.key == keyB || (p.aliasGroup != null && p.aliasGroup in absorbed)) {
+                p.copy(aliasGroup = group, aliasEdited = true)
+            } else {
+                p
+            }
+        },
+        nextKey = if (a.aliasGroup == null && b.aliasGroup == null) nextKey + 1 else nextKey
+    )
+}
+
+/**
+ * Take [key] out of its alias group.
+ *
+ * **A group of one is not a group**, so a member left alone is cleared with it.
+ * That is not tidiness: a lone `aliasGroup` claims this battery has another path
+ * that the vehicle no longer describes, and it is what the rider would have to
+ * undo by hand on the *other* card to get back to "these are two batteries".
+ * `PackAggregator` collapsing a one-member group is a no-op, so nothing observable
+ * depends on the leftover — which is exactly why it would sit there unnoticed.
+ */
+fun VehicleDraft.ungroupPack(key: String): VehicleDraft {
+    val group = packs.firstOrNull { it.key == key }?.aliasGroup ?: return this
+    val cleared = packs.map { if (it.key == key) it.copy(aliasGroup = null, aliasEdited = true) else it }
+    val left = cleared.filter { it.aliasGroup == group }
+    return copy(
+        packs = if (left.size > 1) cleared
+        else cleared.map { if (it.aliasGroup == group) it.copy(aliasGroup = null, aliasEdited = true) else it }
+    )
+}
+
 fun VehicleDraft.updatePack(key: String, edit: (PackDraft) -> PackDraft): VehicleDraft =
     copy(packs = packs.map { if (it.key == key) edit(it) else it })
 
@@ -594,6 +718,66 @@ sealed interface ComposerIssue {
     data class UnroutableGateway(val address: String, val kind: ProtocolKind) : ComposerIssue {
         override val blocking: Boolean get() = false
     }
+
+    /**
+     * Two battery sources that look like **the same physical pack reached two
+     * ways** (`G §5`, `01-linking §4`), offered as a grouping rather than
+     * counted twice.
+     *
+     * The rule, the window, the band and — most of all — why it refuses to fire
+     * on two genuinely similar packs are all in `ComposerDuplicates.kt`. It is
+     * the one issue that carries an ACTION rather than a correction: the card
+     * offers [VehicleDraft.groupPacks] on the pair.
+     *
+     * Advisory, and it could not be anything else. Two packs that track each
+     * other are a perfectly valid vehicle — that is what parallel wiring is —
+     * so this is a question about the rider's hardware, not a contradiction in
+     * their configuration.
+     */
+    data class DuplicatePack(val keyA: String, val keyB: String) : ComposerIssue {
+        override val blocking: Boolean get() = false
+    }
+
+    /**
+     * **A controller row that is probably a display, not an ESC** (Task 4, added
+     * after Task 5 found it).
+     *
+     * Picking a head unit creates a controller row for it with `canId == null`,
+     * because at pick time nothing knows whether the endpoint drives a motor. On
+     * the product owner's scooter it does not: the head unit is a VESC Express
+     * dashboard that reaches the two uBoxes **only by CAN-forwarding**
+     * (`01-linking §0`), and its own `GET_VALUES` describes no motor. That row
+     * then polls a controller that does not exist, and nothing ever prompts the
+     * rider to remove it.
+     *
+     * It is not merely a wasted poll — it damages the two things this app is for:
+     *
+     *  - **the number on the dashboard.** `MotionAggregator` folds
+     *    `inputVoltageV` with `average()`. A head unit answering with a 0 V rail
+     *    makes a three-controller vehicle report **two thirds** of its real pack
+     *    voltage, and that value feeds the alert engine as well as the dial
+     *    (`G §9.3`);
+     *  - **the staleness watchdog.** A head unit answering *nothing* is excluded
+     *    from the fold correctly, but `MotionResult.partial` is then permanently
+     *    true and the row is a permanently-silent extra source on the gateway
+     *    link — the precondition a timed-out CAN scan needs to trip the 5 s
+     *    stale-sample watchdog. The row manufactures the hazard.
+     *
+     * **Advisory, never blocking**, and worded as a question rather than an
+     * assertion: a head unit that genuinely *is* an ESC is a legitimate build
+     * (a uBox with a BLE module is exactly that — `01-linking §0`'s
+     * controller-gateway), and we have not measured what this rider's hardware
+     * answers.
+     *
+     * Raised only when the link has **proved it works** — some other source at
+     * the same address has reported — so "this one is silent" is a fact about
+     * the source and not about a link that never came up. See
+     * `ComposerDuplicates.kt`'s `reportsMotion` for why an all-zero answer
+     * counts as silence.
+     */
+    data class PhantomGatewayController(val sourceKey: String) : ComposerIssue {
+        override val blocking: Boolean get() = false
+    }
 }
 
 /**
@@ -621,14 +805,22 @@ private class AddressGroup {
 
 /**
  * Every problem [draft] has, in a stable order (per-source first in draft
- * order, then per-address in first-appearance order) so a screen can render it
- * without sorting and a test can assert on the list.
+ * order, then per-address in first-appearance order, then the pairwise ones) so
+ * a screen can render it without sorting and a test can assert on the list.
  *
  * Empty for a well-formed draft, and `issues.none { it.blocking }` is exactly
  * the condition under which the resulting [Vehicle] is guaranteed to survive
  * `planLinks`.
+ *
+ * [telemetry] is what this sitting has **observed** of the vehicle, and the two
+ * issues that read it ([ComposerIssue.PhantomGatewayController] and
+ * [ComposerIssue.DuplicatePack]) are both advisories about the rider's hardware
+ * rather than about their configuration — neither can be decided from a draft
+ * alone, and both say nothing at all when nothing has been observed. It
+ * defaults to empty so a caller that only wants the structural rules (and every
+ * test that predates Task 4) needs no change.
  */
-fun validate(draft: VehicleDraft): List<ComposerIssue> {
+fun validate(draft: VehicleDraft, telemetry: ComposerTelemetry = ComposerTelemetry()): List<ComposerIssue> {
     val issues = mutableListOf<ComposerIssue>()
 
     for (p in draft.packs) if (p.address.isBlank()) issues += ComposerIssue.BlankAddress(p.key)
@@ -694,7 +886,31 @@ fun validate(draft: VehicleDraft): List<ComposerIssue> {
         if (isGateway && resolved != ProtocolKind.VESC) {
             issues += ComposerIssue.UnroutableGateway(address, resolved)
         }
+        // The phantom head-unit controller — see [ComposerIssue.PhantomGatewayController].
+        //
+        // `g.canIds.isNotEmpty()` and not `isGateway`: the criterion is a link
+        // that carries CAN-ADDRESSED sources, which is the only shape in which
+        // a null id means "the endpoint itself" AND there is something else
+        // behind it that the endpoint exists to reach. `isGateway` is broader
+        // (two controllers on one address, a hosted VESC_BMS) and would make a
+        // plain dual-VESC-on-one-link vehicle — where neither controller is a
+        // gateway for the other — answer to a rule about gateways.
+        if (g.canIds.isNotEmpty()) {
+            // The link has PROVED it works: something else at this address has
+            // reported. Without this, a head unit that was simply never
+            // connected would be accused of being a display.
+            val linkWorks = (g.controllers.map { it.key } + g.packs.map { it.key })
+                .any { it in telemetry.sourcesSeen }
+            if (linkWorks) {
+                g.controllers
+                    .filter { it.canId == null && it.key !in telemetry.controllersWithMotion }
+                    .forEach { issues += ComposerIssue.PhantomGatewayController(it.key) }
+            }
+        }
     }
+
+    // Pairwise, so last: it is about two rows rather than one row or one link.
+    issues += duplicatePackSuspects(draft, telemetry)
     return issues
 }
 
@@ -733,7 +949,12 @@ fun ComposerIssue.affectedKeys(draft: VehicleDraft): List<String> = when (this) 
     is ComposerIssue.BlankAddress -> listOf(sourceKey)
     is ComposerIssue.NoControllerDecoder -> listOf(sourceKey)
     is ComposerIssue.HostlessVescBms -> listOf(sourceKey)
+    is ComposerIssue.PhantomGatewayController -> listOf(sourceKey)
     is ComposerIssue.AmbiguousGatewaySource -> sourceKeys
+    // Both cards, because the offer is symmetric: either one can be tapped to
+    // group the pair, and a rider who only ever opens the second pack's card
+    // would otherwise never be told.
+    is ComposerIssue.DuplicatePack -> listOf(keyA, keyB)
     is ComposerIssue.ConflictingKinds -> draft.keysAt(address)
     is ComposerIssue.UnroutableGateway -> draft.keysAt(address)
     is ComposerIssue.DuplicateCanId -> draft.keysAt(address, canId)

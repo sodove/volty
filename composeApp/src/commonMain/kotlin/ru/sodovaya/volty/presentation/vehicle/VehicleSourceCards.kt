@@ -38,10 +38,13 @@ import volty.composeapp.generated.resources.composer_issue_ambiguous_gateway
 import volty.composeapp.generated.resources.composer_issue_blank_address
 import volty.composeapp.generated.resources.composer_issue_conflicting_kinds
 import volty.composeapp.generated.resources.composer_issue_duplicate_can_id
+import volty.composeapp.generated.resources.composer_issue_duplicate_pack
 import volty.composeapp.generated.resources.composer_issue_hostless_vesc_bms
 import volty.composeapp.generated.resources.composer_issue_no_decoder
+import volty.composeapp.generated.resources.composer_issue_phantom_gateway
 import volty.composeapp.generated.resources.composer_issue_unroutable_gateway
 import volty.composeapp.generated.resources.vehicle_field_alias_group
+import volty.composeapp.generated.resources.vehicle_field_alias_group_caption
 import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_can_id
 import volty.composeapp.generated.resources.vehicle_field_cell_count_auto
@@ -171,6 +174,8 @@ internal fun PackSourceCard(
     issues: List<ComposerIssue>,
     canRemove: Boolean,
     linkAddresses: List<String>,
+    /** Every OTHER pack in the draft, in draft order, with its 1-based number. */
+    otherPacks: List<Pair<Int, PackDraft>>,
     component: VehicleEditComponent
 ) {
     SourceCard(
@@ -191,14 +196,9 @@ internal fun PackSourceCard(
                 stringResource(Res.string.vehicle_field_can_id),
                 draft.canId
             ) { component.onPackCanIdChanged(draft.key, it) }
-            // The slot Task 4 fills in (`G §5`): two battery sources marked as
-            // one physical pack. It already displays whatever is stored, so a
-            // vehicle seeded elsewhere shows its grouping today; nothing on
-            // this screen writes it yet.
-            ReadOnlyRow(
-                stringResource(Res.string.vehicle_field_alias_group),
-                draft.aliasGroup ?: EM_DASH
-            )
+            // `G §5` / `01-linking §4`, filled in by Task 4: this battery and
+            // another one are the SAME physical pack reached two ways.
+            AliasGroupField(draft, otherPacks, component)
         }
     ) {
         TypeChips(
@@ -340,6 +340,13 @@ internal fun composerIssueText(issue: ComposerIssue): String = when (issue) {
         stringResource(Res.string.composer_issue_no_decoder, issue.controllerType.label)
     is ComposerIssue.HostlessVescBms -> stringResource(Res.string.composer_issue_hostless_vesc_bms)
     is ComposerIssue.UnroutableGateway -> stringResource(Res.string.composer_issue_unroutable_gateway)
+    is ComposerIssue.DuplicatePack -> stringResource(Res.string.composer_issue_duplicate_pack)
+    // Deliberately a QUESTION and not a diagnosis. We have not measured what
+    // this rider's head unit answers to `GET_VALUES`, and a head unit that
+    // really is a motor controller is a legitimate build — so the sentence asks
+    // whether it drives a motor and says what to do if it does not, rather than
+    // telling them their hardware is wrong.
+    is ComposerIssue.PhantomGatewayController -> stringResource(Res.string.composer_issue_phantom_gateway)
 }
 
 // ---------------------------------------------------------------------------
@@ -419,8 +426,55 @@ private fun LinkField(address: String, linkAddresses: List<String>, onAddressCha
     }
 }
 
+/**
+ * "This battery and that one are the same physical pack."
+ *
+ * A chip per other pack, because that is what the rider actually knows — *which*
+ * battery it is the same as — and because the stored `aliasGroup` is an opaque
+ * id no rider should ever see or type. Tapping a chip calls
+ * [VehicleEditComponent.onGroupPacks]; tapping the grouped one again ungroups.
+ * A vehicle with one pack shows nothing at all: there is nothing to be the same
+ * as, and an empty control here reads as a broken one.
+ *
+ * The group's *members* are named rather than its id, so two packs in one group
+ * describe each other symmetrically and a third pack joining reads the same way.
+ */
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun SwitchRow(label: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+private fun AliasGroupField(
+    draft: PackDraft,
+    otherPacks: List<Pair<Int, PackDraft>>,
+    component: VehicleEditComponent
+) {
+    if (otherPacks.isEmpty()) return
+    Caption(stringResource(Res.string.vehicle_field_alias_group))
+    Caption(stringResource(Res.string.vehicle_field_alias_group_caption))
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        otherPacks.forEach { (number, other) ->
+            val grouped = draft.aliasGroup != null && draft.aliasGroup == other.aliasGroup
+            FilterChip(
+                selected = grouped,
+                onClick = {
+                    if (grouped) component.onUngroupPack(draft.key)
+                    else component.onGroupPacks(draft.key, other.key)
+                },
+                label = {
+                    Text(
+                        "${stringResource(Res.string.vehicle_source_pack)} $number",
+                        fontSize = 11.sp
+                    )
+                }
+            )
+        }
+    }
+}
+
+@Composable
+internal fun SwitchRow(label: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
     Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(modifier = Modifier.weight(1f)) {
             Text(label, fontSize = 14.sp)
