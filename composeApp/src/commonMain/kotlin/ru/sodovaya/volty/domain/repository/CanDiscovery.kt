@@ -39,9 +39,48 @@ interface CanDiscovery {
      *
      * An **empty list is a real answer**: the gateway replied and nothing is on
      * its bus. Failure means the question could not be asked (or was not
-     * answered) — no live link at [address], a link that does not speak VESC,
-     * or silence within the reply window. The distinction matters to the
-     * screen: "nothing found" and "we could not look" are different sentences.
+     * answered) — see [CanScanRefusal], and note that every failure this
+     * interface produces carries one, as a [CanScanRefusedException]. The
+     * distinction matters to the screen: "nothing found" and "we could not
+     * look" are different sentences, and so are the four ways of not looking.
      */
     suspend fun discoverCanIds(address: String): Result<List<Int>>
 }
+
+/**
+ * Why a scan could not be performed — **one case per thing a rider can do about
+ * it**, which is why there are four rather than one.
+ *
+ * Typed rather than a message string, because the screen has to say each of
+ * these in the rider's own language. The first implementation carried
+ * `IllegalStateException("Link HU:01 speaks VESC_BMS, which has no CAN bus")`
+ * and the screen printed that English sentence inside a Russian one.
+ * `Throwable.message` is a log line; this is the UI contract.
+ */
+enum class CanScanRefusal {
+    /** Nothing of this vehicle's is connected at that address. */
+    NOT_CONNECTED,
+
+    /**
+     * There is a link, but it is not usable yet — still connecting,
+     * reconnecting, or up in the fold without a session behind it. One case to
+     * a rider ("wait, or reconnect"), two internally; the distinction survives
+     * in the exception message for logs and tests.
+     */
+    LINK_NOT_READY,
+
+    /** The link speaks a protocol with no CAN bus — see `ProtocolKind.hasCanBus`. */
+    NO_CAN_BUS,
+
+    /** It was asked, and stayed silent for the whole reply window. */
+    NO_REPLY
+}
+
+/**
+ * The one failure type [CanDiscovery.discoverCanIds] produces. [message] is for
+ * logs and tests and names the link; [refusal] is what the screen renders.
+ */
+class CanScanRefusedException(
+    val refusal: CanScanRefusal,
+    message: String
+) : IllegalStateException(message)

@@ -6,8 +6,11 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
+import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -46,10 +49,20 @@ class KableBmsRepositoryCanDiscoveryTest {
     private fun why(r: Result<List<Int>>): String =
         r.exceptionOrNull()?.message ?: "SUCCESS(${r.getOrNull()})"
 
+    /**
+     * The TYPED reason, which is what the screen renders - the message above is
+     * only a log line. Asserted alongside it everywhere, because a refusal that
+     * carried the right sentence and the wrong reason would print the wrong
+     * thing in Russian and no message assertion could see it.
+     */
+    private fun reason(r: Result<List<Int>>): CanScanRefusal? =
+        (r.exceptionOrNull() as? CanScanRefusedException)?.refusal
+
     @Test
     fun `an address with no link at all is refused`() = bleRepositoryTest { repo ->
         val r = repo.discoverCanIds("HU:01")
         assertTrue(r.isFailure)
+        assertEquals(CanScanRefusal.NOT_CONNECTED, reason(r), why(r))
         assertTrue(why(r).contains("Not connected"), why(r))
     }
 
@@ -64,6 +77,7 @@ class KableBmsRepositoryCanDiscoveryTest {
         repo.installLinksForTest(v, "HU:01", null)
         val r = repo.discoverCanIds("HU:01")
         assertTrue(r.isFailure)
+        assertEquals(CanScanRefusal.LINK_NOT_READY, reason(r), why(r))
         assertTrue(why(r).contains("not online"), why(r))
     }
 
@@ -81,6 +95,7 @@ class KableBmsRepositoryCanDiscoveryTest {
         repo.markLinkOnlineForTest("JK:01")
         val r = repo.discoverCanIds("JK:01")
         assertTrue(r.isFailure)
+        assertEquals(CanScanRefusal.NO_CAN_BUS, reason(r), why(r))
         assertTrue(why(r).contains("JK"), why(r))
         assertTrue(why(r).contains("no CAN bus"), why(r))
     }
@@ -97,7 +112,57 @@ class KableBmsRepositoryCanDiscoveryTest {
         repo.markLinkOnlineForTest("HU:01")
         val r = repo.discoverCanIds("HU:01")
         assertTrue(r.isFailure)
+        // Same reason as "not online": to a rider both are "the link is not up
+        // yet". The two stay distinct in the message, for logs and for this test.
+        assertEquals(CanScanRefusal.LINK_NOT_READY, reason(r), why(r))
         assertTrue(why(r).contains("no session"), why(r))
+    }
+
+    /**
+     * **The shape the review's Important 1 was about, from the other side.**
+     *
+     * A lone hosted `VESC_BMS` pack resolves — through the real `planLinks` —
+     * to a link of kind `VESC_BMS`, and this refuses it. The composer used to
+     * offer a scan on exactly this shape, so the button appeared and the tap
+     * could only ever fail; both layers now read `ProtocolKind.hasCanBus`, and
+     * this is the half of that fact which lives here.
+     *
+     * Without it `VESC_BMS -> false` in `hasCanBus` is indistinguishable from
+     * `true`: `canScanTarget` looks only at controllers, and no `ControllerType`
+     * maps to `VESC_BMS`.
+     */
+    @Test
+    fun `a lone hosted VESC_BMS cannot even become a link, let alone a gateway`() = bleRepositoryTest { repo ->
+        val v = vehicle(
+            controllers = emptyList(),
+            packs = listOf(Pack(index = 0, label = "P", bmsType = BmsType.VESC_BMS, bmsAddress = "HU:01"))
+        )
+        // The real planner calls it a VESC_BMS link…
+        assertEquals(
+            ProtocolKind.VESC_BMS,
+            planLinks(v.packs, v.controllers).single().protocolKind
+        )
+        // …and `createProtocol` refuses to build one at all, so it can never be
+        // online to be scanned. THAT is why `hasCanBus` answers false for it,
+        // and why offering a scan on this shape produced a button that could
+        // only ever fail.
+        val thrown = assertFailsWith<IllegalStateException> {
+            repo.installLinksForTest(v, "HU:01", BmsType.VESC_BMS)
+        }
+        assertTrue(thrown.message.orEmpty().contains("VESC BMS"), thrown.message.orEmpty())
+    }
+
+    /**
+     * The single statement of which links have a bus, over the WHOLE enum —
+     * because it is now read by two layers and a widening would quietly widen
+     * both at once, which is precisely the failure mode that made this fact
+     * shared in the first place.
+     */
+    @Test
+    fun `only VESC has a CAN bus`() {
+        for (kind in ProtocolKind.entries) {
+            assertEquals(kind == ProtocolKind.VESC, kind.hasCanBus, "hasCanBus for $kind")
+        }
     }
 
     /** Every refusal names the address it is about, so a two-link vehicle is unambiguous. */

@@ -122,14 +122,17 @@ class VescProtocol(
             // wire. (On the success path `onNotification` has already nulled it
             // and this is a no-op.)
             //
-            // The identity check guards the one interleaving the single-flight
-            // above still allows: another caller arming between
-            // `onNotification`'s null and this line would otherwise have ITS
-            // arm cleared here and its reply dropped. It is not reachable from a
-            // `runTest` harness — the two statements are adjacent with no
-            // suspension point between them — and is kept because it is correct
-            // under the concurrency this type permits, not because a test
-            // demands it. Reported as such in this task's sweep.
+            // The identity check guards the interleaving the single-flight above
+            // still allows: another caller arming between this scan being
+            // answered and this line running would otherwise have ITS arm
+            // cleared here and its reply dropped — a scan that put a `PING_CAN`
+            // on a healthy bus and reported silence.
+            //
+            // It IS reachable from a test, contrary to what this comment first
+            // claimed: `reset()` answers a scan without going through
+            // `onNotification`, and an `UNDISPATCHED` second caller arms before
+            // the first resumes. See `a disarm must not clear a scan somebody
+            // else armed`.
             if (canScan === waiter) canScan = null
         }
     }

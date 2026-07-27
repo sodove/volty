@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
@@ -177,6 +179,39 @@ class CanBusScanTest {
         assertEquals(2, sent.size, "the second scan must reach the wire, not join a dead one")
         p.onNotification(pingReply(10))
         assertEquals(listOf(10), second.await())
+    }
+
+    /**
+     * The identity check in `scanCanBus`' `finally` — and it **is** reachable,
+     * against the first report's claim that no `runTest` harness could get at it.
+     *
+     * The interleaving: a scan is disarmed by [VescProtocol.reset], a **new**
+     * scan arms before the first caller has run its `finally`, and that `finally`
+     * must not clear somebody else's arm. `CoroutineStart.UNDISPATCHED` puts the
+     * second `scanCanBus` on the wire inside the same dispatch, so the ordering
+     * is deterministic rather than a race.
+     *
+     * Without the check the second scan's reply is dropped and it times out —
+     * a scan that put a `PING_CAN` on a healthy bus and reported silence.
+     */
+    @Test
+    fun `a disarm must not clear a scan somebody else armed`() = runTest {
+        val p = VescProtocol()
+        val sent = mutableListOf<ByteArray>()
+
+        val first = async(start = CoroutineStart.UNDISPATCHED) { p.scanCanBus { sent += it } }
+        // Answers `first` with silence and disarms; its `finally` has NOT run.
+        p.reset()
+
+        val second = async(start = CoroutineStart.UNDISPATCHED) { p.scanCanBus { sent += it } }
+        assertEquals(2, sent.size, "the second scan reached the wire")
+
+        // NOW `first` resumes and runs its finally, with `second`'s waiter armed.
+        runCurrent()
+        assertNull(first.await())
+
+        p.onNotification(pingReply(10, 11))
+        assertEquals(listOf(10, 11), second.await())
     }
 
     /** Telemetry keeps decoding while a scan is armed — the scan is not a mode. */
@@ -381,6 +416,54 @@ class CanBusScanTest {
         runCurrent()
 
         assertEquals(listOf(10, 11), scan.await())
+        loop.cancel()
+    }
+
+    /**
+     * `serviceCanScan` clears the parked request **before** completing it, and
+     * that order is load-bearing — also against the first report's claim that it
+     * could only be seen with two real dispatchers.
+     *
+     * The interleaving: the caller resumes **inside** `waiter.complete(ids)`
+     * (`Dispatchers.Unconfined` resumes inline) and immediately parks a second
+     * scan. If the field were cleared after the completion, that clear would
+     * wipe the second caller's waiter and it would never be serviced — hanging
+     * for the full `SCAN_WAIT_MS` on a link that is answering perfectly.
+     */
+    @Test
+    fun `a scan parked from inside the first one's completion is still serviced`() = runTest {
+        val p = gateway()
+        val pings = mutableListOf<Int>()
+        val loop = launch {
+            p.runPollLoop { frame ->
+                val opcode = opcodeOf(frame)
+                if (opcode == VescCan.OPCODE_PING_CAN) {
+                    pings += 1
+                    val answer = pings.size
+                    launch {
+                        kotlinx.coroutines.delay(LATENCY_MS)
+                        p.onNotification(pingReply(answer))
+                    }
+                }
+            }
+        }
+        runCurrent()
+
+        var secondResult: List<Int>? = null
+        val chained = async(Dispatchers.Unconfined) {
+            p.scanCanBus { }
+            // Runs inline inside the first waiter's `complete`, which is the
+            // instant the ordering under test matters.
+            secondResult = p.scanCanBus { }
+        }
+
+        // Two cycles' worth: one to service each scan.
+        advanceTimeBy(4 * (TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS + LATENCY_MS))
+        runCurrent()
+        chained.await()
+
+        assertEquals(2, pings.size, "the chained scan must reach the wire")
+        assertEquals(listOf(2), secondResult, "and must be answered, not left parked")
         loop.cancel()
     }
 

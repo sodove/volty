@@ -42,6 +42,8 @@ import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
+import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -2442,20 +2444,28 @@ class KableBmsRepository private constructor(
      * outcome as a timeout.
      */
     override suspend fun discoverCanIds(address: String): Result<List<Int>> {
+        fun refuse(refusal: CanScanRefusal, message: String): Result<List<Int>> =
+            Result.failure(CanScanRefusedException(refusal, message))
+
         val link = links.firstOrNull { it.spec.address == address }
-            ?: return Result.failure(IllegalStateException("Not connected to $address"))
+            ?: return refuse(CanScanRefusal.NOT_CONNECTED, "Not connected to $address")
         if (link.status != LinkStatus.ONLINE) {
-            return Result.failure(IllegalStateException("Link $address is not online"))
+            return refuse(CanScanRefusal.LINK_NOT_READY, "Link $address is not online")
         }
-        if (link.spec.protocolKind != ProtocolKind.VESC) {
-            return Result.failure(
-                IllegalStateException("Link $address speaks ${link.spec.protocolKind}, which has no CAN bus")
+        // `hasCanBus`, not a second copy of the criterion: the composer decides
+        // whether to OFFER a scan from the same fact, and when the two were
+        // stated separately they disagreed — the screen offered a target this
+        // function then refused, so the button could only ever fail.
+        if (!link.spec.protocolKind.hasCanBus) {
+            return refuse(
+                CanScanRefusal.NO_CAN_BUS,
+                "Link $address speaks ${link.spec.protocolKind}, which has no CAN bus"
             )
         }
         val session = link.session
-            ?: return Result.failure(IllegalStateException("Link $address has no session"))
+            ?: return refuse(CanScanRefusal.LINK_NOT_READY, "Link $address has no session")
         val ids = session.scanCanBus()
-            ?: return Result.failure(IllegalStateException("No PING_CAN reply from $address"))
+            ?: return refuse(CanScanRefusal.NO_REPLY, "No PING_CAN reply from $address")
         return Result.success(ids)
     }
 

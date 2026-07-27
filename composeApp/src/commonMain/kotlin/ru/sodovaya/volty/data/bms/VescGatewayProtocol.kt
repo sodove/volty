@@ -431,9 +431,16 @@ class VescGatewayProtocol(
             // plan's own 400 ms would give up before it could possibly answer.
             timeoutMs = CanBusScanner.REPLY_TIMEOUT_MS
         )
-        // Cleared BEFORE completing, so a caller that immediately asks again
-        // parks a fresh request rather than joining one that is already
-        // finished — and so this cycle cannot service the same scan twice.
+        // Cleared BEFORE completing, and the order is load-bearing: completing
+        // first resumes the caller — inline, if it is waiting on an unconfined
+        // dispatcher, which is what a resumption inside `complete` means — and a
+        // second scan parked by that caller would then be **wiped by the clear
+        // that followed**, never serviced, and left hanging for the whole
+        // [SCAN_WAIT_MS] on a link that is answering perfectly.
+        //
+        // (It also stops this cycle servicing the same scan twice, which is the
+        // lesser of the two.) Pinned by `a scan parked from inside the first
+        // one's completion is still serviced`.
         canScanRequest = null
         waiter.complete(ids)
     }
@@ -460,6 +467,11 @@ class VescGatewayProtocol(
         return try {
             withTimeoutOrNull(SCAN_WAIT_MS) { waiter.await() }
         } finally {
+            // Clears an abandoned request so the NEXT scan parks a fresh one
+            // instead of joining a dead deferred and waiting the window out
+            // again — the same rule [VescProtocol] needs, and the reason both
+            // disarms exist at all.
+            //
             // Only if it is still OURS: [serviceCanScan] nulls the field the
             // moment it takes the request, and a later caller may already have
             // parked a new one there.

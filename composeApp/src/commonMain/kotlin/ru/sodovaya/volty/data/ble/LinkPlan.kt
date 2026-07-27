@@ -30,6 +30,34 @@ fun ControllerType.protocolKind(): ProtocolKind = when (this) {
 }
 
 /**
+ * Whether a link speaking this protocol has a CAN bus that can be enumerated
+ * (`COMM_PING_CAN`, `G §3` flow 4).
+ *
+ * **THE single statement of it**, and it exists because two layers had their own
+ * copy and disagreed: the composer offered a scan target that
+ * `KableBmsRepository.discoverCanIds` then refused, so the button appeared and
+ * the tap could only ever fail. Each layer had a test pinning its own half and
+ * no fixture spanned both, which is exactly how a contradiction survives a
+ * mutation sweep — every mutant of either side was killed by that side's own
+ * test.
+ *
+ * `VESC` and nothing else: `VESC_BMS` is the *hosted battery's* decode kind, and
+ * a link that resolves to it (`resolveLinkKind`, below) has no VESC controller
+ * on it at all — `createProtocol` refuses such a link outright, so it can never
+ * be online to be scanned. Every other kind is a battery protocol or a
+ * controller volty cannot decode yet.
+ *
+ * Exhaustive with no `else`, like every other `when` over this enum: a new kind
+ * has to answer.
+ */
+val ProtocolKind.hasCanBus: Boolean
+    get() = when (this) {
+        ProtocolKind.VESC -> true
+        ProtocolKind.VESC_BMS, ProtocolKind.BEGODE, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
+        ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT, ProtocolKind.DALY -> false
+    }
+
+/**
  * Bridge back to a [BmsType] for the battery half of a link. [KableBmsRepository]
  * builds its decode protocol from a [BmsType]; a link keyed by [ProtocolKind]
  * hands it back the matching value here. Controller-only kinds have no BMS

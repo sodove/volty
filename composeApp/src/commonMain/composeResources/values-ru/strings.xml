@@ -253,7 +253,10 @@
     <string name="can_scan_start">Найти устройства на шине CAN</string>
     <string name="can_scan_running">Опрашиваем шину — это занимает около 2,5 секунд и не прерывается.</string>
     <string name="can_scan_unavailable">Подключитесь к приборке, чтобы опросить её шину CAN. Пока она офлайн, опрос не выполняется.</string>
-    <string name="can_scan_failed">Не удалось опросить: %1$s</string>
+    <string name="can_scan_failed_not_connected">Опрос невозможен: транспорт не подключён. Сначала подключитесь к приборке.</string>
+    <string name="can_scan_failed_not_ready">Опрос невозможен: линия приборки ещё не поднялась. Дождитесь подключения.</string>
+    <string name="can_scan_failed_no_bus">Опрос невозможен: у этой линии нет шины CAN. Спросить можно только приборку VESC.</string>
+    <string name="can_scan_failed_no_reply">Приборка не ответила. Попробуйте ещё раз — уже идущий опрос игнорируется.</string>
     <string name="can_scan_empty">Приборка ответила, но на её шине больше никого нет.</string>
     <string name="can_scan_dismiss">Скрыть результаты</string>
     <string name="can_node_controller">Контроллер %1$d</string>

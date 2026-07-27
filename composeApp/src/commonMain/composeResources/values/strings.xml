@@ -255,7 +255,10 @@
     <string name="can_scan_start">Find devices on the CAN bus</string>
     <string name="can_scan_running">Scanning the bus — this takes about 2.5 seconds and cannot be interrupted.</string>
     <string name="can_scan_unavailable">Connect to the head unit to scan its CAN bus. Nothing is scanned while it is offline.</string>
-    <string name="can_scan_failed">Could not scan: %1$s</string>
+    <string name="can_scan_failed_not_connected">Cannot scan: this vehicle is not connected. Connect to the head unit first.</string>
+    <string name="can_scan_failed_not_ready">Cannot scan: the head unit link is not up yet. Wait for it to connect.</string>
+    <string name="can_scan_failed_no_bus">Cannot scan: this link has no CAN bus. Only a VESC head unit can be asked.</string>
+    <string name="can_scan_failed_no_reply">The head unit did not answer. Try again — a scan already running is ignored.</string>
     <string name="can_scan_empty">The head unit answered, and nothing else is on its bus.</string>
     <string name="can_scan_dismiss">Hide results</string>
     <string name="can_node_controller">Controller %1$d</string>

@@ -28,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.SourceRole
@@ -43,7 +44,10 @@ import volty.composeapp.generated.resources.can_node_raw
 import volty.composeapp.generated.resources.can_node_raw_hosted
 import volty.composeapp.generated.resources.can_scan_dismiss
 import volty.composeapp.generated.resources.can_scan_empty
-import volty.composeapp.generated.resources.can_scan_failed
+import volty.composeapp.generated.resources.can_scan_failed_no_bus
+import volty.composeapp.generated.resources.can_scan_failed_no_reply
+import volty.composeapp.generated.resources.can_scan_failed_not_connected
+import volty.composeapp.generated.resources.can_scan_failed_not_ready
 import volty.composeapp.generated.resources.can_scan_running
 import volty.composeapp.generated.resources.can_scan_start
 import volty.composeapp.generated.resources.can_scan_unavailable
@@ -249,7 +253,7 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
             }
             if (scan is CanScanState.Failed) {
                 Text(
-                    text = stringResource(Res.string.can_scan_failed, scan.message ?: EM_DASH),
+                    text = canScanRefusalText(scan.refusal),
                     fontSize = 11.sp,
                     color = MaterialTheme.colorScheme.error
                 )
@@ -274,6 +278,26 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
         }
     }
 }
+
+/**
+ * The rider-facing sentence for a refusal, one per reason.
+ *
+ * The refusals used to arrive as `Throwable.message` and were printed verbatim
+ * — an English exception string inside a Russian sentence, e.g. *"Не удалось
+ * опросить: Link HU:01 speaks VESC_BMS, which has no CAN bus"*. The reason is
+ * typed now ([CanScanRefusal]); the message stays where it belongs, in the log.
+ *
+ * Exhaustive with no `else`, so a fifth reason has to be given a sentence.
+ */
+@Composable
+private fun canScanRefusalText(refusal: CanScanRefusal): String = stringResource(
+    when (refusal) {
+        CanScanRefusal.NOT_CONNECTED -> Res.string.can_scan_failed_not_connected
+        CanScanRefusal.LINK_NOT_READY -> Res.string.can_scan_failed_not_ready
+        CanScanRefusal.NO_CAN_BUS -> Res.string.can_scan_failed_no_bus
+        CanScanRefusal.NO_REPLY -> Res.string.can_scan_failed_no_reply
+    }
+)
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -335,5 +359,3 @@ private fun canCandidateTitle(candidate: CanCandidate): String = when (candidate
     CanCandidateKind.NODE ->
         stringResource(Res.string.can_node_controller, candidate.ordinal ?: 0)
 }
-
-private const val EM_DASH = "—"

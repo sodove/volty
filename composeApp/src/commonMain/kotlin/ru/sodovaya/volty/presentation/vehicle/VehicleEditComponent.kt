@@ -19,6 +19,8 @@ import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
+import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
@@ -336,8 +338,10 @@ interface VehicleEditComponent {
         val canCandidates: List<CanCandidate>
             get() {
                 val found = canScan as? CanScanState.Found ?: return emptyList()
-                val target = canScanTarget ?: return emptyList()
-                return canCandidates(draft, target, found.ids)
+                // `found.address` — the link the scan ran against — for the same
+                // reason `onAddCanCandidate` uses it: the offers must describe
+                // the bus that answered, not whatever is live now.
+                return canCandidates(draft, found.address, found.ids)
             }
     }
 }
@@ -640,17 +644,29 @@ class DefaultVehicleEditComponent(
         if (s.canScan is CanScanState.Running) return
         val target = s.canScanTarget ?: return
         val discovery = canDiscovery ?: return
+        // Set SYNCHRONOUSLY, before `launch`, and that is the whole of the
+        // double-fire guard: `scope` is `Dispatchers.Main`, not `.immediate`, so
+        // a `Running` written inside the coroutine lands on a later Looper
+        // message and two taps within one message would both read `Idle` and
+        // both dispatch. It is also what makes the spinner cover the whole
+        // window — the firmware blocks ~2.55 s and shows nothing of its own.
+        _state.update { it.copy(canScan = CanScanState.Running) }
         scope.launch {
-            // Entered BEFORE suspending and left only when the call returns, so
-            // a spinner bound to it runs for the whole window — the firmware
-            // blocks ~2.55 s and shows nothing of its own.
-            _state.update { it.copy(canScan = CanScanState.Running) }
             val result = discovery.discoverCanIds(target)
             _state.update {
                 it.copy(
                     canScan = result.fold(
-                        onSuccess = { ids -> CanScanState.Found(ids) },
-                        onFailure = { e -> CanScanState.Failed(e.message) }
+                        onSuccess = { ids -> CanScanState.Found(target, ids) },
+                        // Typed, not `e.message`: the four refusals are four
+                        // different things a rider can fix and each has to be
+                        // said in their language. A failure from some other
+                        // implementation has no reason to give, and NO_REPLY is
+                        // the honest reading of "it did not come back".
+                        onFailure = { e ->
+                            CanScanState.Failed(
+                                (e as? CanScanRefusedException)?.refusal ?: CanScanRefusal.NO_REPLY
+                            )
+                        }
                     )
                 )
             }
@@ -673,7 +689,11 @@ class DefaultVehicleEditComponent(
      * controller is the one sanctioned mixed-kind pairing `planLinks` allows.
      */
     override fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean) {
-        val target = _state.value.canScanTarget ?: return
+        // The address the SCAN ran against, not the one a target recomputed from
+        // the live connection currently points at: a link dropping between the
+        // scan and the tap would otherwise make the add a silent no-op, and a
+        // draft with a second VESC link would put the device on the wrong one.
+        val target = (_state.value.canScan as? CanScanState.Found)?.address ?: return
         if (candidate.alreadyAdded) return
         val label = canCandidateLabel(candidate, asBattery)
         if (asBattery || candidate.kind == CanCandidateKind.HOSTED_BATTERY) {

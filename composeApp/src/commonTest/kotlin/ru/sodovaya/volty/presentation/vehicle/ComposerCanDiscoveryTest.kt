@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.presentation.vehicle
 
+import ru.sodovaya.volty.data.ble.hasCanBus
+import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -214,13 +216,25 @@ class ComposerCanDiscoveryTest {
     }
 
     /**
-     * A vehicle whose only VESC-speaking source is a hosted VESC-BMS still has
-     * a gateway behind it — that is the whole meaning of "hosted" — so the scan
-     * is offered rather than refused for want of a controller row.
+     * A hosted `VESC_BMS` pack **on its own** is not a scan target, and this is
+     * the review's Important 1.
+     *
+     * It looks like one — "hosted" means there is a gateway — but `planLinks`'
+     * `resolveLinkKind` resolves a `{VESC_BMS}`-only address to
+     * `ProtocolKind.VESC_BMS`, which `KableBmsRepository.discoverCanIds`
+     * refuses. Offering it meant a button that appeared and could only ever
+     * fail. A hosted battery that really is behind a gateway shares its address
+     * with a VESC controller, and that is what makes it a target.
      */
     @Test
-    fun `a live hosted VESC BMS is a scan target on its own`() {
+    fun `a hosted VESC BMS is not a scan target on its own`() {
         val d = draft(packs = listOf(pack(address = head)))
+        assertNull(canScanTarget(d, setOf(head)))
+    }
+
+    @Test
+    fun `a hosted VESC BMS beside its gateway controller still scans, through the controller`() {
+        val d = draft(controllers = listOf(controller(address = head)), packs = listOf(pack(address = head)))
         assertEquals(head, canScanTarget(d, setOf(head)))
     }
 
@@ -228,5 +242,80 @@ class ComposerCanDiscoveryTest {
     fun `a live plain BMS is not a scan target`() {
         val d = draft(packs = listOf(pack(address = head, type = BmsType.ANT_BMS)))
         assertNull(canScanTarget(d, setOf(head)))
+    }
+
+    // ------------------------------------------------------------------
+    // The two layers must agree — and each had only its own half pinned
+    // ------------------------------------------------------------------
+
+    /**
+     * **The cross-layer invariant, over an exhaustive source set.**
+     *
+     * `canScanTarget` decides whether to OFFER a scan; `discoverCanIds` decides
+     * whether to PERFORM one, and its criterion is the *planned link's* protocol
+     * kind. Those are two different things — a draft holds sources, `planLinks`
+     * resolves them into a link — and when each was stated separately they
+     * disagreed for one shape (a lone hosted `VESC_BMS`): the button appeared
+     * and the tap always failed.
+     *
+     * A 63-mutant sweep could not see it, because both halves were pinned by
+     * their own layer's tests and **no fixture spanned the two**. Every mutant of
+     * either side was killed by that side. This is the fixture that spans them,
+     * and it is written as an implication over every controller type × every
+     * battery type × three link arrangements rather than over one example —
+     * an agreement argued from one shape is not an agreement.
+     */
+    @Test
+    fun `a scan target's link is always one the repository will scan`() {
+        var offered = 0
+        for (ct in ControllerType.entries) {
+            for (bt in BmsType.entries) {
+                // Same link, two links, and each source alone: the arrangements
+                // that change what `resolveLinkKind` sees.
+                val arrangements = listOf(
+                    draft(controllers = listOf(controller(type = ct)), packs = listOf(pack(type = bt))),
+                    draft(
+                        controllers = listOf(controller(type = ct)),
+                        packs = listOf(pack(address = "OTHER", type = bt))
+                    ),
+                    draft(controllers = listOf(controller(type = ct))),
+                    draft(packs = listOf(pack(type = bt)))
+                )
+                for (d in arrangements) {
+                    // A draft the composer itself refuses is not a shape
+                    // `planLinks` is ever handed — `validate`'s whole contract
+                    // is that a non-blocking draft survives it. Two different
+                    // kinds at one address is exactly such a refusal.
+                    if (validate(d).any { it.blocking }) continue
+                    val live = setOf(head, "OTHER")
+                    val target = canScanTarget(d, live) ?: continue
+                    offered++
+                    // The link the connection layer would actually build for
+                    // that address — the real planner, not a restatement.
+                    val link = planLinks(d.toPacks(), d.toControllers()).single { it.address == target }
+                    assertTrue(
+                        link.protocolKind.hasCanBus,
+                        "offered a scan on $target, whose link resolves to ${link.protocolKind} — " +
+                            "discoverCanIds would refuse it (controller $ct, pack $bt)"
+                    )
+                }
+            }
+        }
+        // Non-vacuity, and EXACT rather than a floor: the implication above is
+        // trivially true if nothing is ever offered, and a `canScanTarget` that
+        // quietly narrowed would still pass a `>=` written loosely enough.
+        //
+        // Only a VESC controller yields a target, so the arithmetic is:
+        //   · same link, VESC controller + pack — 1, because every battery kind
+        //     but VESC_BMS is a BLOCKING conflict at one address (`resolveLinkKind`
+        //     sanctions {VESC, VESC_BMS} and nothing else);
+        //   · two links — one per battery kind, none of them conflicting;
+        //   · controller alone — the same draft once per battery kind of the loop;
+        //   · pack alone — none: no controller, no target.
+        assertEquals(
+            1 + 2 * BmsType.entries.size,
+            offered,
+            "the set of shapes that get a scan offered changed — re-derive it rather than relaxing this"
+        )
     }
 }

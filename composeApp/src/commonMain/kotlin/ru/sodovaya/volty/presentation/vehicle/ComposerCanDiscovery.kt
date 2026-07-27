@@ -1,9 +1,9 @@
 package ru.sodovaya.volty.presentation.vehicle
 
-import ru.sodovaya.volty.data.ble.ProtocolKind
-import ru.sodovaya.volty.data.ble.protocolKind
+import ru.sodovaya.volty.data.ble.hasCanBus
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
 
 /**
  * # CAN discovery, as the composer models it (G2 Task 5, `G §3` flow 4)
@@ -149,22 +149,32 @@ fun liveLinkAddresses(vehicle: Vehicle?, state: ConnectionState): Set<String> {
 /**
  * The link a CAN scan would run against, or null when there is none.
  *
- * Two conditions, both necessary: a **VESC** source in the draft (nothing else
- * has a CAN bus to probe — `PING_CAN` is a VESC command) at an address the
- * connection currently holds. Null is what the screen turns into "connect to the
- * head unit first" rather than a button that fails.
+ * Two conditions, both necessary: a **controller whose protocol has a CAN bus**
+ * ([hasCanBus] — `PING_CAN` is a VESC command and nothing else answers it) at an
+ * address the connection currently holds. Null is what the screen turns into
+ * "connect to the head unit first" rather than a button that fails.
  *
- * Controllers before packs, and draft order within each, so the answer is the
- * head unit rather than whichever source happens to be first overall — a gateway
- * is a controller.
+ * ### It must agree with `discoverCanIds`, and now does so by construction
+ *
+ * The first version also accepted a live **hosted `VESC_BMS` pack** on the
+ * reasoning that a hosted battery implies a gateway. It does not: `planLinks`'
+ * `resolveLinkKind` resolves a `{VESC_BMS}`-only address to
+ * `ProtocolKind.VESC_BMS`, which `KableBmsRepository.discoverCanIds` refuses —
+ * so the button appeared and the tap could only ever fail. (A hosted battery
+ * that really is behind a gateway shares its address with a VESC **controller**,
+ * and that controller is what the line below finds.)
+ *
+ * Both layers now read [hasCanBus], so the contradiction cannot be restated.
+ * `a scan target's link is always one the repository will scan` asserts the
+ * implication across both layers over an exhaustive source set — because each
+ * layer had a test pinning its own half, and no fixture spanned the two.
+ *
+ * Controllers only, and draft order within them: a gateway is a controller.
  */
 fun canScanTarget(draft: VehicleDraft, liveAddresses: Set<String>): String? =
     draft.controllers.firstOrNull {
-        it.protocolKind == ProtocolKind.VESC && it.address in liveAddresses
+        it.protocolKind.hasCanBus && it.address in liveAddresses
     }?.address
-        ?: draft.packs.firstOrNull {
-            it.bmsType.protocolKind() == ProtocolKind.VESC_BMS && it.address in liveAddresses
-        }?.address
 
 // ---------------------------------------------------------------------------
 // The scan's own state
@@ -185,10 +195,16 @@ fun canScanTarget(draft: VehicleDraft, liveAddresses: Set<String>): String? =
  * every time the rider adds one, so the candidate list is derived on read (see
  * `VehicleEditComponent.State.canCandidates`) and can never go stale against the
  * draft.
+ *
+ * It also carries the **address the scan actually ran against**, and every add
+ * made from it uses that rather than re-reading [canScanTarget]. The target is
+ * recomputed from the live connection, so a link dropping between the scan and
+ * the tap would otherwise turn an add into a silent no-op — or, worse once the
+ * draft grows a second VESC link, put the device on the wrong one.
  */
 sealed interface CanScanState {
     data object Idle : CanScanState
     data object Running : CanScanState
-    data class Found(val ids: List<Int>) : CanScanState
-    data class Failed(val message: String?) : CanScanState
+    data class Found(val address: String, val ids: List<Int>) : CanScanState
+    data class Failed(val refusal: CanScanRefusal) : CanScanState
 }

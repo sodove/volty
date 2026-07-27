@@ -26,6 +26,8 @@ import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
+import ru.sodovaya.volty.domain.repository.CanScanRefusal
+import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -1918,7 +1920,7 @@ class VehicleEditComponentTest {
 
         can.gate!!.complete(Unit)
         advanceUntilIdle()
-        assertEquals(CanScanState.Found(listOf(10, 11)), c.state.value.canScan)
+        assertEquals(CanScanState.Found("HU:01", listOf(10, 11)), c.state.value.canScan)
     }
 
     /**
@@ -2093,7 +2095,9 @@ class VehicleEditComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val v = headUnitVehicle()
         val bms = FakeBmsRepo()
-        val can = FakeCanDiscovery(Result.failure(IllegalStateException("Link HU:01 is not online")))
+        val can = FakeCanDiscovery(
+            Result.failure(CanScanRefusedException(CanScanRefusal.LINK_NOT_READY, "Link HU:01 is not online"))
+        )
         val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
         advanceUntilIdle()
         bms.goLive(v)
@@ -2101,13 +2105,126 @@ class VehicleEditComponentTest {
 
         c.onDiscoverCanDevices()
         advanceUntilIdle()
-        assertEquals(CanScanState.Failed("Link HU:01 is not online"), c.state.value.canScan)
+        assertEquals(CanScanState.Failed(CanScanRefusal.LINK_NOT_READY), c.state.value.canScan)
         assertEquals(emptyList(), c.state.value.canCandidates, "a failure offers nothing")
 
         can.answerWith(Result.success(listOf(7)))
         c.onDiscoverCanDevices()
         advanceUntilIdle()
-        assertEquals(CanScanState.Found(listOf(7)), c.state.value.canScan)
+        assertEquals(CanScanState.Found("HU:01", listOf(7)), c.state.value.canScan)
+    }
+
+    /**
+     * Every refusal reaches the screen **as itself**.
+     *
+     * The four are four different things a rider can fix, and the screen has a
+     * sentence for each. The first version passed `Throwable.message` through,
+     * so all four rendered as English exception text inside a Russian sentence
+     * — and no test could see it, because the message was the only thing
+     * asserted. Exhaustive over the enum, so a fifth reason has to be carried.
+     */
+    @Test
+    fun `each refusal reaches the screen as its own reason`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        for (refusal in CanScanRefusal.entries) {
+            val v = headUnitVehicle()
+            val bms = FakeBmsRepo()
+            val can = FakeCanDiscovery(
+                Result.failure(CanScanRefusedException(refusal, "whatever this says"))
+            )
+            val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+            advanceUntilIdle()
+            bms.goLive(v)
+            advanceUntilIdle()
+
+            c.onDiscoverCanDevices()
+            advanceUntilIdle()
+            assertEquals(CanScanState.Failed(refusal), c.state.value.canScan, "refusal $refusal")
+        }
+    }
+
+    /**
+     * A failure that is not one of ours has no reason to give. NO_REPLY is the
+     * honest reading of "it did not come back" — and it must not crash or
+     * silently succeed.
+     */
+    @Test
+    fun `an untyped failure reads as no reply`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val can = FakeCanDiscovery(Result.failure(IllegalStateException("something else entirely")))
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Failed(CanScanRefusal.NO_REPLY), c.state.value.canScan)
+    }
+
+    /**
+     * `Running` is set **synchronously**, before the coroutine is dispatched.
+     *
+     * `scope` is `Dispatchers.Main`, not `.immediate`, so a `Running` written
+     * inside the launched body lands on a later Looper message — and two taps
+     * inside one message would both read `Idle` and both dispatch a `PING_CAN`,
+     * the second of which the firmware silently discards. Asserted with **no
+     * scheduler advance at all**, which is the whole point.
+     */
+    @Test
+    fun `the window is entered before the coroutine is dispatched`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val can = FakeCanDiscovery()
+        can.gate = CompletableDeferred()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        assertEquals(CanScanState.Running, c.state.value.canScan, "before anything is dispatched")
+        // The second tap in the same Looper message, which is exactly what the
+        // guard has to survive.
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(listOf("HU:01"), can.calls)
+        can.gate!!.complete(Unit)
+        advanceUntilIdle()
+    }
+
+    /**
+     * Adds are anchored to the link the scan **ran against**, not to a target
+     * recomputed from the live connection — a link dropping between the scan and
+     * the tap would otherwise turn an add into a silent no-op.
+     */
+    @Test
+    fun `an add still lands after the link drops under it`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        bms.connectionState.value = ConnectionState.Reconnecting(1, "drop")
+        advanceUntilIdle()
+        assertNull(c.state.value.canScanTarget, "the target is gone with the link")
+
+        val node = c.state.value.canCandidates.first { it.canId == 10 }
+        c.onAddCanCandidate(node, asBattery = false)
+        assertEquals(
+            listOf(null, 10),
+            c.state.value.draft.controllers.map { it.canId },
+            "the offers still describe the bus that answered"
+        )
+        assertEquals("HU:01", c.state.value.draft.controllers.last().address)
     }
 
     /**
@@ -2131,7 +2248,7 @@ class VehicleEditComponentTest {
 
         c.onDiscoverCanDevices()
         advanceUntilIdle()
-        assertEquals(CanScanState.Found(emptyList()), c.state.value.canScan)
+        assertEquals(CanScanState.Found("HU:01", emptyList<Int>()), c.state.value.canScan)
         assertEquals(
             listOf(CanCandidateKind.HOSTED_BATTERY),
             c.state.value.canCandidates.map { it.kind }
