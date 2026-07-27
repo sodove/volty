@@ -125,10 +125,13 @@ speed (`speedSource = REPORTED` — a wheel reports ground speed, so no
 `MotorConfig` is involved), `batteryCurrentA`, `escTempC`, `odometerKm`,
 `tripKm`, `inputVoltageV`.
 
-- **`hasMotorTemp = false`** and, per constraint 5, a motor temperature **below
-  the −50 °C sentinel** rather than `0f`.
-- **`dutyPercent = 0f`** with a KDoc stating why, pointing at the availability
-  entry that keeps it from being alarmed on.
+- **`hasMotorTemp = true`** for this wheel — frame `0x07` bytes 6..7 carry a real
+  motor temperature (20 °C in the capture, against 27.5 °C on the board), so spec
+  §2's prose is wrong here. Set the flag from what the wheel actually sends, and
+  keep constraint 5 for the case where it sends nothing: the sentinel, never `0f`.
+- **`dutyPercent` from frame `0x07`** (Task 1 decoded it). The not-yet-known
+  window — before `truePWM` latches on a first non-zero — must be handled
+  explicitly, not published as a confident 0 %.
 - **Voltage:** the protocol deliberately does not know the 67.2-V scale factor,
   which is why the synthetic pack publishes `voltage = 0`. Decide what
   `inputVoltageV` reports — the honest options are the sentinel-free raw scale
@@ -136,13 +139,25 @@ speed (`speedSource = REPORTED` — a wheel reports ground speed, so no
   multiplier from the frame. State the choice and its consequence for the
   dashboard's voltage readout.
 
-### Task 3 — turn `reportsDuty[BEGODE]` off, deliberately
+### Task 3 — duty, faults and tiltback from what the wheel actually sends
 
-One constant in `MotionAlertAvailability`, its pinning test's expectation, and a
-KDoc paragraph recording *why* (the constant candidate field, the stationary
-capture, what would flip it). The rider must get a greyed ШИМ row **with the
-reason in words** — verify that path end to end, since Part F built it and this
-is its first real consumer.
+**Planned as "turn `reportsDuty[BEGODE]` off". That premise is void** — see spec
+§8. The wheel reports true hardware PWM in frame `0x07` (2 % on the stationary
+capture, exactly what a balancing wheel draws), so the entry stays `true` **on
+evidence**, and Part F's headline wheel alarm is real. What this task delivers
+instead:
+
+- **Do not implement WheelLog's `0x00` fallback PWM.** On this wheel bytes 14..15
+  read a constant 169 → 16.9 % while `0x07` reads 2 %. That fallback exists for
+  firmware without hardware PWM and here it would be a fabricated safety number —
+  precisely what spec §7.2 forbids.
+- **Faults from frame `0x04` byte 14** → `ControllerData.faults`: speed-alarm ×2,
+  low voltage, over voltage, over temperature, hall-sensor error, transport mode.
+  Name them in the rider's words, not as bit indices.
+- **Tiltback speed** from `0x04` bytes 10..11 (WheelLog treats ≥ 100 as unset).
+- The greyed-with-reason path still needs verifying end to end for the alerts a
+  wheel genuinely cannot supply — Part F built it and this is its first real
+  consumer.
 
 ### Task 4 — let a Begode vehicle carry a controller
 
