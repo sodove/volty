@@ -208,3 +208,37 @@ The transports themselves (E, H); controller writes of any kind; the
 `VehicleConnection` staleness sweep (`F §14`); `AlertEngine`'s re-arm on a
 changed fault set (`F §16`); the aggregator's dropped `batteryLevelFraction`
 (`A`) — except where Task 6's contract naturally covers it, in which case say so.
+
+---
+
+## Amendments after Task 3 (2026-07-27)
+
+**Execution order changes: Task 5 runs before Task 4.** Task 3 shipped a screen on
+which adding a second source means **typing a BLE MAC by hand** — the composer
+cannot learn an address, because scanning and CAN discovery live in Task 5. That
+makes spec §3's flow 2 (controller + BMS) painful and flow 3 ("+ Wheel" as one
+add) impossible: the single add's whole value is that both sources land on **one
+link**, and there is no link to give them. Task 4's alias grouping also assumes
+both sources already exist. So discovery is not a garnish on the composer — it is
+what makes it usable, and it comes first.
+
+**Spec §3 flow 3 stays open.** Task 3 deferred it and the deferral is accepted,
+but the reasoning was corrected in review: a "+ Wheel" that seeds two sources with
+a shared blank link is not merely a tap saved, it **records that the two sources
+are one device** — knowledge the rider has and the app cannot infer. Task 5 should
+deliver it once an address exists.
+
+### Task 9 — an unsaved composer must not vanish silently
+
+Found in Task 3's review. `goTo` now keeps a buried form alive, but from a
+relocated Settings the tab bar hides it with no sign it exists, and the
+Dashboard's disconnect does `replaceAll(Config.Scanning)`, which **destroys the
+whole stack including the unsaved edit**. One action away, silent.
+
+`VehicleAlertsComponent` already has the shape this needs — an `isDirty` notion
+and a discard prompt. `VehicleEdit` should have the same, and the composer's
+unsaved work is worth more than a threshold edit's: it can be a dozen fields
+across several sources.
+
+Left out of Task 3 deliberately — every real fix crosses component boundaries,
+and widening a screen task into a navigation task is how scope creep starts.
