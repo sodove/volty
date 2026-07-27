@@ -15,6 +15,7 @@ import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.alert_availability_unknown
 import volty.composeapp.generated.resources.alert_unavailable_no_controller
+import volty.composeapp.generated.resources.alert_unavailable_duty_not_reported_yet
 import volty.composeapp.generated.resources.alert_unavailable_no_duty
 import volty.composeapp.generated.resources.alert_unavailable_no_esc_temp
 import volty.composeapp.generated.resources.alert_unavailable_no_motor_temp
@@ -129,6 +130,8 @@ fun alertUnavailableReasonLabel(reason: AlertUnavailableReason): String = when (
         stringResource(Res.string.alert_unavailable_no_controller)
     is AlertUnavailableReason.ControllerReportsNoDuty ->
         stringResource(Res.string.alert_unavailable_no_duty, reason.type.label)
+    AlertUnavailableReason.ControllerHasNotReportedDuty ->
+        stringResource(Res.string.alert_unavailable_duty_not_reported_yet)
     AlertUnavailableReason.NoMotorTempSensor ->
         stringResource(Res.string.alert_unavailable_no_motor_temp)
     AlertUnavailableReason.NoEscTempSensor ->

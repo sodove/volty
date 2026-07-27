@@ -27,15 +27,38 @@ sealed interface AlertUnavailableReason {
     data object NoController : AlertUnavailableReason
 
     /**
-     * This controller does not report duty/ШИМ — either because the protocol
-     * never does (`H §7` for Kelly KLS, layer 1) or because this particular
-     * wheel's firmware has been observed not to fill the field in (layer 2,
-     * [ControllerData.hasDuty]). One reason for both because the rider-facing
-     * statement is the same one — "this hardware does not tell us its duty" —
-     * and because the second case is only ever reached with a live sample in
-     * hand, so it is a claim we have earned.
+     * This controller protocol does not report duty/ШИМ at all (`H §7` for
+     * Kelly KLS) — **layer 1, a permanent property of the protocol**, reached
+     * only when NO controller on the vehicle reports duty. That is what makes
+     * naming [type] sound here: with every controller equally unable, the
+     * lowest-indexed one is a fair representative.
+     *
+     * Not to be used for the observed layer — see [ControllerHasNotReportedDuty].
      */
     data class ControllerReportsNoDuty(val type: ControllerType) : AlertUnavailableReason
+
+    /**
+     * Duty is a fact this protocol *can* report, but nothing has yet — **layer
+     * 2, from a live [ControllerData.hasDuty]**. Begode latches WheelLog's
+     * `truePWM` on the first non-zero PWM and publishes 0 until then, which is
+     * indistinguishable from a genuine 0 %, so the alarm must not arm against
+     * it (`D §7.2`).
+     *
+     * **Deliberately carries no [ControllerType], unlike its layer-1 sibling.**
+     * The vehicle-level aggregate folds `hasDuty` with `any` over the ONLINE
+     * controllers, so this is reachable on a vehicle whose other controller
+     * demonstrably does report duty and merely happens to be offline: a VESC at
+     * index 0 beside a Begode at index 1, VESC offline, wheel's latch still
+     * open. Naming "the lowest-indexed controller" there would tell the rider
+     * *"VESC controllers do not report duty"* — false, and un-actionable, which
+     * is the opposite of what `F §10`'s greyed row with a reason is for. There
+     * is no controller this reason could honestly name, so it names none.
+     *
+     * Distinct from [ControllerReportsNoDuty] for a second reason too: this one
+     * may stop being true on the very next frame. Its wording says "yet"; the
+     * other's states a permanent hardware fact.
+     */
+    data object ControllerHasNotReportedDuty : AlertUnavailableReason
 
     /** No motor thermistor is wired on this controller ([ControllerData.hasMotorTemp]). */
     data object NoMotorTempSensor : AlertUnavailableReason
@@ -246,20 +269,26 @@ private fun availabilityOf(
     // non-zero `dutyPercent` into a field the protocol does not actually report
     // would therefore raise the alarm on a number that is not a duty
     // measurement. `H §7`'s table already says `dutyPercent = 0`; keep it there.
-    MotionAlertKind.DUTY -> {
-        val noDuty = AlertUnavailableReason.ControllerReportsNoDuty(
-            // Same "lowest index wins" rule as Vehicle.primaryController,
-            // spelled out because that helper's nullable type does not
-            // reflect the non-emptiness already established above — and a
-            // fallback elvis here would imply a nullability that cannot occur.
-            controllers.minBy { it.index }.controllerType
-        )
+    MotionAlertKind.DUTY ->
         if (!controllers.any { it.controllerType.reportsDuty }) {
-            AlertAvailability.Unavailable(noDuty)
+            AlertAvailability.Unavailable(
+                AlertUnavailableReason.ControllerReportsNoDuty(
+                    // Same "lowest index wins" rule as Vehicle.primaryController,
+                    // spelled out because that helper's nullable type does not
+                    // reflect the non-emptiness already established above — and a
+                    // fallback elvis here would imply a nullability that cannot
+                    // occur. Sound ONLY here: this branch is reached when every
+                    // controller is equally unable, so any of them represents the
+                    // vehicle. The observed branch below must NOT name one — see
+                    // [AlertUnavailableReason.ControllerHasNotReportedDuty].
+                    controllers.minBy { it.index }.controllerType
+                )
+            )
         } else {
-            observed(latestMotion, noDuty) { it.hasDuty }
+            observed(latestMotion, AlertUnavailableReason.ControllerHasNotReportedDuty) {
+                it.hasDuty
+            }
         }
-    }
 
     // The rest are sensor questions, answerable only from a live sample.
     MotionAlertKind.SPEED -> observed(latestMotion, AlertUnavailableReason.NoSpeedSource) {

@@ -273,6 +273,10 @@
     <!-- Motion alert availability (F §10) — why a greyed alert cannot be armed -->
     <string name="alert_unavailable_no_controller">This vehicle has no motor controller</string>
     <string name="alert_unavailable_no_duty">%1$s controllers do not report duty</string>
+    <!-- Layer 2: the protocol CAN report duty, this unit has not yet. Names no
+         controller — the aggregate folds over online controllers only, so this
+         is reachable while an offline sibling does report duty. -->
+    <string name="alert_unavailable_duty_not_reported_yet">This controller has not reported duty yet</string>
     <string name="alert_unavailable_no_motor_temp">This controller has no motor temperature sensor</string>
     <string name="alert_unavailable_no_esc_temp">This controller has no ESC temperature sensor</string>
     <string name="alert_unavailable_no_speed">This controller reports no speed</string>

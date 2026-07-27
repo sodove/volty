@@ -11,6 +11,9 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertIsNot
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -179,14 +182,49 @@ class MotionAlertAvailabilityTest {
         val unmeasured = fullSample().copy(dutyPercent = 0f, hasDuty = false)
         val availability = availabilityFor(vehicle(ControllerType.BEGODE), unmeasured)
         assertEquals(
-            AlertAvailability.Unavailable(
-                AlertUnavailableReason.ControllerReportsNoDuty(ControllerType.BEGODE)
-            ),
+            AlertAvailability.Unavailable(AlertUnavailableReason.ControllerHasNotReportedDuty),
             availability[MotionAlertKind.DUTY]
         )
         // and the gate is per kind — the wheel's other alarms are untouched.
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.SPEED])
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.ESC_TEMP])
+    }
+
+    @Test fun an_unreported_duty_never_blames_a_controller_that_does_report_one() {
+        // The reason a two-layer gate needs TWO reasons. `MotionAggregator`
+        // folds hasDuty with `any` over the ONLINE controllers, so a vehicle
+        // with a VESC at index 0 and a Begode at index 1 aggregates to
+        // hasDuty = false whenever the VESC is offline and the wheel's truePWM
+        // latch is still open. Naming "the lowest-indexed controller" there
+        // would grey the row with "VESC controllers do not report duty" — false
+        // about hardware that plainly does, and un-actionable, which is the
+        // opposite of what F §10's stated reason is for.
+        val mixed = vehicle(ControllerType.VESC, ControllerType.BEGODE)
+        assertTrue(ControllerType.VESC.reportsDuty, "fixture: the named controller DOES report duty")
+        assertEquals(0, mixed.controllers.minBy { it.index }.index, "fixture: VESC is the one that would be named")
+
+        val reason = assertIs<AlertAvailability.Unavailable>(
+            availabilityFor(mixed, fullSample().copy(hasDuty = false))[MotionAlertKind.DUTY]
+        ).reason
+        assertEquals(AlertUnavailableReason.ControllerHasNotReportedDuty, reason)
+        assertIsNot<AlertUnavailableReason.ControllerReportsNoDuty>(
+            reason,
+            "layer 2 must not claim a permanent hardware fact, nor name a controller"
+        )
+    }
+
+    @Test fun the_two_layers_give_different_reasons_because_they_are_different_claims() {
+        // Layer 1 is permanent and names the hardware; layer 2 may stop being
+        // true on the very next frame and names nothing. A single reason for
+        // both would read to the rider as "your controller cannot do this".
+        val kelly = availabilityFor(vehicle(ControllerType.KELLY), fullSample())[MotionAlertKind.DUTY]
+        val begode = availabilityFor(
+            vehicle(ControllerType.BEGODE),
+            fullSample().copy(hasDuty = false)
+        )[MotionAlertKind.DUTY]
+        assertIs<AlertAvailability.Unavailable>(kelly)
+        assertIs<AlertAvailability.Unavailable>(begode)
+        assertNotEquals(kelly, begode, "the two layers must be distinguishable to a rider")
     }
 
     @Test fun hasDuty_defaults_to_true_so_no_other_decoder_had_to_change() {

@@ -12,6 +12,7 @@ import ru.sodovaya.volty.domain.alert.availabilityFor
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
@@ -225,9 +226,9 @@ class KableBmsRepositoryBegodeControllerTest {
 
         val availability = availabilityFor(v, motion)
         assertEquals(
-            AlertAvailability.Unavailable(
-                AlertUnavailableReason.ControllerReportsNoDuty(ControllerType.BEGODE)
-            ),
+            // "not reported YET", not "this hardware cannot": the latch may
+            // close on the next frame, and on this wheel it does.
+            AlertAvailability.Unavailable(AlertUnavailableReason.ControllerHasNotReportedDuty),
             availability[MotionAlertKind.DUTY],
             "an alarm that cannot fire must not be shown armed"
         )
@@ -286,10 +287,83 @@ class KableBmsRepositoryBegodeControllerTest {
         )
     }
 
+    @Test
+    fun `a battery-only wheel beside a real controller must DROP its motion, not misroute it`() = repoTest { repo ->
+        // The case a single-link vehicle cannot expose, and the reason
+        // `makeLinkOnMotionSample` drops rather than defaulting to controller 0.
+        //
+        // A Begode used as a BATTERY (no controller in its profile) beside a
+        // VESC controller at another address: two links, ONE VehicleConnection.
+        // The wheel's protocol is a MotionSource, so its funnel fires — and its
+        // link owns no controller. Dropping is the only correct answer: any
+        // fallback index lands on the VESC's slot and OVERWRITES a real
+        // controller's speed, duty and temperatures with the wheel's.
+        //
+        // On a single-link vehicle the same fallback is harmless — submitMotion
+        // finds neither a state nor a latent slot and returns without emitting —
+        // which is exactly why that case cannot pin this and this one must.
+        val v = Vehicle(
+            id = "v-wheel-battery-plus-esc",
+            name = "Wheel pack + VESC",
+            iconKey = "scooter",
+            packs = listOf(
+                Pack(index = 0, label = "Wheel pack", bmsType = BmsType.BEGODE, bmsAddress = WHEEL, cellCount = 40)
+            ),
+            controllers = listOf(
+                Controller(index = 0, label = "ESC", controllerType = ControllerType.VESC, address = ESC)
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        repo.installLinksForTest(v, v.primaryAddress, BmsType.BEGODE)
+
+        val specs = repo.linkSpecsForTest()
+        assertEquals(2, specs.size, "two addresses, two links")
+        val wheelLink = specs.indexOfFirst { it.address == WHEEL }
+        assertTrue(wheelLink >= 0)
+        assertTrue(
+            specs[wheelLink].ownedControllers.isEmpty(),
+            "precondition: the wheel is a battery here and owns no controller"
+        )
+        val escLink = specs.indexOfFirst { it.address == ESC }
+        assertEquals(listOf(OwnedSource(0)), specs[escLink].ownedControllers)
+
+        // The VESC reports first: real controller telemetry in the shared state.
+        val funnels = repo.linkMotionFunnelsForTest()
+        funnels[escLink](
+            0,
+            ControllerData(
+                speedKmh = 42f, speedSource = SpeedSource.REPORTED, dutyPercent = 71f,
+                escTempC = 55f, isConnected = true
+            )
+        )
+        advanceUntilIdle()
+        assertEquals(42f, repo.activeMotion.value.speedKmh, 0.01f, "fixture: the VESC's reading is in place")
+
+        // Now the wheel's own link decodes motion, through the production
+        // router, gate and funnel — exactly as its session would.
+        val wheelProtocol = assertIs<BegodeProtocol>(repo.createProtocolForTest(specs[wheelLink], v))
+        val gate = MotionSampleGate(wheelProtocol.controllerCount)
+        wheelProtocol.onNotification(liveFrame(voltageRaw = 5888, currentRaw = -350, tempRaw = 2798))
+        val alive = routeControllerSamples(wheelProtocol, gate) { i, m -> funnels[wheelLink](i, m) }
+        assertTrue(alive, "the wheel really did decode motion — that is the whole hazard")
+        advanceUntilIdle()
+
+        val motion = repo.activeMotion.value
+        assertEquals(42f, motion.speedKmh, 0.01f, "the wheel's motion overwrote the VESC's speed")
+        assertEquals(71f, motion.dutyPercent, 0.01f, "the wheel's motion overwrote the VESC's duty")
+        assertEquals(55f, motion.escTempC, 0.01f, "the wheel's motion overwrote the VESC's ESC temperature")
+        val vd = repo.activeVehicleData.value
+        assertEquals(1, vd.controllers.size, "the vehicle has exactly one controller and it is the VESC")
+        assertEquals(ControllerType.VESC, vd.controllers.single().controller.controllerType)
+    }
+
     // --- Synthetic frame builders (24 bytes, layout as BegodeMotionProtocolTest) ---
 
     private companion object {
         const val WHEEL = "AA:BB:CC:DD:EE:FF"
+        const val ESC = "AA:BB:CC:DD:EE:0C"
     }
 
     private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {
