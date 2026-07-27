@@ -183,3 +183,15 @@ Part D deliberately did not change them unilaterally: the ranges are shared with
 every VESC vehicle. Whoever owns the dashboard should decide whether the range
 follows the vehicle — VESC derives its gauge ranges from `mcconf` (`B §14`),
 which is the same question one layer down.
+
+### 9.3 The aggregate averages an unknown voltage into a real one (2026-07-27)
+
+Part D's final review. `MotionAggregator.aggregate` folds `inputVoltageV` with
+`average()`. Begode is the first decoder that publishes **`0` meaning unknown**
+(no cell count ⇒ no scale ⇒ no honest voltage). On a mixed vehicle that zero is
+averaged in as if it were a measurement, halving the reported rail voltage
+instead of being ignored.
+
+Same family as §9/§9.1: the fold has no notion of "not observed" either. Whatever
+known-flag contract the renderers get should reach the aggregator too, or the
+fold must skip unknowns rather than average them.

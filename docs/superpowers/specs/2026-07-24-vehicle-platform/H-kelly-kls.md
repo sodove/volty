@@ -154,3 +154,22 @@ fine while the rider cannot reach their own instruments.
 **This part must add the test for its own controller type**, in the same shape
 Part D used: a mutant that sends this type to the battery dashboard has to fail
 something. One test, and it closes the quarter of the hole this part owns.
+
+---
+
+## 11. Kelly must set `hasDuty = false` (2026-07-27)
+
+Part D added `ControllerData.hasDuty`, defaulting to **`true`** so no existing
+decoder changed. Kelly reports no duty (§7), so its decoder must set it `false`
+explicitly — the default is wrong for it.
+
+Why it matters beyond tidiness, from Part D's final review: `MotionAlertAvailability`'s
+static layer folds over **all** of `vehicle.controllers`, while the aggregate's
+`hasDuty`/`dutyPercent` fold over the **online** ones only. On a Begode + Kelly
+vehicle with only the Kelly online, the static layer sees the Begode and answers
+DUTY `Available`, the aggregate's `hasDuty` is the Kelly's inherited `true`, and
+`dutyPercent` is `0`. The rider gets a ШИМ alarm shown as armed against a constant
+zero — the silent-dead-alarm shape Part F spent a task eliminating, reintroduced
+by a default.
+
+Setting the flag honestly closes it.
