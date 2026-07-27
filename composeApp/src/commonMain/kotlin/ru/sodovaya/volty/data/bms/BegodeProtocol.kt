@@ -1305,9 +1305,10 @@ class BegodeProtocol(
          * The fix is not here. `AlertEngine.fire` re-arms on the list being
          * empty; it should re-arm on the fault SET CHANGING, so a new fault
          * appearing beside an old one is a new event. That is Part F's
-         * machinery and is scheduled separately — recorded here because this is
-         * where a reader will be looking when they wonder why a second fault
-         * went unannounced.
+         * machinery and is written up as **`F §16`** ("A persistent fault
+         * silences every later one") — recorded here too because this is where a
+         * reader will be looking when they wonder why a second fault went
+         * unannounced.
          */
         private const val FAULT_BITS = 0x78
 
