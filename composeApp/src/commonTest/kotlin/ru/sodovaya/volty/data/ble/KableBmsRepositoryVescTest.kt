@@ -178,6 +178,18 @@ class KableBmsRepositoryVescTest {
      * the REAL factory for every [ControllerType] and asserts the two agree —
      * so it stays green when a protocol is added (both sides move together) and
      * goes red the moment anyone reintroduces a separate list.
+     *
+     * **The two directions are asserted separately, and only one of them is
+     * still universal** (changed 2026-07-27, Part D Task 2). The DANGEROUS
+     * direction — the picker letting a rider pick a controller the factory
+     * cannot decode motion from — holds for every type and always must. The
+     * converse now has one deliberate exception: [BegodeProtocol] became a
+     * [MotionSource] (a wheel is a controller over its battery link), so the
+     * battery FALLBACK at the foot of the factory hands back something that
+     * carries motion, while [controllerMotionProtocol] still has no BEGODE
+     * branch and the picker still refuses it. That is conservative, not unsafe,
+     * and Part D Task 4 closes it — see the test below, which fails the moment
+     * it does.
      */
     @Test
     fun `the picker's gate agrees with the real connect factory for every controller type`() = repoTest { repo ->
@@ -188,11 +200,20 @@ class KableBmsRepositoryVescTest {
             // a throw as "cannot connect" — doConnect catches it and returns
             // Result.failure rather than propagating.
             val built = runCatching { repo.createProtocolForTest(spec, v) }.getOrNull()
-            assertEquals(
-                built is MotionSource,
-                controllerMotionSupported(type),
-                "$type: the picker's gate and the connect factory disagree"
-            )
+            if (controllerMotionSupported(type)) {
+                assertTrue(
+                    built is MotionSource,
+                    "$type: the picker offers a controller the connect factory cannot decode motion from"
+                )
+            } else {
+                // The converse, with BEGODE as the single documented exception
+                // — so a SECOND type drifting into the same state still fails.
+                assertTrue(
+                    built !is MotionSource || type == ControllerType.BEGODE,
+                    "$type: the connect factory decodes its motion but the picker refuses it — " +
+                        "give the kind a branch in controllerMotionProtocol"
+                )
+            }
         }
     }
 
@@ -209,19 +230,35 @@ class KableBmsRepositoryVescTest {
      * The case a "types that throw" list would have missed, and the reason the
      * gate's criterion is `is MotionSource` rather than "did not throw":
      * `ControllerType.BEGODE.protocolKind()` is `ProtocolKind.BEGODE`, which
-     * `toBmsType()` maps to a REAL `BmsType.BEGODE`. Nothing fails — the
-     * factory quietly hands back a battery decoder, and a Begode controller
-     * would have connected onto a Ride dashboard that can never show motion.
+     * `toBmsType()` maps to a REAL `BmsType.BEGODE`, so the factory reaches its
+     * battery fallback and nothing fails.
+     *
+     * **Rewritten 2026-07-27 (Part D Task 2), because half of what it asserted
+     * stopped being true.** [BegodeProtocol] now decodes the wheel's motion —
+     * it is a [MotionSource] — so the fallback no longer hands back a
+     * motion-less decoder. What still refuses a Begode controller is
+     * [controllerMotionProtocol] having no BEGODE branch, which Part D Task 4
+     * adds. Until then the state is *conservative*: a decoder that could carry
+     * motion, behind a picker that will not offer it.
+     *
+     * When Task 4 lands, this test fails on its last assertion — deliberately.
+     * Flipping the picker on is the moment the exception in the agreement test
+     * above must be deleted, and this is what says so out loud.
      */
     @Test
-    fun `a Begode controller yields a battery decoder, which is why it is refused`() = repoTest { repo ->
+    fun `a Begode controller decodes motion but the picker still refuses it until Task 4`() = repoTest { repo ->
         val v = controllerOnly(ControllerType.BEGODE)
         val spec = planLinks(v.packs, v.controllers).single()
 
         val protocol = repo.createProtocolForTest(spec, v)
         assertIs<BegodeProtocol>(protocol, "it does NOT throw — that is the hazard")
-        assertFalse(protocol is MotionSource, "but it carries no motion")
-        assertFalse(controllerMotionSupported(ControllerType.BEGODE), "so the picker refuses it")
+        val motion = assertIs<MotionSource>(protocol, "a wheel IS a controller over its battery link")
+        assertEquals(1, motion.controllerCount)
+        assertFalse(
+            controllerMotionSupported(ControllerType.BEGODE),
+            "controllerMotionProtocol has no BEGODE branch yet — Part D Task 4 adds it, " +
+                "and then this assertion and the BEGODE exception above both come out"
+        )
     }
 
     // ----- 2. A VESC link builds a VescProtocol that is a MotionSource -----

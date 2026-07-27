@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
+import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.math.abs
 
 /**
@@ -45,11 +47,27 @@ import kotlin.math.abs
  * The battery is two parallel branches, each two sections in series
  * (2S2P of assemblies); this protocol reports each branch as one pack.
  *
+ * A wheel is a CONTROLLER as well as a battery, over this one link: the same
+ * frames carry speed, duty, mileage and two temperatures, so this class is also
+ * a [MotionSource] with exactly one controller ([latestMotion]).
+ *
  * Based on: WheelLog GotwayAdapter (GPL-3.0, layout only) and a real capture
  * from a Begode ET Max — see docs/superpowers/specs/2026-07-21-multi-pack-bms-design.md
  * and BegodeDumpFixture.
+ *
+ * @param cellCount cells in series of the wheel's pack, from the vehicle
+ *   profile — the ONE thing this protocol cannot read off any frame and the
+ *   only thing standing between the live frame's 67.2 V-referenced voltage and
+ *   a real one. See [inputVoltageV] and [scaleLiveVoltage]. Null (the default)
+ *   means the caller has no cell count to give, and then no voltage is
+ *   published at all rather than a number that would read ~59 V on a 168 V
+ *   wheel. Same shape as [VescProtocol]'s `motor` parameter: vehicle
+ *   configuration the decoder needs in order to be honest, supplied at
+ *   construction by the layer that owns the profile.
  */
-class BegodeProtocol : BmsProtocol() {
+class BegodeProtocol(
+    private val cellCount: Int? = null
+) : BmsProtocol(), MotionSource {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -142,6 +160,24 @@ class BegodeProtocol : BmsProtocol() {
      * relies on for real branches.
      */
     private var liveData: BmsData? = null
+
+    /**
+     * The wheel's controller sample, rebuilt by [rebuildMotion] from every
+     * frame that carries motion (0x00, 0x04, 0x07) and null until the first
+     * one lands.
+     *
+     * Stored rather than assembled on demand in [latestMotion] because
+     * [ru.sodovaya.volty.data.ble.MotionSampleGate] discriminates on instance
+     * IDENTITY: a fresh object per read would look like a new decode on every
+     * BLE notification, and a wheel that had gone quiet could never be seen to
+     * go quiet. One new instance per contributing frame, the same contract
+     * [VescProtocol] honours.
+     *
+     * Deliberately NOT rebuilt on the smart-BMS frames (0x01/0x02/0x03): they
+     * carry no motion, and a new instance for each of them would push
+     * duplicate motion samples through the gate at cell-frame rate.
+     */
+    private var motion: ControllerData? = null
 
     /** Per-branch decode state, assembled from 0x01 and 0x02/0x03 frames. */
     private class BranchState {
@@ -300,6 +336,163 @@ class BegodeProtocol : BmsProtocol() {
      */
     fun dutyPercent(): Float? = if (sawTrueDuty) dutyPercentValue else null
 
+    // --- MotionSource: the wheel as a controller ---
+
+    /** A wheel is one motor on one board. */
+    override val controllerCount: Int get() = 1
+
+    /**
+     * The wheel's controller sample, or null before any frame carrying motion
+     * has been decoded. See [rebuildMotion] for what every field means and for
+     * the three places where [ControllerData]'s non-nullable floats cannot say
+     * "not measured".
+     */
+    override fun latestMotion(controllerIndex: Int): ControllerData? =
+        if (controllerIndex == 0) motion else null
+
+    /**
+     * Assemble the controller sample from whatever the wheel has said so far.
+     *
+     * The nullable accessors above are the truth; this maps them onto
+     * [ControllerData], whose floats are not nullable. Where a field has an
+     * agreed "absent" encoding it is used; where it has none, the choice is
+     * stated here because it is not obvious and it is safety-relevant.
+     *
+     * **Sign.** The accessors above speak the BATTERY convention this file has
+     * always used for [BmsData.current] (positive = charging); [ControllerData]
+     * speaks VESC's (positive = drawing from the pack, see
+     * `VescProtocol.synthesiseBattery`, which negates in the other direction).
+     * Both currents are therefore negated here, and the capture is what makes
+     * that safe to do in one step: battery and phase current are BOTH negative
+     * in the same frames of an idle wheel, so one convention covers both.
+     *
+     * **Temperatures.** [escTempC] is the mainboard MPU reading of the live
+     * frame and [motorTempC] the 0x07 motor thermistor — genuinely two
+     * sensors, 27.5 °C against 20 °C in the same seconds. Either may be absent
+     * (no live frame yet, no 0x07 frame yet), and absence is written as
+     * [NO_TEMP_SENSOR_C], never 0f: [ControllerData.hasEscTemp] is computed as
+     * `escTempC > -50f`, so a 0f default would CLAIM a sensor that has not
+     * reported and arm Part F's ESC_TEMP alert against a constant zero
+     * (`D §7.1`). [ControllerData.hasMotorTemp] is a stored flag and is set
+     * from what this wheel actually sends — `true` for the ET Max, against
+     * `D §2`'s prose that wheels expose only a board temperature.
+     *
+     * **Duty in the not-yet-known window.** [dutyPercent] is null until the
+     * hardware PWM field has been seen non-zero once, and that window is NOT
+     * the same statement as 0 % — yet [ControllerData] has no way to say it:
+     * there is no nullable duty and no `hasDuty` predicate, because duty
+     * availability is answered statically per protocol
+     * (`MotionAlertAvailability.reportsDuty`) rather than per sample. Of the
+     * representable values this publishes **0f**, and deliberately not a
+     * negative sentinel:
+     *  - every consumer treats duty as a non-negative 0..100 magnitude compared
+     *    against UPPER thresholds — `DutyBands.level`, `AlarmController`,
+     *    `MotionAggregator`'s `maxOf` fold, and the Ride gauges, which render it
+     *    as "N %" and as a fraction of 100. A sentinel below zero would show a
+     *    rider a negative duty and a negative gauge fill, which is a visible
+     *    lie, and would buy no alarm safety that 0 does not already have;
+     *  - 0 is alarm-NEUTRAL: duty only ever escalates upwards, so an unknown
+     *    published as 0 can never RAISE a false alarm. It can only fail to
+     *    raise one — and in this window there is by construction no duty
+     *    measurement to raise it from;
+     *  - `D §7.2` prescribes exactly this value for an absent duty. What it
+     *    forbids is an APPROXIMATION in the field (the live frame's fallback
+     *    PWM, a constant 16.9 % on a wheel that never moved); see
+     *    [parseLiveFrame], which refuses it.
+     *
+     * One consequence, proven by mutation sweep rather than assumed: choosing
+     * 0 makes the latch itself INVISIBLE here. [sawTrueDuty] is false only
+     * while every reading so far has been 0, so `dutyPercent() ?: 0f` and the
+     * raw `dutyPercentValue` are the same number at every instant, and no test
+     * of this class can tell the latch from its absence. The latch still earns
+     * its keep on [dutyPercent], whose null is what a caller able to say
+     * "unknown" would use — this mapping simply has no way to pass it on. Kept
+     * expressed through [dutyPercent] so the intent survives if either side
+     * ever gains a way to say it.
+     *
+     * The residual risk is stated rather than hidden: a firmware that never
+     * fills the PWM field in would leave duty at 0 forever while Part F's
+     * static `reportsDuty[BEGODE] = true` keeps the ШИМ alert armed against
+     * that constant — the silent failure `D §7.2` names. Closing it needs
+     * duty availability to become observable per sample, which is a Part F
+     * decision, not a decode one. On the ET Max the latch closes inside the
+     * first 0x07 frame: a balancing wheel spends 2 % standing still.
+     *
+     * **Absent distances.** [odometerKm] and [tripKm] read 0 before the frames
+     * that carry them arrive. 0 is also a real reading (a wheel out of its box,
+     * a trip that has not started), so this one genuinely cannot be
+     * distinguished — [ControllerData] has no encoding for it and inventing a
+     * negative distance would be worse. Both fields fill in within a second of
+     * connecting.
+     *
+     * [faults] stays empty: the 0x04 alert bitmap is decoded by a later task
+     * (see [parseOdometerFrame]). [eRpm] stays 0 — a Begode reports no eRPM at
+     * all, and the wheel reports GROUND speed directly, so [SpeedSource] is
+     * REPORTED and no `MotorConfig` is involved.
+     */
+    private fun rebuildMotion() {
+        val speed = speedKmh()
+        val batteryCurrent = batteryCurrentA()
+        val motorTemp = motorTempC()
+        val voltage = inputVoltageV()
+        // Negated into the controller convention — see the KDoc on sign.
+        val controllerBatteryCurrent = if (batteryCurrent != null) -batteryCurrent else 0f
+        motion = ControllerData(
+            speedKmh = speed ?: 0f,
+            // REPORTED only for a sample that HAS a speed. A wheel that has
+            // sent a 0x07 but no live frame has reported no speed yet, and
+            // NONE + 0f is how VescValues.decodeValues says the same thing.
+            speedSource = if (speed != null) SpeedSource.REPORTED else SpeedSource.NONE,
+            dutyPercent = dutyPercent() ?: DUTY_NOT_YET_REPORTED_PERCENT,
+            // The live frame's PHASE current (bytes 10..11) — a different
+            // quantity from the battery current, and both are wanted (D §6.3).
+            // Read from [phaseCurrentA]/[boardTempC], which [parseLiveFrame]
+            // owns and [parseMotionFrame] must never write: with this sample
+            // built straight after a 0x07 frame, such a write is now OBSERVABLE
+            // as a motion→motion leak, where before it was a dead store.
+            motorCurrentA = if (sawLiveMotion) -phaseCurrentA else 0f,
+            batteryCurrentA = controllerBatteryCurrent,
+            inputVoltageV = voltage,
+            // Voltage-derived, so it is exactly as unknown as the voltage: 0 W
+            // whenever the cell count is missing. Spec D §2's `powerW =
+            // voltage x current`.
+            powerW = voltage * controllerBatteryCurrent,
+            escTempC = if (sawLiveMotion) boardTempC else NO_TEMP_SENSOR_C,
+            motorTempC = motorTemp ?: NO_TEMP_SENSOR_C,
+            hasMotorTemp = motorTemp != null,
+            odometerKm = (odometerMeters() ?: 0L) / 1000f,
+            tripKm = (tripDistanceMeters() ?: 0L) / 1000f,
+            isConnected = true
+        )
+    }
+
+    /**
+     * The wheel's rail voltage in real volts, or **0** meaning UNKNOWN.
+     *
+     * The live frame reports voltage against Begode's 67.2 V reference (every
+     * wheel pretends to be 16S), and turning that into volts needs the pack's
+     * cell count — 40S x 4.2 V = 168 V is the x2.5 an ET Max needs. WheelLog
+     * does not derive this either: it makes the rider pick a multiplier from a
+     * list (1.0 / 1.25 / 1.5 / 1.738 / 2.0 / 2.25 / 2.5). Volty does better by
+     * taking it from the cell count the vehicle profile already holds — but
+     * only when the caller supplied one ([cellCount]). With no cell count the
+     * honest answer is to publish nothing: the raw reading would render as
+     * 58.92 V on a 168 V wheel, and a wrong voltage is worse than none because
+     * `powerW` is built from it and the dashboard shows both.
+     *
+     * Unlike [liveVoltageOn672ScaleV] this does NOT stop at the smart-BMS
+     * hand-over. That gate exists to stop the synthetic PACK from overriding
+     * real branch data; a controller's input voltage is the wheel's own
+     * measurement of its rail and stays valid whether or not a smart BMS is
+     * also reporting cells.
+     */
+    private fun inputVoltageV(): Float {
+        if (!sawLiveMotion) return 0f
+        val cells = cellCount ?: return 0f
+        if (cells <= 0) return 0f
+        return scaleLiveVoltage(liveVoltageRaw * 0.01f, cells)
+    }
+
     /**
      * The two physical assemblies of branch [packIndex], wired in series
      * (bmsnum's low bit — see [parseBmsTelemetry]).
@@ -399,6 +592,10 @@ class BegodeProtocol : BmsProtocol() {
         // "smart BMS seen" would leave a dumb wheel dataless again.
         smartBmsSeen = false
         liveData = null
+        // The controller sample is assembled from all of the above, so it must
+        // go with them: a stale instance would keep being handed to
+        // MotionSampleGate as the previous wheel's last known motion.
+        motion = null
     }
 
     // --- Protocol implementation ---
@@ -537,6 +734,10 @@ class BegodeProtocol : BmsProtocol() {
                 isConnected = true
             )
         }
+        // A boot placeholder publishes no motion at all: its speed, trip and
+        // temperature are all artefacts of a zero-padded frame, and the same
+        // gate already refuses to synthesise a pack from it.
+        if (sawLiveMotion) rebuildMotion()
     }
 
     /**
@@ -560,6 +761,7 @@ class BegodeProtocol : BmsProtocol() {
     private fun parseOdometerFrame(frame: ByteArray) {
         odometerMetersValue = frame.u32BE(2)
         sawOdometer = true
+        rebuildMotion()
     }
 
     /**
@@ -596,6 +798,12 @@ class BegodeProtocol : BmsProtocol() {
         if (dutyRaw != 0) sawTrueDuty = true
         dutyPercentValue = dutyRaw.toFloat()
         sawMotionFrame = true
+        // NOTE: this frame must never write [phaseCurrentA] or [boardTempC].
+        // That used to be a dead store — [parseLiveFrame] reassigns both from
+        // its own bytes before the only read — but the controller sample below
+        // reads them right here, so a leak would now be observable, and it is
+        // pinned by a test.
+        rebuildMotion()
     }
 
     /**
@@ -805,6 +1013,27 @@ class BegodeProtocol : BmsProtocol() {
          * [batteryCurrentA].
          */
         private const val BATTERY_CURRENT_A_PER_UNIT = 0.01f
+
+        /**
+         * What [ControllerData.escTempC] / [ControllerData.motorTempC] carry
+         * when the wheel has not reported that sensor yet.
+         *
+         * Any value at or below −50 °C would do —
+         * [ControllerData.hasEscTemp] is `escTempC > -50f`, VESC's "no sensor
+         * wired" reading generalised — but −100 is unmistakably a sentinel
+         * rather than a cold morning, and leaves the boundary itself free.
+         * **Never 0f**: that would claim a sensor and arm Part F's ESC_TEMP
+         * alert against a constant zero (`D §7.1`).
+         */
+        private const val NO_TEMP_SENSOR_C = -100f
+
+        /**
+         * What [ControllerData.dutyPercent] carries while the hardware PWM
+         * field has not yet proved itself (see [dutyPercent]'s latch and
+         * [rebuildMotion] for why this is 0 and not a negative sentinel).
+         * Named so the choice is greppable rather than a bare literal.
+         */
+        private const val DUTY_NOT_YET_REPORTED_PERCENT = 0f
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150

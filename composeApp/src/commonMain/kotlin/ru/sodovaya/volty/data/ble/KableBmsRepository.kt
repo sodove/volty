@@ -1227,21 +1227,36 @@ class KableBmsRepository private constructor(
      * SAME channel, so battery and motion cross one serialisation barrier.
      *
      * Fires only when the link's protocol is a
-     * [ru.sodovaya.volty.data.bms.MotionSource] — a battery-only link's
-     * `ownedControllers` is empty and this is never invoked for it. Factored
-     * out for the same reason [makeLinkOnSample] is: the test seam drives the
-     * production lambda rather than a copy that can drift.
+     * [ru.sodovaya.volty.data.bms.MotionSource]. **That is no longer the same
+     * thing as "this link owns a controller".** [BegodeProtocol] decodes a
+     * wheel's motion over the very link that carries its batteries, so a
+     * vehicle configured as a Begode BATTERY and nothing else — every existing
+     * Begode profile, until its owner adds a Begode controller — now reaches
+     * here with an EMPTY [LinkSpec.ownedControllers]. Translating index 0
+     * against that list threw, inside the session's observe loop, which would
+     * have taken the whole link down on the first frame and left riders'
+     * batteries reconnecting in a loop.
+     *
+     * A sample with nowhere to go is dropped, silently: the link plan gave this
+     * connection no controller, so there is no [ControllerState] to submit it
+     * to, and logging would print once per notification. The vehicle's motion
+     * appears the moment its profile carries a controller — which is what makes
+     * the plan, not this lambda, the place the decision lives.
+     *
+     * Factored out for the same reason [makeLinkOnSample] is: the test seam
+     * drives the production lambda rather than a copy that can drift.
      */
     private fun makeLinkOnMotionSample(
         spec: LinkSpec,
         channel: Channel<Sample>
     ): (controllerIndex: Int, data: ControllerData) -> Unit =
         { localCtrlIndex, data ->
-            val sent = channel.trySend(
-                MotionSample(spec.globalControllerIndex(localCtrlIndex), data)
-            )
-            if (sent.isFailure) {
-                println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
+            val owned = spec.ownedControllers.getOrNull(localCtrlIndex)
+            if (owned != null) {
+                val sent = channel.trySend(MotionSample(owned.globalIndex, data))
+                if (sent.isFailure) {
+                    println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
+                }
             }
         }
 

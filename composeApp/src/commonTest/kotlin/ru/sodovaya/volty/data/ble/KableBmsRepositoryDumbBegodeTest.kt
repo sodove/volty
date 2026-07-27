@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.BegodeDumpFixture
+import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
@@ -10,9 +11,12 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.advanceUntilIdle
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertIs
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -192,6 +196,51 @@ class KableBmsRepositoryDumbBegodeTest {
         // SoC estimated from the CELLS (avg ~3.711 V -> ~45.6 %), not from
         // the voltage/cellCount fallback.
         assertEquals(45.6f, data.soc, 0.3f)
+    }
+
+    @Test
+    fun `a battery-only wheel decodes motion that has nowhere to go, and the link survives it`() = repoTest { repo ->
+        // REGRESSION. BegodeProtocol is now a MotionSource, so `protocol as?
+        // MotionSource` succeeds on the link of a vehicle configured as a
+        // Begode BATTERY and nothing else — which is every existing Begode
+        // profile until its owner adds a controller. That link's plan owns NO
+        // controller, so translating local index 0 against ownedControllers
+        // threw, inside the session's observe loop, taking the whole link down
+        // on the first frame and leaving a rider's batteries reconnecting in a
+        // loop. The sample has nowhere to go and is dropped instead.
+        val v = vehicle(cellCount = 40)
+        repo.installLinksForTest(v, ADDRESS, BmsType.BEGODE)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertTrue(
+            spec.ownedControllers.isEmpty(),
+            "precondition: a battery-only Begode profile plans no controller"
+        )
+        val protocol = repo.createProtocolForTest(spec, v)
+        val source = assertIs<MotionSource>(
+            protocol,
+            "precondition: the wheel's protocol decodes motion over the battery link"
+        )
+
+        // The session's observe loop in miniature, motion side — the real
+        // production funnel, the real router, the real gate.
+        val funnel = repo.linkMotionFunnelsForTest().single()
+        val gate = MotionSampleGate(source.controllerCount)
+        protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+        val alive = routeControllerSamples(source, gate) { i, m -> funnel(i, m) }
+
+        assertTrue(alive, "the wheel really did decode motion — that is the whole hazard")
+        advanceUntilIdle()
+        assertFalse(
+            repo.activeMotion.value.isConnected,
+            "a link with no planned controller must publish no motion"
+        )
+        // …and the same notification's BATTERY half decoded normally, so what
+        // was dropped is the motion sample and not the frame.
+        assertEquals(
+            -3.5f, assertNotNull(protocol.latestData(0)).current, 1e-3f,
+            "the wheel's battery decode is untouched by any of this"
+        )
     }
 
     // --- Synthetic frame builders (24 bytes, layout as BegodeNoBmsProtocolTest) ---

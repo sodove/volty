@@ -1,9 +1,14 @@
 package ru.sodovaya.volty.data.bms
 
+import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNotSame
 import kotlin.test.assertNull
+import kotlin.test.assertSame
+import kotlin.test.assertTrue
 
 /**
  * Motion decode of the Begode live 0x00, odometer 0x04 and motion 0x07 frames.
@@ -30,6 +35,13 @@ import kotlin.test.assertNull
  *   scale against WheelLog's documented conversion — see `SPEED_KMH_PER_UNIT`.
  *
  * Tests are named `theRealCapture…` or `synthetic…` accordingly.
+ *
+ * The last section covers the [MotionSource] surface — the same readings
+ * mapped onto a [ru.sodovaya.volty.domain.model.ControllerData], where three
+ * of them have to survive a type whose floats are not nullable: the two
+ * temperatures (sentinel, never 0 — spec D §7.1), the duty of a wheel that has
+ * not reported one yet, and a voltage whose scale is configuration rather than
+ * frame data.
  */
 class BegodeMotionProtocolTest {
 
@@ -420,6 +432,302 @@ class BegodeMotionProtocolTest {
         assertEquals(0L, assertNotNull(protocol.tripDistanceMeters()))
         assertEquals(8_565_341L, assertNotNull(protocol.odometerMeters()))
         assertEquals(2f, assertNotNull(protocol.dutyPercent()), 0f)
+    }
+
+    // --- MotionSource: the wheel published as a controller ---
+
+    @Test
+    fun aWheelIsExactlyOneController() {
+        val protocol = protocolFedWithFixture()
+        assertEquals(1, protocol.controllerCount, "one motor on one board")
+        assertNotNull(protocol.latestMotion(0), "the capture decoded motion")
+        assertNull(protocol.latestMotion(1), "there is no second controller")
+        assertNull(protocol.latestMotion(-1), "nor a controller before the first")
+    }
+
+    @Test
+    fun theRealCaptureControllerSampleCarriesTheWheelsMotion() {
+        // REAL DATA throughout, except speedKmh — see the class KDoc. Every
+        // number here is the LAST value of its own frame type in the capture:
+        // live frame `55aa 1700 0000 003d 0000 fed4 f4a4 …` and motion frame
+        // `55aa 0043 0001 0014 0002 …`.
+        val protocol = protocolFedWithFixture()
+        val m = assertNotNull(protocol.latestMotion(0))
+
+        assertEquals(0f, m.speedKmh, 0f, "the wheel is stationary throughout the capture")
+        assertEquals(
+            SpeedSource.REPORTED, m.speedSource,
+            "a wheel measures GROUND speed itself — no MotorConfig, no derivation"
+        )
+        assertEquals(2f, m.dutyPercent, 0f, "hardware PWM of a wheel holding itself upright")
+        assertEquals(20f, m.motorTempC, 0f, "the 0x07 motor thermistor")
+        assertTrue(m.hasMotorTemp, "this wheel plainly reports a motor temperature")
+        assertEquals(27.977f, m.escTempC, 0.01f, "the mainboard MPU of the same seconds")
+        assertTrue(m.hasEscTemp, "…and that is a real reading, not the -50 C sentinel")
+        assertEquals(8565.341f, m.odometerKm, 0.001f, "8 565 341 m of lifetime mileage")
+        assertEquals(0f, m.tripKm, 0f, "a wheel that never moved")
+        assertTrue(m.isConnected, "a decoded sample is by definition a connected one")
+    }
+
+    @Test
+    fun theRealCaptureControllerSampleReportsBothCurrentsDrawnPositive() {
+        // REAL DATA, and the one place a sign error would be invisible: the
+        // capture's battery current (-0.67 A) and phase current (-3.00 A) are
+        // both NEGATIVE in this file's battery convention, "+ = charging".
+        // ControllerData uses VESC's opposite one — positive while drawing
+        // from the pack, see VescProtocol.synthesiseBattery, which negates the
+        // other way — so both must come out POSITIVE for a discharging wheel.
+        val protocol = protocolFedWithFixture()
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(
+            0.67f, m.batteryCurrentA, 1e-4f,
+            "an un-negated map would show a parked wheel CHARGING at 0.67 A"
+        )
+        assertEquals(
+            3.00f, m.motorCurrentA, 1e-4f,
+            "the live frame's PHASE current, negated the same way — and not the battery current"
+        )
+    }
+
+    @Test
+    fun theWheelsMotorTemperatureIsAbsentAsASentinelAndNeverAsZero() {
+        // Spec D §7.1. A wheel that has sent no 0x07 frame has reported no
+        // motor temperature; 0 C would be a plausible winter reading, and
+        // hasMotorTemp would then be the only thing standing between a rider
+        // and a MOTOR_TEMP alarm armed on a constant.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tempRaw = -3069))
+        val m = assertNotNull(protocol.latestMotion(0), "a live frame alone is motion")
+        assertFalse(m.hasMotorTemp, "no 0x07 frame arrived, so no motor thermistor has spoken")
+        assertTrue(
+            m.motorTempC < -50f,
+            "absent must sit below the -50 C sentinel, not at 0 (was ${m.motorTempC})"
+        )
+        // …and the board sensor of the same sample IS real.
+        assertTrue(m.hasEscTemp)
+        assertEquals(27.5035f, m.escTempC, 0.01f)
+    }
+
+    @Test
+    fun theBoardTemperatureIsAbsentAsASentinelAndNeverAsZero() {
+        // The mirror case, and the one that matters most: hasEscTemp is
+        // COMPUTED as escTempC > -50f, so a 0f default would claim a sensor
+        // that has not reported and arm ESC_TEMP against a constant zero.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        val m = assertNotNull(protocol.latestMotion(0), "a 0x07 frame alone is motion")
+        assertFalse(m.hasEscTemp, "no live frame arrived, so the mainboard sensor has not spoken")
+        assertTrue(
+            m.escTempC < -50f,
+            "absent must sit below the -50 C sentinel, not at 0 (was ${m.escTempC})"
+        )
+        // The motor sensor of the same sample HAS spoken, and the two are
+        // independent: one absent reading must not suppress the other.
+        assertTrue(m.hasMotorTemp)
+        assertEquals(20f, m.motorTempC, 0f)
+    }
+
+    @Test
+    fun aWheelThatHasNotReportedASpeedSaysSoRatherThanReportingZero() {
+        // A 0x07-only wheel has told us its duty and its currents but nothing
+        // about its speed. SpeedSource.NONE + 0f is how ControllerData says
+        // that — the same shape VescValues.decodeValues uses for an
+        // underivable speed — and it is what keeps Part F's SPEED alert from
+        // arming on a fabricated standstill.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(SpeedSource.NONE, m.speedSource)
+        assertFalse(m.speedKnown)
+        assertEquals(0f, m.speedKmh, 0f)
+
+        // The first live frame settles it.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000))
+        val moving = assertNotNull(protocol.latestMotion(0))
+        assertEquals(SpeedSource.REPORTED, moving.speedSource)
+        assertEquals(36.0f, moving.speedKmh, 1e-3f)
+    }
+
+    @Test
+    fun theNotYetKnownDutyIsPublishedAsZeroAndNeverAsTheLiveFramesFallback() {
+        // SYNTHETIC, modelled on the capture. Before the hardware PWM field
+        // has been seen non-zero the wheel has not told us its duty — but
+        // ControllerData has no nullable duty and no hasDuty flag, so the
+        // window is published as 0: alarm-neutral (duty only escalates
+        // upwards) and renderable, where a negative sentinel would put "-1 %"
+        // on the safety dial of a wheel that is simply still booting.
+        //
+        // What this test actually pins is the thing that CAN go wrong: the
+        // live frame's fallback PWM field reads 169 in every frame of the ET
+        // Max capture, and adopting it — as WheelLog does when no 0x07 has
+        // arrived — would publish a confident 16.9 % duty on a wheel that
+        // never moved. That is the fabrication spec D §7.2 forbids.
+        val protocol = BegodeProtocol()
+        repeat(3) { protocol.onNotification(liveFrame(voltageRaw = 5892, fallbackPwmRaw = 169)) }
+        val booting = assertNotNull(protocol.latestMotion(0))
+        assertEquals(
+            0f, booting.dutyPercent, 0f,
+            "not the 16.9 % the live frame's fallback PWM field would give"
+        )
+
+        // And once the wheel reports one, it is published verbatim.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 63))
+        assertEquals(63f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f)
+    }
+
+    @Test
+    fun aWheelWithNoKnownCellCountPublishesNoVoltageRatherThanTheRawScale() {
+        // The live frame reports voltage against Begode's 67.2 V reference —
+        // 58.92 V for a pack that really sits at ~147 V. With no cell count
+        // there is no honest scale, and an unscaled number would read as a
+        // catastrophically flat 168 V wheel on the dashboard AND poison the
+        // power reading built from it.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, m.inputVoltageV, 0f, "0 means UNKNOWN here, and 58.92 would be a lie")
+        assertEquals(0f, m.powerW, 0f, "power is voltage-derived and exactly as unknown")
+        // Everything the wheel DID report is unaffected by the missing scale.
+        assertEquals(0.67f, m.batteryCurrentA, 1e-4f)
+        assertEquals(2f, m.dutyPercent, 0f)
+    }
+
+    @Test
+    fun aWheelWhoseCellCountIsKnownPublishesRealPackVolts() {
+        // REAL DATA for the raw reading (the capture's last live frame holds
+        // 5888 = 58.88 V on the 67.2 V scale) and configuration for the scale:
+        // 40S x 4.2 V = 168 V, i.e. exactly the x2.5 WheelLog makes its riders
+        // pick off a list. 58.88 x 2.5 = 147.20 V, against 148.4 V of summed
+        // cells in the same capture.
+        val protocol = BegodeProtocol(cellCount = 40)
+        BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(147.20f, m.inputVoltageV, 0.01f)
+        // Power follows: 147.20 V x 0.67 A drawn.
+        assertEquals(98.62f, m.powerW, 0.05f)
+        // AND it survives the smart-BMS hand-over. liveVoltageOn672ScaleV()
+        // goes null there — that gate exists to stop the synthetic PACK
+        // overriding real branches — but the wheel's rail voltage is still the
+        // wheel's rail voltage, so the controller keeps reporting it.
+        assertNull(protocol.liveVoltageOn672ScaleV(), "precondition: the synthetic pack is retired")
+    }
+
+    @Test
+    fun aWheelWithANonsensicalCellCountPublishesNoVoltage() {
+        // A profile can carry 0 (the "unset" a stored vehicle uses); scaling by
+        // it would report a wheel at 0.00 V while it rides. Zero alone cannot
+        // pin the guard — 0 cells x 4.2 V / 67.2 is 0 whether the guard runs or
+        // not — so a negative is asserted too, which is the only reading that
+        // tells the guard apart from its absence.
+        val unset = BegodeProtocol(cellCount = 0)
+        unset.onNotification(liveFrame(voltageRaw = 5892))
+        assertEquals(0f, assertNotNull(unset.latestMotion(0)).inputVoltageV, 0f)
+
+        val nonsense = BegodeProtocol(cellCount = -40)
+        nonsense.onNotification(liveFrame(voltageRaw = 5892))
+        assertEquals(
+            0f, assertNotNull(nonsense.latestMotion(0)).inputVoltageV, 0f,
+            "an unguarded scale would report -147.30 V"
+        )
+    }
+
+    @Test
+    fun theMotionFrameNeverLeaksIntoTheControllerSampleEither() {
+        // The twin of theMotionFrameNeverLeaksIntoTheBatterySample, and it
+        // covers what that one CANNOT: parseLiveFrame reassigns phaseCurrentA
+        // and boardTempC unconditionally, so a motion-frame write to either
+        // used to be a dead store no test could observe. The controller sample
+        // is now rebuilt by the 0x07 frame ITSELF, reading both fields at that
+        // exact moment — so the leak became observable here first.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+
+        val m = assertNotNull(protocol.latestMotion(0))
+        assertEquals(
+            27.5035f, m.escTempC, 0.01f,
+            "the mainboard reading, not the 20 C the motion frame carries"
+        )
+        assertEquals(
+            3.50f, m.motorCurrentA, 1e-3f,
+            "the phase current, not the 0.67 A battery current of the motion frame"
+        )
+        // …and the two values the motion frame really does own.
+        assertEquals(20f, m.motorTempC, 0f)
+        assertEquals(0.67f, m.batteryCurrentA, 1e-4f)
+    }
+
+    @Test
+    fun nothingDecodedMeansNoControllerSampleAtAll() {
+        // MotionSource's own absence encoding — and the only one that is not a
+        // compromise, because latestMotion IS nullable. A boot placeholder is
+        // not a sample either: its speed, trip and temperature are artefacts
+        // of a zero-padded frame.
+        val fresh = BegodeProtocol()
+        assertNull(fresh.latestMotion(0))
+
+        val booting = BegodeProtocol()
+        booting.onNotification(liveFrame(voltageRaw = 0, speedRaw = 1000, tripMeters = 4321))
+        assertNull(booting.latestMotion(0), "a boot placeholder is not a motion sample")
+
+        booting.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000))
+        assertNotNull(booting.latestMotion(0), "…and a genuine frame right after it is")
+    }
+
+    @Test
+    fun everyMotionBearingFrameProducesAFreshSampleAndNothingElseDoes() {
+        // MotionSampleGate discriminates on instance IDENTITY: a fresh object
+        // per read would look like a new decode on every notification and a
+        // wheel that had gone quiet could never be seen to go quiet, while a
+        // cached object that never changes would suppress real decodes.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 100))
+        val first = assertNotNull(protocol.latestMotion(0))
+        assertSame(first, protocol.latestMotion(0), "re-reading is not a new decode")
+
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        val afterMotion = assertNotNull(protocol.latestMotion(0))
+        assertNotSame(first, afterMotion, "the 0x07 frame is a decode")
+
+        protocol.onNotification(odometerFrame(byteArrayOf(0x00, 0x82.toByte(), 0xB2.toByte(), 0x5D)))
+        val afterOdometer = assertNotNull(protocol.latestMotion(0))
+        assertNotSame(afterMotion, afterOdometer, "the 0x04 frame is a decode")
+
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 200))
+        val afterLive = assertNotNull(protocol.latestMotion(0))
+        assertNotSame(afterOdometer, afterLive, "the 0x00 frame is a decode")
+
+        // A smart-BMS frame carries NO motion. Minting a new instance for it
+        // would push a duplicate motion sample through the gate at cell-frame
+        // rate — and a Begode sends four of those for every live frame.
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472))
+        assertSame(afterLive, protocol.latestMotion(0), "a 0x01 frame is not a motion decode")
+    }
+
+    @Test
+    fun resetClearsTheControllerSample() {
+        // A reconnect may face a different wheel; the gate would otherwise be
+        // handed the previous one's last known motion as if it were current.
+        val protocol = protocolFedWithFixture()
+        assertNotNull(protocol.latestMotion(0), "precondition: the fixture decoded motion")
+        protocol.reset()
+        assertNull(protocol.latestMotion(0))
+        // The duty latch goes with it, so a wheel reporting only zeros after
+        // the reset does not inherit the ET Max's proof that duty is real.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+        assertEquals(0f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f)
+    }
+
+    @Test
+    fun theControllerSurfaceStillNeverWritesToTheWheel() {
+        // FFE1 is Begode's COMMAND channel. Becoming a MotionSource adds no
+        // reason to speak on it: the wheel streams motion unprompted, exactly
+        // as it streams its battery.
+        val protocol = BegodeProtocol(cellCount = 40)
+        assertTrue(protocol.handshakeCommands().isEmpty(), "a stray write could reconfigure a wheel under its rider")
+        assertTrue(protocol.pollCommands().isEmpty())
+        assertEquals(0L, protocol.pollIntervalMs)
     }
 
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
