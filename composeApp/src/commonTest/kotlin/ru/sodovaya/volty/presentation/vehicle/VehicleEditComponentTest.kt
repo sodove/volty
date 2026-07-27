@@ -315,15 +315,42 @@ class VehicleEditComponentTest {
             chemistry = Chemistry.LIFEPO4,
             createdAt = Instant.DISTANT_PAST
         )
-        val fixture = renderedFields(existingVehicle().toString())
-        val defaults = renderedFields(allDefaults.toString())
+        val fixtureRendering = existingVehicle().toString()
+        val defaultsRendering = allDefaults.toString()
+        val fixture = renderedFields(fixtureRendering)
+        val defaults = renderedFields(defaultsRendering)
 
-        // The splitter is test code and a broken one would pass vacuously:
-        // Vehicle has 16 properties and two of the trickiest to split (a list of
-        // data classes, a nullable) must be among them.
-        assertTrue(
-            fixture.size >= 16 && "motionAlerts" in fixture && "packs" in fixture,
-            "the toString splitter is broken — parsed ${fixture.size} fields: ${fixture.keys}"
+        // The splitter is test code, and a broken one would pass vacuously —
+        // two empty maps agree about everything. Two guards, neither of which
+        // hardcodes today's field count (a floor of 16 still clears a splitter
+        // that drops 4 of 20 fields):
+        //
+        //  1. re-joining the parsed pairs must reproduce the rendering exactly,
+        //     so nothing can be dropped or mangled;
+        //  2. both renderings must yield the SAME key set. Splitting is
+        //     value-dependent, so this is not implied by (1): an unbalanced
+        //     bracket inside a *declared default* (`val marker: String = "("`)
+        //     leaves the depth counter high and every later comma stops
+        //     separating, collapsing `defaults` while `fixture` — which
+        //     overrides that field — parses in full. Both would then still
+        //     round-trip, and comparing a 17-key map against a 4-key one silently
+        //     stops checking 13 fields.
+        assertEquals(
+            renderedBody(fixtureRendering),
+            fixture.entries.joinToString(", ") { "${it.key}=${it.value}" },
+            "the toString splitter dropped or mangled part of the fixture rendering"
+        )
+        assertEquals(
+            renderedBody(defaultsRendering),
+            defaults.entries.joinToString(", ") { "${it.key}=${it.value}" },
+            "the toString splitter dropped or mangled part of the all-defaults rendering"
+        )
+        assertEquals(
+            defaults.keys,
+            fixture.keys,
+            "the toString splitter disagrees across the two renderings, so the check below " +
+                "would compare a collapsed map against a full one and silently skip fields: " +
+                "fixture=${fixture.keys} defaults=${defaults.keys}"
         )
 
         val untouched = defaults.filterKeys { fixture[it] == defaults[it] }.keys
@@ -851,8 +878,12 @@ class VehicleEditComponentTest {
  * tracking is what makes it usable: nested `Pack(...)` renderings and list
  * brackets are full of commas and `=` signs that are not field separators.
  */
+/** The inside of a data class' `toString()`, without the class name or parentheses. */
+private fun renderedBody(rendered: String): String =
+    rendered.substring(rendered.indexOf('(') + 1, rendered.length - 1)
+
 private fun renderedFields(rendered: String): Map<String, String> {
-    val body = rendered.substring(rendered.indexOf('(') + 1, rendered.length - 1)
+    val body = renderedBody(rendered)
     val parts = mutableListOf<String>()
     var depth = 0
     var start = 0
@@ -864,8 +895,11 @@ private fun renderedFields(rendered: String): Map<String, String> {
         }
     }
     parts += body.substring(start)
+    // The value is NOT trimmed: it starts immediately after '=', and trimming a
+    // trailing space would break the round-trip check above on a String field
+    // that legitimately ends in one.
     return parts.associate { part ->
         val eq = part.indexOf('=')
-        part.substring(0, eq).trim() to part.substring(eq + 1).trim()
+        part.substring(0, eq).trim() to part.substring(eq + 1)
     }
 }
