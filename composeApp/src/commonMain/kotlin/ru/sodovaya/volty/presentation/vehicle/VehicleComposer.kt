@@ -141,8 +141,43 @@ data class PackDraft(
 }
 
 /**
+ * A controller's [MotorConfig] **while it is being typed**: every field
+ * nullable, because a text box the rider has cleared is not the number zero.
+ *
+ * This is the rule the deleted flat Motor card used to carry, rehomed onto the
+ * source it edits (G2 Task 3). It had to live somewhere with per-field
+ * nullability: the screen's `IntField`/`FloatField` re-sync from the value they
+ * are handed, so a draft that resolved a blank to `MotorConfig()`'s default
+ * immediately would push that default straight back into the box the rider had
+ * just cleared — which is the wart the flat card produced on every structural
+ * edit, kept at bay there by a separate copy of the field values in `State`.
+ *
+ * The defaults are `MotorConfig()`'s own, so a freshly added controller shows
+ * the geometry it will actually be saved with rather than three empty boxes;
+ * `null` is reserved for "the rider cleared this", and [resolve] is the single
+ * statement of what a cleared field means.
+ */
+data class MotorDraft(
+    val polePairs: Int? = MotorConfig().polePairs,
+    val wheelDiameterMm: Int? = MotorConfig().wheelDiameterMm,
+    val gearRatio: Float? = MotorConfig().gearRatio
+) {
+    /** A blank field falls back to [MotorConfig]'s own default for that field. */
+    fun resolve(): MotorConfig = MotorConfig(
+        polePairs = polePairs ?: MotorConfig().polePairs,
+        wheelDiameterMm = wheelDiameterMm ?: MotorConfig().wheelDiameterMm,
+        gearRatio = gearRatio ?: MotorConfig().gearRatio
+    )
+
+    companion object {
+        fun of(motor: MotorConfig) = MotorDraft(motor.polePairs, motor.wheelDiameterMm, motor.gearRatio)
+    }
+}
+
+/**
  * One controller being edited. See [PackDraft] for what [key] and [origin] are
- * for; [derivedBattery] is documented on [DerivedBatteryChoice].
+ * for; [derivedBattery] is documented on [DerivedBatteryChoice] and [motor] on
+ * [MotorDraft].
  */
 data class ControllerDraft(
     val key: String,
@@ -150,7 +185,7 @@ data class ControllerDraft(
     val controllerType: ControllerType,
     val address: String,
     val canId: Int? = null,
-    val motor: MotorConfig = MotorConfig(),
+    val motor: MotorDraft = MotorDraft(),
     val derivedBattery: DerivedBatteryChoice = DerivedBatteryChoice.AUTO,
     val origin: Controller? = null
 ) {
@@ -168,7 +203,7 @@ data class ControllerDraft(
             controllerType = controllerType,
             address = address,
             canId = canId,
-            motor = motor,
+            motor = motor.resolve(),
             providesDerivedBattery = providesDerivedBattery
         )
 }
@@ -187,6 +222,26 @@ data class VehicleDraft(
     val nextKey: Int = 0
 ) {
     val sourceCount: Int get() = packs.size + controllers.size
+
+    /**
+     * The distinct BLE links this vehicle already has, **controllers first**.
+     *
+     * The screen offers these as one-tap choices for a source's address, which
+     * is what "hosted" means concretely (`G §4`): a battery or a slave
+     * controller reached *through* another source's link is simply one that
+     * shares its address. Expressed as a link rather than as a boolean because
+     * a vehicle can have more than one link and "hosted by which?" then has no
+     * answer — and because it is the same control the two-uBox case needs for a
+     * controller, where a boolean would not have applied at all.
+     *
+     * Blank addresses are excluded: `""` is not a link a rider can mean, it is
+     * the absence of one, and [ComposerIssue.BlankAddress] already says so.
+     * Controllers lead because a gateway is a controller.
+     */
+    val linkAddresses: List<String>
+        get() = (controllers.map { it.address } + packs.map { it.address })
+            .filter { it.isNotBlank() }
+            .distinct()
 
     /**
      * Whether *any* source may be removed. False at exactly one source, because
@@ -295,7 +350,7 @@ fun draftOf(vehicle: Vehicle): VehicleDraft {
                 controllerType = c.controllerType,
                 address = c.address,
                 canId = c.canId,
-                motor = c.motor,
+                motor = MotorDraft.of(c.motor),
                 derivedBattery = derivedBatteryChoiceFor(c, default),
                 origin = c
             )
@@ -362,16 +417,6 @@ fun VehicleDraft.updatePack(key: String, edit: (PackDraft) -> PackDraft): Vehicl
 
 fun VehicleDraft.updateController(key: String, edit: (ControllerDraft) -> ControllerDraft): VehicleDraft =
     copy(controllers = controllers.map { if (it.key == key) edit(it) else it })
-
-/**
- * Positional counterpart of [updateController], for the one editor that is
- * positional rather than keyed: the legacy Motor card, which has always edited
- * `controllers[0]` (`G1` gave a vehicle exactly one controller). A no-op on a
- * vehicle with no controller, which is what a pack-only vehicle must see.
- */
-fun VehicleDraft.updateControllerAt(index: Int, edit: (ControllerDraft) -> ControllerDraft): VehicleDraft =
-    if (index !in controllers.indices) this
-    else copy(controllers = controllers.mapIndexed { i, c -> if (i == index) edit(c) else c })
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -609,4 +654,59 @@ fun validate(draft: VehicleDraft): List<ComposerIssue> {
         }
     }
     return issues
+}
+
+// ---------------------------------------------------------------------------
+// Issues → the rows that must show them
+// ---------------------------------------------------------------------------
+
+private fun VehicleDraft.keysAt(address: String): List<String> =
+    controllers.filter { it.address == address }.map { it.key } +
+        packs.filter { it.address == address }.map { it.key }
+
+private fun VehicleDraft.keysAt(address: String, canId: Int): List<String> =
+    controllers.filter { it.address == address && it.canId == canId }.map { it.key } +
+        packs.filter { it.address == address && it.canId == canId }.map { it.key }
+
+/**
+ * The draft rows this issue is about — the source card(s) the screen prints it
+ * on.
+ *
+ * It lives here rather than in the `@Composable` because it is the answer to
+ * "**which** source is wrong", which is the whole of what a rider needs from
+ * [validate] and the only part of it a renderer cannot work out for itself: the
+ * three per-address issues ([ComposerIssue.ConflictingKinds],
+ * [ComposerIssue.DuplicateCanId], [ComposerIssue.UnroutableGateway]) name a BLE
+ * address, and turning that back into rows means re-walking the draft the same
+ * way [validate] grouped it. A card that printed only the issues carrying its
+ * own key would leave the two blocking address issues — the ones that refuse
+ * the save — with nowhere to appear except a banner naming a MAC.
+ *
+ * [ComposerIssue.DuplicateCanId] names only the rows actually holding the
+ * duplicated id, not every row on the link: the other sources behind that
+ * gateway are innocent, and blaming them is how a rider ends up editing the
+ * wrong one.
+ */
+fun ComposerIssue.affectedKeys(draft: VehicleDraft): List<String> = when (this) {
+    is ComposerIssue.BlankAddress -> listOf(sourceKey)
+    is ComposerIssue.NoControllerDecoder -> listOf(sourceKey)
+    is ComposerIssue.HostlessVescBms -> listOf(sourceKey)
+    is ComposerIssue.AmbiguousGatewaySource -> sourceKeys
+    is ComposerIssue.ConflictingKinds -> draft.keysAt(address)
+    is ComposerIssue.UnroutableGateway -> draft.keysAt(address)
+    is ComposerIssue.DuplicateCanId -> draft.keysAt(address, canId)
+}
+
+/**
+ * [issues] indexed by the source key each one concerns, keeping [validate]'s
+ * order within a row. A source with nothing wrong is absent rather than mapped
+ * to an empty list, so a screen can ask `!= null` and a test can assert on the
+ * key set.
+ */
+fun issuesBySource(draft: VehicleDraft, issues: List<ComposerIssue>): Map<String, List<ComposerIssue>> {
+    val out = LinkedHashMap<String, MutableList<ComposerIssue>>()
+    for (issue in issues) {
+        for (key in issue.affectedKeys(draft)) out.getOrPut(key) { mutableListOf() } += issue
+    }
+    return out
 }

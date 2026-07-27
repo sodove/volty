@@ -856,4 +856,145 @@ class VehicleComposerTest {
             )
         }
     }
+
+    // -----------------------------------------------------------------------
+    // G2 Task 3: what the screen needs in order to be a renderer
+    // -----------------------------------------------------------------------
+
+    /**
+     * **Every issue kind, and the rows it must appear on.** Enumerated rather
+     * than sampled: the three per-address kinds carry a BLE address instead of
+     * a key, so each has to re-walk the draft, and a card printing only the
+     * issues that carry its own key would leave the two blocking address issues
+     * with nowhere to appear but a banner naming a MAC.
+     *
+     * The head-unit fixture is deliberately the one shape where every kind is
+     * reachable at once and where "which row?" has more than one candidate —
+     * three sources on one link, so an implementation that answered "all of
+     * them" for [ComposerIssue.DuplicateCanId] fails on the innocent third.
+     */
+    @Test
+    fun `each issue names the rows that must show it`() {
+        val gateway = draftOf(
+            vehicle(
+                packs = listOf(pack(0, "Hosted", BmsType.VESC_BMS, "HU:01", canId = 41)),
+                controllers = listOf(
+                    controller(0, "uBox L", ControllerType.VESC, "HU:01", canId = 41),
+                    controller(1, "uBox R", ControllerType.VESC, "HU:01", canId = 42)
+                )
+            )
+        )
+        // p0 and c0 share id 41; c1 is on the same link and innocent.
+        assertEquals(
+            listOf("c0", "p0"),
+            ComposerIssue.DuplicateCanId("HU:01", 41).affectedKeys(gateway),
+            "only the rows actually holding the duplicated id"
+        )
+        assertEquals(
+            listOf("c0", "c1", "p0"),
+            ComposerIssue.ConflictingKinds("HU:01", emptySet()).affectedKeys(gateway),
+            "a link that cannot resolve implicates everything on it"
+        )
+        assertEquals(
+            listOf("c0", "c1", "p0"),
+            ComposerIssue.UnroutableGateway("HU:01", ProtocolKind.VESC).affectedKeys(gateway),
+            "so does a link nothing can multiplex"
+        )
+        assertEquals(listOf("c1"), ComposerIssue.BlankAddress("c1").affectedKeys(gateway))
+        assertEquals(
+            listOf("c0"),
+            ComposerIssue.NoControllerDecoder("c0", ControllerType.FARDRIVER).affectedKeys(gateway)
+        )
+        assertEquals(listOf("p0"), ComposerIssue.HostlessVescBms("p0").affectedKeys(gateway))
+        assertEquals(
+            listOf("c0", "c1"),
+            ComposerIssue.AmbiguousGatewaySource("HU:01", listOf("c0", "c1")).affectedKeys(gateway)
+        )
+        // An address no source sits at names nobody rather than throwing — the
+        // screen asks for a key it has, and a stale issue must not crash it.
+        assertEquals(emptyList(), ComposerIssue.ConflictingKinds("GONE", emptySet()).affectedKeys(gateway))
+    }
+
+    /**
+     * The index the cards are actually rendered from: a source with nothing
+     * wrong is absent, and a source with two problems keeps both, in
+     * [validate]'s order.
+     */
+    @Test
+    fun `issues are indexed by the source card that must show them`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.FARDRIVER, "") // no decoder AND no link
+            .addPack(BmsType.ANT_BMS, "AN:01") // nothing wrong
+        val index = issuesBySource(d, validate(d))
+
+        assertEquals(setOf("c-new-0"), index.keys, "the clean pack must not appear at all")
+        assertEquals(
+            listOf(
+                ComposerIssue.BlankAddress("c-new-0"),
+                ComposerIssue.NoControllerDecoder("c-new-0", ControllerType.FARDRIVER)
+            ),
+            index.getValue("c-new-0")
+        )
+    }
+
+    /**
+     * The one-tap "same link as" chips. Controllers lead because a gateway is a
+     * controller; a link is listed once however many sources share it; and a
+     * blank address is not a link a rider can mean — it is the absence of one,
+     * which [ComposerIssue.BlankAddress] already says.
+     */
+    @Test
+    fun `the link list names each link once, controllers first`() {
+        // The DIRECT pack is listed first on the vehicle, so "controllers
+        // first" and "packs first" genuinely disagree here. With the hosted
+        // pack first they would not: it shares the controllers' link, and
+        // `distinct()` would hide the difference — which is how a weaker
+        // fixture makes an ordering claim unfalsifiable.
+        val d = draftOf(
+            vehicle(
+                packs = listOf(
+                    pack(0, "Direct", BmsType.ANT_BMS, "AN:01"),
+                    pack(1, "Hosted", BmsType.VESC_BMS, "HU:01")
+                ),
+                controllers = listOf(
+                    controller(0, "uBox L", ControllerType.VESC, "HU:01"),
+                    controller(1, "uBox R", ControllerType.VESC, "HU:01")
+                )
+            )
+        )
+        assertEquals(listOf("HU:01", "AN:01"), d.linkAddresses)
+        assertEquals(
+            emptyList(),
+            VehicleDraft().addController(ControllerType.VESC, "").linkAddresses,
+            "a source with no link offers none"
+        )
+    }
+
+    // -----------------------------------------------------------------------
+    // Motor geometry, per controller (G2 Task 3)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The rule the deleted flat Motor card carried: a cleared box is not a
+     * zero, it is "unset", and it resolves to [MotorConfig]'s own default only
+     * on the way out.
+     *
+     * Every field is exercised because each has a different default and a
+     * different type — a `?: 0` would satisfy `wheelDiameterMm` alone.
+     */
+    @Test
+    fun `a blank motor field resolves to MotorConfig's default`() {
+        assertEquals(MotorConfig(), MotorDraft(null, null, null).resolve())
+        assertEquals(
+            MotorConfig(polePairs = 7, wheelDiameterMm = MotorConfig().wheelDiameterMm, gearRatio = 2f),
+            MotorDraft(polePairs = 7, wheelDiameterMm = null, gearRatio = 2f).resolve()
+        )
+        // Round trip: a stored geometry survives being loaded into the draft.
+        val stored = MotorConfig(polePairs = 9, wheelDiameterMm = 400, gearRatio = 2.5f)
+        assertEquals(stored, MotorDraft.of(stored).resolve())
+        // And an untouched draft IS the default, so a freshly added controller
+        // shows the geometry it will be saved with rather than three empty
+        // boxes.
+        assertEquals(MotorDraft.of(MotorConfig()), MotorDraft())
+    }
 }

@@ -16,7 +16,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -24,6 +24,7 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -43,20 +44,19 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
-import ru.sodovaya.volty.domain.model.needsDerivedBattery
-import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.secondaryGaugeLabel
-import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
@@ -64,6 +64,10 @@ import volty.composeapp.generated.resources.action_delete
 import volty.composeapp.generated.resources.alerts_open
 import volty.composeapp.generated.resources.alerts_open_subtitle
 import volty.composeapp.generated.resources.dashboard_style_default
+import volty.composeapp.generated.resources.topology_parallel
+import volty.composeapp.generated.resources.topology_series
+import volty.composeapp.generated.resources.units_open
+import volty.composeapp.generated.resources.units_open_subtitle
 import volty.composeapp.generated.resources.vehicle_delete
 import volty.composeapp.generated.resources.vehicle_delete_confirm_text
 import volty.composeapp.generated.resources.vehicle_delete_confirm_title
@@ -75,26 +79,46 @@ import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_cell_high
 import volty.composeapp.generated.resources.vehicle_field_cell_low
 import volty.composeapp.generated.resources.vehicle_field_chemistry
-import volty.composeapp.generated.resources.vehicle_field_controller_address
-import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_dashboard_style
-import volty.composeapp.generated.resources.vehicle_field_gear_ratio
 import volty.composeapp.generated.resources.vehicle_field_icon
 import volty.composeapp.generated.resources.vehicle_field_name
 import volty.composeapp.generated.resources.vehicle_field_name_required
-import volty.composeapp.generated.resources.vehicle_field_pole_pairs
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge_caption
 import volty.composeapp.generated.resources.vehicle_field_soc_low
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
-import volty.composeapp.generated.resources.vehicle_field_wheel_diameter
+import volty.composeapp.generated.resources.vehicle_field_topology
 import volty.composeapp.generated.resources.vehicle_save
+import volty.composeapp.generated.resources.vehicle_save_blocked
 import volty.composeapp.generated.resources.vehicle_section_alerts
-import volty.composeapp.generated.resources.vehicle_section_motor
+import volty.composeapp.generated.resources.vehicle_section_sources
+import volty.composeapp.generated.resources.vehicle_source_add_controller
+import volty.composeapp.generated.resources.vehicle_source_add_pack
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
+/**
+ * The vehicle composer (`G §3`–`§4`), and a renderer and nothing more — see
+ * `VehicleSourceCards.kt` for what that means and why it has to be true here.
+ *
+ * The screen is three bands:
+ *
+ *  1. **the vehicle** — name, icon;
+ *  2. **its sources** — one card per controller and per pack (G2 Task 3), which
+ *     is the whole of what was, until this task, a single read-only "BMS type /
+ *     BMS address" pair plus a flat Motor card editing `controllers[0]`;
+ *  3. **its settings** — chemistry, battery wiring, averaging, the five cell and
+ *     temperature thresholds, and links out to the two screens that own the
+ *     rest (motion alerts, per vehicle; units, app-wide).
+ *
+ * The read-only source header only survives on the **create** path. While
+ * editing it would be a second, staler statement of what the source cards say
+ * live — it reads `State.sourceVehicle`, the vehicle as it was LOADED, so
+ * changing a controller's type in its card would leave the header contradicting
+ * it. Creating has no draft to render (`State.canComposeSources`), so there it
+ * is still the only description of the device the picker prefilled.
+ */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun VehicleEditScreen(component: VehicleEditComponent) {
@@ -109,6 +133,10 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                     TextButton(onClick = component::onCancel) { Text(stringResource(Res.string.action_cancel)) }
                 },
                 actions = {
+                    // Deliberately NOT disabled on `!canSave`. A Save that is
+                    // simply dead tells a rider nothing; tapping it sets
+                    // `saveBlocked`, which prints the banner below and points at
+                    // the source cards that contradict each other.
                     TextButton(onClick = component::onSave, enabled = !state.saving) {
                         if (state.saving) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
                         else Text(stringResource(Res.string.vehicle_save))
@@ -158,30 +186,22 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            // What this vehicle's telemetry actually comes from. A
-            // controller-only vehicle has no BMS at all, so captioning these
-            // rows "BMS" and rendering the form's placeholder default made the
-            // screen assert a JK BMS the vehicle does not have. The VALUE goes
-            // through the one shared vehicleSourceLabel chain (BMS-preferring:
-            // this is the battery-side form, and a vehicle with both sources
-            // must keep naming its BMS); the elvis tail covers only the
-            // create-new case, where there is no vehicle to name yet.
-            val describesController = state.sourceVehicle?.needsDerivedBattery == true
-            ReadOnlyRow(
-                stringResource(
-                    if (describesController) Res.string.vehicle_field_controller_type
-                    else Res.string.vehicle_field_bms_type
-                ),
-                vehicleSourceLabel(state.sourceVehicle, SourcePreference.BMS)
-                    ?: bmsTypeLabel(state.bmsType)
-            )
-            ReadOnlyRow(
-                stringResource(
-                    if (describesController) Res.string.vehicle_field_controller_address
-                    else Res.string.vehicle_field_bms_address
-                ),
-                state.sourceAddress.ifEmpty { "—" }
-            )
+            if (state.canComposeSources) {
+                HorizontalDivider()
+                SourcesSection(state, component)
+            } else {
+                // CREATE only: the picker's prefilled BMS, which is the entire
+                // source set a new vehicle can have from this screen
+                // (`newVehicle` builds the single-pack shape). No draft exists
+                // here, so there are no cards to say it instead.
+                ReadOnlyRow(stringResource(Res.string.vehicle_field_bms_type), bmsTypeLabel(state.bmsType))
+                ReadOnlyRow(
+                    stringResource(Res.string.vehicle_field_bms_address),
+                    state.sourceAddress.ifEmpty { "—" }
+                )
+            }
+
+            HorizontalDivider()
 
             SectionLabel(stringResource(Res.string.vehicle_field_chemistry))
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -192,6 +212,21 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                         onClick = { component.onChemistryChanged(c) },
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = chemistries.size)
                     ) { Text(chemistryLabel(c), fontSize = 12.sp) }
+                }
+            }
+
+            // How the packs are wired (`G §4`). Drives both the aggregation
+            // formulas and what a missing pack means, so it belongs to the
+            // vehicle rather than to any one pack card.
+            SectionLabel(stringResource(Res.string.vehicle_field_topology))
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                val topologies = PackTopology.entries
+                topologies.forEachIndexed { idx, t ->
+                    SegmentedButton(
+                        selected = state.topology == t,
+                        onClick = { component.onTopologyChanged(t) },
+                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = topologies.size)
+                    ) { Text(topologyLabel(t), fontSize = 12.sp) }
                 }
             }
 
@@ -220,32 +255,22 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             // not fit between two numeric fields. Only offered for a SAVED
             // vehicle: the alert screen persists onto a row that must exist.
             if (state.isEditing) {
-                TextButton(
-                    onClick = component::onOpenAlerts,
-                    modifier = Modifier.fillMaxWidth()
-                ) {
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        Text(stringResource(Res.string.alerts_open))
-                        Text(
-                            stringResource(Res.string.alerts_open_subtitle),
-                            fontSize = 11.sp,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                }
+                LinkRow(
+                    title = stringResource(Res.string.alerts_open),
+                    subtitle = stringResource(Res.string.alerts_open_subtitle),
+                    onClick = component::onOpenAlerts
+                )
             }
 
-            // MOTOR — absent (not disabled) for a pack-only vehicle: it has no
-            // controller for these numbers to configure. Manual entry only —
-            // reading them back from the controller (COMM_GET_MCCONF) is
-            // deferred past G1 (G-vehicle-composer.md §4, B-vesc-dashboard.md §11).
-            if (state.hasController) {
-                HorizontalDivider()
-                SectionLabel(stringResource(Res.string.vehicle_section_motor))
-                IntField(stringResource(Res.string.vehicle_field_pole_pairs), state.motorPolePairs, component::onMotorPolePairsChanged)
-                IntField(stringResource(Res.string.vehicle_field_wheel_diameter), state.motorWheelDiameterMm, component::onMotorWheelDiameterChanged)
-                FloatField(stringResource(Res.string.vehicle_field_gear_ratio), state.motorGearRatio, component::onMotorGearRatioChanged)
-            }
+            // km / mi is app-wide (`B §9`), so this is a link to the one screen
+            // that owns it and never a per-vehicle copy of the control — a
+            // second switch writing the same preference would read as
+            // per-vehicle and silently change every other vehicle.
+            LinkRow(
+                title = stringResource(Res.string.units_open),
+                subtitle = stringResource(Res.string.units_open_subtitle),
+                onClick = component::onOpenUnits
+            )
 
             HorizontalDivider()
 
@@ -315,6 +340,102 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
     }
 }
 
+/**
+ * The source list: the refusal banner, one card per source, and the two adds.
+ *
+ * Only rendered while [VehicleEditComponent.State.canComposeSources] — the
+ * create path builds the single-BMS shape through `singlePackVehicle` and never
+ * reads the draft, so an "+ Controller" offered there would take the rider's
+ * work and throw it away at save time. The component refuses those calls too;
+ * this is the half that stops them being offered.
+ */
+@Composable
+private fun SourcesSection(state: VehicleEditComponent.State, component: VehicleEditComponent) {
+    SectionLabel(stringResource(Res.string.vehicle_section_sources))
+
+    // `onSave` refused. Without this the button looked dead: `onSave` returned
+    // with no state change at all, unlike the `nameError` branch beside it.
+    if (state.saveBlocked) {
+        Text(
+            text = stringResource(Res.string.vehicle_save_blocked),
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onErrorContainer,
+            modifier = Modifier
+                .fillMaxWidth()
+                .clip(RoundedCornerShape(8.dp))
+                .background(MaterialTheme.colorScheme.errorContainer)
+                .padding(10.dp)
+        )
+    }
+
+    val issues = state.issuesBySource
+    val links = state.draft.linkAddresses
+
+    state.draft.controllers.forEachIndexed { index, controller ->
+        ControllerSourceCard(
+            draft = controller,
+            index = index,
+            count = state.draft.controllers.size,
+            issues = issues[controller.key].orEmpty(),
+            derivedBattery = state.draft.resolvedDerivedBattery(controller),
+            canRemove = state.canRemoveSource,
+            linkAddresses = links,
+            component = component
+        )
+    }
+    state.draft.packs.forEachIndexed { index, pack ->
+        PackSourceCard(
+            draft = pack,
+            index = index,
+            count = state.draft.packs.size,
+            issues = issues[pack.key].orEmpty(),
+            canRemove = state.canRemoveSource,
+            linkAddresses = links,
+            component = component
+        )
+    }
+
+    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        // The type and the link a new source starts with are only its INITIAL
+        // values — both are editable on the card that appears, so neither is a
+        // decision with a consequence. The link starts blank on purpose rather
+        // than defaulting to the vehicle's existing one: guessing wrong puts a
+        // BMS on the controller's link, which is a BLOCKING conflict the rider
+        // did not ask for, while a blank link is an advisory that says exactly
+        // what is missing — and the card offers every existing link as a chip,
+        // so the two-uBox case is still one tap.
+        OutlinedButton(onClick = { component.onAddController(ControllerType.VESC, "") }) {
+            Text(stringResource(Res.string.vehicle_source_add_controller), fontSize = 12.sp)
+        }
+        OutlinedButton(onClick = { component.onAddPack(BmsType.JK_BMS, "") }) {
+            Text(stringResource(Res.string.vehicle_source_add_pack), fontSize = 12.sp)
+        }
+    }
+}
+
+@Composable
+private fun topologyLabel(topology: PackTopology): String = stringResource(
+    when (topology) {
+        PackTopology.PARALLEL -> Res.string.topology_parallel
+        PackTopology.SERIES -> Res.string.topology_series
+    }
+)
+
+/** A row that goes somewhere else — the two settings this form links to rather than duplicates. */
+@Composable
+private fun LinkRow(title: String, subtitle: String, onClick: () -> Unit) {
+    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.fillMaxWidth()) {
+            Text(title)
+            Text(
+                subtitle,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
 @Composable
 private fun SectionLabel(text: String) {
     Text(
@@ -325,48 +446,3 @@ private fun SectionLabel(text: String) {
         modifier = Modifier.padding(top = 8.dp)
     )
 }
-
-@Composable
-private fun ReadOnlyRow(label: String, value: String) {
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Text(label, fontSize = 12.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Text(value, fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface)
-    }
-}
-
-// The numeric fields keep their own text state: rendering straight from the
-// parsed component value made intermediate input impossible ("3." reparsed to
-// "3.0" mid-typing; any invalid char wiped the field). External value changes
-// (the async initial load) still sync in, but only when they disagree with
-// what the current text parses to — so in-progress typing is never clobbered.
-
-@Composable
-private fun FloatField(label: String, value: Float?, onChange: (Float?) -> Unit) {
-    var text by remember { mutableStateOf(value?.toString() ?: "") }
-    if (value != text.toFloatOrNull()) text = value?.toString() ?: ""
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = it; onChange(it.toFloatOrNull()) },
-        label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
-        modifier = Modifier.fillMaxWidth()
-    )
-}
-
-@Composable
-private fun IntField(label: String, value: Int?, onChange: (Int?) -> Unit) {
-    var text by remember { mutableStateOf(value?.toString() ?: "") }
-    if (value != text.toIntOrNull()) text = value?.toString() ?: ""
-    OutlinedTextField(
-        value = text,
-        onValueChange = { text = it; onChange(it.toIntOrNull()) },
-        label = { Text(label) },
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
-        modifier = Modifier.fillMaxWidth()
-    )
-}
-

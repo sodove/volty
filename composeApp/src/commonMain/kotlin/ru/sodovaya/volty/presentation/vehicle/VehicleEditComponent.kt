@@ -44,9 +44,6 @@ interface VehicleEditComponent {
     fun onTemperatureWarnChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
-    fun onMotorPolePairsChanged(v: Int?)
-    fun onMotorWheelDiameterChanged(v: Int?)
-    fun onMotorGearRatioChanged(v: Float?)
     fun onDashboardStyleChanged(style: DashboardStyle?)
     fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
     /**
@@ -60,6 +57,17 @@ interface VehicleEditComponent {
      * form was in the background are the ones a later save carries forward.
      */
     fun onOpenAlerts()
+
+    /**
+     * Open the app-wide unit setting (km / mi, `B §9`) — Settings, pushed on top
+     * of this form exactly like [onOpenAlerts].
+     *
+     * A **link, not a copy** (`G §4`): the unit system is one app-level
+     * preference, and a per-vehicle control that wrote the same key would read
+     * as a per-vehicle setting and quietly change every other vehicle. Nothing
+     * on this form's state moves, so nothing here can go stale.
+     */
+    fun onOpenUnits()
     fun onSave()
     fun onCancel()
     fun onDelete()
@@ -98,6 +106,21 @@ interface VehicleEditComponent {
     fun onControllerAddressChanged(key: String, address: String)
     fun onControllerCanIdChanged(key: String, canId: Int?)
     fun onControllerMotorChanged(key: String, motor: MotorConfig)
+
+    /**
+     * The three [MotorConfig] numbers, per controller and one field at a time —
+     * the per-source replacement for the flat Motor card G1 left behind, which
+     * was the last positional editor on this screen (it wrote `controllers[0]`).
+     *
+     * Nullable because that is what a cleared text box is, and the value stays
+     * null on the draft until the save resolves it: see [MotorDraft]. That is
+     * the rule the flat card carried, rehomed onto the source it edits — where
+     * it no longer needs a second copy of the numbers in [State] to keep a
+     * cleared box from refilling itself on the next unrelated edit.
+     */
+    fun onControllerPolePairsChanged(key: String, v: Int?)
+    fun onControllerWheelDiameterChanged(key: String, v: Int?)
+    fun onControllerGearRatioChanged(key: String, v: Float?)
 
     /**
      * The rider's word on a controller's derived battery. It is recorded as an
@@ -145,25 +168,6 @@ interface VehicleEditComponent {
         val temperatureWarnC: Float? = 50f,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
-        /**
-         * Whether the Motor section should render at all — true only when the
-         * loaded vehicle has a controller. A pack-only vehicle must not see an
-         * empty motor card, so the screen omits the section entirely rather
-         * than disabling it. Always false while CREATING: this screen never
-         * originates a controller (Picker does), so a new vehicle has none yet.
-         */
-        val hasController: Boolean = false,
-        /**
-         * [ru.sodovaya.volty.domain.model.MotorConfig] fields for
-         * `controllers[0]` — G1 supports exactly one controller per vehicle, so
-         * there is no list editor here (Part G2/C). Nullable to reuse the same
-         * IntField/FloatField empty-input handling as the alert-threshold
-         * fields below; a blank field falls back to `MotorConfig()`'s default
-         * for that field at save time rather than persisting a hole.
-         */
-        val motorPolePairs: Int? = null,
-        val motorWheelDiameterMm: Int? = null,
-        val motorGearRatio: Float? = null,
         /** Null = follow the app-level default. */
         val dashboardStyle: DashboardStyle? = null,
         val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
@@ -206,6 +210,15 @@ interface VehicleEditComponent {
         val canRemoveSource: Boolean get() = draft.canRemoveSource
 
         /**
+         * [issues] indexed by the source card that must show each one — see
+         * [ru.sodovaya.volty.presentation.vehicle.issuesBySource]. A card asks
+         * for its own key; nothing on the screen has to know how an issue
+         * relates to a row.
+         */
+        val issuesBySource: Map<String, List<ComposerIssue>>
+            get() = issuesBySource(draft, issues)
+
+        /**
          * Whether the source list may be edited at all.
          *
          * **False while CREATING**, because the create path builds the
@@ -240,6 +253,8 @@ class DefaultVehicleEditComponent(
     private val onDeleted: () -> Unit,
     /** Defaulted so every existing caller (and test) compiles unchanged. */
     private val onOpenAlertsRequested: () -> Unit = {},
+    /** Defaulted for the same reason as [onOpenAlertsRequested]: navigation only. */
+    private val onOpenUnitsRequested: () -> Unit = {},
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -285,12 +300,6 @@ class DefaultVehicleEditComponent(
                     temperatureWarnC = v.alertConfig.temperatureWarnC,
                     temperatureHighC = v.alertConfig.temperatureHighC,
                     socLowPercent = v.alertConfig.socLowPercent,
-                    // G1: exactly one controller per vehicle, so controllers[0]
-                    // is THE controller — no index to pick.
-                    hasController = v.controllers.isNotEmpty(),
-                    motorPolePairs = v.controllers.firstOrNull()?.motor?.polePairs,
-                    motorWheelDiameterMm = v.controllers.firstOrNull()?.motor?.wheelDiameterMm,
-                    motorGearRatio = v.controllers.firstOrNull()?.motor?.gearRatio,
                     dashboardStyle = v.dashboardStyle,
                     secondaryGauge = v.secondaryGauge,
                     topology = v.topology,
@@ -327,21 +336,24 @@ class DefaultVehicleEditComponent(
     override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
-    override fun onMotorPolePairsChanged(v: Int?) { editMotorField { it.copy(motorPolePairs = v) } }
-    override fun onMotorWheelDiameterChanged(v: Int?) { editMotorField { it.copy(motorWheelDiameterMm = v) } }
-    override fun onMotorGearRatioChanged(v: Float?) { editMotorField { it.copy(motorGearRatio = v) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
     override fun onOpenAlerts() { onOpenAlertsRequested() }
+    override fun onOpenUnits() { onOpenUnitsRequested() }
 
     // ----- The composer -----
 
     /**
-     * Apply a pure draft operation and re-derive everything that follows from
-     * the source set: the issue list, whether a Motor card exists at all, and
-     * the three flat motor fields — which are a **projection of the controller
-     * now at position 0**, so a reorder that moves a different controller there
-     * shows that controller's geometry instead of the previous one's.
+     * Apply a pure draft operation and re-derive what follows from the source
+     * set — which, since G2 Task 3 deleted the flat Motor card, is only the
+     * issue list.
+     *
+     * The three `motorXxx` state fields and their re-pointing rule are gone
+     * with it: they existed because one positional editor showed
+     * `controllers[0]`'s geometry, so a reorder had to re-aim them and a
+     * cleared box had to be defended from being refilled by that re-aiming.
+     * A per-controller card reads its own row, so there is nothing to re-aim
+     * and nothing to defend — see [MotorDraft].
      *
      * [packs] / [controllers] say which half the rider took control of; see
      * [VehicleEditComponent.State.packsEdited].
@@ -355,51 +367,13 @@ class DefaultVehicleEditComponent(
             // Nothing to compose onto while creating — see [State.canComposeSources].
             if (!s.canComposeSources) return@update s
             val d = block(s.draft)
-            val head = d.controllers.firstOrNull()
-            val previousHead = s.draft.controllers.firstOrNull()
-            // Re-point the flat Motor fields ONLY when the geometry they show
-            // actually changed — a different controller moved to the front, or
-            // this one's was edited through the keyed setter. Re-pointing
-            // unconditionally would refill a box the rider had just cleared
-            // (which resolves to MotorConfig()'s default in the draft) the next
-            // time they touched anything else at all.
-            //
-            // Comparing the MotorConfig rather than the row's key is
-            // deliberate: a reorder that brings up a controller with identical
-            // geometry has nothing to re-point, and a key comparison beside
-            // this one could never change the answer.
-            val repoint = head?.motor != previousHead?.motor
             s.copy(
                 draft = d,
                 issues = validate(d),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
-                hasController = d.controllers.isNotEmpty(),
-                saveBlocked = false,
-                motorPolePairs = if (repoint) head?.motor?.polePairs else s.motorPolePairs,
-                motorWheelDiameterMm = if (repoint) head?.motor?.wheelDiameterMm else s.motorWheelDiameterMm,
-                motorGearRatio = if (repoint) head?.motor?.gearRatio else s.motorGearRatio
+                saveBlocked = false
             )
-        }
-    }
-
-    /**
-     * The legacy Motor card's three fields, which edit `controllers[0]` and are
-     * the ONE editor that is positional rather than keyed.
-     *
-     * Unlike [mutateDraft] this does not re-project the fields back off the
-     * draft: they are the source here, and a blanked field must stay blank
-     * while the rider retypes it. It resolves to `MotorConfig()`'s default on
-     * the way into the draft, exactly as the save always has.
-     */
-    private fun editMotorField(edit: (VehicleEditComponent.State) -> VehicleEditComponent.State) {
-        _state.update { s0 ->
-            val s = edit(s0)
-            val d = s.draft.updateControllerAt(0) { it.copy(motor = s.motorConfig()) }
-            // The draft is the ONLY writer of `controllers` (see `withEdits`),
-            // so the flat fields have to mark it edited or the motor edit is
-            // simply dropped.
-            s.copy(draft = d, issues = validate(d), controllersEdited = true)
         }
     }
 
@@ -433,7 +407,15 @@ class DefaultVehicleEditComponent(
     override fun onControllerCanIdChanged(key: String, canId: Int?) =
         mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(canId = canId) } }
     override fun onControllerMotorChanged(key: String, motor: MotorConfig) =
-        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = motor) } }
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = MotorDraft.of(motor)) } }
+
+    override fun onControllerPolePairsChanged(key: String, v: Int?) = editMotor(key) { it.copy(polePairs = v) }
+    override fun onControllerWheelDiameterChanged(key: String, v: Int?) =
+        editMotor(key) { it.copy(wheelDiameterMm = v) }
+    override fun onControllerGearRatioChanged(key: String, v: Float?) = editMotor(key) { it.copy(gearRatio = v) }
+
+    private fun editMotor(key: String, edit: (MotorDraft) -> MotorDraft) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = edit(it.motor)) } }
 
     override fun onControllerDerivedBatteryChanged(key: String, enabled: Boolean) =
         mutateDraft(controllers = true) { d ->
@@ -548,10 +530,9 @@ class DefaultVehicleEditComponent(
  * So an untouched half passes through byte-for-byte — the pack list keeps the
  * long-standing "the vehicle name renames pack 0" coupling (`singlePackVehicle`
  * labels pack 0 after the vehicle and `packLabelFor` shows it verbatim on a
- * single-pack card), and the controller list keeps the positional Motor edit.
- * Once the rider composes that half, it is theirs: the draft carries a label
- * per pack, so the rename coupling stands down rather than overwriting what
- * they typed.
+ * single-pack card). Once the rider composes that half, it is theirs: the draft
+ * carries a label per pack, so the rename coupling stands down rather than
+ * overwriting what they typed.
  *
  * The `packsEdited` switch protects an untouched half *wholesale*; a field that
  * moved inside a source the rider also edited needs the second half of the same
@@ -575,10 +556,10 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
         // case to forget.
         packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
     },
-    // The draft is the ONLY writer of `controllers` — including the flat Motor
-    // card, which writes into draft position 0 (`editMotorField`) rather than
-    // applying itself here. One writer, so there is no second copy of the
-    // "blank field falls back to MotorConfig()'s default" rule to drift.
+    // The draft is the ONLY writer of `controllers`, motor geometry included —
+    // one writer, so there is no second copy of the "blank field falls back to
+    // MotorConfig()'s default" rule to drift (it is stated once, in
+    // `MotorDraft.resolve`).
     //
     // `|| packsEdited` is the derived-battery rule showing through, not a
     // sloppy condition: `providesDerivedBattery` is a function of the PACK set
@@ -602,12 +583,6 @@ private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = 
     temperatureWarnC = s.temperatureWarnC,
     temperatureHighC = s.temperatureHighC,
     socLowPercent = s.socLowPercent
-)
-
-private fun VehicleEditComponent.State.motorConfig(): MotorConfig = MotorConfig(
-    polePairs = motorPolePairs ?: MotorConfig().polePairs,
-    wheelDiameterMm = motorWheelDiameterMm ?: MotorConfig().wheelDiameterMm,
-    gearRatio = motorGearRatio ?: MotorConfig().gearRatio
 )
 
 /**

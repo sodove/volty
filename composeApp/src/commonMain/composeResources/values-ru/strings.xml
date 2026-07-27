@@ -206,6 +206,39 @@
     <string name="vehicle_field_pole_pairs">Пар полюсов</string>
     <string name="vehicle_field_wheel_diameter">Диаметр колеса (мм)</string>
     <string name="vehicle_field_gear_ratio">Передаточное число</string>
+
+    <!-- Composer (G2): a vehicle is N sources -->
+    <string name="vehicle_section_sources">Источники</string>
+    <string name="vehicle_source_controller">Контроллер</string>
+    <string name="vehicle_source_pack">Батарея</string>
+    <string name="vehicle_source_add_controller">+ Контроллер</string>
+    <string name="vehicle_source_add_pack">+ Батарея</string>
+    <string name="vehicle_source_advanced">Дополнительно</string>
+    <string name="vehicle_source_remove">Удалить</string>
+    <string name="vehicle_source_move_up">Выше</string>
+    <string name="vehicle_source_move_down">Ниже</string>
+    <string name="vehicle_field_source_label">Название</string>
+    <string name="vehicle_field_link">Линия (Bluetooth-адрес)</string>
+    <string name="vehicle_field_link_same_as">Та же линия, что и у</string>
+    <string name="vehicle_field_can_id">CAN id</string>
+    <string name="vehicle_field_alias_group">Группа</string>
+    <string name="vehicle_field_cell_count_auto">Ячеек (из телеметрии)</string>
+    <string name="vehicle_field_derived_battery">Батарея по данным контроллера</string>
+    <string name="vehicle_field_derived_battery_caption">По умолчанию включено, пока у транспорта нет своей BMS.</string>
+    <string name="vehicle_field_topology">Соединение батарей</string>
+    <string name="topology_parallel">Параллельно</string>
+    <string name="topology_series">Последовательно</string>
+    <string name="units_open">Единицы (км / мили)</string>
+    <string name="units_open_subtitle">Общая настройка приложения, одна на все транспорты</string>
+    <string name="vehicle_save_blocked">Нельзя сохранить: настройки ниже противоречат друг другу. Исправьте источники, отмеченные красным.</string>
+    <string name="composer_issue_conflicting_kinds">На этой линии уже другой протокол. Одна Bluetooth-линия говорит на одном протоколе.</string>
+    <string name="composer_issue_duplicate_can_id">CAN id %1$d занят на этой линии дважды.</string>
+    <string name="composer_issue_ambiguous_gateway">Больше одного источника выдаёт себя за саму приборку. Задайте остальным CAN id.</string>
+    <string name="composer_issue_blank_address">Линия не указана — подключиться к этому источнику невозможно.</string>
+    <string name="composer_issue_no_decoder">%1$s пока не читается — сохранить можно, но подключения не будет.</string>
+    <string name="composer_issue_hostless_vesc_bms">VESC BMS читается только через VESC-контроллер на той же линии.</string>
+    <string name="composer_issue_unroutable_gateway">Несколько источников по одной линии умеет вести только VESC — остальные останутся офлайн.</string>
+
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_field_secondary_gauge_caption">Только для стиля Clean — Classic показывает все индикаторы сразу.</string>

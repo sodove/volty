@@ -460,7 +460,15 @@ class DefaultRootComponent(
                         // VehicleEditScreen hides the entry while creating.
                         onOpenAlertsRequested = {
                             config.vehicleId?.let { id -> nav.push(Config.VehicleAlerts(id)) }
-                        }
+                        },
+                        // The km/mi setting is app-wide (B §9), so the composer
+                        // links to the one screen that owns it instead of
+                        // growing a per-vehicle copy (G §4). push() for the same
+                        // reason as the alerts screen: the half-filled form
+                        // stays alive underneath and comes back intact, and
+                        // shouldPopOnBack() already pops a Settings entry that
+                        // has something beneath it.
+                        onOpenUnitsRequested = { nav.push(Config.Settings) }
                     )
                 )
             }

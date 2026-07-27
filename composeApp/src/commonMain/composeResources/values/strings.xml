@@ -208,6 +208,39 @@
     <string name="vehicle_field_pole_pairs">Pole pairs</string>
     <string name="vehicle_field_wheel_diameter">Wheel diameter (mm)</string>
     <string name="vehicle_field_gear_ratio">Gear ratio</string>
+
+    <!-- Composer (G2): a vehicle is N sources -->
+    <string name="vehicle_section_sources">Sources</string>
+    <string name="vehicle_source_controller">Controller</string>
+    <string name="vehicle_source_pack">Battery</string>
+    <string name="vehicle_source_add_controller">+ Controller</string>
+    <string name="vehicle_source_add_pack">+ Battery</string>
+    <string name="vehicle_source_advanced">Advanced</string>
+    <string name="vehicle_source_remove">Remove</string>
+    <string name="vehicle_source_move_up">Move up</string>
+    <string name="vehicle_source_move_down">Move down</string>
+    <string name="vehicle_field_source_label">Label</string>
+    <string name="vehicle_field_link">Link (Bluetooth address)</string>
+    <string name="vehicle_field_link_same_as">Same link as</string>
+    <string name="vehicle_field_can_id">CAN id</string>
+    <string name="vehicle_field_alias_group">Alias group</string>
+    <string name="vehicle_field_cell_count_auto">Cells (from telemetry)</string>
+    <string name="vehicle_field_derived_battery">Battery from this controller</string>
+    <string name="vehicle_field_derived_battery_caption">On by default while the vehicle has no BMS of its own.</string>
+    <string name="vehicle_field_topology">Battery wiring</string>
+    <string name="topology_parallel">Parallel</string>
+    <string name="topology_series">Series</string>
+    <string name="units_open">Units (km / mi)</string>
+    <string name="units_open_subtitle">App-wide setting, shared by every vehicle</string>
+    <string name="vehicle_save_blocked">Cannot save: two settings below contradict each other. Fix the sources marked in red.</string>
+    <string name="composer_issue_conflicting_kinds">This link already carries a different protocol. One Bluetooth link speaks one protocol.</string>
+    <string name="composer_issue_duplicate_can_id">CAN id %1$d is claimed twice on this link.</string>
+    <string name="composer_issue_ambiguous_gateway">More than one source here claims to be the gateway itself. Give the others a CAN id.</string>
+    <string name="composer_issue_blank_address">No link yet, so this source can never be connected.</string>
+    <string name="composer_issue_no_decoder">%1$s cannot be read yet — it saves, but it will not connect.</string>
+    <string name="composer_issue_hostless_vesc_bms">A VESC BMS can only be read through a VESC controller on the same link.</string>
+    <string name="composer_issue_unroutable_gateway">Only VESC can carry several sources over one link, so the extra ones will stay offline.</string>
+
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_field_secondary_gauge_caption">Clean style only — Classic shows every gauge at once.</string>

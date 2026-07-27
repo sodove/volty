@@ -388,9 +388,10 @@ class VehicleEditComponentTest {
         c.onTemperatureWarnChanged(41f)
         c.onTemperatureHighChanged(61f)
         c.onSocLowChanged(9)
-        c.onMotorPolePairsChanged(7)
-        c.onMotorWheelDiameterChanged(200)
-        c.onMotorGearRatioChanged(2.5f)
+        val motorKey = c.state.value.draft.controllers.single().key
+        c.onControllerPolePairsChanged(motorKey, 7)
+        c.onControllerWheelDiameterChanged(motorKey, 200)
+        c.onControllerGearRatioChanged(motorKey, 2.5f)
         c.onDashboardStyleChanged(DashboardStyle.CLEAN)
         c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY)
         c.onSave()
@@ -424,17 +425,19 @@ class VehicleEditComponentTest {
     }
 
     /**
-     * The half of the motor edit that is a restriction, not an application: G1
-     * gives a vehicle exactly one controller and this screen edits
-     * `controllers[0]`'s [MotorConfig] only. A save must not spray the form's
-     * three numbers across every controller a vehicle happens to carry.
+     * The half of the motor edit that is a restriction, not an application: a
+     * vehicle with two motors has two different wheels, and editing one row's
+     * geometry must not spray it across the other.
      *
-     * No UI creates a two-controller vehicle yet — [Vehicle] has always allowed
-     * one, and Part G2 is about to start building them, so the rule the code
-     * states is worth holding to before it has a screen behind it.
+     * This used to be the *only* thing keeping the flat Motor card honest,
+     * because that card was positional — it wrote `controllers[0]` whatever the
+     * rider believed they were editing. G2 Task 3 replaced it with a card per
+     * controller, so the rule is now structural (a keyed setter cannot reach a
+     * row it was not given) rather than a guard; the test is kept because
+     * "structural" is a claim, and this is what falsifies it.
      */
     @Test
-    fun `the motor edit reaches controller 0 only`() = runTest {
+    fun `the motor edit reaches only the controller it names`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val second = Controller(
             index = 1,
@@ -447,13 +450,48 @@ class VehicleEditComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
-        c.onMotorPolePairsChanged(7)
+        c.onControllerPolePairsChanged(c.state.value.draft.controllers[0].key, 7)
         c.onSave()
         advanceUntilIdle()
 
         val saved = repo.upserts.single()
         assertEquals(7, saved.controllers[0].motor.polePairs, "the edited controller")
         assertEquals(second, saved.controllers[1], "and the other one untouched, motor included")
+    }
+
+    /**
+     * The whole per-controller motor editor, one field at a time and on the
+     * **second** controller — the row the deleted flat card could never reach,
+     * since it wrote position 0 unconditionally.
+     */
+    @Test
+    fun `each motor field is editable per controller`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val second = Controller(
+            index = 1,
+            label = "Rear",
+            controllerType = ControllerType.VESC,
+            address = "CC:DD",
+            motor = MotorConfig(polePairs = 4, wheelDiameterMm = 300, gearRatio = 2f)
+        )
+        val repo = FakeVehicleRepo(listOf(existingVehicle().copy(controllers = originalControllers + second)))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val rear = c.state.value.draft.controllers[1].key
+        c.onControllerPolePairsChanged(rear, 8)
+        c.onControllerWheelDiameterChanged(rear, 150)
+        c.onControllerGearRatioChanged(rear, 2.25f)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(MotorConfig(polePairs = 8, wheelDiameterMm = 150, gearRatio = 2.25f), saved.controllers[1].motor)
+        assertEquals(
+            MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f),
+            saved.controllers[0].motor,
+            "and controller 0 — the one the flat card used to write — is untouched"
+        )
     }
 
     /**
@@ -754,15 +792,13 @@ class VehicleEditComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
-        // Sanity: the form loaded the controller's current motor config.
-        assertEquals(true, c.state.value.hasController)
-        assertEquals(21, c.state.value.motorPolePairs)
-        assertEquals(500, c.state.value.motorWheelDiameterMm)
-        assertEquals(3.5f, c.state.value.motorGearRatio)
+        // Sanity: the card loaded the controller's current motor config.
+        val key = c.state.value.draft.controllers.single().key
+        assertEquals(MotorDraft(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f), c.state.value.draft.controllers.single().motor)
 
-        c.onMotorPolePairsChanged(7)
-        c.onMotorWheelDiameterChanged(200)
-        c.onMotorGearRatioChanged(2.5f)
+        c.onControllerPolePairsChanged(key, 7)
+        c.onControllerWheelDiameterChanged(key, 200)
+        c.onControllerGearRatioChanged(key, 2.5f)
         c.onSave()
         advanceUntilIdle()
 
@@ -798,15 +834,13 @@ class VehicleEditComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
-        // Sanity: the form loaded the controller's current motor config.
-        assertEquals(true, c.state.value.hasController)
-        assertEquals(21, c.state.value.motorPolePairs)
-        assertEquals(500, c.state.value.motorWheelDiameterMm)
-        assertEquals(3.5f, c.state.value.motorGearRatio)
+        // Sanity: the card loaded the controller's current motor config.
+        val key = c.state.value.draft.controllers.single().key
+        assertEquals(MotorDraft(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f), c.state.value.draft.controllers.single().motor)
 
-        c.onMotorPolePairsChanged(7)
-        c.onMotorWheelDiameterChanged(200)
-        c.onMotorGearRatioChanged(2.5f)
+        c.onControllerPolePairsChanged(key, 7)
+        c.onControllerWheelDiameterChanged(key, 200)
+        c.onControllerGearRatioChanged(key, 2.5f)
         c.onSave()
         advanceUntilIdle()
 
@@ -821,40 +855,55 @@ class VehicleEditComponentTest {
     }
 
     /**
-     * Blanking a motor field (as IntField/FloatField do when the text can't
-     * parse — see that pattern for cellHighV etc.) must fall back to
+     * **The rule the deleted flat Motor card carried, rehomed.**
+     *
+     * Blanking a motor field (as IntField/FloatField do when the text cannot
+     * parse — see that pattern for cellHighV) must fall back to
      * `MotorConfig()`'s own default, not silently persist a zero or the
      * pre-edit value. Starting from a non-default 9 and clearing it makes a
-     * fallback-to-zero or fallback-to-stale-9 bug equally visible: only the
-     * real default (15) satisfies the assertion.
+     * fallback-to-zero and a fallback-to-stale-9 equally visible: only the real
+     * default (15) satisfies the assertion.
+     *
+     * Both halves matter and they pull opposite ways. The **draft** must keep
+     * the blank as `null` — `IntField` re-syncs its text from the value it is
+     * handed, so a draft that resolved the blank to 15 on the spot would type
+     * 15 straight back into the box the rider had just cleared — while the
+     * **save** must resolve it. That is the whole of why [MotorDraft] has
+     * nullable fields and one `resolve()`.
      */
     @Test
-    fun `blanking a motor field falls back to MotorConfig's default`() = runTest {
+    fun `a blanked motor field stays blank and saves MotorConfig's default`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeVehicleRepo(listOf(existingVehicle()))
         val c = component(repo)
         advanceUntilIdle()
 
-        c.onMotorPolePairsChanged(9)
-        c.onMotorPolePairsChanged(null) // user cleared the field
-        // The field must STAY cleared while the rider retypes it. The three
-        // motor fields are a projection of draft controller 0 everywhere else
-        // (a reorder re-points them), and re-projecting them here would refill
-        // the box with the 15 the draft resolved the blank to.
-        assertEquals(null, c.state.value.motorPolePairs, "a cleared field must not refill itself")
+        val key = c.state.value.draft.controllers.single().key
+        c.onControllerPolePairsChanged(key, 9)
+        c.onControllerPolePairsChanged(key, null) // user cleared the field
+        assertEquals(
+            null,
+            c.state.value.draft.controllers.single().motor.polePairs,
+            "a cleared field must not refill itself while the rider retypes it"
+        )
+        assertEquals(
+            500,
+            c.state.value.draft.controllers.single().motor.wheelDiameterMm,
+            "and clearing one field must not disturb its neighbours"
+        )
         c.onSave()
         advanceUntilIdle()
 
         val saved = repo.upserts.single()
         assertEquals(MotorConfig().polePairs, saved.controllers.single().motor.polePairs)
+        assertEquals(500, saved.controllers.single().motor.wheelDiameterMm)
     }
 
     /**
-     * `hasController` — the flag the screen uses to decide whether the Motor
-     * section renders at all — must be false for a pack-only vehicle, and
-     * saving it unchanged must not fabricate a controller (mapIndexed over an
-     * empty list stays empty). No Compose test harness exists, so this is the
-     * reachable assertion for "the fields are absent, not merely disabled."
+     * A pack-only vehicle has no controller card to render, and saving it
+     * unchanged must not fabricate one (mapIndexed over an empty list stays
+     * empty). No Compose test harness exists, so the draft's own controller
+     * list is the reachable assertion for "there are no controller cards".
      */
     @Test
     fun `a pack-only vehicle has no controller to configure, and saving fabricates none`() = runTest {
@@ -864,10 +913,7 @@ class VehicleEditComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
-        assertEquals(false, c.state.value.hasController)
-        assertEquals(null, c.state.value.motorPolePairs)
-        assertEquals(null, c.state.value.motorWheelDiameterMm)
-        assertEquals(null, c.state.value.motorGearRatio)
+        assertEquals(emptyList(), c.state.value.draft.controllers)
 
         c.onSave()
         advanceUntilIdle()
@@ -1225,13 +1271,17 @@ class VehicleEditComponentTest {
     }
 
     /**
-     * The flat Motor card edits `controllers[0]` positionally, so a reorder
-     * that moves a different controller to the front must re-point the three
-     * fields at it — otherwise the rider edits one controller's geometry while
-     * reading another's.
+     * A reorder renumbers the saved indices, and each controller's geometry
+     * must travel with its own row rather than staying at a position.
+     *
+     * This is the test that used to assert the opposite-looking thing: while
+     * the flat Motor card existed it had to *re-point* at whatever controller a
+     * reorder brought to the front, which is the wart Task 3 deleted. Now the
+     * card is the row, so the second half — editing by key after the reorder —
+     * is what proves nothing is still addressing position 0.
      */
     @Test
-    fun `the motor fields follow the controller a reorder moves to the front`() = runTest {
+    fun `a reorder carries each controller's geometry with its own row`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val rear = Controller(
             index = 1,
@@ -1243,19 +1293,24 @@ class VehicleEditComponentTest {
         val repo = FakeVehicleRepo(listOf(existingVehicle().copy(controllers = originalControllers + rear)))
         val c = component(repo)
         advanceUntilIdle()
-        assertEquals(21, c.state.value.motorPolePairs, "controller 0's geometry")
+        val mainKey = c.state.value.draft.controllers[0].key
 
         c.onMoveController(1, 0)
-        assertEquals(4, c.state.value.motorPolePairs, "now the front controller's")
-        assertEquals(300, c.state.value.motorWheelDiameterMm)
-        assertEquals(2f, c.state.value.motorGearRatio)
+        assertEquals(
+            listOf(4, 21),
+            c.state.value.draft.controllers.map { it.motor.polePairs },
+            "the rear controller is now first, and brought its own geometry"
+        )
+        // Editing by key after the reorder: "Main" is at position 1 now, and the
+        // edit must land on it rather than on whatever sits at position 0.
+        c.onControllerPolePairsChanged(mainKey, 6)
 
         c.onSave()
         advanceUntilIdle()
         val saved = repo.upserts.single()
         assertEquals(listOf("Rear", "Main"), saved.controllers.map { it.label })
         assertEquals(
-            listOf(MotorConfig(4, 300, 2f), MotorConfig(21, 500, 3.5f)),
+            listOf(MotorConfig(4, 300, 2f), MotorConfig(6, 500, 3.5f)),
             saved.controllers.map { it.motor },
             "each controller keeps its own geometry across the reorder"
         )
@@ -1287,9 +1342,6 @@ class VehicleEditComponentTest {
         c.onControllerAddressChanged(ck, "WH:01")
         c.onControllerCanIdChanged(ck, null)
         c.onControllerMotorChanged(ck, MotorConfig(polePairs = 3, wheelDiameterMm = 100, gearRatio = 1.5f))
-        // The keyed motor setter and the flat Motor card describe the same
-        // controller while both exist, so editing one must re-point the other.
-        assertEquals(3, c.state.value.motorPolePairs, "the flat Motor card follows the keyed setter")
         c.onSave()
         advanceUntilIdle()
 
@@ -1388,11 +1440,13 @@ class VehicleEditComponentTest {
     }
 
     /**
-     * The flat Motor fields are re-pointed when the controller they describe
-     * changes — a reorder, or the keyed motor setter — and **only** then. An
-     * unrelated source edit must not refill a box the rider has just cleared:
-     * the draft resolved that blank to `MotorConfig()`'s default, and pushing
-     * it back into the field takes the edit away mid-typing.
+     * A cleared motor box must survive an edit somewhere else on the form.
+     *
+     * This was a real wart while the flat Motor card existed: its three fields
+     * were re-projected off draft controller 0 on **any** structural change, so
+     * adding a pack refilled a box the rider had just emptied with the 15 the
+     * draft had resolved it to. Deleting the card removes the mechanism; this
+     * pins that no replacement re-projection grew back.
      */
     @Test
     fun `a cleared motor field survives an unrelated source edit`() = runTest {
@@ -1401,28 +1455,89 @@ class VehicleEditComponentTest {
         val c = component(repo)
         advanceUntilIdle()
 
-        c.onMotorPolePairsChanged(null)
+        val key = c.state.value.draft.controllers.single().key
+        c.onControllerPolePairsChanged(key, null)
         c.onAddPack(BmsType.ANT_BMS, "AN:09")
-        assertEquals(null, c.state.value.motorPolePairs, "an unrelated edit must not refill it")
-        assertEquals(500, c.state.value.motorWheelDiameterMm, "and must not disturb the others")
+        val motor = c.state.value.draft.controllers.single().motor
+        assertEquals(null, motor.polePairs, "an unrelated edit must not refill it")
+        assertEquals(500, motor.wheelDiameterMm, "and must not disturb the others")
     }
 
     /**
-     * Adding the first controller to a pack-only vehicle must switch the Motor
-     * card on — `hasController` is a projection of the draft, not of the row
-     * that was loaded.
+     * A controller added by hand starts from `MotorConfig()`'s own defaults
+     * rather than from three empty boxes: a blank is reserved for "the rider
+     * cleared this", and a card that opened blank would ask them to re-type a
+     * number the save was going to supply anyway.
      */
     @Test
-    fun `adding a controller reveals the motor section`() = runTest {
+    fun `an added controller starts from MotorConfig's defaults`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val packOnly = existingVehicle().copy(controllers = emptyList())
-        val c = component(FakeVehicleRepo(listOf(packOnly)))
+        val repo = FakeVehicleRepo(listOf(packOnly))
+        val c = component(repo)
         advanceUntilIdle()
-        assertEquals(false, c.state.value.hasController)
+        assertEquals(emptyList(), c.state.value.draft.controllers)
 
         c.onAddController(ControllerType.VESC, "VE:01")
-        assertEquals(true, c.state.value.hasController)
-        assertEquals(MotorConfig().polePairs, c.state.value.motorPolePairs)
+        assertEquals(MotorDraft.of(MotorConfig()), c.state.value.draft.controllers.single().motor)
+
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(MotorConfig(), repo.upserts.single().controllers.single().motor)
+    }
+
+    /**
+     * Every issue must reach the card the rider has to edit, which for the three
+     * per-address ones means re-walking the draft — see [affectedKeys]. The
+     * component only has to expose it; the mapping itself is pinned in
+     * `VehicleComposerTest`.
+     */
+    @Test
+    fun `a blocking issue is reported on both of the sources that contradict`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(controllerOnlyVehicle())))
+        advanceUntilIdle()
+
+        c.onAddPack(BmsType.JK_BMS, "AA:BB") // the controller's own link
+        val controllerKey = c.state.value.draft.controllers.single().key
+        val packKey = c.state.value.draft.packs.single().key
+        val bySource = c.state.value.issuesBySource
+
+        assertEquals(
+            listOf(controllerKey, packKey).toSet(),
+            bySource.keys,
+            "a conflict names a link, and both sources on it must say so"
+        )
+        assertTrue(bySource.getValue(controllerKey).all { it is ComposerIssue.ConflictingKinds })
+        assertTrue(bySource.getValue(packKey).all { it is ComposerIssue.ConflictingKinds })
+    }
+
+    /**
+     * The units link (`B §9`) is navigation and nothing else — no state on this
+     * form moves, so there is nothing to go stale while Settings is on top of
+     * it. Same shape as [VehicleEditComponent.onOpenAlerts].
+     */
+    @Test
+    fun `the units link navigates and touches no state`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var opened = 0
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = DefaultVehicleEditComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            vehicleId = "v1",
+            vehicleRepository = repo,
+            bmsRepository = FakeBmsRepo(),
+            onSaved = {},
+            onCancelled = {},
+            onDeleted = {},
+            onOpenUnitsRequested = { opened++ }
+        )
+        advanceUntilIdle()
+        val before = c.state.value
+
+        c.onOpenUnits()
+        assertEquals(1, opened)
+        assertEquals(before, c.state.value, "a link must not touch the form")
     }
 }
 
