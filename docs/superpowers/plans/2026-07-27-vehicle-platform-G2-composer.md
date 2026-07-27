@@ -242,3 +242,33 @@ across several sources.
 
 Left out of Task 3 deliberately — every real fix crosses component boundaries,
 and widening a screen task into a navigation task is how scope creep starts.
+
+### Task 4 gains: the phantom head-unit controller (2026-07-27)
+
+Found in Task 5, and its harm was understated there before review corrected it.
+
+The picker creates a **controller row for the head unit** with `canId == null`. On
+the product owner's scooter the head unit is a **display, not an ESC**, so that
+row polls a motor that does not exist — and nothing prompts him to remove it.
+
+It is not merely useless:
+
+- `MotionAggregator` folds `inputVoltageV` with `average()`. If the Express
+  answers `GET_VALUES` with a 0 V rail, a three-controller vehicle reports **two
+  thirds of its real pack voltage** on the dashboard, and that number feeds the
+  alert engine — `G §9.3`'s open defect class, reached by an ordinary setup.
+- If it answers nothing it stays offline and is correctly excluded from the fold,
+  but `MotionResult.partial` is permanently true, the gateway burns a reply
+  timeout on it every cycle, and it becomes **a permanently-silent extra source
+  on the head-unit link** — exactly the precondition a timed-out CAN scan needs
+  to trip the 5 s stale-sample watchdog. The row *manufactures* that hazard.
+
+So Task 4 adds an advisory to `validate`: a controller that is a gateway (null
+`canId` on a link that carries CAN-addressed sources) and has never reported
+motion is probably a display, not an ESC. Advisory, not blocking — a head unit
+that *is* an ESC is a legitimate build.
+
+**Before implementing, ask what the hardware actually does:** whether the head
+unit answers `GET_VALUES` at all, and with what `inputVoltageV`. That decides
+whether this is a wrong dashboard voltage or merely a wasted poll, and the answer
+changes the wording of the advisory.
