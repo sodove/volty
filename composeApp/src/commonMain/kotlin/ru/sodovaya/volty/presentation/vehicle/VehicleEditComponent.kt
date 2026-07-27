@@ -18,7 +18,13 @@ import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.CanDiscovery
+import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.presentation.picker.ScannedAdd
+import ru.sodovaya.volty.presentation.picker.addBmsType
+import ru.sodovaya.volty.presentation.picker.addControllerType
+import ru.sodovaya.volty.presentation.picker.withScanHit
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -26,6 +32,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.random.Random
@@ -131,6 +138,54 @@ interface VehicleEditComponent {
 
     fun onTopologyChanged(topology: PackTopology)
 
+    // ----- Discovery (G2 Task 5): the composer learns an address -----
+    //
+    // Until this task, adding a second source meant typing a BLE MAC by hand,
+    // which made `G §3`'s second flow painful and its third and fourth
+    // impossible. Two ways in, and neither of them auto-adds anything:
+    //
+    //  - a BLE SCAN, which is the picker's own `BmsRepository.scanAll()` — one
+    //    scanner, shared, see `presentation/picker/SourceScan.kt`;
+    //  - CAN DISCOVERY behind a connected gateway (`ComposerCanDiscovery.kt`).
+
+    /**
+     * Open the scan sheet and start collecting. Idempotent: a second call while
+     * the sheet is open does not start a second collector.
+     */
+    fun onStartDeviceScan()
+
+    /** Close the sheet and cancel the scan. A scan must not outlive the sheet. */
+    fun onStopDeviceScan()
+
+    /**
+     * Add [device] to the draft as [add] — the whole point of the scan, and the
+     * only thing that ever writes a scanned address into the draft.
+     * [ScannedAdd.WHEEL] is `G §3` flow 3: one add, two sources, one link.
+     */
+    fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
+
+    /**
+     * Run one `PING_CAN` against [State.canScanTarget].
+     *
+     * **Refused while one is running**, because the firmware silently discards a
+     * second `PING_CAN` inside its ~2.5 s window and answers neither
+     * (`C §10.2`) — a rider who tapped twice would wait out a window that can
+     * never reply. Refused too when there is no target: the screen says so
+     * rather than offering a scan it cannot perform.
+     */
+    fun onDiscoverCanDevices()
+
+    /**
+     * Add one discovered CAN device. [asBattery] chooses which half — a raw CAN
+     * id says nothing about what the node is, so the rider does.
+     *
+     * Never called by discovery itself (`G §3`: never auto-add).
+     */
+    fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean)
+
+    /** Dismiss the scan result — the offers, not the sources already added. */
+    fun onDismissCanScan()
+
     data class State(
         val isEditing: Boolean = false,
         val name: String = "",
@@ -204,7 +259,24 @@ interface VehicleEditComponent {
          * to the source set, which is the only thing that can fix it.
          */
         val saveBlocked: Boolean = false,
-        val saving: Boolean = false
+        val saving: Boolean = false,
+
+        // ----- Discovery (G2 Task 5) -----
+
+        /** Whether the scan sheet is open. The scan runs only while it is. */
+        val scanning: Boolean = false,
+        /** Devices this scan has seen, first-appearance order — see `withScanHit`. */
+        val scannedDevices: List<DiscoveredDevice> = emptyList(),
+        /**
+         * The link a CAN scan would run against, or null when there is none
+         * (nothing connected, or nothing VESC in the draft). Recomputed from the
+         * live connection and the draft — see [canScanTarget]. **Null is a
+         * sentence, not a disabled button**: the screen says "connect to the
+         * head unit first" rather than offering a scan that cannot work.
+         */
+        val canScanTarget: String? = null,
+        /** Where a `PING_CAN` stands — see [CanScanState]. */
+        val canScan: CanScanState = CanScanState.Idle
     ) {
         /** See [VehicleDraft.canRemoveSource]. False while creating (no draft). */
         val canRemoveSource: Boolean get() = draft.canRemoveSource
@@ -246,6 +318,27 @@ interface VehicleEditComponent {
          * anything that wants to ask *before* the tap; nothing does today.
          */
         val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
+
+        /**
+         * The offers from the last successful CAN scan, derived on read.
+         *
+         * Derived rather than stored because `alreadyAdded` changes on every add
+         * — a stored list would keep offering a uBox the rider has just taken,
+         * and a second tap on it is `DuplicateCanId`. [CanScanState.Found]
+         * therefore carries only the raw ids the wire gave us.
+         *
+         * Empty whenever there is no result to show, including while a scan is
+         * running: an empty LIST from a successful scan is still one row (the
+         * hosted battery, which no probe can report), so the screen tells
+         * "nothing on the bus" from "not scanned" by looking at [canScan], never
+         * at this being empty.
+         */
+        val canCandidates: List<CanCandidate>
+            get() {
+                val found = canScan as? CanScanState.Found ?: return emptyList()
+                val target = canScanTarget ?: return emptyList()
+                return canCandidates(draft, target, found.ids)
+            }
     }
 }
 
@@ -262,6 +355,16 @@ class DefaultVehicleEditComponent(
     private val onOpenAlertsRequested: () -> Unit = {},
     /** Defaulted for the same reason as [onOpenAlertsRequested]: navigation only. */
     private val onOpenUnitsRequested: () -> Unit = {},
+    /**
+     * CAN discovery (G2 Task 5), or null when this build has none.
+     *
+     * Its own interface rather than another `BmsRepository` member — see
+     * [CanDiscovery] — and nullable rather than defaulted to a stub that always
+     * fails, because [VehicleEditComponent.State.canScanTarget] must be able to
+     * say "this screen cannot scan" without pretending to try. Null is also what
+     * the eleven existing `BmsRepository` fakes get for free.
+     */
+    private val canDiscovery: CanDiscovery? = null,
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -272,9 +375,33 @@ class DefaultVehicleEditComponent(
     private val _state = MutableStateFlow(VehicleEditComponent.State())
     override val state: StateFlow<VehicleEditComponent.State> = _state.asStateFlow()
 
+    /**
+     * The addresses currently up, refreshed by the collector in `init`.
+     *
+     * Kept off [VehicleEditComponent.State] because it is an input to
+     * [canScanTarget], not something the screen renders — and because it changes
+     * on every connection event, which would otherwise recompose the whole form
+     * for a fact only one button reads.
+     */
+    private var liveAddresses: Set<String> = emptySet()
+
+    /** The BLE scan behind the sheet, alive only while the sheet is open. */
+    private var scanJob: Job? = null
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
         scope.launch { initialize() }
+        // A CAN scan needs a live link, and whether there is one changes under
+        // the form: the rider can arrive here connected, drop, or reconnect. The
+        // button follows, rather than being decided once at load.
+        scope.launch {
+            combine(bmsRepository.connectionState, bmsRepository.activeVehicle) { st, v ->
+                liveLinkAddresses(v, st)
+            }.collect { addresses ->
+                liveAddresses = addresses
+                _state.update { it.copy(canScanTarget = canScanTarget(it.draft, addresses)) }
+            }
+        }
     }
 
     private suspend fun initialize() {
@@ -316,7 +443,13 @@ class DefaultVehicleEditComponent(
                     // a config that cannot connect should say so on open, not
                     // only after an edit.
                     draft = draftOf(v),
-                    issues = validate(draftOf(v))
+                    issues = validate(draftOf(v)),
+                    // Seeded here as well as by the connection collector: a
+                    // rider who arrives already connected (which is the whole of
+                    // `G §3` flow 4 — the picker connects, then navigates
+                    // straight here) would otherwise see no scan button until
+                    // the next connection event, and there may never be one.
+                    canScanTarget = canScanTarget(draftOf(v), liveAddresses)
                 )
                 return
             }
@@ -379,7 +512,11 @@ class DefaultVehicleEditComponent(
                 issues = validate(d),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
-                saveBlocked = false
+                saveBlocked = false,
+                // Also derived from the draft: editing a controller's address
+                // (or removing it) changes whether anything VESC of this
+                // vehicle's is on a live link.
+                canScanTarget = canScanTarget(d, liveAddresses)
             )
         }
     }
@@ -439,6 +576,119 @@ class DefaultVehicleEditComponent(
 
     override fun onTopologyChanged(topology: PackTopology) {
         _state.update { it.copy(topology = topology) }
+    }
+
+    // ----- Discovery (G2 Task 5) -----
+
+    override fun onStartDeviceScan() {
+        // Guarded on the JOB, not on `scanning`: two taps landing before the
+        // first recomposition would otherwise start two collectors on one flow
+        // and every hit would be folded twice.
+        if (scanJob?.isActive == true) return
+        _state.update { it.copy(scanning = true, scannedDevices = emptyList()) }
+        scanJob = scope.launch {
+            // The picker's scanner, unchanged — one BLE scan in this app. What
+            // is shared beyond it is the labelling and the fold, in
+            // `presentation/picker/SourceScan.kt`.
+            bmsRepository.scanAll().collect { dev ->
+                _state.update { it.copy(scannedDevices = it.scannedDevices.withScanHit(dev)) }
+            }
+        }
+    }
+
+    override fun onStopDeviceScan() {
+        scanJob?.cancel()
+        scanJob = null
+        // The list is dropped with the sheet: a scan is a live view of what is
+        // in range, and rows kept from a previous sheet are stale the moment it
+        // closes.
+        _state.update { it.copy(scanning = false, scannedDevices = emptyList()) }
+    }
+
+    /**
+     * The one writer of a scanned address into the draft.
+     *
+     * The types come off the device's own detection ([addControllerType] /
+     * [addBmsType]), which is what makes a Begode arrive as a Begode on both
+     * halves of a wheel add rather than as a VESC beside a JK.
+     *
+     * Exhaustive over [ScannedAdd] with no `else`.
+     */
+    override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) {
+        val label = device.name.orEmpty()
+        when (add) {
+            ScannedAdd.CONTROLLER ->
+                mutateDraft(controllers = true) {
+                    it.addController(device.addControllerType(), device.address, label)
+                }
+            ScannedAdd.BATTERY ->
+                mutateDraft(packs = true) { it.addPack(device.addBmsType(), device.address, label) }
+            // Both halves, so BOTH edited flags: a wheel add writes a pack and a
+            // controller, and `withEdits` must carry both lists.
+            ScannedAdd.WHEEL ->
+                mutateDraft(packs = true, controllers = true) {
+                    it.addWheel(device.addControllerType(), device.addBmsType(), device.address, label)
+                }
+        }
+    }
+
+    override fun onDiscoverCanDevices() {
+        val s = _state.value
+        // The two refusals, both stated on [VehicleEditComponent.onDiscoverCanDevices]:
+        // no second scan inside the firmware's ~2.5 s window (it would be
+        // silently discarded), and no scan without a live gateway to ask.
+        if (s.canScan is CanScanState.Running) return
+        val target = s.canScanTarget ?: return
+        val discovery = canDiscovery ?: return
+        scope.launch {
+            // Entered BEFORE suspending and left only when the call returns, so
+            // a spinner bound to it runs for the whole window — the firmware
+            // blocks ~2.55 s and shows nothing of its own.
+            _state.update { it.copy(canScan = CanScanState.Running) }
+            val result = discovery.discoverCanIds(target)
+            _state.update {
+                it.copy(
+                    canScan = result.fold(
+                        onSuccess = { ids -> CanScanState.Found(ids) },
+                        onFailure = { e -> CanScanState.Failed(e.message) }
+                    )
+                )
+            }
+        }
+    }
+
+    /**
+     * Add one discovered device — **explicitly**, which is the whole difference
+     * between a composer and a guess (`G §3`, twice).
+     *
+     * Every added source carries the candidate's own `canId`, and the only
+     * candidate whose id is null is the gateway's hosted battery, which is the
+     * one source that legitimately means "the head unit answers this itself"
+     * (`C §6`). Anything else with a null id on a gateway link would be
+     * [ComposerIssue.AmbiguousGatewaySource] — a config that saves clean,
+     * connects, and reports double the current.
+     *
+     * `VESC_BMS` for a battery either way: a pack behind a VESC gateway — hosted
+     * or on its CAN bus — answers `BMS_GET_VALUES`, and `VESC_BMS` beside a VESC
+     * controller is the one sanctioned mixed-kind pairing `planLinks` allows.
+     */
+    override fun onAddCanCandidate(candidate: CanCandidate, asBattery: Boolean) {
+        val target = _state.value.canScanTarget ?: return
+        if (candidate.alreadyAdded) return
+        val label = canCandidateLabel(candidate, asBattery)
+        if (asBattery || candidate.kind == CanCandidateKind.HOSTED_BATTERY) {
+            mutateDraft(packs = true) {
+                it.addPack(BmsType.VESC_BMS, target, label, canId = candidate.canId)
+            }
+        } else {
+            mutateDraft(controllers = true) {
+                it.addController(ControllerType.VESC, target, label, canId = candidate.canId)
+            }
+        }
+    }
+
+    override fun onDismissCanScan() {
+        _state.update { it.copy(canScan = CanScanState.Idle) }
     }
 
     override fun onSave() {

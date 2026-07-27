@@ -997,4 +997,147 @@ class VehicleComposerTest {
         // boxes.
         assertEquals(MotorDraft.of(MotorConfig()), MotorDraft())
     }
+
+    // -----------------------------------------------------------------------
+    // "+ Wheel" as a single add (G §3 flow 3, G2 Task 5)
+    // -----------------------------------------------------------------------
+
+    /**
+     * **The point of the add**, in the terms Task 3's review corrected: not the
+     * tap it saves, but that the two sources land on ONE link — a claim only a
+     * rider can make, and the only place it can be stored.
+     *
+     * Asserted through the real `planLinks`, not by comparing two addresses:
+     * "one link" is a `planLinks` outcome, and comparing strings would pass for
+     * a shape the connection layer still split in two.
+     */
+    @Test
+    fun `a wheel add puts both sources on one link`() {
+        val d = VehicleDraft().addWheel(ControllerType.BEGODE, BmsType.BEGODE, "WH:01")
+        val links = planLinks(d.toPacks(), d.toControllers())
+        assertEquals(1, links.size, "a wheel is one device, so one link")
+        val link = links.single()
+        assertEquals("WH:01", link.address)
+        assertEquals(ProtocolKind.BEGODE, link.protocolKind)
+        assertEquals(1, link.ownedControllers.size)
+        assertEquals(1, link.ownedPacks.size)
+    }
+
+    /**
+     * The contrast that makes the previous test mean something: the two blank
+     * adds the screen offers beside it produce two sources the connection layer
+     * groups SEPARATELY, because it groups by address and nothing told it they
+     * are one device.
+     */
+    @Test
+    fun `two separate adds at two addresses are two links`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.BEGODE, "WH:01")
+            .addPack(BmsType.BEGODE, "WH:02")
+        assertEquals(2, planLinks(d.toPacks(), d.toControllers()).size)
+    }
+
+    @Test
+    fun `a wheel add gives its two halves distinct keys`() {
+        val d = VehicleDraft().addWheel(ControllerType.BEGODE, BmsType.BEGODE, "WH:01")
+        assertEquals(1, d.controllers.size)
+        assertEquals(1, d.packs.size)
+        assertTrue(
+            d.controllers.single().key != d.packs.single().key,
+            "a shared key would make the screen address the wrong row"
+        )
+        // Both halves keep the rider-visible name they were added with.
+        val named = VehicleDraft().addWheel(ControllerType.BEGODE, BmsType.BEGODE, "WH:01", "Monster")
+        assertEquals("Monster", named.controllers.single().label)
+        assertEquals("Monster", named.packs.single().label)
+    }
+
+    /**
+     * `G §6` through the wheel: the pack the same add created is what turns the
+     * controller's derived battery off, and the rule — not a constant — is what
+     * says so, so removing the pack turns it back on.
+     *
+     * (`wheelVehicle` hard-codes `providesDerivedBattery = false`; a composed
+     * wheel gets the same answer from [VehicleDraft.derivedBatteryDefault]
+     * while the pack exists, and a better one afterwards.)
+     */
+    @Test
+    fun `a composed wheel derives no battery while its own pack is there`() {
+        val d = VehicleDraft().addWheel(ControllerType.BEGODE, BmsType.BEGODE, "WH:01")
+        val c = d.controllers.single()
+        assertFalse(d.resolvedDerivedBattery(c))
+        assertFalse(d.toControllers().single().providesDerivedBattery)
+
+        val withoutPack = d.removePack(d.packs.single().key)
+        assertTrue(
+            withoutPack.resolvedDerivedBattery(withoutPack.controllers.single()),
+            "the rule, not a constant: with the pack gone the controller is the only battery source"
+        )
+    }
+
+    /** A wheel add is a valid draft — it must not raise an issue of its own. */
+    @Test
+    fun `a wheel add is well formed`() {
+        val d = VehicleDraft().addWheel(ControllerType.BEGODE, BmsType.BEGODE, "WH:01")
+        assertEquals(emptyList(), validate(d))
+    }
+
+    // -----------------------------------------------------------------------
+    // The CAN id an added source carries (G2 Task 5)
+    // -----------------------------------------------------------------------
+
+    /**
+     * The trap Task 2 built [ComposerIssue.AmbiguousGatewaySource] for: on a
+     * gateway link `canId == null` means "the head unit itself", and
+     * `VescGatewayProtocol.frameFor` sends such a request UNWRAPPED — so two of
+     * them are byte-identical and `MotionAggregator` sums the same decode twice.
+     *
+     * Discovery therefore adds every node WITH its id, which the two adds must
+     * be able to carry — this pins that they do, and that the resulting
+     * two-uBox shape validates clean.
+     */
+    @Test
+    fun `adds carry a can id, and two identified uBoxes behind one gateway are clean`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head unit")
+            .addController(ControllerType.VESC, "HU:01", "Controller 2", canId = 10)
+            .addController(ControllerType.VESC, "HU:01", "Controller 3", canId = 11)
+            .addPack(BmsType.VESC_BMS, "HU:01", "Hosted battery")
+        assertEquals(listOf(null, 10, 11), d.controllers.map { it.canId })
+        assertEquals(listOf(null), d.packs.map { it.canId })
+        assertEquals(emptyList(), validate(d), "one gateway, one head unit, two identified slaves")
+        // And the real planner agrees it is one gateway link.
+        val link = planLinks(d.toPacks(), d.toControllers()).single()
+        assertTrue(link.isGatewayLink)
+    }
+
+    /**
+     * The same shape with the ids dropped — which is what an add that ignored
+     * `canId` would produce — is BLOCKING. Without this the test above would
+     * pass just as well against an `addController` that threw the id away.
+     */
+    @Test
+    fun `the same two slaves without ids are the blocking gateway shape`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head unit")
+            .addController(ControllerType.VESC, "HU:01", "Controller 2")
+            .addController(ControllerType.VESC, "HU:01", "Controller 3")
+        val issues = validate(d)
+        assertTrue(
+            issues.any { it is ComposerIssue.AmbiguousGatewaySource && it.blocking },
+            "three controllers all claiming to be the head unit must be refused, got $issues"
+        )
+    }
+
+    /** A hosted battery and the head unit are one of each, which is legal. */
+    @Test
+    fun `a null-id pack beside a null-id controller is fine, a second pack is not`() {
+        val ok = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", canId = 10)
+            .addPack(BmsType.VESC_BMS, "HU:01", "Hosted battery")
+        assertEquals(emptyList(), validate(ok))
+
+        val doubled = ok.addPack(BmsType.VESC_BMS, "HU:01", "Hosted battery again")
+        assertTrue(doubled.let(::validate).any { it is ComposerIssue.AmbiguousGatewaySource })
+    }
 }

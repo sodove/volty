@@ -1,5 +1,9 @@
 package ru.sodovaya.volty.data.bms
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
+import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescFrameAccumulator
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.data.bms.vesc.VescValues
@@ -23,7 +27,7 @@ class VescProtocol(
     private val deriveBattery: Boolean = true,
     private val motor: MotorConfig = MotorConfig(),
     private val useSetupFrame: Boolean = true
-) : BmsProtocol(), MotionSource {
+) : BmsProtocol(), MotionSource, CanBusScanner {
 
     companion object {
         const val NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -52,6 +56,14 @@ class VescProtocol(
      */
     @Volatile private var tripBaselineKm: Float? = null
 
+    /**
+     * The one outstanding [scanCanBus], armed while its `PING_CAN` is on the
+     * wire and cleared by that function's `finally` — the single owner of the
+     * disarm. Null the rest of the time, which is what lets the NEXT scan reach
+     * the wire instead of joining a request whose window has expired.
+     */
+    @Volatile private var canScan: CompletableDeferred<List<Int>?>? = null
+
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
     override fun pollCommands(): List<ByteArray> = listOf(
@@ -66,8 +78,86 @@ class VescProtocol(
     override val controllerCount: Int get() = 1
     override val packCount: Int get() = if (deriveBattery) 1 else 0
 
+    /**
+     * One-shot CAN scan on a **plain** VESC link — the head unit before anybody
+     * has told volty there is anything behind it.
+     *
+     * This is the case `G §3`'s fourth flow actually starts in: a rider who has
+     * just picked their head unit owns a one-controller vehicle, which is not a
+     * [ru.sodovaya.volty.data.ble.LinkSpec.isGatewayLink] and therefore speaks
+     * this protocol, not [VescGatewayProtocol]. Refusing to scan here would
+     * make CAN discovery reachable only once the rider had already typed the
+     * CAN ids it exists to find.
+     *
+     * Sending straight from the caller's coroutine is safe **here and only
+     * here**: this protocol's polling is a fire-and-forget burst with no
+     * request/reply state to race (`ConnectionSession`'s non-serial branch), and
+     * `PING_CAN` is answered by the endpoint itself rather than forwarded, so
+     * none of `C §10.1`'s single-forward-in-flight reasoning applies.
+     * [VescGatewayProtocol] has that state and overrides accordingly.
+     */
+    override suspend fun scanCanBus(send: suspend (ByteArray) -> Unit): List<Int>? {
+        // Single-flight, exactly as [VescGatewayProtocol] is: the firmware
+        // silently discards a second `PING_CAN` inside the ~2.5 s window
+        // (`C §10.2`), so a second caller joins this one rather than putting a
+        // request on the wire that can only ever be dropped.
+        val existing = canScan
+        if (existing != null) return withTimeoutOrNull(CanBusScanner.REPLY_TIMEOUT_MS) { existing.await() }
+        val waiter = CompletableDeferred<List<Int>?>()
+        canScan = waiter
+        return try {
+            send(VescPacket.frame(byteArrayOf(VescCan.OPCODE_PING_CAN.toByte())))
+            withTimeoutOrNull(CanBusScanner.REPLY_TIMEOUT_MS) { waiter.await() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // The write failed — a link dropping mid-scan. Reported as silence,
+            // which is what the rider is told either way.
+            null
+        } finally {
+            // **The disarm is what lets a NEXT scan happen at all**, now that a
+            // second caller joins an armed one: a request left armed after its
+            // window expired would have every later scan join a dead deferred
+            // and wait the window out again, never putting a `PING_CAN` on the
+            // wire. (On the success path `onNotification` has already nulled it
+            // and this is a no-op.)
+            //
+            // The identity check guards the one interleaving the single-flight
+            // above still allows: another caller arming between
+            // `onNotification`'s null and this line would otherwise have ITS
+            // arm cleared here and its reply dropped. It is not reachable from a
+            // `runTest` harness — the two statements are adjacent with no
+            // suspension point between them — and is kept because it is correct
+            // under the concurrency this type permits, not because a test
+            // demands it. Reported as such in this task's sweep.
+            if (canScan === waiter) canScan = null
+        }
+    }
+
     override fun onNotification(data: ByteArray) {
         for (payload in accumulator.append(data)) {
+            // Checked before the value decoders because it is a different
+            // question, not a fallback: `PING_CAN`'s reply carries opcode 62,
+            // which both decoders reject anyway, so the ordering is for the
+            // reader rather than for correctness.
+            val scan = canScan
+            if (scan != null) {
+                val ids = VescCan.parsePingCan(payload)
+                if (ids != null) {
+                    // Answer only. Disarming belongs to [scanCanBus]'s `finally`
+                    // and to it alone: a second owner here was provably
+                    // indistinguishable from its absence (this task's sweep,
+                    // mutant V8), and two owners of one field is how they come
+                    // to disagree.
+                    scan.complete(ids)
+                    // A short-circuit, not a guard: a payload `parsePingCan`
+                    // accepted begins with opcode 62, which both value decoders
+                    // below reject on their own first byte. Kept for the reader;
+                    // reported as an equivalent mutant rather than pretended to
+                    // be load-bearing.
+                    continue
+                }
+            }
             val decoded = if (useSetupFrame) VescValues.decodeSetupValues(payload)
                           else VescValues.decodeValues(payload, motor)
             if (decoded != null) {
@@ -90,6 +180,13 @@ class VescProtocol(
         motion = null
         battery = null
         tripBaselineKm = null
+        // Answered with null — silence — rather than dropped: a scan on a
+        // session being torn down can never be answered, and
+        // [CanBusScanner.REPLY_TIMEOUT_MS] is a long time to make a rider watch
+        // a spinner for a reply that cannot arrive. Never an empty list, which
+        // would claim the bus is empty.
+        canScan?.complete(null)
+        canScan = null
     }
 
     /**

@@ -22,16 +22,25 @@ import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
+import ru.sodovaya.volty.data.ble.isGatewayLink
+import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
+import ru.sodovaya.volty.presentation.picker.ScannedAdd
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.yield
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
@@ -40,7 +49,9 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -63,13 +74,32 @@ import kotlin.time.Instant
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
 class VehicleEditComponentTest {
 
-    private class FakeBmsRepo : BmsRepository {
+    private class FakeBmsRepo(
+        /** What one collection of [scanAll] emits. Empty = the pre-Task-5 behaviour. */
+        private val scan: List<DiscoveredDevice> = emptyList()
+    ) : BmsRepository {
+        /** How many times [scanAll] has been COLLECTED — one per sheet opening. */
+        var scanCollections = 0
+        /**
+         * How many of those collections have ENDED. The difference from
+         * [scanCollections] is the number of BLE scans still running, which is
+         * the only way a test can see a sheet that closed without cancelling
+         * its scan — the leak is a live radio, not a wrong list.
+         */
+        var scanCompletions = 0
         override val activeVehicleData = MutableStateFlow(VehicleData())
         override val activeData = MutableStateFlow(BmsData())
         override val activeMotion = MutableStateFlow(ControllerData())
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
-        override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
+        // Emits its script and then STAYS OPEN, which is what a BLE scan does —
+        // and the only way a test can tell "the sheet cancelled its scan" from
+        // "the flow happened to finish". `awaitCancellation` schedules nothing,
+        // so it cannot run virtual time away and wedge `runTest`.
+        override fun scanAll(): Flow<DiscoveredDevice> =
+            if (scan.isEmpty()) emptyFlow()
+            else flow { scanCollections++; scan.forEach { emit(it) }; awaitCancellation() }
+                .onCompletion { scanCompletions++ }
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
         override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
@@ -80,11 +110,52 @@ class VehicleEditComponentTest {
         override suspend fun onAppResumed() {}
     }
 
+    /**
+     * CAN discovery under the test's control.
+     *
+     * [gate] is what makes the "one scan at a time" and "Running for the whole
+     * window" assertions possible: the call suspends on it until the test says
+     * otherwise, which is the shape of a firmware that blocks for ~2.5 s —
+     * without ever starting a delayed loop, because an unbounded one wedges
+     * `runTest` instead of failing it.
+     */
+    private class FakeCanDiscovery(
+        private var result: Result<List<Int>> = Result.success(listOf(10, 11))
+    ) : CanDiscovery {
+        val calls = mutableListOf<String>()
+        var gate: CompletableDeferred<Unit>? = null
+
+        override suspend fun discoverCanIds(address: String): Result<List<Int>> {
+            calls += address
+            gate?.await()
+            return result
+        }
+
+        fun answerWith(r: Result<List<Int>>) { result = r }
+    }
+
     private class FakeVehicleRepo(private val saved: List<Vehicle>) : VehicleRepository {
         val upserts = mutableListOf<Vehicle>()
         override val vehicles: Flow<List<Vehicle>> = flowOf(saved)
-        override suspend fun get(id: String): Vehicle? =
-            upserts.lastOrNull { it.id == id } ?: saved.firstOrNull { it.id == id }
+        /**
+         * Yields before answering, because the real one does: it is a
+         * SQLDelight read, so `initialize()` is genuinely suspended while
+         * anything else the component launched runs. A fake that answered
+         * without suspending made the load look atomic and hid the fact that
+         * `initialize()` replaces the whole state — including a field the
+         * connection collector had already filled in.
+         */
+        /**
+         * Held open for as long as [loadGate] is, so a test can put the load
+         * exactly where production puts it — finishing AFTER everything else
+         * the component launched has already run.
+         */
+        var loadGate: CompletableDeferred<Unit>? = null
+
+        override suspend fun get(id: String): Vehicle? {
+            loadGate?.await() ?: yield()
+            return upserts.lastOrNull { it.id == id } ?: saved.firstOrNull { it.id == id }
+        }
         override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle }
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
@@ -204,17 +275,20 @@ class VehicleEditComponentTest {
         vehicleRepo: FakeVehicleRepo,
         vehicleId: String? = "v1",
         prefilledBmsType: BmsType? = null,
-        prefilledBmsAddress: String? = null
+        prefilledBmsAddress: String? = null,
+        bmsRepo: FakeBmsRepo = FakeBmsRepo(),
+        canDiscovery: CanDiscovery? = null
     ): DefaultVehicleEditComponent {
         val ctx = DefaultComponentContext(LifecycleRegistry())
         return DefaultVehicleEditComponent(
             componentContext = ctx,
             vehicleId = vehicleId,
             vehicleRepository = vehicleRepo,
-            bmsRepository = FakeBmsRepo(),
+            bmsRepository = bmsRepo,
             onSaved = {},
             onCancelled = {},
             onDeleted = {},
+            canDiscovery = canDiscovery,
             prefilledBmsType = prefilledBmsType,
             prefilledBmsAddress = prefilledBmsAddress
         )
@@ -1538,6 +1612,620 @@ class VehicleEditComponentTest {
         c.onOpenUnits()
         assertEquals(1, opened)
         assertEquals(before, c.state.value, "a link must not touch the form")
+    }
+
+    // =====================================================================
+    // Discovery (G2 Task 5) — the composer learns an address
+    //
+    // Until this task, adding a second source meant typing a BLE MAC by hand.
+    // Everything below is the component's half; the pure rules it delegates to
+    // are in SourceScanTest and ComposerCanDiscoveryTest.
+    // =====================================================================
+
+    /** A head unit as the picker leaves it: one VESC controller, no CAN id. */
+    private fun headUnitVehicle() = Vehicle(
+        id = "v1",
+        name = "Scooter",
+        iconKey = "scooter",
+        packs = emptyList(),
+        controllers = listOf(
+            Controller(index = 0, label = "Head unit", controllerType = ControllerType.VESC, address = "HU:01")
+        ),
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = createdAtFixture
+    )
+
+    private fun device(
+        address: String,
+        name: String? = null,
+        bmsType: BmsType? = null,
+        controllerType: ControllerType? = null
+    ) = DiscoveredDevice(address, name, -55, bmsType, controllerType)
+
+    // ---------------------------------------------------------------------
+    // BLE scan into the composer
+    // ---------------------------------------------------------------------
+
+    /**
+     * The deliverable in one assertion: a source arrives with an address the
+     * rider never typed.
+     */
+    @Test
+    fun `a scanned controller enters the draft with its own address`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo(listOf(device("UB:10", "uBox", controllerType = ControllerType.VESC)))
+        val c = component(FakeVehicleRepo(listOf(headUnitVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        val found = c.state.value.scannedDevices.single()
+        c.onAddScannedDevice(found, ScannedAdd.CONTROLLER)
+
+        val added = c.state.value.draft.controllers.last()
+        assertEquals("UB:10", added.address)
+        assertEquals(ControllerType.VESC, added.controllerType)
+        assertEquals("uBox", added.label)
+        assertTrue(c.state.value.controllersEdited)
+    }
+
+    /**
+     * `G §3` flow 3, and the reason it is a single add: **one link**. Asserted
+     * through the real `planLinks`, because "one link" is its outcome and not a
+     * property of two equal strings.
+     *
+     * Both edited flags matter as much as the shapes: `withEdits` writes a list
+     * only for the half the rider took control of, so a wheel add that flagged
+     * one half would drop the other on save.
+     */
+    @Test
+    fun `a scanned wheel is one add, two sources, one link`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo(listOf(device("WH:01", "Falcon", bmsType = BmsType.BEGODE)))
+        val repo = FakeVehicleRepo(listOf(headUnitVehicle()))
+        val c = component(repo, bmsRepo = bms)
+        advanceUntilIdle()
+
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        c.onAddScannedDevice(c.state.value.scannedDevices.single(), ScannedAdd.WHEEL)
+
+        val s = c.state.value
+        assertTrue(s.packsEdited && s.controllersEdited, "a wheel writes both lists")
+        val wheelController = s.draft.controllers.last()
+        val wheelPack = s.draft.packs.last()
+        assertEquals(ControllerType.BEGODE, wheelController.controllerType)
+        assertEquals(BmsType.BEGODE, wheelPack.bmsType)
+
+        // The claim the add records: these two are ONE device.
+        val links = planLinks(s.draft.toPacks(), s.draft.toControllers())
+        val wheelLink = links.single { it.address == "WH:01" }
+        assertEquals(1, wheelLink.ownedControllers.size)
+        assertEquals(1, wheelLink.ownedPacks.size)
+
+        // And it survives the save, which is where the claim has to end up.
+        c.onSave()
+        advanceUntilIdle()
+        val saved = repo.upserts.last()
+        assertEquals(1, saved.controllers.count { it.address == "WH:01" })
+        assertEquals(1, saved.packs.count { it.bmsAddress == "WH:01" })
+    }
+
+    @Test
+    fun `a scanned battery enters the draft as a pack only`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo(listOf(device("AN:01", "ANT", bmsType = BmsType.ANT_BMS)))
+        val c = component(FakeVehicleRepo(listOf(headUnitVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        c.onAddScannedDevice(c.state.value.scannedDevices.single(), ScannedAdd.BATTERY)
+
+        val s = c.state.value
+        assertEquals(1, s.draft.packs.size)
+        assertEquals("AN:01", s.draft.packs.single().address)
+        assertEquals(BmsType.ANT_BMS, s.draft.packs.single().bmsType)
+        assertEquals(1, s.draft.controllers.size, "a battery add must not invent a controller")
+        assertTrue(s.packsEdited)
+        assertFalse(s.controllersEdited)
+    }
+
+    /**
+     * Two taps before the first recomposition must not start two collectors:
+     * each hit would then be folded twice, and the sheet would offer the same
+     * device on two rows.
+     */
+    @Test
+    fun `a second scan start does not open a second scan`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo(listOf(device("UB:10", controllerType = ControllerType.VESC)))
+        val c = component(FakeVehicleRepo(listOf(headUnitVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+
+        c.onStartDeviceScan()
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        assertEquals(1, bms.scanCollections)
+        assertEquals(1, c.state.value.scannedDevices.size)
+    }
+
+    /** A scan must not outlive its sheet, and its list must not linger. */
+    @Test
+    fun `closing the sheet stops the scan and drops what it found`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val bms = FakeBmsRepo(listOf(device("UB:10", controllerType = ControllerType.VESC)))
+        val c = component(FakeVehicleRepo(listOf(headUnitVehicle())), bmsRepo = bms)
+        advanceUntilIdle()
+
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        assertTrue(c.state.value.scanning)
+
+        c.onStopDeviceScan()
+        advanceUntilIdle()
+        assertFalse(c.state.value.scanning)
+        assertEquals(emptyList(), c.state.value.scannedDevices)
+        // The radio, not the flag: a stop that dropped the job reference without
+        // cancelling it leaves the BLE scan running for the life of the process,
+        // which no assertion on the state could ever see.
+        assertEquals(bms.scanCollections, bms.scanCompletions, "no scan may outlive its sheet")
+
+        // And re-opening starts a genuinely new one.
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        assertTrue(c.state.value.scanning)
+        assertEquals(2, bms.scanCollections)
+        assertEquals(1, c.state.value.scannedDevices.size)
+        c.onStopDeviceScan()
+    }
+
+    // ---------------------------------------------------------------------
+    // CAN discovery
+    // ---------------------------------------------------------------------
+
+    /** Connect the fake so the composer sees a live link at the head unit. */
+    private fun FakeBmsRepo.goLive(vehicle: Vehicle) {
+        activeVehicle.value = vehicle
+        connectionState.value = ConnectionState.Connected(vehicle)
+    }
+
+    @Test
+    fun `with nothing connected there is no scan target and the call does nothing`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val can = FakeCanDiscovery()
+        val c = component(FakeVehicleRepo(listOf(headUnitVehicle())), canDiscovery = can)
+        advanceUntilIdle()
+
+        assertNull(c.state.value.canScanTarget)
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(emptyList(), can.calls, "the screen must not pretend to scan")
+        assertEquals(CanScanState.Idle, c.state.value.canScan)
+    }
+
+    @Test
+    fun `connecting the head unit gives the composer a scan target`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        assertNull(c.state.value.canScanTarget)
+
+        bms.goLive(v)
+        advanceUntilIdle()
+        assertEquals("HU:01", c.state.value.canScanTarget)
+
+        // …and loses it again when the link drops, so the button follows the
+        // connection rather than being decided once at load.
+        bms.connectionState.value = ConnectionState.Reconnecting(1, "drop")
+        advanceUntilIdle()
+        assertNull(c.state.value.canScanTarget)
+    }
+
+    /**
+     * The ordering `G §3` flow 4 actually has: the picker connects and navigates
+     * **straight here**, so the connection is already up before this component
+     * exists. `initialize()` replaces the whole state wholesale, so a target
+     * seeded only by the connection collector would be clobbered by a load that
+     * finishes after it — and there may never be another connection event to
+     * put it back.
+     */
+    @Test
+    fun `arriving already connected shows the scan target immediately`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        bms.goLive(v)
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+
+        assertEquals("HU:01", c.state.value.canScanTarget)
+    }
+
+    /**
+     * The same thing with production's own ordering, which is the one that
+     * bites: the vehicle load is a SQLDelight read, so it finishes long after
+     * the connection collector has already reported a live link — and
+     * `initialize()` then replaces the **whole** state. Without a target
+     * computed at load, the collector's answer is erased by a load that came
+     * second, and there is no further connection event to put it back.
+     */
+    @Test
+    fun `a slow load must not erase a target the connection already reported`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        bms.goLive(v)
+        val repo = FakeVehicleRepo(listOf(v))
+        repo.loadGate = CompletableDeferred()
+        val c = component(repo, bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        // Everything but the load has now run: the collector has seen the live
+        // link, and `initialize()` is still parked on the database.
+        advanceUntilIdle()
+
+        repo.loadGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals("HU:01", c.state.value.canScanTarget)
+    }
+
+    /**
+     * The target follows the DRAFT too, not only the connection: a rider who
+     * corrects a misdetected controller's type is now behind a VESC gateway and
+     * the scan becomes possible without anything reconnecting.
+     */
+    @Test
+    fun `editing the draft can reveal a scan target`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle().copy(
+            controllers = listOf(
+                Controller(0, "Head unit", ControllerType.BEGODE, "HU:01", providesDerivedBattery = true)
+            )
+        )
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        assertNull(c.state.value.canScanTarget, "a Begode has no CAN bus to probe")
+
+        c.onControllerTypeChanged(c.state.value.draft.controllers.single().key, ControllerType.VESC)
+        assertEquals("HU:01", c.state.value.canScanTarget)
+    }
+
+    /**
+     * The firmware blocks for ~2.5 s and reports nothing of its own, so
+     * `Running` has to hold for the whole call — it is the only thing the screen
+     * can show. Asserted while the discovery is still suspended.
+     */
+    @Test
+    fun `the scan reports Running for the whole window`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val can = FakeCanDiscovery()
+        can.gate = CompletableDeferred()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Running, c.state.value.canScan, "the whole 2.5 s window")
+
+        can.gate!!.complete(Unit)
+        advanceUntilIdle()
+        assertEquals(CanScanState.Found(listOf(10, 11)), c.state.value.canScan)
+    }
+
+    /**
+     * `C §10.2`: a second `PING_CAN` inside the window is **silently discarded
+     * with no error reply**, so a rider who taps twice would wait out a window
+     * that can never answer. The UI must not let them.
+     */
+    @Test
+    fun `a second tap inside the window is refused`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val can = FakeCanDiscovery()
+        can.gate = CompletableDeferred()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(listOf("HU:01"), can.calls, "exactly one PING_CAN may be in flight")
+
+        // Once it has answered, another scan IS allowed — the refusal is the
+        // window, not a one-shot.
+        can.gate!!.complete(Unit)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(listOf("HU:01", "HU:01"), can.calls)
+    }
+
+    /** `G §3`, twice: never auto-add. Discovery produces offers, nothing else. */
+    @Test
+    fun `a successful scan adds nothing on its own`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        val before = c.state.value.draft
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        assertEquals(before, c.state.value.draft, "discovery offers; the rider adds")
+        assertEquals(3, c.state.value.canCandidates.size, "two nodes plus the hosted battery")
+    }
+
+    /**
+     * **The trap.** Every source added from discovery must carry its real
+     * `canId`: on a gateway link a null id means "the head unit itself", whose
+     * request `VescGatewayProtocol` sends UNWRAPPED — two of them are
+     * byte-identical and `MotionAggregator` sums the same decode twice.
+     *
+     * So the two uBoxes come in with 10 and 11, the hosted battery is the one
+     * source that keeps null, and the whole draft validates clean.
+     */
+    @Test
+    fun `discovered devices are added with their real can ids`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        val nodes = c.state.value.canCandidates.filter { it.kind == CanCandidateKind.NODE }
+        nodes.forEach { c.onAddCanCandidate(it, asBattery = false) }
+        val hosted = c.state.value.canCandidates.single { it.kind == CanCandidateKind.HOSTED_BATTERY }
+        c.onAddCanCandidate(hosted, asBattery = true)
+
+        val s = c.state.value
+        // The head unit keeps null; every discovered node carries its own id.
+        assertEquals(listOf(null, 10, 11), s.draft.controllers.map { it.canId })
+        assertEquals(listOf(null), s.draft.packs.map { it.canId })
+        assertEquals(BmsType.VESC_BMS, s.draft.packs.single().bmsType)
+        assertEquals(
+            emptyList(),
+            s.issues,
+            "one head unit, two identified slaves and a hosted battery is a legal gateway"
+        )
+        assertEquals("HU:01", s.draft.linkAddresses.single(), "everything behind one link")
+    }
+
+    /**
+     * The offers refresh against the draft, so a device already taken cannot be
+     * added twice — a second add of the same node is `DuplicateCanId`, which is
+     * blocking.
+     */
+    @Test
+    fun `an added node comes back already added and refuses a second add`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        val first = c.state.value.canCandidates.first { it.canId == 10 }
+        c.onAddCanCandidate(first, asBattery = false)
+        assertTrue(c.state.value.canCandidates.first { it.canId == 10 }.alreadyAdded)
+
+        // The refreshed candidate is refused, and so is the stale one the
+        // screen was holding when the rider tapped.
+        val refreshed = c.state.value.canCandidates.first { it.canId == 10 }
+        c.onAddCanCandidate(refreshed, asBattery = false)
+        c.onAddCanCandidate(first.copy(alreadyAdded = true), asBattery = false)
+        assertEquals(2, c.state.value.draft.controllers.size)
+    }
+
+    @Test
+    fun `a node may be added as a battery instead`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        c.onAddCanCandidate(c.state.value.canCandidates.first { it.canId == 11 }, asBattery = true)
+        val pack = c.state.value.draft.packs.single()
+        assertEquals(11, pack.canId)
+        assertEquals(BmsType.VESC_BMS, pack.bmsType, "a pack behind a VESC gateway answers BMS_GET_VALUES")
+        assertEquals(1, c.state.value.draft.controllers.size, "adding a battery must not add a controller")
+    }
+
+    /**
+     * The hosted battery is a battery whichever way it is asked for. The screen
+     * never offers it as a controller — a `BMS_GET_VALUES` endpoint is not an
+     * ESC — and the component holds that even if some caller did, rather than
+     * quietly creating a second "the head unit itself" controller.
+     */
+    @Test
+    fun `the hosted battery is never added as a controller`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        val hosted = c.state.value.canCandidates.single { it.kind == CanCandidateKind.HOSTED_BATTERY }
+        c.onAddCanCandidate(hosted, asBattery = false)
+
+        val s = c.state.value
+        assertEquals(1, s.draft.packs.size)
+        assertNull(s.draft.packs.single().canId)
+        assertEquals(1, s.draft.controllers.size, "no second gateway-claiming controller")
+        assertEquals(emptyList(), s.issues)
+    }
+
+    @Test
+    fun `a failed scan says why, and can be retried`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val can = FakeCanDiscovery(Result.failure(IllegalStateException("Link HU:01 is not online")))
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = can)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Failed("Link HU:01 is not online"), c.state.value.canScan)
+        assertEquals(emptyList(), c.state.value.canCandidates, "a failure offers nothing")
+
+        can.answerWith(Result.success(listOf(7)))
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Found(listOf(7)), c.state.value.canScan)
+    }
+
+    /**
+     * An empty answer is a real one — the gateway replied and its bus is empty
+     * — and it is not the same as a failure. The hosted battery is still
+     * offered, because no probe could ever have reported it (`C §6`).
+     */
+    @Test
+    fun `an empty bus is a result, not a failure`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(
+            FakeVehicleRepo(listOf(v)),
+            bmsRepo = bms,
+            canDiscovery = FakeCanDiscovery(Result.success(emptyList()))
+        )
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Found(emptyList()), c.state.value.canScan)
+        assertEquals(
+            listOf(CanCandidateKind.HOSTED_BATTERY),
+            c.state.value.canCandidates.map { it.kind }
+        )
+    }
+
+    @Test
+    fun `dismissing the result clears the offers but keeps what was added`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        c.onAddCanCandidate(c.state.value.canCandidates.first { it.canId == 10 }, asBattery = false)
+
+        c.onDismissCanScan()
+        assertEquals(CanScanState.Idle, c.state.value.canScan)
+        assertEquals(emptyList(), c.state.value.canCandidates)
+        assertEquals(2, c.state.value.draft.controllers.size, "an added source is not an offer")
+    }
+
+    /** A build with no CAN discovery wired must not offer one. */
+    @Test
+    fun `no discovery implementation means no scan`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val c = component(FakeVehicleRepo(listOf(v)), bmsRepo = bms, canDiscovery = null)
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        assertEquals(CanScanState.Idle, c.state.value.canScan)
+    }
+
+    /**
+     * The whole of `G §3` flow 4 through the component: connect the head unit,
+     * discover, include the two uBoxes and the hosted battery, add the direct
+     * ANT by scan, drop the head unit's own phantom controller row, save.
+     *
+     * The assertion that matters is the saved vehicle, because that is what
+     * `planLinks` will be handed at the next connect.
+     */
+    @Test
+    fun `the two-uBox scooter can be described end to end`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo(listOf(device("AN:01", "ANT", bmsType = BmsType.ANT_BMS)))
+        val repo = FakeVehicleRepo(listOf(v))
+        val c = component(repo, bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        c.state.value.canCandidates
+            .filter { it.kind == CanCandidateKind.NODE }
+            .forEach { c.onAddCanCandidate(it, asBattery = false) }
+        c.onAddCanCandidate(
+            c.state.value.canCandidates.single { it.kind == CanCandidateKind.HOSTED_BATTERY },
+            asBattery = true
+        )
+
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        c.onAddScannedDevice(c.state.value.scannedDevices.single(), ScannedAdd.BATTERY)
+        c.onStopDeviceScan()
+
+        // The head unit is a display, not an ESC — its own controller row would
+        // poll a motor that does not exist.
+        c.onRemoveController(c.state.value.draft.controllers.first { it.canId == null }.key)
+
+        assertEquals(emptyList(), c.state.value.issues)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.last()
+        assertEquals(listOf(10, 11), saved.controllers.map { it.canId })
+        assertEquals(listOf("HU:01", "HU:01"), saved.controllers.map { it.address })
+        assertEquals(
+            listOf(BmsType.VESC_BMS to "HU:01", BmsType.ANT_BMS to "AN:01"),
+            saved.packs.map { it.bmsType to it.bmsAddress }
+        )
+        // Two links: everything behind the head unit, plus the direct ANT.
+        val links = planLinks(saved.packs, saved.controllers)
+        assertEquals(listOf("HU:01", "AN:01"), links.map { it.address })
+        assertTrue(links.first { it.address == "HU:01" }.isGatewayLink)
     }
 }
 

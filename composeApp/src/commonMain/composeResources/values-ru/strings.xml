@@ -237,6 +237,33 @@
     <string name="composer_issue_hostless_vesc_bms">VESC BMS читается только через VESC-контроллер на той же линии.</string>
     <string name="composer_issue_unroutable_gateway">Несколько источников по одной линии умеет вести только VESC — остальные останутся офлайн.</string>
 
+    <!-- Composer discovery (G2 Task 5): the screen learns an address -->
+    <string name="vehicle_source_scan">Найти рядом</string>
+    <string name="scan_sheet_title">Устройства рядом</string>
+    <string name="scan_sheet_empty">Ищем…</string>
+    <string name="scan_sheet_close">Закрыть</string>
+    <string name="scan_role_controller">Контроллер</string>
+    <string name="scan_role_battery">Батарея</string>
+    <string name="scan_role_both">Контроллер + батарея</string>
+    <string name="scan_role_unknown">Не распознано</string>
+    <string name="scan_add_controller">+ Контроллер</string>
+    <string name="scan_add_battery">+ Батарея</string>
+    <string name="scan_add_wheel">+ Колесо (контроллер + батарея)</string>
+    <string name="can_section">Шина CAN за приборкой</string>
+    <string name="can_scan_start">Найти устройства на шине CAN</string>
+    <string name="can_scan_running">Опрашиваем шину — это занимает около 2,5 секунд и не прерывается.</string>
+    <string name="can_scan_unavailable">Подключитесь к приборке, чтобы опросить её шину CAN. Пока она офлайн, опрос не выполняется.</string>
+    <string name="can_scan_failed">Не удалось опросить: %1$s</string>
+    <string name="can_scan_empty">Приборка ответила, но на её шине больше никого нет.</string>
+    <string name="can_scan_dismiss">Скрыть результаты</string>
+    <string name="can_node_controller">Контроллер %1$d</string>
+    <string name="can_node_hosted_battery">Батарея за приборкой</string>
+    <string name="can_node_raw">CAN id %1$d</string>
+    <string name="can_node_raw_hosted">отвечает сама приборка (без CAN id)</string>
+    <string name="can_node_added">Уже добавлено</string>
+    <string name="can_add_as_controller">Добавить контроллером</string>
+    <string name="can_add_as_battery">Добавить батареей</string>
+
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_field_secondary_gauge_caption">Только для стиля Clean — Classic показывает все индикаторы сразу.</string>

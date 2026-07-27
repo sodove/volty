@@ -142,7 +142,7 @@ class VescGatewayProtocol(
      * property of the protocol (§10.1, reason 2) and not of this code.
      */
     private val lateReplyGuardMs: Long = DEFAULT_LATE_REPLY_GUARD_MS
-) : BmsProtocol(), MotionSource, SerialPollSource {
+) : BmsProtocol(), MotionSource, SerialPollSource, CanBusScanner {
 
     companion object {
         const val DEFAULT_POLL_INTERVAL_MS: Long = 50L
@@ -158,6 +158,25 @@ class VescGatewayProtocol(
          * constant so [checkSilenceBudget] can name what it is protecting.
          */
         const val WATCHDOG_SILENCE_BUDGET_MS: Long = 5_000L
+
+        /**
+         * How long [scanCanBus] waits for the poll loop to pick its parked
+         * request up **and** finish it.
+         *
+         * Two costs, not one: the loop only looks at the request between
+         * cycles, so the caller first waits out whatever is left of the current
+         * cycle, and only then the reply window
+         * ([CanBusScanner.REPLY_TIMEOUT_MS]). A cycle whose sources all answer
+         * is tens of milliseconds; a cycle where they are all silent is capped
+         * by [checkSilenceBudget] below [WATCHDOG_SILENCE_BUDGET_MS]. So the
+         * sum is bounded by that budget plus the reply window, which is exactly
+         * this.
+         *
+         * It exists at all because a link torn down mid-scan never services the
+         * request: without an outer bound the composer's spinner would run
+         * forever on a connection that has gone away.
+         */
+        const val SCAN_WAIT_MS: Long = WATCHDOG_SILENCE_BUDGET_MS + CanBusScanner.REPLY_TIMEOUT_MS
 
         /**
          * The real timeout-budget invariant of this loop, checked rather than
@@ -347,19 +366,104 @@ class VescGatewayProtocol(
     @Volatile private var pending: Pending? = null
 
     /**
-     * Strictly serial round-robin. Every iteration of the inner loop performs a
-     * complete exchange before the next begins; nothing here can start a second
-     * request while one is outstanding, because [exchange] does not return
-     * until its own is settled.
+     * A `PING_CAN` the composer has asked for, parked until the loop reaches
+     * the top of a cycle. Null means no scan is outstanding.
+     *
+     * Completed with the id list, or with **null for silence** — the composer
+     * needs to tell "the bus is empty" (an empty list) from "the head unit did
+     * not answer" apart, and only the loop knows which happened.
+     */
+    @Volatile private var canScanRequest: CompletableDeferred<List<Int>?>? = null
+
+    /**
+     * Strictly serial round-robin, with the composer's CAN scan taking the
+     * first slot of a cycle when one is parked.
+     *
+     * Every iteration of the inner loop performs a complete exchange before the
+     * next begins; nothing here can start a second request while one is
+     * outstanding, because [exchange] does not return until its own is settled.
      */
     override suspend fun runPollLoop(send: suspend (ByteArray) -> Unit) {
         // A link that owns nothing has nothing to ask for. Returning (rather
         // than looping over an empty plan) keeps this from becoming a delay-only
         // spin for a misconfigured spec.
+        //
+        // A scan parked against such a link is therefore never serviced, and
+        // [scanCanBus]'s own [SCAN_WAIT_MS] is what stops that from hanging the
+        // caller. `planLinks` cannot produce an empty gateway plan — a gateway
+        // link is gateway-shaped BECAUSE it owns sources — so this is the
+        // misconfiguration path, not a real one.
         if (plan.isEmpty()) return
         while (currentCoroutineContext().isActive) {
+            serviceCanScan(send)
             for (request in plan) exchange(request, send)
             delay(pollIntervalMs)
+        }
+    }
+
+    /**
+     * The parked scan, if any, run through the ordinary [exchange] — so it is
+     * one more strictly-serial request rather than a second writer.
+     *
+     * That is the whole reason [scanCanBus] does not simply write: on a gateway
+     * link `C §10.1` allows exactly one request in flight, and this coroutine is
+     * the only one that ever holds it. A `PING_CAN` written from the composer's
+     * coroutine would land beside an outstanding `FORWARD_CAN`, whose reply the
+     * gateway routes through a **single** `send_func_can_fwd` slot.
+     *
+     * The frame is unwrapped: `PING_CAN` asks the endpoint we are connected to,
+     * which is the only node that knows what else is on the bus.
+     */
+    private suspend fun serviceCanScan(send: suspend (ByteArray) -> Unit) {
+        val waiter = canScanRequest ?: return
+        var ids: List<Int>? = null
+        exchange(
+            Request(
+                frame = VescPacket.frame(byteArrayOf(VescCan.OPCODE_PING_CAN.toByte())),
+                expectedOpcode = VescCan.OPCODE_PING_CAN,
+                consume = { payload -> ids = VescCan.parsePingCan(payload) },
+                // Nothing cached, nothing to forget — the silence IS the result,
+                // and it is reported below as a null completion.
+                onSilence = {}
+            ),
+            send,
+            // The firmware blocks ~2.55 s on this one command (`C §10.2`); the
+            // plan's own 400 ms would give up before it could possibly answer.
+            timeoutMs = CanBusScanner.REPLY_TIMEOUT_MS
+        )
+        // Cleared BEFORE completing, so a caller that immediately asks again
+        // parks a fresh request rather than joining one that is already
+        // finished — and so this cycle cannot service the same scan twice.
+        canScanRequest = null
+        waiter.complete(ids)
+    }
+
+    /**
+     * Park a `PING_CAN` for [runPollLoop] and wait for its answer.
+     *
+     * [send] is **deliberately ignored** — see [serviceCanScan]. The parameter
+     * stays because [CanBusScanner] is implemented by [VescProtocol] too, where
+     * a plain burst-polled link has no loop to hand the request to and writing
+     * from the caller is the correct thing to do.
+     *
+     * Single-flight: a second call while one is outstanding joins the SAME
+     * request rather than putting a second `PING_CAN` on the wire, which the
+     * firmware would silently discard (`C §10.2`). The composer refuses the
+     * second tap as well; this is the half that holds even if some other caller
+     * appears.
+     */
+    override suspend fun scanCanBus(send: suspend (ByteArray) -> Unit): List<Int>? {
+        val existing = canScanRequest
+        if (existing != null) return withTimeoutOrNull(SCAN_WAIT_MS) { existing.await() }
+        val waiter = CompletableDeferred<List<Int>?>()
+        canScanRequest = waiter
+        return try {
+            withTimeoutOrNull(SCAN_WAIT_MS) { waiter.await() }
+        } finally {
+            // Only if it is still OURS: [serviceCanScan] nulls the field the
+            // moment it takes the request, and a later caller may already have
+            // parked a new one there.
+            if (canScanRequest === waiter) canScanRequest = null
         }
     }
 
@@ -370,11 +474,20 @@ class VescGatewayProtocol(
      * write failed — which is what makes "one in flight" structural rather than
      * a rule someone has to remember.
      */
-    private suspend fun exchange(request: Request, send: suspend (ByteArray) -> Unit) {
+    private suspend fun exchange(
+        request: Request,
+        send: suspend (ByteArray) -> Unit,
+        /**
+         * How long to wait for this one reply. Defaults to the loop's own
+         * budget; the CAN scan overrides it because the firmware blocks ~2.55 s
+         * on `PING_CAN` alone (`C §10.2`) and would never answer inside 400 ms.
+         */
+        timeoutMs: Long = replyTimeoutMs
+    ) {
         val waiter = CompletableDeferred<Unit>()
         pending = Pending(request.expectedOpcode, request.consume, waiter)
         val answered = try {
-            withTimeoutOrNull(replyTimeoutMs) {
+            withTimeoutOrNull(timeoutMs) {
                 send(request.frame)
                 waiter.await()
             }
@@ -484,6 +597,13 @@ class VescGatewayProtocol(
     override fun reset() {
         accumulator.reset()
         pending = null
+        // A scan parked on a session being torn down will never be serviced.
+        // Answered with null — silence — rather than dropped: the composer is
+        // suspended on this deferred and [SCAN_WAIT_MS] is a long time to make
+        // a rider watch a spinner for an answer that can no longer arrive.
+        // Completing with an empty list instead would claim the bus is empty.
+        canScanRequest?.complete(null)
+        canScanRequest = null
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()

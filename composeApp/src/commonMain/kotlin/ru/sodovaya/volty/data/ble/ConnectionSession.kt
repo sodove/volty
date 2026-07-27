@@ -5,6 +5,7 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.CanBusScanner
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.SerialPollSource
 import ru.sodovaya.volty.domain.model.BmsData
@@ -80,7 +81,35 @@ internal class ConnectionSession(
     @Volatile
     private var lastSampleAtMs: Long = 0L
 
+    /**
+     * The write characteristic, hoisted out of [doConnect] so [scanCanBus] can
+     * reach it — the one place anything outside the poll loop needs to put
+     * bytes on this link. Null until the link is up, which is exactly when a
+     * scan has nothing to talk to.
+     */
+    @Volatile
+    private var writeChar: com.juul.kable.Characteristic? = null
+
     val peripheralRef: Peripheral get() = peripheral
+
+    /**
+     * Run one `COMM_PING_CAN` on this link (`G §3` flow 4).
+     *
+     * Null when this link cannot be asked at all — its protocol is not a
+     * [CanBusScanner] (anything that is not VESC), or it is not up yet — and
+     * null again when it was asked and stayed silent. The two are the same
+     * sentence to a rider ("we could not look"), and the repository, which knows
+     * the link's [LinkSpec.protocolKind], is where they are told apart.
+     *
+     * The session does not decide *how* the scan reaches the wire: a gateway
+     * link hands it to its own serial loop, a plain VESC link writes it here.
+     * See [CanBusScanner.scanCanBus].
+     */
+    suspend fun scanCanBus(): List<Int>? {
+        val scanner = protocol as? CanBusScanner ?: return null
+        val ch = writeChar ?: return null
+        return scanner.scanCanBus { cmd -> peripheral.write(ch, cmd, WriteType.WithoutResponse) }
+    }
 
     /**
      * Most recent sample receipt time (epoch ms). 0 means no sample has been
@@ -127,6 +156,9 @@ internal class ConnectionSession(
             service = Uuid.parse(protocol.uuids.serviceUuid),
             characteristic = Uuid.parse(protocol.uuids.writeCharUuid)
         )
+        // Published for [scanCanBus]; every write below still uses the local,
+        // so the poll path is byte-for-byte what it was.
+        this.writeChar = writeChar
 
         observeJob = parentScope.launch {
             try {
@@ -298,6 +330,10 @@ internal class ConnectionSession(
             observeJob?.cancelAndJoin(); observeJob = null
             stateJob?.cancelAndJoin(); stateJob = null
             watchdogJob?.cancelAndJoin(); watchdogJob = null
+            // Before reset(), which is what answers a scan parked on this link:
+            // a scan that reached the wire after the peripheral was gone would
+            // wait out its whole window for a reply that cannot arrive.
+            writeChar = null
             try { peripheral.disconnect() } catch (_: Exception) {}
             protocol.reset()
         }

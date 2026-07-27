@@ -41,6 +41,7 @@ import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -126,7 +127,7 @@ class KableBmsRepository private constructor(
      * actually drives the reconnect / watchdog loops.
      */
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
-) : BmsRepository {
+) : BmsRepository, CanDiscovery {
 
     /** Production constructor used by Koin. */
     constructor(
@@ -2422,6 +2423,40 @@ class KableBmsRepository private constructor(
                 }
             }
         }
+    }
+
+    /**
+     * [CanDiscovery.discoverCanIds] — `PING_CAN` against one live link.
+     *
+     * Four refusals before anything reaches the wire, each with its own message
+     * because they are four different things a rider can fix: no link at that
+     * address (they are editing a vehicle they are not connected to), a link
+     * that is not up, a link that does not speak VESC (a JK BMS has no bus),
+     * and a link whose protocol declines to scan.
+     *
+     * Deliberately **not** guarded by [sessionLock]: the scan holds the link for
+     * seconds, and taking the lock that every connect and disconnect needs would
+     * make a CAN scan block them all. The link is read once and the session is
+     * captured with it; a link torn down underneath us answers null through
+     * `ConnectionSession.tearDown` → `protocol.reset()`, which is the same
+     * outcome as a timeout.
+     */
+    override suspend fun discoverCanIds(address: String): Result<List<Int>> {
+        val link = links.firstOrNull { it.spec.address == address }
+            ?: return Result.failure(IllegalStateException("Not connected to $address"))
+        if (link.status != LinkStatus.ONLINE) {
+            return Result.failure(IllegalStateException("Link $address is not online"))
+        }
+        if (link.spec.protocolKind != ProtocolKind.VESC) {
+            return Result.failure(
+                IllegalStateException("Link $address speaks ${link.spec.protocolKind}, which has no CAN bus")
+            )
+        }
+        val session = link.session
+            ?: return Result.failure(IllegalStateException("Link $address has no session"))
+        val ids = session.scanCanBus()
+            ?: return Result.failure(IllegalStateException("No PING_CAN reply from $address"))
+        return Result.success(ids)
     }
 
     override suspend fun onAppResumed() {

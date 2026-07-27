@@ -239,6 +239,33 @@
     <string name="composer_issue_hostless_vesc_bms">A VESC BMS can only be read through a VESC controller on the same link.</string>
     <string name="composer_issue_unroutable_gateway">Only VESC can carry several sources over one link, so the extra ones will stay offline.</string>
 
+    <!-- Composer discovery (G2 Task 5): the screen learns an address -->
+    <string name="vehicle_source_scan">Scan nearby</string>
+    <string name="scan_sheet_title">Devices in range</string>
+    <string name="scan_sheet_empty">Looking…</string>
+    <string name="scan_sheet_close">Close</string>
+    <string name="scan_role_controller">Controller</string>
+    <string name="scan_role_battery">Battery</string>
+    <string name="scan_role_both">Controller + battery</string>
+    <string name="scan_role_unknown">Unrecognised</string>
+    <string name="scan_add_controller">+ Controller</string>
+    <string name="scan_add_battery">+ Battery</string>
+    <string name="scan_add_wheel">+ Wheel (controller + battery)</string>
+    <string name="can_section">CAN bus behind the head unit</string>
+    <string name="can_scan_start">Find devices on the CAN bus</string>
+    <string name="can_scan_running">Scanning the bus — this takes about 2.5 seconds and cannot be interrupted.</string>
+    <string name="can_scan_unavailable">Connect to the head unit to scan its CAN bus. Nothing is scanned while it is offline.</string>
+    <string name="can_scan_failed">Could not scan: %1$s</string>
+    <string name="can_scan_empty">The head unit answered, and nothing else is on its bus.</string>
+    <string name="can_scan_dismiss">Hide results</string>
+    <string name="can_node_controller">Controller %1$d</string>
+    <string name="can_node_hosted_battery">Battery behind the head unit</string>
+    <string name="can_node_raw">CAN id %1$d</string>
+    <string name="can_node_raw_hosted">answered by the head unit itself (no CAN id)</string>
+    <string name="can_node_added">Already added</string>
+    <string name="can_add_as_controller">Add as controller</string>
+    <string name="can_add_as_battery">Add as battery</string>
+
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_field_secondary_gauge_caption">Clean style only — Classic shows every gauge at once.</string>

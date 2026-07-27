@@ -360,33 +360,75 @@ fun draftOf(vehicle: Vehicle): VehicleDraft {
 
 // ----- mutations, all pure and all total (an impossible request is a no-op) -----
 
+/**
+ * [canId] is defaulted to null — a direct source, which is every add a rider
+ * makes by hand — and set only by CAN discovery, where it is **mandatory**: on a
+ * gateway link a null id claims to be the head unit itself, and a second such
+ * pack is [ComposerIssue.AmbiguousGatewaySource]. See `ComposerCanDiscovery.kt`.
+ */
 fun VehicleDraft.addPack(
     bmsType: BmsType,
     address: String,
-    label: String = ""
+    label: String = "",
+    canId: Int? = null
 ): VehicleDraft = copy(
     packs = packs + PackDraft(
         key = "p-new-$nextKey",
         label = label.ifBlank { "Pack ${packs.size + 1}" },
         bmsType = bmsType,
-        address = address
+        address = address,
+        canId = canId
     ),
     nextKey = nextKey + 1
 )
 
+/** See [addPack] for what [canId] is for and why it defaults to null. */
 fun VehicleDraft.addController(
     controllerType: ControllerType,
     address: String,
-    label: String = ""
+    label: String = "",
+    canId: Int? = null
 ): VehicleDraft = copy(
     controllers = controllers + ControllerDraft(
         key = "c-new-$nextKey",
         label = label.ifBlank { "Controller ${controllers.size + 1}" },
         controllerType = controllerType,
-        address = address
+        address = address,
+        canId = canId
     ),
     nextKey = nextKey + 1
 )
+
+/**
+ * `G §3` flow 3: **one** add producing a controller and a battery on **one
+ * link** — an electric unicycle, which is a motherboard and its own pack behind
+ * a single BLE address.
+ *
+ * Composed from [addController] and [addPack] rather than written out, so there
+ * is still exactly one definition of what each half of the add is (labels,
+ * key allocation, the `nextKey` bump) and a wheel cannot drift away from two
+ * separate adds in any respect except the one that matters.
+ *
+ * **The shared [address] IS the deliverable.** Task 3's review corrected the
+ * reasoning for this add: the value is not the tap it saves — two separate adds
+ * produce the same two rows — it is that a rider who taps it has *told volty the
+ * two sources are one device*, which the app cannot infer from anything on the
+ * wire. `planLinks` groups by address, so both land on one [LinkSpec], one
+ * session, one connection: exactly what `wheelVehicle` builds for a picked
+ * Begode, reachable now from a vehicle that already has other sources.
+ *
+ * The controller's derived battery is left on [DerivedBatteryChoice.AUTO] and
+ * not forced off: the rule resolves it to false the moment this add's pack
+ * exists (`G §6`), which is the same answer `wheelVehicle`'s hard-coded `false`
+ * gives — and unlike that constant, it comes back on if the rider later removes
+ * the pack.
+ */
+fun VehicleDraft.addWheel(
+    controllerType: ControllerType,
+    bmsType: BmsType,
+    address: String,
+    label: String = ""
+): VehicleDraft = addController(controllerType, address, label).addPack(bmsType, address, label)
 
 /** Refuses to remove the last source — see [VehicleDraft.canRemoveSource]. */
 fun VehicleDraft.removePack(key: String): VehicleDraft =

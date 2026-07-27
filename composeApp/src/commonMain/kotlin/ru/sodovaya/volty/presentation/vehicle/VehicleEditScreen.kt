@@ -96,6 +96,7 @@ import volty.composeapp.generated.resources.vehicle_section_alerts
 import volty.composeapp.generated.resources.vehicle_section_sources
 import volty.composeapp.generated.resources.vehicle_source_add_controller
 import volty.composeapp.generated.resources.vehicle_source_add_pack
+import volty.composeapp.generated.resources.vehicle_source_scan
 
 private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
 
@@ -412,7 +413,19 @@ private fun SourcesSection(state: VehicleEditComponent.State, component: Vehicle
         }
     }
 
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+    @OptIn(ExperimentalLayoutApi::class)
+    FlowRow(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        // FIRST, because it is the one that does not ask a rider to know a BLE
+        // MAC by heart (G2 Task 5). The two blank adds below stay: a device that
+        // is out of range, asleep, or simply not advertising has to be
+        // describable, and before this task they were the only way in at all.
+        OutlinedButton(onClick = component::onStartDeviceScan) {
+            Text(stringResource(Res.string.vehicle_source_scan), fontSize = 12.sp)
+        }
         // The type and the link a new source starts with are only its INITIAL
         // values — both are editable on the card that appears, so neither is a
         // decision with a consequence. The link starts blank on purpose rather
@@ -428,6 +441,13 @@ private fun SourcesSection(state: VehicleEditComponent.State, component: Vehicle
             Text(stringResource(Res.string.vehicle_source_add_pack), fontSize = 12.sp)
         }
     }
+
+    // Below the adds rather than above them: it only applies once there IS a
+    // VESC source to scan behind, and on the one-controller vehicle `G §3`'s
+    // first flow builds it is a single line of explanation.
+    CanDiscoverySection(state, component)
+
+    if (state.scanning) DeviceScanSheet(state.scannedDevices, component)
 }
 
 @Composable
