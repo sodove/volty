@@ -315,6 +315,51 @@ class BegodeMotionProtocolTest {
     }
 
     @Test
+    fun theControllerSampleCarriesTheLatchOnHasDutyBecauseZeroCannotSayIt() {
+        // Task 2 recorded that the latch was INVISIBLE on the controller
+        // sample: `dutyPercent() ?: 0f` and the raw value are the same number
+        // at every instant, so nothing downstream could tell "0 % duty" from
+        // "this firmware never fills the field in" — and Part F would show the
+        // ШИМ alarm armed and unable to fire. `hasDuty` is that statement,
+        // and Part D Task 4 added it because Task 4 is what makes a Begode
+        // vehicle able to carry a controller at all.
+        val protocol = BegodeProtocol()
+        repeat(5) {
+            protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+        }
+        val unproven = assertNotNull(protocol.latestMotion(0), "precondition: the frames were decoded")
+        assertEquals(0f, unproven.dutyPercent, 0f, "0 is all the field itself can say")
+        assertFalse(unproven.hasDuty, "…so the sample has to say the rest")
+
+        // One non-zero reading closes the latch, and the flag follows.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 3))
+        val proven = assertNotNull(protocol.latestMotion(0))
+        assertEquals(3f, proven.dutyPercent, 0f)
+        assertTrue(proven.hasDuty)
+
+        // …and a later genuine zero stays MEASURED: the wheel stopped pushing.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+        val stopped = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, stopped.dutyPercent, 0f)
+        assertTrue(stopped.hasDuty, "the latch holds once proved — this zero IS a reading")
+    }
+
+    @Test
+    fun aResetReopensTheDutyLatchOnTheControllerSampleToo() {
+        // Per-wheel evidence: a reconnect may face a different wheel, and the
+        // previous one's proof must not arm this one's alarm.
+        val protocol = protocolFedWithFixture()
+        assertTrue(assertNotNull(protocol.latestMotion(0)).hasDuty, "precondition: the ET Max proved it")
+
+        protocol.reset()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+        assertFalse(
+            assertNotNull(protocol.latestMotion(0)).hasDuty,
+            "the truePWM latch must not survive a reset"
+        )
+    }
+
+    @Test
     fun theLiveFramesFallbackPwmIsNeverPublishedAsDuty() {
         // SYNTHETIC, modelled on the real capture: the ET Max's live frames
         // carry 169 in the bytes WheelLog uses as a FALLBACK hardware PWM,

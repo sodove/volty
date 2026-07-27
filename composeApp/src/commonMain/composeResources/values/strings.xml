@@ -276,7 +276,9 @@
     <string name="alert_unavailable_no_motor_temp">This controller has no motor temperature sensor</string>
     <string name="alert_unavailable_no_esc_temp">This controller has no ESC temperature sensor</string>
     <string name="alert_unavailable_no_speed">This controller reports no speed</string>
-    <string name="alert_availability_unknown">No data yet — connect to check this sensor</string>
+    <!-- Shown for every kind that has an observed layer, DUTY included since
+         Part D Task 4 — so it must not say "sensor": duty is computed, not measured. -->
+    <string name="alert_availability_unknown">No data yet — connect to check</string>
 
     <!-- Motion alert kinds (F §10.2) -->
     <string name="motion_alert_duty">Duty / PWM</string>

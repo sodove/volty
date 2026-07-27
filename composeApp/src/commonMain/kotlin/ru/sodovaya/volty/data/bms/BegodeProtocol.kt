@@ -496,12 +496,12 @@ class BegodeProtocol(
      *
      * **Duty in the not-yet-known window.** [dutyPercent] is null until the
      * hardware PWM field has been seen non-zero once, and that window is NOT
-     * the same statement as 0 % — yet [ControllerData] has no way to say it:
-     * there is no nullable duty and no `hasDuty` predicate, because duty
-     * availability is answered statically per protocol
-     * (`MotionAlertAvailability.reportsDuty`) rather than per sample. Of the
-     * representable values this publishes **0f**, and deliberately not a
-     * negative sentinel:
+     * the same statement as 0 %. [ControllerData.dutyPercent] still cannot say
+     * it — of the representable values this publishes **0f**, deliberately not
+     * a negative sentinel — so the statement travels beside it, on
+     * [ControllerData.hasDuty], which Part D Task 4 added for exactly this and
+     * which `MotionAlertAvailability`'s DUTY branch reads as its observed
+     * layer. Why the number itself stays 0:
      *  - every consumer treats duty as a non-negative 0..100 magnitude compared
      *    against UPPER thresholds — `DutyBands.level`, `AlarmController`,
      *    `MotionAggregator`'s `maxOf` fold, and the Ride gauges, which render it
@@ -517,23 +517,18 @@ class BegodeProtocol(
      *    PWM, a constant 16.9 % on a wheel that never moved); see
      *    [parseLiveFrame], which refuses it.
      *
-     * One consequence, proven by mutation sweep rather than assumed: choosing
-     * 0 makes the latch itself INVISIBLE here. [sawTrueDuty] is false only
-     * while every reading so far has been 0, so `dutyPercent() ?: 0f` and the
-     * raw `dutyPercentValue` are the same number at every instant, and no test
-     * of this class can tell the latch from its absence. The latch still earns
-     * its keep on [dutyPercent], whose null is what a caller able to say
-     * "unknown" would use — this mapping simply has no way to pass it on. Kept
-     * expressed through [dutyPercent] so the intent survives if either side
-     * ever gains a way to say it.
-     *
-     * The residual risk is stated rather than hidden: a firmware that never
-     * fills the PWM field in would leave duty at 0 forever while Part F's
-     * static `reportsDuty[BEGODE] = true` keeps the ШИМ alert armed against
-     * that constant — the silent failure `D §7.2` names. Closing it needs
-     * duty availability to become observable per sample, which is a Part F
-     * decision, not a decode one. On the ET Max the latch closes inside the
-     * first 0x07 frame: a balancing wheel spends 2 % standing still.
+     * Task 2 recorded that choosing 0 made the latch INVISIBLE here —
+     * `dutyPercent() ?: 0f` and the raw `dutyPercentValue` were the same number
+     * at every instant, so no test of this class could tell the latch from its
+     * absence, and the residual risk was a firmware that never fills the PWM
+     * field leaving duty at 0 forever while `reportsDuty[BEGODE] = true` kept
+     * the ШИМ alert armed against that constant. **[hasDuty] closes both.** It
+     * is the same latch, published where a caller can act on it, and
+     * `availabilityFor` now answers DUTY `Unavailable` on a sample that carries
+     * it false instead of arming an alarm that could never fire. On the ET Max
+     * the latch closes inside the first 0x07 frame — a balancing wheel spends
+     * 2 % standing still — so this window is a fraction of a second in
+     * practice, and the guard is for the firmware nobody here has seen.
      *
      * **Absent distances.** [odometerKm] and [tripKm] read 0 before the frames
      * that carry them arrive. 0 is also a real reading (a wheel out of its box,
@@ -562,6 +557,11 @@ class BegodeProtocol(
             // NONE + 0f is how VescValues.decodeValues says the same thing.
             speedSource = if (speed != null) SpeedSource.REPORTED else SpeedSource.NONE,
             dutyPercent = dutyPercent() ?: DUTY_NOT_YET_REPORTED_PERCENT,
+            // The latch, finally said out loud. `dutyPercent` above cannot
+            // carry it (0 is both "not yet reported" and a real 0 %), so this
+            // flag is what stops Part F arming the ШИМ alarm against a
+            // placeholder — see [ControllerData.hasDuty] and the KDoc below.
+            hasDuty = dutyPercent() != null,
             // The live frame's PHASE current (bytes 10..11) — a different
             // quantity from the battery current, and both are wanted (D §6.3).
             // Read from [phaseCurrentA]/[boardTempC], which [parseLiveFrame]

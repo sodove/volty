@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.ble
 
+import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
 import ru.sodovaya.volty.data.bms.MotionSource
@@ -24,13 +25,35 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  *
  * Battery kinds return null rather than being absent: this function answers
  * "is there a CONTROLLER protocol for this kind", and every kind has an answer.
- * [ProtocolKind.BEGODE] is the one that matters — it is reachable from a
- * [ru.sodovaya.volty.domain.model.Pack] AND from
- * [ControllerType.BEGODE], and `toBmsType()` maps it to a real
- * [ru.sodovaya.volty.domain.model.BmsType], so it is the only unsupported
- * controller kind that would NOT throw on its own. Returning null for it here
- * is what keeps a Begode *controller* refused instead of silently decoded as a
- * battery on a Ride dashboard that can never show motion.
+ *
+ * ### [ProtocolKind.BEGODE] — the kind that is both
+ * A wheel is a controller AND two batteries over ONE link, so this kind is
+ * reachable from a [ru.sodovaya.volty.domain.model.Pack] and from
+ * [ControllerType.BEGODE] alike, and `toBmsType()` maps it to a real
+ * [ru.sodovaya.volty.domain.model.BmsType] — it is the one controller kind that
+ * would not throw on its own if this function got it wrong.
+ *
+ * Until Part D Task 4 it answered **null**, deliberately: `BegodeProtocol` was
+ * a battery decoder, and returning it here would have put a Ride dashboard that
+ * can never show motion in front of a rider. That reason expired when Task 2
+ * made `BegodeProtocol` a [MotionSource] — the same 20-byte frames carry speed,
+ * duty, mileage and two temperatures — so the branch now returns the wheel's
+ * own protocol and the picker offers it.
+ *
+ * The BEGODE arm is answered for EVERY Begode link, including a battery-only
+ * one, and that is not a widening: it is the same class the battery fallback
+ * would have built one line further down, so a wheel configured as batteries
+ * only decodes exactly as it always did. What a link actually *does* with the
+ * motion is the link plan's decision — a plan owning no controller drops the
+ * sample (`KableBmsRepository.makeLinkOnMotionSample`).
+ *
+ * [cellCount] is that branch's [motor]: vehicle configuration the decoder
+ * cannot read off any frame and needs in order to be honest. The live frame's
+ * voltage is on Begode's 67.2 V reference, and without the pack's cell count
+ * `BegodeProtocol` publishes `inputVoltageV = 0` — which the Ride dashboard
+ * renders as a confident **"0.0 kW"** and "0.0 Wh/km", not as a blank. Passing
+ * it here is therefore part of the branch, not a tidy-up. Null (the picker's
+ * probe, every non-Begode caller) is honest absence.
  *
  * Exhaustive with NO `else`, like [ProtocolKind.toBmsType] and
  * `KableBmsRepository.batteryBmsTypeOrNull`: a new [ProtocolKind] must force a
@@ -56,7 +79,8 @@ fun controllerMotionProtocol(
     deriveBattery: Boolean,
     motor: MotorConfig,
     link: LinkSpec? = null,
-    motorFor: (globalControllerIndex: Int) -> MotorConfig = { motor }
+    motorFor: (globalControllerIndex: Int) -> MotorConfig = { motor },
+    cellCount: Int? = null
 ): BmsProtocol? = when (kind) {
     ProtocolKind.VESC ->
         if (link != null && link.isGatewayLink) {
@@ -69,11 +93,13 @@ fun controllerMotionProtocol(
         } else {
             VescProtocol(deriveBattery = deriveBattery, motor = motor)
         }
-    // No motion decoder yet — Parts D (FarDriver) and E (Kelly).
+    // A wheel: one controller and two packs over one link. See the KDoc.
+    ProtocolKind.BEGODE -> BegodeProtocol(cellCount = cellCount)
+    // No motion decoder yet — Parts E (FarDriver) and H (Kelly).
     ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
-    // Battery kinds: not a controller protocol at all. See the KDoc on BEGODE.
+    // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
-    ProtocolKind.DALY, ProtocolKind.BEGODE, ProtocolKind.VESC_BMS -> null
+    ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null
 }
 
 /**

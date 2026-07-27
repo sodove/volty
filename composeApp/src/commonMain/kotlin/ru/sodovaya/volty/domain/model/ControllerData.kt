@@ -11,6 +11,34 @@ data class ControllerData(
     val speedKmh: Float = 0f,
     val speedSource: SpeedSource = SpeedSource.NONE,
     val dutyPercent: Float = 0f,
+    /**
+     * Whether [dutyPercent] is a MEASUREMENT rather than a placeholder — the
+     * observed half of duty availability, and the twin of [hasMotorTemp].
+     *
+     * Duty has no "absent" encoding: every consumer treats it as a
+     * non-negative 0..100 magnitude compared against upper thresholds, so an
+     * unreported duty has to be published as `0f`, which is indistinguishable
+     * from a genuine 0 %. A decoder whose hardware has not proved it reports
+     * duty at all (Begode's `truePWM` latch — WheelLog's own name for it) would
+     * therefore leave the ШИМ alarm, the headline safety feature for a wheel,
+     * **displayed as armed and permanently unable to fire**: `F §10`'s
+     * silent-dead-alarm class, on the one alert a EUC rider most needs.
+     *
+     * **Defaults to `true`**: the static
+     * [ru.sodovaya.volty.domain.alert.reportsDuty] table already refuses the
+     * protocols that report no duty at all, so a decoder that says nothing here
+     * keeps exactly the behaviour it had — only a decoder that can tell
+     * "reported" from "not yet reported" has anything to add, and only it sets
+     * this.
+     *
+     * Read by [ru.sodovaya.volty.domain.alert.availabilityFor]'s DUTY branch as
+     * its second layer, and folded across controllers by
+     * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate] with `any` —
+     * one controller that measures duty is enough for the vehicle, because the
+     * aggregate's `maxOf { dutyPercent }` already carries that controller's real
+     * reading.
+     */
+    val hasDuty: Boolean = true,
     val motorCurrentA: Float = 0f,
     val batteryCurrentA: Float = 0f,
     val inputVoltageV: Float = 0f,

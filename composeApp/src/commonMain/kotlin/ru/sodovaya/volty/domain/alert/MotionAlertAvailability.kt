@@ -26,7 +26,15 @@ sealed interface AlertUnavailableReason {
     /** The vehicle has no motor controller at all, so there is no motion telemetry. */
     data object NoController : AlertUnavailableReason
 
-    /** This controller protocol does not report duty/ШИМ at all (`H §7` for Kelly KLS). */
+    /**
+     * This controller does not report duty/ШИМ — either because the protocol
+     * never does (`H §7` for Kelly KLS, layer 1) or because this particular
+     * wheel's firmware has been observed not to fill the field in (layer 2,
+     * [ControllerData.hasDuty]). One reason for both because the rider-facing
+     * statement is the same one — "this hardware does not tell us its duty" —
+     * and because the second case is only ever reached with a live sample in
+     * hand, so it is a claim we have earned.
+     */
     data class ControllerReportsNoDuty(val type: ControllerType) : AlertUnavailableReason
 
     /** No motor thermistor is wired on this controller ([ControllerData.hasMotorTemp]). */
@@ -64,7 +72,8 @@ sealed interface AlertAvailability {
 
     /**
      * Layer 1 permits this kind, but no sample has been seen, so whether the
-     * sensor is actually wired is not yet known.
+     * hardware actually supplies it is not yet known — is the sensor wired, and
+     * (since Part D Task 4) does this firmware report a duty at all.
      *
      * **At arming time Unknown behaves as not-armable** — no sample means there
      * is no value to compare a threshold against, so an alarm could not fire
@@ -117,6 +126,12 @@ val AlertAvailability.isConfigurable: Boolean get() = this !is AlertAvailability
  * Whether this controller protocol reports duty/ШИМ at all — a permanent
  * property of the protocol, observable without connecting.
  *
+ * **Layer 1 only.** A `true` here means the protocol CAN report duty, not that
+ * a given unit does: [ControllerData.hasDuty] is the observed second layer, and
+ * [availabilityFor] requires both. Keep this answering the protocol question —
+ * a firmware that turns out not to fill the field in is the sample's business,
+ * not this table's.
+ *
  * Exhaustive with no `else`: a new [ControllerType] must answer this at compile
  * time rather than inherit an optimistic default, because the default silently
  * offers riders an alarm their hardware can never raise.
@@ -155,11 +170,11 @@ internal val ControllerType.reportsDuty: Boolean
  * **A disconnected placeholder is not evidence, and this function enforces
  * that.** `activeMotion` is a non-nullable flow that emits a default
  * `ControllerData()` whenever nothing is connected, and that placeholder carries
- * `hasMotorTemp = false`, `speedSource = NONE` and `escTempC = 0f` — taken as
- * evidence it would tell a rider who has never connected both that their motor
- * thermistor is missing *and* that their ESC sensor is fine. So a sample with
- * [ControllerData.isConnected] false is discarded here and treated exactly like
- * null.
+ * `hasMotorTemp = false`, `speedSource = NONE`, `escTempC = 0f` and
+ * `hasDuty = true` — taken as evidence it would tell a rider who has never
+ * connected both that their motor thermistor is missing *and* that their ESC
+ * sensor and their duty are fine. So a sample with [ControllerData.isConnected]
+ * false is discarded here and treated exactly like null.
  *
  * That guard is sound rather than a lucky proxy:
  * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate] is the only
@@ -201,10 +216,28 @@ private fun availabilityOf(
     controllers: List<Controller>,
     latestMotion: ControllerData?
 ): AlertAvailability = when (kind) {
-    // Duty is settled by the protocol alone — an ESC computes it, there is no
-    // sensor to be missing — so it never resolves to Unknown. A vehicle whose
-    // controllers ALL lack duty cannot have it; one controller that reports duty
-    // is enough, because the vehicle-level aggregate folds them together.
+    // Duty is decided in BOTH layers, like every other kind — the difference
+    // is only that its layer 1 can rule it out on its own.
+    //
+    // Layer 1, the protocol: a vehicle whose controllers ALL lack duty cannot
+    // have it, and no sample can rescue that (a Kelly's `dutyPercent` field is
+    // not a duty measurement whatever arrives in it). One controller that
+    // reports duty is enough, because the vehicle-level aggregate folds them
+    // together.
+    //
+    // Layer 2, the sample (`D §7.2`, added by Part D Task 4): "this protocol
+    // reports duty" is not the same statement as "this wheel's firmware fills
+    // the field in". Begode latches WheelLog's `truePWM` on the first non-zero
+    // reading and publishes 0 until then — indistinguishable from a genuine
+    // 0 % — so a firmware that never reports PWM would leave the ШИМ alarm
+    // displayed as armed and permanently unable to fire. ControllerData.hasDuty
+    // is what tells the two apart; it defaults to true, so every other decoder
+    // reaches Available exactly as before.
+    //
+    // No sample ⇒ Unknown, never Unavailable, for the same reason as the sensor
+    // kinds: the rider opening settings while disconnected must keep their
+    // thresholds editable (isConfigurable) and must never be told their
+    // hardware lacks something we have not looked for.
     //
     // HAZARD for Part H (and any future non-duty decoder): MotionAggregator
     // folds duty as `maxOf { it.dutyPercent }`. On a mixed VESC + Kelly vehicle
@@ -213,20 +246,20 @@ private fun availabilityOf(
     // non-zero `dutyPercent` into a field the protocol does not actually report
     // would therefore raise the alarm on a number that is not a duty
     // measurement. `H §7`'s table already says `dutyPercent = 0`; keep it there.
-    MotionAlertKind.DUTY ->
-        if (controllers.any { it.controllerType.reportsDuty }) {
-            AlertAvailability.Available
+    MotionAlertKind.DUTY -> {
+        val noDuty = AlertUnavailableReason.ControllerReportsNoDuty(
+            // Same "lowest index wins" rule as Vehicle.primaryController,
+            // spelled out because that helper's nullable type does not
+            // reflect the non-emptiness already established above — and a
+            // fallback elvis here would imply a nullability that cannot occur.
+            controllers.minBy { it.index }.controllerType
+        )
+        if (!controllers.any { it.controllerType.reportsDuty }) {
+            AlertAvailability.Unavailable(noDuty)
         } else {
-            AlertAvailability.Unavailable(
-                // Same "lowest index wins" rule as Vehicle.primaryController,
-                // spelled out because that helper's nullable type does not
-                // reflect the non-emptiness already established above — and a
-                // fallback elvis here would imply a nullability that cannot occur.
-                AlertUnavailableReason.ControllerReportsNoDuty(
-                    controllers.minBy { it.index }.controllerType
-                )
-            )
+            observed(latestMotion, noDuty) { it.hasDuty }
         }
+    }
 
     // The rest are sensor questions, answerable only from a live sample.
     MotionAlertKind.SPEED -> observed(latestMotion, AlertUnavailableReason.NoSpeedSource) {

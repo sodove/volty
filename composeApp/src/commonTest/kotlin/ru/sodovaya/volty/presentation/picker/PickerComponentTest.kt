@@ -403,10 +403,18 @@ class PickerComponentTest {
 
     @Test
     fun `every unsupported controller type is named in its own refusal`() {
-        // A pure check on the gate itself, so the three types the picker offers
-        // but cannot connect are all covered without three component tests.
-        assertEquals(null, unsupportedControllerReason(ControllerType.VESC))
-        listOf(ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE).forEach { t ->
+        // A pure check on the gate itself, so the types the picker offers but
+        // cannot connect are all covered without one component test each.
+        //
+        // The gate is DERIVED from `controllerMotionProtocol`, so this list
+        // moves on its own as parts land — Part D Task 4 gave BEGODE a branch
+        // (a wheel is a controller over its battery link) and the refusal went
+        // away with no change in the picker. FarDriver is Part E's, Kelly is
+        // Part H's.
+        listOf(ControllerType.VESC, ControllerType.BEGODE).forEach { t ->
+            assertEquals(null, unsupportedControllerReason(t), "$t is connectable and must not be refused")
+        }
+        listOf(ControllerType.FARDRIVER, ControllerType.KELLY).forEach { t ->
             val reason = unsupportedControllerReason(t)
             assertTrue(
                 reason != null && reason.contains(t.label),

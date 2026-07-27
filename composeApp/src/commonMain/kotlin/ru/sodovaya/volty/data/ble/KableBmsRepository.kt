@@ -2465,8 +2465,12 @@ class KableBmsRepository private constructor(
      * offerable in one edit — writing a protocol into this `when` instead would
      * leave the picker refusing a controller that works.
      *
-     * Every battery kind falls through (null) to [createProtocol] (BmsType)
-     * unchanged.
+     * Every battery-only kind falls through (null) to [createProtocol]
+     * (BmsType) unchanged. [ProtocolKind.BEGODE] no longer does, because a
+     * wheel is a controller and two packs over one link and the controller
+     * factory answers for it — the SAME [BegodeProtocol] the fallback would
+     * have built, now told the pack's cell count. A Begode vehicle configured
+     * as batteries only therefore decodes exactly as before.
      *
      * The whole [spec] goes to the factory, not just its first controller's
      * kind: a GATEWAY link (CAN-forwarded controllers, a hosted battery)
@@ -2501,7 +2505,21 @@ class KableBmsRepository private constructor(
             link = spec,
             motorFor = { idx ->
                 vehicle?.controllers?.firstOrNull { it.index == idx }?.motor ?: MotorConfig()
-            }
+            },
+            // The Begode branch's counterpart of `motor`: configuration the
+            // decoder cannot read off any frame. The live frame's voltage is on
+            // Begode's 67.2 V reference and needs the pack's series count to
+            // become volts; without it `inputVoltageV` — and `powerW`, which is
+            // built from it — stay 0, which the Ride dashboard renders as a
+            // confident "0.0 kW" rather than as a blank. Taken from the FIRST
+            // PACK THIS LINK OWNS rather than the vehicle's pack 0, so a
+            // multi-link vehicle cannot hand one wheel another's profile; for a
+            // wheel the two coincide, and pack 0 is also what
+            // [withScaledBegodeLiveVoltage] scales the battery side by.
+            // Null — a link owning no pack at all — is honest absence, and the
+            // protocol publishes no voltage rather than a wrong one.
+            cellCount = spec.ownedPacks.firstOrNull()?.globalIndex
+                ?.let { idx -> vehicle?.packs?.firstOrNull { it.index == idx }?.cellCount }
         )?.let { return it }
         return createProtocol(spec.protocolKind.toBmsType())
     }

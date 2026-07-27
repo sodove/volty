@@ -101,8 +101,8 @@ class MotionAlertAvailabilityTest {
         )
     }
 
-    @Test fun vesc_has_duty_available_with_no_sample_at_all() {
-        val availability = availabilityFor(vehicle(ControllerType.VESC), latestMotion = null)
+    @Test fun vesc_has_duty_available_on_its_first_sample() {
+        val availability = availabilityFor(vehicle(ControllerType.VESC), fullSample())
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
     }
 
@@ -111,9 +111,26 @@ class MotionAlertAvailabilityTest {
         // VESC beside a Kelly still supplies duty.
         val availability = availabilityFor(
             vehicle(ControllerType.KELLY, ControllerType.VESC),
-            latestMotion = null
+            fullSample()
         )
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
+    }
+
+    @Test fun the_static_layer_refuses_duty_even_on_a_sample_that_claims_it() {
+        // Layer 1 comes first and no sample can rescue it: `hasDuty` says the
+        // decoder MEASURED the field it filled, not that the field is a duty.
+        // A Kelly decoder writing a plausible number into `dutyPercent` (H §7
+        // forbids it, but the type cannot) must still never arm the alarm.
+        val availability = availabilityFor(
+            vehicle(ControllerType.KELLY),
+            fullSample().copy(hasDuty = true)
+        )
+        assertEquals(
+            AlertAvailability.Unavailable(
+                AlertUnavailableReason.ControllerReportsNoDuty(ControllerType.KELLY)
+            ),
+            availability[MotionAlertKind.DUTY]
+        )
     }
 
     @Test fun the_static_duty_table_answers_every_controller_type() {
@@ -154,6 +171,36 @@ class MotionAlertAvailabilityTest {
         assertEquals(AlertAvailability.Available, availability[MotionAlertKind.MOTOR_TEMP])
     }
 
+    @Test fun a_sample_that_reports_no_measured_duty_makes_duty_unavailable() {
+        // `D §7.2`, the reason this layer exists: a Begode's `truePWM` latch is
+        // open until the wheel reports a non-zero PWM once, and until then
+        // `dutyPercent` reads 0 — indistinguishable from a genuine 0 %. Arming
+        // the ШИМ alarm against that constant is F §10's silent-dead-alarm.
+        val unmeasured = fullSample().copy(dutyPercent = 0f, hasDuty = false)
+        val availability = availabilityFor(vehicle(ControllerType.BEGODE), unmeasured)
+        assertEquals(
+            AlertAvailability.Unavailable(
+                AlertUnavailableReason.ControllerReportsNoDuty(ControllerType.BEGODE)
+            ),
+            availability[MotionAlertKind.DUTY]
+        )
+        // and the gate is per kind — the wheel's other alarms are untouched.
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.SPEED])
+        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.ESC_TEMP])
+    }
+
+    @Test fun hasDuty_defaults_to_true_so_no_other_decoder_had_to_change() {
+        // The flag is opt-IN to absence: only a decoder that can tell "reported"
+        // from "not yet reported" sets it, and every other sample keeps exactly
+        // the availability it had before the layer existed.
+        assertTrue(ControllerData().hasDuty)
+        assertEquals(
+            AlertAvailability.Available,
+            availabilityFor(vehicle(ControllerType.VESC), fullSample())[MotionAlertKind.DUTY],
+            "fixture check: fullSample() never sets hasDuty, so it must inherit true"
+        )
+    }
+
     @Test fun no_speed_source_makes_speed_unavailable() {
         val availability = availabilityFor(
             vehicle(ControllerType.VESC),
@@ -186,37 +233,37 @@ class MotionAlertAvailabilityTest {
         assertEquals(SpeedSource.NONE, placeholder.speedSource)
         assertTrue(placeholder.hasEscTemp, "the false-Available half of the trap")
 
+        // The third half of the trap, added with the observed duty layer: the
+        // placeholder's hasDuty is TRUE (the field's default), so taken as
+        // evidence it would also say "your wheel measures its PWM".
+        assertTrue(placeholder.hasDuty, "the other false-Available half of the trap")
+
         val availability = availabilityFor(vehicle(ControllerType.VESC), placeholder)
 
-        for (kind in listOf(
-            MotionAlertKind.SPEED,
-            MotionAlertKind.MOTOR_TEMP,
-            MotionAlertKind.ESC_TEMP
-        )) {
+        for (kind in MotionAlertKind.entries) {
             assertEquals(
                 AlertAvailability.Unknown,
                 availability[kind],
                 "$kind: a disconnected placeholder was treated as an observation"
             )
         }
-        // Duty is a protocol fact, so it is unaffected by there being no sample.
-        assertEquals(AlertAvailability.Available, availability[MotionAlertKind.DUTY])
     }
 
-    @Test fun a_disconnected_placeholder_arms_no_sensor_dependent_kind() {
-        // Every kind whose availability depends on a sensor is dropped, because
-        // the placeholder is not an observation. DUTY survives on purpose: it is
-        // a protocol fact that owes nothing to a sample, and the engine simply
-        // has no duty reading to compare while the link is down.
+    @Test fun a_disconnected_placeholder_arms_nothing_at_all() {
+        // The placeholder is not an observation, so no kind may arm off it —
+        // DUTY included since Part D Task 4 gave duty an observed layer. Note
+        // this costs the alarm nothing: while the link is down there is no
+        // reading to compare a threshold against anyway, and both production
+        // callers re-gate on every live sample.
         val armed = armedRules(
             vehicle(ControllerType.VESC),
             ControllerData(),
             AlarmDefaults.all()
         )
         assertEquals(
-            listOf(MotionAlertKind.DUTY),
-            armed.rules.map { it.kind },
-            "a disconnected placeholder armed a sensor-dependent alarm"
+            ArmedRules.NONE,
+            armed,
+            "a disconnected placeholder armed an alarm"
         )
     }
 
@@ -233,16 +280,17 @@ class MotionAlertAvailabilityTest {
         )
     }
 
-    @Test fun no_sample_yields_unknown_not_unavailable_for_the_sensor_dependent_kinds() {
+    @Test fun no_sample_yields_unknown_not_unavailable_for_every_observed_kind() {
         // The rider opens settings while disconnected. We must not tell them
-        // their motor has no thermistor — we have never looked.
+        // their motor has no thermistor — we have never looked. DUTY joined
+        // them in Part D Task 4: "this protocol reports duty" is not the same
+        // statement as "this wheel's firmware fills the field in", and the
+        // second is a sample's business. Unknown, never Unavailable, so the
+        // thresholds stay editable ([isConfigurable]) while nothing may arm.
         val availability = availabilityFor(vehicle(ControllerType.VESC), latestMotion = null)
-        for (kind in listOf(
-            MotionAlertKind.SPEED,
-            MotionAlertKind.MOTOR_TEMP,
-            MotionAlertKind.ESC_TEMP
-        )) {
+        for (kind in MotionAlertKind.entries) {
             assertEquals(AlertAvailability.Unknown, availability[kind], "$kind with no sample")
+            assertTrue(availability.getValue(kind).isConfigurable, "$kind must stay editable")
         }
     }
 

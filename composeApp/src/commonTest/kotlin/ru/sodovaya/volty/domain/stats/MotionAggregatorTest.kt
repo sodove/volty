@@ -64,6 +64,39 @@ class MotionAggregatorTest {
             MotionAggregator.aggregate(listOf(state(0, derived))).speedSource)
     }
 
+    @Test fun hasDuty_folds_with_any_so_one_measuring_controller_carries_the_vehicle() {
+        // The fold that keeps a MIXED vehicle's duty alarm alive. `dutyPercent`
+        // is folded with maxOf, so a VESC beside a Begode whose truePWM latch
+        // is still open contributes the only real reading — and the flag has to
+        // travel with it. Folding with `all` (or leaving the flag unfolded and
+        // inheriting the default) would lose duty availability outright, which
+        // is a worse bug than the one the flag exists for.
+        val measuring = ControllerData(dutyPercent = 62f, isConnected = true)
+        val notMeasuring = ControllerData(dutyPercent = 0f, hasDuty = false, isConnected = true)
+
+        val mixed = MotionAggregator.aggregate(listOf(state(0, measuring), state(1, notMeasuring)))
+        assertTrue(mixed.hasDuty, "one controller that measures duty is enough")
+        assertEquals(62f, mixed.dutyPercent, "…and it is that controller's reading the fold carries")
+
+        // Order must not matter — `any` over the whole list, not the first.
+        assertTrue(MotionAggregator.aggregate(listOf(state(0, notMeasuring), state(1, measuring))).hasDuty)
+
+        // The negative: with nobody measuring, the vehicle measures nothing.
+        assertFalse(
+            MotionAggregator.aggregate(listOf(state(0, notMeasuring), state(1, notMeasuring))).hasDuty,
+            "an aggregate that claims duty nobody measured re-arms the dead alarm"
+        )
+        // Offline controllers are not evidence either way.
+        assertFalse(
+            MotionAggregator.aggregate(
+                listOf(state(0, notMeasuring), state(1, measuring, online = false))
+            ).hasDuty,
+            "an offline controller's duty is not an observation"
+        )
+        // And the default carries through untouched for every other decoder.
+        assertTrue(MotionAggregator.aggregate(listOf(state(0, measuring))).hasDuty)
+    }
+
     @Test fun faults_labelled_only_when_more_than_one_online() {
         val a = ControllerData(faults = listOf("OVERTEMP"), isConnected = true)
         val one = MotionAggregator.aggregate(listOf(state(0, a)))

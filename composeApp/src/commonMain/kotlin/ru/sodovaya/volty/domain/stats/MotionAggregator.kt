@@ -43,6 +43,14 @@ object MotionAggregator {
             speedKmh = d.maxOf { it.speedKmh },
             speedSource = speedSource,
             dutyPercent = d.maxOf { it.dutyPercent },
+            // `any`, exactly like hasMotorTemp below: one controller that
+            // MEASURES duty is enough for the vehicle, because the maxOf fold
+            // above already carries that controller's real reading. Folding
+            // with `all` (or dropping the fold and inheriting the default)
+            // would cost a mixed VESC + Begode vehicle its duty availability
+            // outright the moment the wheel's truePWM latch is still open —
+            // a worse bug than the unmeasured-duty one the flag exists for.
+            hasDuty = d.any { it.hasDuty },
             motorCurrentA = d.sumOf { it.motorCurrentA.toDouble() }.toFloat(),
             batteryCurrentA = d.sumOf { it.batteryCurrentA.toDouble() }.toFloat(),
             inputVoltageV = d.map { it.inputVoltageV }.average().toFloat(),
