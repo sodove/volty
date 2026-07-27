@@ -100,3 +100,86 @@ and set `MotionAlertAvailability`'s static `reportsDuty` entry for `BEGODE` to
 `false`. That entry is currently `true`, **inferred from this spec's §2/§3 text
 rather than from hardware**, and is pinned by a test so this part has to decide
 it deliberately.
+
+---
+
+## 8. §2, §3 and §6 answered from WheelLog's source (2026-07-27)
+
+The product owner asked why we were reasoning from a stationary capture instead
+of reading WheelLog, which this protocol already cites. Fair question — and the
+answer overturned the part's scope.
+
+**The comment that caused it.** `BegodeProtocol` says of frame `0x07`:
+*"undocumented; WheelLog does not decode it either. Ignored deliberately."*
+**That is false.** WheelLog decodes `0x07`, and it carries the three numbers this
+part most needed. Everything below is from
+`app/src/main/java/com/cooper/wheellog/utils/GotwayAdapter.java` and
+`WheelData.java` (GPL-3.0). **Take the facts, not the code** — the existing
+"layout only" note is the boundary this project keeps.
+
+### 8.1 Frame `0x07` — battery current, motor temperature, true PWM
+
+All signed big-endian 16-bit:
+
+| Bytes | Field | WheelLog handling | ET Max capture |
+|---|---|---|---|
+| 2..3 | **battery current** | `setCurrent(-1 × value)`, hundredths of an amp | 65, 54, 20, 37, 89, 82 → 0.2–0.9 A idle, live |
+| 6..7 | **motor temperature** | `setTemperature2(value × 100)` | `0x0014` = 20 °C |
+| 8..9 | **true hardware PWM** | `if (abs(v) > 0) truePWM = true; setOutput(v × 100)`, then `updatePwm()` = `output / 10000` as a 0..1 fraction | `0x0002` = **2 %**, a balancing wheel |
+
+**So duty percent is the raw value of bytes 8..9, reported by the hardware.**
+§3's two-case framing collapses: the wheel reports PWM, so **no derivation is
+implemented**. WheelLog's `calculatePwm()` fallback needs rider-configured
+rotation-speed / rotation-voltage / power-factor constants and only runs when
+hardware PWM is absent. `truePWM` latches on the first non-zero value; "never
+seen a non-zero" means *not yet known*, not zero duty.
+
+**§7.2's `reportsDuty[BEGODE]` therefore stays `true`, on evidence rather than
+on prose.** The wheel's ШИМ alarm — Part F's headline feature — is real.
+
+**§2's motor-temperature claim is wrong for this wheel.** It says wheels expose
+one board temperature and `hasMotorTemp = false`. The ET Max reports both: 20 °C
+motor against 27.5 °C board. Set the flag from what the wheel actually sends.
+
+**§6.3 (current split) is answered:** `0x00` bytes 10..11 are **phase** current,
+`0x07` bytes 2..3 are **battery** current. Both can be populated honestly.
+
+### 8.2 Corrections to the live `0x00` frame
+
+- **Speed** is bytes 4..5 signed BE, and WheelLog computes `round(raw × 3.6)`
+  into a field stored in **tenths** of km/h — so **km/h = raw × 0.36**, the raw
+  unit being 0.1 m/s. An earlier reading of this plan guessed hundredths of km/h;
+  that is wrong by 3.6×, and the implementer independently flagged the same
+  discrepancy from memory before the source was fetched.
+- **Trip distance is bytes 8..9**, unsigned BE, metres. Bytes 6..7 are **not read
+  by WheelLog at all** — the `0x003d` = 61 sitting there in the capture is not a
+  distance and must not be decoded as one.
+- Total distance from frame `0x04` is bytes 2..5 BE metres, as already commented.
+
+### 8.3 Voltage scaling — Volty can do better than WheelLog
+
+WheelLog does not derive the scale either: it uses a **rider-chosen setting**
+with multipliers 1.0 / 1.25 / 1.5 / 1.738 / 2.0 / 2.5 / 2.25 over the 67.2 V
+base. Volty already knows the vehicle's cell count, and 40S × 4.2 V = 168 V is
+exactly the ×2.5 this wheel needs — so the scale can be **derived from
+configuration the rider has already given us**, with no extra setting. §6.2's
+"profile entry" question is answered: cell count is the profile.
+
+### 8.4 Newly in scope — frame `0x04` carries alerts and settings
+
+Beyond the odometer, `0x04` holds a settings word at bytes 6..7 (pedal mode,
+speed alarms, roll angle, an **in-miles** flag), power-off time at 8..9,
+**tiltback speed** at 10..11, LED mode at 13, an **alert byte at 14** and light
+mode at 15. The alert bits are: speed-alarm ×2, low voltage, over voltage, over
+temperature, hall-sensor error, transport mode.
+
+That is a genuine `ControllerData.faults` source for a wheel, and tiltback speed
+is a rider-meaningful number. Both are additions to this part's scope.
+
+### 8.5 What still needs the wheel
+
+Speed reads zero in every frame of the only capture, so its **offset and
+signedness are pinned by synthetic frames** and its scale rests on WheelLog's
+source rather than on measurement. One `:dumper` capture of a moving wheel
+settles it, and would also confirm the odometer's unit (8 565 341 → 8 565 km is
+plausible for an ET Max; if the wheel's display reads ~856 km, the unit is wrong).
