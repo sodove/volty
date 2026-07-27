@@ -945,7 +945,7 @@ class BegodeMotionProtocolTest {
         // tiltback, and the tests that do are synthetic.
         val protocol = protocolFedWithFixture()
         assertNull(
-            protocol.tiltbackSpeedKmh(),
+            protocol.tiltbackSpeed(),
             "200 is the wheel's unset marker, not a 200 km/h tiltback"
         )
     }
@@ -969,7 +969,7 @@ class BegodeMotionProtocolTest {
                 alertBitmap = 0x00
             )
         )
-        assertEquals(50f, assertNotNull(protocol.tiltbackSpeedKmh()), 0f)
+        assertEquals(50f, assertNotNull(protocol.tiltbackSpeed()), 0f)
     }
 
     @Test
@@ -980,7 +980,7 @@ class BegodeMotionProtocolTest {
         fun tiltbackOf(raw: Int): Float? {
             val protocol = BegodeProtocol()
             protocol.onNotification(odometerFrame(etMaxOdometerBytes(), tiltbackRaw = raw))
-            return protocol.tiltbackSpeedKmh()
+            return protocol.tiltbackSpeed()
         }
         assertEquals(99f, assertNotNull(tiltbackOf(99), "99 is a real tiltback speed"), 0f)
         assertNull(tiltbackOf(100), "100 is the first unset value")
@@ -1003,7 +1003,7 @@ class BegodeMotionProtocolTest {
         protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
         protocol.onNotification(odometerFrame(etMaxOdometerBytes(), tiltbackRaw = 50))
 
-        assertEquals(50f, assertNotNull(protocol.tiltbackSpeedKmh()), 0f)
+        assertEquals(50f, assertNotNull(protocol.tiltbackSpeed()), 0f)
         val m = assertNotNull(protocol.latestMotion(0))
         assertEquals(3.6f, m.speedKmh, 1e-3f, "the wheel's speed, not its tiltback setting")
         assertEquals(2f, m.dutyPercent, 0f)
