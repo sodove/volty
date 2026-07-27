@@ -202,33 +202,112 @@ class KableBmsRepositoryBegodeFunnelTest {
             "a $BEGODE_FRAME_BYTES-byte frame cannot tile a $BEGODE_MTU_PAYLOAD-byte notification"
         )
 
-        val atRealBoundaries = BegodeProtocol(cellCount = 40)
-        chunks.forEach { atRealBoundaries.onNotification(it) }
+        val stream = chunks.fold(ByteArray(0)) { acc, c -> acc + c }
+        assertEquals(
+            0, stream.size % BEGODE_FRAME_BYTES,
+            "the capture is a whole number of frames end to end, with no gaps to hide a loss in"
+        )
+        val framesInTheCapture = stream.size / BEGODE_FRAME_BYTES
+
+        val atRealBoundaries = replayCountingDecodes(chunks)
+        val atSevenBytes = replayCountingDecodes(stream.chunkedInto(7))
+
+        // (1) Same VALUES. What the wheel ends up saying cannot depend on where
+        // the radio split the stream. Timestamp is stamped per rebuild, so it
+        // is the one field that may legitimately differ between two replays.
         val real = assertNotNull(
-            atRealBoundaries.latestMotion(0),
+            atRealBoundaries.motion,
             "the capture must decode motion through its real MTU-23 boundaries"
         )
-
-        val stream = chunks.fold(ByteArray(0)) { acc, c -> acc + c }
-        val atSevenBytes = BegodeProtocol(cellCount = 40)
-        var i = 0
-        while (i < stream.size) {
-            atSevenBytes.onNotification(stream.copyOfRange(i, minOf(i + 7, stream.size)))
-            i += 7
-        }
         val recut = assertNotNull(
-            atSevenBytes.latestMotion(0),
+            atSevenBytes.motion,
             "the same bytes cut into 7-byte notifications must still decode"
         )
-
-        // Timestamp is stamped per rebuild, so it is the one field that may
-        // legitimately differ between two runs over the same bytes.
         assertEquals(
             real.copy(timestamp = recut.timestamp),
             recut,
             "the wheel's motion must not depend on where the radio split the stream"
         )
+
+        // (2) Same NUMBER of frames. Values alone cannot see frame LOSS: this
+        // wheel repeats its frame types every cycle, so dropping one whole
+        // frame leaves the terminal reading identical and the decoder silently
+        // slower. Demonstrated on the very branch this test's own comment calls
+        // out — `tryParseAll`'s no-header case, which keeps a trailing 0x55 in
+        // case the header pair straddles. Discarding it instead loses exactly
+        // one frame per split header, and every value assertion in this file
+        // stays green. So count the decodes each cut produced, and require the
+        // capture's own frame count from the bytes rather than a number read
+        // off the implementation.
+        //
+        // One frame of the 190 is unobservable, and exactly one: the capture's
+        // first branch-1 cell frame arrives before that branch's first 0x01
+        // telemetry frame, and `BegodeProtocol.rebuild` returns early while
+        // `sawTelemetry` is false — so it publishes no BmsData. Written as
+        // "all but one" rather than as a bare 189 so the exemption has to stay
+        // true: a second unobservable frame fails this too.
+        assertEquals(
+            framesInTheCapture - 1,
+            atRealBoundaries.total,
+            "every frame of the capture but the one that precedes its branch's telemetry " +
+                "must produce exactly one decode ($framesInTheCapture frames in the stream)"
+        )
+        assertEquals(
+            atRealBoundaries.decodes(),
+            atSevenBytes.decodes(),
+            "the harsher cut must reach the same live frames, not merely the same final values"
+        )
     }
+
+    /** Motion / branch-0 / branch-1 decodes produced by one replay, and the last motion sample. */
+    private class DecodeTally(
+        val motionDecodes: Int,
+        val pack0Decodes: Int,
+        val pack1Decodes: Int,
+        val motion: ControllerData?
+    ) {
+        fun decodes(): Triple<Int, Int, Int> = Triple(motionDecodes, pack0Decodes, pack1Decodes)
+        /**
+         * Every frame type the wheel emits contributes exactly one decode:
+         * 0x00/0x04/0x07 rebuild the controller sample, 0x01/0x02/0x03 rebuild
+         * their branch's [BmsData]. So the three counters sum to the number of
+         * frames the decoder actually consumed.
+         */
+        val total: Int get() = motionDecodes + pack0Decodes + pack1Decodes
+    }
+
+    /**
+     * Replay [notifications] through a fresh decoder, counting how many times
+     * each cached decode was REPLACED — instance identity, the same
+     * discriminator [MotionSampleGate] and [PackSampleGate] use, which is what
+     * makes this a count of frames consumed rather than of notifications fed.
+     *
+     * At most one frame can complete per notification for any chunk size below
+     * the 24-byte frame (a leftover is always < 24, so buffer < 24 + chunk),
+     * so no decode can be double-counted by two frames landing in one append.
+     */
+    private fun replayCountingDecodes(notifications: List<ByteArray>): DecodeTally {
+        val protocol = BegodeProtocol(cellCount = 40)
+        var lastMotion: ControllerData? = null
+        var lastPack0: BmsData? = null
+        var lastPack1: BmsData? = null
+        var motionDecodes = 0
+        var pack0Decodes = 0
+        var pack1Decodes = 0
+        notifications.forEach { n ->
+            protocol.onNotification(n)
+            val m = protocol.latestMotion(0)
+            if (m !== lastMotion) { motionDecodes++; lastMotion = m }
+            val p0 = protocol.latestData(0)
+            if (p0 !== lastPack0) { pack0Decodes++; lastPack0 = p0 }
+            val p1 = protocol.latestData(1)
+            if (p1 !== lastPack1) { pack1Decodes++; lastPack1 = p1 }
+        }
+        return DecodeTally(motionDecodes, pack0Decodes, pack1Decodes, lastMotion)
+    }
+
+    private fun ByteArray.chunkedInto(size: Int): List<ByteArray> =
+        indices.step(size).map { copyOfRange(it, minOf(it + size, this.size)) }
 
     // ----- 1. The funnel: one controller, two packs, interleaved -----
 
