@@ -676,6 +676,38 @@ class BegodeMotionProtocolTest {
     }
 
     @Test
+    fun aZeroPaddedLiveFrameMidStreamCannotOverwriteARealReading() {
+        // The case the boot gate alone does NOT cover, and the one that would
+        // have shipped: `sawLiveMotion` latches on the FIRST genuine frame, so
+        // a rebuild gated on the latch rather than on THIS frame's voltage
+        // would happily republish a later zero-padded frame's contents.
+        //
+        // Such a frame is reachable two ways: a placeholder emitted after a
+        // reconnect, and — this format having no checksum, only a `5A5A5A5A`
+        // tail — a garbled frame whose voltage word came through as zero.
+        // parseLiveFrame assigns phaseCurrentA and boardTempC unconditionally,
+        // so the artefacts are already in the fields; only the gate stops them
+        // reaching a sample. 0/340 + 36.53 = 36.53 C, which is a plausible
+        // board temperature and would quietly mask a genuinely hot one.
+        val protocol = BegodeProtocol()
+        // A hot board: raw 5000 -> 36.53 + 14.7 = 51.24 C.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000, currentRaw = -350, tempRaw = 5000))
+        val hot = assertNotNull(protocol.latestMotion(0))
+        assertEquals(51.23f, hot.escTempC, 0.01f, "precondition: a real, hot board reading")
+
+        protocol.onNotification(liveFrame(voltageRaw = 0, speedRaw = 0, currentRaw = 0, tempRaw = 0))
+
+        val after = assertNotNull(protocol.latestMotion(0))
+        assertSame(hot, after, "a zero-padded frame is not a decode and must mint no sample")
+        assertEquals(
+            51.23f, after.escTempC, 0.01f,
+            "36.53 C is the temperature formula's raw-zero artefact, not a cooling board"
+        )
+        assertEquals(3.50f, after.motorCurrentA, 1e-3f, "nor is 0 A a motor current")
+        assertEquals(36.0f, after.speedKmh, 1e-3f, "nor 0 km/h a speed")
+    }
+
+    @Test
     fun everyMotionBearingFrameProducesAFreshSampleAndNothingElseDoes() {
         // MotionSampleGate discriminates on instance IDENTITY: a fresh object
         // per read would look like a new decode on every notification and a

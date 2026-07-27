@@ -1237,11 +1237,18 @@ class KableBmsRepository private constructor(
      * have taken the whole link down on the first frame and left riders'
      * batteries reconnecting in a loop.
      *
-     * A sample with nowhere to go is dropped, silently: the link plan gave this
+     * A sample with nowhere to go is dropped: the link plan gave this
      * connection no controller, so there is no [ControllerState] to submit it
-     * to, and logging would print once per notification. The vehicle's motion
-     * appears the moment its profile carries a controller — which is what makes
-     * the plan, not this lambda, the place the decision lives.
+     * to. The vehicle's motion appears the moment its profile carries a
+     * controller — which is what makes the plan, not this lambda, the place the
+     * decision lives.
+     *
+     * The drop is logged **once per funnel**, not per notification (which would
+     * print at the wheel's frame rate). Once is what keeps the expected case
+     * quiet while stopping the unexpected one from hiding: a planning bug that
+     * left `ownedControllers.size < controllerCount` — a gateway spec, say —
+     * would otherwise turn into silently missing motion instead of a loud
+     * crash, which is the failure mode this whole guard was written for.
      *
      * Factored out for the same reason [makeLinkOnSample] is: the test seam
      * drives the production lambda rather than a copy that can drift.
@@ -1249,16 +1256,24 @@ class KableBmsRepository private constructor(
     private fun makeLinkOnMotionSample(
         spec: LinkSpec,
         channel: Channel<Sample>
-    ): (controllerIndex: Int, data: ControllerData) -> Unit =
-        { localCtrlIndex, data ->
+    ): (controllerIndex: Int, data: ControllerData) -> Unit {
+        var warnedUnowned = false
+        return { localCtrlIndex, data ->
             val owned = spec.ownedControllers.getOrNull(localCtrlIndex)
             if (owned != null) {
                 val sent = channel.trySend(MotionSample(owned.globalIndex, data))
                 if (sent.isFailure) {
                     println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
                 }
+            } else if (!warnedUnowned) {
+                warnedUnowned = true
+                println(
+                    "[VOLTY-BLE] motion funnel: link ${spec.address} decodes motion for " +
+                        "controller=$localCtrlIndex but owns ${spec.ownedControllers.size} — dropping (logged once)"
+                )
             }
         }
+    }
 
     /**
      * Launch the single consumer coroutine that owns every shared-state

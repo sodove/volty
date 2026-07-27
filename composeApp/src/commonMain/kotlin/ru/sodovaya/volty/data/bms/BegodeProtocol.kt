@@ -707,6 +707,19 @@ class BegodeProtocol(
             speedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
             tripMetersValue = tripMeters
             sawLiveMotion = true
+            // Rebuilt INSIDE the gate, not after it on `sawLiveMotion`. Those
+            // two differ only mid-stream, and that is exactly where it matters:
+            // once the first genuine frame has latched the flag, a LATER
+            // zero-padded frame — a boot placeholder after a reconnect, or a
+            // garbled one, this format having no checksum and only a
+            // `5A5A5A5A` tail to catch corruption — still assigns
+            // [phaseCurrentA] and [boardTempC] above. Rebuilding on it would
+            // publish `0/340 + 36.53` = 36.53 C as an ESC temperature and 0 A
+            // as a motor current, momentarily masking a genuinely hot board.
+            // The battery half is already protected the same way (the
+            // synthetic pack below is built inside its own `liveVoltageRaw > 0`
+            // test); this puts motion on equal footing. Spec D §7.1.
+            rebuildMotion()
         }
         // While no smart-BMS frame has arrived, this frame IS the battery
         // telemetry: synthesise pack 0 from it so a wheel without a smart BMS
@@ -734,10 +747,6 @@ class BegodeProtocol(
                 isConnected = true
             )
         }
-        // A boot placeholder publishes no motion at all: its speed, trip and
-        // temperature are all artefacts of a zero-padded frame, and the same
-        // gate already refuses to synthesise a pack from it.
-        if (sawLiveMotion) rebuildMotion()
     }
 
     /**
