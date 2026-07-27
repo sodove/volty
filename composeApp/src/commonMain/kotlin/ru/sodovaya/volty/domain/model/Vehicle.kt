@@ -85,11 +85,23 @@ val Vehicle.motionAlertRules: List<AlertRule> get() = motionAlerts ?: AlarmDefau
 val Vehicle.hasControllers: Boolean get() = controllers.isNotEmpty()
 
 /**
- * [Vehicle.yieldBmsToHeadUnit] resolved: unset (null) follows the default,
- * which is ON. Only an explicit opt-OUT switches the handoff off — see the
- * field's doc for why "on by default" is safe to state unconditionally here.
+ * The three-valued [Vehicle.yieldBmsToHeadUnit] resolved: unset (null) follows
+ * the default, which is ON. Only an explicit opt-OUT switches the handoff off —
+ * see the field's doc for why "on by default" is safe to state unconditionally.
+ *
+ * **Stated once, on the nullable, because it has two readers on opposite sides
+ * of the app**: the runtime, through [Vehicle.yieldsBmsToHeadUnit] below, and
+ * the composer's own form state
+ * ([ru.sodovaya.volty.presentation.vehicle.VehicleEditComponent.State.yieldsBmsToHeadUnit]),
+ * which holds the same nullable while the rider is editing. Two spellings of
+ * `!= false` would be two places to drift, and drifting means the switch renders
+ * ON while `planAliasHandoffs` plans nothing — a setting that lies about itself.
+ * `the form and the runtime resolve the handoff default identically` spans them.
  */
-val Vehicle.yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit != false
+val Boolean?.yieldsBms: Boolean get() = this != false
+
+/** [Vehicle.yieldBmsToHeadUnit] resolved — see [yieldsBms]. */
+val Vehicle.yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit.yieldsBms
 
 /** The lowest-indexed controller, or null when the vehicle has none. */
 val Vehicle.primaryController: Controller? get() = controllers.minByOrNull { it.index }

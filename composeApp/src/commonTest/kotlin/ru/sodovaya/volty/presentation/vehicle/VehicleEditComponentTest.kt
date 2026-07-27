@@ -23,6 +23,7 @@ import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
+import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
@@ -2456,6 +2457,34 @@ class VehicleEditComponentTest {
         c2.onSave()
         advanceUntilIdle()
         assertEquals(null, untouched.upserts.single().yieldBmsToHeadUnit)
+    }
+
+    /**
+     * The form and the runtime read the SAME three-valued column and must
+     * resolve it identically. Drifted, the switch renders ON while
+     * `planAliasHandoffs` plans nothing — a setting that lies about itself, and
+     * a class of defect no test of either side alone can see.
+     *
+     * All three values, because the interesting one is `null`: it is the value
+     * that is neither, and the only one where "unset means ON" is a decision
+     * rather than an identity.
+     */
+    @Test
+    fun `the form and the runtime resolve the handoff default identically`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        for (stored in listOf(null, true, false)) {
+            val v = aliasScooter().copy(yieldBmsToHeadUnit = stored)
+            val c = component(FakeVehicleRepo(listOf(v)))
+            advanceUntilIdle()
+            assertEquals(
+                v.yieldsBmsToHeadUnit,
+                c.state.value.yieldsBmsToHeadUnit,
+                "stored=$stored must read the same on the form as in the runtime"
+            )
+        }
+        // …and the decision itself, so "they agree" cannot be satisfied by both
+        // being wrong together.
+        assertTrue(aliasScooter().copy(yieldBmsToHeadUnit = null).yieldsBmsToHeadUnit, "unset is ON")
     }
 
     /**

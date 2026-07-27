@@ -18,6 +18,7 @@ import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.yieldsBms
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
@@ -391,8 +392,16 @@ interface VehicleEditComponent {
          */
         val showYieldToggle: Boolean get() = canComposeSources && draft.handoffAliasGroups.isNotEmpty()
 
-        /** [yieldBmsToHeadUnit] resolved — unset is ON, same rule as [Vehicle.yieldBmsToHeadUnit]. */
-        val yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit != false
+        /**
+         * [yieldBmsToHeadUnit] resolved — unset is ON.
+         *
+         * Through the model's own [yieldsBms] rather than a second `!= false`
+         * here: the runtime reads the same nullable through
+         * [ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit], and two copies
+         * of the rule are two places to drift. Drifted, the switch would render
+         * ON while `planAliasHandoffs` planned nothing.
+         */
+        val yieldsBmsToHeadUnit: Boolean get() = yieldBmsToHeadUnit.yieldsBms
 
         /**
          * The offers from the last successful CAN scan, derived on read.

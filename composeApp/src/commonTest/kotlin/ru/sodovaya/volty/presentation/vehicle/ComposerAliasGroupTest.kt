@@ -277,6 +277,45 @@ class ComposerAliasGroupTest {
         assertEquals(emptyList(), planAliasHandoffs(planLinks(v.packs, v.controllers), v.packs))
     }
 
+    /**
+     * …and the span's **third** case: where the two layers are meant to
+     * disagree, pinned rather than merely described.
+     *
+     * [VehicleDraft.handoffAliasGroups] deliberately mirrors only the first
+     * three of `planAliasHandoffs`' conditions. Its fourth — the direct link
+     * must own nothing else — is about what would be lost as *collateral* when
+     * the link is released, not about whether the setting applies. Here the ANT
+     * link also carries a second, ungrouped battery: there IS contention over
+     * the aliased pack, so the toggle belongs on this vehicle, and yet releasing
+     * that link would take the other battery down with it, so nothing is
+     * planned.
+     *
+     * Without this the divergence is a sentence in a KDoc that no fixture
+     * distinguishes from a bug.
+     */
+    @Test
+    fun `the toggle applies to a link the runtime still refuses to release`() {
+        val d = draftOf(
+            vehicle(
+                packs = listOf(
+                    Pack(0, "ANT", BmsType.ANT_BMS, ANT),
+                    Pack(1, "Other", BmsType.ANT_BMS, ANT),
+                    Pack(2, "Hosted", BmsType.VESC_BMS, HU)
+                ),
+                controllers = listOf(Controller(0, "uBox", ControllerType.VESC, HU, canId = 41))
+            )
+        )
+        val grouped = d.groupPacks(d.packKey("ANT"), d.packKey("Hosted"))
+
+        assertEquals(1, grouped.handoffAliasGroups.size, "the setting applies: two paths contend")
+        val v = vehicle(grouped.toPacks(), grouped.toControllers())
+        assertEquals(
+            emptyList(),
+            planAliasHandoffs(planLinks(v.packs, v.controllers), v.packs),
+            "but the direct link carries another battery, so it is not released"
+        )
+    }
+
     // -----------------------------------------------------------------------
     // 3. The duplicate heuristic — both directions
     // -----------------------------------------------------------------------
@@ -288,7 +327,7 @@ class ComposerAliasGroupTest {
             isOnline = online
         )
 
-    /** [samples] pairs of (direct volts, hosted volts), oldest first. */
+    /** [samples] pairs of (pack 0 volts, pack 1 volts), oldest first. */
     private fun observed(draft: VehicleDraft, samples: List<Pair<Float, Float>>, cells: Int = 20) =
         samples.fold(ComposerTelemetry()) { t, (a, b) ->
             t.observing(
@@ -343,6 +382,56 @@ class ComposerAliasGroupTest {
             emptyList(),
             validate(d, observed(d, distinct)).filterIsInstance<ComposerIssue.DuplicatePack>()
         )
+    }
+
+    /**
+     * **The band's upper edge, at the place it actually matters.** Two packs
+     * hard-paralleled read the same node through two BMS, so they differ only by
+     * their calibration offsets — roughly ±0.07 V to ±0.36 V on 72 V, a range
+     * that straddles the 0.20 V band. 0.25 V is inside that spread and outside
+     * the band, and it must stay outside: accepting the offer here would run
+     * `collapseAliases` and show HALF the rider's real capacity.
+     *
+     * Separated by a literal 0.25 V rather than by a multiple of the constant,
+     * so the test cannot move with the value it is pinning. Doubling the band to
+     * `0.02f` — which the first sweep did not catch, because it pinned only
+     * `0.1f` and `0.0001f` — flags this pair.
+     */
+    @Test
+    fun `a parallel pair inside the BMS calibration spread is left alone`() {
+        val d = draftOf(scooter())
+        val nearby = listOf(
+            72.40f to 72.15f,
+            72.38f to 72.13f,
+            72.35f to 72.10f,
+            72.33f to 72.08f,
+            72.30f to 72.05f
+        )
+        assertEquals(
+            emptyList(),
+            validate(d, observed(d, nearby)).filterIsInstance<ComposerIssue.DuplicatePack>()
+        )
+    }
+
+    /**
+     * The band is per SERIES CELL, not a fixed number of volts, so a 10S pack is
+     * judged on 0.10 V where a 20S is judged on 0.20 V. 0.15 V apart is a match
+     * on a 20S and a non-match here — an absolute band could not tell the two
+     * vehicles apart, and would call a 10S pair duplicates at a separation that
+     * is a quarter of a volt per... well, 15 mV per cell.
+     */
+    @Test
+    fun `a 10S pair is judged on a 10S band`() {
+        val d = draftOf(scooter())
+        val apart = List(DUPLICATE_SAMPLES) { 36.00f to 35.85f }
+        assertEquals(
+            emptyList(),
+            validate(d, observed(d, apart, cells = 10)).filterIsInstance<ComposerIssue.DuplicatePack>()
+        )
+        // …and the same 0.15 V on a 20S pack, whose band is 0.20 V, IS a match.
+        // Same numbers, different vehicle, opposite answer: that is the scaling.
+        val same = List(DUPLICATE_SAMPLES) { 72.00f to 71.85f }
+        assertTrue(validate(d, observed(d, same, cells = 20)).any { it is ComposerIssue.DuplicatePack })
     }
 
     /**
@@ -508,9 +597,72 @@ class ComposerAliasGroupTest {
     }
 
     /**
+     * Gate 2's second arm, and the case `01-linking §4` names verbatim: a real
+     * VESC-BMS on the gateway's CAN bus **and the battery the head unit already
+     * emulates**. One address, but one side carries `canId == null` (the
+     * endpoint answering for itself) and the other a CAN id — two paths, not two
+     * devices.
+     *
+     * Without this arm the rule fires on neither the headline case (the ANT's
+     * single BLE slot means its two paths are almost never live at once) nor any
+     * fallback, and the whole heuristic would be unable to catch anything.
+     */
+    @Test
+    fun `a hosted battery and a real BMS on the same bus are offered as one pack`() {
+        val d = draftOf(gatewayBusVehicle(realBmsCanId = 43))
+        val issues = validate(d, observed(d, tracking))
+
+        val dup = issues.filterIsInstance<ComposerIssue.DuplicatePack>().single()
+        assertEquals(setOf(d.packKey("Emulated"), d.packKey("Real")), setOf(dup.keyA, dup.keyB))
+        assertFalse(issues.any { it.blocking }, "and the config itself is legal")
+    }
+
+    /**
+     * The other side of that arm: **two distinct CAN ids are two distinct
+     * nodes**, so they are two devices and cannot be one BMS. Two VESC-BMS in
+     * parallel on one bus is an ordinary build, and their readings track for
+     * exactly the reason two direct packs' do.
+     *
+     * This is where the implementation deliberately reads "exactly one is the
+     * endpoint itself" rather than "the ids differ" — the looser rule would
+     * re-open `G §9.2` one level down.
+     */
+    @Test
+    fun `two distinct CAN nodes on one bus are not a duplicate`() {
+        val d = draftOf(
+            vehicle(
+                packs = listOf(
+                    Pack(0, "Emulated", BmsType.VESC_BMS, HU, canId = 44),
+                    Pack(1, "Real", BmsType.VESC_BMS, HU, canId = 43)
+                ),
+                controllers = listOf(Controller(0, "uBox", ControllerType.VESC, HU, canId = 41))
+            )
+        )
+        assertEquals(
+            emptyList(),
+            validate(d, observed(d, tracking)).filterIsInstance<ComposerIssue.DuplicatePack>()
+        )
+    }
+
+    /** A head unit emulating a battery, beside a real BMS on its CAN bus. */
+    private fun gatewayBusVehicle(realBmsCanId: Int) = vehicle(
+        packs = listOf(
+            Pack(0, "Emulated", BmsType.VESC_BMS, HU, canId = null),
+            Pack(1, "Real", BmsType.VESC_BMS, HU, canId = realBmsCanId)
+        ),
+        controllers = listOf(Controller(0, "uBox", ControllerType.VESC, HU, canId = 41))
+    )
+
+    /**
      * Two packs at one address are one link's business — a Begode wheel reports
      * two real branches over one BLE address, which is the most ordinary EUC
      * there is.
+     *
+     * **This is now load-bearing in a way it was not before.** Gate 2's first
+     * arm reads the address alone, so a same-address pair could once never reach
+     * the comparison at all; the second arm reads `canId`, and both of a wheel's
+     * branches carry `canId == null`, so the exclusion now rests on that. The
+     * coupling is stated in `ComposerDuplicates.kt` and pinned here.
      */
     @Test
     fun `two branches of one wheel are not a duplicate`() {

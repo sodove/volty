@@ -38,27 +38,39 @@ import kotlin.math.abs
  *  1. **Both sources have a link at all.** A blank address is not a path, so a
  *     pack that has one cannot be the *alternate* path to anything —
  *     [ComposerIssue.BlankAddress] is what that source needs to hear.
- *  2. **One hosted, one direct.** Exactly one side is reached through a gateway
- *     ([VehicleDraft.isHostedPack]). This is the gate that does the real work,
- *     and it is what keeps the §9.2 case out: two packs on two *direct* BMS
- *     links that track each other are two real packs wired in parallel — their
- *     terminals are the same electrical node, so at rest their voltages agree to
- *     within the two BMS' calibration offsets, both currents are zero, and
- *     neither path reports a serial number. **No telemetry the app can read at
- *     compose time separates that from one pack seen twice.** Warning there
- *     would be a guaranteed nag on an ordinary build, in exchange for catching a
- *     configuration a rider can only reach by giving one BMS two different BLE
- *     addresses. The hosted/direct pair, on the other hand, is the shape
- *     `01-linking §4` actually describes: two *paths*, not two packs.
+ *  2. **The two sources are two PATHS, not two devices** ([twoPaths]). This is
+ *     the gate that does the real work, and it has two arms because
+ *     `01-linking §4` describes two shapes:
+ *
+ *      - **across links** — exactly one side is reached through a gateway
+ *        ([VehicleDraft.isHostedPack]), the other over its own BLE link. The
+ *        product owner's ANT: direct while parked, hosted by the head unit while
+ *        riding;
+ *      - **on one gateway link** — exactly one side carries `canId == null`,
+ *        i.e. it is the endpoint's *own* answer, and the other is a node behind
+ *        it. That is `01-linking §4`'s named hardware conflict verbatim:
+ *        "attaching a real VESC-BMS on a CAN id the head unit already emulates".
+ *        One battery; one path is the gateway's emulation, the other the real
+ *        node on its bus.
+ *
+ *     What it keeps out is the §9.2 case: two packs that are **two devices**
+ *     wired in parallel. Their terminals are the same electrical node, so at
+ *     rest their voltages agree to within the two BMS' calibration offsets, both
+ *     currents are zero, and neither path reports a serial number. **No
+ *     telemetry the app can read at compose time separates that from one pack
+ *     seen twice** — see the band section below, which is why this gate and not
+ *     a tighter band is what carries the case. Two direct BMS links are two
+ *     devices; so are two distinct CAN nodes behind one gateway.
  *
  *     It is also what keeps **two branches of one Begode wheel** out
  *     (`01-linking §3` archetype 3: two real packs over a single BLE address).
- *     There is no separate same-address gate, and there was one until the
- *     mutation sweep showed no implementation could tell it from its absence:
- *     [VehicleDraft.isHostedPack] is a function of the address alone, so two
- *     packs at one address are always on the same side of this gate and can
- *     never reach the comparison. `two branches of one wheel are not a
- *     duplicate` pins the behaviour rather than the gate that delivers it.
+ *     They share an address and **both carry `canId == null`**, so neither arm
+ *     admits them. Note the coupling this creates: before the second arm
+ *     existed, [VehicleDraft.isHostedPack] read only the address, so a
+ *     same-address pair could never reach the comparison at all and a separate
+ *     same-address gate was provably dead code (the mutation sweep found it).
+ *     That is no longer true — the exclusion now rests on `canId`, and `two
+ *     branches of one wheel are not a duplicate` is what pins it.
  *  3. **Same series-cell count, both known.** A 20S and a 24S pack at the same
  *     voltage are not the same battery. Unknown on either side is not a match —
  *     the composer never guesses at a fact it has not been told.
@@ -80,15 +92,34 @@ import kotlin.math.abs
  *
  * **[DUPLICATE_BAND_V_PER_CELL] = 0.01 V, i.e. 0.20 V on a 20S 72 V pack** —
  * about 0.28 % of pack voltage. Per cell rather than absolute so it means the
- * same thing on a 24 V wheel as on a 72 V scooter, which an absolute band cannot.
+ * same thing on a 24 V wheel as on a 72 V scooter, which an absolute band cannot
+ * (`a 10S pair is judged on a 10S band` pins the scaling, not just the value).
  * The floor is set by what two readings of ONE pack legitimately differ by: the
  * two paths quantise differently (an ANT reports pack voltage in hundredths of a
  * volt, a hosted VESC-BMS re-serves it in thousandths) and are polled by
  * independent loops, so a sub-second skew during a current step shows up as a
- * few tens of millivolts. The ceiling is set by what two *different* packs
- * differ by — which, for two packs that are not hard-paralleled, is tenths of a
- * volt and up. Between those two the band is not knife-edge, and gate 2 is what
- * carries the case where they overlap.
+ * few tens of millivolts.
+ *
+ * **The ceiling is where the honesty is.** Two *different* packs that are not
+ * hard-paralleled differ by tenths of a volt and up — but two that ARE
+ * paralleled differ only by their BMS' calibration offsets, roughly ±0.07 V to
+ * ±0.36 V on a 72 V pack, and that range **straddles this band**. So there is no
+ * value of this constant that separates "one pack seen twice" from "two real
+ * packs in parallel": in part of the range they are genuinely indistinguishable
+ * to us. Gate 2 is what carries that case, and where gate 2 admits a pair we
+ * cannot separate, the OFFER carries it — `composer_issue_duplicate_pack` states
+ * what accepting costs if the rider is looking at two real packs, because
+ * `PackAggregator.collapseAliases` drops one member from the capacity sum and a
+ * wrong accept therefore **halves reported capacity**, the exact mirror of the
+ * double-count this feature exists to prevent. An informed accept is worth more
+ * than a better constant, because a better constant does not exist.
+ *
+ * Both edges are pinned by tests that fail if the band moves by a factor of two
+ * in either direction (`a parallel pair inside the BMS calibration spread is
+ * left alone` at 0.25 V on 20S, and `a real duplicate is caught` at 0.01 V) —
+ * the first sweep pinned only `0.1f` and `0.0001f`, two orders apart, which
+ * proved the band was somewhere between them rather than at the value argued
+ * for here.
  *
  * ## Identical reported serial (`G §5`) is not implemented, deliberately
  *
@@ -218,6 +249,24 @@ private fun ru.sodovaya.volty.domain.model.ControllerData.reportsMotion(): Boole
  * share an `aliasGroup` are not reported: the rider has answered, and repeating
  * the question is the nag `G §9.2` forbids.
  */
+/**
+ * Gate 2 — whether [a] and [b] could be two **paths** to one battery rather than
+ * two batteries. See the file doc for both arms and for what each keeps out.
+ *
+ * On one address the question is answered by `canId` alone, and specifically by
+ * *exactly one* of the two being null: `canId == null` on a gateway link means
+ * "the endpoint answers this itself" (`VescGatewayProtocol.frameFor` sends the
+ * request unwrapped), so a null/non-null pair is the gateway's own emulation
+ * beside the real node behind it. **Two distinct non-null ids are two distinct
+ * CAN nodes** — two devices, which cannot be one BMS — and two nulls are two
+ * branches of one wheel. Reading this as "different `canId`" instead would admit
+ * the two-CAN-node case, and two VESC-BMS in parallel on one bus is an ordinary
+ * build whose readings track for the same reason two direct packs do.
+ */
+private fun VehicleDraft.twoPaths(a: PackDraft, b: PackDraft): Boolean =
+    if (a.address == b.address) (a.canId == null) != (b.canId == null)
+    else isHostedPack(a) != isHostedPack(b)
+
 fun duplicatePackSuspects(
     draft: VehicleDraft,
     telemetry: ComposerTelemetry
@@ -229,7 +278,7 @@ fun duplicatePackSuspects(
             val b = draft.packs[j]
             if (a.address.isBlank() || b.address.isBlank()) continue
             if (a.aliasGroup != null && a.aliasGroup == b.aliasGroup) continue
-            if (draft.isHostedPack(a) == draft.isHostedPack(b)) continue
+            if (!draft.twoPaths(a, b)) continue
             val cellsA = telemetry.packSeriesCells[a.key] ?: continue
             val cellsB = telemetry.packSeriesCells[b.key] ?: continue
             if (cellsA != cellsB) continue
