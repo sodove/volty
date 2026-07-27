@@ -227,13 +227,25 @@ class KableBmsRepositoryBegodeFunnelTest {
         // (2) Same NUMBER of frames. Values alone cannot see frame LOSS: this
         // wheel repeats its frame types every cycle, so dropping one whole
         // frame leaves the terminal reading identical and the decoder silently
-        // slower. Demonstrated on the very branch this test's own comment calls
-        // out — `tryParseAll`'s no-header case, which keeps a trailing 0x55 in
-        // case the header pair straddles. Discarding it instead loses exactly
-        // one frame per split header, and every value assertion in this file
-        // stays green. So count the decodes each cut produced, and require the
+        // slower. So count the decodes each cut produced, and require the
         // capture's own frame count from the bytes rather than a number read
         // off the implementation.
+        //
+        // An earlier version of this comment cited `tryParseAll`'s no-header
+        // case — the one that keeps a trailing 0x55 in case the header pair
+        // straddles — as the demonstration. **That citation was wrong** and is
+        // corrected here rather than deleted, because the arithmetic is worth
+        // knowing: neither cut in this file can reach that branch with more
+        // than one residual byte. At 20-byte notifications and 24-byte frames a
+        // frame's 0x55 can never land last (`20k ≡ 1 mod 24` has no solution),
+        // and the 7-byte recut leaves exactly one byte, which the `size > 1`
+        // guard short-circuits. Discarding the residue therefore survives all
+        // of this file's assertions AND the count assertions below.
+        // **The split-header retention at `BegodeProtocol.trimLeading` has no
+        // coverage anywhere**; closing it needs a cut leaving ≥ 2 residual
+        // bytes ending in 0x55. The count assertions below are still the right
+        // defence — they catch every loss the two cuts CAN produce — but they
+        // do not catch that one.
         //
         // One frame of the 190 is unobservable, and exactly one: the capture's
         // first branch-1 cell frame arrives before that branch's first 0x01

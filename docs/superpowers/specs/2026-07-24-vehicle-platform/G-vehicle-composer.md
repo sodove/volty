@@ -195,3 +195,16 @@ instead of being ignored.
 Same family as §9/§9.1: the fold has no notion of "not observed" either. Whatever
 known-flag contract the renderers get should reach the aggregator too, or the
 fold must skip unknowns rather than average them.
+
+### 8.1 The rebuild-on-save now meets a wheel sooner (2026-07-27)
+
+Part D's final re-review. `VehicleEditComponent.onSave` guards only
+`existing.packs.isEmpty()`, so once the pack auto-fill has appended a Begode
+wheel's **second branch**, a save rebuilds from `singlePackVehicle` and drops it.
+Cosmetic today — `expandedTo` re-synthesises the slot on the next connect — but
+the labels are lost, and it is the same rebuild-on-save defect §8 describes.
+
+What changed is the timing: the picker now navigates **straight to the edit
+screen** after a Controller pick, so the wheel path meets this defect far sooner
+than the battery path ever did. Another reason §8's update-in-place rewrite is
+the fix rather than one more field in the copy list.
