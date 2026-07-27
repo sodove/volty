@@ -23,54 +23,56 @@ task."* That is the gap Part D closes.
 (GotWay_75042, 40S, 148.4 V of cells), 228 notifications at the real MTU-23
 chunk boundaries.
 
-## The capture is stationary, and that decides the shape of this part
+## What the wheel actually sends — read from WheelLog, not guessed
 
-I decoded a `0x00` frame from the fixture by hand:
+> **This section replaces an earlier version of the plan that was wrong on its
+> central point.** That version reasoned only from the stationary capture, decided
+> duty was unobtainable, and instructed Part D to ship `dutyPercent = 0f` with
+> `reportsDuty[BEGODE] = false`. The product owner asked why we were not simply
+> reading WheelLog — which this protocol already cites — and the answer overturned
+> the part. Spec §8 carries the full correction; nothing from the old reasoning
+> survives. If you find a claim below contradicted by spec §8.6, §8 wins.
 
-```
-55 aa | 17 04 | 00 00 | 00 3d 00 00 | fe b6 | f4 06 | 00 a9 | 00 01 | 00 | 18 | 5a5a5a5a
-        volt    speed    distance     current  temp     ?       ?     type
-```
+The authority is WheelLog's `GotwayAdapter.java` + `WheelData.java` (GPL-3.0).
+**Take the facts, not the code** — this repo's existing note says "layout only"
+and that boundary holds.
 
-- `0x1704` = 5892 → 58.92 V on Begode's 67.2 V scale; the wheel is 40S/148.4 V,
-  so the multiplier is ~2.5 (168 / 67.2), consistent with the existing comment.
-- **speed = `0x0000` in every frame of the capture.** It is the first 13 seconds
-  of a session with the wheel standing still.
-- distance = `00 3d 00 00`, ~61 m under Gotway's middle-endian word order.
-- current `0xfeb6` = −3.30 A idle draw; temp `0xf406` → 27.5 °C. Both match what
-  the protocol already decodes.
-- bytes 14..15 are `0x00a9` **constant across every frame** while current varies
-  — which is what a version/config constant looks like, not PWM.
+**Frame `0x07`, which `BegodeProtocol` used to dismiss as "undocumented, and
+WheelLog does not decode it either" — a claim that was simply false:**
 
-**Consequence: nothing in this repository can validate a moving-wheel field.**
-Speed reads zero everywhere, so a speed decode can only be checked structurally.
-Duty cannot be checked at all.
+| Bytes | Field | Scale | ET Max capture |
+|---|---|---|---|
+| 2..3 | battery current | negated, 0.01 A | 0.2–0.9 A idle, varies per frame |
+| 6..7 | motor temperature | whole °C | 20 °C |
+| 8..9 | **true hardware PWM** | whole % | **2 %** — a balancing wheel |
 
-## The duty decision, made deliberately (spec §7.2)
+**Frame `0x00`:** voltage at 2..3 on the 67.2 V scale (×2.5 for this 40S wheel);
+**speed at 4..5, `raw × 0.036` km/h** with the raw unit cm/s; **trip at 8..9**,
+u16 metres; phase current at 10..11; board temperature at 12..13.
 
-Spec §3 calls duty *"the safety number"* and §7.2 says it must be **real or
-absent, never a placeholder**, because `MotionAggregator` folds duty as
-`maxOf { dutyPercent }` and Part F's headline wheel alarm fires on the result.
+Three things that repeatedly caught people out, recorded so they do not catch the
+next reader:
+- **Bytes 6..7 are not read by WheelLog at all.** The `0x003d` = 61 sitting there
+  is not a distance. An earlier draft of this plan called it a verified 61 m trip;
+  it is not.
+- **Bytes 14..15 are WheelLog's *fallback* PWM**, for firmware without hardware
+  PWM. On this wheel they read a constant 169 → 16.9 % while `0x07` reads 2 %.
+  **Do not implement it** — that is a fabricated safety number, exactly what spec
+  §7.2 forbids.
+- **The speed scale was read wrong three times** — `×0.01`, then `×0.36`, before
+  `×0.036` was settled from `WheelData` storing hundredths and WheelLog's own
+  frame comment. Only `×0.036` makes the raw unit physical (cm/s; 50 km/h → raw
+  1389).
 
-Two derivations were available and both fail here:
-- **A frame field.** The only candidate (bytes 14..15) is constant while the
-  wheel's other numbers move. Asserting it is duty would be a guess.
-- **WheelLog-style derivation** from speed against a voltage-dependent maximum.
-  It needs per-model constants this repo does not have, and a speed reading that
-  is never non-zero in the only capture we own.
+## What the capture still cannot tell us
 
-**Therefore Part D ships `dutyPercent = 0f` and sets
-`MotionAlertAvailability`'s static `reportsDuty[BEGODE] = false`.** That entry is
-currently `true`, inferred from spec prose rather than hardware, and pinned by a
-test precisely so this part has to decide it on purpose. The rider then sees the
-ШИМ alarm greyed out **with its reason stated** — Part F §10's whole design — not
-an alarm armed against a fabricated number.
+The capture is 13 seconds of a **stationary** wheel, so **speed reads zero in
+every frame**. Its offset and signedness are pinned by clearly-labelled synthetic
+frames and its scale rests on WheelLog's source rather than on measurement. Trip
+and odometer units are plausibility-only. Duty is exercised at 1–2 % but never
+under load, so the high end of the ШИМ alarm's range is unmeasured.
 
-This is the difference between a wheel dashboard that is honest about what it
-measures and one that lies quietly. Flipping it later needs one constant, one
-test expectation and a moving capture.
-
-**What unblocks it:** a `:dumper` capture of a real ride — accelerating hard
+**What unblocks all of it:** a `:dumper` capture of a real ride — accelerating hard
 enough to push PWM up, ideally to a tiltback. Recorded in §6 as the hand-off.
 
 ---

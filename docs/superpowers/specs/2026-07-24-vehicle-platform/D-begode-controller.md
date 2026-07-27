@@ -146,11 +146,13 @@ motor against 27.5 °C board. Set the flag from what the wheel actually sends.
 
 ### 8.2 Corrections to the live `0x00` frame
 
-- **Speed** is bytes 4..5 signed BE, and WheelLog computes `round(raw × 3.6)`
-  into a field stored in **tenths** of km/h — so **km/h = raw × 0.36**, the raw
-  unit being 0.1 m/s. An earlier reading of this plan guessed hundredths of km/h;
-  that is wrong by 3.6×, and the implementer independently flagged the same
-  discrepancy from memory before the source was fetched.
+- **Speed** is bytes 4..5 signed BE. **⚠️ The scale stated here was wrong and is
+  superseded by §8.6: it is `raw × 0.036` km/h, raw in cm/s.** The paragraph is
+  kept because the mistake is instructive, not because it is right. What it said:
+  *"WheelLog computes `round(raw × 3.6)` into a field stored in tenths of km/h, so
+  km/h = raw × 0.36, the raw unit being 0.1 m/s."* The field is stored in
+  **hundredths**, not tenths — see §8.6 for the four independent statements that
+  settle it.
 - **Trip distance is bytes 8..9**, unsigned BE, metres. Bytes 6..7 are **not read
   by WheelLog at all** — the `0x003d` = 61 sitting there in the capture is not a
   distance and must not be decoded as one.
@@ -190,9 +192,10 @@ Checked against the source while implementing Task 1, because §8.2's own
 instruction was to verify rather than trust. §8.2 says WheelLog stores speed in
 **tenths** of km/h, giving `km/h = raw × 0.36`. It stores **hundredths**:
 
-- `WheelData` has `private static final int RIDING_SPEED = 200; // 2km/h` — 200
-  units is 2 km/h — and a commented-out debug line setting the same field to
-  `50_00` for 50 km/h. `getSpeedDouble()` is `mSpeed / 100.0`.
+- `WheelData` declares a riding-speed constant of 200 units and annotates it as
+  2 km/h, and a commented-out debug block sets the same field to 5000 for 50 km/h
+  alongside a current field set to 10000 for 100 A — one convention across three
+  fields. Its double accessor divides by 100.
 - `GotwayAdapter` computes `round(signedShortFromBytesBE(buff, 4) * 3.6)` into
   that field.
 - WheelLog's own frame-layout comment at the foot of `GotwayAdapter.java` states
