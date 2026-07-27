@@ -5,6 +5,7 @@ import com.arkivanov.decompose.DelicateDecomposeApi
 import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
 import com.arkivanov.decompose.router.stack.childStack
+import com.arkivanov.decompose.router.stack.navigate
 import com.arkivanov.decompose.router.stack.pop
 import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
@@ -18,6 +19,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Clock
@@ -259,6 +261,79 @@ class RootNavigationTest {
             Config.Picker(mode = "add"),
             stack.value.active.configuration,
             "pop() on a single-entry stack is a no-op — the dead-end this task fixes"
+        )
+    }
+
+    // ----- G2 Task 3: navigating to somewhere already in the stack -----
+
+    /**
+     * **The crash this rule exists to prevent, demonstrated rather than
+     * asserted.** Decompose 3.4.0 `check`s that configurations are unique
+     * (`ChildrenNavigator.switchDefault`) and
+     * `DecomposeExperimentFlags.duplicateConfigurationsEnabled` is false and set
+     * nowhere in this repo, so a second `push` of a live configuration throws
+     * and takes the app — and any unsaved form on it — down.
+     *
+     * The stack built here is the exact one the composer's units link produced:
+     * Settings → vehicle list → Edit is the **primary** route to that form, so
+     * `Config.Settings` is already one entry below when the link is tapped.
+     */
+    @Test
+    fun a_second_push_of_a_live_configuration_throws() {
+        val (nav, stack) = buildStack(Config.Dashboard)
+        nav.push(Config.Settings)
+        nav.push(Config.VehicleEdit(vehicleId = "v1"))
+        assertEquals(3, stack.value.items.size)
+
+        assertFailsWith<IllegalStateException>("pushing a duplicate must be what kills the app") {
+            nav.push(Config.Settings)
+        }
+    }
+
+    /**
+     * The same tap through [stackAfterGoTo] — every `push` in
+     * `DefaultRootComponent.createChild` now goes through it. The entry is
+     * relocated, the form underneath survives, and one back reveals it again.
+     */
+    @Test
+    fun navigating_to_a_live_configuration_relocates_it_and_keeps_what_is_underneath() {
+        val (nav, stack) = buildStack(Config.Dashboard)
+        nav.navigate { stackAfterGoTo(it, Config.Settings) }
+        nav.navigate { stackAfterGoTo(it, Config.VehicleEdit(vehicleId = "v1")) }
+
+        // The units link, on the stack that used to crash.
+        nav.navigate { stackAfterGoTo(it, Config.Settings) }
+        assertEquals(
+            listOf(Config.Dashboard, Config.VehicleEdit(vehicleId = "v1"), Config.Settings),
+            stack.value.items.map { it.configuration },
+            "Settings moves to the top; the half-filled form stays in the stack"
+        )
+
+        nav.pop()
+        assertEquals(
+            Config.VehicleEdit(vehicleId = "v1"),
+            stack.value.active.configuration,
+            "and back reveals the form again, not a home screen"
+        )
+    }
+
+    /** The rule itself: append when absent, relocate when present, never duplicate. */
+    @Test
+    fun the_navigation_rule_appends_when_absent_and_relocates_when_present() {
+        assertEquals(
+            listOf(Config.Dashboard, Config.Settings),
+            stackAfterGoTo(listOf(Config.Dashboard), Config.Settings),
+            "absent: exactly what push() did, so no existing route changes shape"
+        )
+        assertEquals(
+            listOf(Config.Dashboard, Config.Graph, Config.Settings),
+            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.Graph), Config.Settings),
+            "present: moved to the top, and everything else keeps its order"
+        )
+        assertEquals(
+            listOf(Config.Settings, Config.Graph, Config.Dashboard),
+            stackAfterGoTo(listOf(Config.Dashboard, Config.Settings, Config.Graph), Config.Dashboard),
+            "including the entry at the bottom — the Dashboard a tab would bring forward"
         )
     }
 }

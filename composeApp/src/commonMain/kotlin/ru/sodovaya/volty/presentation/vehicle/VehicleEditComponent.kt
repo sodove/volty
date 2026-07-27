@@ -234,9 +234,16 @@ interface VehicleEditComponent {
 
         /**
          * Whether [onSave] will do anything. A blocking issue is a
-         * self-contradictory config the connection layer cannot honour, so the
-         * screen disables Save and the component refuses it — the failure is
-         * never reached from either side.
+         * self-contradictory config the connection layer cannot honour, and the
+         * component refuses it outright — [saveBlocked] is how that refusal
+         * reaches the rider.
+         *
+         * **The screen deliberately does NOT disable the Save button on this.**
+         * A dead button explains nothing, and the explanation is the whole
+         * point of `validate` — so Save stays tappable, the refusal prints a
+         * banner, and every blocking issue is already marked on the source card
+         * it concerns ([issuesBySource]). This property is the same fact for
+         * anything that wants to ask *before* the tap; nothing does today.
          */
         val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
     }

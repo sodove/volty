@@ -36,6 +36,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -112,12 +113,18 @@ private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "mot
  *     temperature thresholds, and links out to the two screens that own the
  *     rest (motion alerts, per vehicle; units, app-wide).
  *
- * The read-only source header only survives on the **create** path. While
- * editing it would be a second, staler statement of what the source cards say
- * live — it reads `State.sourceVehicle`, the vehicle as it was LOADED, so
- * changing a controller's type in its card would leave the header contradicting
- * it. Creating has no draft to render (`State.canComposeSources`), so there it
- * is still the only description of the device the picker prefilled.
+ * The read-only source header only survives on the **create** path, where it
+ * renders the picker's prefilled `State.bmsType` / `State.sourceAddress` —
+ * there is no draft to make cards from (`State.canComposeSources`), so it is
+ * the only description of the device the rider picked.
+ *
+ * While editing it is gone. It described the vehicle **as loaded**
+ * (`State.sourceVehicle`), so changing a controller's type in its card would
+ * have left the header contradicting the card six rows below it; and the defect
+ * it was built for in G1 Task 5 — a controller-only vehicle described as a
+ * phantom JK BMS — cannot happen once the cards render the actual sources.
+ * `State.sourceVehicle` is still written at load and still asserted by two
+ * component tests, but nothing on this screen reads it.
  */
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
@@ -371,28 +378,38 @@ private fun SourcesSection(state: VehicleEditComponent.State, component: Vehicle
     val issues = state.issuesBySource
     val links = state.draft.linkAddresses
 
+    // `key(draft.key)` and not the loop index: a card owns one piece of local
+    // state the draft does not carry — whether its Advanced disclosure is open
+    // — and without a key that `remember` binds to the SLOT. Moving controller
+    // 1 down would then leave its open disclosure on whatever moved up into
+    // position 1. The text fields self-correct (they re-sync from the value
+    // they are handed); the boolean would not.
     state.draft.controllers.forEachIndexed { index, controller ->
-        ControllerSourceCard(
-            draft = controller,
-            index = index,
-            count = state.draft.controllers.size,
-            issues = issues[controller.key].orEmpty(),
-            derivedBattery = state.draft.resolvedDerivedBattery(controller),
-            canRemove = state.canRemoveSource,
-            linkAddresses = links,
-            component = component
-        )
+        key(controller.key) {
+            ControllerSourceCard(
+                draft = controller,
+                index = index,
+                count = state.draft.controllers.size,
+                issues = issues[controller.key].orEmpty(),
+                derivedBattery = state.draft.resolvedDerivedBattery(controller),
+                canRemove = state.canRemoveSource,
+                linkAddresses = links,
+                component = component
+            )
+        }
     }
     state.draft.packs.forEachIndexed { index, pack ->
-        PackSourceCard(
-            draft = pack,
-            index = index,
-            count = state.draft.packs.size,
-            issues = issues[pack.key].orEmpty(),
-            canRemove = state.canRemoveSource,
-            linkAddresses = links,
-            component = component
-        )
+        key(pack.key) {
+            PackSourceCard(
+                draft = pack,
+                index = index,
+                count = state.draft.packs.size,
+                issues = issues[pack.key].orEmpty(),
+                canRemove = state.canRemoveSource,
+                linkAddresses = links,
+                component = component
+            )
+        }
     }
 
     Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

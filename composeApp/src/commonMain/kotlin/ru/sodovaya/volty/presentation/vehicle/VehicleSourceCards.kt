@@ -109,8 +109,19 @@ internal fun ControllerSourceCard(
         canRemove = canRemove,
         issues = issues,
         onMove = component::onMoveController,
-        onRemove = { component.onRemoveController(draft.key) }
-    ) { advanced ->
+        onRemove = { component.onRemoveController(draft.key) },
+        advanced = {
+            LinkField(
+                address = draft.address,
+                linkAddresses = linkAddresses,
+                onAddressChanged = { component.onControllerAddressChanged(draft.key, it) }
+            )
+            IntField(
+                stringResource(Res.string.vehicle_field_can_id),
+                draft.canId
+            ) { component.onControllerCanIdChanged(draft.key, it) }
+        }
+    ) {
         // Type: auto-detected by the picker (`G §4`, `G §7`), editable here
         // because detection is a hint and a misdetected device must still be
         // describable.
@@ -149,18 +160,6 @@ internal fun ControllerSourceCard(
             checked = derivedBattery,
             onChange = { component.onControllerDerivedBatteryChanged(draft.key, it) }
         )
-
-        if (advanced) {
-            LinkField(
-                address = draft.address,
-                linkAddresses = linkAddresses,
-                onAddressChanged = { component.onControllerAddressChanged(draft.key, it) }
-            )
-            IntField(
-                stringResource(Res.string.vehicle_field_can_id),
-                draft.canId
-            ) { component.onControllerCanIdChanged(draft.key, it) }
-        }
     }
 }
 
@@ -181,28 +180,8 @@ internal fun PackSourceCard(
         canRemove = canRemove,
         issues = issues,
         onMove = component::onMovePack,
-        onRemove = { component.onRemovePack(draft.key) }
-    ) { advanced ->
-        TypeChips(
-            label = stringResource(Res.string.vehicle_field_bms_type),
-            options = BmsType.entries,
-            selected = draft.bmsType,
-            text = { bmsTypeLabel(it) },
-            onSelect = { component.onPackTypeChanged(draft.key, it) }
-        )
-        LabelField(draft.label) { component.onPackLabelChanged(draft.key, it) }
-
-        // Read-only on purpose (`G §4`): the cell count is auto-filled from
-        // telemetry (`KableBmsRepository.maybePersistCellCount`), so a text box
-        // here would ask the rider to type what the app already learned — and
-        // would hand a stale load-time value back to the row the connection is
-        // writing to underneath this form (see `VehicleDraft.reanchoredTo`).
-        ReadOnlyRow(
-            stringResource(Res.string.vehicle_field_cell_count_auto),
-            draft.cellCount?.toString() ?: EM_DASH
-        )
-
-        if (advanced) {
+        onRemove = { component.onRemovePack(draft.key) },
+        advanced = {
             LinkField(
                 address = draft.address,
                 linkAddresses = linkAddresses,
@@ -221,6 +200,25 @@ internal fun PackSourceCard(
                 draft.aliasGroup ?: EM_DASH
             )
         }
+    ) {
+        TypeChips(
+            label = stringResource(Res.string.vehicle_field_bms_type),
+            options = BmsType.entries,
+            selected = draft.bmsType,
+            text = { bmsTypeLabel(it) },
+            onSelect = { component.onPackTypeChanged(draft.key, it) }
+        )
+        LabelField(draft.label) { component.onPackLabelChanged(draft.key, it) }
+
+        // Read-only on purpose (`G §4`): the cell count is auto-filled from
+        // telemetry (`KableBmsRepository.maybePersistCellCount`), so a text box
+        // here would ask the rider to type what the app already learned — and
+        // would hand a stale load-time value back to the row the connection is
+        // writing to underneath this form (see `VehicleDraft.reanchoredTo`).
+        ReadOnlyRow(
+            stringResource(Res.string.vehicle_field_cell_count_auto),
+            draft.cellCount?.toString() ?: EM_DASH
+        )
     }
 }
 
@@ -231,15 +229,26 @@ internal fun PackSourceCard(
 private const val EM_DASH = "—"
 
 /**
- * Header (name, reorder, remove) + the issues this source has + the body, with
- * the Advanced disclosure the body is handed as a flag.
+ * Header (name, reorder, remove) → the issues this source has → the always-open
+ * body → the **Advanced** toggle → the fields it discloses.
+ *
+ * The toggle sits **above** what it discloses, not below it: a disclosure
+ * rendered under its own content makes the fields appear above the rider's
+ * finger and push the button down, and on the auto-open path they would simply
+ * materialise with no header over them at all.
  *
  * Reorder is two buttons rather than a drag handle: reordering renumbers the
  * saved indices (`VehicleDraft.toControllers`), so it is a rare, deliberate act
  * — and a drag gesture on a form that already scrolls vertically is the kind of
  * thing that needs a device to get right, which this repo cannot test.
+ *
+ * The three header buttons are **omitted, not disabled**, when they could do
+ * nothing: reorder needs a second source in this list, and removal needs a
+ * second source anywhere ([VehicleEditComponent.State.canRemoveSource] — the
+ * component refuses it either way, so this is presentation). A one-controller
+ * vehicle would otherwise carry three dead buttons on the only card it has,
+ * which is the one place `G §3`'s first flow looked busier than it is.
  */
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun SourceCard(
     title: String,
@@ -249,15 +258,16 @@ private fun SourceCard(
     issues: List<ComposerIssue>,
     onMove: (Int, Int) -> Unit,
     onRemove: () -> Unit,
-    content: @Composable (advanced: Boolean) -> Unit
+    advanced: @Composable () -> Unit,
+    content: @Composable () -> Unit
 ) {
-    var advanced by remember { mutableStateOf(false) }
+    var showAdvanced by remember { mutableStateOf(false) }
     val hasIssue = issues.isNotEmpty()
     // Opens itself when something is wrong and never closes itself again: all
     // but one issue kind is fixed by a field down there, and a rider who has
     // opened it deliberately must not have it shut under them by an unrelated
     // edit elsewhere on the form.
-    LaunchedEffect(hasIssue) { if (hasIssue) advanced = true }
+    LaunchedEffect(hasIssue) { if (hasIssue) showAdvanced = true }
 
     Column(
         modifier = Modifier
@@ -275,21 +285,22 @@ private fun SourceCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.weight(1f)
             )
-            TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
-                Text(stringResource(Res.string.vehicle_source_move_up), fontSize = 11.sp)
+            if (count > 1) {
+                TextButton(onClick = { onMove(index, index - 1) }, enabled = index > 0) {
+                    Text(stringResource(Res.string.vehicle_source_move_up), fontSize = 11.sp)
+                }
+                TextButton(onClick = { onMove(index, index + 1) }, enabled = index < count - 1) {
+                    Text(stringResource(Res.string.vehicle_source_move_down), fontSize = 11.sp)
+                }
             }
-            TextButton(onClick = { onMove(index, index + 1) }, enabled = index < count - 1) {
-                Text(stringResource(Res.string.vehicle_source_move_down), fontSize = 11.sp)
-            }
-            // Disabled at the last source: `Vehicle`'s own init requires one,
-            // and the component refuses the call as well. Disabled AND
-            // prevented — see VehicleDraft.canRemoveSource.
-            TextButton(onClick = onRemove, enabled = canRemove) {
-                Text(
-                    stringResource(Res.string.vehicle_source_remove),
-                    fontSize = 11.sp,
-                    color = if (canRemove) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.outline
-                )
+            if (canRemove) {
+                TextButton(onClick = onRemove) {
+                    Text(
+                        stringResource(Res.string.vehicle_source_remove),
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
             }
         }
 
@@ -302,14 +313,15 @@ private fun SourceCard(
             )
         }
 
-        content(advanced)
+        content()
 
-        TextButton(onClick = { advanced = !advanced }) {
+        TextButton(onClick = { showAdvanced = !showAdvanced }) {
             Text(
-                text = stringResource(Res.string.vehicle_source_advanced) + if (advanced) " ▴" else " ▾",
+                text = stringResource(Res.string.vehicle_source_advanced) + if (showAdvanced) " ▴" else " ▾",
                 fontSize = 11.sp
             )
         }
+        if (showAdvanced) advanced()
     }
 }
 

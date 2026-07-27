@@ -194,7 +194,6 @@
     <string name="vehicle_field_bms_type">BMS type</string>
     <string name="vehicle_field_bms_address">BMS address</string>
     <string name="vehicle_field_controller_type">Controller type</string>
-    <string name="vehicle_field_controller_address">Controller address</string>
     <string name="vehicle_field_chemistry">Chemistry</string>
     <string name="vehicle_field_cell_count">Cell count (optional)</string>
     <string name="vehicle_field_averaging_window">Averaging window</string>
@@ -204,7 +203,6 @@
     <string name="vehicle_field_temp_warn">Temperature warning (°C)</string>
     <string name="vehicle_field_temp_high">Temperature high (°C)</string>
     <string name="vehicle_field_soc_low">SOC low (%)</string>
-    <string name="vehicle_section_motor">Motor</string>
     <string name="vehicle_field_pole_pairs">Pole pairs</string>
     <string name="vehicle_field_wheel_diameter">Wheel diameter (mm)</string>
     <string name="vehicle_field_gear_ratio">Gear ratio</string>

@@ -6,8 +6,8 @@ import com.arkivanov.decompose.router.stack.ChildStack
 import com.arkivanov.decompose.router.stack.StackNavigation
 import com.arkivanov.decompose.router.stack.bringToFront
 import com.arkivanov.decompose.router.stack.childStack
+import com.arkivanov.decompose.router.stack.navigate
 import com.arkivanov.decompose.router.stack.pop
-import com.arkivanov.decompose.router.stack.push
 import com.arkivanov.decompose.router.stack.replaceAll
 import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
@@ -174,17 +174,56 @@ internal fun shouldLeaveRide(vehicle: Vehicle?, stackConfigs: List<*>): Boolean 
 }
 
 /**
+ * The stack after navigating to [config]: the entry moved to the top if it is
+ * already in the stack, appended if it is not. **Never a duplicate.**
+ *
+ * That is not a nicety, it is the difference between navigating and crashing.
+ * Decompose 3.4.0's `ChildrenNavigator.switchDefault` does
+ * `check(newConfigurations.size == newStates.size) { "Configurations must be
+ * unique: …" }`, and `DecomposeExperimentFlags.duplicateConfigurationsEnabled`
+ * defaults to false and is set nowhere in this repo — so pushing a
+ * configuration the stack already holds throws `IllegalStateException` and
+ * takes the app down, along with whatever unsaved work was on screen.
+ *
+ * Until Part G2 that was unreachable by accident, because every `push` target
+ * was a leaf nothing could navigate back out of *into itself*. G2 Task 3 gave
+ * the vehicle form a link to **Settings** (`G §4`, the app-wide km/mi setting),
+ * and the primary route to that form is *Settings → vehicle list → Edit* — so
+ * `Config.Settings` is already one entry below when the link is tapped. One
+ * tap, first try, no preconditions. Two more of the same shape follow from it
+ * (Settings → "+ Add battery", and Settings → Edit the vehicle already open),
+ * which is why every `push` in `createChild` now goes through here rather than
+ * just the one that exposed it.
+ *
+ * Relocation, not replacement: Decompose keeps a retained instance for a
+ * configuration that stays in the stack, so a half-filled form moved down the
+ * stack is still alive and is one back-press away.
+ *
+ * Pure so it can be tested — see the note on [RootNavigationTest] about why a
+ * live [DefaultRootComponent] is not reachable from `commonTest`.
+ */
+internal fun stackAfterGoTo(stack: List<Config>, config: Config): List<Config> =
+    stack.filterNot { it == config } + config
+
+/**
  * Whether system [onBack][DefaultRootComponent.onBack] should `pop()` the
  * current entry rather than collapse the whole stack with `replaceAll`.
  *
- * Graph and Settings are only ever reached by `push` on top of a home entry
- * (Ride or Dashboard), so popping — exactly what those screens' own ‹ buttons
- * already do (`onBackRequested = { nav.pop() }`) — reveals that SAME home
- * component instance instead of destroying and rebuilding it. That is worth
- * pinning: `replaceAll` was resetting live Ride state (session uptime,
- * session max speed, the sparkline) and the Battery tab's scroll position on
- * every system back out of Graph/Settings, while the in-screen button left
- * all of it alone — the disagreement this function removes.
+ * Graph and Settings are reached by [stackAfterGoTo] on top of some other
+ * entry, so popping — exactly what those screens' own ‹ buttons already do
+ * (`onBackRequested = { nav.pop() }`) — reveals that SAME component instance
+ * instead of destroying and rebuilding it. That is worth pinning: `replaceAll`
+ * was resetting live Ride state (session uptime, session max speed, the
+ * sparkline) and the Battery tab's scroll position on every system back out of
+ * Graph/Settings, while the in-screen button left all of it alone — the
+ * disagreement this function removes.
+ *
+ * It used to say "only ever reached by `push` on top of a **home** entry (Ride
+ * or Dashboard)". G2 Task 3 broke that: the vehicle form now links to Settings,
+ * so `[Dashboard, VehicleEdit, Settings]` is reachable and the entry revealed
+ * by a pop is the form, not a home screen. The rule below does not depend on
+ * which — it only needs something underneath to pop to — but the invariant it
+ * was written against is gone, and a later reader must not rely on it.
  *
  * `replaceAll(homeConfig())` remains the answer for every other case: from
  * any OTHER screen it is still correct to just pop, and the [stackSize] <= 1
@@ -255,6 +294,20 @@ class DefaultRootComponent(
                 }
             }
         }
+    }
+
+    /**
+     * Navigate to [config] — **the only way this component adds an entry**, and
+     * the replacement for every `nav.push`. See [stackAfterGoTo] for why a
+     * second push of a live configuration is a crash rather than a duplicate,
+     * and why a link from the vehicle form to Settings made that reachable in
+     * one tap.
+     *
+     * On a stack that does not already hold [config] this is exactly `push`, so
+     * no existing route changes shape.
+     */
+    private fun goTo(config: Config) {
+        nav.navigate { stack -> stackAfterGoTo(stack, config) }
     }
 
     /**
@@ -329,7 +382,7 @@ class DefaultRootComponent(
                     // something to reveal instead of stranding the user — see
                     // the matching fix on Config.Picker's onAddNewBatteryRequested
                     // below, which had the identical dead-end bug.
-                    onAddBatteryRequested = { nav.push(Config.Picker(mode = "add")) },
+                    onAddBatteryRequested = { goTo(Config.Picker(mode = "add")) },
                     onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) },
                     onTryDemoRequested = { profile -> startDemo(profile) }
                 )
@@ -383,7 +436,7 @@ class DefaultRootComponent(
                     // renders "+ Add new battery" when `state.mode != "add"`),
                     // so this can't be used to push an unbounded run of
                     // Picker(mode = "add") entries onto the stack.
-                    onAddNewBatteryRequested = { nav.push(Config.Picker(mode = "add")) },
+                    onAddNewBatteryRequested = { goTo(Config.Picker(mode = "add")) },
                     onDemoConnected = { nav.replaceAll(homeConfig()) },
                     onCancelled = { nav.pop() }
                 )
@@ -394,12 +447,12 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onOpenGraphRequested = { nav.push(Config.Graph) },
-                    onOpenSettingsRequested = { nav.push(Config.Settings) },
+                    onOpenGraphRequested = { goTo(Config.Graph) },
+                    onOpenSettingsRequested = { goTo(Config.Settings) },
                     // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
                     // "+ Add" captures the live connection into a new vehicle.
                     onAddVehicleRequested = {
-                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
                     onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
                 )
@@ -409,12 +462,12 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onOpenGraphRequested = { nav.push(Config.Graph) },
-                    onOpenSettings = { nav.push(Config.Settings) },
+                    onOpenGraphRequested = { goTo(Config.Graph) },
+                    onOpenSettings = { goTo(Config.Settings) },
                     onOpenAddBattery = {
-                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
-                    onOpenPackDetail = { packIndex -> nav.push(Config.PackDetail(packIndex)) },
+                    onOpenPackDetail = { packIndex -> goTo(Config.PackDetail(packIndex)) },
                     onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
                 )
             )
@@ -459,7 +512,7 @@ class DefaultRootComponent(
                         // alerts screen persists onto a row that must exist, and
                         // VehicleEditScreen hides the entry while creating.
                         onOpenAlertsRequested = {
-                            config.vehicleId?.let { id -> nav.push(Config.VehicleAlerts(id)) }
+                            config.vehicleId?.let { id -> goTo(Config.VehicleAlerts(id)) }
                         },
                         // The km/mi setting is app-wide (B §9), so the composer
                         // links to the one screen that owns it instead of
@@ -468,7 +521,7 @@ class DefaultRootComponent(
                         // stays alive underneath and comes back intact, and
                         // shouldPopOnBack() already pops a Settings entry that
                         // has something beneath it.
-                        onOpenUnitsRequested = { nav.push(Config.Settings) }
+                        onOpenUnitsRequested = { goTo(Config.Settings) }
                     )
                 )
             }
@@ -497,9 +550,9 @@ class DefaultRootComponent(
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
                     logExporter = get(),
-                    onEditVehicleRequested = { id -> nav.push(Config.VehicleEdit(id)) },
+                    onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {
-                        nav.push(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
                     onBackRequested = { nav.pop() }
                 )

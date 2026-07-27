@@ -192,7 +192,6 @@
     <string name="vehicle_field_bms_type">Тип BMS</string>
     <string name="vehicle_field_bms_address">Адрес BMS</string>
     <string name="vehicle_field_controller_type">Тип контроллера</string>
-    <string name="vehicle_field_controller_address">Адрес контроллера</string>
     <string name="vehicle_field_chemistry">Химия</string>
     <string name="vehicle_field_cell_count">Кол-во ячеек (опц.)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>
@@ -202,7 +201,6 @@
     <string name="vehicle_field_temp_warn">Предупреждение по температуре (°C)</string>
     <string name="vehicle_field_temp_high">Макс. температура (°C)</string>
     <string name="vehicle_field_soc_low">Низкий SOC (%)</string>
-    <string name="vehicle_section_motor">Мотор</string>
     <string name="vehicle_field_pole_pairs">Пар полюсов</string>
     <string name="vehicle_field_wheel_diameter">Диаметр колеса (мм)</string>
     <string name="vehicle_field_gear_ratio">Передаточное число</string>
