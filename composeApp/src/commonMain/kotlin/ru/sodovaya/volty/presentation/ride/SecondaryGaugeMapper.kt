@@ -107,7 +107,10 @@ object SecondaryGaugeMapper {
                 labels.motorTemp,
                 temp.readoutOr { it.roundToInt().toString() }, "°C",
                 temp?.let { frac(it, TempBands.MOTOR_CRITICAL_C + 20f) } ?: 0f,
-                TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
+                // Through the nullable local, not `motion.motorTempC` beside its flag —
+                // identical behaviour, but it keeps every read in this file going through
+                // the contract. Same for ESC below.
+                temp?.let { TempBands.motorLevel(it, known = true) } ?: DutyLevel.NORMAL
             )
         }
         SecondaryGauge.ESC_TEMP -> {
@@ -116,7 +119,7 @@ object SecondaryGaugeMapper {
                 labels.escTemp,
                 temp.readoutOr { it.roundToInt().toString() }, "°C",
                 temp?.let { frac(it, TempBands.ESC_CRITICAL_C + 20f) } ?: 0f,
-                TempBands.escLevel(motion.escTempC)
+                temp?.let { TempBands.escLevel(it) } ?: DutyLevel.NORMAL
             )
         }
         SecondaryGauge.CONSUMPTION -> {

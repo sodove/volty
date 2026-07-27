@@ -43,6 +43,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
+import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
@@ -145,7 +146,13 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 
     var powerPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
-        powerPeakTracker = powerPeakTracker.accept(abs(motion.powerW))
+        // Through MotionReadings like every other motion read (`G §9`), and it
+        // matters here even though the scale is not a readout: an unobserved
+        // power is a 0 W placeholder, and feeding it to the tracker would let a
+        // mixed vehicle's POWER dial grow its scale from a partial sum while the
+        // readout above it correctly dashes. An unobserved sample simply does
+        // not move the high-water mark.
+        MotionReadings.powerW(motion)?.let { powerPeakTracker = powerPeakTracker.accept(abs(it)) }
     }
     val sessionMaxAbsPowerW = powerPeakTracker.committed
 
@@ -352,18 +359,22 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)
         ) {
+            // Both temperatures come off MotionReadings like every other motion
+            // read on this screen, so the card's text and its severity dot are
+            // decided by one nullable rather than by a value-and-flag pair each
+            // call site re-pairs for itself.
+            val escTemp = MotionReadings.escTempC(motion)
+            val motorTemp = MotionReadings.motorTempC(motion)
             TempMetricCard(
                 label = stringResource(Res.string.ride_esc_temp),
-                valueC = motion.escTempC,
-                known = motion.hasEscTemp,
-                severity = TempBands.escLevel(motion.escTempC),
+                valueC = escTemp,
+                severity = escTemp?.let { TempBands.escLevel(it) } ?: DutyLevel.NORMAL,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
             TempMetricCard(
                 label = stringResource(Res.string.ride_motor_temp),
-                valueC = motion.motorTempC,
-                known = motion.hasMotorTemp,
-                severity = TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp),
+                valueC = motorTemp,
+                severity = motorTemp?.let { TempBands.motorLevel(it, known = true) } ?: DutyLevel.NORMAL,
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }
@@ -373,15 +384,17 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
 @Composable
 private fun TempMetricCard(
     label: String,
-    valueC: Float,
-    known: Boolean,
+    // Null when no sensor reported — MotionReadings' encoding, rendered as
+    // UNKNOWN_READOUT. Replaces the value-and-`known`-flag pair this used to
+    // take: two parameters that could disagree, re-paired at every call site.
+    valueC: Float?,
     severity: DutyLevel,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
         MetricCard(
             label = label,
-            value = if (known) "${valueC.roundToInt()}°C" else "—",
+            value = valueC.readoutOr { "${it.roundToInt()}°C" },
             modifier = Modifier.fillMaxSize()
         )
         // Small severity dot, top-right — the mockup's `.tstripe` corner marker.

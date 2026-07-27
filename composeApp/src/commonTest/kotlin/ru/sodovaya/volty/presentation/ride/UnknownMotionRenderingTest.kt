@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
@@ -123,7 +124,7 @@ class UnknownMotionRenderingTest {
         // "unknown ⇒ NORMAL" assertions are unfalsifiable: DutyBands.level(0f) is
         // NORMAL too, so the naive `level(motion.dutyPercent)` passes them.
         val bogus = wheel.copy(dutyPercent = 92f, hasDuty = false)
-        assertEquals(DutyLevel.CRITICAL, ru.sodovaya.volty.domain.stats.DutyBands.level(92f), "precondition")
+        assertEquals(DutyLevel.CRITICAL, DutyBands.level(92f), "precondition")
 
         val dial = classic(bogus, VescClusterSlot.DUTY)
         assertEquals(DutyLevel.NORMAL, dial.severity, "Classic must not redden a needle nobody measured")
@@ -259,6 +260,30 @@ class UnknownMotionRenderingTest {
             secondary(noSensors, SecondaryGauge.ESC_TEMP).value,
             secondary(noSensors, SecondaryGauge.POWER).value
         )
+    }
+
+    @Test fun an_unwired_temperature_sensor_gets_no_severity_band_on_either_renderer() {
+        // The temperature gauges were the precedent this contract copied, but their
+        // severity was the one part still computed from a value-and-flag pair rather
+        // than from the nullable. Behaviour is unchanged — TempBands.motorLevel's own
+        // `known` branch already answered NORMAL — so this asserts the CONTRACT-level
+        // claim the refactor makes: an unobserved sensor never colours anything, and a
+        // renderer that defaulted the other way would be caught here rather than on a
+        // rider's dashboard.
+        val noSensors = wheel.copy(motorTempC = -60f, hasMotorTemp = false, escTempC = -60f)
+
+        assertEquals(DutyLevel.NORMAL, classic(noSensors, VescClusterSlot.MOTOR_TEMP).severity)
+        assertEquals(DutyLevel.NORMAL, classic(noSensors, VescClusterSlot.ESC_TEMP).severity)
+        assertEquals(DutyLevel.NORMAL, secondary(noSensors, SecondaryGauge.MOTOR_TEMP).severity)
+        assertEquals(DutyLevel.NORMAL, secondary(noSensors, SecondaryGauge.ESC_TEMP).severity)
+
+        // …and the positive half, so "never colours anything" cannot be satisfied by a
+        // renderer that colours nothing at all.
+        val hot = wheel.copy(motorTempC = 105f, hasMotorTemp = true, escTempC = 90f)
+        assertEquals(DutyLevel.CRITICAL, classic(hot, VescClusterSlot.MOTOR_TEMP).severity)
+        assertEquals(DutyLevel.CRITICAL, classic(hot, VescClusterSlot.ESC_TEMP).severity)
+        assertEquals(DutyLevel.CRITICAL, secondary(hot, SecondaryGauge.MOTOR_TEMP).severity)
+        assertEquals(DutyLevel.CRITICAL, secondary(hot, SecondaryGauge.ESC_TEMP).severity)
     }
 
     @Test fun the_battery_gauges_are_untouched_by_this_contract() {

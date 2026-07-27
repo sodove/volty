@@ -29,6 +29,8 @@ import ru.sodovaya.volty.domain.stats.MotionAggregator
 import ru.sodovaya.volty.presentation.ride.DefaultRideDashboardComponent
 import ru.sodovaya.volty.presentation.root.Config
 import ru.sodovaya.volty.presentation.root.homeConfigFor
+import ru.sodovaya.volty.renderedBody
+import ru.sodovaya.volty.renderedFields
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -535,52 +537,11 @@ class KableBmsRepositoryBegodeFunnelTest {
         // distinct and non-zero, so dropping ANY of them is caught. A moving
         // wheel produces this shape; so does a VESC, which is the other
         // topology that reaches this line.
-        val everything = ControllerData(
-            speedKmh = 43.5f,
-            speedSource = SpeedSource.REPORTED,
-            dutyPercent = 78f,
-            // FALSE, against the model's own default of `true`, and that is the
-            // whole point: a fixture that leaves a field at its default cannot
-            // prove the fold carries it. `hasDuty` is the field D Task 4 added
-            // and the one this test's name most owes an assertion — at `true`,
-            // deleting the fold's `hasDuty` line left this test green. The
-            // pairing with `dutyPercent = 78f` is deliberately incoherent as a
-            // wheel reading; this is a fold, and a fold must move every field
-            // regardless of whether the combination could occur.
-            hasDuty = false,
-            motorCurrentA = 61.25f,
-            batteryCurrentA = 33.75f,
-            inputVoltageV = 147.2f,
-            // FALSE for the same reason `hasDuty` is, and paired with a real
-            // voltage for the same reason: a fold moves every field whether or
-            // not the combination could occur on hardware. It also pins the
-            // ONE case `G §9.3`'s new voltage fold could have got wrong — with
-            // no controller measuring, the average has nothing to prefer, so it
-            // must keep averaging what it has rather than substituting a 0.
-            hasInputVoltage = false,
-            powerW = 4968.0f,
-            hasPower = false,
-            eRpm = 12345f,
-            escTempC = 52.5f,
-            motorTempC = 71.5f,
-            hasMotorTemp = true,
-            odometerKm = 8565.341f,
-            tripKm = 12.75f,
-            consumedAh = 4.5f,
-            consumedWh = 640.5f,
-            regenAh = 0.25f,
-            regenWh = 36.5f,
-            hasEnergyCounters = false,
-            faults = listOf("OVER_TEMPERATURE"),
-            // The hole this test used to name and leave open: `aggregate` did
-            // NOT carry `batteryLevelFraction` (`A-foundation`), and null is
-            // also the model's default, so leaving it null here made the field
-            // invisible to the equality below in both directions. G2 Task 6
-            // added it to the fold, so it is non-default now like every other
-            // field and the identity claim is finally true of the whole class.
-            batteryLevelFraction = 0.62f,
-            isConnected = true
-        )
+        //
+        // "Every field" is not a claim this test can make on its own — see
+        // `the fold fixture leaves no ControllerData field at its default`,
+        // which is what actually holds the fixture to it.
+        val everything = everyFieldNonDefault()
 
         val agg = MotionAggregator.aggregate(
             listOf(
@@ -593,6 +554,142 @@ class KableBmsRepositoryBegodeFunnelTest {
         )
         assertEquals(everything, agg, "the one-controller fold must be the identity on every field")
     }
+
+    /**
+     * **Closes the identity test's one weakness — read this if it fails.**
+     *
+     * `the single-controller fold carries every field` compares whole objects,
+     * and whole-object equality is **blind to a field left at its default on
+     * both sides**: the fold drops it, the fixture never set it, both renderings
+     * say the same thing and nothing fails. `batteryLevelFraction` sat in
+     * exactly that blind spot for two parts — this file's own comment called it
+     * a KNOWN HOLE and left it open, and it was closed only because a human
+     * happened to edit the fixture during G2 Task 6.
+     *
+     * That is the same *omission* failure mode the identity test exists to
+     * catch, moved one file over, so it gets the same mechanical answer Task 1
+     * already built for `Vehicle`: a data class' `toString()` renders every
+     * primary-constructor property, so a field added to [ControllerData] shows
+     * up here the moment it exists. Comparing the fixture against a
+     * [ControllerData] that took every default names any field the fixture
+     * failed to override.
+     *
+     * **The scenario it prevents:** a later part adds `hasRegenCapability` to
+     * [ControllerData], forgets the line in
+     * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate], every test in
+     * the repo stays green, and `activeMotion` publishes the default forever —
+     * silently, because nothing throws and the number is simply absent.
+     *
+     * If this fails, do not weaken it — give the named field a non-default value
+     * in [everyFieldNonDefault], and then check the fold actually carries it.
+     */
+    @Test
+    fun `the fold fixture leaves no ControllerData field at its default`() {
+        // Every field at its declared default, except `timestamp`, whose default
+        // is `Clock.System.now()` — not a value a test can compare against
+        // twice. It is given the same treatment Vehicle's REQUIRED fields get in
+        // the sibling guard: a value the fixture demonstrably does not use, so
+        // it is never falsely reported AND can never be silently skipped.
+        val allDefaults = ControllerData(timestamp = Instant.DISTANT_PAST)
+        val fixtureRendering = everyFieldNonDefault().toString()
+        val defaultsRendering = allDefaults.toString()
+        val fixture = renderedFields(fixtureRendering)
+        val defaults = renderedFields(defaultsRendering)
+
+        // The splitter is test code, and a broken one would pass vacuously — two
+        // empty maps agree about everything. The same two guards the sibling
+        // guard documents, neither of which hardcodes today's field count:
+        //
+        //  1. re-joining the parsed pairs must reproduce the rendering exactly,
+        //     so nothing can be dropped or mangled;
+        //  2. both renderings must yield the SAME key set. Splitting is
+        //     value-dependent, so this is not implied by (1) — an unbalanced
+        //     bracket inside one rendering's values leaves the depth counter
+        //     high and collapses that map alone, and comparing a full map
+        //     against a collapsed one silently stops checking most fields.
+        assertEquals(
+            renderedBody(fixtureRendering),
+            fixture.entries.joinToString(", ") { "${it.key}=${it.value}" },
+            "the toString splitter dropped or mangled part of the fixture rendering"
+        )
+        assertEquals(
+            renderedBody(defaultsRendering),
+            defaults.entries.joinToString(", ") { "${it.key}=${it.value}" },
+            "the toString splitter dropped or mangled part of the all-defaults rendering"
+        )
+        assertEquals(
+            defaults.keys,
+            fixture.keys,
+            "the toString splitter disagrees across the two renderings, so the check below " +
+                "would compare a collapsed map against a full one and silently skip fields: " +
+                "fixture=${fixture.keys} defaults=${defaults.keys}"
+        )
+
+        val untouched = defaults.filterKeys { fixture[it] == defaults[it] }.keys
+        assertEquals(
+            emptySet(),
+            untouched,
+            "these ControllerData fields sit at their default in everyFieldNonDefault(), so " +
+                "`the single-controller fold carries every field` cannot prove the fold " +
+                "carries them: $untouched"
+        )
+    }
+
+    /**
+     * The fold fixture: every [ControllerData] field at a value the model's own
+     * default is not, so whole-object equality can see all of them. Held to that
+     * by `the fold fixture leaves no ControllerData field at its default`.
+     */
+    private fun everyFieldNonDefault(): ControllerData = ControllerData(
+        speedKmh = 43.5f,
+        speedSource = SpeedSource.REPORTED,
+        dutyPercent = 78f,
+        // FALSE, against the model's own default of `true`, and that is the
+        // whole point: a fixture that leaves a field at its default cannot
+        // prove the fold carries it. `hasDuty` is the field D Task 4 added
+        // and the one this test's name most owes an assertion — at `true`,
+        // deleting the fold's `hasDuty` line left this test green. The
+        // pairing with `dutyPercent = 78f` is deliberately incoherent as a
+        // wheel reading; this is a fold, and a fold must move every field
+        // regardless of whether the combination could occur.
+        hasDuty = false,
+        motorCurrentA = 61.25f,
+        batteryCurrentA = 33.75f,
+        inputVoltageV = 147.2f,
+        // FALSE for the same reason `hasDuty` is, and paired with a real
+        // voltage for the same reason: a fold moves every field whether or
+        // not the combination could occur on hardware. It also pins the
+        // ONE case `G §9.3`'s new voltage fold could have got wrong — with
+        // no controller measuring, the average has nothing to prefer, so it
+        // must keep averaging what it has rather than substituting a 0.
+        hasInputVoltage = false,
+        powerW = 4968.0f,
+        hasPower = false,
+        eRpm = 12345f,
+        escTempC = 52.5f,
+        motorTempC = 71.5f,
+        hasMotorTemp = true,
+        odometerKm = 8565.341f,
+        tripKm = 12.75f,
+        consumedAh = 4.5f,
+        consumedWh = 640.5f,
+        regenAh = 0.25f,
+        regenWh = 36.5f,
+        hasEnergyCounters = false,
+        faults = listOf("OVER_TEMPERATURE"),
+        // The hole this file used to name and leave open: `aggregate` did
+        // NOT carry `batteryLevelFraction` (`A-foundation`), and null is also
+        // the model's default, so leaving it null here made the field invisible
+        // to the identity comparison in both directions. G2 Task 6 added it to
+        // the fold, so it is non-default now like every other field — and the
+        // default-guard above is what stops the next such field repeating it.
+        batteryLevelFraction = 0.62f,
+        isConnected = true,
+        // Pinned rather than left at `Clock.System.now()`: the guard above has
+        // to compare this against a default-constructed sample, and two `now()`
+        // readings are neither reliably equal nor reliably different.
+        timestamp = Instant.fromEpochSeconds(1_700_000_000L)
+    )
 
     private companion object {
         const val WHEEL = "AA:BB:CC:DD:EE:FF"

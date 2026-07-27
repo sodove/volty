@@ -752,11 +752,20 @@ sealed interface ComposerIssue {
      *
      * It is not merely a wasted poll — it damages the two things this app is for:
      *
-     *  - **the number on the dashboard.** `MotionAggregator` folds
-     *    `inputVoltageV` with `average()`. A head unit answering with a 0 V rail
-     *    makes a three-controller vehicle report **two thirds** of its real pack
-     *    voltage, and that value feeds the alert engine as well as the dial
-     *    (`G §9.3`);
+     *  - **the number on the dashboard.** `MotionAggregator` used to fold
+     *    `inputVoltageV` with a plain `average()`, so a head unit answering with
+     *    a 0 V rail made a three-controller vehicle report **two thirds** of its
+     *    real pack voltage. G2 Task 6 fixed the fold (`G §9.3`): it now averages
+     *    only over the controllers that report
+     *    [ru.sodovaya.volty.domain.model.ControllerData.hasInputVoltage], and
+     *    the number never reached the alert engine in the first place — no
+     *    `MotionAlertKind` thresholds against a rail voltage.
+     *
+     *    **This bullet is still live for a VESC head unit**, which is the one
+     *    this advisory is actually about: only `BegodeProtocol` sets that flag
+     *    false today, so a VESC-protocol row answering `vIn = 0` still takes the
+     *    `true` default and is still averaged in. Closing it means teaching
+     *    `VescValues` the same distinction — see `G §8`'s follow-up list;
      *  - **the staleness watchdog.** A head unit answering *nothing* is excluded
      *    from the fold correctly, but `MotionResult.partial` is then permanently
      *    true and the row is a permanently-silent extra source on the gateway

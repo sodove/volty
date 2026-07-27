@@ -21,6 +21,8 @@ import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.renderedBody
+import ru.sodovaya.volty.renderedFields
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
@@ -2573,37 +2575,7 @@ class VehicleEditComponentTest {
     )
 }
 
-/**
- * Splits a data class' `toString()` into its top-level `property=value` pairs.
- *
- * Stands in for reflection, which common code does not have: `toString()` is
- * generated from the primary constructor, so it enumerates exactly the
- * properties a `copy()` can carry — including ones added tomorrow. Depth
- * tracking is what makes it usable: nested `Pack(...)` renderings and list
- * brackets are full of commas and `=` signs that are not field separators.
- */
-/** The inside of a data class' `toString()`, without the class name or parentheses. */
-private fun renderedBody(rendered: String): String =
-    rendered.substring(rendered.indexOf('(') + 1, rendered.length - 1)
-
-private fun renderedFields(rendered: String): Map<String, String> {
-    val body = renderedBody(rendered)
-    val parts = mutableListOf<String>()
-    var depth = 0
-    var start = 0
-    body.forEachIndexed { i, ch ->
-        when (ch) {
-            '(', '[', '{' -> depth++
-            ')', ']', '}' -> depth--
-            ',' -> if (depth == 0) { parts += body.substring(start, i); start = i + 1 }
-        }
-    }
-    parts += body.substring(start)
-    // The value is NOT trimmed: it starts immediately after '=', and trimming a
-    // trailing space would break the round-trip check above on a String field
-    // that legitimately ends in one.
-    return parts.associate { part ->
-        val eq = part.indexOf('=')
-        part.substring(0, eq).trim() to part.substring(eq + 1)
-    }
-}
+// The toString-based field splitter this file's default-guard is built on now
+// lives in `ru.sodovaya.volty.DataClassFields`, shared with
+// KableBmsRepositoryBegodeFunnelTest's equivalent guard on ControllerData (G2
+// Task 6). See its KDoc for why one copy rather than two.

@@ -558,7 +558,15 @@ object ClassicDialSpecs {
                 unit = "°C",                          // QML :473
                 valueTextOverride = if (motorTemp == null) UNKNOWN else null,
                 // OURS WINS: VESC reddens at 70 (:479); TempBands says 100/85 for a motor.
-                severity = TempBands.motorLevel(motion.motorTempC, motion.hasMotorTemp)
+                //
+                // Through the nullable local like every other gauge, rather than passing
+                // `motion.motorTempC` beside `motion.hasMotorTemp`. Identical behaviour —
+                // TempBands.motorLevel's own `known` branch answers NORMAL for exactly the
+                // samples this `?:` does — but it keeps "every renderer reads motion through
+                // MotionReadings" literally true, so the next reader does not find one gauge
+                // reaching past the contract and take it for permission.
+                severity = motorTemp?.let { TempBands.motorLevel(it, known = true) }
+                    ?: DutyLevel.NORMAL
             ),
             // QML :487-533 (`efficiencyGauge`).
             VescDialSpec(

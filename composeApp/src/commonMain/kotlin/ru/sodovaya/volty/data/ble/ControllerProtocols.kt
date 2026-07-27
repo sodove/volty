@@ -50,10 +50,18 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  * [cellCount] is that branch's [motor]: vehicle configuration the decoder
  * cannot read off any frame and needs in order to be honest. The live frame's
  * voltage is on Begode's 67.2 V reference, and without the pack's cell count
- * `BegodeProtocol` publishes `inputVoltageV = 0` — which the Ride dashboard
- * renders as a confident **"0.0 kW"** and "0.0 Wh/km", not as a blank. Passing
- * it here is therefore part of the branch, not a tidy-up. Null (the picker's
- * probe, every non-Begode caller) is honest absence.
+ * `BegodeProtocol` publishes `inputVoltageV = 0` **with
+ * [ru.sodovaya.volty.domain.model.ControllerData.hasInputVoltage] false**, which
+ * `G §9`'s unknown-vs-zero contract renders as a dash on both dashboard styles
+ * and which `MotionAggregator` skips rather than averaging into a mixed
+ * vehicle's real rail.
+ *
+ * That contract makes the missing cell count *legible*, not harmless: a rider
+ * still sees no power, no rail voltage and no live consumption until they supply
+ * one. (Before G2 Task 6 they saw a confident **"0.0 kW"** and "0.0 Wh/km"
+ * instead, which was worse — but "honest absence" is not the same as "present".)
+ * Passing it here is therefore part of the branch, not a tidy-up. Null (the
+ * picker's probe, every non-Begode caller) is honest absence.
  *
  * Exhaustive with NO `else`, like [ProtocolKind.toBmsType] and
  * `KableBmsRepository.batteryBmsTypeOrNull`: a new [ProtocolKind] must force a
