@@ -780,14 +780,16 @@ class VehicleEditComponentTest {
     /**
      * The same round trip as above, but on the shape the app can actually
      * produce: zero packs, one controller (see [controllerOnlyVehicle] and
-     * the Picker's controller-creation path in Task 5). [existingVehicle]
-     * pairs a VESC_BMS pack with a VESC controller at the SAME address
-     * ("AA:BB") — `planLinks` (data/ble/LinkPlan.kt) resolves one address to
-     * more than one `ProtocolKind` (VESC_BMS vs VESC) and throws
-     * "Address AA:BB resolves to conflicting protocol kinds [...]", so that
-     * fixture can never actually connect. Every other Task 6 test above
-     * exercises only that unreachable shape, leaving the real one — a bare
-     * controller vehicle — with no motor-edit coverage at all.
+     * the Picker's controller-creation path in Task 5).
+     *
+     * (This KDoc used to claim [existingVehicle] "can never actually connect"
+     * because its VESC_BMS pack and VESC controller share one address. That was
+     * true when it was written and is **not** true now: Part C §6 sanctions
+     * exactly that pairing — a gateway hosting its own battery — and
+     * `resolveLinkKind` resolves it to VESC. The fixture is a legal head-unit
+     * shape. The reason this test exists is still good: every other motor test
+     * runs on a vehicle that HAS a pack, so the bare controller vehicle would
+     * otherwise have no motor-edit coverage.)
      */
     @Test
     fun `save persists edited motor config onto a zero-pack controller vehicle`() = runTest {
@@ -1105,6 +1107,55 @@ class VehicleEditComponentTest {
     }
 
     /**
+     * The **field**-level counterpart of the two tests above, and the case the
+     * `packsEdited` switch alone cannot cover.
+     *
+     * `State.draft` is the load-time snapshot, and
+     * `KableBmsRepository.maybePersistCellCount` upserts `withCellCount(n)` the
+     * moment the pack's first cell frames arrive — while this form is on
+     * screen. Once the rider touches the pack list, the save replaces `packs`
+     * wholesale from the draft, so a stale `cellCount` would overwrite the real
+     * one — and `lastPersistedCellCount` then suppresses re-persisting for the
+     * rest of the process, so nothing would ever restore it. Cell count is
+     * spec'd as auto-filled from telemetry (`G §4`); silently reverting it is a
+     * value the rider cannot re-enter.
+     */
+    @Test
+    fun `a cell count auto-filled while the form was open survives a composed save`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val unknownCells = existingVehicle().copy(
+            packs = listOf(existingVehicle().packs.single().copy(cellCount = null))
+        )
+        val repo = FakeVehicleRepo(listOf(unknownCells))
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(null, c.state.value.draft.packs.single().cellCount, "nothing known when the form opened")
+
+        // The connection learns the cell count and persists it. `aliasGroup`
+        // moves with it — not because anything writes it today, but because the
+        // guarantee is generic: a pack field the composer does not edit comes
+        // from the freshly-read row, not from the load-time snapshot. Task 4
+        // makes that field editable and will need the same rule stated the
+        // other way round.
+        repo.upsert(
+            unknownCells.copy(
+                packs = listOf(unknownCells.packs.single().copy(cellCount = 20, aliasGroup = "moved"))
+            )
+        )
+
+        // The rider composes — which is what makes the save write `packs` from
+        // the draft instead of leaving the stored list alone.
+        c.onPackLabelChanged(c.state.value.draft.packs.single().key, "Батарея")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.last()
+        assertEquals("Батарея", saved.packs.single().label, "the edit itself must land")
+        assertEquals(20, saved.packs.single().cellCount, "and the auto-filled count must not be reverted")
+        assertEquals("moved", saved.packs.single().aliasGroup, "nor any other field written underneath")
+    }
+
+    /**
      * The other side of the same switch: once the rider composes the pack list,
      * it is theirs. The vehicle-name → pack-0-label coupling exists because
      * `singlePackVehicle` labels pack 0 after the vehicle and the pack card
@@ -1236,6 +1287,9 @@ class VehicleEditComponentTest {
         c.onControllerAddressChanged(ck, "WH:01")
         c.onControllerCanIdChanged(ck, null)
         c.onControllerMotorChanged(ck, MotorConfig(polePairs = 3, wheelDiameterMm = 100, gearRatio = 1.5f))
+        // The keyed motor setter and the flat Motor card describe the same
+        // controller while both exist, so editing one must re-point the other.
+        assertEquals(3, c.state.value.motorPolePairs, "the flat Motor card follows the keyed setter")
         c.onSave()
         advanceUntilIdle()
 
@@ -1274,6 +1328,83 @@ class VehicleEditComponentTest {
             ),
             saved.controllers
         )
+    }
+
+    /**
+     * The create path builds the single-BMS shape through `singlePackVehicle`
+     * and never reads the draft, so a composer control offered while creating
+     * would take the rider's work and discard it at save time with no signal.
+     * The state says so (`canComposeSources`) **and** the mutations are no-ops
+     * — disabled *and* prevented, the same pair as the last-source rule, rather
+     * than trusting the screen to remember.
+     */
+    @Test
+    fun `the source list cannot be composed while creating`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(emptyList())
+        val c = component(repo, vehicleId = null, prefilledBmsType = BmsType.JK_BMS, prefilledBmsAddress = "CR:01")
+        advanceUntilIdle()
+        assertEquals(false, c.state.value.canComposeSources)
+
+        c.onNameChanged("Fresh")
+        c.onAddController(ControllerType.VESC, "VE:01")
+        c.onAddPack(BmsType.ANT_BMS, "AN:01")
+        assertEquals(VehicleDraft(), c.state.value.draft, "nothing may be accepted that the save would discard")
+        assertEquals(false, c.state.value.packsEdited)
+        assertEquals(false, c.state.value.controllersEdited)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(
+            Pack(index = 0, label = "Fresh", bmsType = BmsType.JK_BMS, bmsAddress = "CR:01"),
+            saved.packs.single()
+        )
+        assertEquals(emptyList(), saved.controllers)
+    }
+
+    /**
+     * A refusal the screen can see. `nameError` has had this shape forever; a
+     * blocking issue returning silently would give a screen that wires only the
+     * Save button a control that appears dead.
+     */
+    @Test
+    fun `a refused save says so, and the refusal clears when the config is fixed`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(false, c.state.value.saveBlocked)
+
+        c.onAddPack(BmsType.JK_BMS, "AA:BB")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(true, c.state.value.saveBlocked)
+        assertEquals(emptyList(), repo.upserts)
+
+        c.onPackAddressChanged(c.state.value.draft.packs.single().key, "JK:01")
+        assertEquals(false, c.state.value.saveBlocked, "fixing the config withdraws the refusal")
+    }
+
+    /**
+     * The flat Motor fields are re-pointed when the controller they describe
+     * changes — a reorder, or the keyed motor setter — and **only** then. An
+     * unrelated source edit must not refill a box the rider has just cleared:
+     * the draft resolved that blank to `MotorConfig()`'s default, and pushing
+     * it back into the field takes the edit away mid-typing.
+     */
+    @Test
+    fun `a cleared motor field survives an unrelated source edit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onMotorPolePairsChanged(null)
+        c.onAddPack(BmsType.ANT_BMS, "AN:09")
+        assertEquals(null, c.state.value.motorPolePairs, "an unrelated edit must not refill it")
+        assertEquals(500, c.state.value.motorWheelDiameterMm, "and must not disturb the others")
     }
 
     /**

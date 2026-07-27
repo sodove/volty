@@ -5,8 +5,8 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
-import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
@@ -193,16 +193,37 @@ interface VehicleEditComponent {
         val packsEdited: Boolean = false,
         val controllersEdited: Boolean = false,
         val nameError: Boolean = false,
+        /**
+         * [onSave] refused because of a blocking [ComposerIssue] — the
+         * counterpart of [nameError], so a screen that wires only the button
+         * still says something instead of appearing dead. Cleared by any change
+         * to the source set, which is the only thing that can fix it.
+         */
+        val saveBlocked: Boolean = false,
         val saving: Boolean = false
     ) {
         /** See [VehicleDraft.canRemoveSource]. False while creating (no draft). */
         val canRemoveSource: Boolean get() = draft.canRemoveSource
 
         /**
+         * Whether the source list may be edited at all.
+         *
+         * **False while CREATING**, because the create path builds the
+         * single-BMS shape through `singlePackVehicle` and never reads [draft]
+         * — so a composer control offered here would take the rider's work and
+         * discard it at save time with no signal. The mutations are no-ops in
+         * that state as well (belt and braces, exactly like
+         * [canRemoveSource]); a controller-bearing vehicle is created by the
+         * Picker, which then navigates straight to this screen to EDIT it, and
+         * that is where composing happens.
+         */
+        val canComposeSources: Boolean get() = isEditing
+
+        /**
          * Whether [onSave] will do anything. A blocking issue is a
-         * self-contradictory config `planLinks` itself throws on, so the screen
-         * disables Save and the component refuses it — the exception is never
-         * reached from either side.
+         * self-contradictory config the connection layer cannot honour, so the
+         * screen disables Save and the component refuses it — the failure is
+         * never reached from either side.
          */
         val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
     }
@@ -331,17 +352,33 @@ class DefaultVehicleEditComponent(
         block: (VehicleDraft) -> VehicleDraft
     ) {
         _state.update { s ->
+            // Nothing to compose onto while creating — see [State.canComposeSources].
+            if (!s.canComposeSources) return@update s
             val d = block(s.draft)
-            val motor = d.controllers.firstOrNull()?.motor
+            val head = d.controllers.firstOrNull()
+            val previousHead = s.draft.controllers.firstOrNull()
+            // Re-point the flat Motor fields ONLY when the geometry they show
+            // actually changed — a different controller moved to the front, or
+            // this one's was edited through the keyed setter. Re-pointing
+            // unconditionally would refill a box the rider had just cleared
+            // (which resolves to MotorConfig()'s default in the draft) the next
+            // time they touched anything else at all.
+            //
+            // Comparing the MotorConfig rather than the row's key is
+            // deliberate: a reorder that brings up a controller with identical
+            // geometry has nothing to re-point, and a key comparison beside
+            // this one could never change the answer.
+            val repoint = head?.motor != previousHead?.motor
             s.copy(
                 draft = d,
                 issues = validate(d),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
                 hasController = d.controllers.isNotEmpty(),
-                motorPolePairs = motor?.polePairs,
-                motorWheelDiameterMm = motor?.wheelDiameterMm,
-                motorGearRatio = motor?.gearRatio
+                saveBlocked = false,
+                motorPolePairs = if (repoint) head?.motor?.polePairs else s.motorPolePairs,
+                motorWheelDiameterMm = if (repoint) head?.motor?.wheelDiameterMm else s.motorWheelDiameterMm,
+                motorGearRatio = if (repoint) head?.motor?.gearRatio else s.motorGearRatio
             )
         }
     }
@@ -418,12 +455,17 @@ class DefaultVehicleEditComponent(
     override fun onSave() {
         val s = _state.value
         if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
-        // A blocking issue is a config `planLinks` throws on (conflicting
-        // protocol kinds at one address; two sources claiming one CAN id).
-        // Refusing the save is the composer's half of "the UI must not be able
-        // to reach that exception"; [State.canSave] is the same fact, for the
-        // screen to disable the button with. Nothing here catches anything.
-        if (s.issues.any { it.blocking }) return
+        // A blocking issue is a self-contradictory config: conflicting protocol
+        // kinds at one address or two sources claiming one CAN id (both of
+        // which `planLinks` throws on), or two sources on one gateway link both
+        // claiming to be the gateway itself (which it cannot see). Refusing the
+        // save is the composer's half of "the UI must not be able to reach that
+        // failure"; [State.canSave] is the same fact for the screen to disable
+        // the button with. Nothing here catches anything.
+        //
+        // Reported like [State.nameError] rather than returning silently: a
+        // screen that wires only the button would otherwise look dead.
+        if (s.issues.any { it.blocking }) { _state.update { it.copy(saveBlocked = true) }; return }
         scope.launch {
             _state.update { it.copy(saving = true) }
             // Re-read rather than reuse State.sourceVehicle: the alerts screen
@@ -510,6 +552,12 @@ class DefaultVehicleEditComponent(
  * Once the rider composes that half, it is theirs: the draft carries a label
  * per pack, so the rename coupling stands down rather than overwriting what
  * they typed.
+ *
+ * The `packsEdited` switch protects an untouched half *wholesale*; a field that
+ * moved inside a source the rider also edited needs the second half of the same
+ * rule, which is [reanchoredTo] — every draft's `origin` is re-pointed at THIS
+ * freshly-read vehicle before it is projected, so a cell count the auto-fill
+ * wrote while the form was open is not reverted by a save that renamed a pack.
  */
 private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
     name = s.name,
@@ -519,7 +567,7 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
     averagingWindowMin = s.averagingWindowMin,
     alertConfig = alertConfig.withEdits(s),
     packs = if (s.packsEdited) {
-        s.draft.toPacks()
+        s.draft.reanchoredTo(this).toPacks()
     } else {
         // Index 0 ONLY: a wheel's second branch keeps the positional label
         // `expandedTo` gave it, and a pack-less vehicle maps an empty list to
@@ -538,7 +586,11 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
     // asymmetry is deliberate — a controller-only edit leaves `packs` to the
     // stored row, which is what keeps a branch persisted underneath this form
     // from being dropped, and nothing writes `controllers` underneath us.
-    controllers = if (s.controllersEdited || s.packsEdited) s.draft.toControllers() else controllers,
+    controllers = if (s.controllersEdited || s.packsEdited) {
+        s.draft.reanchoredTo(this).toControllers()
+    } else {
+        controllers
+    },
     dashboardStyle = s.dashboardStyle,
     secondaryGauge = s.secondaryGauge
 )

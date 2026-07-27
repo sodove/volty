@@ -108,6 +108,15 @@ fun derivedBatteryChoiceFor(controller: Controller, default: Boolean): DerivedBa
  * reason Task 1 rewrote `onSave`: a field this draft does not model is then
  * **preserved by default** instead of reset by default. Adding a field to
  * [Pack] requires no change here.
+ *
+ * **[toPack] names exactly the fields this composer edits, and nothing else.**
+ * [cellCount] and [aliasGroup] are carried on the draft so a row can *show*
+ * them, but they are written by telemetry (`maybePersistCellCount`) and by Task
+ * 4, not here — so they come off [origin], which [reanchoredTo] re-points at
+ * the freshly-read row at save time. That is what stops a save from reverting a
+ * cell count the auto-fill wrote while this form was open. Whoever makes either
+ * field editable must add it to the `copy()` below **and** keep it out of
+ * [reanchoredTo]'s refresh.
  */
 data class PackDraft(
     val key: String,
@@ -127,9 +136,7 @@ data class PackDraft(
             label = label,
             bmsType = bmsType,
             bmsAddress = address,
-            cellCount = cellCount,
-            canId = canId,
-            aliasGroup = aliasGroup
+            canId = canId
         )
 }
 
@@ -227,6 +234,43 @@ data class VehicleDraft(
     fun toControllers(): List<Controller> =
         controllers.mapIndexed { i, c -> c.toController(i, resolvedDerivedBattery(c)) }
 }
+
+/**
+ * Re-point every draft's `origin` at the **freshly-read** row, matching by the
+ * stored index the draft was seeded from.
+ *
+ * `draftOf` runs when the form opens; the stored row moves underneath it.
+ * `KableBmsRepository.maybePersistCellCount` upserts `withCellCount(n)` the
+ * moment the pack's first cell frames arrive — which, since Part D navigates a
+ * Controller pick straight to this form, is exactly while the rider is looking
+ * at it. Without this, a save that touched the pack list would write back the
+ * load-time `cellCount` (usually null), and `lastPersistedCellCount` then
+ * suppresses re-persisting for the rest of the process: a spec'd, telemetry-fed
+ * value (`G §4`) silently reverted, with nothing to restore it.
+ *
+ * `State.packsEdited` already protects the *untouched* half wholesale; this
+ * protects the composed half **field by field**, which is the only way to cover
+ * a value that changed inside a source the rider also edited.
+ *
+ * A draft whose origin has vanished from the stored row keeps the old one —
+ * dropping it would reset every unmodelled field to its default, which is worse
+ * than a stale value for a source somebody deleted elsewhere.
+ */
+fun VehicleDraft.reanchoredTo(vehicle: Vehicle): VehicleDraft = copy(
+    packs = packs.map { d ->
+        val fresh = d.origin?.let { o -> vehicle.packs.firstOrNull { it.index == o.index } }
+        // `origin` ONLY. Refreshing the draft's own display fields as well
+        // would be a second mechanism for the same guarantee, and the one that
+        // matters is `toPack` not naming what the composer does not edit — so
+        // there is exactly one place a future editable field has to be added,
+        // not two that can disagree.
+        if (fresh == null) d else d.copy(origin = fresh)
+    },
+    controllers = controllers.map { d ->
+        val fresh = d.origin?.let { o -> vehicle.controllers.firstOrNull { it.index == o.index } }
+        if (fresh == null) d else d.copy(origin = fresh)
+    }
+)
 
 /** The draft [vehicle] loads as. Round-trips exactly: `draftOf(v).toPacks() == v.packs`. */
 fun draftOf(vehicle: Vehicle): VehicleDraft {
@@ -341,9 +385,11 @@ fun VehicleDraft.updateControllerAt(index: Int, edit: (ControllerDraft) -> Contr
  * **[blocking] draws a deliberate line**, and it is not "how bad is it":
  *
  *  - **blocking** = the rider's configuration *contradicts itself*. Two things
- *    that cannot both be true of one physical BLE link. `planLinks` throws on
- *    exactly these two, no future version of volty will accept them, and the
- *    save is refused.
+ *    that cannot both be true of one physical BLE link. No future version of
+ *    volty will accept them, and the save is refused. `planLinks` throws on two
+ *    of the three; the third ([AmbiguousGatewaySource]) it cannot see, because
+ *    its duplicate-CAN check `mapNotNull`s the nulls away — pre-Part-C *every*
+ *    source was null, so "null" could not have meant "the gateway itself" yet.
  *  - **advisory** = the configuration describes real hardware correctly and
  *    volty cannot read it *yet* (or reads only part of it). Refusing the save
  *    would stop a rider describing their own scooter because a decoder has not
@@ -378,6 +424,35 @@ sealed interface ComposerIssue {
      * check pools packs and controllers because they share the bus.
      */
     data class DuplicateCanId(val address: String, val canId: Int) : ComposerIssue {
+        override val blocking: Boolean get() = true
+    }
+
+    /**
+     * **Two sources on one gateway link both claiming to be the gateway
+     * itself** — more than one owned controller, or more than one owned pack,
+     * with `canId == null`.
+     *
+     * On a gateway link `canId == null` does not mean "direct", it means "the
+     * endpoint answers this itself": `VescGatewayProtocol.frameFor` sends the
+     * request **unwrapped** when the id is null, rather than inside a
+     * `FORWARD_CAN`. There is exactly one such endpoint, so two sources cannot
+     * both be it — and the resulting requests are **byte-identical**, so the
+     * gateway answers the same frame twice and `applyValues` files one decode
+     * under two different `globalIndex`es. `MotionAggregator` then **sums**
+     * `motorCurrentA`, `batteryCurrentA` and `powerW` across controllers, so
+     * the dashboard reads about double. Nothing throws, nothing is logged: it
+     * saves clean, connects, and lies.
+     *
+     * `planLinks` does not catch it — its duplicate-CAN `require` runs over
+     * `mapNotNull { it.canId }` (`LinkPlan.kt:189`), deliberately, because
+     * before Part C every source's id was null. This is the same criterion as
+     * [UnroutableGateway] one level down: a gateway link must be able to tell
+     * its sources apart, and `canId` is the only thing that tells them apart.
+     *
+     * Blocking, not advisory: it is a contradiction (two "the head unit
+     * itself"s), not a capability gap.
+     */
+    data class AmbiguousGatewaySource(val address: String, val sourceKeys: List<String>) : ComposerIssue {
         override val blocking: Boolean get() = true
     }
 
@@ -506,10 +581,30 @@ fun validate(draft: VehicleDraft): List<ComposerIssue> {
         if (resolved == ProtocolKind.VESC_BMS) {
             g.packs.forEach { issues += ComposerIssue.HostlessVescBms(it.key) }
         }
-        // The gateway triggers of `LinkSpec.isGatewayLink` that a non-VESC link
-        // can actually reach. Its third trigger — a hosted VESC_BMS pack — can
-        // only occur on a link that resolved to VESC, so it is not tested here.
-        if (resolved != ProtocolKind.VESC && (g.canIds.isNotEmpty() || g.controllers.size > 1)) {
+        // `LinkSpec.isGatewayLink`, re-stated: any CAN id, a hosted VESC_BMS
+        // pack (only possible once the link resolved to VESC), or more than one
+        // controller on one address.
+        val isGateway = g.canIds.isNotEmpty() ||
+            g.controllers.size > 1 ||
+            (resolved == ProtocolKind.VESC && g.packs.any { it.protocolKind == ProtocolKind.VESC_BMS })
+        if (isGateway) {
+            // On a gateway link `canId == null` means "the endpoint itself",
+            // and there is one endpoint. Two such sources produce identical
+            // requests and one decode filed twice — see [AmbiguousGatewaySource].
+            // Packs and controllers are counted separately: they ask different
+            // questions (BMS_GET_VALUES vs GET_VALUES), so one of each is fine.
+            val directControllers = g.controllers.filter { it.canId == null }
+            if (directControllers.size > 1) {
+                issues += ComposerIssue.AmbiguousGatewaySource(address, directControllers.map { it.key })
+            }
+            val directPacks = g.packs.filter { it.canId == null }
+            if (directPacks.size > 1) {
+                issues += ComposerIssue.AmbiguousGatewaySource(address, directPacks.map { it.key })
+            }
+        }
+        // VESC is the only kind with a multiplexer; every other arm of
+        // `controllerMotionProtocol` ignores the link spec entirely.
+        if (isGateway && resolved != ProtocolKind.VESC) {
             issues += ComposerIssue.UnroutableGateway(address, resolved)
         }
     }

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import ru.sodovaya.volty.data.ble.ProtocolKind
+import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -99,6 +100,47 @@ class VehicleComposerTest {
         )
         assertEquals(emptyList(), draftOf(v).toPacks())
         assertEquals(v.controllers, draftOf(v).toControllers())
+    }
+
+    /**
+     * `origin` is the load-time snapshot, and the stored row moves underneath
+     * it: `maybePersistCellCount` upserts a cell count the moment the pack's
+     * first frames arrive, which is while this form is on screen. Re-anchoring
+     * picks that up for the fields the composer does not edit, without
+     * disturbing the ones it does.
+     */
+    @Test
+    fun `re-anchoring picks up a field written to the stored row while the form was open`() {
+        // TWO packs, each learning a different count: matching them back by
+        // list position instead of by stored index would hand pack 0 pack 1's
+        // telemetry, which is worse than the staleness this fixes.
+        val loaded = vehicle(
+            packs = listOf(
+                pack(0, "P0", BmsType.ANT_BMS, "AN:01", cellCount = null, aliasGroup = null),
+                pack(1, "P1", BmsType.ANT_BMS, "AN:02", cellCount = null, aliasGroup = null)
+            ),
+            controllers = listOf(controller(0, "C", ControllerType.VESC, "VE:01"))
+        )
+        val d = draftOf(loaded).let { it.updatePack(it.packs.first().key) { p -> p.copy(label = "Renamed") } }
+        val freshController = loaded.controllers.single().copy(motor = MotorConfig(9, 400, 2f))
+        val fresh = loaded.copy(
+            packs = listOf(
+                loaded.packs[0].copy(cellCount = 20, aliasGroup = "g"),
+                loaded.packs[1].copy(cellCount = 7, aliasGroup = "other")
+            ),
+            controllers = listOf(freshController)
+        )
+
+        assertEquals(null, d.toPacks().first().cellCount, "the load-time snapshot knew nothing")
+        val out = d.reanchoredTo(fresh).toPacks()
+        assertEquals(20, out[0].cellCount)
+        assertEquals("g", out[0].aliasGroup)
+        assertEquals(7, out[1].cellCount, "and each pack gets its OWN row back, matched by stored index")
+        assertEquals("Renamed", out[0].label, "and the rider's own edit still wins")
+        // Both halves are re-anchored. A `Controller` has no field the draft
+        // leaves unmodelled today, so this is only observable on `origin`
+        // itself — which is precisely the thing a future field would ride on.
+        assertEquals(freshController, d.reanchoredTo(fresh).controllers.single().origin)
     }
 
     /**
@@ -543,8 +585,10 @@ class VehicleComposerTest {
             vehicle(
                 packs = emptyList(),
                 controllers = listOf(
-                    controller(0, address = "WH:01", type = ControllerType.BEGODE),
-                    controller(1, address = "WH:01", type = ControllerType.BEGODE)
+                    // Distinct CAN ids, so this is ONLY about the missing
+                    // multiplexer — the ambiguous-source case is its own test.
+                    controller(0, address = "WH:01", type = ControllerType.BEGODE, canId = 1),
+                    controller(1, address = "WH:01", type = ControllerType.BEGODE, canId = 2)
                 )
             )
         )
@@ -563,6 +607,83 @@ class VehicleComposerTest {
             listOf(ComposerIssue.UnroutableGateway("JK:01", ProtocolKind.JK)),
             validate(forwardedBms)
         )
+    }
+
+    /**
+     * **The product owner's own topology entered naively, and the worst
+     * outcome this task exists to stop: it saves clean, connects, and lies.**
+     *
+     * Two uBoxes behind the head unit with no CAN ids. `planLinks` accepts it
+     * — its duplicate check runs over `mapNotNull { it.canId }`, so nulls are
+     * dropped — and plans ONE gateway link owning two controllers whose
+     * `canId` is null. `VescGatewayProtocol.frameFor` sends an unwrapped
+     * request for a null id, so both `GET_VALUES` frames are byte-identical,
+     * the head unit answers the same thing twice, and `MotionAggregator` SUMS
+     * `motorCurrentA` / `batteryCurrentA` / `powerW` across controllers: the
+     * dashboard reads about double, with nothing thrown and nothing logged.
+     */
+    @Test
+    fun `two controllers on one gateway link both claiming to be the gateway are blocked`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01")
+            .addController(ControllerType.VESC, "HU:01")
+
+        assertEquals(
+            listOf(ComposerIssue.AmbiguousGatewaySource("HU:01", d.controllers.map { it.key })),
+            validate(d)
+        )
+        assertTrue(validate(d).single().blocking)
+
+        // The shape this is about, read off the real planner: one gateway link,
+        // two owned controllers, both `canId == null`. planLinks does not
+        // refuse it, which is exactly why the composer must.
+        val v = d.asVehicle()
+        val link = planLinks(v.packs, v.controllers).single()
+        assertTrue(link.isGatewayLink)
+        assertEquals(listOf(null, null), link.ownedControllers.map { it.canId })
+    }
+
+    /** Same contradiction on the battery half: two batteries hosted by one head unit. */
+    @Test
+    fun `two hosted packs on one gateway link are blocked`() {
+        val d = draftOf(
+            vehicle(
+                packs = listOf(
+                    pack(0, address = "HU:01", type = BmsType.VESC_BMS),
+                    pack(1, address = "HU:01", type = BmsType.VESC_BMS)
+                ),
+                // No CAN id anywhere: what makes this a gateway link at all is
+                // the hosted VESC_BMS pack, `isGatewayLink`'s third trigger.
+                controllers = listOf(controller(0, address = "HU:01"))
+            )
+        )
+        assertEquals(
+            listOf(ComposerIssue.AmbiguousGatewaySource("HU:01", listOf("p0", "p1"))),
+            validate(d)
+        )
+        val v = d.asVehicle()
+        assertTrue(planLinks(v.packs, v.controllers).single().isGatewayLink)
+    }
+
+    /**
+     * The half that must NOT be reported: a controller-gateway answers
+     * `GET_VALUES` for itself and `BMS_GET_VALUES` for its hosted battery —
+     * different questions, so one null-id source of each kind is not
+     * ambiguous. Counting them together would refuse `01-linking §3`
+     * archetype 1b.
+     */
+    @Test
+    fun `one direct controller beside one hosted pack is fine`() {
+        val d = draftOf(
+            vehicle(
+                packs = listOf(pack(0, address = "HU:01", type = BmsType.VESC_BMS)),
+                controllers = listOf(
+                    controller(0, address = "HU:01"),
+                    controller(1, address = "HU:01", canId = 42)
+                )
+            )
+        )
+        assertEquals(emptyList(), validate(d))
     }
 
     /** The shape that DOES have a multiplexer must not be reported. */
@@ -652,8 +773,8 @@ class VehicleComposerTest {
                 vehicle(
                     emptyList(),
                     listOf(
-                        controller(0, address = "WH:01", type = ControllerType.BEGODE),
-                        controller(1, address = "WH:01", type = ControllerType.BEGODE)
+                        controller(0, address = "WH:01", type = ControllerType.BEGODE, canId = 1),
+                        controller(1, address = "WH:01", type = ControllerType.BEGODE, canId = 2)
                     )
                 )
             ),
@@ -701,6 +822,38 @@ class VehicleComposerTest {
             assertFailsWith<IllegalArgumentException>("$name must be what planLinks refuses") {
                 planLinks(v.packs, v.controllers)
             }
+        }
+
+        // The composer is STRICTLY stricter than `planLinks`, and this is the
+        // list of where — each entry a contradiction `planLinks` structurally
+        // cannot see, with the reason. Kept here rather than in its own test so
+        // that "blocked but plans fine" stays an enumerated, argued set instead
+        // of a silent gap in the agreement above.
+        val beyondPlanLinks: List<Pair<String, VehicleDraft>> = listOf(
+            // Its duplicate-CAN check is `mapNotNull { it.canId }`
+            // (LinkPlan.kt:189) — deliberately, because before Part C every
+            // source's id was null and "null" could not yet mean "the gateway
+            // itself".
+            "two controllers claiming to be the gateway itself" to VehicleDraft()
+                .addController(ControllerType.VESC, "HU:01")
+                .addController(ControllerType.VESC, "HU:01"),
+            "two packs hosted by the same gateway" to draftOf(
+                vehicle(
+                    listOf(
+                        pack(0, address = "HU:01", type = BmsType.VESC_BMS),
+                        pack(1, address = "HU:01", type = BmsType.VESC_BMS)
+                    ),
+                    listOf(controller(0, address = "HU:01"))
+                )
+            )
+        )
+        for ((name, d) in beyondPlanLinks) {
+            assertTrue(validate(d).any { it.blocking }, "$name must be blocked")
+            val v = d.asVehicle()
+            assertTrue(
+                planLinks(v.packs, v.controllers).isNotEmpty(),
+                "$name is blocked by the composer alone — planLinks accepts it"
+            )
         }
     }
 }
