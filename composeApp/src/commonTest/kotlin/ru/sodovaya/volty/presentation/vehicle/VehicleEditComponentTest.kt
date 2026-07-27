@@ -835,6 +835,11 @@ class VehicleEditComponentTest {
 
         c.onMotorPolePairsChanged(9)
         c.onMotorPolePairsChanged(null) // user cleared the field
+        // The field must STAY cleared while the rider retypes it. The three
+        // motor fields are a projection of draft controller 0 everywhere else
+        // (a reorder re-points them), and re-projecting them here would refill
+        // the box with the 15 the draft resolved the blank to.
+        assertEquals(null, c.state.value.motorPolePairs, "a cleared field must not refill itself")
         c.onSave()
         advanceUntilIdle()
 
@@ -866,6 +871,427 @@ class VehicleEditComponentTest {
         advanceUntilIdle()
 
         assertEquals(emptyList(), repo.upserts.single().controllers)
+    }
+
+    // ----- G2 Task 2: the composer (N sources) -----
+    //
+    // The rules themselves live in VehicleComposer.kt and are pinned by
+    // VehicleComposerTest. What is tested here is the wiring: that the
+    // component reaches them, and that the save applies a composed source list
+    // without giving back any of the ground Task 1 took.
+
+    @Test
+    fun `adding a battery source writes it and recomputes the derived battery`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // The loaded shape: one controller, no pack, so it derives a battery.
+        assertEquals(true, c.state.value.draft.toControllers().single().providesDerivedBattery)
+
+        c.onAddPack(BmsType.ANT_BMS, "AN:01", "Основной")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(
+            Pack(index = 0, label = "Основной", bmsType = BmsType.ANT_BMS, bmsAddress = "AN:01"),
+            saved.packs.single()
+        )
+        assertEquals(
+            false,
+            saved.controllers.single().providesDerivedBattery,
+            "a real battery source turns the controller's derived battery off (G §6)"
+        )
+        // The controller is otherwise untouched — the composer edits what it is
+        // asked to and carries the rest.
+        assertEquals("AA:BB", saved.controllers.single().address)
+        assertEquals(21, saved.controllers.single().canId)
+    }
+
+    @Test
+    fun `adding a second controller renumbers and keeps the first`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onAddController(ControllerType.VESC, "AA:BB", "uBox R")
+        c.onControllerCanIdChanged(c.state.value.draft.controllers[1].key, 42)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(listOf(0, 1), saved.controllers.map { it.index })
+        assertEquals(listOf("Main", "uBox R"), saved.controllers.map { it.label })
+        assertEquals(listOf(21, 42), saved.controllers.map { it.canId })
+        assertEquals(MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f), saved.controllers[0].motor)
+    }
+
+    /**
+     * **The exception the UI must not be able to reach.** [Vehicle]'s `init`
+     * requires a source; the component refuses the removal and advertises
+     * `canRemoveSource` so the screen can disable the control. Nothing throws
+     * and nothing is caught.
+     */
+    @Test
+    fun `removing the last source is refused, not thrown`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertEquals(false, c.state.value.canRemoveSource)
+        c.onRemoveController(c.state.value.draft.controllers.single().key)
+        assertEquals(1, c.state.value.draft.controllers.size, "the only source must survive")
+
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(originalControllers, repo.upserts.single().controllers)
+    }
+
+    /**
+     * The other half of the refusal above, and the reason that test cannot
+     * stand alone: "nothing happened" is what a control wired to nothing looks
+     * like too. When a source remains, the removal must actually happen.
+     */
+    @Test
+    fun `removing a controller works while another source remains`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val rear = Controller(
+            index = 1,
+            label = "Rear",
+            controllerType = ControllerType.VESC,
+            address = "CC:DD"
+        )
+        val repo = FakeVehicleRepo(
+            listOf(controllerOnlyVehicle().copy(controllers = originalControllers + rear))
+        )
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(true, c.state.value.canRemoveSource)
+
+        c.onRemoveController(c.state.value.draft.controllers[0].key)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(listOf("Rear"), saved.controllers.map { it.label })
+        assertEquals(listOf(0), saved.controllers.map { it.index }, "and the survivor is renumbered")
+    }
+
+    /**
+     * The composer must not be able to emit a config `planLinks` throws on —
+     * prevented, not caught. A JK BMS at the VESC controller's own address
+     * resolves one link to two protocol kinds.
+     */
+    @Test
+    fun `a config planLinks would reject blocks the save`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(true, c.state.value.canSave)
+
+        c.onAddPack(BmsType.JK_BMS, "AA:BB")
+        assertEquals(false, c.state.value.canSave)
+        assertTrue(c.state.value.issues.any { it is ComposerIssue.ConflictingKinds && it.blocking })
+
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(emptyList(), repo.upserts, "nothing may be persisted while the config conflicts")
+
+        // And the rider can get out of it: move the pack to its own address.
+        c.onPackAddressChanged(c.state.value.draft.packs.single().key, "JK:01")
+        assertEquals(true, c.state.value.canSave)
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals("JK:01", repo.upserts.single().packs.single().bmsAddress)
+    }
+
+    /**
+     * A vehicle whose stored config already cannot connect says so on open,
+     * before the rider touches anything — an advisory one still saves.
+     */
+    @Test
+    fun `a stored config volty cannot decode is reported on load without blocking`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val fardriver = controllerOnlyVehicle().copy(
+            controllers = listOf(
+                Controller(index = 0, label = "FD", controllerType = ControllerType.FARDRIVER, address = "FD:01")
+            )
+        )
+        val c = component(FakeVehicleRepo(listOf(fardriver)))
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf(ComposerIssue.NoControllerDecoder("c0", ControllerType.FARDRIVER)),
+            c.state.value.issues
+        )
+        assertEquals(true, c.state.value.canSave, "a missing decoder is Parts E/H's job, not a config error")
+    }
+
+    /**
+     * **The stale-draft counterpart of Task 1's stale-snapshot test.**
+     *
+     * `State.draft` is a snapshot taken when the form opened, and the stored row
+     * moves underneath it: `KableBmsRepository.maybePersistPacks` appends a
+     * Begode wheel's second branch mid-connection, and Part D navigates a
+     * Controller pick straight to this form, so that is exactly when this form
+     * is open. Writing a never-edited draft back would drop the branch —
+     * §8.1's data loss arriving by a stale copy instead of by a forgotten
+     * field.
+     */
+    @Test
+    fun `a pack persisted while the form was open survives a save that did not compose`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // The connection's pack auto-fill appends a second branch while this
+        // form sits in front of the rider.
+        val appended = Pack(index = 1, label = "Pack 2", bmsType = BmsType.VESC_BMS, bmsAddress = "AA:BB")
+        repo.upsert(existingVehicle().copy(packs = existingVehicle().packs + appended))
+
+        c.onNameChanged("Renamed")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.last()
+        assertEquals("Renamed", saved.name, "the edit itself must land")
+        assertEquals(2, saved.packs.size, "the branch persisted underneath must not be dropped")
+        assertEquals(appended, saved.packs[1])
+        assertEquals("Renamed", saved.packs[0].label, "and pack 0 still follows the vehicle name")
+    }
+
+    /**
+     * The controller half of the same rule, and the reason the save's condition
+     * is `controllersEdited || packsEdited` rather than an unconditional write:
+     * a save must touch only the half the rider composed.
+     *
+     * Nothing in the app writes `controllers` mid-edit *today* — but the pack
+     * auto-fill did not write packs mid-edit either until Part D made a
+     * Controller pick land straight on this form, and Task 5's CAN discovery is
+     * the obvious next writer. The rule is cheap to hold now and expensive to
+     * rediscover later, which is the same argument Task 1 made for keeping
+     * `the motor edit reaches controller 0 only`.
+     */
+    @Test
+    fun `a controller persisted while the form was open survives a save that did not compose`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val discovered = Controller(
+            index = 1,
+            label = "uBox R",
+            controllerType = ControllerType.VESC,
+            address = "AA:BB",
+            canId = 42
+        )
+        repo.upsert(existingVehicle().copy(controllers = originalControllers + discovered))
+
+        c.onNameChanged("Renamed")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.last()
+        assertEquals("Renamed", saved.name, "the edit itself must land")
+        assertEquals(2, saved.controllers.size, "the controller added underneath must not be dropped")
+        assertEquals(discovered, saved.controllers[1])
+    }
+
+    /**
+     * The other side of the same switch: once the rider composes the pack list,
+     * it is theirs. The vehicle-name → pack-0-label coupling exists because
+     * `singlePackVehicle` labels pack 0 after the vehicle and the pack card
+     * shows it verbatim; a composed list carries a label per pack, so the
+     * coupling stands down rather than overwriting what they typed.
+     */
+    @Test
+    fun `a composed pack list keeps the rider's own labels`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onPackLabelChanged(c.state.value.draft.packs.single().key, "Передний")
+        c.onNameChanged("Renamed")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals("Renamed", saved.name)
+        assertEquals("Передний", saved.packs.single().label)
+        // Fields the composer does not model still ride along on the origin.
+        assertEquals(20, saved.packs.single().cellCount)
+        assertEquals("alias-a", saved.packs.single().aliasGroup)
+    }
+
+    /**
+     * The G §6 collision, through the component: the rider's word outlives
+     * every recompute a source change triggers.
+     */
+    @Test
+    fun `the rider's derived-battery choice outlives adding and removing a BMS`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val key = c.state.value.draft.controllers.single().key
+        c.onControllerDerivedBatteryChanged(key, false)
+        c.onAddPack(BmsType.ANT_BMS, "AN:01")
+        c.onRemovePack(c.state.value.draft.packs.single().key)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(emptyList(), saved.packs)
+        assertEquals(
+            false,
+            saved.controllers.single().providesDerivedBattery,
+            "the rule says ON for a lone controller; the rider said OFF"
+        )
+    }
+
+    @Test
+    fun `topology is editable and lands on the saved vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertEquals(PackTopology.SERIES, c.state.value.topology, "loaded from the vehicle")
+        c.onTopologyChanged(PackTopology.PARALLEL)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(PackTopology.PARALLEL, repo.upserts.single().topology)
+    }
+
+    /**
+     * The flat Motor card edits `controllers[0]` positionally, so a reorder
+     * that moves a different controller to the front must re-point the three
+     * fields at it — otherwise the rider edits one controller's geometry while
+     * reading another's.
+     */
+    @Test
+    fun `the motor fields follow the controller a reorder moves to the front`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val rear = Controller(
+            index = 1,
+            label = "Rear",
+            controllerType = ControllerType.VESC,
+            address = "CC:DD",
+            motor = MotorConfig(polePairs = 4, wheelDiameterMm = 300, gearRatio = 2f)
+        )
+        val repo = FakeVehicleRepo(listOf(existingVehicle().copy(controllers = originalControllers + rear)))
+        val c = component(repo)
+        advanceUntilIdle()
+        assertEquals(21, c.state.value.motorPolePairs, "controller 0's geometry")
+
+        c.onMoveController(1, 0)
+        assertEquals(4, c.state.value.motorPolePairs, "now the front controller's")
+        assertEquals(300, c.state.value.motorWheelDiameterMm)
+        assertEquals(2f, c.state.value.motorGearRatio)
+
+        c.onSave()
+        advanceUntilIdle()
+        val saved = repo.upserts.single()
+        assertEquals(listOf("Rear", "Main"), saved.controllers.map { it.label })
+        assertEquals(
+            listOf(MotorConfig(4, 300, 2f), MotorConfig(21, 500, 3.5f)),
+            saved.controllers.map { it.motor },
+            "each controller keeps its own geometry across the reorder"
+        )
+    }
+
+    /**
+     * The composer's counterpart of `every field this form edits lands on the
+     * saved vehicle`: every per-source control, one edit each, to a value
+     * [existingVehicle] does not already hold — so a control wired to nothing
+     * fails here rather than shipping as a dead switch.
+     */
+    @Test
+    fun `every composer control reaches the saved vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val pk = c.state.value.draft.packs.single().key
+        val ck = c.state.value.draft.controllers.single().key
+        c.onPackLabelChanged(pk, "Батарея")
+        c.onPackTypeChanged(pk, BmsType.ANT_BMS)
+        c.onPackAddressChanged(pk, "AN:01")
+        c.onPackCanIdChanged(pk, 33)
+        c.onAddPack(BmsType.ANT_BMS, "AN:02", "Вторая")
+        c.onMovePack(0, 1)
+        c.onControllerLabelChanged(ck, "Левый")
+        c.onControllerTypeChanged(ck, ControllerType.BEGODE)
+        c.onControllerAddressChanged(ck, "WH:01")
+        c.onControllerCanIdChanged(ck, null)
+        c.onControllerMotorChanged(ck, MotorConfig(polePairs = 3, wheelDiameterMm = 100, gearRatio = 1.5f))
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(
+            listOf(
+                Pack(index = 0, label = "Вторая", bmsType = BmsType.ANT_BMS, bmsAddress = "AN:02"),
+                Pack(
+                    index = 1,
+                    label = "Батарея",
+                    bmsType = BmsType.ANT_BMS,
+                    bmsAddress = "AN:01",
+                    // Not modelled as editable here, and carried on the origin
+                    // rather than re-typed by the rider.
+                    cellCount = 20,
+                    canId = 33,
+                    aliasGroup = "alias-a"
+                )
+            ),
+            saved.packs
+        )
+        assertEquals(
+            listOf(
+                Controller(
+                    index = 0,
+                    label = "Левый",
+                    controllerType = ControllerType.BEGODE,
+                    address = "WH:01",
+                    canId = null,
+                    motor = MotorConfig(polePairs = 3, wheelDiameterMm = 100, gearRatio = 1.5f),
+                    // The fixture stores `true` beside a pack, which the rule
+                    // says should be `false` — so it reloads as the rider's
+                    // explicit ON and survives every recompute above.
+                    providesDerivedBattery = true
+                )
+            ),
+            saved.controllers
+        )
+    }
+
+    /**
+     * Adding the first controller to a pack-only vehicle must switch the Motor
+     * card on — `hasController` is a projection of the draft, not of the row
+     * that was loaded.
+     */
+    @Test
+    fun `adding a controller reveals the motor section`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val packOnly = existingVehicle().copy(controllers = emptyList())
+        val c = component(FakeVehicleRepo(listOf(packOnly)))
+        advanceUntilIdle()
+        assertEquals(false, c.state.value.hasController)
+
+        c.onAddController(ControllerType.VESC, "VE:01")
+        assertEquals(true, c.state.value.hasController)
+        assertEquals(MotorConfig().polePairs, c.state.value.motorPolePairs)
     }
 }
 

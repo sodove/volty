@@ -6,7 +6,9 @@ import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
@@ -61,6 +63,50 @@ interface VehicleEditComponent {
     fun onSave()
     fun onCancel()
     fun onDelete()
+
+    // ----- The composer (G2 Task 2): a vehicle is N sources -----
+    //
+    // Every one of these is a thin delegation to a pure operation in
+    // VehicleComposer.kt, which is where the decisions live and where they are
+    // tested. Sources are addressed by [PackDraft.key] / [ControllerDraft.key]
+    // rather than by position, because removal and reorder renumber positions
+    // under the screen's feet.
+
+    fun onAddPack(bmsType: BmsType, address: String, label: String = "")
+    fun onAddController(controllerType: ControllerType, address: String, label: String = "")
+
+    /**
+     * Remove a source. **Refused, not thrown, when it would leave the vehicle
+     * with none** — [Vehicle]'s own `init` requires a source and this screen
+     * must never be able to reach that exception. [State.canRemoveSource] is
+     * the same fact for the screen to disable the control with.
+     */
+    fun onRemovePack(key: String)
+    fun onRemoveController(key: String)
+
+    /** Out-of-range moves are no-ops, so a drag gesture can never fail. */
+    fun onMovePack(from: Int, to: Int)
+    fun onMoveController(from: Int, to: Int)
+
+    fun onPackLabelChanged(key: String, label: String)
+    fun onPackTypeChanged(key: String, bmsType: BmsType)
+    fun onPackAddressChanged(key: String, address: String)
+    fun onPackCanIdChanged(key: String, canId: Int?)
+
+    fun onControllerLabelChanged(key: String, label: String)
+    fun onControllerTypeChanged(key: String, controllerType: ControllerType)
+    fun onControllerAddressChanged(key: String, address: String)
+    fun onControllerCanIdChanged(key: String, canId: Int?)
+    fun onControllerMotorChanged(key: String, motor: MotorConfig)
+
+    /**
+     * The rider's word on a controller's derived battery. It is recorded as an
+     * explicit choice and a later source-set change will **not** overwrite it —
+     * see [DerivedBatteryChoice] for the rule and why.
+     */
+    fun onControllerDerivedBatteryChanged(key: String, enabled: Boolean)
+
+    fun onTopologyChanged(topology: PackTopology)
 
     data class State(
         val isEditing: Boolean = false,
@@ -121,9 +167,45 @@ interface VehicleEditComponent {
         /** Null = follow the app-level default. */
         val dashboardStyle: DashboardStyle? = null,
         val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
+        /** How this vehicle's packs are wired. Editable since G2. */
+        val topology: PackTopology = PackTopology.PARALLEL,
+        /**
+         * The editable source set (G2 Task 2). Seeded from the loaded vehicle
+         * by [draftOf] and round-trips it exactly; empty while CREATING, which
+         * still goes through [singlePackVehicle].
+         */
+        val draft: VehicleDraft = VehicleDraft(),
+        /** Everything wrong with [draft] right now — see [ComposerIssue]. */
+        val issues: List<ComposerIssue> = emptyList(),
+        /**
+         * Whether the rider has touched the pack / controller list at all.
+         *
+         * The save applies [draft] **only** to the half it is set for, and
+         * otherwise leaves the stored vehicle's own list alone. That is Task 1's
+         * polarity carried into the composer: [draft] is a snapshot taken when
+         * the form opened, and the pack auto-fill
+         * (`KableBmsRepository.maybePersistPacks`) can append a wheel's second
+         * branch to the stored row *while this form is open*. Writing a
+         * never-edited draft back would silently drop it — losing a field by
+         * saving a stale copy rather than by forgetting to copy it, which is
+         * the same defect in a different costume.
+         */
+        val packsEdited: Boolean = false,
+        val controllersEdited: Boolean = false,
         val nameError: Boolean = false,
         val saving: Boolean = false
-    )
+    ) {
+        /** See [VehicleDraft.canRemoveSource]. False while creating (no draft). */
+        val canRemoveSource: Boolean get() = draft.canRemoveSource
+
+        /**
+         * Whether [onSave] will do anything. A blocking issue is a
+         * self-contradictory config `planLinks` itself throws on, so the screen
+         * disables Save and the component refuses it — the exception is never
+         * reached from either side.
+         */
+        val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
+    }
 }
 
 @OptIn(ExperimentalTime::class)
@@ -189,7 +271,15 @@ class DefaultVehicleEditComponent(
                     motorWheelDiameterMm = v.controllers.firstOrNull()?.motor?.wheelDiameterMm,
                     motorGearRatio = v.controllers.firstOrNull()?.motor?.gearRatio,
                     dashboardStyle = v.dashboardStyle,
-                    secondaryGauge = v.secondaryGauge
+                    secondaryGauge = v.secondaryGauge,
+                    topology = v.topology,
+                    // The composer's own view of the same vehicle. Seeded even
+                    // when the rider never opens the source list, because
+                    // [State.issues] must describe the vehicle as STORED —
+                    // a config that cannot connect should say so on open, not
+                    // only after an edit.
+                    draft = draftOf(v),
+                    issues = validate(draftOf(v))
                 )
                 return
             }
@@ -216,16 +306,124 @@ class DefaultVehicleEditComponent(
     override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
-    override fun onMotorPolePairsChanged(v: Int?) { _state.update { it.copy(motorPolePairs = v) } }
-    override fun onMotorWheelDiameterChanged(v: Int?) { _state.update { it.copy(motorWheelDiameterMm = v) } }
-    override fun onMotorGearRatioChanged(v: Float?) { _state.update { it.copy(motorGearRatio = v) } }
+    override fun onMotorPolePairsChanged(v: Int?) { editMotorField { it.copy(motorPolePairs = v) } }
+    override fun onMotorWheelDiameterChanged(v: Int?) { editMotorField { it.copy(motorWheelDiameterMm = v) } }
+    override fun onMotorGearRatioChanged(v: Float?) { editMotorField { it.copy(motorGearRatio = v) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
     override fun onOpenAlerts() { onOpenAlertsRequested() }
 
+    // ----- The composer -----
+
+    /**
+     * Apply a pure draft operation and re-derive everything that follows from
+     * the source set: the issue list, whether a Motor card exists at all, and
+     * the three flat motor fields — which are a **projection of the controller
+     * now at position 0**, so a reorder that moves a different controller there
+     * shows that controller's geometry instead of the previous one's.
+     *
+     * [packs] / [controllers] say which half the rider took control of; see
+     * [VehicleEditComponent.State.packsEdited].
+     */
+    private fun mutateDraft(
+        packs: Boolean = false,
+        controllers: Boolean = false,
+        block: (VehicleDraft) -> VehicleDraft
+    ) {
+        _state.update { s ->
+            val d = block(s.draft)
+            val motor = d.controllers.firstOrNull()?.motor
+            s.copy(
+                draft = d,
+                issues = validate(d),
+                packsEdited = s.packsEdited || packs,
+                controllersEdited = s.controllersEdited || controllers,
+                hasController = d.controllers.isNotEmpty(),
+                motorPolePairs = motor?.polePairs,
+                motorWheelDiameterMm = motor?.wheelDiameterMm,
+                motorGearRatio = motor?.gearRatio
+            )
+        }
+    }
+
+    /**
+     * The legacy Motor card's three fields, which edit `controllers[0]` and are
+     * the ONE editor that is positional rather than keyed.
+     *
+     * Unlike [mutateDraft] this does not re-project the fields back off the
+     * draft: they are the source here, and a blanked field must stay blank
+     * while the rider retypes it. It resolves to `MotorConfig()`'s default on
+     * the way into the draft, exactly as the save always has.
+     */
+    private fun editMotorField(edit: (VehicleEditComponent.State) -> VehicleEditComponent.State) {
+        _state.update { s0 ->
+            val s = edit(s0)
+            val d = s.draft.updateControllerAt(0) { it.copy(motor = s.motorConfig()) }
+            // The draft is the ONLY writer of `controllers` (see `withEdits`),
+            // so the flat fields have to mark it edited or the motor edit is
+            // simply dropped.
+            s.copy(draft = d, issues = validate(d), controllersEdited = true)
+        }
+    }
+
+    override fun onAddPack(bmsType: BmsType, address: String, label: String) =
+        mutateDraft(packs = true) { it.addPack(bmsType, address, label) }
+
+    override fun onAddController(controllerType: ControllerType, address: String, label: String) =
+        mutateDraft(controllers = true) { it.addController(controllerType, address, label) }
+
+    override fun onRemovePack(key: String) = mutateDraft(packs = true) { it.removePack(key) }
+    override fun onRemoveController(key: String) = mutateDraft(controllers = true) { it.removeController(key) }
+
+    override fun onMovePack(from: Int, to: Int) = mutateDraft(packs = true) { it.movePack(from, to) }
+    override fun onMoveController(from: Int, to: Int) = mutateDraft(controllers = true) { it.moveController(from, to) }
+
+    override fun onPackLabelChanged(key: String, label: String) =
+        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(label = label) } }
+    override fun onPackTypeChanged(key: String, bmsType: BmsType) =
+        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(bmsType = bmsType) } }
+    override fun onPackAddressChanged(key: String, address: String) =
+        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(address = address) } }
+    override fun onPackCanIdChanged(key: String, canId: Int?) =
+        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(canId = canId) } }
+
+    override fun onControllerLabelChanged(key: String, label: String) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(label = label) } }
+    override fun onControllerTypeChanged(key: String, controllerType: ControllerType) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(controllerType = controllerType) } }
+    override fun onControllerAddressChanged(key: String, address: String) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(address = address) } }
+    override fun onControllerCanIdChanged(key: String, canId: Int?) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(canId = canId) } }
+    override fun onControllerMotorChanged(key: String, motor: MotorConfig) =
+        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = motor) } }
+
+    override fun onControllerDerivedBatteryChanged(key: String, enabled: Boolean) =
+        mutateDraft(controllers = true) { d ->
+            d.updateController(key) {
+                // Always an explicit ON/OFF, never back to AUTO: the rider has
+                // answered the question, and a later source change must not
+                // quietly un-answer it (DerivedBatteryChoice).
+                it.copy(
+                    derivedBattery =
+                        if (enabled) DerivedBatteryChoice.ON else DerivedBatteryChoice.OFF
+                )
+            }
+        }
+
+    override fun onTopologyChanged(topology: PackTopology) {
+        _state.update { it.copy(topology = topology) }
+    }
+
     override fun onSave() {
         val s = _state.value
         if (s.name.isBlank()) { _state.update { it.copy(nameError = true) }; return }
+        // A blocking issue is a config `planLinks` throws on (conflicting
+        // protocol kinds at one address; two sources claiming one CAN id).
+        // Refusing the save is the composer's half of "the UI must not be able
+        // to reach that exception"; [State.canSave] is the same fact, for the
+        // screen to disable the button with. Nothing here catches anything.
+        if (s.issues.any { it.blocking }) return
         scope.launch {
             _state.update { it.copy(saving = true) }
             // Re-read rather than reuse State.sourceVehicle: the alerts screen
@@ -290,31 +488,57 @@ class DefaultVehicleEditComponent(
  * [VehicleEditComponent.State] actually edits, and adding a field to [Vehicle]
  * requires no change here at all.
  *
- * Everything not listed follows from that: `packs` beyond index 0 (a Begode
- * wheel's auto-filled second branch — §8.1), `cellCount`, `canId`,
- * `aliasGroup`, `topology`, `createdAt`, `lastConnectedAt`, `isPinned`,
- * `yieldBmsToHeadUnit`, `motionAlerts`.
+ * Everything not listed follows from that: `cellCount`, `aliasGroup`,
+ * `createdAt`, `lastConnectedAt`, `isPinned`, `yieldBmsToHeadUnit`,
+ * `motionAlerts`.
+ *
+ * ### The two source lists (G2 Task 2)
+ *
+ * `packs` and `controllers` are written **only from the half of the composer
+ * the rider actually touched** ([VehicleEditComponent.State.packsEdited]).
+ * `s.draft` is a snapshot taken when the form opened, and the stored row can
+ * move underneath it — `KableBmsRepository.maybePersistPacks` appends a Begode
+ * wheel's second branch mid-connection, and this form is open exactly then
+ * (Part D navigates a Controller pick straight here). Writing a never-edited
+ * draft back would drop it: the same data loss as the rebuild, arriving by a
+ * stale copy instead of by a forgotten field.
+ *
+ * So an untouched half passes through byte-for-byte — the pack list keeps the
+ * long-standing "the vehicle name renames pack 0" coupling (`singlePackVehicle`
+ * labels pack 0 after the vehicle and `packLabelFor` shows it verbatim on a
+ * single-pack card), and the controller list keeps the positional Motor edit.
+ * Once the rider composes that half, it is theirs: the draft carries a label
+ * per pack, so the rename coupling stands down rather than overwriting what
+ * they typed.
  */
 private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
     name = s.name,
     iconKey = s.iconKey,
     chemistry = s.chemistry,
+    topology = s.topology,
     averagingWindowMin = s.averagingWindowMin,
     alertConfig = alertConfig.withEdits(s),
-    // The name field has always renamed the primary pack too — `singlePackVehicle`
-    // labels pack 0 after the vehicle, and for a single-pack vehicle that label is
-    // what the pack card shows (`packLabelFor`). Index 0 ONLY: a wheel's second
-    // branch keeps the positional label `expandedTo` gave it, and a pack-less
-    // vehicle maps an empty list to an empty list — no phantom battery, and no
-    // `packs.isEmpty()` special case to forget.
-    packs = packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p },
-    // Motor config for controllers[0] — G1 has exactly one controller per
-    // vehicle, and this screen is the only place that edits a MotorConfig. A
-    // blank field falls back to MotorConfig()'s own default rather than
-    // persisting a hole. Every other controller field is untouched.
-    controllers = controllers.mapIndexed { i, c ->
-        if (i == 0) c.copy(motor = s.motorConfig()) else c
+    packs = if (s.packsEdited) {
+        s.draft.toPacks()
+    } else {
+        // Index 0 ONLY: a wheel's second branch keeps the positional label
+        // `expandedTo` gave it, and a pack-less vehicle maps an empty list to
+        // an empty list — no phantom battery, and no `packs.isEmpty()` special
+        // case to forget.
+        packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
     },
+    // The draft is the ONLY writer of `controllers` — including the flat Motor
+    // card, which writes into draft position 0 (`editMotorField`) rather than
+    // applying itself here. One writer, so there is no second copy of the
+    // "blank field falls back to MotorConfig()'s default" rule to drift.
+    //
+    // `|| packsEdited` is the derived-battery rule showing through, not a
+    // sloppy condition: `providesDerivedBattery` is a function of the PACK set
+    // (`G §6`), so editing the packs alone still changes every controller. The
+    // asymmetry is deliberate — a controller-only edit leaves `packs` to the
+    // stored row, which is what keeps a branch persisted underneath this form
+    // from being dropped, and nothing writes `controllers` underneath us.
+    controllers = if (s.controllersEdited || s.packsEdited) s.draft.toControllers() else controllers,
     dashboardStyle = s.dashboardStyle,
     secondaryGauge = s.secondaryGauge
 )
