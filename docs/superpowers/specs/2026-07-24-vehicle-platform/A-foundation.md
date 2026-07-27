@@ -385,3 +385,33 @@ Pure/unit, following existing test style:
    lone VESC added by quick-scan (no composer pass) still needs a battery — Part
    B/G define that default (likely: true when the vehicle has no other battery
    source).
+
+---
+
+## The aggregator silently drops `batteryLevelFraction` (2026-07-27)
+
+Found in Part D Task 5, while proving that a single-controller fold is the
+identity — the proof failed on exactly one field.
+
+`ControllerData.batteryLevelFraction` is the controller-computed battery level
+from `COMM_GET_VALUES_SETUP`, used to seed a derived battery's SoC when no smart
+BMS is present. **`MotionAggregator.aggregate` never copies it**, so the
+vehicle-level `activeMotion` always publishes `null` for it, no matter what the
+controller reported.
+
+Harmless today only because both VESC decoders read the field upstream of the
+fold. It becomes a silent `null` the moment anything reads it off `activeMotion`
+— and "silent" is the operative word: nothing throws, the number is simply
+absent, and a derived battery would fall back to whatever it does without a seed.
+
+**Not fixed in Part D**, which had no business changing the aggregator's contract,
+and deliberately **not pinned by a test asserting the current behaviour** —
+pinning it would turn a one-line fix into a test edit and make the defect look
+intentional. Fix it where the fold lives, and add the field to whatever test
+proves the single-controller fold is the identity.
+
+One caution learned in the same task: **a stationary fixture cannot prove a fold
+is the identity.** Zeroing `speedKmh` in the aggregator passed both
+capture-based identity tests, because 13 seconds of a parked wheel leaves speed,
+trip, eRPM and every energy counter at zero. Any identity proof needs a fixture
+with all fields distinct and non-zero.
