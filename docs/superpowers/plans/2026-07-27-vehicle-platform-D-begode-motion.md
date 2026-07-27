@@ -217,9 +217,18 @@ aggregation is unaffected (single controller).
 
 ### Task 6 — demo and dashboard sanity
 
+> **Premise updated.** This task was written when Part D was expected to ship
+> without duty. The wheel reports true hardware PWM, so the dials **do** have a
+> duty to show. What remains is the *unknown* case — a wheel whose `truePWM`
+> latch has never fired — and the reviewer of Task 4 established that the
+> dashboard renders that as a **confident 0 %**, because `hasDuty` is read
+> nowhere in `presentation/`. That fix is recorded as **Part G's** work
+> (`G-vehicle-composer.md §9`) and is explicitly **not** this task's: widening it
+> means a known-flag on every motion gauge, which is a dashboard change, not a
+> Begode change.
+
 The demo simulator emits a synthetic ride curve; make sure a wheel-shaped demo
-vehicle renders sensibly on the Classic and Clean dashboards with **no duty** —
-the dials must degrade honestly rather than showing a confident zero. Say in the
+vehicle renders sensibly on the Classic and Clean dashboards. Say in the
 report what a duty-less wheel actually looks like on both styles.
 
 ---
