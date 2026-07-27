@@ -9,8 +9,8 @@ import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
-import ru.sodovaya.volty.domain.model.controllerVehicle
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.pickedControllerVehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -212,7 +212,11 @@ class DefaultPickerComponent(
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
-            val v = controllerVehicle(
+            // The SHAPE is the model layer's decision, not this screen's: a
+            // Begode is a controller and its own battery over one link and gets
+            // a stored pack, everything else is controller-only. See
+            // [pickedControllerVehicle].
+            val v = pickedControllerVehicle(
                 id = newVehicleId(),
                 // Named after the controller kind, not "BMS", when the device
                 // advertises no name of its own.

@@ -38,8 +38,9 @@ already selects for the battery side):
   `powerW = voltage × current`
 - **temperature** → `escTempC` (mainboard temp; wheels usually expose one board
   temp — `hasMotorTemp = false`)
-- **mileage / trip** → `odometerKm` (total), `tripKm` (session, from the "b"
-  frame or session delta)
+- **mileage / trip** → `odometerKm` (total), `tripKm` (**session** — see §9.3:
+  the wheel's own since-power-on counter is decoded but must NOT be published
+  here; the trip is the odometer minus a per-connection baseline, as VESC does)
 - **duty / PWM** — see §3
 
 ## 3. Duty / PWM — the safety number
@@ -123,9 +124,9 @@ All signed big-endian 16-bit:
 
 | Bytes | Field | WheelLog handling | ET Max capture |
 |---|---|---|---|
-| 2..3 | **battery current** | `setCurrent(-1 × value)`, hundredths of an amp | 65, 54, 20, 37, 89, 82 → 0.2–0.9 A idle, live |
-| 6..7 | **motor temperature** | `setTemperature2(value × 100)` | `0x0014` = 20 °C |
-| 8..9 | **true hardware PWM** | `if (abs(v) > 0) truePWM = true; setOutput(v × 100)`, then `updatePwm()` = `output / 10000` as a 0..1 fraction | `0x0002` = **2 %**, a balancing wheel |
+| 2..3 | **battery current** | negated, then stored in the field WheelLog keeps in hundredths of an amp | 65, 54, 20, 37, 89, 82 → 0.2–0.9 A idle, live |
+| 6..7 | **motor temperature** | scaled by 100 into its hundredths-of-a-degree temperature field | `0x0014` = 20 °C |
+| 8..9 | **true hardware PWM** | any non-zero value latches its `truePWM` flag; the value is scaled by 100 into an output field which its PWM accessor then divides by 10 000 to a 0..1 fraction | `0x0002` = **2 %**, a balancing wheel |
 
 **So duty percent is the raw value of bytes 8..9, reported by the hardware.**
 §3's two-case framing collapses: the wheel reports PWM, so **no derivation is
@@ -196,10 +197,11 @@ instruction was to verify rather than trust. §8.2 says WheelLog stores speed in
   2 km/h, and a commented-out debug block sets the same field to 5000 for 50 km/h
   alongside a current field set to 10000 for 100 A — one convention across three
   fields. Its double accessor divides by 100.
-- `GotwayAdapter` computes `round(signedShortFromBytesBE(buff, 4) * 3.6)` into
-  that field.
-- WheelLog's own frame-layout comment at the foot of `GotwayAdapter.java` states
-  it outright: *"Bytes 4-5: BE speed, fixed point, 3.6 * value / 100 km/h"*.
+- `GotwayAdapter` reads bytes 4..5 as a signed big-endian short, multiplies by
+  3.6, rounds, and stores the result in that field.
+- The frame-layout note at the foot of `GotwayAdapter.java` says the same thing
+  in words: bytes 4-5 are a fixed-point big-endian speed of 3.6 × value / 100
+  km/h.
 
 So **`km/h = raw × 3.6 / 100 = raw × 0.036`**, and the raw unit is cm/s, not
 0.1 m/s. `BegodeProtocol.SPEED_KMH_PER_UNIT` ships `0.036f`.
@@ -210,3 +212,110 @@ only in an `== 0` comparison, so nothing in WheelLog depends on it. Every readin
 of this field so far has been wrong in a different direction — 0.01 (3.6× low),
 then 0.36 (10× high) — which is the argument for the moving capture in §8.5
 rather than a fourth reading of the same source.
+
+---
+
+## 9. Whole-branch review, and the three seams no task could see (2026-07-27)
+
+Six tasks, each reviewed and approved on its own. A review of the whole branch
+found three defects that live **between** tasks — each one invisible from inside
+any single task because it needed two of them side by side. Recorded here
+because they are decisions about shared contracts, not about Begode.
+
+### 9.1 The picker built a pack-less wheel, so the cell count could never arrive
+
+Task 4 landed the picker branch and the cell-count lookup together, on the
+argument that shipping the pick without the count is *"a correctness bug, not an
+untidiness"* — the Ride dashboard renders an unknown voltage as a confident
+**"0.0 kW"** and "0.0 Wh/km", never as a blank. It landed for the shape §4
+describes and missed the shape the picker actually creates: `controllerVehicle`
+produces **zero packs**, so the link's only pack slots are the derived ones
+`planLinkPacks` synthesises (never persisted, no cell count), and
+`createProtocol`'s lookup runs against `vehicle.packs`, which is empty.
+
+There was **no recovery path**: `Vehicle.withCellCount` is `packs.mapIndexed`, a
+silent no-op on an empty list; the pack auto-fill only appends behind an address
+the profile already names a pack on; and the edit screen deliberately keeps a
+controller-only vehicle pack-less and never edits a cell count.
+
+**Fixed by changing the SHAPE the pick creates, not the lookup**
+(`pickedControllerVehicle` → `wheelVehicle`): a BEGODE Controller pick now builds
+one stored Begode pack beside the controller at the wheel's one address — §4's
+archetype exactly, and byte-for-byte what the BATTERY pick has always created for
+a Begode. The count then arrives through the auto-fill that already exists, and
+the second connect scales the rail voltage with it.
+
+**This also removes the Begode/VESC divergence the review flagged.** A VESC
+*derives* a battery from its own telemetry, which is why `controllerVehicle` sets
+`providesDerivedBattery = true` and why the VESC arm of `controllerMotionProtocol`
+honours `deriveBattery`. **A wheel derives nothing** — it decodes two real
+branches off the same frames — so its controller carries
+`providesDerivedBattery = false` and the BEGODE arm ignoring `deriveBattery` is
+correct rather than an omission. The arm now says so, and also states the
+limitation that a link owning two Begode controllers is a gateway the BEGODE arm
+cannot serve (unreachable today: no screen can create one).
+
+**Still open, and unchanged by this fix:** a wheel with **no smart BMS** never
+reports cells, so nothing auto-fills its count and its voltage stays absent — on
+the Battery tab as much as on Ride. That is the pre-existing behaviour of every
+Begode battery profile, not a regression of this part; closing it needs an
+editable cell count, which belongs to whichever part opens the edit screen to
+pack configuration.
+
+### 9.2 Duty is a magnitude, and the decoder is where that is established
+
+`0x07` bytes 8..9 are **signed** and unbounded, and the only capture reads a
+constant `0x0002` — so nothing in it pins the sign in either direction. The
+decode passed the value through untouched while `dutyPercent()`'s own KDoc
+claimed "(0..100)" and `rebuildMotion` *reasoned from* "every consumer treats
+duty as a non-negative magnitude compared against UPPER thresholds". A wheel
+reporting negative hardware PWM under regen would have graded `DutyBands` level
+0, filled the dial backwards, and left **the ШИМ alarm silent exactly when a
+EUC's duty peaks**.
+
+**`abs`, then clamp to 100, in `parseMotionFrame`** — not folded into
+`rebuildMotion`. That is where `VescValues` establishes the same contract
+(`abs(duty) * 100`), and this field's meaning is cross-protocol: one convention,
+stated once per decoder, is what stops the two disagreeing. The `truePWM` latch
+reads the RAW value first, so a wheel that only ever reports negative PWM still
+proves it reports duty. The clamp fails **loud** on purpose — garbage becomes
+100 % and raises the alarm, because duty only escalates upwards and over-firing
+is the safe error.
+
+### 9.3 `tripKm` means the SESSION, on every protocol
+
+VESC publishes `odometerKm - baseline`, distance since this connection started
+(B1's decision). Begode published the wheel's own since-power-on counter, u16
+metres. `RideMetrics.sessionWhPerKm` — named *session* — was therefore dividing a
+session's Wh by a non-session distance, and a rider connecting mid-ride at km 30
+saw a one-second-old session reading **30.0 km**, then a silent reset to 0.0 at
+km 65.5 when the 16-bit field wrapped.
+
+Begode now derives `tripKm` from the lifetime odometer against a baseline taken
+at the connection's first genuine `0x04` frame — the same shape VESC uses, which
+also disposes of the wrap. The wheel's own counter is still decoded, renamed
+`powerOnDistanceMeters()` so it cannot be mistaken for the trip again. **The
+contract is now written on the shared field itself** (`ControllerData.tripKm`),
+which is where it was missing: it had only ever been documented on VESC's private
+baseline field.
+
+### 9.4 The `0x04` and `0x07` frames now take the same boot gate the `0x00` does
+
+`parseLiveFrame` has been gated since Task 2 (`liveVoltageRaw > 0`) because the
+format has **no checksum** — only a `5A5A5A5A` tail. `parseOdometerFrame` and
+`parseMotionFrame` rebuilt unconditionally, so a zero-padded boot `0x04`
+republished 8 565 km of mileage as **0.0 km** and reset the trip baseline, and a
+zero-padded `0x07` fed the two ONE-WAY latches it owns.
+
+Both now skip a frame whose **whole 16-byte payload is zero** — the discriminator
+`parseBmsTelemetry` already uses, and the only one this frame can support, since
+every individual field has a legitimate zero (an odometer of 0 is a new wheel, an
+alert byte of 0 is a healthy one, 0 °C is a real winter reading). A false
+positive costs nothing: every field is left at exactly the value it would have
+published anyway.
+
+**What it does not catch, stated rather than papered over: corruption.** Garbled
+bytes are non-zero by nature, so no gate here can tell a corrupted `0x07` from a
+real one, and a corrupted frame can still close `truePWM` /
+`sawMotorTempEvidence` for the connection. Closing that needs a checksum the
+wheel does not send.

@@ -94,6 +94,25 @@ fun controllerMotionProtocol(
             VescProtocol(deriveBattery = deriveBattery, motor = motor)
         }
     // A wheel: one controller and two packs over one link. See the KDoc.
+    //
+    // [deriveBattery] and [link] are both ignored here, and both deliberately:
+    //  - a wheel does not DERIVE a battery from its rail voltage the way a VESC
+    //    does; it decodes two real branches off the same frames
+    //    (`packCount = 2`), so the derived-battery machinery has nothing to do.
+    //    `pickedControllerVehicle` builds a Begode with a stored pack for
+    //    exactly this reason, and its controller carries
+    //    `providesDerivedBattery = false`;
+    //  - [link] selects VESC's multiplexer, and there is no Begode equivalent.
+    //    LIMITATION, stated because nothing else states it: a vehicle
+    //    configured with TWO Begode controllers at one address is a
+    //    [LinkSpec.isGatewayLink] (`ownedControllers.size > 1`), and this arm
+    //    still returns a protocol reporting `controllerCount = 1`. Controller 1
+    //    is never sampled and sits permanently offline with nothing logged.
+    //    Unreachable today — no screen can create it (the picker builds exactly
+    //    one controller, and the edit screen edits only `controllers[0]`) — and
+    //    a wheel has one motor on one board, so the shape is physically odd
+    //    too. If a later part lets a rider add a second controller, it must
+    //    either refuse this pairing in the plan or grow a Begode multiplexer.
     ProtocolKind.BEGODE -> BegodeProtocol(cellCount = cellCount)
     // No motion decoder yet — Parts E (FarDriver) and H (Kelly).
     ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null

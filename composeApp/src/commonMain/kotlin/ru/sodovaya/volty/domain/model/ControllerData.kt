@@ -48,6 +48,30 @@ data class ControllerData(
     val motorTempC: Float = 0f,
     val hasMotorTemp: Boolean = false,
     val odometerKm: Float = 0f,
+    /**
+     * Distance travelled **since this connection started** — a SESSION delta,
+     * not a counter the source keeps across connects.
+     *
+     * Stated here because it is the contract every decoder owes and none of
+     * them can state on its own. [VescProtocol][ru.sodovaya.volty.data.bms.VescProtocol]
+     * and [VescGatewayProtocol][ru.sodovaya.volty.data.bms.VescGatewayProtocol]
+     * subtract a baseline taken at the connection's first frame;
+     * [BegodeProtocol][ru.sodovaya.volty.data.bms.BegodeProtocol] does the same
+     * against the wheel's lifetime odometer, deliberately NOT publishing the
+     * wheel's own since-power-on field here; the demo simulator counts its own
+     * session. A decoder that put a raw device counter in this field would show
+     * a rider who connected mid-ride at km 30 a one-second-old session reading
+     * 30.0 km on the TRIP tile.
+     *
+     * The reason it must be a session and not merely "some distance":
+     * [ru.sodovaya.volty.domain.stats.RideMetrics.sessionWhPerKm] divides a
+     * session's consumed Wh by this. A non-session denominator makes the
+     * consumption figure the ratio of two different rides.
+     *
+     * Folded across controllers with `max` — every controller on one vehicle
+     * has travelled the same distance, so the largest reading is the one whose
+     * source has been connected longest.
+     */
     val tripKm: Float = 0f,
     val consumedAh: Float = 0f,
     val consumedWh: Float = 0f,

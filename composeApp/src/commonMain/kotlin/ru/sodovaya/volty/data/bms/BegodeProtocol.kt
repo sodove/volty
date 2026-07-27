@@ -24,8 +24,8 @@ import kotlin.math.abs
  * bearing, not defensive.
  *
  * Frame types (byte 18):
- *   0x00 — live motherboard frame (scaled voltage, speed, trip distance,
- *          phase current, MPU temp)
+ *   0x00 — live motherboard frame (scaled voltage, speed, the wheel's own
+ *          since-power-on distance, phase current, MPU temp)
  *   0x01 — smart-BMS telemetry; byte 19 is bmsnum 0..3 (branch = bmsnum shr 1,
  *          section within the branch = bmsnum and 1)
  *   0x02 / 0x03 — cell voltages of branch 0 / branch 1, 8 cells per frame,
@@ -108,8 +108,8 @@ class BegodeProtocol(
     /** Last decoded speed, km/h — see [speedKmh] for what "last" means. */
     private var speedKmhValue: Float = 0f
 
-    /** Last decoded trip distance in metres — see [tripDistanceMeters]. */
-    private var tripMetersValue: Long = 0L
+    /** Last decoded power-on distance in metres — see [powerOnDistanceMeters]. */
+    private var powerOnMetersValue: Long = 0L
 
     /** True once a genuine (non-boot) live frame supplied speed and trip. */
     private var sawLiveMotion = false
@@ -119,6 +119,18 @@ class BegodeProtocol(
 
     /** True once any 0x04 frame arrived. */
     private var sawOdometer = false
+
+    /**
+     * Session baseline for [ControllerData.tripKm]: the lifetime odometer
+     * reading at the FIRST genuine 0x04 frame of this connection. Null until
+     * that frame arrives, and cleared by [reset] so a reconnect starts the trip
+     * over at 0.
+     *
+     * The same shape [VescProtocol] uses, and deliberately so — see
+     * [sessionTripKm] for why the wheel's own power-on counter cannot be
+     * `tripKm` even though it is decoded.
+     */
+    private var tripBaselineMeters: Long? = null
 
     /** Last decoded 0x04 alert bitmap (byte 14) — see [parseOdometerFrame]. */
     private var alertBitmap: Int = 0
@@ -277,17 +289,30 @@ class BegodeProtocol(
     fun speedKmh(): Float? = if (sawLiveMotion) speedKmhValue else null
 
     /**
-     * Trip distance in METRES since the wheel was powered on, from the live
-     * frame, or null before any genuine live frame — same reasoning as
-     * [speedKmh], and 0 m is a perfectly ordinary trip value.
+     * The wheel's OWN distance counter in METRES, reset by the wheel when it is
+     * powered on, from the live frame's bytes 8..9 — or null before any genuine
+     * live frame, same reasoning as [speedKmh].
+     *
+     * **This is NOT [ControllerData.tripKm]**, and the name says so. That field
+     * means "distance since this CONNECTION started" everywhere else in Volty
+     * ([VescProtocol], [VescGatewayProtocol], the demo simulator), which is the
+     * semantics `B1` chose and which `RideMetrics.sessionWhPerKm` — a session's
+     * Wh over a session's km — depends on. This counter answers a different
+     * question: it keeps running across app disconnects, so connecting mid-ride
+     * at km 30 would have shown a one-second-old session reading 30.0 km. It is
+     * also 16-bit, so it WRAPS at 65 535 m and the tile would silently reset to
+     * 0.0 at 65.5 km. [sessionTripKm] derives the real trip from the odometer
+     * instead, which disposes of both.
+     *
+     * Kept decoded because it is the only thing that pins bytes 8..9 against the
+     * neighbouring word at 6..7 (see [parseLiveFrame]), and because a wheel's
+     * own since-power-on distance is a real number a later part may want to
+     * show beside the session's.
      *
      * Metres, not kilometres, because metres is what the frame carries; the
-     * unit conversion is a presentation concern. The field is 16-bit, so it
-     * WRAPS at 65 535 m — a rider who passes 65.5 km on one charge sees the
-     * trip restart. That is the wheel's behaviour, not a decode artefact, and
-     * inventing a wider counter here would be inventing data.
+     * unit conversion is a presentation concern.
      */
-    fun tripDistanceMeters(): Long? = if (sawLiveMotion) tripMetersValue else null
+    fun powerOnDistanceMeters(): Long? = if (sawLiveMotion) powerOnMetersValue else null
 
     /**
      * Lifetime odometer in METRES from the 0x04 frame, or null before one
@@ -299,6 +324,37 @@ class BegodeProtocol(
      * has no field for one. A MotionSource surfaces it.
      */
     fun odometerMeters(): Long? = if (sawOdometer) odometerMetersValue else null
+
+    /**
+     * Distance in KM since this connection started — what
+     * [ControllerData.tripKm] means across every protocol Volty speaks, and
+     * therefore what this wheel must publish into it.
+     *
+     * Derived from the lifetime [odometerMeters] against a baseline taken at
+     * this connection's first genuine 0x04 frame, exactly as [VescProtocol]
+     * does it from `tachometer_abs`. Three things follow, and all three are the
+     * reason the wheel's own counter ([powerOnDistanceMeters]) is not used:
+     *  - **it is a session.** `RideMetrics.sessionWhPerKm` divides a session's
+     *    consumed Wh by this; the wheel's power-on counter would make the
+     *    numerator and the denominator describe different rides;
+     *  - **it starts at 0.** Connecting mid-ride at km 30 reads 0.0 km, not
+     *    30.0 km on a session one second old;
+     *  - **it cannot wrap.** The odometer is a 32-bit metre count, so the
+     *    65 535 m wrap of the 16-bit power-on field is gone.
+     *
+     * 0 — not null — before the first 0x04 frame: [ControllerData.tripKm] is a
+     * non-nullable float and 0 is also the honest reading for a session that
+     * has not moved. The odometer fills in within a second of connecting.
+     *
+     * `coerceAtLeast(0)` for the same reason VESC's does: the baseline is a
+     * lifetime counter that only accumulates, so a negative delta would mean
+     * the wheel contradicted itself, and a negative distance helps nobody.
+     */
+    private fun sessionTripKm(): Float {
+        val odometer = odometerMeters() ?: return 0f
+        val baseline = tripBaselineMeters ?: return 0f
+        return (odometer - baseline).coerceAtLeast(0L) / 1000f
+    }
 
     /**
      * BATTERY current in amperes from the 0x07 frame, or null before one
@@ -446,6 +502,31 @@ class BegodeProtocol(
      * describes. After the latch, later zeros ARE published — by then the
      * field has proved itself.
      *
+     * ### The 0..100 above is enforced, not merely promised
+     *
+     * The frame field is SIGNED and unbounded, and the only capture we have
+     * reads a constant `0x0002` — so nothing in it pins the sign, in either
+     * direction. Every consumer of [ControllerData.dutyPercent] treats it as a
+     * non-negative magnitude compared against UPPER thresholds (`DutyBands`,
+     * `AlarmController`, `MotionAggregator`'s `maxOf` fold, both dial
+     * renderers), and a wheel reporting negative hardware PWM under regen would
+     * grade level 0, fill the dial backwards and leave the ШИМ alarm silent at
+     * the exact moment a EUC's duty peaks.
+     *
+     * **So the magnitude is taken at DECODE** — `abs`, then clamped to
+     * [DUTY_MAX_PERCENT] — in [parseMotionFrame], not folded into
+     * [rebuildMotion]. That is where [ru.sodovaya.volty.data.bms.vesc.VescValues]
+     * establishes the same contract for VESC (`abs(duty) * 100`), and this
+     * field's meaning is cross-protocol: one convention, stated once per
+     * decoder, is what stops the two disagreeing about what "duty" is. The
+     * latch reads the RAW value first, so a wheel that only ever reports
+     * negative PWM still proves it reports duty.
+     *
+     * The clamp's failure direction is deliberate: an out-of-range positive
+     * (garbage — this format has no checksum) becomes 100 %, which raises the
+     * alarm rather than suppressing it. Duty only ever escalates upwards, so
+     * over-firing is the safe error and under-firing is the dangerous one.
+     *
      * No derivation is offered when the wheel reports nothing: WheelLog's
      * `calculatePwm()` fallback needs rider-configured rotation-speed,
      * rotation-voltage and power-factor constants that Volty does not have,
@@ -537,6 +618,12 @@ class BegodeProtocol(
      * negative distance would be worse. Both fields fill in within a second of
      * connecting.
      *
+     * **[tripKm] is the SESSION delta**, derived from the odometer against a
+     * baseline taken at this connection's first 0x04 frame — the same thing
+     * [VescProtocol] publishes and the meaning `RideMetrics.sessionWhPerKm`
+     * requires. The wheel's own since-power-on counter is decoded and kept, but
+     * it is not this field: see [sessionTripKm] and [powerOnDistanceMeters].
+     *
      * **Faults** come from the 0x04 alert bitmap, filtered to the bits that are
      * actually faults — see [FAULT_BITS], which is where the filter is argued.
      * [eRpm] stays 0 — a Begode reports no eRPM at all, and the wheel reports
@@ -579,7 +666,9 @@ class BegodeProtocol(
             motorTempC = motorTemp ?: NO_TEMP_SENSOR_C,
             hasMotorTemp = motorTemp != null,
             odometerKm = (odometerMeters() ?: 0L) / 1000f,
-            tripKm = (tripDistanceMeters() ?: 0L) / 1000f,
+            // The SESSION delta, not the wheel's own power-on counter — see
+            // [sessionTripKm] and [powerOnDistanceMeters].
+            tripKm = sessionTripKm(),
             faults = faultsValue,
             isConnected = true
         )
@@ -696,10 +785,15 @@ class BegodeProtocol(
         // Motion is per-connection state too: a reconnect may face a different
         // wheel, and the previous one's speed and mileage must not survive it.
         speedKmhValue = 0f
-        tripMetersValue = 0L
+        powerOnMetersValue = 0L
         sawLiveMotion = false
         odometerMetersValue = 0L
         sawOdometer = false
+        // The trip is per-CONNECTION by definition: a reconnect starts a new
+        // session and must start its trip at 0, not carry the last one's
+        // baseline (which would make the new session open at the old one's
+        // distance). Same reason VescProtocol.reset clears its baseline.
+        tripBaselineMeters = null
         // A reconnect may face a healthy wheel: the previous one's alerts must
         // not survive it, or a cleared fault would keep firing.
         alertBitmap = 0
@@ -772,6 +866,43 @@ class BegodeProtocol(
         return true
     }
 
+    /**
+     * Whether every payload byte (2..17) of [frame] is zero — the wheel's
+     * BOOT-PLACEHOLDER shape, and the one genuineness gate this format can
+     * support.
+     *
+     * `parseLiveFrame` has had a gate since Task 2 (`liveVoltageRaw > 0`) and
+     * `parseBmsTelemetry` has had one since before this part (all-zero
+     * temperatures *and* section voltage); 0x04 and 0x07 had none, and the
+     * asymmetry was undocumented rather than reasoned. This closes it with the
+     * discriminator that fits a frame in which every individual field has a
+     * legitimate zero: an odometer of 0 is a wheel out of its box, an alert
+     * byte of 0 is a healthy wheel, 0 °C is a real winter reading and 0 % duty
+     * is what an unimplemented field looks like. **All of them at once is not a
+     * reading**, and it is the shape a booting wheel actually sends.
+     *
+     * Cost of a false positive: a frame that genuinely carried nothing but
+     * zeros is skipped, which leaves every field at exactly the value it would
+     * have published anyway (the latches already withhold a zero temperature
+     * and a zero duty, and both distance counters default to 0). So this is
+     * free in the one direction and closes the boot case in the other.
+     *
+     * **What it deliberately does NOT catch: corruption.** This format has no
+     * checksum — the `5A5A5A5A` tail is the whole integrity check — and garbled
+     * bytes are non-zero by nature, so no gate here can tell a corrupted 0x07
+     * from a real one. A corrupted frame can therefore still close
+     * [sawTrueDuty] / [sawMotorTempEvidence] for the connection. That residual
+     * risk is stated rather than papered over: closing it needs a checksum the
+     * wheel does not send, or a plausibility model of hardware nobody here has
+     * measured.
+     */
+    private fun isZeroPaddedPayload(frame: ByteArray): Boolean {
+        for (i in PAYLOAD_FIRST..PAYLOAD_LAST) {
+            if (frame[i].toInt() != 0) return false
+        }
+        return true
+    }
+
     private fun parseFrame(frame: ByteArray) {
         when (frame.u8(18)) {
             0x00 -> parseLiveFrame(frame)
@@ -804,8 +935,9 @@ class BegodeProtocol(
      *   whose LIFETIME odometer is 8 565 km and whose trip resets at power-on.
      *   WheelLog's parser reads only 8..9, and the capture agrees with the
      *   parser rather than with the comment.
-     * - bytes 8..9 unsigned BE: trip distance in metres, see
-     *   [tripDistanceMeters].
+     * - bytes 8..9 unsigned BE: the wheel's own since-power-on distance in
+     *   metres, see [powerOnDistanceMeters] — which is NOT
+     *   [ControllerData.tripKm]; that one is a session delta off the odometer.
      * - bytes 10..11 signed BE: PHASE current in 0.01 A. `0xfeb6` = −330 →
      *   −3.30 A. The wheel's BATTERY current is a different number and lives
      *   in the 0x07 frame — see [batteryCurrentA].
@@ -823,7 +955,7 @@ class BegodeProtocol(
     private fun parseLiveFrame(frame: ByteArray) {
         liveVoltageRaw = frame.u16BE(2)
         val speedRaw = frame.i16BE(4)
-        val tripMeters = frame.u16BE(8).toLong()
+        val powerOnMeters = frame.u16BE(8).toLong()
         phaseCurrentA = frame.i16BE(10) * 0.01f
         boardTempC = frame.i16BE(12) / 340f + 36.53f
         // Motion takes the same genuineness gate as the synthetic pack below:
@@ -832,7 +964,7 @@ class BegodeProtocol(
         // wheel, and a wheel with a smart BMS still moves.
         if (liveVoltageRaw > 0) {
             speedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
-            tripMetersValue = tripMeters
+            powerOnMetersValue = powerOnMeters
             sawLiveMotion = true
             // Rebuilt INSIDE the gate, not after it on `sawLiveMotion`. Those
             // two differ only mid-stream, and that is exactly where it matters:
@@ -908,6 +1040,12 @@ class BegodeProtocol(
      * - byte 15: light mode (low two bits). Not decoded — a setting.
      */
     private fun parseOdometerFrame(frame: ByteArray) {
+        // Same genuineness gate as [parseLiveFrame]'s and [parseBmsTelemetry]'s,
+        // and it was missing here — see [isZeroPaddedPayload] for the
+        // discriminator and for what it can and cannot catch. Without it a
+        // zero-padded boot 0x04 mid-stream republished the wheel's lifetime
+        // mileage as 0.0 km and reset the trip baseline under a rider.
+        if (isZeroPaddedPayload(frame)) return
         odometerMetersValue = frame.u32BE(2)
         val tiltbackRaw = frame.i16BE(10)
         // WheelLog's own rule: >= 100 is the wheel's "unset" marker rather than
@@ -918,6 +1056,11 @@ class BegodeProtocol(
         alertBitmap = frame.u8(14)
         faultsValue = alertLabels(alertBitmap and FAULT_BITS)
         sawOdometer = true
+        // The trip's session baseline: the FIRST genuine odometer reading of
+        // this connection, so `tripKm` counts from where the rider connected
+        // rather than from where the wheel was last switched on. See
+        // [sessionTripKm].
+        if (tripBaselineMeters == null) tripBaselineMeters = odometerMetersValue
         rebuildMotion()
     }
 
@@ -946,6 +1089,12 @@ class BegodeProtocol(
      * by 1, 100 and 100 respectively on the way in.
      */
     private fun parseMotionFrame(frame: ByteArray) {
+        // The same gate [parseOdometerFrame] and [parseLiveFrame] take. It is
+        // worth being explicit about what it buys HERE, because this frame owns
+        // two one-way latches: [sawMotorTempEvidence] and [sawTrueDuty] never
+        // reopen until [reset], so a single frame that gets past this is
+        // permanent for the connection. See [isZeroPaddedPayload].
+        if (isZeroPaddedPayload(frame)) return
         batteryCurrentAValue = -frame.i16BE(2) * BATTERY_CURRENT_A_PER_UNIT
         val motorTempRaw = frame.i16BE(6)
         // The thermistor's counterpart of the duty latch below: one non-zero
@@ -957,9 +1106,16 @@ class BegodeProtocol(
         val dutyRaw = frame.i16BE(8)
         // WheelLog's truePWM latch: one non-zero reading is what proves the
         // firmware fills this field in at all. Before that a zero is not a
-        // measurement of zero duty.
+        // measurement of zero duty. Read off the RAW value, ahead of the
+        // magnitude below, so a wheel that only ever reports negative PWM still
+        // proves it reports duty.
         if (dutyRaw != 0) sawTrueDuty = true
-        dutyPercentValue = dutyRaw.toFloat()
+        // MAGNITUDE, clamped to the 0..100 [dutyPercent]'s contract promises —
+        // the same statement VescValues makes with `abs(duty) * 100`, made in
+        // the decoder rather than in [rebuildMotion] so the two protocols agree
+        // on what the shared field means. See [dutyPercent] for the negative
+        // case (a silent ШИМ alarm) and for why the upper clamp fails loud.
+        dutyPercentValue = abs(dutyRaw).toFloat().coerceAtMost(DUTY_MAX_PERCENT)
         sawMotionFrame = true
         // NOTE: this frame must never write [phaseCurrentA] or [boardTempC].
         // That used to be a dead store — [parseLiveFrame] reassigns both from
@@ -1117,6 +1273,12 @@ class BegodeProtocol(
         private const val FRAME_SIZE = 24
         private const val TAIL_OFFSET = 20
 
+        /** First payload byte of a frame — bytes 0..1 are the `55 AA` header. */
+        private const val PAYLOAD_FIRST = 2
+
+        /** Last payload byte — 18 is the frame type and 19 its subtype/index. */
+        private const val PAYLOAD_LAST = 17
+
         /**
          * The reference the live frame's voltage is expressed against: Begode
          * reports every wheel as if it were a 16S one, full at 16 x 4.2 =
@@ -1143,13 +1305,14 @@ class BegodeProtocol(
          * Km/h per unit of the live frame's signed speed field (bytes 4..5) —
          * the raw unit is cm/s.
          *
-         * Taken from WheelLog's source, not guessed: `GotwayAdapter` converts
-         * this field as `round(raw * 3.6)` into a speed field whose unit is
-         * hundredths of km/h (`RIDING_SPEED = 200 // 2km/h`, and a debug line
-         * setting the same field to `50_00` for 50 km/h), i.e.
-         * `km/h = raw * 3.6 / 100`. WheelLog's own frame-layout comment states
-         * the same thing in words: *"BE speed, fixed point, 3.6 * value / 100
-         * km/h"*. Two independent statements in one file agreeing on 0.036.
+         * Taken from WheelLog's source, not guessed: `GotwayAdapter` multiplies
+         * this field by 3.6 and rounds it into a speed field whose unit is
+         * hundredths of km/h — its riding-speed constant is 200 units annotated
+         * as 2 km/h, and a commented-out debug line puts 5000 in the same field
+         * for 50 km/h — i.e. `km/h = raw * 3.6 / 100`. The frame-layout note at
+         * the foot of that same file says it in words too, describing bytes
+         * 4..5 as a fixed-point big-endian speed of `3.6 * value / 100` km/h.
+         * Two independent statements in one file agreeing on 0.036.
          *
          * **Still unconfirmed by any capture of THIS wheel**, and that gap
          * cannot be closed here: bytes 4..5 read `00 00` in all 38 live frames
@@ -1199,10 +1362,22 @@ class BegodeProtocol(
         private const val DUTY_NOT_YET_REPORTED_PERCENT = 0f
 
         /**
+         * The top of [dutyPercent]'s stated 0..100 range, and the clamp
+         * [parseMotionFrame] applies after taking the field's magnitude.
+         *
+         * 100 % is full modulation — a wheel physically cannot exceed it — so
+         * anything above is garbage on a frame format with no checksum. Clamping
+         * rather than rejecting keeps the failure LOUD: the ШИМ alarm fires at
+         * maximum instead of the value being dropped and the dial holding a
+         * stale, comfortable number.
+         */
+        private const val DUTY_MAX_PERCENT = 100f
+
+        /**
          * The value of the 0x04 tiltback field at and above which the wheel
-         * means "unset" rather than a speed — WheelLog's own threshold
-         * (`if (tiltBackSpeed >= 100) tiltBackSpeed = 0`). The ET Max capture
-         * reads 200 in every 0x04 frame. See [tiltbackSpeed].
+         * means "unset" rather than a speed — WheelLog's own threshold, which
+         * zeroes its tiltback field once the decoded value reaches 100. The ET
+         * Max capture reads 200 in every 0x04 frame. See [tiltbackSpeed].
          */
         private const val TILTBACK_UNSET_AT = 100
 

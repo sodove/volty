@@ -96,11 +96,30 @@ enough to push PWM up, ideally to a tiltback. Recorded in §6 as the hand-off.
 5. **Absent sensors take the sentinel, not zero** (§7.1). `hasEscTemp` is computed
    as `escTempC > -50f`, so a `0f` default claims a sensor that does not exist and
    arms `ESC_TEMP` against a constant. `hasMotorTemp` is an explicit flag — set it
-   honestly (a wheel has one board temp, so it is `false`).
+   honestly. **This brief assumed a wheel has one board temperature and that the
+   flag is therefore `false`; that is wrong for the ET Max** (spec §8.1: frame
+   `0x07` bytes 6..7 carry a real motor thermistor, 20 °C against 27.5 °C on the
+   board). Set it from what the wheel actually sends — which shipped as a latch
+   on the first non-zero reading, because 0 °C is a real winter value and no
+   range gate can separate it from an unwired sensor.
 6. **`runTest` hazard:** a test starting an unbounded delayed loop makes virtual
    time advance forever and **wedges the build instead of failing**.
 7. Structural claims about frame layout must cite the fixture bytes that support
    them, or say plainly that they are unverified.
+8. **`ControllerData.tripKm` is the SESSION's distance** — km since this
+   connection started — not a counter the device keeps across connects. Part B1
+   decided it and `RideMetrics.sessionWhPerKm` depends on it (a session's Wh over
+   a session's km). Begode derives it from the lifetime odometer against a
+   baseline taken at the connection's first `0x04` frame, exactly as VESC does
+   from `tachometer_abs`. The wheel's own since-power-on field is decoded but is
+   NOT this value: it would show a rider who connected mid-ride at km 30 a
+   one-second-old session reading 30.0 km, and it wraps at 65 535 m.
+9. **Duty is a non-negative 0..100 magnitude, established in the DECODER.** The
+   0x07 field is signed and unbounded and the capture (a constant `0x0002`) pins
+   neither direction. `abs` then clamp, in `parseMotionFrame` — the same place
+   `VescValues` does it — so the two protocols cannot disagree about what the
+   shared field means. A negative duty would grade `DutyBands` level 0 and leave
+   the ШИМ alarm silent exactly when a EUC's duty peaks.
 
 ---
 
@@ -111,13 +130,18 @@ enough to push PWM up, ideally to a tiltback. Recorded in §6 as the hand-off.
 Extend `parseLiveFrame` to also read speed, and add a `0x04` handler for the
 total odometer (u32 BE at 2..5, metres — currently dropped with a comment).
 
-- Speed at bytes 4..5, and the **scale must be stated with its evidence**. Gotway
-  reports speed in 0.01 km/h units on most firmware; the capture cannot confirm
-  it, so the constant carries a comment saying it is unverified and what would
-  verify it.
-- Distance: work out the byte order from the fixture (`00 3d 00 00` should read
-  as a small metre count, not millions) and pin it with a test that would fail
-  under the naive big-endian reading.
+- Speed at bytes 4..5, and the **scale must be stated with its evidence**. This
+  brief guessed 0.01 km/h units from memory; **it is wrong and spec §8.6 settles
+  it at `raw × 0.036`** (WheelLog stores this field in hundredths of km/h after
+  multiplying by 3.6, so the raw unit is cm/s). The capture cannot confirm it —
+  bytes 4..5 read `00 00` throughout — so the constant carries a comment saying
+  it is unverified and what would verify it.
+- Distance: this brief described bytes 6..9 as one trip counter. **Spec §8.2
+  overrules it**: bytes 6..7 are not read by WheelLog at all (`00 3d` = 61 in
+  every frame of the capture and not a distance), and the wheel's own
+  since-power-on counter is bytes 8..9 alone, u16 BE metres. Pin the offset with
+  a test that would fail under the 32-bit reading at 6..9.
+  **`ControllerData.tripKm` is NOT that counter** — see Global Constraint 8.
 - Keep every existing battery assertion green.
 
 ### Task 2 — `MotionSource` on `BegodeProtocol`

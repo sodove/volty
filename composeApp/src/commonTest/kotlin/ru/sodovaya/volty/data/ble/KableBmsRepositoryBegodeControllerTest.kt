@@ -102,6 +102,18 @@ class KableBmsRepositoryBegodeControllerTest {
      */
     private class Wire(repo: KableBmsRepository, val vehicle: Vehicle) {
         val protocol: BegodeProtocol
+
+        /**
+         * Every funnel call in ARRIVAL ORDER — `P<n>` a battery sample for
+         * branch n, `M<n>` a motion sample for controller n, both local indices.
+         *
+         * Recorded rather than merely counted because terminal state cannot see
+         * ORDER: a decode that routed every battery frame first and every motion
+         * frame afterwards leaves the same end state and would satisfy a test
+         * called "interleave" without interleaving anything. Same reason the
+         * Task 5 funnel test records.
+         */
+        val calls: MutableList<String> = mutableListOf()
         private val motion: MotionSource
         private val packFunnel: (Int, ru.sodovaya.volty.domain.model.BmsData, List<SectionState>) -> Unit
         private val motionFunnel: (Int, ru.sodovaya.volty.domain.model.ControllerData) -> Unit
@@ -120,8 +132,14 @@ class KableBmsRepositoryBegodeControllerTest {
 
         fun notify(bytes: ByteArray) {
             protocol.onNotification(bytes)
-            routePackSamples(protocol, packGate) { i, bms, sections -> packFunnel(i, bms, sections) }
-            routeControllerSamples(motion, motionGate) { i, m -> motionFunnel(i, m) }
+            routePackSamples(protocol, packGate) { i, bms, sections ->
+                calls += "P$i"
+                packFunnel(i, bms, sections)
+            }
+            routeControllerSamples(motion, motionGate) { i, m ->
+                calls += "M$i"
+                motionFunnel(i, m)
+            }
         }
     }
 
@@ -153,9 +171,55 @@ class KableBmsRepositoryBegodeControllerTest {
     fun `the wheel's controller and its two branches interleave over the one link`() = repoTest { repo ->
         // `D §5`: one connection yields one controller AND two packs, from the
         // same frames on the same link.
+        val chunks = BegodeDumpFixture.chunks()
         val wire = Wire(repo, wheel())
-        BegodeDumpFixture.chunks().forEach { wire.notify(it) }
+        chunks.forEach { wire.notify(it) }
         advanceUntilIdle()
+
+        // (a) The INTERLEAVE this test is named for, which its terminal
+        // assertions below cannot see: a decode that routed every battery frame
+        // first and every motion frame afterwards satisfies every one of them.
+        val kinds = wire.calls.map { it.first() }
+        assertTrue(
+            kinds.indexOfFirst { it == 'M' } < kinds.indexOfLast { it == 'P' },
+            "motion starts before the battery stream ends"
+        )
+        assertTrue(
+            kinds.indexOfFirst { it == 'P' } < kinds.indexOfLast { it == 'M' },
+            "battery starts before the motion stream ends"
+        )
+        assertTrue(
+            kinds.zipWithNext().count { (a, b) -> a != b } >= 20,
+            "the two must alternate throughout the capture, not cross once; got ${wire.calls.size} calls"
+        )
+        assertTrue(
+            wire.calls.none { it != "M0" && it != "P0" && it != "P1" },
+            "one controller and two branches and nothing else, got ${wire.calls.distinct()}"
+        )
+
+        // (b) And no frame was LOST on the way: the count comes from the BYTES,
+        // not from the decoder, so a reassembler that consumed fewer frames than
+        // the stream contains fails here even when every terminal VALUE is
+        // identical — this wheel repeats its frame types every cycle, so losing
+        // one changes nothing a value assertion can see. Written as "all but
+        // one" for the capture's single unobservable frame — its first branch-1
+        // cell frame precedes that branch's telemetry, so `rebuild` publishes
+        // nothing for it — which means a SECOND missing frame fails this too.
+        //
+        // Measured, not assumed: a decoder that waits for more than one frame's
+        // worth of bytes before parsing (`current.size < FRAME_SIZE + 4`) fails
+        // this test. Note the mutant the Task 5 funnel test's own comment names
+        // — discarding the trailing byte in `tryParseAll`'s no-header branch —
+        // does NOT fail either count, because this capture never reaches that
+        // branch with a straddling `55 AA`. The guard is real; that particular
+        // justification for it is not exercised by these bytes.
+        val streamBytes = chunks.sumOf { it.size }
+        assertEquals(0, streamBytes % BEGODE_FRAME_BYTES, "the capture is a whole number of frames")
+        assertEquals(
+            streamBytes / BEGODE_FRAME_BYTES - 1,
+            wire.calls.size,
+            "every frame of the capture but one must reach a funnel exactly once"
+        )
 
         val vd = repo.activeVehicleData.value
         assertEquals(2, vd.packs.size, "both branches")
@@ -364,6 +428,8 @@ class KableBmsRepositoryBegodeControllerTest {
     private companion object {
         const val WHEEL = "AA:BB:CC:DD:EE:FF"
         const val ESC = "AA:BB:CC:DD:EE:0C"
+        /** Every Begode frame: 0x55 0xAA, 16 payload bytes, type, subtype, 0x5A x4. */
+        const val BEGODE_FRAME_BYTES = 24
     }
 
     private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {

@@ -197,11 +197,6 @@ class KableBmsRepositoryBegodeFunnelTest {
             chunks.all { it.size == BEGODE_MTU_PAYLOAD },
             "every notification is $BEGODE_MTU_PAYLOAD bytes at MTU 23"
         )
-        assertTrue(
-            BEGODE_FRAME_BYTES % BEGODE_MTU_PAYLOAD != 0,
-            "a $BEGODE_FRAME_BYTES-byte frame cannot tile a $BEGODE_MTU_PAYLOAD-byte notification"
-        )
-
         val stream = chunks.fold(ByteArray(0)) { acc, c -> acc + c }
         assertEquals(
             0, stream.size % BEGODE_FRAME_BYTES,
@@ -532,7 +527,15 @@ class KableBmsRepositoryBegodeFunnelTest {
             speedKmh = 43.5f,
             speedSource = SpeedSource.REPORTED,
             dutyPercent = 78f,
-            hasDuty = true,
+            // FALSE, against the model's own default of `true`, and that is the
+            // whole point: a fixture that leaves a field at its default cannot
+            // prove the fold carries it. `hasDuty` is the field D Task 4 added
+            // and the one this test's name most owes an assertion — at `true`,
+            // deleting the fold's `hasDuty` line left this test green. The
+            // pairing with `dutyPercent = 78f` is deliberately incoherent as a
+            // wheel reading; this is a fold, and a fold must move every field
+            // regardless of whether the combination could occur.
+            hasDuty = false,
             motorCurrentA = 61.25f,
             batteryCurrentA = 33.75f,
             inputVoltageV = 147.2f,
@@ -555,6 +558,13 @@ class KableBmsRepositoryBegodeFunnelTest {
             // this test fail for the aggregator's bug rather than for the
             // fold under test, and pinning the drop as expected would block
             // the fix. It is reported instead: see D Task 5's report.
+            //
+            // KNOWN HOLE, and the exception to this test's name: null is also
+            // the MODEL's default, so this field is defaulted on both sides and
+            // the equality below cannot see it either way. That is accepted
+            // here rather than fixed, because the only way to pin it is to
+            // assert the current (wrong) behaviour. Every OTHER field above is
+            // non-default precisely so that it is not in the same position.
             batteryLevelFraction = null,
             isConnected = true
         )

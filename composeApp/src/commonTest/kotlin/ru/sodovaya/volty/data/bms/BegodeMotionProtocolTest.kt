@@ -12,6 +12,8 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.stats.DutyBands
+import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.presentation.alerts.alertDraftsFor
 import ru.sodovaya.volty.presentation.alerts.isEditable
 import kotlin.test.Test
@@ -100,7 +102,7 @@ class BegodeMotionProtocolTest {
         val protocol = protocolFedWithFixture()
         assertEquals(
             0L,
-            assertNotNull(protocol.tripDistanceMeters(), "the capture carries live frames"),
+            assertNotNull(protocol.powerOnDistanceMeters(), "the capture carries live frames"),
             "trip of a wheel that never moved (bytes 6..7 hold 61, which is not the trip)"
         )
     }
@@ -171,7 +173,7 @@ class BegodeMotionProtocolTest {
         val protocol = protocolFedWithFixture()
         assertNull(protocol.liveVoltageOn672ScaleV(), "precondition: the synthetic pack is retired")
         assertNotNull(protocol.speedKmh(), "speed must survive the smart-BMS hand-over")
-        assertNotNull(protocol.tripDistanceMeters(), "trip must survive the smart-BMS hand-over")
+        assertNotNull(protocol.powerOnDistanceMeters(), "trip must survive the smart-BMS hand-over")
         assertNotNull(protocol.dutyPercent(), "duty must survive the smart-BMS hand-over")
     }
 
@@ -228,7 +230,7 @@ class BegodeMotionProtocolTest {
         protocol.onNotification(
             liveFrame(voltageRaw = 5892, unknown6 = 61, tripMeters = 1234)
         )
-        assertEquals(1234L, assertNotNull(protocol.tripDistanceMeters()))
+        assertEquals(1234L, assertNotNull(protocol.powerOnDistanceMeters()))
     }
 
     @Test
@@ -237,7 +239,7 @@ class BegodeMotionProtocolTest {
         // past 32.8 km would report as a negative distance.
         val protocol = BegodeProtocol()
         protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 65535))
-        assertEquals(65535L, assertNotNull(protocol.tripDistanceMeters()))
+        assertEquals(65535L, assertNotNull(protocol.powerOnDistanceMeters()))
     }
 
     @Test
@@ -412,7 +414,7 @@ class BegodeMotionProtocolTest {
         // ordinary real values, so none of them can double as "unknown".
         val protocol = BegodeProtocol()
         assertNull(protocol.speedKmh())
-        assertNull(protocol.tripDistanceMeters())
+        assertNull(protocol.powerOnDistanceMeters())
         assertNull(protocol.odometerMeters())
         assertNull(protocol.batteryCurrentA())
         assertNull(protocol.motorTempC())
@@ -427,7 +429,7 @@ class BegodeMotionProtocolTest {
         val liveOnly = BegodeProtocol()
         liveOnly.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 100))
         assertNotNull(liveOnly.speedKmh())
-        assertNotNull(liveOnly.tripDistanceMeters())
+        assertNotNull(liveOnly.powerOnDistanceMeters())
         assertNull(liveOnly.odometerMeters(), "no 0x04 frame arrived")
         assertNull(liveOnly.batteryCurrentA(), "no 0x07 frame arrived")
 
@@ -456,7 +458,7 @@ class BegodeMotionProtocolTest {
         val protocol = BegodeProtocol()
         protocol.onNotification(liveFrame(voltageRaw = 0, speedRaw = 1000, tripMeters = 4321))
         assertNull(protocol.speedKmh(), "a boot placeholder is not a speed measurement")
-        assertNull(protocol.tripDistanceMeters(), "a boot placeholder is not a trip measurement")
+        assertNull(protocol.powerOnDistanceMeters(), "a boot placeholder is not a trip measurement")
 
         // ...and a genuine frame right after it is decoded normally.
         protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000))
@@ -469,7 +471,7 @@ class BegodeMotionProtocolTest {
         // of all — its proof that it reports duty must not be inherited.
         val protocol = protocolFedWithFixture()
         assertNotNull(protocol.speedKmh(), "precondition: the fixture decoded motion")
-        assertNotNull(protocol.tripDistanceMeters())
+        assertNotNull(protocol.powerOnDistanceMeters())
         assertNotNull(protocol.odometerMeters())
         assertNotNull(protocol.dutyPercent())
         assertNotNull(protocol.batteryCurrentA())
@@ -477,7 +479,7 @@ class BegodeMotionProtocolTest {
 
         protocol.reset()
         assertNull(protocol.speedKmh())
-        assertNull(protocol.tripDistanceMeters())
+        assertNull(protocol.powerOnDistanceMeters())
         assertNull(protocol.odometerMeters())
         assertNull(protocol.batteryCurrentA())
         assertNull(protocol.motorTempC())
@@ -490,7 +492,7 @@ class BegodeMotionProtocolTest {
 
         // And the protocol decodes motion again from scratch afterwards.
         BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
-        assertEquals(0L, assertNotNull(protocol.tripDistanceMeters()))
+        assertEquals(0L, assertNotNull(protocol.powerOnDistanceMeters()))
         assertEquals(8_565_341L, assertNotNull(protocol.odometerMeters()))
         assertEquals(2f, assertNotNull(protocol.dutyPercent()), 0f)
     }
@@ -1210,7 +1212,229 @@ class BegodeMotionProtocolTest {
         )
     }
 
+    // --- Duty is a MAGNITUDE, because the frame field is signed and unbounded ---
+
+    @Test
+    fun syntheticNegativeHardwarePwmIsPublishedAsAMagnitudeSoTheShimAlarmStillFires() {
+        // SYNTHETIC, and it has to be: the only capture reads a constant
+        // 0x0002, so nothing in it pins this field's SIGN in either direction.
+        // The field is signed 16-bit and the decode used to pass it through
+        // untouched, while every consumer treats duty as a non-negative 0..100
+        // magnitude compared against UPPER thresholds. A wheel reporting
+        // negative hardware PWM under regen braking therefore graded NORMAL and
+        // left the ШИМ alarm — the headline safety feature of this whole part —
+        // silent at the exact moment a EUC's duty peaks.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -92))
+
+        assertEquals(
+            92f, assertNotNull(protocol.dutyPercent()), 0f,
+            "a negative hardware PWM is 92 % of duty, not -92 %"
+        )
+        assertEquals(92f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f)
+        assertEquals(
+            DutyLevel.CRITICAL,
+            DutyBands.level(assertNotNull(protocol.latestMotion(0)).dutyPercent),
+            "the rider-visible consequence: the alarm the part exists for must fire"
+        )
+        // The control that makes the assertion above non-vacuous — the raw
+        // value graded NORMAL, which is what shipped.
+        assertEquals(DutyLevel.NORMAL, DutyBands.level(-92f), "…and it did not, before the magnitude")
+    }
+
+    @Test
+    fun syntheticANegativeOnlyWheelStillProvesItReportsDuty() {
+        // The latch reads the RAW value, ahead of the magnitude: a firmware
+        // that only ever reports negative PWM has still proved it fills the
+        // field in, and withholding its duty would be the OTHER silent failure
+        // (hasDuty false forever, the alarm greyed out on a wheel that does
+        // report).
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -3))
+        assertNotNull(protocol.dutyPercent(), "a negative reading is a reading")
+        assertTrue(assertNotNull(protocol.latestMotion(0)).hasDuty)
+    }
+
+    @Test
+    fun syntheticAnOutOfRangeDutyIsClampedToOneHundredRatherThanShownRaw() {
+        // The mirror case. This frame format has no checksum — the 5A5A5A5A
+        // tail is its whole integrity check — so a garbled 0x07 can put any
+        // 16-bit value here. 8000 % would render as a dial filled eighty times
+        // over. Clamping keeps the failure LOUD (the alarm fires at maximum)
+        // rather than dropping the frame and leaving a stale, comfortable
+        // number on the dial: duty only ever escalates upwards, so over-firing
+        // is the safe error.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 8000))
+        assertEquals(100f, assertNotNull(protocol.dutyPercent()), 0f)
+        assertEquals(100f, assertNotNull(protocol.latestMotion(0)).dutyPercent, 0f)
+
+        // Symmetrically for a large negative, which the magnitude turns into a
+        // large positive before the clamp sees it.
+        val other = BegodeProtocol()
+        other.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = -8000))
+        assertEquals(100f, assertNotNull(other.dutyPercent()), 0f)
+    }
+
+    @Test
+    fun syntheticAnOrdinaryDutyPassesThroughUntouchedByTheMagnitudeAndTheClamp() {
+        // The control for both tests above: neither `abs` nor the clamp may
+        // move a value that is already in range, and 100 % itself is a real
+        // reading (full modulation) rather than the clamp's own artefact.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 63))
+        assertEquals(63f, assertNotNull(protocol.dutyPercent()), 0f)
+
+        val atTheLimit = BegodeProtocol()
+        atTheLimit.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 100))
+        assertEquals(100f, assertNotNull(atTheLimit.dutyPercent()), 0f)
+    }
+
+    // --- tripKm is the SESSION's distance, not the wheel's own counter ---
+
+    @Test
+    fun syntheticTheTripIsDistanceSinceThisConnectionAndNotSincePowerOn() {
+        // `ControllerData.tripKm` means "distance since this connection
+        // started" everywhere else in Volty (VescProtocol, VescGatewayProtocol,
+        // the demo), and `RideMetrics.sessionWhPerKm` — a session's Wh over a
+        // session's km — depends on it. This wheel used to publish its OWN
+        // since-power-on counter there, so a rider connecting mid-ride at km 30
+        // saw a one-second-old session reading 30.0 km.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 100, tripMeters = 30_000))
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(30_000)))
+
+        assertEquals(
+            0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0f,
+            "a session one frame old has travelled nothing, whatever the wheel's own counter says"
+        )
+        // The wheel's counter is still decoded — it is what pins bytes 8..9 —
+        // it is simply not this field.
+        assertEquals(30_000L, assertNotNull(protocol.powerOnDistanceMeters()))
+
+        // 2.5 km further on, and the trip is that 2.5 km.
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(32_500)))
+        assertEquals(2.5f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
+        assertEquals(32.5f, assertNotNull(protocol.latestMotion(0)).odometerKm, 1e-3f)
+    }
+
+    @Test
+    fun syntheticTheTripSurvivesPastTheSixtyFiveKilometreWrapOfTheWheelsOwnCounter() {
+        // The other half of the same defect. The wheel's own field is 16-bit,
+        // so it wraps at 65 535 m and the TRIP tile silently restarted at 0.0
+        // for a rider past 65.5 km. The odometer is a 32-bit metre count, so
+        // the derived trip simply keeps counting.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 65_535))
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_565_341)))
+        // The wheel wraps; the odometer does not.
+        protocol.onNotification(liveFrame(voltageRaw = 5892, tripMeters = 0))
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_635_341)))
+
+        assertEquals(
+            70f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f,
+            "70 km of session, across the point where the wheel's own counter wrapped to 0"
+        )
+        assertEquals(0L, assertNotNull(protocol.powerOnDistanceMeters()), "the wheel really did wrap")
+    }
+
+    @Test
+    fun syntheticTheTripCannotGoNegativeAndAResetStartsANewSession() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(10_000)))
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(12_000)))
+        assertEquals(2f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
+
+        // A lifetime counter that went BACKWARDS means the wheel contradicted
+        // itself; a negative distance helps nobody. Same guard VescProtocol has.
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(9_000)))
+        assertEquals(0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0f)
+
+        // A reconnect is a NEW session: the baseline must not survive it, or
+        // the next session would open at the previous one's distance.
+        protocol.reset()
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(12_000)))
+        assertEquals(
+            0f, assertNotNull(protocol.latestMotion(0)).tripKm, 0f,
+            "a reconnect starts the trip over, whatever the odometer reads"
+        )
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(13_500)))
+        assertEquals(1.5f, assertNotNull(protocol.latestMotion(0)).tripKm, 1e-3f)
+    }
+
+    // --- The 0x04 and 0x07 frames take the same boot gate the 0x00 frame does ---
+
+    @Test
+    fun syntheticAZeroPaddedOdometerFrameCannotEraseTheWheelsMileage() {
+        // `parseLiveFrame` has been gated since Task 2 and `parseBmsTelemetry`
+        // for longer; 0x04 and 0x07 were not, and the asymmetry was undocumented
+        // rather than reasoned. This format has no checksum, so a boot
+        // placeholder or a truncated frame mid-stream published its zeros as
+        // measurements: 8 565 km of lifetime mileage became 0.0 km, and the
+        // trip baseline reset under the rider.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(odometerFrame(meterBytes = etMaxOdometerBytes(), tiltbackRaw = 50))
+        val real = assertNotNull(protocol.latestMotion(0))
+
+        protocol.onNotification(zeroPaddedFrame(type = 0x04))
+        assertSame(real, protocol.latestMotion(0), "a zero-padded frame is not a decode and mints no sample")
+        assertEquals(8_565_341L, assertNotNull(protocol.odometerMeters()))
+        assertEquals(50f, assertNotNull(protocol.tiltbackSpeed()), 0f)
+
+        // …and a genuine frame right after it is decoded normally.
+        protocol.onNotification(odometerFrame(meterBytes = odometerBytes(8_565_400)))
+        assertEquals(8_565_400L, assertNotNull(protocol.odometerMeters()))
+    }
+
+    @Test
+    fun syntheticAZeroPaddedMotionFrameCannotCloseTheTwoLatchesThatNeverReopen() {
+        // The sharper half: 0x07 owns two ONE-WAY latches — the motor-thermistor
+        // one and the truePWM one — and neither reopens until reset(). A frame
+        // that gets past the gate is permanent for the connection.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(zeroPaddedFrame(type = 0x07))
+        assertNull(protocol.latestMotion(0), "a zero-padded 0x07 is not a motion decode at all")
+        assertNull(protocol.batteryCurrentA(), "…and 0 A is not a battery-current measurement")
+        assertNull(protocol.motorTempC())
+        assertNull(protocol.dutyPercent())
+
+        // A real frame afterwards still works — the gate withholds a placeholder,
+        // it does not disable the frame type.
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+        assertEquals(2f, assertNotNull(protocol.dutyPercent()), 0f)
+        assertEquals(20f, assertNotNull(protocol.motorTempC()), 0f)
+    }
+
+    @Test
+    fun syntheticTheBootGateJudgesTheWholePayloadAndNotAnySingleField() {
+        // The discriminator is that EVERY payload byte is zero, and it has to
+        // be: each field on its own has a legitimate zero. An odometer of 0 is
+        // a wheel out of its box, an alert byte of 0 is a healthy wheel, 0 °C
+        // is a real winter reading. A gate keyed on any one of them would
+        // reject real data.
+        val newWheel = BegodeProtocol()
+        // Odometer 0, but the wheel has a tiltback configured — a real frame.
+        newWheel.onNotification(odometerFrame(meterBytes = odometerBytes(0), tiltbackRaw = 50))
+        assertEquals(0L, assertNotNull(newWheel.odometerMeters(), "a brand-new wheel really reads 0 km"))
+
+        val coldMotor = BegodeProtocol()
+        // Motor at exactly 0 °C and duty at 0, but a real battery current.
+        coldMotor.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 0, dutyRaw = 0))
+        assertEquals(
+            -0.67f, assertNotNull(coldMotor.batteryCurrentA(), "the frame WAS accepted"), 1e-3f
+        )
+    }
+
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
+
+    /** A frame of [type] whose whole 16-byte payload is zero — the wheel's boot placeholder. */
+    private fun zeroPaddedFrame(type: Int): ByteArray = frame(type, 24, ByteArray(16))
+
+    /** The 0x04 odometer field's four big-endian bytes for [meters]. */
+    private fun odometerBytes(meters: Long): ByteArray = byteArrayOf(
+        (meters shr 24).toByte(), (meters shr 16).toByte(), (meters shr 8).toByte(), meters.toByte()
+    )
+
 
     private fun frame(type: Int, subtype: Int, payload: ByteArray): ByteArray {
         require(payload.size == 16) { "payload is frame bytes 2..17" }
