@@ -11,6 +11,13 @@ class ControllerDataTest {
         assertEquals(SpeedSource.NONE, d.speedSource)
         assertFalse(d.speedKnown)
         assertFalse(d.isConnected)
+        // hasDuty is the one absence-flag that defaults to PRESENT: the static
+        // reportsDuty table already refuses the protocols that report no duty,
+        // so a decoder saying nothing here keeps exactly the availability it
+        // had. Only a decoder that can tell "reported" from "not yet reported"
+        // — Begode's truePWM latch — has anything to add.
+        assertTrue(d.hasDuty)
+        assertFalse(d.hasMotorTemp, "…unlike hasMotorTemp, which defaults to absent")
     }
 
     @Test fun speedKnown_tracks_speedSource() {

@@ -501,3 +501,43 @@ correctness risk, which is why it was left.
 **15.7 — CI has no signal on a branch without a PR.** `push` is restricted to
 `main`, so CI is a post-merge safety net rather than a gate. Acceptable while
 every merge runs the full suite locally first.
+
+---
+
+## 16. A persistent fault silences every later one (2026-07-27)
+
+Found while reviewing Part D Task 3, and it is a defect in Part F's engine that
+Part D is the first protocol to make reachable.
+
+`ControllerData.faults` drives one CRITICAL notification. `AlertEngine.fire`
+(`AlertEngine.kt:330-344`) clears `armed` after firing and re-arms **only when
+the fault list goes empty** — `recovered = faults.isEmpty()`.
+
+That is correct while faults are transient. It is wrong the moment one of them
+**persists**, which is ordinary:
+
+> A rider trips **low voltage** at km 30. The notification fires once and the
+> kind disarms. At km 34 the motor **over-temps**. The list becomes
+> `["Low voltage", "Over temperature"]` — still non-empty, so `recovered` is
+> false, so nothing re-arms and **the rider is never told about the
+> over-temperature**.
+
+A pack below the wheel's low-voltage threshold stays below it for the rest of the
+ride, so the masking lasts the whole ride. VESC's fault set is mostly transient,
+which is why this never surfaced before; Begode reports a low-voltage flag that
+is not.
+
+**The fix is to re-arm on a change of the fault set rather than on emptiness** —
+a newly appearing fault is a new event even while an old one is still present.
+Two things to get right when implementing it:
+- **Do not re-fire on the same set.** Debounce alone would not save a rider from
+  a notification per sample; the trigger must be "this set differs from the set
+  we last announced", not "this set is non-empty".
+- **Name the new fault, not the whole set.** A notification repeating a fault the
+  rider already dismissed is the fatigue failure §10 exists to prevent.
+
+Part D deliberately filters the wheel's latching bits (transport mode, the
+general alarm flag) out of `faults` for the same reason — but that mitigates the
+class rather than closing it, because a persistent *genuine* fault like low
+voltage still masks everything after it. The filter is not a fix and Part D's
+code says so.

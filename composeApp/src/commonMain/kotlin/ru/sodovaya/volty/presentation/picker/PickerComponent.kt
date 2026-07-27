@@ -6,10 +6,11 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
-import ru.sodovaya.volty.domain.model.controllerVehicle
 import ru.sodovaya.volty.domain.model.isGuest
+import ru.sodovaya.volty.domain.model.pickedControllerVehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.model.singlePackVehicle
@@ -39,7 +40,9 @@ interface PickerComponent {
     fun onTypeSheetDismissed()
     fun onConnectWithType(device: DiscoveredDevice, choice: SourceChoice)
     fun onAddNewBattery()
-    fun onTryDemo()
+
+    /** Start "Try demo" for [profile] — the two profiles are different vehicles. */
+    fun onTryDemo(profile: DemoProfile)
     fun onBack()
 
     data class State(
@@ -209,7 +212,11 @@ class DefaultPickerComponent(
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
-            val v = controllerVehicle(
+            // The SHAPE is the model layer's decision, not this screen's: a
+            // Begode is a controller and its own battery over one link and gets
+            // a stored pack, everything else is controller-only. See
+            // [pickedControllerVehicle].
+            val v = pickedControllerVehicle(
                 id = newVehicleId(),
                 // Named after the controller kind, not "BMS", when the device
                 // advertises no name of its own.
@@ -299,11 +306,11 @@ class DefaultPickerComponent(
 
     override fun onAddNewBattery() { onAddNewBatteryRequested() }
 
-    override fun onTryDemo() {
+    override fun onTryDemo(profile: DemoProfile) {
         scope.launch {
             _state.update { it.copy(connecting = "demo", error = null) }
             scanJob?.cancel()
-            val result = bmsRepository.connectDemo()
+            val result = bmsRepository.connectDemo(profile)
             if (result.isSuccess) onDemoConnected()
             else _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
         }

@@ -129,3 +129,82 @@ equality on the entire object, because field-by-field assertions are exactly how
 this reached review three times. Keep that test through the rewrite, and note its
 one weakness — it is only as strong as its fixture, so a new field whose default
 the fixture never overrides still slips through.
+
+---
+
+## 9. Motion gauges render unknown values as confident zeros (2026-07-27)
+
+Found in Part D Task 4's review. Part F taught the *alarm* to distinguish "not
+measured" from "measured as zero"; the **dashboard** never learned it.
+
+`ControllerData` now carries `hasDuty`, `hasMotorTemp` and `hasEscTemp`. The
+temperature flags are honoured by the renderers, which blank the gauge and drop
+the severity band. `hasDuty` is not: `SecondaryGaugeMapper.kt:71-72` and
+`ClassicDialSpecs.kt:452-456` read `dutyPercent` and `DutyBands.level(…)` with no
+known-flag at all. So a Begode wheel whose firmware has never reported a PWM —
+the exact case the alarm now refuses to arm on — still shows a **confident 0 %**
+on the dial.
+
+The same shape exists for power. Task 4 wired the wheel's cell count so
+`inputVoltageV` is real, but when a scale is genuinely unavailable `powerW` is
+`0f`, and `RideDashboardScreen.kt:342` / `SecondaryGaugeMapper.kt:80-82` render
+it as **"0.0 kW"** while `RideMetrics.instantWhPerKm(0f, speed)` returns `0f`, so
+consumption reads **"0.0 Wh/km"** once moving. Neither is a blank or a dash.
+
+**Part G owns the dashboard, so it owns this.** The rule the renderers need is the
+one the alarm already follows: a value we have not observed is not a zero. That
+means a known-flag reaching every motion gauge — duty and power at minimum — and
+a rendering for "unknown" that is visibly different from a real low reading.
+
+Part D deliberately did not widen this: its scope allowed exactly one new field on
+the shared `ControllerData`, and a dashboard-wide fix is not a Begode change.
+
+### 9.1 Consumption is the third field of this class (2026-07-27)
+
+Found in Part D Task 6. `RideMetrics.sessionWhPerKm` returns null only when
+`tripKm <= 0`, and a Begode reports no `consumedWh` — so the instant the trip
+counter moves, the fallback becomes a well-formed **`0.0 Wh/km`** rather than an
+absence. Classic's consumption dial prints `0.0` with the needle centred (its
+`—` override exists and is never reached), and **Clean's consumption card prints
+`avg 0.0 Wh/km` for the whole ride, on every Begode.**
+
+Same rule as §9: a value we have not observed is not a zero. Three fields now
+share it — duty, power, consumption — which is the argument for fixing the
+*rendering contract* once rather than patching gauges one at a time.
+
+### 9.2 Two Classic dials are unusable at a wheel's scale (2026-07-27)
+
+Also Part D Task 6. Classic's CURRENT dial floors at ±60 A and POWER at
+±10 000 W — VESC's own ranges (`B §14`). A wheel cruises at about 6 A and 571 W,
+so both needles sit inside the first tenth of scale and never visibly move. The
+dials are not wrong, they are scoped to a different machine.
+
+Part D deliberately did not change them unilaterally: the ranges are shared with
+every VESC vehicle. Whoever owns the dashboard should decide whether the range
+follows the vehicle — VESC derives its gauge ranges from `mcconf` (`B §14`),
+which is the same question one layer down.
+
+### 9.3 The aggregate averages an unknown voltage into a real one (2026-07-27)
+
+Part D's final review. `MotionAggregator.aggregate` folds `inputVoltageV` with
+`average()`. Begode is the first decoder that publishes **`0` meaning unknown**
+(no cell count ⇒ no scale ⇒ no honest voltage). On a mixed vehicle that zero is
+averaged in as if it were a measurement, halving the reported rail voltage
+instead of being ignored.
+
+Same family as §9/§9.1: the fold has no notion of "not observed" either. Whatever
+known-flag contract the renderers get should reach the aggregator too, or the
+fold must skip unknowns rather than average them.
+
+### 8.1 The rebuild-on-save now meets a wheel sooner (2026-07-27)
+
+Part D's final re-review. `VehicleEditComponent.onSave` guards only
+`existing.packs.isEmpty()`, so once the pack auto-fill has appended a Begode
+wheel's **second branch**, a save rebuilds from `singlePackVehicle` and drops it.
+Cosmetic today — `expandedTo` re-synthesises the slot on the next connect — but
+the labels are lost, and it is the same rebuild-on-save defect §8 describes.
+
+What changed is the timing: the picker now navigates **straight to the edit
+screen** after a Controller pick, so the wheel path meets this defect far sooner
+than the battery path ever did. Another reason §8's update-in-place rewrite is
+the fix rather than one more field in the copy list.

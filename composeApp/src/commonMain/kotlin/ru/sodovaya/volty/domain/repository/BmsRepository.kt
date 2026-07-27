@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -57,8 +58,12 @@ interface BmsRepository {
      * notification) so reviewers and new users can exercise the full UI without
      * hardware. The synthetic demo vehicle (see [ru.sodovaya.volty.domain.model.isDemo])
      * is NEVER persisted.
+     *
+     * [profile] picks WHICH synthetic vehicle comes up — a VESC scooter or a
+     * Begode wheel. They are different machines, not the same curve renamed:
+     * see [DemoProfile].
      */
-    suspend fun connectDemo(): Result<Unit>
+    suspend fun connectDemo(profile: DemoProfile = DemoProfile.SCOOTER): Result<Unit>
 
     suspend fun disconnect()
 

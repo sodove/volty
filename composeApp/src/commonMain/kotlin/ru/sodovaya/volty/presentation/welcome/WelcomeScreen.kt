@@ -28,12 +28,14 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
+import ru.sodovaya.volty.domain.model.DemoProfile
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.welcome_add_battery
 import volty.composeapp.generated.resources.welcome_quick_connect
 import volty.composeapp.generated.resources.welcome_subtitle
 import volty.composeapp.generated.resources.welcome_title
 import volty.composeapp.generated.resources.welcome_try_demo
+import volty.composeapp.generated.resources.welcome_try_demo_wheel
 
 @Composable
 fun WelcomeScreen(component: WelcomeComponent) {
@@ -76,8 +78,11 @@ fun WelcomeScreen(component: WelcomeComponent) {
             Text(stringResource(Res.string.welcome_quick_connect))
         }
         Spacer(Modifier.height(4.dp))
-        TextButton(onClick = component::onTryDemo) {
+        TextButton(onClick = { component.onTryDemo(DemoProfile.SCOOTER) }) {
             Text(stringResource(Res.string.welcome_try_demo))
+        }
+        TextButton(onClick = { component.onTryDemo(DemoProfile.WHEEL) }) {
+            Text(stringResource(Res.string.welcome_try_demo_wheel))
         }
     }
 }

@@ -20,6 +20,7 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.alert.AlarmCommand
 import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.alert.AlertAvailability
@@ -75,7 +76,7 @@ class VehicleAlertsComponentTest {
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
-        override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
+        override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())

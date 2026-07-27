@@ -13,6 +13,7 @@ import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
@@ -299,9 +300,9 @@ class DefaultRootComponent(
      * lands straight on live (synthetic) data. The demo vehicle carries a
      * synthetic controller, so [homeConfig] puts it on Ride. Never persisted.
      */
-    private fun startDemo() {
+    private fun startDemo(profile: DemoProfile) {
         scope.launch {
-            bmsRepository.connectDemo()
+            bmsRepository.connectDemo(profile)
             nav.replaceAll(homeConfig())
         }
     }
@@ -330,7 +331,7 @@ class DefaultRootComponent(
                     // below, which had the identical dead-end bug.
                     onAddBatteryRequested = { nav.push(Config.Picker(mode = "add")) },
                     onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) },
-                    onTryDemoRequested = { startDemo() }
+                    onTryDemoRequested = { profile -> startDemo(profile) }
                 )
             )
             is Config.Permissions -> RootComponent.Child.Permissions(

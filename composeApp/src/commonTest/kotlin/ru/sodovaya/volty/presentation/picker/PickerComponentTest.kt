@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.picker
 import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -57,7 +58,7 @@ class PickerComponentTest {
         override fun scanAll(): Flow<DiscoveredDevice> = scan.asFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> { vehicleConnects += vehicle; return connectResult }
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> { guestConnects += address to type; return Result.success(Unit) }
-        override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
+        override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
@@ -403,10 +404,18 @@ class PickerComponentTest {
 
     @Test
     fun `every unsupported controller type is named in its own refusal`() {
-        // A pure check on the gate itself, so the three types the picker offers
-        // but cannot connect are all covered without three component tests.
-        assertEquals(null, unsupportedControllerReason(ControllerType.VESC))
-        listOf(ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE).forEach { t ->
+        // A pure check on the gate itself, so the types the picker offers but
+        // cannot connect are all covered without one component test each.
+        //
+        // The gate is DERIVED from `controllerMotionProtocol`, so this list
+        // moves on its own as parts land — Part D Task 4 gave BEGODE a branch
+        // (a wheel is a controller over its battery link) and the refusal went
+        // away with no change in the picker. FarDriver is Part E's, Kelly is
+        // Part H's.
+        listOf(ControllerType.VESC, ControllerType.BEGODE).forEach { t ->
+            assertEquals(null, unsupportedControllerReason(t), "$t is connectable and must not be refused")
+        }
+        listOf(ControllerType.FARDRIVER, ControllerType.KELLY).forEach { t ->
             val reason = unsupportedControllerReason(t)
             assertTrue(
                 reason != null && reason.contains(t.label),

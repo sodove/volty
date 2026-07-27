@@ -8,6 +8,7 @@
     <string name="welcome_add_battery">+ Add my battery</string>
     <string name="welcome_quick_connect">⚡ Quick connect (guest)</string>
     <string name="welcome_try_demo">Try demo</string>
+    <string name="welcome_try_demo_wheel">Try demo: unicycle</string>
 
     <!-- Permissions -->
     <string name="permissions_title">Permissions needed</string>
@@ -45,6 +46,7 @@
     <string name="picker_detected">BMS detected</string>
     <string name="picker_add_new">+ Add new battery</string>
     <string name="picker_try_demo">Try demo mode</string>
+    <string name="picker_try_demo_wheel">Demo mode: unicycle</string>
     <string name="picker_scanning">Scanning…</string>
     <string name="picker_error">Error: %1$s</string>
     <string name="picker_show_all">Show all Bluetooth devices (%1$d)</string>
@@ -273,10 +275,16 @@
     <!-- Motion alert availability (F §10) — why a greyed alert cannot be armed -->
     <string name="alert_unavailable_no_controller">This vehicle has no motor controller</string>
     <string name="alert_unavailable_no_duty">%1$s controllers do not report duty</string>
+    <!-- Layer 2: the protocol CAN report duty, this unit has not yet. Names no
+         controller — the aggregate folds over online controllers only, so this
+         is reachable while an offline sibling does report duty. -->
+    <string name="alert_unavailable_duty_not_reported_yet">This controller has not reported duty yet</string>
     <string name="alert_unavailable_no_motor_temp">This controller has no motor temperature sensor</string>
     <string name="alert_unavailable_no_esc_temp">This controller has no ESC temperature sensor</string>
     <string name="alert_unavailable_no_speed">This controller reports no speed</string>
-    <string name="alert_availability_unknown">No data yet — connect to check this sensor</string>
+    <!-- Shown for every kind that has an observed layer, DUTY included since
+         Part D Task 4 — so it must not say "sensor": duty is computed, not measured. -->
+    <string name="alert_availability_unknown">No data yet — connect to check</string>
 
     <!-- Motion alert kinds (F §10.2) -->
     <string name="motion_alert_duty">Duty / PWM</string>
