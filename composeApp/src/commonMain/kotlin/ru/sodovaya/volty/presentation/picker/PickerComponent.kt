@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.controllerVehicle
@@ -39,7 +40,9 @@ interface PickerComponent {
     fun onTypeSheetDismissed()
     fun onConnectWithType(device: DiscoveredDevice, choice: SourceChoice)
     fun onAddNewBattery()
-    fun onTryDemo()
+
+    /** Start "Try demo" for [profile] — the two profiles are different vehicles. */
+    fun onTryDemo(profile: DemoProfile)
     fun onBack()
 
     data class State(
@@ -299,11 +302,11 @@ class DefaultPickerComponent(
 
     override fun onAddNewBattery() { onAddNewBatteryRequested() }
 
-    override fun onTryDemo() {
+    override fun onTryDemo(profile: DemoProfile) {
         scope.launch {
             _state.update { it.copy(connecting = "demo", error = null) }
             scanJob?.cancel()
-            val result = bmsRepository.connectDemo()
+            val result = bmsRepository.connectDemo(profile)
             if (result.isSuccess) onDemoConnected()
             else _state.update { it.copy(connecting = null, error = result.exceptionOrNull()?.message) }
         }

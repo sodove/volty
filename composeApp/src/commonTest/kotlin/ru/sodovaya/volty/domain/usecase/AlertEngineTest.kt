@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.domain.usecase
 
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
@@ -55,7 +56,7 @@ class AlertEngineTest {
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle) = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType) = Result.success(Unit)
-        override suspend fun connectDemo() = Result.success(Unit)
+        override suspend fun connectDemo(profile: DemoProfile) = Result.success(Unit)
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = emptyFlow()

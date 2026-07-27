@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.pack
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -50,7 +51,7 @@ class PackDetailComponentTest {
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
-        override suspend fun connectDemo(): Result<Unit> = Result.success(Unit)
+        override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())

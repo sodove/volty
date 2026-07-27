@@ -8,6 +8,7 @@
     <string name="welcome_add_battery">+ Добавить батарею</string>
     <string name="welcome_quick_connect">⚡ Быстрое подключение (гость)</string>
     <string name="welcome_try_demo">Попробовать демо</string>
+    <string name="welcome_try_demo_wheel">Демо: моноколесо</string>
 
     <!-- Permissions -->
     <string name="permissions_title">Нужны разрешения</string>
@@ -45,6 +46,7 @@
     <string name="picker_detected">BMS обнаружено</string>
     <string name="picker_add_new">+ Добавить новую батарею</string>
     <string name="picker_try_demo">Демо-режим</string>
+    <string name="picker_try_demo_wheel">Демо-режим: моноколесо</string>
     <string name="picker_scanning">Сканирование…</string>
     <string name="picker_error">Ошибка: %1$s</string>
     <string name="picker_show_all">Показать все Bluetooth-устройства (%1$d)</string>

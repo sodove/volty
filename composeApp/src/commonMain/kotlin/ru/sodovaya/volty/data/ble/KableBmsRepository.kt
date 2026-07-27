@@ -20,6 +20,8 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
+import ru.sodovaya.volty.domain.model.DEMO_WHEEL_VEHICLE_ID
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.GUEST_VEHICLE_ID_PREFIX
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
@@ -231,6 +233,71 @@ class KableBmsRepository private constructor(
             cellCount = DemoBmsSimulator.CELL_COUNT,
             createdAt = Clock.System.now()
         ).copy(controllers = listOf(DEMO_CONTROLLER))
+
+        /**
+         * The ONE BLE address a demo wheel's controller and both its battery
+         * branches sit behind.
+         *
+         * Unlike the demo scooter above — whose pack and controller are
+         * deliberately given two addresses because a JK BMS and a VESC are two
+         * devices — a Begode wheel really is one device: `BegodeProtocol`
+         * decodes the branches AND the motherboard off the same notify
+         * characteristic. [planLinks] therefore folds all three sources into a
+         * single link, which is what a wheel physically is, and both kinds
+         * resolve to [ProtocolKind.BEGODE] so nothing conflicts.
+         */
+        private const val DEMO_WHEEL_ADDRESS = "demo-wheel-link"
+
+        /**
+         * The synthetic Begode wheel that powers "Try demo (wheel)".
+         *
+         * Shaped like the real thing rather than like the demo scooter:
+         *  - **one controller and two packs at one address** — the wheel's own
+         *    topology, and the reason [planLinks] plans exactly ONE link for it;
+         *  - **[BmsType.BEGODE] packs**, whose `reportsStateOfCharge` is false,
+         *    so the SoC a rider sees comes from [VoltageSocEstimator] over the
+         *    branch cells — the same object, on the same terms, as a real wheel;
+         *  - **[PackTopology.PARALLEL]**, because the branches are parallel;
+         *  - **[ControllerType.BEGODE]**, which is what routes it to the Ride
+         *    dashboard (`homeConfigFor`) and what the DUTY alert's availability
+         *    table keys on;
+         *  - no `MotorConfig` anywhere: a wheel REPORTS ground speed, so there
+         *    is nothing to derive it from and nothing configured to try.
+         *
+         * Its id is [DEMO_WHEEL_VEHICLE_ID], so [isDemo] is true and it is never
+         * persisted, touched or used to prefill a saved vehicle.
+         */
+        val DEMO_WHEEL_VEHICLE: Vehicle = Vehicle(
+            id = DEMO_WHEEL_VEHICLE_ID,
+            name = "Demo wheel",
+            iconKey = "generic",
+            packs = List(DemoBmsSimulator.WHEEL_PACK_COUNT) { i ->
+                Pack(
+                    index = i,
+                    label = "Branch ${i + 1}",
+                    bmsType = BmsType.BEGODE,
+                    bmsAddress = DEMO_WHEEL_ADDRESS,
+                    cellCount = DemoBmsSimulator.WHEEL_CELL_COUNT
+                )
+            },
+            controllers = listOf(
+                Controller(
+                    index = 0,
+                    label = "Wheel",
+                    controllerType = ControllerType.BEGODE,
+                    address = DEMO_WHEEL_ADDRESS
+                )
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Clock.System.now()
+        )
+
+        /** Which synthetic vehicle a [DemoProfile] brings up. */
+        fun demoVehicleFor(profile: DemoProfile): Vehicle = when (profile) {
+            DemoProfile.SCOOTER -> DEMO_VEHICLE
+            DemoProfile.WHEEL -> DEMO_WHEEL_VEHICLE
+        }
 
         /**
          * Test-only factory: construct with noop start/stop callbacks and a
@@ -720,8 +787,9 @@ class KableBmsRepository private constructor(
     override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> =
         doConnect(address, type, vehicle = buildGuestVehicle(address, type))
 
-    override suspend fun connectDemo(): Result<Unit> {
-        println("[VOLTY-BLE] connectDemo: starting simulated session")
+    override suspend fun connectDemo(profile: DemoProfile): Result<Unit> {
+        println("[VOLTY-BLE] connectDemo: starting simulated session (profile=$profile)")
+        val demoVehicle = demoVehicleFor(profile)
         return try {
             // Tear down every real link (session + reconnect loop) / prior demo
             // under the lock so a concurrent disconnect or connect sees a
@@ -767,52 +835,71 @@ class KableBmsRepository private constructor(
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
             }
-            _activeVehicle.value = DEMO_VEHICLE
+            _activeVehicle.value = demoVehicle
             ringBuffer.clear()
             motionRingBuffer.clear()
-            _connectionState.value = ConnectionState.Connected(DEMO_VEHICLE)
+            _connectionState.value = ConnectionState.Connected(demoVehicle)
             // Show the foreground notification too, so reviewers see the full
             // monitoring experience (the service feeds off activeData/activeVehicle).
             serviceStart()
             demoJob = scope.launch {
-                DemoBmsSimulator().run { sample, motion ->
-                    ringBuffer.push(sample)
-                    _activeData.value = sample
+                DemoBmsSimulator(profile = profile).run { tick ->
+                    // One PackState per pack of the demo vehicle, positionally
+                    // against the simulator's own per-pack samples — a scooter
+                    // has one, a wheel has its two parallel branches.
+                    //
+                    // VoltageSocEstimator is applied here for the same reason
+                    // the real path applies it in the sample funnel: it is the
+                    // one place holding both a sample and the vehicle it
+                    // belongs to. It is an IDENTITY for the scooter's JK packs
+                    // (reportsStateOfCharge = true) and the whole fuel gauge for
+                    // the wheel's Begode branches, which report none — exactly
+                    // as on hardware.
+                    val packStates = demoVehicle.packs.mapIndexed { i, pack ->
+                        val sample = tick.packs[i]
+                        PackState(
+                            pack = pack,
+                            data = VoltageSocEstimator.withEstimatedSoc(sample, demoVehicle, pack.index),
+                            isOnline = true,
+                            lastSeenAt = sample.timestamp
+                        )
+                    }
+                    // Mirrors VehicleConnection.snapshot()'s battery half via the
+                    // same PackAggregator a real connection uses — an identity
+                    // transform for a one-pack vehicle, and the real parallel fold
+                    // (average voltage, summed current) for the wheel's two
+                    // branches. Keeping the demo on the one true path rather than
+                    // on a bespoke shortcut is what makes the wheel demo's numbers
+                    // the numbers a real wheel would produce.
+                    val demoBattery = PackAggregator.build(packStates, demoVehicle.topology)
+                    ringBuffer.push(demoBattery.aggregate)
+                    _activeData.value = demoBattery.aggregate
                     // Motion twin of the two lines above: demo bypasses the
                     // orchestrator entirely (no VehicleConnection, no funnel),
                     // so the ride curve is fed straight into the SAME flows a
                     // real connection's onVehicleData hook would publish —
                     // activeMotion directly, and the motion ring buffer /
-                    // vehicle-level snapshot alongside it. See DEMO_CONTROLLER:
-                    // the demo vehicle carries one, so this controller state
-                    // is coherent with the vehicle it is published under.
+                    // vehicle-level snapshot alongside it. The demo vehicle
+                    // carries a controller, so this controller state is coherent
+                    // with the vehicle it is published under.
+                    val motion = tick.motion
                     motionRingBuffer.push(motion)
                     _activeMotion.value = motion
                     // Battery twin of the same idea: without this, packs/aggregate
                     // stay at VehicleData()'s all-zero default for the whole demo
                     // session (only _activeData — the Battery tab's own flow — saw
-                    // sample), so the Ride dashboard's BATTERY tile (which reads
+                    // the sample), so the Ride dashboard's BATTERY tile (which reads
                     // activeVehicleData.aggregate, not activeData) would be stuck
                     // at "0% / 0.0V" forever instead of tracking the demo's SoC
-                    // curve. Mirrors VehicleConnection.snapshot()'s battery half via
-                    // the same PackAggregator a real single-pack connection uses —
-                    // an identity transform here, but it keeps the demo on the one
-                    // true path rather than a bespoke shortcut.
-                    val demoPackState = PackState(
-                        pack = DEMO_VEHICLE.packs.first(),
-                        data = sample,
-                        isOnline = true,
-                        lastSeenAt = sample.timestamp
-                    )
-                    val demoBattery = PackAggregator.build(listOf(demoPackState), PackTopology.PARALLEL)
+                    // curve.
                     _activeVehicleData.value = _activeVehicleData.value.copy(
                         packs = demoBattery.packs,
                         aggregate = demoBattery.aggregate,
                         topology = demoBattery.topology,
                         isPartial = demoBattery.isPartial,
-                        controllers = listOf(
-                            ControllerState(controller = DEMO_CONTROLLER, data = motion, isOnline = true)
-                        ),
+                        controllers = demoVehicle.controllers.map {
+                            ControllerState(controller = it, data = motion, isOnline = true)
+                        },
                         motion = motion,
                         motionPartial = false
                     )

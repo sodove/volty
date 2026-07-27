@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -62,6 +63,7 @@ import volty.composeapp.generated.resources.picker_section_battery
 import volty.composeapp.generated.resources.picker_section_controller
 import volty.composeapp.generated.resources.picker_show_all
 import volty.composeapp.generated.resources.picker_try_demo
+import volty.composeapp.generated.resources.picker_try_demo_wheel
 import volty.composeapp.generated.resources.picker_type_unknown
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -178,10 +180,16 @@ fun PickerScreen(component: PickerComponent) {
                     Text(stringResource(Res.string.picker_add_new))
                 }
                 TextButton(
-                    onClick = component::onTryDemo,
-                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                    onClick = { component.onTryDemo(DemoProfile.SCOOTER) },
+                    modifier = Modifier.fillMaxWidth()
                 ) {
                     Text(stringResource(Res.string.picker_try_demo))
+                }
+                TextButton(
+                    onClick = { component.onTryDemo(DemoProfile.WHEEL) },
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                ) {
+                    Text(stringResource(Res.string.picker_try_demo_wheel))
                 }
             }
         }

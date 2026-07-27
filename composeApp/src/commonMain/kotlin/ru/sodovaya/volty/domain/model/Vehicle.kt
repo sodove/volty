@@ -163,8 +163,20 @@ val Vehicle.isGuest: Boolean get() = id.startsWith(GUEST_VEHICLE_ID_PREFIX)
 const val DEMO_VEHICLE_ID: String = "demo"
 
 /**
- * True when this vehicle is the simulated demo battery (see [DEMO_VEHICLE_ID]).
- * Demo is non-persistent like a guest, but distinct: it has no real BLE device
- * behind it at all.
+ * Sentinel id for the simulated "Try demo" WHEEL — a Begode electric unicycle
+ * ([DemoProfile.WHEEL]). A second id rather than a prefix test: vehicle ids are
+ * caller-supplied strings, and `startsWith("demo")` would silently swallow a
+ * real vehicle somebody named `demo-2`, whereas an exact pair cannot.
  */
-val Vehicle.isDemo: Boolean get() = id == DEMO_VEHICLE_ID
+const val DEMO_WHEEL_VEHICLE_ID: String = "demo-wheel"
+
+/**
+ * True when this vehicle is one of the simulated demo vehicles (see
+ * [DEMO_VEHICLE_ID], [DEMO_WHEEL_VEHICLE_ID]). Demo is non-persistent like a
+ * guest, but distinct: it has no real BLE device behind it at all.
+ *
+ * Every guard in the app that refuses to persist, touch or prefill from a demo
+ * reads THIS, so both demo vehicles must answer true — a wheel demo that
+ * answered false would be written to the saved-vehicle store on connect.
+ */
+val Vehicle.isDemo: Boolean get() = id == DEMO_VEHICLE_ID || id == DEMO_WHEEL_VEHICLE_ID
