@@ -28,8 +28,19 @@ import kotlin.math.abs
  *          section within the branch = bmsnum and 1)
  *   0x02 / 0x03 — cell voltages of branch 0 / branch 1, 8 cells per frame,
  *          packet index at byte 19
- *   0x04 — total odometer (see [odometerMeters])
- *   0x07 — undocumented, ignored (see the multi-pack design spec)
+ *   0x04 — total odometer, wheel settings and an alert bitmap
+ *          (only the odometer is decoded — see [parseOdometerFrame])
+ *   0x07 — motion telemetry: battery current, motor temperature and the
+ *          wheel's HARDWARE PWM (see [parseMotionFrame])
+ *
+ * This file used to say of 0x07: *"undocumented, ignored; WheelLog does not
+ * decode it either."* **That was false**, and it cost this part its whole
+ * design — the wheel's duty, the one number a EUC rider needs an alarm on, was
+ * declared underivable while it was sitting in a frame we were dropping.
+ * `GotwayAdapter` contains a commented-out debug dump of 0x07 near the top of
+ * its parser, which is what an earlier reading found; the real decode is
+ * further down the same `when` chain, next to 0x00 and 0x04. Checked against
+ * the source on 2026-07-27.
  *
  * The battery is two parallel branches, each two sections in series
  * (2S2P of assemblies); this protocol reports each branch as one pack.
@@ -90,6 +101,26 @@ class BegodeProtocol : BmsProtocol() {
 
     /** True once any 0x04 frame arrived. */
     private var sawOdometer = false
+
+    /** Last decoded battery current, A — see [batteryCurrentA]. */
+    private var batteryCurrentAValue: Float = 0f
+
+    /** Last decoded motor temperature, °C — see [motorTempC]. */
+    private var motorTempCValue: Float = 0f
+
+    /** True once any 0x07 frame arrived. */
+    private var sawMotionFrame = false
+
+    /** Last decoded hardware duty, percent — see [dutyPercent]. */
+    private var dutyPercentValue: Float = 0f
+
+    /**
+     * WheelLog's `truePWM` latch: true once the 0x07 duty field has been seen
+     * NON-ZERO at least once. Until then the wheel has not proved it reports a
+     * hardware duty at all, and [dutyPercent] withholds the value instead of
+     * publishing a zero that may just be an unimplemented field.
+     */
+    private var sawTrueDuty = false
 
     /**
      * True once ANY smart-BMS frame (0x01/0x02/0x03) was decoded. Not every
@@ -193,10 +224,13 @@ class BegodeProtocol : BmsProtocol() {
     /**
      * Trip distance in METRES since the wheel was powered on, from the live
      * frame, or null before any genuine live frame — same reasoning as
-     * [speedKmh], and 61 m is a perfectly ordinary trip value.
+     * [speedKmh], and 0 m is a perfectly ordinary trip value.
      *
      * Metres, not kilometres, because metres is what the frame carries; the
-     * unit conversion is a presentation concern.
+     * unit conversion is a presentation concern. The field is 16-bit, so it
+     * WRAPS at 65 535 m — a rider who passes 65.5 km on one charge sees the
+     * trip restart. That is the wheel's behaviour, not a decode artefact, and
+     * inventing a wider counter here would be inventing data.
      */
     fun tripDistanceMeters(): Long? = if (sawLiveMotion) tripMetersValue else null
 
@@ -210,6 +244,61 @@ class BegodeProtocol : BmsProtocol() {
      * has no field for one. A MotionSource surfaces it.
      */
     fun odometerMeters(): Long? = if (sawOdometer) odometerMetersValue else null
+
+    /**
+     * BATTERY current in amperes from the 0x07 frame, or null before one
+     * arrives.
+     *
+     * This is a different quantity from the phase current the battery path
+     * already publishes (live frame, bytes 10..11): on the ET Max capture the
+     * battery draws −0.67 A while the phase current reads −3.00 A, which is
+     * what a balancing wheel looks like. Both are real, both are wanted
+     * (`batteryCurrentA` and `motorCurrentA` in spec §2), and neither is a
+     * better version of the other — so this decode leaves the battery path
+     * completely alone.
+     *
+     * Sign follows the negation WheelLog applies, and the capture confirms the
+     * negation is right for Volty's convention: negated, the battery current
+     * has the SAME sign as the phase current of the same frames (both
+     * negative, an idle wheel drawing down its pack). Unnegated it would claim
+     * the pack was charging while the phase current said it was discharging.
+     */
+    fun batteryCurrentA(): Float? = if (sawMotionFrame) batteryCurrentAValue else null
+
+    /**
+     * MOTOR temperature in °C from the 0x07 frame, or null before one arrives.
+     *
+     * The ET Max reads 20 °C here against 27.5 °C on the mainboard sensor, so
+     * this wheel plainly HAS a motor thermistor — spec §2's "wheels usually
+     * expose one board temp, `hasMotorTemp = false`" does not hold for it, and
+     * Task 2 should set that flag from whether this returns null rather than
+     * from the spec's prose.
+     */
+    fun motorTempC(): Float? = if (sawMotionFrame) motorTempCValue else null
+
+    /**
+     * The wheel's HARDWARE duty in percent (0..100), or null while the wheel
+     * has not proved it reports one.
+     *
+     * Duty is the safety number for a EUC — Part F's headline alarm fires on
+     * it — and spec §7.2 requires it to be real or absent, never a
+     * placeholder. This is the real one: the wheel's own firmware measurement,
+     * not a derivation. The capture reads 2 % on a stationary balancing wheel,
+     * which is exactly what a wheel holding itself upright spends.
+     *
+     * **Null until the field has been seen non-zero once** ([sawTrueDuty],
+     * WheelLog's `truePWM` latch). A frame full of zeros cannot distinguish "0
+     * % duty" from "this firmware does not fill the field in", and arming the
+     * ШИМ alarm against a constant zero is precisely the silent failure §7.2
+     * describes. After the latch, later zeros ARE published — by then the
+     * field has proved itself.
+     *
+     * No derivation is offered when the wheel reports nothing: WheelLog's
+     * `calculatePwm()` fallback needs rider-configured rotation-speed,
+     * rotation-voltage and power-factor constants that Volty does not have,
+     * and a guess in this field is worse than an honest absence.
+     */
+    fun dutyPercent(): Float? = if (sawTrueDuty) dutyPercentValue else null
 
     /**
      * The two physical assemblies of branch [packIndex], wired in series
@@ -299,6 +388,13 @@ class BegodeProtocol : BmsProtocol() {
         sawLiveMotion = false
         odometerMetersValue = 0L
         sawOdometer = false
+        batteryCurrentAValue = 0f
+        motorTempCValue = 0f
+        sawMotionFrame = false
+        dutyPercentValue = 0f
+        // The duty latch is per-wheel evidence: a wheel that never proved it
+        // reports duty must not inherit the previous wheel's proof.
+        sawTrueDuty = false
         // A reconnect may face a different wheel: a protocol stuck in
         // "smart BMS seen" would leave a dumb wheel dataless again.
         smartBmsSeen = false
@@ -359,8 +455,7 @@ class BegodeProtocol : BmsProtocol() {
             0x02 -> parseCells(frame, branch = 0)
             0x03 -> parseCells(frame, branch = 1)
             0x04 -> parseOdometerFrame(frame)
-            // 0x07: undocumented; WheelLog does not decode it either. Ignored
-            // deliberately — see the design spec.
+            0x07 -> parseMotionFrame(frame)
         }
     }
 
@@ -368,8 +463,8 @@ class BegodeProtocol : BmsProtocol() {
      * Live motherboard frame — the wheel's whole moving picture in 24 bytes:
      *
      * ```
-     * 55 aa | 17 04 | 00 00 | 00 3d 00 00 | fe b6 | f4 06 | 00 a9 | 00 01 | 00 | 18 | 5a5a5a5a
-     *  hdr    volt    speed     trip        current  temp     ?       ?    type
+     * 55 aa | 17 04 | 00 00 | 00 3d | 00 00 | fe b6 | f4 06 | 00 a9 | 00 01 | 00 | 18 | 5a5a5a5a
+     *  hdr    volt    speed     ?      trip   current  temp   pwm-fb    ?    type
      * ```
      *
      * (a real frame of the ET Max capture, see BegodeDumpFixture)
@@ -378,21 +473,33 @@ class BegodeProtocol : BmsProtocol() {
      *   [liveVoltageRaw]). `0x1704` = 5892 → 58.92 V for a wheel whose cells
      *   independently sum to 148.4 V, i.e. the documented 168 / 67.2 factor.
      * - bytes 4..5 signed BE: speed, see [SPEED_KMH_PER_UNIT].
-     * - bytes 6..9: trip distance in metres, see [tripMetersOf].
-     * - bytes 10..11 signed BE: phase current in 0.01 A. `0xfeb6` = −330 →
-     *   −3.30 A, the idle draw of the stationary capture.
+     * - bytes 6..7: **not decoded**, and not part of the trip. `0x003d` = 61
+     *   in every frame of the capture. If bytes 6..9 were one 32-bit trip
+     *   counter, as an out-of-date comment in WheelLog's own source claims,
+     *   this wheel's trip would read 61 × 65536 m = 3 998 km — on a wheel
+     *   whose LIFETIME odometer is 8 565 km and whose trip resets at power-on.
+     *   WheelLog's parser reads only 8..9, and the capture agrees with the
+     *   parser rather than with the comment.
+     * - bytes 8..9 unsigned BE: trip distance in metres, see
+     *   [tripDistanceMeters].
+     * - bytes 10..11 signed BE: PHASE current in 0.01 A. `0xfeb6` = −330 →
+     *   −3.30 A. The wheel's BATTERY current is a different number and lives
+     *   in the 0x07 frame — see [batteryCurrentA].
      * - bytes 12..13 signed BE: raw MPU6050 die temperature, converted with
      *   WheelLog's `raw / 340 + 36.53` formula. `0xf406` → 27.5 °C.
-     * - bytes 14..15: **not decoded.** `0x00a9` in every frame of the capture
-     *   while current and temperature move — a constant is what a version or
-     *   config word looks like, not the PWM this byte range is sometimes
-     *   claimed to hold. Asserting duty from it would be a guess, and duty
-     *   feeds the ШИМ alarm (spec §7.2): real or absent, never a placeholder.
+     * - bytes 14..15: WheelLog's FALLBACK hardware PWM (percent = raw × 0.1),
+     *   used only until a 0x07 frame proves a real one. **Deliberately not
+     *   decoded here.** It reads `0x00a9` = 169 in all 38 live frames of the
+     *   capture — a constant 16.9 % duty on a wheel that never moved — while
+     *   the 0x07 field of the same seconds reads 2 %. On this wheel the
+     *   fallback is not a duty at all, and duty must be real or absent
+     *   (spec §7.2). See [dutyPercent].
+     * - bytes 16..17: unknown, `0x0001` throughout the capture.
      */
     private fun parseLiveFrame(frame: ByteArray) {
         liveVoltageRaw = frame.u16BE(2)
         val speedRaw = frame.i16BE(4)
-        val tripMeters = tripMetersOf(frame)
+        val tripMeters = frame.u16BE(8).toLong()
         phaseCurrentA = frame.i16BE(10) * 0.01f
         boardTempC = frame.i16BE(12) / 340f + 36.53f
         // Motion takes the same genuineness gate as the synthetic pack below:
@@ -433,53 +540,62 @@ class BegodeProtocol : BmsProtocol() {
     }
 
     /**
-     * Trip distance in metres from the live frame's bytes 6..9, which are a
-     * 32-bit value with its two 16-bit words in the WRONG order for a naive
-     * big-endian read: **high word at 8..9, low word at 6..7**, big-endian
-     * inside each word.
+     * Lifetime odometer (0x04): u32 big-endian at bytes 2..5, metres — the
+     * word order WheelLog's parser uses. The capture reads `00 82 b2 5d` =
+     * 8 565 341 m = 8 565 km, constant across all 13 seconds, as a lifetime
+     * counter of a stationary wheel must be; a word-swapped read of the same
+     * bytes gives 2.99 million km, which is absurd rather than merely wrong.
+     * Neither check is a measurement — a wheel whose displayed odometer is
+     * known would confirm it outright.
      *
-     * The capture settles this, and it is the one motion field it does settle.
-     * Every live frame carries `00 3d 00 00`, and the three candidate readings
-     * are wildly apart:
-     *
-     * | reading | value |
-     * |---|---|
-     * | word-swapped (this one) | 61 m |
-     * | naive big-endian | 3 997 696 m = 3 998 km |
-     * | fully little-endian | 15 616 m |
-     *
-     * 61 m is the only one a wheel can produce in the first 13 seconds of a
-     * session (and the trip counter resets at power-on); 3 998 km is half the
-     * wheel's LIFETIME odometer — which the 0x04 frame reports separately as
-     * 8 565 km — and 15.6 km would mean a ride that had already happened
-     * before the capture's own trip counter started.
-     *
-     * The consequence of getting it wrong is silent: a trip of 3 998 km is
-     * still a plausible-looking number on a dashboard, so a test pins this
-     * against the naive reading rather than trusting the comment.
-     */
-    private fun tripMetersOf(frame: ByteArray): Long =
-        (frame.u16BE(8).toLong() shl 16) or frame.u16BE(6).toLong()
-
-    /**
-     * Lifetime odometer (0x04): u32 big-endian at bytes 2..5, metres. The
-     * capture reads `00 82 b2 5d` = 8 565 341 m = 8 565 km, constant across
-     * all 13 seconds, as a lifetime counter of a stationary wheel must be.
-     *
-     * Unlike the trip field this word order is NOT proven by the capture — a
-     * word-swapped read of the same bytes gives 2 992 439 426 m (2.99 million
-     * km), which is absurd rather than merely wrong, so the plain big-endian
-     * reading is the only one whose magnitude is possible. That is weaker
-     * evidence than the trip field's: it rules out one alternative by
-     * plausibility, it does not measure anything. A wheel whose displayed
-     * odometer is known would confirm it outright.
-     *
-     * The rest of the frame (pedal mode, alarms, miles/km, tiltback settings)
-     * is deliberately not decoded: Volty never writes settings to a wheel.
+     * The REST of this frame is left alone on purpose, and it is not empty:
+     * bytes 6..7 pack pedal mode, speed alarms, roll angle and an in-miles
+     * flag; 8..9 the power-off timer; 10..11 the tiltback speed (the capture
+     * reads 200, which WheelLog treats as "unset"); byte 14 is an alert bitmap
+     * — speed alarm x2, low voltage, over voltage, over temperature,
+     * hall-sensor error, transport mode — and reads 0 here, i.e. no faults.
+     * That bitmap is a real `ControllerData.faults` source for a later task;
+     * it is recorded rather than decoded so that task starts from a fact.
      */
     private fun parseOdometerFrame(frame: ByteArray) {
         odometerMetersValue = frame.u32BE(2)
         sawOdometer = true
+    }
+
+    /**
+     * Motion telemetry (0x07) — the frame this protocol used to drop:
+     *
+     * ```
+     * 55 aa | 00 43 | 00 01 | 00 14 | 00 02 | 00 00 00 00 00 00 00 00 | 07 | 18 | 5a5a5a5a
+     *  hdr   bat cur    ?     mot t    duty            zero            type
+     * ```
+     *
+     * (a real frame of the ET Max capture)
+     *
+     * - bytes 2..3 signed BE: battery current, 0.01 A, **negated** — see
+     *   [batteryCurrentA]. `0x0043` = 67 → −0.67 A.
+     * - bytes 4..5: unknown, `0x0001` throughout the capture.
+     * - bytes 6..7 signed BE: motor temperature in whole °C — see
+     *   [motorTempC]. `0x0014` = 20 °C.
+     * - bytes 8..9 signed BE: hardware duty in whole percent — see
+     *   [dutyPercent]. `0x0002` = 2 %.
+     * - bytes 10..17: zero throughout the capture.
+     *
+     * The scales are WheelLog's, read off its source rather than guessed: it
+     * stores current in 0.01 A, temperature in 0.01 °C and PWM as
+     * `output / 10000` of full scale, and multiplies this frame's three fields
+     * by 1, 100 and 100 respectively on the way in.
+     */
+    private fun parseMotionFrame(frame: ByteArray) {
+        batteryCurrentAValue = -frame.i16BE(2) * BATTERY_CURRENT_A_PER_UNIT
+        motorTempCValue = frame.i16BE(6).toFloat()
+        val dutyRaw = frame.i16BE(8)
+        // WheelLog's truePWM latch: one non-zero reading is what proves the
+        // firmware fills this field in at all. Before that a zero is not a
+        // measurement of zero duty.
+        if (dutyRaw != 0) sawTrueDuty = true
+        dutyPercentValue = dutyRaw.toFloat()
+        sawMotionFrame = true
     }
 
     /**
@@ -653,29 +769,42 @@ class BegodeProtocol : BmsProtocol() {
             voltageOn672ScaleV * (cellCount * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V)
 
         /**
-         * Km/h per unit of the live frame's signed speed field (bytes 4..5).
+         * Km/h per unit of the live frame's signed speed field (bytes 4..5) —
+         * the raw unit is cm/s.
          *
-         * **UNVERIFIED — this is the one constant in this file that no capture
-         * backs.** Begode/Gotway is commonly documented as reporting speed in
-         * hundredths of km/h, which is what 0.01 encodes. The ET Max capture
-         * cannot confirm it and never will: bytes 4..5 read `00 00` in every
-         * live frame of it, because those are 13 seconds of a wheel standing
-         * still. The tests therefore pin the field's OFFSET and its SIGNEDNESS
-         * with synthetic frames, and pin this scale only to itself.
+         * Taken from WheelLog's source, not guessed: `GotwayAdapter` converts
+         * this field as `round(raw * 3.6)` into a speed field whose unit is
+         * hundredths of km/h (`RIDING_SPEED = 200 // 2km/h`, and a debug line
+         * setting the same field to `50_00` for 50 km/h), i.e.
+         * `km/h = raw * 3.6 / 100`. WheelLog's own frame-layout comment states
+         * the same thing in words: *"BE speed, fixed point, 3.6 * value / 100
+         * km/h"*. Two independent statements in one file agreeing on 0.036.
          *
-         * A competing scale exists and differs by 3.6x: WheelLog's
-         * `GotwayAdapter` is reported to convert the same field as
-         * `raw * 3.6 / 100` (i.e. the raw unit is cm/s, 0.036 km/h per unit).
-         * That source is not available in this repository and the claim is
-         * second-hand, so it is recorded rather than adopted — but if it is
-         * right, every speed here reads 3.6x LOW.
+         * **Still unconfirmed by any capture of THIS wheel**, and that gap
+         * cannot be closed here: bytes 4..5 read `00 00` in all 38 live frames
+         * of the ET Max capture, which is 13 seconds of a wheel standing
+         * still. So the tests pin the field's OFFSET and SIGNEDNESS with
+         * synthetic frames and the scale against WheelLog's documented one;
+         * what they cannot do is catch a firmware that disagrees with
+         * WheelLog.
          *
-         * **What would verify it:** one `:dumper` capture of a moving wheel
-         * next to a known reference speed (GPS, or the wheel's own app). The
-         * two candidates are 3.6x apart, so a single frame at any real riding
-         * speed settles it — no precision needed.
+         * **What would close it:** one `:dumper` capture of a moving wheel
+         * beside a known reference speed (GPS, or the wheel's own app).
+         *
+         * (History, because it nearly shipped: this constant was 0.01 for one
+         * commit — "hundredths of km/h" from memory rather than from source —
+         * which reads 3.6x LOW, and a correction to 0.36 was proposed, which
+         * reads 10x HIGH. The source settles it at 0.036.)
          */
-        private const val SPEED_KMH_PER_UNIT = 0.01f
+        private const val SPEED_KMH_PER_UNIT = 0.036f
+
+        /**
+         * Amperes per unit of the 0x07 frame's signed battery-current field.
+         * WheelLog stores current in hundredths of an amp and passes this
+         * field through unscaled apart from a sign flip — see
+         * [batteryCurrentA].
+         */
+        private const val BATTERY_CURRENT_A_PER_UNIT = 0.01f
 
         /** Plausible battery temperature range, degrees Celsius. */
         private val TEMP_SANITY = -39..150
