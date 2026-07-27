@@ -158,3 +158,28 @@ a rendering for "unknown" that is visibly different from a real low reading.
 
 Part D deliberately did not widen this: its scope allowed exactly one new field on
 the shared `ControllerData`, and a dashboard-wide fix is not a Begode change.
+
+### 9.1 Consumption is the third field of this class (2026-07-27)
+
+Found in Part D Task 6. `RideMetrics.sessionWhPerKm` returns null only when
+`tripKm <= 0`, and a Begode reports no `consumedWh` — so the instant the trip
+counter moves, the fallback becomes a well-formed **`0.0 Wh/km`** rather than an
+absence. Classic's consumption dial prints `0.0` with the needle centred (its
+`—` override exists and is never reached), and **Clean's consumption card prints
+`avg 0.0 Wh/km` for the whole ride, on every Begode.**
+
+Same rule as §9: a value we have not observed is not a zero. Three fields now
+share it — duty, power, consumption — which is the argument for fixing the
+*rendering contract* once rather than patching gauges one at a time.
+
+### 9.2 Two Classic dials are unusable at a wheel's scale (2026-07-27)
+
+Also Part D Task 6. Classic's CURRENT dial floors at ±60 A and POWER at
+±10 000 W — VESC's own ranges (`B §14`). A wheel cruises at about 6 A and 571 W,
+so both needles sit inside the first tenth of scale and never visibly move. The
+dials are not wrong, they are scoped to a different machine.
+
+Part D deliberately did not change them unilaterally: the ranges are shared with
+every VESC vehicle. Whoever owns the dashboard should decide whether the range
+follows the vehicle — VESC derives its gauge ranges from `mcconf` (`B §14`),
+which is the same question one layer down.
