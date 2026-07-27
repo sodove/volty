@@ -129,3 +129,32 @@ equality on the entire object, because field-by-field assertions are exactly how
 this reached review three times. Keep that test through the rewrite, and note its
 one weakness — it is only as strong as its fixture, so a new field whose default
 the fixture never overrides still slips through.
+
+---
+
+## 9. Motion gauges render unknown values as confident zeros (2026-07-27)
+
+Found in Part D Task 4's review. Part F taught the *alarm* to distinguish "not
+measured" from "measured as zero"; the **dashboard** never learned it.
+
+`ControllerData` now carries `hasDuty`, `hasMotorTemp` and `hasEscTemp`. The
+temperature flags are honoured by the renderers, which blank the gauge and drop
+the severity band. `hasDuty` is not: `SecondaryGaugeMapper.kt:71-72` and
+`ClassicDialSpecs.kt:452-456` read `dutyPercent` and `DutyBands.level(…)` with no
+known-flag at all. So a Begode wheel whose firmware has never reported a PWM —
+the exact case the alarm now refuses to arm on — still shows a **confident 0 %**
+on the dial.
+
+The same shape exists for power. Task 4 wired the wheel's cell count so
+`inputVoltageV` is real, but when a scale is genuinely unavailable `powerW` is
+`0f`, and `RideDashboardScreen.kt:342` / `SecondaryGaugeMapper.kt:80-82` render
+it as **"0.0 kW"** while `RideMetrics.instantWhPerKm(0f, speed)` returns `0f`, so
+consumption reads **"0.0 Wh/km"** once moving. Neither is a blank or a dash.
+
+**Part G owns the dashboard, so it owns this.** The rule the renderers need is the
+one the alarm already follows: a value we have not observed is not a zero. That
+means a known-flag reaching every motion gauge — duty and power at minimum — and
+a rendering for "unknown" that is visibly different from a real low reading.
+
+Part D deliberately did not widen this: its scope allowed exactly one new field on
+the shared `ControllerData`, and a dashboard-wide fix is not a Begode change.
