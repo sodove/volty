@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
+import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.util.UnitSystem
@@ -56,8 +57,6 @@ data class SecondaryGaugeLabels(
  */
 object SecondaryGaugeMapper {
 
-    private const val MAX_CURRENT_A = 150f
-    private const val MAX_POWER_W = 8000f
     private const val MAX_WH_PER_KM = 50f
 
     /**
@@ -65,13 +64,23 @@ object SecondaryGaugeMapper {
      * app's unit setting) but is a deliberate no-op here: the imperial toggle only converts
      * speed and distance, and none of the seven [SecondaryGauge] metrics (%, kW, A, °C, Wh/km)
      * has an imperial form under the locked design — so this is not a forgotten conversion.
+     *
+     * [currentRangeA] / [powerRangeW] are `G §9.2`'s learned dial widths, and they are here rather
+     * than only on [ClassicDialSpecs] because BOTH renderers draw these two quantities. The rings
+     * that used to divide by a hardcoded 150 A / 8000 W had the same defect Classic's ±60 A / ±10 kW
+     * did: on a wheel cruising at 6 A the ring filled 4 % and never moved. A range that only one
+     * style honours is half a fix.
      */
     fun map(
         gauge: SecondaryGauge,
         motion: ControllerData,
         battery: BmsData,
         units: UnitSystem,
-        labels: SecondaryGaugeLabels = SecondaryGaugeLabels()
+        labels: SecondaryGaugeLabels = SecondaryGaugeLabels(),
+        /** The CURRENT ring's full-scale value in amps — a [GaugeScale.CURRENT_RUNGS_A] rung. */
+        currentRangeA: Float = GaugeScale.CURRENT_RUNGS_A.first(),
+        /** The POWER ring's full-scale value in watts — a [GaugeScale.POWER_RUNGS_W] rung. */
+        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first()
     ): SecondaryReadout = when (gauge) {
         SecondaryGauge.DUTY -> {
             // G §9: hasDuty used to be read nowhere in presentation/, so a wheel
@@ -94,12 +103,12 @@ object SecondaryGaugeMapper {
             val power = MotionReadings.powerW(motion)
             SecondaryReadout(
                 labels.power, power.readoutOr { formatFixed(it / 1000f, 1) }, "kW",
-                power?.let { frac(abs(it), MAX_POWER_W) } ?: 0f, DutyLevel.NORMAL
+                power?.let { frac(abs(it), powerRangeW) } ?: 0f, DutyLevel.NORMAL
             )
         }
         SecondaryGauge.CURRENT -> SecondaryReadout(
             labels.current, motion.batteryCurrentA.roundToInt().toString(), "A",
-            frac(abs(motion.batteryCurrentA), MAX_CURRENT_A), DutyLevel.NORMAL
+            frac(abs(motion.batteryCurrentA), currentRangeA), DutyLevel.NORMAL
         )
         SecondaryGauge.MOTOR_TEMP -> {
             val temp = MotionReadings.motorTempC(motion)

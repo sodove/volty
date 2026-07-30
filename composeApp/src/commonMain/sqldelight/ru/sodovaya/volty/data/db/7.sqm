@@ -1,0 +1,31 @@
+-- v7 -> v8: the learned widths of the CURRENT and POWER dials (Part G §9.2).
+--
+-- Classic's CURRENT dial floored at +-60 A and POWER at +-10 000 W, VESC's own
+-- RtDataSetup.qml defaults. A wheel cruises at ~6 A / ~571 W, so on an electric
+-- unicycle both needles lived in the first tenth of scale and never visibly
+-- moved. VESC Tool escapes this by rewriting both maxima from the motor config
+-- (l_current_max, l_watt_max) once GET_MCCONF answers; Volty cannot read one
+-- yet, and only one of the protocols it speaks has one at all. So the range is
+-- LEARNED from what the machine reports, and these two columns are where it
+-- lives between rides. See domain/stats/GaugeScale.kt.
+--
+-- REAL, because both are physical magnitudes the decoders already carry as
+-- floats, and quantising them to the rung ladder here would throw away the
+-- distinction the ladder itself needs (a peak that grows WITHIN a rung must be
+-- retained, or it could never cross into the next one).
+--
+-- NOT NULL DEFAULT 0 is the whole three-state question answered, and answered
+-- differently from dashboardStyle / yieldBmsToHeadUnit next door. Those two are
+-- nullable because "unset" is a strictly different statement from any value they
+-- can hold. Here it is not: a vehicle nobody has ridden and a vehicle that peaks
+-- at 0 A both correctly open on the narrowest rung, so zero IS the answer rather
+-- than the absence of one. DEFAULT 0 therefore reads history correctly too --
+-- every vehicle that existed before this migration has, by definition, been
+-- observed peaking at nothing, and each will learn its own scale over its next
+-- ride.
+--
+-- Not per-protocol and not asked of the rider, both deliberately: the same
+-- protocol drives a 250 A scooter and a 15 A wheel, and a current limit is a
+-- number most riders do not know. The machine reports it by being ridden.
+ALTER TABLE VehicleRow ADD COLUMN gaugePeakCurrentA REAL NOT NULL DEFAULT 0;
+ALTER TABLE VehicleRow ADD COLUMN gaugePeakPowerW REAL NOT NULL DEFAULT 0;

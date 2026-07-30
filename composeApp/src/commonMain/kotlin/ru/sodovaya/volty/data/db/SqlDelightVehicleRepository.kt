@@ -113,7 +113,13 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 // off writes zero level rows, exactly like a rider who has never
                 // opened the screen — and the two must not read back the same.
                 // See AlertLevelRow.sq / Vehicle.motionAlerts.
-                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L
+                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L,
+                // Zero is a value here, not an absence — see Vehicle.gaugePeakCurrentA
+                // and 7.sqm — so these two ride along on every upsert like any
+                // other NOT NULL column. `updateGaugePeaks` below is the hot path
+                // that avoids rewriting the child tables, not the only writer.
+                gaugePeakCurrentA = vehicle.gaugePeakCurrentA.toDouble(),
+                gaugePeakPowerW = vehicle.gaugePeakPowerW.toDouble()
             )
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
@@ -202,6 +208,23 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     override suspend fun touch(id: String) {
         queries.touch(now = Clock.System.now().toString(), id = id)
     }
+
+    /**
+     * Two columns, no children, no transaction — the same shape as [touch].
+     *
+     * Overrides [VehicleRepository.updateGaugePeaks]'s correct-but-heavy default
+     * (read, `copy`, full upsert) for the reason stated there: this runs while the
+     * rider is riding, and the default would replay the caller's snapshot of the
+     * pack/controller/alert tables. A single UPDATE also needs no transaction —
+     * there is no second statement for a crash to land between.
+     */
+    override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
+        queries.updateGaugePeaks(
+            gaugePeakCurrentA = currentA.toDouble(),
+            gaugePeakPowerW = powerW.toDouble(),
+            id = id
+        )
+    }
 }
 
 @OptIn(ExperimentalTime::class)
@@ -265,7 +288,13 @@ private fun VehicleRow.toDomain(
     // Null — "never configured, use AlarmDefaults" — comes from the column, NOT
     // from the row list being empty. `motionAlertsConfigured = 1` with no rows
     // is a rider who switched everything off, and stays off.
-    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null
+    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null,
+    // No `runCatching` and no null-coalesce: the columns are NOT NULL DEFAULT 0
+    // and zero is a legitimate reading. A hostile file could still hand back a
+    // NaN or an infinity, which is why PeakTracker.seededAt — the one consumer —
+    // treats a non-finite seed as "nothing learned" rather than trusting it.
+    gaugePeakCurrentA = gaugePeakCurrentA.toFloat(),
+    gaugePeakPowerW = gaugePeakPowerW.toFloat()
 )
 
 /**

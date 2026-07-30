@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.stats.DutyLevel
+import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.presentation.ride.gauge.VescGaugeRange
 import ru.sodovaya.volty.util.UnitSystem
@@ -36,9 +37,14 @@ class ClassicDialSpecsTest {
         b: BmsData = battery,
         u: UnitSystem = UnitSystem.METRIC,
         maxKmh: Float = 70f,
-        maxCurrentA: Float = 0f,
-        maxPowerW: Float = 0f
-    ) = ClassicDialSpecs.build(m, b, u, maxKmh, maxCurrentA = maxCurrentA, maxPowerW = maxPowerW)
+        // VESC's own -60/+60 A and -10000/+10000 W (QML :77-78, :108-109) are BOTH rungs on
+        // G §9.2's ladders, so the QML-parity assertions below keep asserting exactly the face VESC
+        // draws — they just have to name the rung now instead of relying on a floor. That the two
+        // numbers survived the change to a learned range is the point, not a coincidence: a rider
+        // whose vehicle has taught the dial 60 A must still see the dial VESC would have drawn.
+        currentRangeA: Float = 60f,
+        powerRangeW: Float = 10_000f
+    ) = ClassicDialSpecs.build(m, b, u, maxKmh, currentRangeA = currentRangeA, powerRangeW = powerRangeW)
         .associateBy { it.slot }
 
     private fun spec(slot: VescClusterSlot, u: UnitSystem = UnitSystem.METRIC) = specs(u = u).getValue(slot)
@@ -228,125 +234,183 @@ class ClassicDialSpecsTest {
         assertTrue(range.hasTickmarks)
     }
 
-    // --- Current and Power's session auto-scale (§14's "Now" divergence from the port) ---------
+    // --- Current and Power's LEARNED range (G §9.2) ----------------------------------------------
     //
     // VESC derives these two ranges from the connected controller's motor config (`l_current_max`,
     // `l_watt_max`) times `num_vescs`; Volty cannot read that yet (needs COMM_GET_MCCONF, deferred
-    // to Part C — B-vesc-dashboard.md §14), so it grows the scale from the largest ABSOLUTE reading
-    // the session has actually shown instead, floored at VESC's own defaults so a quiet ride still
-    // looks like the familiar port.
+    // to Part C — B-vesc-dashboard.md §14). The interim answer used to be a session peak floored at
+    // VESC's own defaults, which is exactly what made a wheel unreadable: 6 A on a +-60 A ring.
+    // The range now arrives as a GaugeScale rung, learned per vehicle. What this file still owns is
+    // the ring's LABELLING at each rung — and, below, that the floors are gone.
 
-    /** A quiet ride (no args -> `0f`) must look exactly like the un-scaled port always has. */
-    @Test fun current_and_power_floor_at_VESCs_own_defaults_when_nothing_has_been_seen() {
-        val current = spec(VescClusterSlot.CURRENT).range
-        assertEquals(-60.0, current.minimumValue, 1e-9)
-        assertEquals(60.0, current.maximumValue, 1e-9)
-        assertEquals(10.0, current.labelStep, 1e-9)
+    /**
+     * **The reported defect, as a number.** An unridden vehicle takes `build`'s own defaults, and
+     * those must be the ladders' narrowest rungs — not VESC's +-60 A / +-10 kW, which is what made
+     * an electric unicycle's two needles sit in the first tenth of scale forever.
+     *
+     * Asserted against [GaugeScale]'s ladder rather than against literals, so a re-ordered ladder
+     * cannot leave this test passing while the dial opens somewhere else.
+     */
+    @Test fun an_unridden_vehicle_opens_both_dials_on_the_narrowest_rung() {
+        val built = ClassicDialSpecs.build(motion, battery, UnitSystem.METRIC, 70f).associateBy { it.slot }
 
-        val power = spec(VescClusterSlot.POWER).range
-        assertEquals(-10000.0, power.minimumValue, 1e-9)
-        assertEquals(10000.0, power.maximumValue, 1e-9)
-        assertEquals(2000.0, power.labelStep, 1e-9)
-    }
+        val current = built.getValue(VescClusterSlot.CURRENT).range
+        assertEquals(GaugeScale.CURRENT_RUNGS_A.first().toDouble(), current.maximumValue, 1e-9)
+        assertEquals(10.0, current.maximumValue, 1e-9, "the ladder's first current rung is 10 A")
+        assertTrue(current.maximumValue < 60.0, "VESC's 60 A floor is the defect and must be gone")
 
-    /** A session reading well under the floor must not shrink the dial below it. */
-    @Test fun current_and_power_never_shrink_below_VESCs_floor_for_a_small_session_reading() {
-        val current = specs(maxCurrentA = 5f).getValue(VescClusterSlot.CURRENT).range
-        assertEquals(60.0, current.maximumValue, 1e-9)
-
-        val power = specs(maxPowerW = 500f).getValue(VescClusterSlot.POWER).range
-        assertEquals(10000.0, power.maximumValue, 1e-9)
+        val power = built.getValue(VescClusterSlot.POWER).range
+        assertEquals(GaugeScale.POWER_RUNGS_W.first().toDouble(), power.maximumValue, 1e-9)
+        assertEquals(500.0, power.maximumValue, 1e-9, "the ladder's first power rung is 500 W")
+        assertTrue(power.maximumValue < 10_000.0, "VESC's 10 kW floor is the defect and must be gone")
     }
 
     /**
-     * The product owner's actual scooter: two uBox 250 A controllers. A session peak north of the
-     * 60 A / 10000 W floor must grow the dial to cover it, not peg at the floor and stay there.
+     * The same defect from the rider's side: the brief's own wheel — cruising ~6 A and ~571 W —
+     * must move both needles across a visible part of the dial.
+     *
+     * The rungs those peaks learn (10 A, 1000 W) put the needle at 60 % and 57 % of scale. On VESC's
+     * old floors the same readings were 10 % and 5.7 %, and the comparison is asserted here too, so
+     * this test cannot be satisfied by a range that merely *changed*.
      */
-    @Test fun current_and_power_grow_to_cover_a_reading_the_floor_does_not_reach() {
-        val current = specs(maxCurrentA = 251f).getValue(VescClusterSlot.CURRENT).range
-        assertEquals(260.0, current.maximumValue, 1e-9) // ceil(251/10)*10
-        assertTrue(current.maximumValue >= 251.0, "the scale must cover the real session peak")
+    @Test fun a_wheels_cruise_moves_both_needles_across_a_visible_part_of_the_scale() {
+        val cruiseA = 6f
+        val cruiseW = 571f
+        val built = ClassicDialSpecs.build(
+            motion.copy(batteryCurrentA = cruiseA, powerW = cruiseW), battery, UnitSystem.METRIC, 70f,
+            currentRangeA = GaugeScale.currentDisplayRungA(cruiseA, cruiseA),
+            powerRangeW = GaugeScale.powerDisplayRungW(cruiseW, cruiseW)
+        ).associateBy { it.slot }
 
-        val power = specs(maxPowerW = 40200f).getValue(VescClusterSlot.POWER).range
-        assertEquals(41000.0, power.maximumValue, 1e-9) // ceil(40200/1000)*1000
-        assertTrue(power.maximumValue >= 40200.0)
-    }
-
-    /** Both dials are bipolar: whatever the session grows the max to, the range stays symmetric. */
-    @Test fun current_and_power_stay_symmetric_around_zero_at_every_auto_scaled_maximum() {
-        listOf(0f, 55f, 251f, 505f).forEach { maxA ->
-            val range = specs(maxCurrentA = maxA).getValue(VescClusterSlot.CURRENT).range
-            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "current maxA=$maxA")
-        }
-        listOf(0f, 9500f, 40200f).forEach { maxW ->
-            val range = specs(maxPowerW = maxW).getValue(VescClusterSlot.POWER).range
-            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "power maxW=$maxW")
-        }
+        val currentFraction = cruiseA / built.getValue(VescClusterSlot.CURRENT).range.maximumValue
+        val powerFraction = cruiseW / built.getValue(VescClusterSlot.POWER).range.maximumValue
+        assertTrue(currentFraction > 0.4, "a wheel's cruise current fills only $currentFraction of the dial")
+        assertTrue(powerFraction > 0.4, "a wheel's cruise power fills only $powerFraction of the dial")
+        // What it used to be, for contrast — and so a regression to any wide fixed floor fails here.
+        assertTrue(cruiseA / 60.0 < 0.15)
+        assertTrue(cruiseW / 10_000.0 < 0.15)
     }
 
     /**
-     * The real discriminating check: [tenOrTwentyLabelStep]/[powerLabelStep]'s chosen step must
-     * divide the (symmetric) span `max - min` exactly at every auto-scaled maximum this session can
-     * produce, or the ring goes ragged — the same shipped-twice defect `assertRoundTicks` above
-     * guards for the hero. None of the maxima below are already round multiples of the label step
-     * on their own, which is the point: the snapping in `currentDisplayMax`/`powerDisplayMax` is
-     * what has to make them round, not luck.
+     * **The discriminating structural test: EVERY rung of both ladders must label a readable ring.**
+     *
+     * Two ways a rung can be unreadable, and the ladder introduced both. `VescGaugeRange` spaces its
+     * majors by `span / (tickmarkCount - 1)` rather than by `labelStep`, so a step that does not
+     * divide the span exactly gives fractional tick numbers (the ragged ring the hero tests
+     * document). And a step that divides but is too coarse gives a bipolar ring labelled only
+     * `-max, 0, +max` — the QML's own 10 A step on the 10 A rung does exactly that, which is why
+     * `ClassicDialSpecs.currentLabelStep` has a fallback list behind the QML's rule.
+     *
+     * Run over the ladders themselves, not a hand-picked list, so a rung added tomorrow is covered.
      */
-    /**
-     * Extended past the tick cap (task-7, Fix 1): 990/1000/5000 A straddle the exact point where
-     * `VescGaugeRange`'s own `min(100, …)` tick-count cap starts overriding the label-step division
-     * — 990 A is the LAST round one (natural count is exactly 100, so the cap has nothing to clip),
-     * 1000 A is the first one that would have gone ragged (natural count 101, capped to 100,
-     * `tickmarkSectionValue = 2000/99 = 20.2…`) had `currentDisplayMax` not ceilinged the scale at
-     * 990. Every value at or above 990 must therefore clamp to 990 and stay round.
-     */
-    @Test fun current_tick_labels_stay_round_at_several_auto_scaled_maxima() {
-        listOf(0f, 5f, 55f, 65f, 251f, 505f, 990f, 991f, 1000f, 5000f, 50_000f).forEach { maxA ->
-            assertRoundTickLabels(specs(maxCurrentA = maxA).getValue(VescClusterSlot.CURRENT).range, "current maxA=$maxA")
-        }
-    }
-
-    /** Power's half of the same coverage — 99000 W is the ceiling, 100000 W the first ragged value it now clamps away. */
-    @Test fun power_tick_labels_stay_round_at_several_auto_scaled_maxima() {
-        listOf(0f, 500f, 9500f, 12500f, 40200f, 99_000f, 99_001f, 100_000f, 1_000_000f).forEach { maxW ->
-            assertRoundTickLabels(specs(maxPowerW = maxW).getValue(VescClusterSlot.POWER).range, "power maxW=$maxW")
+    @Test fun every_current_rung_labels_a_round_ring_with_at_least_five_majors() {
+        GaugeScale.CURRENT_RUNGS_A.forEach { rung ->
+            val range = specs(currentRangeA = rung).getValue(VescClusterSlot.CURRENT).range
+            assertRoundTickLabels(range, "current rung=$rung")
+            assertTrue(range.tickmarkCount >= 5, "current rung=$rung has only ${range.tickmarkCount} majors")
+            assertTrue(
+                range.tickmarkCount <= VescGaugeRange.MAX_TICKMARK_COUNT,
+                "current rung=$rung would be clipped by the tick cap"
+            )
         }
     }
 
-    // --- the ceiling itself (task-7, Fix 1): a session reading has no upper bound the way a real ---
-    // --- vehicle's speed does, so nothing before this stopped it walking into the tick-count cap ---
-
-    /**
-     * The exact boundary, derived the same way `ClassicDialSpecs.tickCapCeiling` derives it:
-     * `(VescGaugeRange.MAX_TICKMARK_COUNT - 1) * snapStep` = `99 * 10` = 990 A / `99 * 1000` =
-     * 99000 W. Pinned directly against `VescGaugeRange.tickmarkCount`/`tickmarkSectionValue` so a
-     * future change to the tick cap or either snap step is forced to re-derive this number rather
-     * than let it drift.
-     */
-    @Test fun the_auto_scale_ceiling_sits_exactly_where_the_tick_cap_would_start_ragging_the_ring() {
-        assertEquals(990.0, ClassicDialSpecs.currentDisplayMax(990f), 1e-9)
-        val atCeiling = specs(maxCurrentA = 990f).getValue(VescClusterSlot.CURRENT).range
-        // The NATURAL count, computed independently of VescGaugeRange.tickmarkCount's own
-        // min(cap, natural) — tickmarkCount alone cannot prove the natural count didn't exceed the
-        // cap, since it is defined to hide exactly that (task-7 review, Minor 3).
-        val naturalCount = floor((atCeiling.maximumValue - atCeiling.minimumValue) / atCeiling.labelStep + 1.0).toInt()
-        assertEquals(100, naturalCount, "natural count (uncapped) must equal the cap exactly, not exceed it")
-        assertEquals(100, atCeiling.tickmarkCount)
-        assertEquals(20.0, atCeiling.tickmarkSectionValue, 1e-9)
-
-        assertEquals(99_000.0, ClassicDialSpecs.powerDisplayMax(99_000f), 1e-9)
-        val powerAtCeiling = specs(maxPowerW = 99_000f).getValue(VescClusterSlot.POWER).range
-        val powerNaturalCount =
-            floor((powerAtCeiling.maximumValue - powerAtCeiling.minimumValue) / powerAtCeiling.labelStep + 1.0).toInt()
-        assertEquals(100, powerNaturalCount, "natural count (uncapped) must equal the cap exactly, not exceed it")
-        assertEquals(100, powerAtCeiling.tickmarkCount)
-        assertEquals(2000.0, powerAtCeiling.tickmarkSectionValue, 1e-9)
+    @Test fun every_power_rung_labels_a_round_ring_with_at_least_five_majors() {
+        GaugeScale.POWER_RUNGS_W.forEach { rung ->
+            val range = specs(powerRangeW = rung).getValue(VescClusterSlot.POWER).range
+            assertRoundTickLabels(range, "power rung=$rung")
+            assertTrue(range.tickmarkCount >= 5, "power rung=$rung has only ${range.tickmarkCount} majors")
+            assertTrue(
+                range.tickmarkCount <= VescGaugeRange.MAX_TICKMARK_COUNT,
+                "power rung=$rung would be clipped by the tick cap"
+            )
+        }
     }
 
     /**
-     * The hero's own version of the boundary test above. `heroDisplayMax` shares [tickCapCeiling]
-     * with Current/Power (990, in DISPLAY units — km/h or mph, since [HERO_SNAP_STEP] is the same
-     * 10 either way), but the hero's range is unipolar (`span = max`, not `2 * max`) and
+     * **The label-step machinery must work for a maximum that is NOT one of today's rungs.**
+     *
+     * Found by mutation sweep: with only the nine rungs under test, the "step divides the span
+     * exactly" half of `usableBipolarStep` was unkillable — every rung happens to reject its
+     * non-dividing candidates on the tick-COUNT check instead, so deleting the divisibility test
+     * changed no answer. That made a real guard indistinguishable from its absence, and it would have
+     * stayed that way until the first caller passed something else: `build` takes a plain `Float`,
+     * `currentLabelStep`/`powerLabelStep` are public, `GET_MCCONF` will one day seed a controller's
+     * own `l_current_max`, and the brief asks for a mechanism general enough for Speed to join.
+     *
+     * 125 A is the discriminating case. Its span is 250 A; the QML's own step of 20 gives 13 majors —
+     * enough to pass the count check — but does not divide 250, so `VescGaugeRange` would space the
+     * majors by `250 / 12 = 20.83…` and label the ring `-125, -104.17, -83.33, …`. Only rejecting the
+     * step for not dividing gets to 50, which does. 7500 W is power's twin (its span of 15 000 passes
+     * the count check on a step of 2000 but is not a multiple of it).
+     */
+    @Test fun the_label_step_machinery_stays_round_for_a_maximum_that_is_not_a_rung() {
+        assertEquals(50.0, ClassicDialSpecs.currentLabelStep(125.0), 1e-9)
+        assertEquals(1000.0, ClassicDialSpecs.powerLabelStep(7500.0), 1e-9)
+
+        listOf(45f, 90f, 125f, 250f).forEach { maxA ->
+            assertRoundTickLabels(specs(currentRangeA = maxA).getValue(VescClusterSlot.CURRENT).range, "current max=$maxA")
+        }
+        listOf(4500f, 7500f, 15_000f, 25_000f).forEach { maxW ->
+            assertRoundTickLabels(specs(powerRangeW = maxW).getValue(VescClusterSlot.POWER).range, "power max=$maxW")
+        }
+    }
+
+    /** Both dials are bipolar at every rung — regen must grow the scale exactly as much as drive. */
+    @Test fun both_dials_stay_symmetric_around_zero_at_every_rung() {
+        GaugeScale.CURRENT_RUNGS_A.forEach { rung ->
+            val range = specs(currentRangeA = rung).getValue(VescClusterSlot.CURRENT).range
+            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "current rung=$rung")
+            assertEquals(rung.toDouble(), range.maximumValue, 1e-9, "current rung=$rung")
+        }
+        GaugeScale.POWER_RUNGS_W.forEach { rung ->
+            val range = specs(powerRangeW = rung).getValue(VescClusterSlot.POWER).range
+            assertEquals(-range.maximumValue, range.minimumValue, 1e-9, "power rung=$rung")
+            assertEquals(rung.toDouble(), range.maximumValue, 1e-9, "power rung=$rung")
+        }
+    }
+
+    /**
+     * The POWER ring's tick numbers are rendered with `precision = 0` (QML :310's `.toFixed(0)`,
+     * faithfully ported in `VescDialGauge.drawVescTickLabels`), so a ring that is not a whole number
+     * of kilowatts *cannot* be labelled in kilowatts: the 500 W rung would print
+     * `-1k, -0k, 0k, 0k, 1k`. The two narrowest rungs therefore label in plain watts.
+     *
+     * Pinned on the PRINTED strings, the way the ten-kilowatt test above is, rather than on the two
+     * properties — the failure this prevents is a wrong label, not a wrong field.
+     */
+    @Test fun the_two_narrowest_power_rungs_label_their_ticks_in_watts_not_kilowatts() {
+        val fiveHundred = specs(powerRangeW = 500f).getValue(VescClusterSlot.POWER)
+        assertEquals(1.0, fiveHundred.tickmarkScale, 1e-12)
+        assertEquals("", fiveHundred.tickmarkSuffix)
+        assertEquals(listOf("-500", "-250", "0", "250", "500"), printedTicks(fiveHundred))
+
+        val oneKilowatt = specs(powerRangeW = 1000f).getValue(VescClusterSlot.POWER)
+        assertEquals(listOf("-1000", "-500", "0", "500", "1000"), printedTicks(oneKilowatt))
+
+        // And from 2000 W up the kilowatt labelling of the port is back, unconditionally.
+        GaugeScale.POWER_RUNGS_W.filter { it >= 2000f }.forEach { rung ->
+            val spec = specs(powerRangeW = rung).getValue(VescClusterSlot.POWER)
+            assertEquals(0.001, spec.tickmarkScale, 1e-12, "power rung=$rung")
+            assertEquals("k", spec.tickmarkSuffix, "power rung=$rung")
+            printedTicks(spec).forEach { label ->
+                assertTrue(label.endsWith("k"), "power rung=$rung printed $label")
+            }
+        }
+    }
+
+    /** Exactly what the renderer prints for each major tick (QML :310). */
+    private fun printedTicks(spec: VescDialSpec): List<String> =
+        (0 until spec.range.tickmarkCount).map { i ->
+            (spec.range.tickmarkValueFromIndex(i) * spec.tickmarkScale).roundToInt().toString() + spec.tickmarkSuffix
+        }
+
+    /**
+     * The hero is now the only dial with an unbounded runtime scale, so [tickCapCeiling] is its
+     * alone — G §9.2's rung ladders cap Current and Power by construction, their top rungs (500 A,
+     * 50 kW) sitting well inside the tick cap. The ceiling is 990 in DISPLAY units (km/h or mph,
+     * since [HERO_SNAP_STEP] is the same 10 either way). The hero's range is unipolar
+     * (`span = max`, not `2 * max`) and
      * [ClassicDialSpecs.heroLabelStep] can fall back all the way to [HERO_SNAP_STEP] itself, so the
      * value that actually goes ragged pre-fix is not simply "one [HERO_SNAP_STEP] above 990":
      * 1000 km/h still resolves to labelStep 20 (1000 is a multiple of 20) and stays round with
@@ -374,30 +438,6 @@ class ClassicDialSpecsTest {
         assertRoundTickLabels(specs(maxKmh = 1010f).getValue(VescClusterSlot.SPEED).range, "hero maxKmh=1010 (clamped)")
         assertEquals(990f, ClassicDialSpecs.heroDisplayMax(2000f, UnitSystem.METRIC), 1e-6f)
         assertRoundTickLabels(specs(maxKmh = 2000f).getValue(VescClusterSlot.SPEED).range, "hero maxKmh=2000 (clamped)")
-    }
-
-    /**
-     * The actual defect this fixes: before the ceiling existed, `currentDisplayMax`/`powerDisplayMax`
-     * grew without bound, so a single spurious sample (a bad decode reporting thousands of amps)
-     * left the rider with a scale pegged at that spurious value — and, above ~991 A / 99 kW, a
-     * RAGGED one (see the round-label test above). Now no session reading, however extreme, can
-     * grow the display max past the ceiling.
-     */
-    @Test fun current_and_power_never_grow_past_the_ceiling_for_an_extreme_or_spurious_reading() {
-        listOf(991f, 1000f, 5000f, 50_000f, 5_000_000f).forEach { maxA ->
-            assertEquals(990.0, ClassicDialSpecs.currentDisplayMax(maxA), 1e-9, "current maxA=$maxA")
-        }
-        listOf(99_001f, 100_000f, 1_000_000f, 100_000_000f).forEach { maxW ->
-            assertEquals(99_000.0, ClassicDialSpecs.powerDisplayMax(maxW), 1e-9, "power maxW=$maxW")
-        }
-    }
-
-    /** Feeding a growing sequence of session peaks must never produce a smaller display max. */
-    @Test fun the_current_and_power_maxima_never_decrease_as_the_session_reading_grows() {
-        val currentMaxima = listOf(10f, 55f, 65f, 200f, 251f, 505f).map { ClassicDialSpecs.currentDisplayMax(it) }
-        assertEquals(currentMaxima, currentMaxima.sorted())
-        val powerMaxima = listOf(1000f, 9500f, 12500f, 40200f).map { ClassicDialSpecs.powerDisplayMax(it) }
-        assertEquals(powerMaxima, powerMaxima.sorted())
     }
 
     /** Shared by the two round-label tests above: whole-number labels, one consistent step. */

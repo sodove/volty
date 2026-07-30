@@ -28,7 +28,12 @@ CREATE TABLE VehicleRow (
     -- AlarmDefaults apply; 1 = yes, so AlertLevelRow is the whole truth even
     -- when it holds no rows for this vehicle (= every kind switched off).
     -- Not inferable from AlertLevelRow being empty — see 6.sqm.
-    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0
+    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0,
+    -- The learned widths of the CURRENT and POWER dials (G §9.2), in amps and
+    -- watts. NOT NULL DEFAULT 0 because zero IS the answer for a vehicle nobody
+    -- has ridden — see Vehicle.gaugePeakCurrentA and 7.sqm.
+    gaugePeakCurrentA        REAL NOT NULL DEFAULT 0,
+    gaugePeakPowerW          REAL NOT NULL DEFAULT 0
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -44,12 +49,12 @@ INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
-    yieldBmsToHeadUnit, motionAlertsConfigured
+    yieldBmsToHeadUnit, motionAlertsConfigured, gaugePeakCurrentA, gaugePeakPowerW
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
-    :yieldBmsToHeadUnit, :motionAlertsConfigured
+    :yieldBmsToHeadUnit, :motionAlertsConfigured, :gaugePeakCurrentA, :gaugePeakPowerW
 );
 
 delete:
@@ -57,3 +62,14 @@ DELETE FROM VehicleRow WHERE id = :id;
 
 touch:
 UPDATE VehicleRow SET lastConnectedAt = :now WHERE id = :id;
+
+-- Two columns, no children — the same shape as `touch` and for the same reason.
+-- The ride dashboard writes the learned dial widths while the rider is riding,
+-- from a Vehicle snapshot that may be minutes old; a full `upsert` would replay
+-- that snapshot's packs, controllers and alert levels over rows the connection
+-- itself may have moved underneath it (KableBmsRepository.maybePersistPacks
+-- appends a Begode's second branch mid-ride). A targeted UPDATE cannot.
+updateGaugePeaks:
+UPDATE VehicleRow
+SET gaugePeakCurrentA = :gaugePeakCurrentA, gaugePeakPowerW = :gaugePeakPowerW
+WHERE id = :id;

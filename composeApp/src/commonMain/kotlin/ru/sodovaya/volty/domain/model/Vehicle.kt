@@ -59,7 +59,27 @@ data class Vehicle(
      * the storage layer can make; nothing inside
      * [AlertRule][ru.sodovaya.volty.domain.alert.AlertRule] knows about it.
      */
-    val motionAlerts: List<AlertRule>? = null
+    val motionAlerts: List<AlertRule>? = null,
+    /**
+     * The largest battery current this vehicle has ever been *observed* pulling,
+     * in amps — the learned width of the CURRENT dial (`G §9.2`).
+     *
+     * **Zero is the honest seed, not a missing value**, which is why this is a
+     * plain `Float` and not a nullable the way [dashboardStyle] is: "nobody has
+     * ridden this yet" and "this vehicle peaks at 0 A" are the same statement,
+     * and both correctly open the dial on
+     * [GaugeScale.CURRENT_RUNGS_A][ru.sodovaya.volty.domain.stats.GaugeScale.CURRENT_RUNGS_A]'s
+     * first rung. There is no third state to keep room for.
+     *
+     * Written by the ride dashboard, and only when the *rung* it resolves to
+     * changes — so this is a handful of writes over a vehicle's life rather than
+     * one per BLE notification. Cleared by the composer when the controller set
+     * changes, because it describes hardware
+     * ([GaugeScale.peaksStillApply][ru.sodovaya.volty.domain.stats.GaugeScale.peaksStillApply]).
+     */
+    val gaugePeakCurrentA: Float = 0f,
+    /** The learned width of the POWER dial, in watts. See [gaugePeakCurrentA]. */
+    val gaugePeakPowerW: Float = 0f
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }

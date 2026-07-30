@@ -76,6 +76,55 @@ class SecondaryGaugeMapperTest {
         assertEquals(0f, r.fraction)
     }
 
+    // --- G §9.2: the CURRENT and POWER rings follow the vehicle, on THIS renderer too -------------
+
+    /**
+     * **"A range that only Classic honours is half a fix."** The Clean hero's inner ring divided
+     * `abs(current)` by a hardcoded 150 A and `abs(power)` by 8000 W, which put a wheel's 6 A / 571 W
+     * cruise at 4 % and 7 % of the ring — the same unreadable state Classic's ±60 A / ±10 kW dials
+     * were reported for.
+     *
+     * Both halves are asserted: the old hardcoded divisors would fail the first two assertions, and
+     * an implementation that ignored the parameter entirely would fail all four.
+     */
+    @Test fun the_current_and_power_rings_divide_by_the_learned_range() {
+        val wheel = motion.copy(batteryCurrentA = 6f, powerW = 571f)
+
+        val current = SecondaryGaugeMapper.map(
+            SecondaryGauge.CURRENT, wheel, battery, UnitSystem.METRIC, currentRangeA = 10f
+        )
+        assertTrue(abs(current.fraction - 0.6f) < 0.01f, "current ring read ${current.fraction}")
+        assertTrue(6f / 150f < 0.05f, "what the hardcoded 150 A divisor used to give")
+
+        val power = SecondaryGaugeMapper.map(
+            SecondaryGauge.POWER, wheel, battery, UnitSystem.METRIC, powerRangeW = 1000f
+        )
+        assertTrue(abs(power.fraction - 0.571f) < 0.01f, "power ring read ${power.fraction}")
+        assertTrue(571f / 8000f < 0.1f, "what the hardcoded 8000 W divisor used to give")
+    }
+
+    /** A scooter's wide range must widen the divisor too, not just narrow it for wheels. */
+    @Test fun a_wide_learned_range_shrinks_the_same_reading_on_the_ring() {
+        val narrow = SecondaryGaugeMapper.map(
+            SecondaryGauge.CURRENT, motion, battery, UnitSystem.METRIC, currentRangeA = 60f
+        )
+        val wide = SecondaryGaugeMapper.map(
+            SecondaryGauge.CURRENT, motion, battery, UnitSystem.METRIC, currentRangeA = 500f
+        )
+        assertTrue(narrow.fraction > wide.fraction)
+        assertTrue(abs(narrow.fraction - 52.4f / 60f) < 0.01f)
+        assertTrue(abs(wide.fraction - 52.4f / 500f) < 0.01f)
+    }
+
+    /** Regen is a negative current on a bipolar dial, so the ring follows the magnitude. */
+    @Test fun the_current_ring_follows_the_magnitude_of_a_regen_reading() {
+        val regen = motion.copy(batteryCurrentA = -30f)
+        val r = SecondaryGaugeMapper.map(
+            SecondaryGauge.CURRENT, regen, battery, UnitSystem.METRIC, currentRangeA = 60f
+        )
+        assertTrue(abs(r.fraction - 0.5f) < 0.01f)
+    }
+
     @Test fun fractions_never_leave_zero_to_one() {
         val over = motion.copy(dutyPercent = 140f)
         assertEquals(1f, SecondaryGaugeMapper.map(SecondaryGauge.DUTY, over, battery, UnitSystem.METRIC).fraction)

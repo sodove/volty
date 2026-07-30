@@ -120,41 +120,14 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     // Never zero: the hero always has at least a 70 km/h scale to draw against.
     val vehicleMaxSpeed = max(70f, ceil(sessionMaxSpeedKmh / 10f) * 10f)
 
-    // Classic's Current and Power dials auto-scale the same way (B-vesc-dashboard.md §14: VESC
-    // derives these from the motor config we cannot read yet, so we scale from what the vehicle has
-    // actually shown this session instead — a deliberate divergence, and today's floors, not
-    // targets, are what ClassicDialSpecs.currentDisplayMax/powerDisplayMax fall back to for a quiet
-    // ride). Unlike speed, both readings are bipolar, so the tracker follows the ABSOLUTE value —
-    // regen braking grows the current scale exactly as much as accelerating does.
+    // Classic's Current and Power dials no longer scale from a session tracker HERE. Their range is
+    // learned per VEHICLE and persisted (`G §9.2`), which needs a spike guard and a database write —
+    // neither of which is provable inside a LaunchedEffect (Task 6's ledger). Both now arrive
+    // already quantised, on the state, from DefaultRideDashboardComponent: state.currentRangeA /
+    // state.powerRangeW. The screen is a renderer.
     //
-    // Unlike the plain "grow on any bigger sample" speed tracker above, these two go through
-    // SessionPeakTracker rather than a bare `if (x > max) max = x`: a scale with no ceiling AND no
-    // debounce lets one spurious decode (a single frame reporting, say, 5000 A) peg the dial for
-    // the rest of the ride. ClassicDialSpecs.currentDisplayMax/powerDisplayMax now cap how far that
-    // peg can reach (see their tickCapCeiling doc), but capping the DAMAGE still is not the same as
-    // preventing it — SessionPeakTracker keeps a rising reading from being committed at all until
-    // several consecutive samples corroborate it, so a one-frame glitch never reaches
-    // ClassicDialSpecs in the first place. See SessionPeakTracker's own doc for why a consecutive-
-    // sample debounce was chosen over a percentile or a decay, and why the confirmed value is the
-    // RUN's minimum rather than its maximum. The confirmed value is still handed to ClassicDialSpecs
-    // raw — it does its own floor+snap+ceiling, needing no unit conversion the way speed does.
-    var currentPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
-    LaunchedEffect(vehicle?.id, motion.timestamp) {
-        currentPeakTracker = currentPeakTracker.accept(abs(motion.batteryCurrentA))
-    }
-    val sessionMaxAbsCurrentA = currentPeakTracker.committed
-
-    var powerPeakTracker by remember(vehicle?.id) { mutableStateOf(SessionPeakTracker()) }
-    LaunchedEffect(vehicle?.id, motion.timestamp) {
-        // Through MotionReadings like every other motion read (`G §9`), and it
-        // matters here even though the scale is not a readout: an unobserved
-        // power is a 0 W placeholder, and feeding it to the tracker would let a
-        // mixed vehicle's POWER dial grow its scale from a partial sum while the
-        // readout above it correctly dashes. An unobserved sample simply does
-        // not move the high-water mark.
-        MotionReadings.powerW(motion)?.let { powerPeakTracker = powerPeakTracker.accept(abs(it)) }
-    }
-    val sessionMaxAbsPowerW = powerPeakTracker.committed
+    // The speed tracker above stays where it is: its scale is per-session by design and Part B
+    // §15.3 item 1 already tracks lifting it out.
 
     val recentSpeeds = remember(vehicle?.id) { mutableStateListOf<Float>() }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
@@ -217,8 +190,6 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             DashboardStyle.CLASSIC -> ClassicRideCluster(
                 state = state,
                 maxSpeedKmh = vehicleMaxSpeed,
-                maxCurrentA = sessionMaxAbsCurrentA,
-                maxPowerW = sessionMaxAbsPowerW,
                 modifier = Modifier.fillMaxWidth()
             )
         }
@@ -275,7 +246,14 @@ private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float
         escTemp = stringResource(Res.string.secondary_gauge_esc_temp).uppercase(),
         consumption = stringResource(Res.string.secondary_gauge_consumption).uppercase()
     )
-    val secondary = SecondaryGaugeMapper.map(state.secondary, motion, state.battery, state.units, secondaryLabels)
+    // The two learned dial widths travel with the recomputed readout: this call exists only to
+    // resolve the LABELS in the rider's language, so everything else it passes must match what the
+    // component already computed — a range dropped here would give the Clean hero a different scale
+    // from the Classic dial for the same vehicle (`G §9.2`).
+    val secondary = SecondaryGaugeMapper.map(
+        state.secondary, motion, state.battery, state.units, secondaryLabels,
+        currentRangeA = state.currentRangeA, powerRangeW = state.powerRangeW
+    )
     val speedFraction = motion.speedKmh / vehicleMaxSpeed
     val secondaryColor = severityColor(secondary.severity)
 

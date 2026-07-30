@@ -237,7 +237,13 @@ class VehicleEditComponentTest {
         // Every kind deliberately silenced (F §10.2: an empty level list is the
         // only way to say "off"). Non-null, so it is an ANSWER — and a
         // non-default one, which is what makes a dropped field visible below.
-        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) }
+        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) },
+        // G §9.2's learned dial widths. Non-zero, so a save that CLEARED them
+        // when it should not have is visible to the identity test — and the two
+        // are deliberately different numbers, so swapping the amps for the watts
+        // is visible too.
+        gaugePeakCurrentA = 137f,
+        gaugePeakPowerW = 6421f
     )
 
     /**
@@ -275,7 +281,11 @@ class VehicleEditComponentTest {
         packs = emptyList(),
         controllers = originalControllers,
         chemistry = Chemistry.LI_ION_NMC,
-        createdAt = createdAtFixture
+        createdAt = createdAtFixture,
+        // A vehicle that has been ridden, so the G §9.2 tests below can see a range being CLEARED
+        // rather than merely staying at its default. Same two values as existingVehicle().
+        gaugePeakCurrentA = 137f,
+        gaugePeakPowerW = 6421f
     )
 
     private fun component(

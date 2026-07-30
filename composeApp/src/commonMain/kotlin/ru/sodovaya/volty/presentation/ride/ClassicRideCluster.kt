@@ -64,14 +64,6 @@ import volty.composeapp.generated.resources.unit_wh_per_mi
 fun ClassicRideCluster(
     state: RideDashboardComponent.State,
     maxSpeedKmh: Float,
-    /**
-     * The largest ABSOLUTE battery current seen this session — see
-     * `ClassicDialSpecs.currentDisplayMax` and B-vesc-dashboard.md §14. Defaults to `0f` (floors at
-     * VESC's own 60 A) for a caller with no session tracker of its own.
-     */
-    maxCurrentA: Float = 0f,
-    /** The largest ABSOLUTE power seen this session — see `ClassicDialSpecs.powerDisplayMax`. */
-    maxPowerW: Float = 0f,
     modifier: Modifier = Modifier
 ) {
     val labels = ClassicDialLabels(
@@ -94,8 +86,11 @@ fun ClassicRideCluster(
         units = state.units,
         maxSpeedKmh = maxSpeedKmh,
         labels = labels,
-        maxCurrentA = maxCurrentA,
-        maxPowerW = maxPowerW
+        // Straight off the state — the CURRENT/POWER ranges are learned per vehicle and quantised
+        // by DefaultRideDashboardComponent (`G §9.2`), not by this Composable and not by a session
+        // tracker on the screen above it. Two parameters became none.
+        currentRangeA = state.currentRangeA,
+        powerRangeW = state.powerRangeW
     )
 
     VescClusterLayout(modifier = modifier) {

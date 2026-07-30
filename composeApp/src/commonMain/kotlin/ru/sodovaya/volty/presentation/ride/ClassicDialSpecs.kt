@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.stats.DutyBands
 import ru.sodovaya.volty.domain.stats.DutyLevel
+import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
@@ -40,7 +41,11 @@ data class VescDialSpec(
     val precision: Int = 0,
     /** `CustomGauge.qml` :57. False only for Battery, which overlays its own centre content. */
     val centerTextVisible: Boolean = true,
-    /** `CustomGauge.qml` :48. */
+    /**
+     * `CustomGauge.qml` :48.
+     *
+     * Not a constant on the POWER dial any more: see [ClassicDialSpecs.powerTicksInKilowatts].
+     */
     val tickmarkScale: Double = 1.0,
     /** `CustomGauge.qml` :47. */
     val tickmarkSuffix: String = "",
@@ -95,15 +100,20 @@ data class ClassicDialLabels(
  * temperatures from `l_temp_fet_end`/`l_temp_motor_end`). Volty does not read a VESC motor config
  * yet (that needs `COMM_GET_MCCONF`, deferred to Part C — see
  * `docs/superpowers/specs/2026-07-24-vehicle-platform/B-vesc-dashboard.md` §14), so those adaptive
- * maxima are NOT ported faithfully. Three of the eight dials instead grow from what the vehicle has
- * actually shown this session — Speed ([heroDisplayMax], the original runtime scale), and, per §14's
- * interim decision, Current and Power too ([currentDisplayMax]/[powerDisplayMax]): a rider on a
- * 2×250 A scooter gets a dial that is wrong in a way that matters (pegged at the end of its scale)
- * rather than merely imprecise. The two temperature dials keep the QML's fixed `0..100` range —
- * §14 leaves their threshold question (`l_temp_fet_start` vs. this project's own `TempBands`) open
- * for when `GET_MCCONF` lands, and does not touch their range. The conditional `labelStep`
- * expressions ARE ported as functions of the maximum even where the maximum is currently fixed, so
- * the rule rather than its current answer is what lives here.
+ * maxima are NOT ported faithfully. Three of the eight dials instead scale from what the vehicle has
+ * actually shown:
+ *
+ *  - **Speed** ([heroDisplayMax]) — the original runtime scale, grown from the *session*'s maximum;
+ *  - **Current and Power** — grown from a *per-vehicle, persisted* peak instead, quantised onto
+ *    [GaugeScale]'s rung ladders. `G §9.2`: the session-scaled version of these two floored at
+ *    VESC's own ±60 A / ±10 000 W, which is why an electric unicycle's needles never visibly moved.
+ *    The floor is gone; [GaugeScale.CURRENT_RUNGS_A]'s first rung is 10 A.
+ *
+ * The two temperature dials keep the QML's fixed `0..100` range — §14 leaves their threshold
+ * question (`l_temp_fet_start` vs. this project's own `TempBands`) open for when `GET_MCCONF` lands,
+ * and does not touch their range. The conditional `labelStep` expressions ARE ported as functions of
+ * the maximum even where the maximum is currently fixed, so the rule rather than its current answer
+ * is what lives here.
  *
  * ## Whose thresholds colour the needle
  *
@@ -127,14 +137,8 @@ object ClassicDialSpecs {
     /** `CustomGauge.qml` :31 — the label step a gauge gets when it declares none (Battery). */
     private const val DEFAULT_LABEL_STEP = 10.0
 
-    /** QML :77-78. */
-    private const val CURRENT_MAX_A = 60.0
-
     /** QML :92-93. */
     private const val DUTY_MAX_PERCENT = 100.0
-
-    /** QML :108-109. */
-    private const val POWER_MAX_W = 10000.0
 
     /** QML :441-442 and :467-468 — both temperature dials read 0..100 °C. */
     private const val TEMP_MAX_C = 100.0
@@ -146,8 +150,8 @@ object ClassicDialSpecs {
     private fun tenOrTwentyLabelStep(maximumValue: Double): Double =
         if (maximumValue > 60.0) 20.0 else 10.0
 
-    /** QML :112. */
-    private fun powerLabelStep(maximumValue: Double): Double =
+    /** QML :112. The PREFERRED power step; [powerLabelStep] is what a ring actually gets. */
+    private fun powerLabelStepQml(maximumValue: Double): Double =
         if (maximumValue > 6000.0) 2000.0 else 1000.0
 
     // ---------------------------------------------------------------------------------------
@@ -252,81 +256,111 @@ object ClassicDialSpecs {
     }
 
     // ---------------------------------------------------------------------------------------
-    // Current + Power's runtime scale — §14's "Now" divergence from the port
+    // Current + Power's label steps — §14's divergence from the port, now on G §9.2's rung ladder
     //
-    // VESC derives BOTH of these from the connected controller's motor configuration
+    // VESC derives both MAXIMA from the connected controller's motor configuration
     // (`RtDataSetup.qml:665-728`):
     //   currentMaxRound = ceil(l_current_max / 5) * 5 * values.num_vescs
     //   powerMax        = min(v_in * min(l_in_current_max, l_current_max), l_watt_max) * num_vescs
-    // Volty cannot reproduce that — it needs `COMM_GET_MCCONF`, which is deferred to Part C, where
-    // `num_vescs` first becomes meaningful (see B-vesc-dashboard.md §14). Until then, THIS project
-    // scales from what the vehicle has actually shown this session instead, reusing the exact
-    // floor-then-snap-then-grow-only shape [heroDisplayMax] already established for Speed: a fixed
-    // floor (today's constant, so a quiet ride still shows VESC's familiar scale), snapped up to a
-    // step that keeps the tick labels round, and never allowed to shrink. `GET_MCCONF` supersedes
-    // this the day Part C lands.
+    // Volty cannot reproduce that — it needs `COMM_GET_MCCONF`, deferred to Part C. The maximum now
+    // arrives from [GaugeScale]: a per-vehicle learned peak, quantised onto a rung ladder, passed
+    // into [build] as `currentRangeA` / `powerRangeW`. What is left HERE is the question the ladder
+    // does not answer — how to LABEL a ring of that width so its numbers stay round.
     //
-    // Like the hero, this scale is given a CEILING too — [tickCapCeiling], shared by all three (see
-    // its doc, above). What Current and Power do NOT share with the hero is a debounce:
-    // `SessionPeakTracker`, upstream of these two functions, withholds a rising reading from ever
-    // reaching [sessionScaledMax] until several consecutive samples corroborate it, so a single bad
-    // decode never reaches the ceiling in the first place. Speed's own tracker
-    // (`RideDashboardScreen.sessionMaxSpeedKmh`) has no such debounce — see `B-vesc-dashboard.md`
-    // §15.3 item 1 for what that leaves open now that the ceiling itself is no longer one of them.
+    // Before G §9.2 the maximum was session-scaled with a fixed floor (60 A / 10 000 W) and a
+    // snap-to-10/1000, so the label step only ever had to divide a multiple of the snap step. A rung
+    // ladder is a different constraint: nine specific widths, two of them (10 A, 500 W) narrower than
+    // anything the old arithmetic could produce, where the QML's own step would leave a ring with
+    // three numbers on it. So the QML's rule is now the PREFERRED step, with a fallback list behind
+    // it — the exact shape [heroLabelStep] has always had, for the same reason.
     // ---------------------------------------------------------------------------------------
 
     /**
-     * The shared shape behind [currentDisplayMax] and [powerDisplayMax]: floor at VESC's own
-     * default, snap UP to [snapStep] so the label-step functions below always divide the resulting
-     * (symmetric, `-max..+max`) span evenly, then clamp to [tickCapCeiling] so the snap can never
-     * carry the max PAST the point where [VescGaugeRange]'s own tick-count cap would make that
-     * division ragged again (see [tickCapCeiling]'s doc). Monotonic — `max`, `ceil` and `min` are
-     * all non-decreasing in [sessionMaxAbs] up to the ceiling and constant beyond it — so a caller
-     * that only ever grows its own high-water mark (see `RideDashboardScreen`'s session trackers)
-     * still gets a scale that only grows, it just stops growing at the ceiling instead of forever.
+     * The fewest major ticks a ring may carry before its step is rejected as too coarse.
      *
-     * The ceiling does not, by itself, stop ONE spurious sample from pinning the scale there for
-     * the rest of the ride — merely capping how far wrong it can go. That is
-     * [SessionPeakTracker]'s job, upstream of this function: it withholds a rising reading from
-     * ever reaching [sessionMaxAbs] until several consecutive samples corroborate it, so a single
-     * bad decode never gets this far in the first place.
+     * Five, i.e. `min`, `max` and three between them. Not a taste call: on a bipolar dial two of
+     * every ring's majors are the two ends and a third is zero, so a count of three means a ring
+     * labelled `-max, 0, +max` — no interior graduation at all, and nothing to read a needle
+     * against. The narrowest rungs are exactly where the QML's own step produces that: 10 A with a
+     * step of 10 has a span of 20, i.e. two intervals.
      */
-    private fun sessionScaledMax(sessionMaxAbs: Float, floor: Double, snapStep: Double): Double {
-        val floored = max(floor, sessionMaxAbs.toDouble())
-        val snapped = ceil(floored / snapStep) * snapStep
-        return min(snapped, tickCapCeiling(snapStep))
+    private const val MIN_MAJOR_TICKS = 5
+
+    /**
+     * Fallback label steps for a bipolar CURRENT ring, coarsest first — the same "coarse before
+     * crowded" ordering [HERO_FALLBACK_LABEL_STEPS] uses. Bottoms out at 5 A, which is what the
+     * 10 A rung needs.
+     */
+    private val CURRENT_FALLBACK_LABEL_STEPS = listOf(50.0, 25.0, 20.0, 10.0, 5.0)
+
+    /**
+     * Fallback label steps for a bipolar POWER ring, coarsest first. Bottoms out at 250 W for the
+     * 500 W rung; 500 W serves the 1000 W rung.
+     */
+    private val POWER_FALLBACK_LABEL_STEPS = listOf(2000.0, 1000.0, 500.0, 250.0)
+
+    /**
+     * Is [step] a usable label step for a bipolar ring of `-max..+max`?
+     *
+     * Two conditions, and both have shipped as defects on this cluster before. The step must divide
+     * the span EXACTLY, because [VescGaugeRange] spaces its majors by `span / (tickmarkCount - 1)`
+     * rather than by `labelStep` itself — a step that does not divide evenly produces fractional
+     * tick labels (the ragged ring [heroLabelStep] documents). And the resulting count must be at
+     * least [MIN_MAJOR_TICKS] and at most [VescGaugeRange.MAX_TICKMARK_COUNT], the latter because
+     * past the cap `tickmarkCount` silently substitutes its own divisor and the ring ragges again
+     * (see [tickCapCeiling]).
+     */
+    private fun usableBipolarStep(max: Double, step: Double): Boolean {
+        if (step <= 0.0 || max <= 0.0) return false
+        val span = 2.0 * max
+        if (!dividesEvenly(span, step)) return false
+        val count = (span / step).roundToInt() + 1
+        return count >= MIN_MAJOR_TICKS && count <= VescGaugeRange.MAX_TICKMARK_COUNT
     }
 
     /**
-     * Amps ten apart. [tenOrTwentyLabelStep] picks either 10 or 20 A per label; snapping the max to
-     * a multiple of 10 makes the symmetric span `2 * max` a multiple of 20, which both candidate
-     * steps divide exactly for every integer multiple — the same reasoning [HERO_SNAP_STEP] documents.
+     * The QML's preferred step for [max] if it is usable, else the coarsest usable candidate, else
+     * the finest candidate there is.
+     *
+     * The preference matters: it is what keeps a dial whose learned rung happens to equal VESC's own
+     * default (60 A, 10 000 W — both are rungs) drawn exactly as VESC draws it, rather than
+     * re-derived into something merely equivalent.
      */
-    private const val CURRENT_SNAP_STEP = 10.0
+    private fun bipolarLabelStep(max: Double, preferred: Double, fallbacks: List<Double>): Double {
+        if (usableBipolarStep(max, preferred)) return preferred
+        return fallbacks.firstOrNull { usableBipolarStep(max, it) } ?: fallbacks.last()
+    }
+
+    /** The CURRENT ring's label step for a rung of [maxA] amps. QML :80, then a divisor that works. */
+    fun currentLabelStep(maxA: Double): Double =
+        bipolarLabelStep(maxA, tenOrTwentyLabelStep(maxA), CURRENT_FALLBACK_LABEL_STEPS)
+
+    /** The POWER ring's label step for a rung of [maxW] watts. QML :112, then a divisor that works. */
+    fun powerLabelStep(maxW: Double): Double =
+        bipolarLabelStep(maxW, powerLabelStepQml(maxW), POWER_FALLBACK_LABEL_STEPS)
 
     /**
-     * Watts a thousand apart, for the same reason as [CURRENT_SNAP_STEP]: [powerLabelStep] picks
-     * 1000 or 2000 W, and a max snapped to a multiple of 1000 makes the span a multiple of 2000,
-     * which both divide exactly.
+     * Does the POWER ring label its ticks in kilowatts (QML :110-111, `tickmarkScale = 0.001` and a
+     * `"k"` suffix) or in plain watts?
+     *
+     * **Derived, because the renderer formats tick labels with `precision = 0` and no way to ask for
+     * more** (`VescDialGauge.drawVescTickLabels`, faithful to QML :310's `.toFixed(0)`). A ring whose
+     * ticks are not whole kilowatts therefore cannot be labelled in kilowatts at all: the 500 W rung
+     * with a 250 W step would draw `-1k, -0k, 0k, 0k, 1k` — five labels, three of them lies. In
+     * watts the same ring reads `-500, -250, 0, 250, 500`.
+     *
+     * So the test is arithmetic rather than a threshold: kilowatts exactly when every tick value is a
+     * whole number of them, which for a symmetric `-max..+max` ring stepped by [step] means both the
+     * maximum and the step are multiples of 1000. Every rung from 2000 W up satisfies it (and 10 000 W
+     * — VESC's own default — keeps the `-10k…10k` face it always had); 500 W and 1000 W do not, and
+     * are the two rungs no VESC scooter will ever sit on.
      */
-    private const val POWER_SNAP_STEP = 1000.0
+    fun powerTicksInKilowatts(maxW: Double, step: Double): Boolean =
+        isMultipleOf(maxW, WATTS_PER_KILOWATT) && isMultipleOf(step, WATTS_PER_KILOWATT)
 
-    /**
-     * Current's bipolar scale maximum in AMPS — see the divergence note above and §14. Bipolar
-     * because the dial is `-max..+max` (QML :77-78); the caller therefore tracks the largest
-     * ABSOLUTE battery current seen, not the largest signed one, so regen braking grows the scale
-     * exactly as much as acceleration does. Ceilinged at 990 A ([tickCapCeiling] of
-     * [CURRENT_SNAP_STEP]) — see [sessionScaledMax].
-     */
-    fun currentDisplayMax(sessionMaxAbsCurrentA: Float): Double =
-        sessionScaledMax(sessionMaxAbsCurrentA, CURRENT_MAX_A, CURRENT_SNAP_STEP)
+    private const val WATTS_PER_KILOWATT = 1000.0
 
-    /**
-     * Power's bipolar scale maximum in WATTS — see the divergence note above and §14. Ceilinged at
-     * 99000 W ([tickCapCeiling] of [POWER_SNAP_STEP]) — see [sessionScaledMax].
-     */
-    fun powerDisplayMax(sessionMaxAbsPowerW: Float): Double =
-        sessionScaledMax(sessionMaxAbsPowerW, POWER_MAX_W, POWER_SNAP_STEP)
+    private fun isMultipleOf(value: Double, unit: Double): Boolean = dividesEvenly(value, unit)
 
     // ---------------------------------------------------------------------------------------
     // nibColor thresholds
@@ -405,19 +439,25 @@ object ClassicDialSpecs {
         maxSpeedKmh: Float,
         labels: ClassicDialLabels = ClassicDialLabels(),
         /**
-         * The largest ABSOLUTE battery current seen this session; drives [currentDisplayMax].
-         * Defaults to `0f` — nothing seen yet — which floors at VESC's own [CURRENT_MAX_A].
+         * The CURRENT dial's `±max` in AMPS — already a [GaugeScale.CURRENT_RUNGS_A] rung, resolved
+         * by the component from this vehicle's learned peak and the live sample
+         * ([GaugeScale.currentDisplayRungA]). A RANGE rather than a peak, unlike the argument it
+         * replaced: quantising is `GaugeScale`'s job, and doing it here too would give the two
+         * renderers two chances to disagree about the same vehicle's scale.
+         *
+         * Defaults to the narrowest rung — a vehicle nobody has ridden — so every existing caller
+         * that has no learned peak to offer still gets a dial a wheel can move the needle on.
          */
-        maxCurrentA: Float = 0f,
-        /**
-         * The largest ABSOLUTE power seen this session; drives [powerDisplayMax]. Defaults to
-         * `0f`, which floors at VESC's own [POWER_MAX_W].
-         */
-        maxPowerW: Float = 0f
+        currentRangeA: Float = GaugeScale.CURRENT_RUNGS_A.first(),
+        /** The POWER dial's `±max` in WATTS, likewise a [GaugeScale.POWER_RUNGS_W] rung. */
+        powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first()
     ): List<VescDialSpec> {
         val heroMax = heroDisplayMax(maxSpeedKmh, units)
-        val currentMax = currentDisplayMax(maxCurrentA)
-        val powerMax = powerDisplayMax(maxPowerW)
+        val currentMax = currentRangeA.toDouble()
+        val powerMax = powerRangeW.toDouble()
+        val currentStep = currentLabelStep(currentMax)
+        val powerStep = powerLabelStep(powerMax)
+        val powerInKilowatts = powerTicksInKilowatts(powerMax, powerStep)
 
         // The canonical Wh/km drives the COLOUR (see CONSUMPTION_WARN_WH_PER_KM); the display
         // conversion drives the needle and the readout, exactly as the speed dial does.
@@ -440,11 +480,13 @@ object ClassicDialSpecs {
                 range = VescGaugeRange(
                     minAngle = -210.0,               // QML :84
                     maxAngle = 15.0,                 // QML :85
-                    // §14: session-scaled, floored at the QML's own -60/+60 (:77-78) — see
-                    // currentDisplayMax's doc.
+                    // G §9.2: the vehicle's learned rung, replacing the QML's fixed -60/+60
+                    // (:77-78) — which is the whole defect on a wheel. Bipolar, so the caller
+                    // learns from the ABSOLUTE current and regen grows the scale as much as
+                    // acceleration does.
                     minimumValue = -currentMax,
                     maximumValue = currentMax,
-                    labelStep = tenOrTwentyLabelStep(currentMax) // QML :80
+                    labelStep = currentStep          // QML :80, then a divisor that works
                 ),
                 value = motion.batteryCurrentA,
                 caption = labels.current,
@@ -477,19 +519,22 @@ object ClassicDialSpecs {
                 range = VescGaugeRange(
                     minAngle = DEFAULT_MIN_ANGLE,
                     maxAngle = DEFAULT_MAX_ANGLE,
-                    // §14: session-scaled, floored at the QML's own -10000/+10000 (:108-109) — see
-                    // powerDisplayMax's doc.
+                    // G §9.2: the vehicle's learned rung, replacing the QML's fixed
+                    // -10000/+10000 (:108-109).
                     minimumValue = -powerMax,
                     maximumValue = powerMax,
-                    labelStep = powerLabelStep(powerMax) // QML :112
+                    labelStep = powerStep             // QML :112, then a divisor that works
                 ),
                 value = power ?: 0f,
                 caption = labels.power,
                 unit = "W",                           // QML :114
                 // G §9: an unavailable voltage scale used to render as a confident 0 W.
                 valueTextOverride = if (power == null) UNKNOWN else null,
-                tickmarkScale = 0.001,                // QML :110 — label the watts as kilowatts
-                tickmarkSuffix = "k"                  // QML :111
+                // QML :110-111 label the watts as kilowatts unconditionally, which the QML can
+                // afford because its narrowest power ring is 10 kW. Two of G §9.2's rungs are
+                // narrower than one kilowatt — see powerTicksInKilowatts.
+                tickmarkScale = if (powerInKilowatts) 0.001 else 1.0,
+                tickmarkSuffix = if (powerInKilowatts) "k" else ""
             ),
             // QML :129-142. The only runtime scale: see heroDisplayMax / heroLabelStep.
             VescDialSpec(
