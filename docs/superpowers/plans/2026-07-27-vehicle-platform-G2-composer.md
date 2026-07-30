@@ -207,10 +207,20 @@ The mechanism, all of it pure and testable:
    load-bearing, not padding: it is what guarantees the needle is never pinned at
    full scale while the range is still growing.
 2. **A spike guard, because Begode frames have no checksum.** `PeakTracker`
-   learns from the **median of the last three** samples, on the ABSOLUTE value
+   learns from the **median of the last five** samples, on the ABSOLUTE value
    (both dials are bipolar). A single garbage 300 A sample must not blow the dial
    open for the life of the vehicle. Non-finite samples are ignored, never
    propagated.
+
+   **Amended after the task's review (2026-07-30): this said THREE, and three was
+   wrong.** A median of three is defeated by two *adjacent* corrupt frames, which
+   on a checksum-less format is a routine event rather than a freak one — and the
+   reviewer showed it was strictly weaker than the run-minimum of the
+   `SessionPeakTracker` this task supersedes. Five costs two extra samples of
+   latency in **persistence only**, which the rider never sees, because item 3
+   keeps the displayed range instant. Decay, shrinking and a rider-facing reset
+   were considered and deliberately refused — see `I`'s open items; the
+   controller-set-change clear in item 7 is the reset path that exists.
 3. **Display responds instantly; persistence does not.** The rung the dial draws
    is computed from `max(learnedPeak, abs(thisSample))`, so a real excursion is
    on-scale in the same frame it happens; only the median-filtered peak is ever

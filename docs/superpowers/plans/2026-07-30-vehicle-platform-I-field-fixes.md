@@ -629,6 +629,18 @@ git commit -m "feat(ride): a wheel that counts no watt-hours can still be measur
   schema and Task 8 does not add one — its integration is in-memory, per session.
 - **Parts E (FarDriver) and H (Kelly).** Unchanged by this part.
 
+## Open, carried from Part G2 Task 7's review
+
+- **A learned gauge range grows and never shrinks.** There is no decay, no
+  shrinking, and no rider-facing reset — only the automatic clear when the
+  vehicle's controller set changes. A corrupt reading that survives the
+  median-of-five filter (three adjacent corrupt frames passing both the
+  `5A5A5A5A` tail check and the zero-payload gate) widens the dial permanently,
+  and the rider has no way to undo it. Refused deliberately in that task rather
+  than grown into it: a reset is UI, a decay is a policy nobody has evidence for,
+  and the filter closes the plausible case. Whoever adds the vehicle-settings
+  screen should add the reset there.
+
 ## Open, and needing the rider rather than an implementer
 
 - **The bicycle's controller type**, which decides whether Part H or Part E comes next.
