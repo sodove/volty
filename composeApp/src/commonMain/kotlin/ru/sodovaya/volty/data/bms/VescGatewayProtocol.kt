@@ -91,6 +91,18 @@ data class GatewaySource(
  * has no such failure mode — whichever nodes can answer, do, and the ones that
  * cannot simply cost their timeout.
  *
+ * That statement is about a SINGLE cycle, and it is worth being precise, because
+ * the cost of "the ones that cannot simply cost their timeout" is not small: on
+ * the rider's vehicle it is roughly 1000 ms of every ~1110 ms cycle. **Repeated**
+ * silence, accumulated across cycles, IS a usable signal — one timeout is
+ * ambiguous, twenty are not. `I` Task 11 uses it, and uses it to **suppress**
+ * rather than to elect: after several consecutive non-answers a (controller,
+ * opcode) pair stops being asked, with a re-probe on reconnect and on a long
+ * timer. That is compatible with everything above rather than a reversal of it —
+ * asking everybody remains the right default, and suppression is per opcode
+ * because this very head unit refuses both `GET_VALUES` opcodes while answering
+ * `COMM_BMS_GET_VALUES` perfectly well.
+ *
  * The traffic this adds is one request per controller per cycle: the plan grows
  * from `1 + controllers + packs` to `2 x controllers + packs`. That growth is
  * bounded by [checkSilenceBudget], which is computed from the plan size and
@@ -355,6 +367,14 @@ class VescGatewayProtocol(
      * order would have had none — the guard covers both, and both are pinned
      * (`… is not credited to the next controller` for `GET_VALUES`,
      * `a late SETUP reply is not credited to the next controller` for SETUP).
+     *
+     * **There is a THIRD such pair and this task did not create it**: two packs
+     * on one gateway put two byte-identical `COMM_BMS_GET_VALUES` requests
+     * adjacent, and the product's own four-source plan (two controllers, two
+     * packs) reaches it. The guard is the same mechanism and covers it by
+     * construction, but **no test pins that pair** — recorded rather than
+     * quietly assumed, because the other two were pinned only after someone
+     * looked.
      * The trade is deliberate: one guard mechanism covering two known pairs
      * beats an ordering whose safety comes from opcodes happening not to
      * collide, which no test can hold in place.
@@ -659,9 +679,13 @@ class VescGatewayProtocol(
         // Deliberately NOT publishing here, and this is not a micro-optimisation.
         //
         // It used to publish, back when the SETUP frame was the primary's and
-        // arrived immediately before that same primary's `GET_VALUES`. Under
-        // this plan every SETUP is answered before any `GET_VALUES` is even
-        // sent, so `perUnit[global]` at this instant is LAST cycle's decode —
+        // arrived immediately before that same primary's `GET_VALUES`. That
+        // soundness lasted exactly one cycle even then: from cycle 2 onward the
+        // pre-task plan had the same staleness, so no plan shape ever made this
+        // line correct — the grouping below did not introduce the bug, it made
+        // it reachable on the first cycle too. Under this plan every SETUP is
+        // answered before any `GET_VALUES` is even sent, so `perUnit[global]`
+        // at this instant is LAST cycle's decode —
         // and [ConnectionSession] drains the routing helpers on **every
         // notification**, so a publish here is not an invisible intermediate
         // value. It is a real sample, restamped `Clock.System.now()` on the way
