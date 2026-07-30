@@ -187,8 +187,61 @@ the same notion, or must skip unknowns.
 Classic's CURRENT dial floors at ±60 A and POWER at ±10 000 W — VESC's ranges. A
 wheel cruises at ~6 A and ~571 W, so both needles live in the first tenth of
 scale and never visibly move. VESC itself derives its ranges from `mcconf`
-(`B §14`), which is the same question one layer down. Decide where the range
-comes from and make it follow the vehicle.
+(`B §14`), which is the same question one layer down.
+
+**Decided (2026-07-30): the range is LEARNED per vehicle, not configured and not
+per-protocol.** `mcconf` is a seam this leaves open, not a dependency it takes:
+`GET_MCCONF` would *seed* the learned peak instead of replacing the mechanism, so
+this task does not wait on `B §14`. Asking the rider for a current limit was
+rejected — it is a number most riders do not know, and the machine reports it by
+riding.
+
+The mechanism, all of it pure and testable:
+
+1. **A rung ladder per quantity**, in a new `domain/stats/GaugeScale.kt`:
+   - current: `10, 20, 30, 60, 100, 150, 200, 300, 500` A
+   - power: `500, 1 000, 2 000, 3 000, 5 000, 10 000, 20 000, 30 000, 50 000` W
+   `rungFor(peak, rungs, headroom = 1.25f)` returns the smallest rung
+   `>= peak * headroom`, the last rung when the peak exceeds all of them, and the
+   FIRST rung for a peak that is zero, negative or non-finite. The headroom is
+   load-bearing, not padding: it is what guarantees the needle is never pinned at
+   full scale while the range is still growing.
+2. **A spike guard, because Begode frames have no checksum.** `PeakTracker`
+   learns from the **median of the last three** samples, on the ABSOLUTE value
+   (both dials are bipolar). A single garbage 300 A sample must not blow the dial
+   open for the life of the vehicle. Non-finite samples are ignored, never
+   propagated.
+3. **Display responds instantly; persistence does not.** The rung the dial draws
+   is computed from `max(learnedPeak, abs(thisSample))`, so a real excursion is
+   on-scale in the same frame it happens; only the median-filtered peak is ever
+   stored. These two are deliberately different numbers and a test must
+   distinguish them.
+4. **Persisted per vehicle:** `VehicleRow` gains `gaugePeakCurrentA` and
+   `gaugePeakPowerW` (`REAL NOT NULL DEFAULT 0`), migration `8.sqm` + snapshot
+   `8.db`. Written back **only when the rung changes** — monotone and quantised,
+   so this is a handful of writes over a vehicle's life, not one per BLE
+   notification. A test must pin that a peak growing *within* a rung writes
+   nothing.
+5. **Zero is the honest seed.** A brand-new vehicle stores 0 and therefore opens
+   on the smallest rung; the headroom in (1) keeps the needle readable while the
+   first minute of riding walks the rung up. After that first ride the scale is
+   stable forever, which is what makes it an instrument rather than an animation.
+6. **Unknown is not zero, here too.** A sample whose `hasPower` is false must not
+   feed the power tracker (Task 6's contract — otherwise every Begode teaches the
+   dial that its peak power is 0 W). Same for any current whose known-flag exists.
+7. **Clear the learned peaks when the vehicle's controller set changes** in the
+   composer: they describe hardware that is no longer on the vehicle. The
+   derived-battery rule already recomputes on exactly that event (`G §6`).
+
+The tracker lives in the **component**, not in a `@Composable`. Task 6's ledger
+records that `RideDashboardScreen`'s existing peak tracker sits inside a
+`LaunchedEffect` and is unverifiable where it is — **do not add a second one
+there and do not extend that one.** Lifting the existing three session trackers
+out is a known open item and stays out of this task.
+
+The rider's first hardware test (`field-reports/2026-07-30-first-hardware-test.md`)
+is what makes real peaks measurable at all; nothing in this task depends on its
+outcome.
 
 ### Task 8 — the vocabulary is battery-centric and lies
 
