@@ -53,6 +53,15 @@ import kotlin.time.ExperimentalTime
  *
  * Tests are named `theRealCapture…` or `synthetic…` accordingly.
  *
+ * **What that split cost, on 2026-07-30.** Because every non-zero speed
+ * assertion here is synthetic, they all restate the decoder's own convention and
+ * none could notice the convention was wrong: the wheel signs FORWARD negative,
+ * and this file asserted a negative reading as "reverse" and passed. The
+ * decoder-level fix is `forwardMotionPublishesPositiveSpeedWhateverTheFieldsSign`
+ * below; the test that would actually have CAUGHT it has to leave this layer —
+ * see `BegodeForwardRideConsumptionTest`, which drives a forward-moving wheel
+ * through to a consumption reading.
+ *
  * The last section covers the [MotionSource] surface — the same readings
  * mapped onto a [ru.sodovaya.volty.domain.model.ControllerData], where three
  * of them have to survive a type whose floats are not nullable: the two
@@ -205,15 +214,61 @@ class BegodeMotionProtocolTest {
     }
 
     @Test
-    fun syntheticReverseMotionReadsNegativeNotTwoThousandKmh() {
-        // SYNTHETIC. The field is signed: an unsigned read turns a wheel
-        // rolling gently backwards into 2340 km/h, which every alarm threshold
-        // downstream would treat as a catastrophe.
+    fun syntheticNegativeMotionReadsEighteenKmhAndNotTwoThousand() {
+        // SYNTHETIC. The field is signed and the published speed is its
+        // MAGNITUDE: an unsigned read turns a wheel rolling gently at 18.8 km/h
+        // into 2340 km/h, which every alarm threshold downstream would treat as
+        // a catastrophe — and `abs` of that unsigned read is the same 2340, so
+        // taking the magnitude does not hide the misread.
+        //
+        // Renamed and re-signed on 2026-07-30: this test used to be called
+        // `syntheticReverseMotionReadsNegativeNotTwoThousandKmh` and asserted
+        // −18.828, which stated the old promise that the sign travelled to
+        // callers. The first hardware test found forward reading NEGATIVE on two
+        // wheels, so a negative here is not "reverse" at all — see [speedKmh].
         val protocol = BegodeProtocol()
         protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = -523))
         assertEquals(
-            -18.828f, assertNotNull(protocol.speedKmh()), 1e-4f,
+            18.828f, assertNotNull(protocol.speedKmh()), 1e-4f,
             "an unsigned read of the same bytes would report 2340.468 km/h"
+        )
+        // The signedness of the FIELD is still pinned, one accessor over: a
+        // decoder that read bytes 4..5 unsigned would answer +2340.468 here too.
+        assertEquals(
+            -18.828f, assertNotNull(protocol.signedSpeedKmh()), 1e-4f,
+            "the direction is kept, just not published as the speed"
+        )
+    }
+
+    @Test
+    fun forwardMotionPublishesPositiveSpeedWhateverTheFieldsSign() {
+        // The first hardware test (field report S1): the rider's ET Max AND EXN
+        // both report FORWARD as a negative value in bytes 4..5. A negative
+        // speed is not merely cosmetic downstream — it nulls instant
+        // consumption (RideMetrics' MIN_SPEED_KMH guard), silences the SPEED
+        // alarm and freezes the session peak, all without an error.
+        //
+        // So the magnitude is taken at decode, exactly as `dutyPercent` does
+        // one field over. Negating instead would fix these two wheels and break
+        // the next rider's: WheelLog makes this a per-wheel preference because
+        // the polarity varies by firmware and wiring, and its own DEFAULT is
+        // `Math.abs`.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = -1000))
+        assertEquals(
+            36.0f, assertNotNull(protocol.speedKmh()), 1e-3f,
+            "a wheel moving forward at 36 km/h reads 36 km/h whichever sign its firmware picks"
+        )
+        // The direction is kept, just not published as the speed — the same
+        // "decoded but unsurfaced" shape as powerOnDistanceMeters and
+        // tiltbackSpeed, so a later reverse indicator starts from a decode that
+        // works.
+        assertEquals(-36.0f, assertNotNull(protocol.signedSpeedKmh()), 1e-3f)
+        // …and the controller sample the dashboard and the alarm read carries
+        // the magnitude too, not just the accessor.
+        assertEquals(
+            36.0f, assertNotNull(protocol.latestMotion(0)).speedKmh, 1e-3f,
+            "the sample is what every consumer folds and compares against upper thresholds"
         )
     }
 
@@ -459,10 +514,15 @@ class BegodeMotionProtocolTest {
         protocol.onNotification(liveFrame(voltageRaw = 0, speedRaw = 1000, tripMeters = 4321))
         assertNull(protocol.speedKmh(), "a boot placeholder is not a speed measurement")
         assertNull(protocol.powerOnDistanceMeters(), "a boot placeholder is not a trip measurement")
+        // The signed half takes the same gate, and it needs saying separately:
+        // it is an accessor with no production caller, so nothing else would
+        // notice it publishing a placeholder's contents as 36 km/h of reverse.
+        assertNull(protocol.signedSpeedKmh(), "nor a signed one")
 
         // ...and a genuine frame right after it is decoded normally.
-        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 1000))
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = -1000))
         assertEquals(36.0f, assertNotNull(protocol.speedKmh()), 1e-3f)
+        assertEquals(-36.0f, assertNotNull(protocol.signedSpeedKmh()), 1e-3f)
     }
 
     @Test

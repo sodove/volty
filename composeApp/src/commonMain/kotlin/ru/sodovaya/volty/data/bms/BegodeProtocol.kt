@@ -105,8 +105,14 @@ class BegodeProtocol(
     // BmsData is a sample of ONE battery and has no field for any of them.
     // They live on the protocol until a MotionSource surfaces them.
 
-    /** Last decoded speed, km/h — see [speedKmh] for what "last" means. */
+    /** Last decoded speed MAGNITUDE, km/h — see [speedKmh] for what "last" means. */
     private var speedKmhValue: Float = 0f
+
+    /**
+     * Last decoded speed with the frame's own SIGN kept, km/h — see
+     * [signedSpeedKmh]. [speedKmhValue] is this value's magnitude.
+     */
+    private var signedSpeedKmhValue: Float = 0f
 
     /** Last decoded power-on distance in metres — see [powerOnDistanceMeters]. */
     private var powerOnMetersValue: Long = 0L
@@ -282,11 +288,58 @@ class BegodeProtocol(
      * publish a confident 0 km/h for a wheel that has said nothing. Absent is
      * absent (spec §7.1).
      *
-     * NEGATIVE while the wheel rolls backwards: the field is signed (see
-     * [SPEED_KMH_PER_UNIT]). Callers that want a magnitude take abs; a caller
-     * that wants direction has it.
+     * ### A MAGNITUDE, never negative — and the magnitude is taken at DECODE
+     *
+     * The frame field is signed (see [SPEED_KMH_PER_UNIT]), and this used to
+     * promise "NEGATIVE while the wheel rolls backwards". The first real ride
+     * refuted the premise that made that promise harmless: on the rider's ET Max
+     * **and** EXN, riding **forward** reads NEGATIVE and rolling backwards reads
+     * positive (field report `2026-07-30-first-hardware-test` S1). So the sign is
+     * not a direction anyone can act on — it is a per-firmware convention.
+     *
+     * The magnitude is taken here, in the decoder, for the identical reasons
+     * [dutyPercent] gives one field over:
+     *  - **every consumer treats speed as a non-negative quantity compared
+     *    against UPPER thresholds** — `AlarmController`'s SPEED rule, the Ride
+     *    dashboard's session maximum, `MotionAggregator`'s `maxOf` fold and both
+     *    dial renderers, which draw it as a fraction of full scale. A negative
+     *    number therefore fails SILENTLY in the worst possible direction: it nulls
+     *    instant consumption (`RideMetrics`' `MIN_SPEED_KMH` guard rejects
+     *    everything below 0.5), leaves the speed alarm unfireable and freezes the
+     *    session peak, with no error anywhere. That is exactly what the rider saw;
+     *  - **negation would not fix it.** WheelLog exposes the polarity as a
+     *    per-wheel three-way preference precisely because it varies by firmware
+     *    and motor wiring, and its own DEFAULT is `Math.abs`. Negating fixes these
+     *    two wheels and breaks the next rider's into the same silent failure;
+     *  - **one convention, stated once per decoder**, is what stops this protocol
+     *    and VESC's disagreeing about what `ControllerData.speedKmh` means.
+     *
+     * No rider-facing polarity preference is offered: nothing in Volty consumes
+     * the direction, so the setting would exist only to let a rider break their
+     * own dashboard.
+     *
+     * The direction is not discarded — see [signedSpeedKmh].
      */
     fun speedKmh(): Float? = if (sawLiveMotion) speedKmhValue else null
+
+    /**
+     * The same reading with the frame's own SIGN kept — negative for whichever
+     * direction this particular firmware calls negative. Null on the same gate as
+     * [speedKmh].
+     *
+     * **Decoded but deliberately unsurfaced**, the same shape as
+     * [powerOnDistanceMeters], [tiltbackSpeed] and [wheelAlerts]: it has no
+     * production caller and must not acquire one by accident. It exists so that
+     * the signedness of bytes 4..5 stays a *testable* decode rather than a claim
+     * in a comment (an unsigned read of a gentle roll answers 2340 km/h in either
+     * accessor), and so a later part that wants a reverse indicator starts from a
+     * decode that works instead of from a field whose sign was thrown away.
+     *
+     * A consumer that ever does want the direction must first answer the question
+     * the field report leaves open: which sign means forward is per-firmware, so
+     * a reverse indicator needs evidence, not this value alone.
+     */
+    internal fun signedSpeedKmh(): Float? = if (sawLiveMotion) signedSpeedKmhValue else null
 
     /**
      * The wheel's OWN distance counter in METRES, reset by the wheel when it is
@@ -801,6 +854,12 @@ class BegodeProtocol(
         // Motion is per-connection state too: a reconnect may face a different
         // wheel, and the previous one's speed and mileage must not survive it.
         speedKmhValue = 0f
+        // The signed half goes with it. Both are gated behind [sawLiveMotion],
+        // cleared below, so neither clear is observable through any accessor
+        // today — they are here because a value that outlives its connection is
+        // one careless future read away from being the previous wheel's, and
+        // this field's whole point is to be read later.
+        signedSpeedKmhValue = 0f
         powerOnMetersValue = 0L
         sawLiveMotion = false
         odometerMetersValue = 0L
@@ -943,7 +1002,9 @@ class BegodeProtocol(
      * - bytes 2..3 BE: voltage on the 67.2 V scale (NOT pack volts — see
      *   [liveVoltageRaw]). `0x1704` = 5892 → 58.92 V for a wheel whose cells
      *   independently sum to 148.4 V, i.e. the documented 168 / 67.2 factor.
-     * - bytes 4..5 signed BE: speed, see [SPEED_KMH_PER_UNIT].
+     * - bytes 4..5 signed BE: speed, see [SPEED_KMH_PER_UNIT]. Read as signed,
+     *   published as a MAGNITUDE — the sign is a per-firmware convention, not a
+     *   direction (see [speedKmh] and [signedSpeedKmh]).
      * - bytes 6..7: **not decoded**, and not part of the trip. `0x003d` = 61
      *   in every frame of the capture. If bytes 6..9 were one 32-bit trip
      *   counter, as an out-of-date comment in WheelLog's own source claims,
@@ -979,7 +1040,16 @@ class BegodeProtocol(
         // as measurement. Independent of [smartBmsSeen] — motion belongs to the
         // wheel, and a wheel with a smart BMS still moves.
         if (liveVoltageRaw > 0) {
-            speedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
+            signedSpeedKmhValue = speedRaw * SPEED_KMH_PER_UNIT
+            // MAGNITUDE, for the same reason and in the same place as
+            // [dutyPercent]'s: every consumer of [ControllerData.speedKmh]
+            // treats it as a non-negative quantity compared against UPPER
+            // thresholds, and the first hardware test found this field signing
+            // FORWARD negative on two wheels. One convention, stated once per
+            // decoder, is what stops two protocols disagreeing about what the
+            // shared field means. The signed value is kept above rather than
+            // discarded — see [signedSpeedKmh].
+            speedKmhValue = abs(signedSpeedKmhValue)
             powerOnMetersValue = powerOnMeters
             sawLiveMotion = true
             // Rebuilt INSIDE the gate, not after it on `sawLiveMotion`. Those
@@ -1330,21 +1400,30 @@ class BegodeProtocol(
          * 4..5 as a fixed-point big-endian speed of `3.6 * value / 100` km/h.
          * Two independent statements in one file agreeing on 0.036.
          *
-         * **Still unconfirmed by any capture of THIS wheel**, and that gap
-         * cannot be closed here: bytes 4..5 read `00 00` in all 38 live frames
-         * of the ET Max capture, which is 13 seconds of a wheel standing
-         * still. So the tests pin the field's OFFSET and SIGNEDNESS with
-         * synthetic frames and the scale against WheelLog's documented one;
-         * what they cannot do is catch a firmware that disagrees with
-         * WheelLog.
+         * **Corroborated by the machine itself, and no longer to be refined.**
+         * This used to record that no capture of a moving wheel existed — bytes
+         * 4..5 read `00 00` in all 38 live frames of the ET Max capture, 13
+         * seconds of a wheel standing still — so the tests could pin only the
+         * field's OFFSET and SIGNEDNESS synthetically. The first hardware ride
+         * closed the part of that gap that mattered: asked about the magnitude
+         * specifically, the rider judged it *"плюс-минус верная скорость"*
+         * against how fast the wheel was visibly turning, on **two** wheels
+         * (field report `2026-07-30-first-hardware-test` §1 S1).
          *
-         * **What would close it:** one `:dumper` capture of a moving wheel
-         * beside a known reference speed (GPS, or the wheel's own app).
+         * That is not a measurement — "about right by eye" cannot separate 0.036
+         * from 0.034 — but it rules out both failure modes that could have
+         * shipped, and the report's §1 declares **no further work justified on
+         * this constant**: a GPS comparison would refine a number already inside
+         * its useful tolerance. What the same ride DID find is that the field's
+         * sign is not a direction — see [speedKmh], which now publishes the
+         * magnitude.
          *
          * (History, because it nearly shipped: this constant was 0.01 for one
          * commit — "hundredths of km/h" from memory rather than from source —
          * which reads 3.6x LOW, and a correction to 0.36 was proposed, which
-         * reads 10x HIGH. The source settles it at 0.036.)
+         * reads 10x HIGH. The source settles it at 0.036, and the ride agrees
+         * with the source: 3.6x low or 10x high would both have been obvious
+         * against a visibly spinning wheel.)
          */
         private const val SPEED_KMH_PER_UNIT = 0.036f
 
