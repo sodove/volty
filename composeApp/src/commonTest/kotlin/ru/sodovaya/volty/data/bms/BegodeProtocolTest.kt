@@ -719,6 +719,44 @@ class BegodeProtocolTest {
     }
 
     @Test
+    fun aThirtySixOfFortyRunMustNeverLatchACellCount() {
+        // A half-filled last cell packet: 36 of 40 real-shaped cells (avg
+        // ~3.711 V, matching the ET Max capture), the real capture's own
+        // frame voltage (147.2 V) and live-frame reading (58.88 V on the
+        // 67.2 V scale). Both the old loose completeness cutoff (0.9) AND the
+        // cross-check pass for this shortfall — measured: cellSum/frameVoltage
+        // = 133.596/147.2 = 0.9076 (above 0.9), and the live-frame ratio
+        // disagrees by the same ~0.85 % a genuinely complete branch does,
+        // because that check is a function of average cell voltage only and
+        // cancels count out algebraically. Latching 36S here would publish
+        // ~132.5 V for a 147.2 V rail — 10 % low, with hasInputVoltage = true,
+        // which is worse than the absence this task set out to remove.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 5888))
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        // 4 full packets (32 cells) plus a half-filled 5th packet (4 more,
+        // cells 36..39 never arrive) — 36 contiguous cells at 3711 mV each.
+        for (packet in 0 until 4) {
+            protocol.onNotification(cellFrameOf(type = 0x02, packetIndex = packet, mv = IntArray(8) { 3711 }))
+        }
+        protocol.onNotification(
+            cellFrameOf(type = 0x02, packetIndex = 4, mv = intArrayOf(3711, 3711, 3711, 3711, 0, 0, 0, 0))
+        )
+        assertEquals(
+            36, assertNotNull(protocol.latestData(0)).cellVoltages.size,
+            "precondition: 36 of 40, a half-filled last packet"
+        )
+        assertNull(
+            protocol.derivedCellCount(),
+            "36 of 40 is not a proven count — it must not latch 36S"
+        )
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertFalse(motion.hasInputVoltage, "no profile count and no proven derived one")
+    }
+
+    @Test
     fun resetClearsTheDerivedCellCount() {
         // A reconnect may face a different wheel: the constructor `val`
         // ([cellCount]) never needed a clear, but a value LEARNED this
@@ -728,13 +766,6 @@ class BegodeProtocolTest {
         assertEquals(40, protocol.derivedCellCount(), "precondition: fixture proved 40S")
         protocol.reset()
         assertNull(protocol.derivedCellCount(), "a reconnect may face a different wheel")
-    }
-
-    /** Live 0x00 frame with only the voltage field (bytes 2..3) set — all these tests need. */
-    private fun liveFrame(voltageRaw: Int): ByteArray {
-        val p = ByteArray(16)
-        p[0] = (voltageRaw shr 8).toByte(); p[1] = voltageRaw.toByte()
-        return frame(0x00, 24, p)
     }
 
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
@@ -814,6 +845,13 @@ class BegodeProtocolTest {
             p[i * 2 + 1] = mv[i].toByte()
         }
         return frame(type, packetIndex, p)
+    }
+
+    /** Live 0x00 frame with only the voltage field (bytes 2..3) set — all these tests need. */
+    private fun liveFrame(voltageRaw: Int): ByteArray {
+        val p = ByteArray(16)
+        p[0] = (voltageRaw shr 8).toByte(); p[1] = voltageRaw.toByte()
+        return frame(0x00, 24, p)
     }
 
     private fun assertSameDecodedData(a: BmsData, b: BmsData, label: String) {

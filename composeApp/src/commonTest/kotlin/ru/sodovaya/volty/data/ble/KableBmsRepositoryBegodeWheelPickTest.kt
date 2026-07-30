@@ -248,7 +248,7 @@ class KableBmsRepositoryBegodeWheelPickTest {
     // ----- 2. The walk: picker -> vehicle -> auto-fill -> protocol -> a real voltage -----
 
     @Test
-    fun `the picked wheel's cell count reaches its decoder, and POWER stops being a confident zero`() = repoTest { repo ->
+    fun `the picked wheel gets a real voltage immediately from its own smart BMS, and the auto-fill pipeline still round-trips`() = repoTest { repo ->
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val created = pickTheWheel()
 
@@ -283,9 +283,17 @@ class KableBmsRepositoryBegodeWheelPickTest {
         )
         assertEquals(40, autofilled.packs.single().cellCount)
 
-        // --- next connect: a FRESH protocol instance, told by the profile this
-        // time instead of deriving it again — the same real voltage, by the
-        // other route. ---
+        // --- next connect: a FRESH protocol instance, constructed with the
+        // now-autofilled profile. On THIS wheel the outcome is UNCHANGED from
+        // the first connect above — the wheel's own smart BMS derives 40S
+        // again regardless of what the profile says (derived beats profile,
+        // see `inputVoltageOrNull`'s precedence) — so this does NOT, by
+        // itself, prove the profile's count is what supplies the voltage.
+        // What it proves is that the whole pipeline (picker -> auto-fill -> a
+        // reconnect reading a cell-count-bearing profile) round-trips without
+        // error. Proving the profile route matters IN ISOLATION needs a wheel
+        // with no smart BMS at all, which is `KableBmsRepositoryDumbBegodeTest`'s
+        // territory, not this one's.
         Wire(repo, autofilled).replayTheCapture()
         advanceUntilIdle()
 
@@ -297,7 +305,8 @@ class KableBmsRepositoryBegodeWheelPickTest {
             "power is voltage x battery current — the '0.0 kW' this item is about"
         )
         assertTrue(motion.powerW > 0f, "and it is a number, not a confident zero")
-        // The battery half of the same link gets the count too, by the same route.
+        // The battery half of the same link gets its cell-summed voltage too —
+        // via branchVoltage's own cell sum, not the profile's cellCount at all.
         assertTrue(repo.activeData.value.voltage in 148.1f..148.7f)
     }
 

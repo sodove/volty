@@ -244,13 +244,24 @@ class KableBmsRepositoryBegodeControllerTest {
     fun `the profile's cell count reaches the wheel's decoder, so power is a number and not a lie`() = repoTest { repo ->
         // Without this the picker branch alone would ship a dashboard reading a
         // confident "0.0 kW" and "0.0 Wh/km" — not a blank and not a dash.
+        //
+        // Vacuous with respect to the PROFILE specifically since Task 2: this
+        // wheel's own smart BMS derives the identical 40S on its own, and
+        // `inputVoltageOrNull` prefers the derived count over the profile's —
+        // see `a wheel whose profile has no cell count still gets a real
+        // voltage from its own smart BMS` below for that path in isolation.
+        // What this test still pins is that a cell count on the profile does
+        // not BREAK anything and produces the same right answer, which
+        // matters for a wheel with no smart BMS (a dumb wheel never proves a
+        // derived count, so the profile is its only route — see
+        // `KableBmsRepositoryDumbBegodeTest`).
         val wire = Wire(repo, wheel(cellCount = 40))
         BegodeDumpFixture.chunks().forEach { wire.notify(it) }
         advanceUntilIdle()
 
         val motion = repo.activeMotion.value
         // 58.88 V on Begode's 67.2 V reference x (40 x 4.2 / 67.2) = 147.20 V.
-        assertEquals(147.20f, motion.inputVoltageV, 0.01f, "the 67.2 V scale needs the profile's cell count")
+        assertEquals(147.20f, motion.inputVoltageV, 0.01f, "the 67.2 V scale, from either the profile or the derived count")
         assertEquals(98.62f, motion.powerW, 0.5f, "power is voltage-derived and follows it")
     }
 

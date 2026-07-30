@@ -790,31 +790,45 @@ class BegodeProtocol(
     internal fun derivedCellCount(): Int? = derivedCellCountValue
 
     /**
-     * Learn [derivedCellCount] from branch 0's decoded cells, the moment the
-     * evidence is both COMPLETE and self-consistent with the live frame — and
-     * not a moment before, because [contiguousCells] legitimately returns a
-     * TRUNCATED run while packets are still arriving (say 8 of 40 mid-stream),
-     * and `cells.size` alone would derive an 8S pack and scale the live frame
-     * to ~29.5 V on a 168 V wheel. That is the single most likely way to get
-     * this task wrong, so nothing here trusts a raw list size.
+     * Learn [derivedCellCount] from branch 0's decoded cells, the moment a
+     * candidate count is CONFIRMED and a second, independent check confirms
+     * this wheel's live frame even follows the reference convention the
+     * resulting voltage will be scaled by.
      *
-     * Two gates, both borrowed rather than invented:
-     *  1. **Completeness** — [isCellSumComplete], the IDENTICAL test
-     *     [branchVoltage] already uses to decide whether to trust the cell sum
-     *     over the 0x01 frame's own voltage field. A mid-stream 8-of-40 branch
-     *     fails this outright — 8 cells sum to ~20 % of the reported pack
-     *     voltage, nowhere near the ~90 % only a genuinely full set clears —
-     *     so the truncation trap above is closed by this alone.
-     *  2. **Cross-check against the live frame** — a FREE second witness the
-     *     completeness test cannot see, because it never looks at the live
-     *     frame at all: `cellSum / (live 67.2-scale voltage)` should equal
-     *     `count * 4.2 / 67.2` for the count that is actually right. On the ET
-     *     Max capture the two disagree by ~0.86 % (measured), which is the
-     *     known discontinuity [inputVoltageOrNull] documents; a wheel whose
-     *     branch and live frame disagree beyond
-     *     [CELL_COUNT_CROSS_CHECK_TOLERANCE] gets an honest absence instead of
-     *     a guess — "a wheel that contradicts itself" is refused, not patched
-     *     over.
+     * **Gate 1 — count confirmation, [isCellCountConfirmed].**
+     * [contiguousCells] legitimately returns a TRUNCATED run while packets are
+     * still arriving — 8 of 40 mid-stream, or a half-filled last packet
+     * leaving 36 of 40 — and `cells.size` alone would derive a wrong count and
+     * scale the live frame to a confidently wrong voltage. That is the single
+     * most likely way to get this task wrong, so nothing here trusts a raw
+     * list size: [isCellCountConfirmed] requires `cellSum / frameVoltage` to
+     * sit within [CELL_COUNT_RATIO_TOLERANCE] of **1.0**, a band tight enough
+     * that even ONE missing cell falls outside it. See that function's KDoc
+     * for the measured numbers a reader can check the band against, and for
+     * why this is a DIFFERENT, tighter judgement from [isCellSumComplete] —
+     * reusing that one here was the bug an earlier version of this file had.
+     *
+     * **Gate 2 — the live-frame convention, NOT a second vote on the count.**
+     * This gate used to be documented as "a second witness for the count that
+     * is actually right", which review caught as false: writing the compare
+     * out algebraically (`count * avgCellV / liveVoltageV` against
+     * `count * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V`) shows `count` is a
+     * common factor on both sides of the comparison and cancels out
+     * completely — this gate is mathematically INCAPABLE of preferring one
+     * candidate count over another. A verified example: a 36-of-40 shortfall
+     * disagrees with the live frame by the same ~0.85 % a genuinely complete
+     * 40-cell reading does, because both are really testing the same thing —
+     * whether the AVERAGE cell voltage, scaled by [LIVE_VOLTAGE_REFERENCE_V]
+     * and divided by the live reading, comes back to [FULL_CELL_V] — and that
+     * quantity does not depend on how many cells went into the average.
+     *
+     * What this gate DOES catch, and why it stays: gate 1 only ever compares
+     * the 0x01 frame's OWN voltage field against the cells, and never looks at
+     * the live frame at all — so a wheel whose live-frame reading does not
+     * follow the 67.2 V / 16 S-equivalent convention [scaleLiveVoltage]
+     * assumes would sail through gate 1 and then be scaled wrongly forever.
+     * This gate is what refuses THAT wheel — a real, distinct failure mode,
+     * just not a count witness.
      *
      * Proved once per connection and then left alone (the `if (... != null)
      * return` guard): a pack's series-cell count cannot change mid-ride, and
@@ -824,17 +838,38 @@ class BegodeProtocol(
      */
     private fun updateDerivedCellCount(cells: List<Float>) {
         if (derivedCellCountValue != null) return
+        // Hard-coded to branch 0 regardless of whose cells [cells] holds —
+        // correct ONLY because `rebuild` gates every call into this function
+        // to packIndex == 0 (see rebuild's KDoc). If that gate is ever
+        // loosened, this line silently mixes another branch's cells with
+        // branch 0's frame voltage.
         val frameVoltage = branches[0].packVoltageV
         if (frameVoltage <= 0f) return
+        // Genuinely redundant with gate 2 below, verified rather than assumed:
+        // `cellSum / 0f` in Kotlin is +Infinity (IEEE 754), not NaN, and
+        // `abs(Infinity - x) > y` is always true for finite x, y — so gate 2
+        // already refuses a missing live frame on its own. Kept anyway: a
+        // reader should not have to re-derive that float semantics to see
+        // that "no live frame yet" is refused.
         if (liveVoltageRaw <= 0) return
         val cellSum = cells.sum()
-        if (!isCellSumComplete(cellSum, frameVoltage)) return
+        if (!isCellCountConfirmed(cellSum, frameVoltage)) return
         val count = cells.size
+        // Unreachable given isCellCountConfirmed just passed: an empty list
+        // sums to 0f, and [isCellCountConfirmed] would need `0f` within
+        // [CELL_COUNT_RATIO_TOLERANCE] of 1.0 times a positive frameVoltage,
+        // which cannot happen once frameVoltage > 0f (already checked above).
+        // Kept for defensive clarity rather than relying on that chain.
         if (count <= 0) return
         val liveVoltageV = liveVoltageRaw * 0.01f
-        val expectedRatio = count * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V
-        val actualRatio = cellSum / liveVoltageV
-        if (abs(actualRatio - expectedRatio) > expectedRatio * CELL_COUNT_CROSS_CHECK_TOLERANCE) return
+        val avgCellV = cellSum / count
+        // The reduced, count-free form of the comparison the KDoc above
+        // derives — written this way so the code states what it actually
+        // tests (average cell voltage against the live frame's convention),
+        // rather than dressing up a count-independent check as if it varied
+        // with count.
+        val impliedFullCellV = avgCellV * LIVE_VOLTAGE_REFERENCE_V / liveVoltageV
+        if (abs(impliedFullCellV - FULL_CELL_V) > FULL_CELL_V * LIVE_FRAME_CONVENTION_TOLERANCE) return
         derivedCellCountValue = count
     }
 
@@ -875,10 +910,10 @@ class BegodeProtocol(
      * **Known discontinuity, accepted rather than hidden.** The 0x01 frame's
      * pack-voltage field is ~0.1009 V/unit, not the 0.1 [parseBmsTelemetry]
      * decodes it at (measured on the ET Max capture; see [branchVoltage]).
-     * [derivedCellCount]'s cross-check compares the cell sum against the LIVE
+     * [updateDerivedCellCount]'s gate 2 compares the cell sum against the LIVE
      * frame, not that field, but the live frame's own 67.2 V reference carries
      * a similar-sized error: on the ET Max capture the scaled live reading
-     * settles at ~147.2 V against ~148.4 V of directly-summed cells, ~0.86 %
+     * settles at ~147.2 V against ~148.4 V of directly-summed cells, ~0.85 %
      * low. WheelLog inherits the same error and does not correct it either.
      * Acceptable versus absent — the rider's alternative was 0 W, not a
      * cleaner 147.2 V.
@@ -1432,6 +1467,16 @@ class BegodeProtocol(
      * two branches are parallel, so branch 0's series-cell count is the
      * pack's, but branch 1's is not evidence of anything beyond itself and
      * must not be consulted. See [derivedCellCount].
+     *
+     * **A newly-proven count reaches [ControllerData.inputVoltageV] one
+     * motion-bearing frame LATE.** This function does not call
+     * [rebuildMotion] — only [parseLiveFrame], [parseOdometerFrame] and
+     * [parseMotionFrame] do — so the cell/telemetry frame that proves the
+     * count updates [derivedCellCountValue] but publishes nothing new on
+     * [motion] itself; the next 0x00/0x04/0x07 frame is what surfaces it.
+     * Harmless on real hardware, which streams live frames continuously, but
+     * worth knowing before reading a test that expects the voltage the
+     * INSTANT the proving cell frame lands.
      */
     private fun rebuild(branch: BranchState, packIndex: Int) {
         if (!branch.sawTelemetry) return
@@ -1524,9 +1569,12 @@ class BegodeProtocol(
         /**
          * Scale a [liveVoltageOn672ScaleV] reading to real pack volts for a
          * wheel with [cellCount] cells in series: `v * (cellCount * 4.2) /
-         * 67.2`. Static because the protocol itself never has a cell count to
-         * call it with — the caller supplies one from the vehicle profile
-         * (user-set, or auto-filled from a prior smart-BMS connect).
+         * 67.2`. Static so it is callable with a count from EITHER source this
+         * file now has — [inputVoltageOrNull] calls it with [derivedCellCount]
+         * or the vehicle profile's [BegodeProtocol.cellCount], and
+         * `KableBmsRepository` calls it directly with a cell count read off a
+         * stored [ru.sodovaya.volty.domain.model.Pack] for the battery path,
+         * which has no protocol instance to call an instance method on.
          */
         fun scaleLiveVoltage(voltageOn672ScaleV: Float, cellCount: Int): Float =
             voltageOn672ScaleV * (cellCount * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V)
@@ -1737,47 +1785,103 @@ class BegodeProtocol(
         private const val CELL_SUM_COMPLETE_RATIO = 0.9f
 
         /**
-         * Whether [cellSum] represents every cell of a branch whose 0x01 frame
-         * reported [frameVoltage] as the whole-pack voltage — the ONE
-         * definition of "complete" this file uses, so [branchVoltage] and
-         * [updateDerivedCellCount] cannot silently disagree about what a
-         * complete cell set looks like. See [CELL_SUM_COMPLETE_RATIO]'s KDoc
-         * for the gap the ratio sits in.
+         * Whether [cellSum] is close enough to [frameVoltage] to trust as
+         * [branchVoltage]'s PUBLISHED voltage in place of the 0x01 frame's own
+         * field — a one-sided, LOOSE cutoff, correct for that decision and
+         * wrong for any other.
          *
-         * Callers must check `frameVoltage > 0f` themselves first (as
-         * [branchVoltage] already does): with no frame reference at all there
-         * is nothing to judge completeness against, and that is a different
-         * question from this one.
+         * The real sum runs ~0.9 % ABOVE the frame field once a branch is
+         * genuinely complete; one missing 8-cell packet out of five puts a
+         * partial sum ~20 % BELOW it. [CELL_SUM_COMPLETE_RATIO] sits in that
+         * gap, and for `branchVoltage`'s question — publish the cell sum, or
+         * fall back to the frame field? — that gap is wide enough: both
+         * candidates are still close to the true voltage, so picking either
+         * one is a small error.
          *
-         * Kept in the companion object rather than as an instance method, and
-         * left `internal`: a later caller outside this class needs the
-         * identical judgement (`KableBmsRepository.maybePersistCellCount`
-         * derives its persisted cell count from a sample's cell list alone
-         * today, which lets a dead BMS branch's few surviving cells overwrite
-         * a good stored count — precisely the truncation this function is
-         * built to catch). It takes only the two primitives that decision
-         * needs, so reusing it costs nothing.
+         * **NOT the right test for confirming a cell COUNT, and must not be
+         * reused for one — this function used to be [updateDerivedCellCount]'s
+         * completeness gate, and that was a real defect caught in review.** On
+         * the ET Max capture's own numbers a 36-of-40 run (a half-filled last
+         * cell packet) sums to 90.76 % of the frame field — ABOVE this
+         * function's 90 % cutoff — and would have LATCHED 36S, publishing
+         * ~132.5 V for a 147.2 V rail with `hasInputVoltage = true`: a
+         * confidently wrong voltage, worse than the absence this task set out
+         * to remove. See [isCellCountConfirmed] for the tight band a count
+         * decision needs instead, including
+         * `KableBmsRepository.maybePersistCellCount`'s (Task 3).
+         *
+         * `private`: nothing outside `branchVoltage` should reach for this
+         * one, and leaving it `internal` is exactly what invited the mix-up
+         * above.
          */
-        internal fun isCellSumComplete(cellSum: Float, frameVoltage: Float): Boolean =
+        private fun isCellSumComplete(cellSum: Float, frameVoltage: Float): Boolean =
             cellSum >= frameVoltage * CELL_SUM_COMPLETE_RATIO
 
         /**
-         * How far `cellSum / liveVoltageV` may sit from `count * 4.2 / 67.2`
-         * — expressed as a FRACTION of the expected ratio — and still count as
-         * the live frame agreeing with a candidate [derivedCellCount].
+         * Whether [cellSum] is close enough to [frameVoltage] to CONFIRM a
+         * candidate cell COUNT for [derivedCellCount] — a TIGHT band around
+         * ratio 1.0, not [isCellSumComplete]'s loose one-sided cutoff.
          *
-         * Measured disagreement on the ET Max capture is ~0.86 % (the known
+         * The band, and the arithmetic a reader can check it against — all
+         * measured on the ET Max capture, branch 0, `cellSum / frameVoltage`:
+         *  - complete (40 of 40): ratio **1.00851** (0.85 % ABOVE 1.0);
+         *  - one cell short (39 of 40): ratio **0.98328** (1.67 % below 1.0);
+         *  - two cells short (38 of 40): ratio **0.95806** (4.19 % below);
+         *  - one packet short, 8 cells (32 of 40): ratio **0.80671** (19.33 %
+         *    below).
+         * [CELL_COUNT_RATIO_TOLERANCE] (1 %) sits comfortably above the
+         * complete reading's 0.85 % deviation and comfortably below even a
+         * SINGLE missing cell's 1.67 % — a genuinely full set always clears
+         * it, and the smallest possible shortfall on real hardware (one cell)
+         * never does, with roughly double the margin either side.
+         *
+         * Kept in the companion object, `internal`: this — not
+         * [isCellSumComplete] — is the judgement a later caller outside this
+         * class should reuse for a cell-COUNT decision. Task 3's
+         * `KableBmsRepository.maybePersistCellCount` derives its persisted
+         * count from a sample's cell-list size today with no completeness
+         * check at all, and that is a count decision exactly like this one —
+         * a dead branch's few surviving cells must not overwrite a good
+         * stored count. It takes only the two primitives that decision needs,
+         * so reusing it costs nothing.
+         */
+        internal fun isCellCountConfirmed(cellSum: Float, frameVoltage: Float): Boolean {
+            val ratio = cellSum / frameVoltage
+            return ratio in (1f - CELL_COUNT_RATIO_TOLERANCE)..(1f + CELL_COUNT_RATIO_TOLERANCE)
+        }
+
+        /**
+         * Half-width of [isCellCountConfirmed]'s band around ratio 1.0 — see
+         * that function's KDoc for the measured numbers this sits between.
+         */
+        private const val CELL_COUNT_RATIO_TOLERANCE = 0.01f
+
+        /**
+         * How far the average cell voltage, scaled by [LIVE_VOLTAGE_REFERENCE_V]
+         * and divided by the live reading, may sit from [FULL_CELL_V] — as a
+         * FRACTION of [FULL_CELL_V] — and still count as this wheel's live
+         * frame following the 67.2 V / 16 S-equivalent reference convention
+         * [scaleLiveVoltage] assumes.
+         *
+         * **Not a count check — see [updateDerivedCellCount]'s gate 2 KDoc.**
+         * This used to be named and documented as a "cross-check" that voted
+         * on the count alongside [isCellCountConfirmed]; review caught that
+         * `count` cancels out of the comparison algebraically, so it cannot
+         * distinguish a right count from a wrong one — verified: a 36-of-40
+         * shortfall disagrees with the live frame by the same ~0.85 % a
+         * genuinely complete 40-cell reading does. What it DOES catch is a
+         * wheel whose live-frame reading does not follow the convention at
+         * all, which [isCellCountConfirmed] cannot see (it never looks at the
+         * live frame).
+         *
+         * Measured disagreement on the ET Max capture is ~0.85 % (the known
          * discontinuity [inputVoltageOrNull] documents: the live frame's 67.2 V
          * reference and the directly-summed cells are two independent
-         * measurements of the same rail). 5 % gives roughly five times that
-         * headroom for wheels not yet seen, the same multiple
-         * [SECTION_SPLIT_TOLERANCE_V] uses over ITS observed disagreement. This
-         * is a plausibility check on a count [isCellSumComplete] already
-         * accepted, not the primary defence against a truncated cell list —
-         * that is [isCellSumComplete] itself, which a genuinely partial set
-         * (8 of 40) fails outright, nowhere near this tolerance's edge.
+         * measurements of the same rail). 5 % gives roughly six times that
+         * headroom for wheels not yet seen, the same order of magnitude
+         * [SECTION_SPLIT_TOLERANCE_V] uses over ITS observed disagreement.
          */
-        private const val CELL_COUNT_CROSS_CHECK_TOLERANCE = 0.05f
+        private const val LIVE_FRAME_CONVENTION_TOLERANCE = 0.05f
 
         /**
          * How far a candidate section's cell sum may sit from the assembly
