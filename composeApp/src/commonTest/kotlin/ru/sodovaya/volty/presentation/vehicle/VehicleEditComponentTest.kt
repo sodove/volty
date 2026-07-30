@@ -1068,6 +1068,96 @@ class VehicleEditComponentTest {
         assertEquals(MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f), saved.controllers[0].motor)
     }
 
+    // --- G §9.2 item 7: a learned dial range describes hardware -----------------------------------
+
+    /**
+     * **Adding a second controller doubles what the vehicle can pull, so the learned dial widths no
+     * longer describe it and must be cleared.**
+     *
+     * Hung off the same recomputation the derived-battery rule uses, which is why this test also
+     * asserts the controller list actually changed — otherwise a component that cleared the peaks
+     * unconditionally would pass.
+     */
+    @Test
+    fun `adding a controller clears the learned dial ranges`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onAddController(ControllerType.VESC, "CC:DD", "uBox R")
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals(2, saved.controllers.size, "the hardware really did change")
+        assertEquals(0f, saved.gaugePeakCurrentA, "137 A was one controller's peak, not two")
+        assertEquals(0f, saved.gaugePeakPowerW)
+    }
+
+    @Test
+    fun `removing a controller clears the learned dial ranges too`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val rear = Controller(index = 1, label = "Rear", controllerType = ControllerType.VESC, address = "CC:DD")
+        val repo = FakeVehicleRepo(
+            listOf(controllerOnlyVehicle().copy(controllers = originalControllers + rear))
+        )
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onRemoveController(c.state.value.draft.controllers[1].key)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
+        assertEquals(0f, repo.upserts.single().gaugePeakPowerW)
+    }
+
+    /**
+     * **The other direction, and the one that keeps the rule from being "any controller edit".**
+     *
+     * Renaming a card and correcting a motor's geometry both mark `controllersEdited`, but neither
+     * changes an ohm of hardware — throwing away a range that took a whole ride to learn because
+     * somebody fixed a typo would be its own defect. `GaugeScale.peaksStillApply` owns which fields
+     * count, and this test is what stops the condition drifting back to the edited flag.
+     */
+    @Test
+    fun `renaming a controller or fixing its geometry keeps the learned dial ranges`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val key = c.state.value.draft.controllers.single().key
+        c.onControllerLabelChanged(key, "Front")
+        c.onControllerWheelDiameterChanged(key, 660)
+        c.onSave()
+        advanceUntilIdle()
+
+        val saved = repo.upserts.single()
+        assertEquals("Front", saved.controllers.single().label, "the edit really did land")
+        assertEquals(660, saved.controllers.single().motor.wheelDiameterMm)
+        assertEquals(137f, saved.gaugePeakCurrentA, "a rename is not a hardware change")
+        assertEquals(6421f, saved.gaugePeakPowerW)
+    }
+
+    /**
+     * A controller's ADDRESS is hardware identity: a rider who corrects it is pointing the vehicle at
+     * a different board, whatever the card is called.
+     */
+    @Test
+    fun `re-addressing a controller clears the learned dial ranges`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onControllerAddressChanged(c.state.value.draft.controllers.single().key, "ZZ:ZZ")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
+    }
+
     /**
      * **The exception the UI must not be able to reach.** [Vehicle]'s `init`
      * requires a source; the component refuses the removal and advertises

@@ -25,6 +25,7 @@ import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.addBmsType
 import ru.sodovaya.volty.presentation.picker.addControllerType
@@ -923,6 +924,11 @@ class DefaultVehicleEditComponent(
  * Everything not listed follows from that: `cellCount`, `createdAt`,
  * `lastConnectedAt`, `isPinned`, `motionAlerts`.
  *
+ * `gaugePeakCurrentA` / `gaugePeakPowerW` are the one entry that is not a form
+ * field: they are cleared, not written, and only when the CONTROLLER SET changed
+ * (`G §9.2` item 7) — a learned dial range describes hardware, so it cannot
+ * outlive the hardware being swapped out. See the body.
+ *
  * `yieldBmsToHeadUnit` left that list in Task 4 and is now written from
  * [VehicleEditComponent.State.yieldBmsToHeadUnit] — which is **seeded** from
  * the loaded vehicle rather than resolved, so the three-valued column survives
@@ -954,22 +960,7 @@ class DefaultVehicleEditComponent(
  * freshly-read vehicle before it is projected, so a cell count the auto-fill
  * wrote while the form was open is not reverted by a save that renamed a pack.
  */
-private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
-    name = s.name,
-    iconKey = s.iconKey,
-    chemistry = s.chemistry,
-    topology = s.topology,
-    averagingWindowMin = s.averagingWindowMin,
-    alertConfig = alertConfig.withEdits(s),
-    packs = if (s.packsEdited) {
-        s.draft.reanchoredTo(this).toPacks()
-    } else {
-        // Index 0 ONLY: a wheel's second branch keeps the positional label
-        // `expandedTo` gave it, and a pack-less vehicle maps an empty list to
-        // an empty list — no phantom battery, and no `packs.isEmpty()` special
-        // case to forget.
-        packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
-    },
+private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
     // The draft is the ONLY writer of `controllers`, motor geometry included —
     // one writer, so there is no second copy of the "blank field falls back to
     // MotorConfig()'s default" rule to drift (it is stated once, in
@@ -981,15 +972,47 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle = copy(
     // asymmetry is deliberate — a controller-only edit leaves `packs` to the
     // stored row, which is what keeps a branch persisted underneath this form
     // from being dropped, and nothing writes `controllers` underneath us.
-    controllers = if (s.controllersEdited || s.packsEdited) {
+    val nextControllers = if (s.controllersEdited || s.packsEdited) {
         s.draft.reanchoredTo(this).toControllers()
     } else {
         controllers
-    },
-    dashboardStyle = s.dashboardStyle,
-    secondaryGauge = s.secondaryGauge,
-    yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
-)
+    }
+    // G §9.2 item 7. Hung off the SAME recomputation the derived-battery rule
+    // uses — `nextControllers` — rather than a second change-detector, and asked
+    // of the resulting list rather than of `controllersEdited`: a rider who opens
+    // the composer and retypes a label has "edited the controllers" without
+    // changing an ohm of hardware, and throwing away a hard-learned dial range
+    // for that would be its own defect. GaugeScale.peaksStillApply owns which
+    // fields count.
+    //
+    // These two names being here does not weaken this function's "a field nobody
+    // names is preserved" rule — they are named precisely BECAUSE the composer
+    // edits what they describe, which is the only kind of entry that belongs.
+    val peaksApply = GaugeScale.peaksStillApply(controllers, nextControllers)
+    return copy(
+        name = s.name,
+        iconKey = s.iconKey,
+        chemistry = s.chemistry,
+        topology = s.topology,
+        averagingWindowMin = s.averagingWindowMin,
+        alertConfig = alertConfig.withEdits(s),
+        packs = if (s.packsEdited) {
+            s.draft.reanchoredTo(this).toPacks()
+        } else {
+            // Index 0 ONLY: a wheel's second branch keeps the positional label
+            // `expandedTo` gave it, and a pack-less vehicle maps an empty list to
+            // an empty list — no phantom battery, and no `packs.isEmpty()` special
+            // case to forget.
+            packs.mapIndexed { i, p -> if (i == 0) p.copy(label = s.name) else p }
+        },
+        controllers = nextControllers,
+        dashboardStyle = s.dashboardStyle,
+        secondaryGauge = s.secondaryGauge,
+        yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
+        gaugePeakCurrentA = if (peaksApply) gaugePeakCurrentA else 0f,
+        gaugePeakPowerW = if (peaksApply) gaugePeakPowerW else 0f
+    )
+}
 
 /** The five thresholds this form exposes; the rest of [AlertConfig] is not its business. */
 private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = copy(
