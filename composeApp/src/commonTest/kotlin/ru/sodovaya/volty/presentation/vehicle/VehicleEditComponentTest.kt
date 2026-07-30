@@ -1378,9 +1378,14 @@ class VehicleEditComponentTest {
      * screen. Once the rider touches the pack list, the save replaces `packs`
      * wholesale from the draft, so a stale `cellCount` would overwrite the real
      * one — and `lastPersistedCellCount` then suppresses re-persisting for the
-     * rest of the process, so nothing would ever restore it. Cell count is
-     * spec'd as auto-filled from telemetry (`G §4`); silently reverting it is a
-     * value the rider cannot re-enter.
+     * rest of the process, so nothing would ever restore it.
+     *
+     * This is the UNTOUCHED path — the rider edited some OTHER pack field and
+     * never typed a cell count in this session (`PackDraft.cellCountEdited`
+     * stays false), so the freshly-read row must still win. Task 3 made the
+     * field editable again for the wheel that has no auto-fill to fall back
+     * on at all (no smart BMS, no cell frames, ever) — see
+     * `an edited cell count is not reverted by a save` for that side of it.
      */
     @Test
     fun `a cell count auto-filled while the form was open survives a composed save`() = runTest {
@@ -1415,6 +1420,39 @@ class VehicleEditComponentTest {
         assertEquals("Батарея", saved.packs.single().label, "the edit itself must land")
         assertEquals(20, saved.packs.single().cellCount, "and the auto-filled count must not be reverted")
         assertEquals("moved", saved.packs.single().aliasGroup, "nor any other field written underneath")
+    }
+
+    /**
+     * The other side of the switch above (Task 3): once the RIDER has typed a
+     * cell count in this session, [PackDraft.cellCountEdited] is true and that
+     * typed value — not whatever the freshly-read row now holds — is what
+     * this save writes. This is the whole point on a wheel with no smart BMS:
+     * nothing else will ever supply this number.
+     *
+     * Safe on a smart-BMS wheel too, for a reason this test does not need to
+     * exercise: `KableBmsRepository.maybePersistCellCount` keeps running on
+     * the SAME live connection and re-asserts its own measurement on the next
+     * confirmed, stable sample — a save landing a rider's typed value is not
+     * the last word there, only here.
+     */
+    @Test
+    fun `an edited cell count is not reverted by a save`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = existingVehicle().copy(packs = listOf(existingVehicle().packs.single().copy(cellCount = null)))
+        val repo = FakeVehicleRepo(listOf(v))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // A row moved underneath the form too, exactly like the test above —
+        // the rider's typed value must win over THIS fresh row, not merely
+        // over the load-time snapshot.
+        repo.upsert(v.copy(packs = listOf(v.packs.single().copy(cellCount = 30))))
+
+        c.onPackCellCountChanged(c.state.value.draft.packs.single().key, 24)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(24, repo.upserts.last().packs.single().cellCount, "the rider's typed value must land")
     }
 
     /**
@@ -1551,6 +1589,7 @@ class VehicleEditComponentTest {
         c.onPackTypeChanged(pk, BmsType.ANT_BMS)
         c.onPackAddressChanged(pk, "AN:01")
         c.onPackCanIdChanged(pk, 33)
+        c.onPackCellCountChanged(pk, 24)
         c.onAddPack(BmsType.ANT_BMS, "AN:02", "Вторая")
         c.onMovePack(0, 1)
         c.onControllerLabelChanged(ck, "Левый")
@@ -1570,9 +1609,9 @@ class VehicleEditComponentTest {
                     label = "Батарея",
                     bmsType = BmsType.ANT_BMS,
                     bmsAddress = "AN:01",
-                    // Not modelled as editable here, and carried on the origin
-                    // rather than re-typed by the rider.
-                    cellCount = 20,
+                    // Editable again since Task 3 — the rider's typed value,
+                    // not the fixture's stored 20.
+                    cellCount = 24,
                     canId = 33,
                     aliasGroup = "alias-a"
                 )

@@ -195,7 +195,7 @@
     <string name="vehicle_field_bms_address">BMS address</string>
     <string name="vehicle_field_controller_type">Controller type</string>
     <string name="vehicle_field_chemistry">Chemistry</string>
-    <string name="vehicle_field_cell_count">Cell count (optional)</string>
+    <string name="vehicle_field_cell_count">Cell count (needed for a wheel with no BMS)</string>
     <string name="vehicle_field_averaging_window">Averaging window</string>
     <string name="vehicle_section_alerts">Alert thresholds</string>
     <string name="vehicle_field_cell_high">Cell V high</string>
@@ -225,7 +225,6 @@
     <string name="vehicle_field_alias_group_caption">Pick another battery if it is this same pack reached a different way — it is then counted once, not twice.</string>
     <string name="vehicle_field_yield_bms">Yield the BMS to the head unit while riding</string>
     <string name="vehicle_field_yield_bms_caption">The battery is reachable both directly and through the head unit, and only one of them can hold it. On: the app lets go of the direct link once the head unit is delivering.</string>
-    <string name="vehicle_field_cell_count_auto">Cells (from telemetry)</string>
     <string name="vehicle_field_derived_battery">Battery from this controller</string>
     <string name="vehicle_field_derived_battery_caption">On by default while the vehicle has no BMS of its own.</string>
     <string name="vehicle_field_topology">Battery wiring</string>

@@ -657,9 +657,28 @@ class KableBmsRepository private constructor(
      * user input: once the reported count is stable, write it back to the
      * saved vehicle so the UI can show "16s" before the first sample arrives
      * on later connects. Guests and demo are transient and never persisted.
+     *
+     * **Stability alone is not enough (Task 3).** Three consecutive samples
+     * with an identical cell-list SIZE is exactly what a dead BMS branch also
+     * produces — 8 of 40 cells, stuck there for the life of the connection —
+     * and the streak check above cannot tell that apart from a genuinely
+     * complete reading. So a second gate,
+     * [BegodeProtocol.isCellCountConfirmed], must also pass before a write
+     * happens: it compares the candidate sample's own cell-sum against its own
+     * reported pack voltage, and a truncated set reads far short of that
+     * voltage no matter how many identical samples it produces.
+     *
+     * Reused rather than redefined — [BegodeProtocol]'s sibling
+     * `isCellSumComplete` is a DIFFERENT, LOOSE judgement `branchVoltage` uses
+     * for a different decision (which number to publish, not whether to trust
+     * a count) and is deliberately kept `private` so this call site cannot
+     * reach for it by mistake; see [BegodeProtocol.isCellCountConfirmed]'s
+     * KDoc for the measured numbers showing why a 36-of-40 run would clear
+     * that looser gate and must not clear this one.
      */
     private suspend fun maybePersistCellCount(data: BmsData) {
-        val n = primaryPackCellCount() ?: data.cellVoltages.size
+        val source = primaryPackData()?.takeIf { it.cellVoltages.isNotEmpty() } ?: data
+        val n = source.cellVoltages.size
         if (!data.isConnected || n == 0) {
             observedCellCountStreak = 0
             return
@@ -671,6 +690,7 @@ class KableBmsRepository private constructor(
             observedCellCountStreak = 1
         }
         if (observedCellCountStreak < cellCountStableSamples) return
+        if (!BegodeProtocol.isCellCountConfirmed(source.cellVoltages.sum(), source.voltage)) return
         val vehicle = _activeVehicle.value ?: return
         if (vehicle.isGuest || vehicle.isDemo) return
         // packs.firstOrNull(), not the `Vehicle.cellCount` shim: that is
@@ -688,14 +708,18 @@ class KableBmsRepository private constructor(
     }
 
     /**
-     * Cell count of the PRIMARY pack, or null when the orchestrator has not
-     * published one yet (then [maybePersistCellCount] falls back to the sample
-     * it was handed).
+     * The PRIMARY pack's own decoded sample, or null when the orchestrator has
+     * not published one yet (then [maybePersistCellCount] falls back to the
+     * vehicle-level aggregate it was handed, for both the candidate count and
+     * the completeness check below — the same source for both, never mixed).
      *
      * [Vehicle.cellCount] describes one pack, but [_activeData] carries the
      * vehicle-level AGGREGATE, whose `cellVoltages` is the union of every
-     * online pack — 80 values for a two-branch Begode. Persisting that would
-     * store a 40S wheel as "80s".
+     * online pack — 80 values for a two-branch Begode — and whose `voltage`
+     * is the parallel mean of every branch's own. Persisting the aggregate's
+     * count would store a 40S wheel as "80s"; gating on the aggregate's sum
+     * against the aggregate's voltage would compare a doubled sum against a
+     * single branch's voltage and refuse every two-branch wheel outright.
      *
      * INVARIANT: [_activeVehicleData] is assumed to describe the SAME
      * connection as [_activeVehicle], which [maybePersistCellCount] persists
@@ -706,12 +730,11 @@ class KableBmsRepository private constructor(
      * alone, so the safety rests entirely on that ordering. A violation
      * would persist one vehicle's branch cell count into another's profile.
      */
-    private fun primaryPackCellCount(): Int? =
+    private fun primaryPackData(): BmsData? =
         _activeVehicleData.value.packs
             .firstOrNull()
             ?.takeIf { it.isOnline }
-            ?.data?.cellVoltages?.size
-            ?.takeIf { it > 0 }
+            ?.data
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         // Keyed by EVERY address each vehicle can be recognised by — the same

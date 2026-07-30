@@ -110,24 +110,43 @@ fun derivedBatteryChoiceFor(controller: Controller, default: Boolean): DerivedBa
  * [Pack] requires no change here.
  *
  * **[toPack] names exactly the fields this composer edits, and nothing else.**
- * [cellCount] is carried on the draft so a row can *show* it, but it is written
- * by telemetry (`maybePersistCellCount`), not here — so it comes off [origin],
- * which [reanchoredTo] re-points at the freshly-read row at save time. That is
- * what stops a save from reverting a cell count the auto-fill wrote while this
- * form was open.
  *
- * ### [aliasGroup] is editable since Task 4, and [aliasEdited] is why that is safe
+ * ### [cellCount] is a rider field again (Task 3), on [aliasGroup]'s shape
+ *
+ * This used to be read-only, on the premise that `KableBmsRepository`'s
+ * `maybePersistCellCount` auto-fill always supplies it. That premise fails for
+ * a wheel with no smart BMS: it sends no cell frames at all, so the auto-fill's
+ * candidate count is permanently `0` and it never fires — and that is exactly
+ * the wheel that cannot derive a rail voltage any other way. So the field is
+ * editable again, on precisely [aliasGroup]'s terms below rather than an
+ * unconditional member of the `copy()`: writing [cellCount] unconditionally
+ * would hand back a stale load-time value the moment the rider touched any
+ * OTHER field on this same pack (see [reanchoredTo]), reverting a count the
+ * auto-fill had *already* written in from telemetry while this form was open.
+ * [cellCountEdited] is the same "once the rider has touched it" gate
+ * [aliasEdited] is for the field below, and for the same reason.
+ *
+ * This is deliberately **not** a guard against the auto-fill overwriting a
+ * typed value *later*, while the connection stays open — a smart-BMS wheel's
+ * own measurement should win over whatever the rider typed (forty measured
+ * cells beat a rider's memory), and `maybePersistCellCount` simply keeps
+ * running and re-asserts its count on the next confirmed, stable sample.
+ * [cellCountEdited] only protects the one save *this form* performs from
+ * clobbering a fresher stored value with a stale one; it is never persisted
+ * and never reaches [Pack].
+ *
+ * ### [aliasGroup] is editable since Task 4, and [aliasEdited] is the same shape
  *
  * Grouping two battery sources as one physical pack (`G §5`, `01-linking §4`) is
  * knowledge only the rider has, so the composer had to become a writer of this
- * field. Making it an unconditional member of the `copy()` below would have
+ * field too. Making it an unconditional member of the `copy()` below would have
  * inverted the guarantee above for it: a stale load-time value would be written
  * back over whatever the stored row had grown underneath the form.
  *
  * So the rule is stated the other way round — **the draft writes this field only
  * once the rider has touched it**. Until then it still comes off [origin], i.e.
- * off the freshly-read row, exactly like [cellCount]. [aliasEdited] is that
- * "once", per pack rather than per form ([VehicleEditComponent.State.packsEdited]
+ * off the freshly-read row, exactly like [cellCount] now works. [aliasEdited] is
+ * that "once", per pack rather than per form ([VehicleEditComponent.State.packsEdited]
  * is set by any edit at all, including renaming an unrelated pack, and would
  * have made a rename claim ownership of the grouping).
  */
@@ -137,6 +156,8 @@ data class PackDraft(
     val bmsType: BmsType,
     val address: String,
     val cellCount: Int? = null,
+    /** Whether the RIDER set [cellCount] on this pack — see the class doc. */
+    val cellCountEdited: Boolean = false,
     val canId: Int? = null,
     val aliasGroup: String? = null,
     /** Whether the RIDER set [aliasGroup] on this pack — see the class doc. */
@@ -154,7 +175,8 @@ data class PackDraft(
                 bmsAddress = address,
                 canId = canId
             )
-        return if (aliasEdited) base.copy(aliasGroup = aliasGroup) else base
+        val withCellCount = if (cellCountEdited) base.copy(cellCount = cellCount) else base
+        return if (aliasEdited) withCellCount.copy(aliasGroup = aliasGroup) else withCellCount
     }
 }
 

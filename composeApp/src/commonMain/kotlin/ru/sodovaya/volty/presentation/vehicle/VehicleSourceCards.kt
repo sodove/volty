@@ -47,7 +47,7 @@ import volty.composeapp.generated.resources.vehicle_field_alias_group
 import volty.composeapp.generated.resources.vehicle_field_alias_group_caption
 import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_can_id
-import volty.composeapp.generated.resources.vehicle_field_cell_count_auto
+import volty.composeapp.generated.resources.vehicle_field_cell_count
 import volty.composeapp.generated.resources.vehicle_field_controller_type
 import volty.composeapp.generated.resources.vehicle_field_derived_battery
 import volty.composeapp.generated.resources.vehicle_field_derived_battery_caption
@@ -210,23 +210,24 @@ internal fun PackSourceCard(
         )
         LabelField(draft.label) { component.onPackLabelChanged(draft.key, it) }
 
-        // Read-only on purpose (`G §4`): the cell count is auto-filled from
-        // telemetry (`KableBmsRepository.maybePersistCellCount`), so a text box
-        // here would ask the rider to type what the app already learned — and
-        // would hand a stale load-time value back to the row the connection is
-        // writing to underneath this form (see `VehicleDraft.reanchoredTo`).
-        ReadOnlyRow(
-            stringResource(Res.string.vehicle_field_cell_count_auto),
-            draft.cellCount?.toString() ?: EM_DASH
-        )
+        // Editable again (Task 3): a wheel with no smart BMS sends no cell
+        // frames at all, so `KableBmsRepository.maybePersistCellCount`'s
+        // auto-fill can never derive this count, and that is exactly the wheel
+        // that cannot show a rail voltage any other way. `onPackCellCountChanged`
+        // marks the pack `cellCountEdited`, which is what stops this typed value
+        // from being reverted by a stale load-time snapshot on save while
+        // leaving a SMART-BMS wheel's own live measurement free to keep
+        // overwriting it on every later confirmed sample (`PackDraft` KDoc).
+        IntField(
+            stringResource(Res.string.vehicle_field_cell_count),
+            draft.cellCount
+        ) { component.onPackCellCountChanged(draft.key, it) }
     }
 }
 
 // ---------------------------------------------------------------------------
 // The card scaffold
 // ---------------------------------------------------------------------------
-
-private const val EM_DASH = "—"
 
 /**
  * Header (name, reorder, remove) → the issues this source has → the always-open

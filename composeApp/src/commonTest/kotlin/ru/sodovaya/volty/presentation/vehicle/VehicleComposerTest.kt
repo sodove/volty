@@ -144,6 +144,43 @@ class VehicleComposerTest {
     }
 
     /**
+     * The dumb-wheel case Task 3 exists for: no smart BMS ever confirms a
+     * count, so the rider's own typed value is the ONLY way this pack gets
+     * one — and it must win over whatever `origin` still holds, unlike every
+     * OTHER pack field the composer does not edit.
+     */
+    @Test
+    fun `an edited cell count overrides the stored one`() {
+        val loaded = vehicle(
+            packs = listOf(pack(0, "Wheel", BmsType.BEGODE, "WH:01", cellCount = null)),
+            controllers = listOf(controller(0, "C", ControllerType.BEGODE, "WH:01"))
+        )
+        val d = draftOf(loaded).let {
+            it.updatePack(it.packs.single().key) { p -> p.copy(cellCount = 24, cellCountEdited = true) }
+        }
+
+        assertEquals(24, d.toPacks().single().cellCount)
+    }
+
+    /**
+     * The complement of the test above, stated directly on `toPack` rather
+     * than through a whole-vehicle re-anchor: touching a DIFFERENT field on
+     * the same pack must not turn on [PackDraft.cellCountEdited] by itself —
+     * `mutateDraft`'s `packsEdited` is form-wide and would otherwise be the
+     * only signal, which is exactly the granularity `reanchoredTo`'s KDoc
+     * warns is too coarse for a field-level guarantee.
+     */
+    @Test
+    fun `an unedited cell count still comes off origin after another field changes`() {
+        val origin = pack(0, "Wheel", BmsType.BEGODE, "WH:01", cellCount = 40)
+        val d = PackDraft(key = "p0", label = "Wheel", bmsType = BmsType.BEGODE, address = "WH:01", origin = origin)
+            .copy(label = "Renamed")
+
+        assertEquals(false, d.cellCountEdited, "label alone must not mark the cell count touched")
+        assertEquals(40, d.toPack(0).cellCount, "and the stored count must still come through")
+    }
+
+    /**
      * The draft renumbers from its own order rather than carrying stored
      * indices, which is what makes reorder mean anything — and is also a
      * repair: `VehicleConnection` matches a source by index and

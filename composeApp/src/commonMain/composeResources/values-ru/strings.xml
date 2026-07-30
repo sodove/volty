@@ -193,7 +193,7 @@
     <string name="vehicle_field_bms_address">Адрес BMS</string>
     <string name="vehicle_field_controller_type">Тип контроллера</string>
     <string name="vehicle_field_chemistry">Химия</string>
-    <string name="vehicle_field_cell_count">Кол-во ячеек (опц.)</string>
+    <string name="vehicle_field_cell_count">Кол-во ячеек (нужно, если нет BMS)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>
     <string name="vehicle_section_alerts">Пороги алертов</string>
     <string name="vehicle_field_cell_high">Макс. напряжение ячейки</string>
@@ -223,7 +223,6 @@
     <string name="vehicle_field_alias_group_caption">Отметьте другую батарею, если это тот же самый аккумулятор, но по другому пути — тогда он считается один раз, а не два.</string>
     <string name="vehicle_field_yield_bms">Отдавать BMS приборке во время поездки</string>
     <string name="vehicle_field_yield_bms_caption">Батарея доступна и напрямую, и через приборку, но держать её может только кто-то один. Включено: приложение отпускает прямую линию, как только приборка начинает отдавать данные.</string>
-    <string name="vehicle_field_cell_count_auto">Ячеек (из телеметрии)</string>
     <string name="vehicle_field_derived_battery">Батарея по данным контроллера</string>
     <string name="vehicle_field_derived_battery_caption">По умолчанию включено, пока у транспорта нет своей BMS.</string>
     <string name="vehicle_field_topology">Соединение батарей</string>

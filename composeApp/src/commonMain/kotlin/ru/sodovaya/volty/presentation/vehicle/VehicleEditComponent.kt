@@ -113,6 +113,14 @@ interface VehicleEditComponent {
     fun onPackAddressChanged(key: String, address: String)
     fun onPackCanIdChanged(key: String, canId: Int?)
 
+    /**
+     * The rider's own series-cell count for this pack (Task 3) — the only path
+     * to a rail voltage on a wheel with no smart BMS, since a dumb wheel sends
+     * no cell frames and `KableBmsRepository.maybePersistCellCount`'s auto-fill
+     * can never derive one. Blank clears to `null`, not `0` — see [PackDraft].
+     */
+    fun onPackCellCountChanged(key: String, cellCount: Int?)
+
     fun onControllerLabelChanged(key: String, label: String)
     fun onControllerTypeChanged(key: String, controllerType: ControllerType)
     fun onControllerAddressChanged(key: String, address: String)
@@ -664,6 +672,10 @@ class DefaultVehicleEditComponent(
         mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(address = address) } }
     override fun onPackCanIdChanged(key: String, canId: Int?) =
         mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(canId = canId) } }
+    override fun onPackCellCountChanged(key: String, cellCount: Int?) =
+        mutateDraft(packs = true) { d ->
+            d.updatePack(key) { it.copy(cellCount = cellCount, cellCountEdited = true) }
+        }
 
     override fun onControllerLabelChanged(key: String, label: String) =
         mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(label = label) } }

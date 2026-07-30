@@ -477,11 +477,16 @@ class KableBmsRepositoryVescTest {
         repo.installLinksForTest(v, v.primaryAddress, type = null)
 
         // Three consecutive samples with the same cell count is what the
-        // auto-fill demands before it trusts a reading.
+        // auto-fill demands before it trusts a reading. Task 3 added a second
+        // gate (BegodeProtocol.isCellCountConfirmed) that also demands the
+        // sample's own cell-sum sit close to its own reported voltage — 20
+        // cells at 3.91 V sums to 78.2 V, so the per-sample offset has to stay
+        // small (not the whole `+ i` volts of before) or the tight lower edge
+        // of that band would refuse this otherwise-genuine reading itself.
         repeat(3) { i ->
             repo.emitActiveDataForTest(
                 BmsData(
-                    voltage = 78.2f + i,
+                    voltage = 78.2f + i * 0.001f,
                     cellVoltages = List(20) { 3.91f },
                     isConnected = true
                 )
