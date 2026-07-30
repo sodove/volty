@@ -676,6 +676,52 @@ git commit -m "refactor(db): the dial's memory is not part of the vehicle's desc
 
 ---
 
+### Task 10 — VESC publishes a signed speed too
+
+**Files:**
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/vesc/VescValues.kt:93`
+  (the SETUP-frame speed), `:136` and `:161` (the eRPM-derived speed)
+- Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/data/bms/vesc/VescValuesTest.kt`
+
+**Why, and why it is a separate task from Task 1.** Task 1's review found that its own
+justification had become an overclaim: the Begode decoder now takes the magnitude "so the
+two protocols agree on what the shared field means" — and they do not, because VESC still
+publishes a signed speed from both of its sources. Every consequence Task 1 lists is
+therefore still live for a VESC:
+
+- `RideMetrics.kt:11` nulls instant consumption for any speed below `MIN_SPEED_KMH = 0.5f`,
+  which every negative speed is, so consumption vanishes for the whole excursion;
+- `MotionAggregator`'s `maxOf` fold picks the least-negative contributor;
+- `RideDashboardScreen`'s session peak cannot advance;
+- the SPEED alarm is graded against upper thresholds and cannot fire.
+
+**This is not hypothetical for a VESC.** A scooter reversing reports negative RPM, and a
+controller whose motor direction is configured the other way round reports negative RPM
+*while moving forward* — the same firmware-variance case that produced the Begode bug on
+the rider's two wheels. Nothing in the app takes a magnitude anywhere
+(`abs(speedKmh)` appears nowhere in `commonMain`).
+
+- [ ] **Step 1: Write the failing tests** — a SETUP frame with a negative speed and an
+      eRPM-derived speed from negative RPM each publish a positive `speedKmh`, and the
+      cross-layer consumption chain survives both. Reuse Task 1's cross-layer test shape
+      rather than writing a third variant.
+- [ ] **Step 2: Run them and watch them fail.**
+- [ ] **Step 3: Take the magnitude at decode**, in the same place and with the same
+      one-line reason Task 1 used, so the claim that the two decoders agree becomes true
+      instead of aspirational. Preserve the sign on an internal accessor **only if a test
+      needs it** — do not mirror `signedSpeedKmh()` reflexively; VESC's `eRpm` field
+      already carries the direction, which is the difference from Begode, where no other
+      field did.
+- [ ] **Step 4: Check `eRpm`'s own consumers** before changing anything about it. This
+      task changes `speedKmh` only; `eRpm` keeps its sign.
+- [ ] **Step 5: Sweep, full suite, commit.**
+
+```bash
+git commit -m "fix(vesc): the other decoder was still signing its speed"
+```
+
+---
+
 ## Out of scope
 
 - **Reading `GET_MCCONF`** (`B §14`). Part G2 Task 7 made gauge ranges self-learning,

@@ -151,6 +151,14 @@ the temperature reading (S4a):
 - **The summed counters blank the whole total** when any contributor lacks
   counters, throwing away a real measurement rather than reporting a partial one
   as partial.
+- **S1 is not Begode-only** (added 2026-07-30, found by Task 1's review). `VescValues`
+  publishes a signed speed from both of its sources, so every consequence of a negative
+  speed — consumption nulled below the 0.5 km/h floor, the `maxOf` fold picking the
+  least-negative contributor, the session peak frozen, the SPEED alarm unfireable —
+  remains live for a VESC. A scooter in reverse reports negative RPM, and a controller
+  whose motor direction is configured the other way round reports negative RPM **while
+  moving forward**: the same firmware-variance case that produced S1 on two wheels.
+  Booked as `I` Task 10.
 
 The test suite could not have caught any of these: its mixed-source fixtures all
 build the hollow contributor **by hand with `has*` explicitly false** — a shape no
