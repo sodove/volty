@@ -255,19 +255,25 @@ class KableBmsRepositoryBegodeControllerTest {
     }
 
     @Test
-    fun `a wheel whose profile has no cell count publishes no voltage rather than a wrong one`() = repoTest { repo ->
-        // The control that makes the test above non-vacuous: the number can
-        // only come from the profile, so a profile without one gets nothing.
-        // 0 here means UNKNOWN; the raw reading would be 58.88 V on a 168 V
-        // wheel, which is worse than an absence because power is built from it.
+    fun `a wheel whose profile has no cell count still gets a real voltage from its own smart BMS`() = repoTest { repo ->
+        // Task 2 (2026-07-30 field fix): this used to be the control that made
+        // the test above non-vacuous — "the number can only come from the
+        // profile, so a profile without one gets nothing" — and THAT premise
+        // was the field report's bug. The ET Max's two branches are PARALLEL,
+        // so branch 0's own cells prove the pack's series-cell count with no
+        // profile involved at all; the wheel that showed no power on a real
+        // ride was streaming exactly this data, unused. See
+        // `BegodeProtocol.derivedCellCount`. A wheel with no smart BMS still
+        // has no recovery route and is covered by
+        // `KableBmsRepositoryDumbBegodeTest`'s "no known cell count" cases.
         val wire = Wire(repo, wheel(cellCount = null))
         BegodeDumpFixture.chunks().forEach { wire.notify(it) }
         advanceUntilIdle()
 
         val motion = repo.activeMotion.value
         assertTrue(motion.isConnected, "everything else the wheel reports is unaffected")
-        assertEquals(0f, motion.inputVoltageV, 0f)
-        assertEquals(0f, motion.powerW, 0f)
+        assertTrue(motion.hasInputVoltage, "the wheel's own cells supply the rail voltage")
+        assertEquals(147.2f, motion.inputVoltageV, 0.5f, "40S derived from branch 0's own cells")
         assertEquals(2f, motion.dutyPercent, 0f, "…and the duty, which needs no scale, is still there")
     }
 

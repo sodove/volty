@@ -188,6 +188,17 @@ class BegodeProtocol(
     private var smartBmsSeen = false
 
     /**
+     * The series-cell count [derivedCellCount] has PROVEN this connection, or
+     * null until it has — see that accessor and [updateDerivedCellCount] for
+     * how proof is decided. A constructor `val` never needed a slot like this
+     * ([cellCount] just IS whatever the caller supplied), which is exactly why
+     * this one is easy to miss: it must be cleared in [reset], beside
+     * [sawTrueDuty] and [sawMotorTempEvidence], or a reconnect to a different
+     * wheel would silently inherit the wrong series count.
+     */
+    private var derivedCellCountValue: Int? = null
+
+    /**
      * The synthetic pack of a wheel without a smart BMS, rebuilt from every
      * genuine live frame: phase current, board temperature, no cells — and
      * `voltage = 0`, because the live-frame voltage is on the 67.2 V scale
@@ -761,30 +772,120 @@ class BegodeProtocol(
     }
 
     /**
+     * The series-cell count PROVEN by branch 0's own decoded cells this
+     * connection, or null until the evidence is both COMPLETE and
+     * self-consistent with the live frame — see [updateDerivedCellCount] for
+     * how and why. The ET Max has a smart BMS whose two branches are
+     * **parallel** (see the class KDoc), so branch 0's series-cell count IS
+     * the pack's, with no vehicle profile involved at all — this is what
+     * lets [inputVoltageOrNull] show a rail voltage on a wheel the rider never
+     * configured, which is the whole point of this part: a wheel streaming
+     * everything needed to know its own rail voltage was showing no power at
+     * all because only a human-entered cell count was ever consulted.
+     *
+     * `internal`: [inputVoltageOrNull] is the one production caller, and this
+     * exists so the derivation is independently testable rather than only
+     * observable through the voltage it feeds.
+     */
+    internal fun derivedCellCount(): Int? = derivedCellCountValue
+
+    /**
+     * Learn [derivedCellCount] from branch 0's decoded cells, the moment the
+     * evidence is both COMPLETE and self-consistent with the live frame — and
+     * not a moment before, because [contiguousCells] legitimately returns a
+     * TRUNCATED run while packets are still arriving (say 8 of 40 mid-stream),
+     * and `cells.size` alone would derive an 8S pack and scale the live frame
+     * to ~29.5 V on a 168 V wheel. That is the single most likely way to get
+     * this task wrong, so nothing here trusts a raw list size.
+     *
+     * Two gates, both borrowed rather than invented:
+     *  1. **Completeness** — [isCellSumComplete], the IDENTICAL test
+     *     [branchVoltage] already uses to decide whether to trust the cell sum
+     *     over the 0x01 frame's own voltage field. A mid-stream 8-of-40 branch
+     *     fails this outright — 8 cells sum to ~20 % of the reported pack
+     *     voltage, nowhere near the ~90 % only a genuinely full set clears —
+     *     so the truncation trap above is closed by this alone.
+     *  2. **Cross-check against the live frame** — a FREE second witness the
+     *     completeness test cannot see, because it never looks at the live
+     *     frame at all: `cellSum / (live 67.2-scale voltage)` should equal
+     *     `count * 4.2 / 67.2` for the count that is actually right. On the ET
+     *     Max capture the two disagree by ~0.86 % (measured), which is the
+     *     known discontinuity [inputVoltageOrNull] documents; a wheel whose
+     *     branch and live frame disagree beyond
+     *     [CELL_COUNT_CROSS_CHECK_TOLERANCE] gets an honest absence instead of
+     *     a guess — "a wheel that contradicts itself" is refused, not patched
+     *     over.
+     *
+     * Proved once per connection and then left alone (the `if (... != null)
+     * return` guard): a pack's series-cell count cannot change mid-ride, and
+     * re-deriving on every later cell frame would only open a window for
+     * transient noise to flip it. [reset] clears it for the next connection,
+     * which may face a different wheel.
+     */
+    private fun updateDerivedCellCount(cells: List<Float>) {
+        if (derivedCellCountValue != null) return
+        val frameVoltage = branches[0].packVoltageV
+        if (frameVoltage <= 0f) return
+        if (liveVoltageRaw <= 0) return
+        val cellSum = cells.sum()
+        if (!isCellSumComplete(cellSum, frameVoltage)) return
+        val count = cells.size
+        if (count <= 0) return
+        val liveVoltageV = liveVoltageRaw * 0.01f
+        val expectedRatio = count * FULL_CELL_V / LIVE_VOLTAGE_REFERENCE_V
+        val actualRatio = cellSum / liveVoltageV
+        if (abs(actualRatio - expectedRatio) > expectedRatio * CELL_COUNT_CROSS_CHECK_TOLERANCE) return
+        derivedCellCountValue = count
+    }
+
+    /**
      * The wheel's rail voltage in real volts, or **null** meaning UNKNOWN —
      * published as `inputVoltageV = 0f` with `hasInputVoltage = false`, which is
      * `G §9`'s contract for a field whose type cannot carry an absence.
      *
      * The live frame reports voltage against Begode's 67.2 V reference (every
      * wheel pretends to be 16S), and turning that into volts needs the pack's
-     * cell count — 40S x 4.2 V = 168 V is the x2.5 an ET Max needs. WheelLog
-     * does not derive this either: it makes the rider pick a multiplier from a
-     * list (1.0 / 1.25 / 1.5 / 1.738 / 2.0 / 2.25 / 2.5). Volty does better by
-     * taking it from the cell count the vehicle profile already holds — but
-     * only when the caller supplied one ([cellCount]). With no cell count the
-     * honest answer is to publish nothing: the raw reading would render as
-     * 58.92 V on a 168 V wheel, and a wrong voltage is worse than none because
-     * `powerW` is built from it and the dashboard shows both.
+     * cell count. **Precedence, in this order:**
+     *  1. **[derivedCellCount]** — proven from the wheel's OWN smart-BMS
+     *     cells, when it has them (see [updateDerivedCellCount]). This is new:
+     *     an ET Max reports everything needed to know its rail voltage with no
+     *     vehicle profile at all, and the rider who found this wheel showing
+     *     no power at all had exactly this data streaming past unused.
+     *     WheelLog does the same thing (`GotwayAdapter.java:212`, gated on
+     *     `getAutoVoltage() = pref && smartBmsCells > 0`, defaulting on).
+     *  2. **[cellCount]**, the vehicle profile's count — today's only path,
+     *     and still the fallback for a wheel with no smart BMS (a dumb wheel
+     *     sends no cell frames, so [derivedCellCount] never proves anything).
+     *  3. **Unknown.** With neither, the honest answer is to publish nothing:
+     *     the raw reading would render as 58.92 V on a 168 V wheel, and a
+     *     wrong voltage is worse than none because `powerW` is built from it
+     *     and the dashboard shows both.
      *
-     * Unlike [liveVoltageOn672ScaleV] this does NOT stop at the smart-BMS
-     * hand-over. That gate exists to stop the synthetic PACK from overriding
-     * real branch data; a controller's input voltage is the wheel's own
-     * measurement of its rail and stays valid whether or not a smart BMS is
-     * also reporting cells.
+     * **This is a NEW rule, not [smartBmsSeen] reversed.** That gate
+     * (`liveVoltageOn672ScaleV()`, `retireSyntheticPack()`) exists to stop the
+     * synthetic no-BMS *pack* from overriding real branch data once real
+     * frames prove the wheel has them — the opposite direction from here.
+     * This function has never taken that gate, because a controller's input
+     * voltage is the wheel's own measurement of its rail and stays valid
+     * whether or not a smart BMS is also reporting cells; what changes with
+     * [derivedCellCount] is only WHICH cell count scales that measurement,
+     * preferring the wheel's own proof over a profile that could be stale,
+     * wrong, or simply never entered.
+     *
+     * **Known discontinuity, accepted rather than hidden.** The 0x01 frame's
+     * pack-voltage field is ~0.1009 V/unit, not the 0.1 [parseBmsTelemetry]
+     * decodes it at (measured on the ET Max capture; see [branchVoltage]).
+     * [derivedCellCount]'s cross-check compares the cell sum against the LIVE
+     * frame, not that field, but the live frame's own 67.2 V reference carries
+     * a similar-sized error: on the ET Max capture the scaled live reading
+     * settles at ~147.2 V against ~148.4 V of directly-summed cells, ~0.86 %
+     * low. WheelLog inherits the same error and does not correct it either.
+     * Acceptable versus absent — the rider's alternative was 0 W, not a
+     * cleaner 147.2 V.
      */
     private fun inputVoltageOrNull(): Float? {
         if (!sawLiveMotion) return null
-        val cells = cellCount ?: return null
+        val cells = derivedCellCount() ?: cellCount ?: return null
         if (cells <= 0) return null
         return scaleLiveVoltage(liveVoltageRaw * 0.01f, cells)
     }
@@ -903,6 +1004,12 @@ class BegodeProtocol(
         // The duty latch is per-wheel evidence: a wheel that never proved it
         // reports duty must not inherit the previous wheel's proof.
         sawTrueDuty = false
+        // Per-wheel evidence, exactly like the two latches above: a reconnect
+        // may face a physically different wheel, and its series-cell count
+        // must not be inherited from the last one — that would silently
+        // mis-scale the new wheel's live frame instead of re-deriving it (or
+        // honestly reporting no voltage until it proves itself again).
+        derivedCellCountValue = null
         // A reconnect may face a different wheel: a protocol stuck in
         // "smart BMS seen" would leave a dumb wheel dataless again.
         smartBmsSeen = false
@@ -1279,7 +1386,7 @@ class BegodeProtocol(
             branch.sectionVoltageV[section] = sectionVoltageRaw * 0.1f
         }
 
-        rebuild(branch)
+        rebuild(branch, bmsnum shr 1)
     }
 
     /**
@@ -1299,7 +1406,7 @@ class BegodeProtocol(
                 state.cells[packetIndex * 8 + i] = mv / 1000f
             }
         }
-        rebuild(state)
+        rebuild(state, branch)
     }
 
     /**
@@ -1319,12 +1426,19 @@ class BegodeProtocol(
      * frame: without it there is no voltage. A wheel without a smart BMS never
      * sends one — such a wheel is served by the synthetic live-frame pack
      * instead (see [liveData]).
+     *
+     * [packIndex] is used for exactly one thing beyond the branch state
+     * itself: branch 0 is the one [updateDerivedCellCount] learns from — the
+     * two branches are parallel, so branch 0's series-cell count is the
+     * pack's, but branch 1's is not evidence of anything beyond itself and
+     * must not be consulted. See [derivedCellCount].
      */
-    private fun rebuild(branch: BranchState) {
+    private fun rebuild(branch: BranchState, packIndex: Int) {
         if (!branch.sawTelemetry) return
         val cells = contiguousCells(branch.cells)
         val voltage = branchVoltage(branch, cells)
         val current = branch.currentA
+        if (packIndex == 0) updateDerivedCellCount(cells)
         branch.lastData = BmsData(
             voltage = voltage,
             current = current,
@@ -1367,7 +1481,7 @@ class BegodeProtocol(
         if (cells.isEmpty()) return frameVoltage
         val cellSum = cells.sum()
         if (frameVoltage <= 0f) return cellSum
-        return if (cellSum >= frameVoltage * CELL_SUM_COMPLETE_RATIO) cellSum else frameVoltage
+        return if (isCellSumComplete(cellSum, frameVoltage)) cellSum else frameVoltage
     }
 
     /**
@@ -1621,6 +1735,49 @@ class BegodeProtocol(
          * above the field; a single missing packet drops it ~20 % below.
          */
         private const val CELL_SUM_COMPLETE_RATIO = 0.9f
+
+        /**
+         * Whether [cellSum] represents every cell of a branch whose 0x01 frame
+         * reported [frameVoltage] as the whole-pack voltage — the ONE
+         * definition of "complete" this file uses, so [branchVoltage] and
+         * [updateDerivedCellCount] cannot silently disagree about what a
+         * complete cell set looks like. See [CELL_SUM_COMPLETE_RATIO]'s KDoc
+         * for the gap the ratio sits in.
+         *
+         * Callers must check `frameVoltage > 0f` themselves first (as
+         * [branchVoltage] already does): with no frame reference at all there
+         * is nothing to judge completeness against, and that is a different
+         * question from this one.
+         *
+         * Kept in the companion object rather than as an instance method, and
+         * left `internal`: a later caller outside this class needs the
+         * identical judgement (`KableBmsRepository.maybePersistCellCount`
+         * derives its persisted cell count from a sample's cell list alone
+         * today, which lets a dead BMS branch's few surviving cells overwrite
+         * a good stored count — precisely the truncation this function is
+         * built to catch). It takes only the two primitives that decision
+         * needs, so reusing it costs nothing.
+         */
+        internal fun isCellSumComplete(cellSum: Float, frameVoltage: Float): Boolean =
+            cellSum >= frameVoltage * CELL_SUM_COMPLETE_RATIO
+
+        /**
+         * How far `cellSum / liveVoltageV` may sit from `count * 4.2 / 67.2`
+         * — expressed as a FRACTION of the expected ratio — and still count as
+         * the live frame agreeing with a candidate [derivedCellCount].
+         *
+         * Measured disagreement on the ET Max capture is ~0.86 % (the known
+         * discontinuity [inputVoltageOrNull] documents: the live frame's 67.2 V
+         * reference and the directly-summed cells are two independent
+         * measurements of the same rail). 5 % gives roughly five times that
+         * headroom for wheels not yet seen, the same multiple
+         * [SECTION_SPLIT_TOLERANCE_V] uses over ITS observed disagreement. This
+         * is a plausibility check on a count [isCellSumComplete] already
+         * accepted, not the primary defence against a truncated cell list —
+         * that is [isCellSumComplete] itself, which a genuinely partial set
+         * (8 of 40) fails outright, nowhere near this tolerance's edge.
+         */
+        private const val CELL_COUNT_CROSS_CHECK_TOLERANCE = 0.05f
 
         /**
          * How far a candidate section's cell sum may sit from the assembly

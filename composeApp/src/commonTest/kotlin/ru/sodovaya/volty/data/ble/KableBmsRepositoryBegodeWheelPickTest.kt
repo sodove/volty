@@ -252,7 +252,11 @@ class KableBmsRepositoryBegodeWheelPickTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val created = pickTheWheel()
 
-        // --- first connect: nothing knows the cell count, so nothing is claimed ---
+        // --- first connect: the PROFILE knows no cell count yet, but the
+        // wheel's own smart BMS supplies one anyway (Task 2, 2026-07-30 field
+        // fix) — the ET Max's branches are parallel, so branch 0's own cells
+        // prove the pack's series-cell count with no profile involved at all.
+        // See `BegodeProtocol.derivedCellCount`.
         repo.primeConnectedForTest(
             created, created.primaryAddress, BmsType.BEGODE, Clock.System.now().toEpochMilliseconds()
         )
@@ -261,23 +265,27 @@ class KableBmsRepositoryBegodeWheelPickTest {
         advanceUntilIdle()
 
         assertEquals(
-            0f, repo.activeMotion.value.inputVoltageV, 0f,
-            "precondition: with no cell count the wheel publishes NO voltage, not the raw 58.9 V"
+            147.2f, repo.activeMotion.value.inputVoltageV, 0.5f,
+            "the wheel's own smart-BMS cells already supply a real rail voltage, profile or not"
         )
-        assertEquals(0f, repo.activeMotion.value.powerW, 0f)
+        assertTrue(repo.activeMotion.value.hasInputVoltage)
         assertTrue(repo.activeMotion.value.isConnected, "…everything else the wheel reports is there")
 
-        // --- the profile learns the count, through the production auto-fill ---
-        // This is the step the pack-less shape could not take: `withCellCount`
-        // is `packs.mapIndexed`, so on a zero-pack vehicle the upsert wrote the
-        // vehicle back UNCHANGED and the count was lost forever.
+        // --- the PROFILE also learns the count, through the production
+        // auto-fill, independently of the decoder already having proven one of
+        // its own. This is the step the pack-less shape could not take:
+        // `withCellCount` is `packs.mapIndexed`, so on a zero-pack vehicle the
+        // upsert wrote the vehicle back UNCHANGED and the count was lost
+        // forever.
         val autofilled = assertNotNull(
             store.upserts.lastOrNull { it.id == created.id && it.packs.firstOrNull()?.cellCount != null },
             "the cell-count auto-fill must have written the wheel's 40s back into the profile"
         )
         assertEquals(40, autofilled.packs.single().cellCount)
 
-        // --- next connect: the decoder is told, and the dashboard's numbers are real ---
+        // --- next connect: a FRESH protocol instance, told by the profile this
+        // time instead of deriving it again — the same real voltage, by the
+        // other route. ---
         Wire(repo, autofilled).replayTheCapture()
         advanceUntilIdle()
 
@@ -294,33 +302,42 @@ class KableBmsRepositoryBegodeWheelPickTest {
     }
 
     @Test
-    fun `the pack-less controller vehicle is why this had no recovery path at all`() = repoTest { repo ->
-        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        // The CONTROL for the walk above, and the defect in one assertion: built
-        // the old way, a Begode vehicle has nowhere to put a cell count. This is
-        // not asserting a behaviour we want — it is pinning why the picker's
-        // shape had to change rather than the lookup.
-        val packLess = controllerVehicle(
-            id = "v-old-shape",
-            name = "ET Max",
-            iconKey = "unicycle",
-            controllerType = ControllerType.BEGODE,
-            address = WHEEL,
-            chemistry = Chemistry.LI_ION_NMC,
-            createdAt = Instant.fromEpochSeconds(0L)
-        )
-        assertTrue(packLess.packs.isEmpty())
-        assertTrue(
-            packLess.withCellCount(40).packs.isEmpty(),
-            "withCellCount is packs.mapIndexed — a silent no-op with no list to map"
-        )
+    fun `the pack-less controller vehicle's PROFILE route is still a dead end, but Task 2 rescues it anyway`() =
+        repoTest { repo ->
+            Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+            // Built the old way, a Begode vehicle has nowhere to put a cell
+            // count — `withCellCount` is `packs.mapIndexed`, a silent no-op with
+            // no list to map. That defect is real and unrelated to Task 2, so it
+            // is still pinned here.
+            val packLess = controllerVehicle(
+                id = "v-old-shape",
+                name = "ET Max",
+                iconKey = "unicycle",
+                controllerType = ControllerType.BEGODE,
+                address = WHEEL,
+                chemistry = Chemistry.LI_ION_NMC,
+                createdAt = Instant.fromEpochSeconds(0L)
+            )
+            assertTrue(packLess.packs.isEmpty())
+            assertTrue(
+                packLess.withCellCount(40).packs.isEmpty(),
+                "withCellCount is packs.mapIndexed — a silent no-op with no list to map"
+            )
 
-        // …and the decoder therefore never gets one, however many frames arrive.
-        Wire(repo, packLess).replayTheCapture()
-        advanceUntilIdle()
-        assertEquals(0f, repo.activeMotion.value.inputVoltageV, 0f)
-        assertEquals(0f, repo.activeMotion.value.powerW, 0f)
-    }
+            // …and createProtocol therefore never gets a PROFILE cell count,
+            // however many frames arrive. But Task 2 does not need one: the
+            // wheel's own smart BMS derives its series-cell count straight from
+            // its cells, independently of the vehicle's shape — so this is no
+            // longer "no recovery path at all", only "no recovery through the
+            // profile".
+            Wire(repo, packLess).replayTheCapture()
+            advanceUntilIdle()
+            assertEquals(
+                147.2f, repo.activeMotion.value.inputVoltageV, 0.5f,
+                "the wheel's own cells rescue the voltage even though the profile never could"
+            )
+            assertTrue(repo.activeMotion.value.hasInputVoltage)
+        }
 
     private companion object {
         const val WHEEL = "AA:BB:CC:DD:EE:FF"

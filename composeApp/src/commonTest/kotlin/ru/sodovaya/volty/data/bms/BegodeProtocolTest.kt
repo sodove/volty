@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.presentation.common.groupPackCells
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -555,6 +556,185 @@ class BegodeProtocolTest {
         BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
         val data = assertNotNull(protocol.latestData(0))
         assertEquals(40, data.cellVoltages.size)
+    }
+
+    // --- Derived cell count: the rail voltage without a vehicle profile ---
+
+    /** Replays the real ET Max capture, exactly as [protocolFedWithFixture] does. */
+    private fun feedEtMaxSmartBmsCapture(protocol: BegodeProtocol) {
+        BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
+    }
+
+    @Test
+    fun branchOnesCellsMustNeverDeriveTheCellCountEvenWhenTheyLookComplete() {
+        // Branch 0 is the wheel's series-cell count (the two branches are
+        // PARALLEL — see the class KDoc); branch 1 is not evidence of anything
+        // beyond itself. Branch 0's own telemetry sets a real frame voltage
+        // (147.2 V, matching the ET Max), but branch 0's cells never arrive —
+        // so branch 0 has proven nothing. Branch 1 gets a matching frame
+        // voltage (realistic: parallel branches report the same nominal
+        // voltage) and 34 cells at 4.00 V, chosen to be complete AND
+        // self-consistent for a WRONG hypothetical 34S reading (136 V against
+        // 147.2 V clears CELL_SUM_COMPLETE_RATIO; the live frame is scaled to
+        // match exactly). If branch 1 could derive the count, it would wrongly
+        // report 34; branch 0 having proven nothing must leave it null.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 6400)) // 64.00 V
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 2, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 0, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 1, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 2, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 3, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(
+            cellFrameOf(type = 0x03, packetIndex = 4, mv = intArrayOf(4000, 4000, 0, 0, 0, 0, 0, 0))
+        )
+        assertEquals(
+            34, assertNotNull(protocol.latestData(1)).cellVoltages.size,
+            "precondition: branch 1 complete at 34 cells"
+        )
+        assertTrue(
+            assertNotNull(protocol.latestData(0)).cellVoltages.isEmpty(),
+            "precondition: branch 0 has proven no cells at all"
+        )
+        assertNull(
+            protocol.derivedCellCount(),
+            "branch 1 is not evidence — branch 0 never proved anything"
+        )
+    }
+
+    @Test
+    fun smartBmsCellsSupplyTheRailVoltageWithNoProfileCellCount() {
+        // The ET Max has a smart BMS whose branches are PARALLEL, so branch
+        // 0's series-cell count IS the pack's — no vehicle profile needed at
+        // all. This is the field report's bug: the rider's wheel was streaming
+        // everything needed to compute its rail voltage while only a
+        // human-entered cell count was ever consulted.
+        val protocol = BegodeProtocol(cellCount = null) // nothing from the profile
+        feedEtMaxSmartBmsCapture(protocol)
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertTrue(motion.hasInputVoltage, "the wheel's own cells prove a rail voltage")
+        assertEquals(147.2f, motion.inputVoltageV, 0.5f)
+        assertEquals(40, protocol.derivedCellCount())
+    }
+
+    @Test
+    fun aProfileCellCountNeverOverridesTheWheelsOwnDerivedOne() {
+        // Precedence: the wheel's own proof beats a profile that could be
+        // stale, wrong, or simply mistyped. A (deliberately wrong) profile of
+        // 20 would scale the capture's final live frame to 73.60 V; the
+        // wheel's own cells prove 40S and 147.2 V.
+        val protocol = BegodeProtocol(cellCount = 20)
+        feedEtMaxSmartBmsCapture(protocol)
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(40, protocol.derivedCellCount())
+        assertEquals(147.2f, motion.inputVoltageV, 0.5f, "the wheel's own proof wins over a wrong profile")
+    }
+
+    @Test
+    fun aBootZeroTelemetryFrameIsNotEvidenceOfCompletenessEither() {
+        // A booting BMS zero-pads its ENTIRE 0x01 payload, including the pack
+        // voltage field itself (parseBmsTelemetry's isBootPlaceholder; the real
+        // capture's opening ~13 frames). With no frame voltage to check a cell
+        // sum against, that is a missing witness, not a free pass — it must
+        // not be read as "nothing to disprove completeness with, so anything
+        // goes". Constructed so completeness and the cross-check would BOTH
+        // trivially pass without this guard: 8 cells summing to ~29.71 V and a
+        // live frame chosen so the ratio matches an assumed 8S exactly.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 5942))
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 0, t1 = 0, t2 = 0, sectionVoltageRaw = 0)
+        )
+        protocol.onNotification(cellFrame(type = 0x02, packetIndex = 0, baseMv = 3710))
+        assertNull(
+            protocol.derivedCellCount(),
+            "no frame voltage to check against must not be mistaken for a proven count"
+        )
+    }
+
+    @Test
+    fun aPartialCellSetMidStreamNeverDerivesACellCount() {
+        // The single most likely way to get this task wrong: contiguousCells
+        // legitimately returns a TRUNCATED run while packets are still
+        // arriving, and a naive `cells.size` would derive 8S here and scale
+        // the live frame to ~29.5 V on a 168 V wheel.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 5892))
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
+        )
+        // Only the first of five cell packets: 8 cells summing to ~29.7 V —
+        // far short of 132.48 V (90 % of the 147.2 V a complete set must clear).
+        protocol.onNotification(cellFrame(type = 0x02, packetIndex = 0, baseMv = 3710))
+        assertEquals(
+            8, assertNotNull(protocol.latestData(0)).cellVoltages.size,
+            "precondition: cells still arriving"
+        )
+        assertNull(
+            protocol.derivedCellCount(),
+            "a truncated cell run must not be mistaken for a full pack"
+        )
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertFalse(
+            motion.hasInputVoltage,
+            "no profile cell count and no proven derived one — voltage stays unknown"
+        )
+    }
+
+    @Test
+    fun aBranchWhoseCellsContradictTheLiveFrameRefusesToDeriveACellCount() {
+        // Completeness alone is not enough: 20 cells at 4.00 V sum to exactly
+        // the reported 80.0 V pack voltage (complete per
+        // CELL_SUM_COMPLETE_RATIO), but the live frame's OWN 67.2 V-scale
+        // reading implies a ~32S pack (actual ratio 2.0 against the 1.25
+        // expected for 20S) — the two witnesses disagree, and a wheel that
+        // contradicts itself gets an honest absence rather than a guess.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 4000))
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 800, t1 = 28, t2 = 26, sectionVoltageRaw = 400)
+        )
+        protocol.onNotification(cellFrameOf(type = 0x02, packetIndex = 0, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(cellFrameOf(type = 0x02, packetIndex = 1, mv = IntArray(8) { 4000 }))
+        // Cells 16..19 real, 20..23 zero-padded (fewer cells than the packet
+        // grid) — contiguousCells stops the run at 20, honestly.
+        protocol.onNotification(
+            cellFrameOf(type = 0x02, packetIndex = 2, mv = intArrayOf(4000, 4000, 4000, 4000, 0, 0, 0, 0))
+        )
+        assertEquals(
+            20, assertNotNull(protocol.latestData(0)).cellVoltages.size,
+            "precondition: 20 cells, contiguous"
+        )
+        assertNull(
+            protocol.derivedCellCount(),
+            "the cross-check must refuse a count the live frame contradicts"
+        )
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertFalse(motion.hasInputVoltage, "no profile count and the derived one was refused")
+    }
+
+    @Test
+    fun resetClearsTheDerivedCellCount() {
+        // A reconnect may face a different wheel: the constructor `val`
+        // ([cellCount]) never needed a clear, but a value LEARNED this
+        // connection must not survive into the next one, or a reconnect to a
+        // different pack size would silently mis-scale it.
+        val protocol = protocolFedWithFixture()
+        assertEquals(40, protocol.derivedCellCount(), "precondition: fixture proved 40S")
+        protocol.reset()
+        assertNull(protocol.derivedCellCount(), "a reconnect may face a different wheel")
+    }
+
+    /** Live 0x00 frame with only the voltage field (bytes 2..3) set — all these tests need. */
+    private fun liveFrame(voltageRaw: Int): ByteArray {
+        val p = ByteArray(16)
+        p[0] = (voltageRaw shr 8).toByte(); p[1] = voltageRaw.toByte()
+        return frame(0x00, 24, p)
     }
 
     // --- Synthetic frame builders (24 bytes: 55 AA + 16 payload + type + subtype + 5A x4) ---
