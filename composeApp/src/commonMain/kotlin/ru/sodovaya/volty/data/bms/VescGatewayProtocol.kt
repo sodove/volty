@@ -6,6 +6,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescFrameAccumulator
@@ -107,19 +109,26 @@ data class GatewaySource(
  * head unit's working, correctly-emulating ANT bridge was never asked anything.
  *
  * Both halves are one fix, because a derived slot IS a pack request here. What
- * fills it is decided per cycle, in this order:
+ * fills it is decided per cycle, by **precedence and age** — never by a latch,
+ * and never immediately:
  *
- *  1. a real `COMM_BMS_GET_VALUES` reply — the head unit hosts a BMS after all,
- *     which is the rider's case. Once one such frame has been decoded the slot
- *     is latched to it for the rest of the connection ([hostedBms]): a link
- *     that has PROVEN it has a BMS must age its readings out through the
- *     ordinary staleness sweep, not silently swap in a rail-derived substitute
- *     that reads just as plausibly;
- *  2. otherwise the link's controllers' own rail telemetry
- *     ([publishDerivedBattery]) — a stock VESC with no BMS answers opcode 96
- *     with the `can_id == 0xFF` "no BMS data yet" sentinel, and a plain
- *     [VescProtocol] link would have shown a rail-derived battery. Adding a
- *     second controller must not take that away either.
+ *  1. a real `COMM_BMS_GET_VALUES` reply wins, and goes on winning for
+ *     [STALE_READING_MS] ([hostedBmsAtMs]) — a hosted BMS that misses a cycle
+ *     must not have its number swapped for a computed one that reads just as
+ *     real. Past that age the orchestrator is greying the pack out anyway, so
+ *     the substitute serves again rather than leaving a rider whose ANT bridge
+ *     died mid-ride with no battery for the rest of the connection;
+ *  2. a contentless reply — the `can_id == 0xFF` sentinel, an undecodable
+ *     frame, or silence — is a **warm-up for [HOSTED_BMS_WARMUP_MS] before it
+ *     is a verdict** ([onContentlessBms]), because the same sentinel is what
+ *     the rider's own bridge reports while it is merely reconnecting. Nothing
+ *     is published during that window;
+ *  3. only then the link's controllers' own rail telemetry
+ *     ([publishDerivedBattery]), folded across the contributors whose decodes
+ *     are younger than [STALE_READING_MS] — a stock VESC with no BMS answers
+ *     opcode 96 with the sentinel forever, and a plain [VescProtocol] link
+ *     would have shown a rail-derived battery. Adding a second controller must
+ *     not take that away either.
  *
  * ## Why SETUP is asked of EVERY controller (field report 2026-07-30)
  *
@@ -207,6 +216,7 @@ data class GatewaySource(
  * The same applies to the per-cell balancing flags: decoded, but with no
  * `BmsData` field to carry them, left unmapped rather than approximated.
  */
+@OptIn(ExperimentalTime::class)
 class VescGatewayProtocol(
     /** Owned controllers, in the link's own order — index i IS local index i. */
     private val controllers: List<GatewaySource>,
@@ -247,13 +257,80 @@ class VescGatewayProtocol(
      * not a cure: a reply later than this is still unattributable, which is a
      * property of the protocol (§10.1, reason 2) and not of this code.
      */
-    private val lateReplyGuardMs: Long = DEFAULT_LATE_REPLY_GUARD_MS
+    private val lateReplyGuardMs: Long = DEFAULT_LATE_REPLY_GUARD_MS,
+    /**
+     * Wall clock in epoch milliseconds, injectable for the same reason
+     * [ru.sodovaya.volty.data.ble.VehicleConnection] takes one: the derived
+     * battery's three decisions ([STALE_READING_MS] twice, [HOSTED_BMS_WARMUP_MS]
+     * once) are all "how long has it been since", and a test that cannot move
+     * this clock can only approximate them from real elapsed time.
+     *
+     * Deliberately NOT the source of [ControllerData.timestamp] — those are
+     * stamped by the decoders off `Clock.System` and stay that way, because the
+     * timestamp a sample carries downstream must be the one every other producer
+     * in the app uses. This clock decides *ages*; the decoders decide *stamps*.
+     * In production they are the same clock, microseconds apart.
+     */
+    private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() }
 ) : BmsProtocol(), MotionSource, SerialPollSource, CanBusScanner {
 
     companion object {
         const val DEFAULT_POLL_INTERVAL_MS: Long = 50L
         const val DEFAULT_REPLY_TIMEOUT_MS: Long = 400L
         const val DEFAULT_LATE_REPLY_GUARD_MS: Long = 100L
+
+        /**
+         * How old a reading may be before this protocol stops treating it as
+         * current — used for both halves of the derived battery's precedence
+         * rule ([publishDerivedBattery]).
+         *
+         * A restatement of `BleConfig.packOfflineAfterMs`, NOT an import, for
+         * the same dependency-direction reason as [WATCHDOG_SILENCE_BUDGET_MS].
+         * That is the age at which `VehicleConnection`'s own sweep stops
+         * showing a source as online, and lining up with it is what makes both
+         * halves of the rule defensible rather than tuned:
+         *
+         *  - a CONTRIBUTOR the orchestrator would already be drawing as offline
+         *    must not still be feeding a battery reading. Without this a
+         *    controller stuck emitting right-opcode-but-undecodable
+         *    `GET_VALUES` — which is ANSWERED, so [valuesRequest]'s `onSilence`
+         *    never runs and its cached decode never expires — contributes its
+         *    frozen current and power to the sum forever;
+         *  - a HOSTED BMS reading this old is one the orchestrator is about to
+         *    grey out anyway, so a rail-derived substitute is better than an
+         *    empty slot. Below it the real reading wins.
+         */
+        const val STALE_READING_MS: Long = 12_000L
+
+        /**
+         * How long a contentless `COMM_BMS_GET_VALUES` must persist before it is
+         * believed — the sentinel's **warm-up**, not its verdict.
+         *
+         * `can_id == 0xFF` means two different things and the wire cannot tell
+         * them apart: "this VESC has no BMS", and "the ANT bridge is not up yet"
+         * — `ant_bms.c:900-905` memsets `bms_values` and sets `can_id = -1` on
+         * **every** BLE disconnect of the pack, including the ordinary blips it
+         * recovers from by itself. Believing the sentinel immediately would put
+         * a rail-derived substitute on the Battery screen for the first cycles
+         * of every single connect to a head unit that hosts a perfectly good
+         * BMS — indistinguishable from the real reading, which is the exact
+         * confident-substitute failure this part exists to remove.
+         *
+         * Derived from that firmware rather than picked: the fast path a bridge
+         * takes when a link it had established drops is
+         * `ANT_DIRECTED_DELAY_MS` (500 ms settle) + up to `ANT_DIRECTED_TIMEOUT_MS`
+         * (3000 ms for the scan-less direct open) + up to
+         * `ANT_POLL_INTERVAL_DEFAULT` (2000 ms before the first status frame) =
+         * 5500 ms, rounded up. Past that the bridge has fallen back to its
+         * backed-off scan (3 s doubling to a 60 s ceiling), which is an outage
+         * rather than a warm-up, and a substitute is then the honest thing to
+         * show.
+         *
+         * The price, stated: a gateway that genuinely hosts no BMS shows no
+         * battery for the first 6 s of a connection. An absent battery for six
+         * seconds is honest; a plausible wrong one is not.
+         */
+        const val HOSTED_BMS_WARMUP_MS: Long = 6_000L
 
         /**
          * The budget one link may spend on a run of silent sources before the
@@ -357,16 +434,41 @@ class VescGatewayProtocol(
     @Volatile private var packData: Map<Int, BmsData> = emptyMap()
 
     /**
-     * Pack slots that have produced a REAL `COMM_BMS_GET_VALUES` reading on
-     * this connection — so a [GatewaySource.derived] slot stops falling back to
-     * the controllers' rail once the gateway has proven it hosts a BMS.
+     * When each pack slot last produced a REAL `COMM_BMS_GET_VALUES` reading,
+     * on [nowMs]' clock — **precedence, not permanence**.
      *
-     * A latch, not a per-cycle flag, and cleared only by [reset]: a hosted BMS
-     * that drops out for a cycle must age out through the orchestrator's
-     * staleness sweep like any other battery, not be quietly replaced by a
-     * derived number that looks exactly as real on the Battery screen.
+     * A real reading outranks the derived substitute while it is younger than
+     * [STALE_READING_MS]: a hosted BMS that misses a cycle must not have its
+     * number quietly swapped for a computed one that reads just as real. Past
+     * that age the orchestrator is greying the pack out anyway, and a substitute
+     * beats an empty slot — which is what a permanent latch got wrong, leaving a
+     * rider whose ANT bridge died mid-ride with no battery at all for the rest
+     * of the connection while the substitute sat there available.
      */
-    @Volatile private var hostedBms: Set<Int> = emptySet()
+    @Volatile private var hostedBmsAtMs: Map<Int, Long> = emptyMap()
+
+    /**
+     * When the CURRENT unbroken run of contentless `COMM_BMS_GET_VALUES`
+     * outcomes began, per pack slot — a sentinel frame, an undecodable one, or
+     * silence. Cleared the moment a real reading lands.
+     *
+     * The input to [HOSTED_BMS_WARMUP_MS]: the sentinel has to persist before it
+     * is believed, because on the rider's own head unit it is also what a bridge
+     * that is merely reconnecting reports. Silence is graced on the same terms —
+     * a dropped reply is not a verdict either, and treating the two differently
+     * would only mean guessing which one a given head unit uses.
+     */
+    @Volatile private var contentlessSinceMs: Map<Int, Long> = emptyMap()
+
+    /**
+     * When each controller last produced a per-unit decode, on [nowMs]' clock.
+     *
+     * NOT derivable from [motion]'s own timestamps: those are the decoders'
+     * stamps, and this has to answer "how long since this entry was last
+     * REFRESHED" — which for a controller answering with an undecodable body is
+     * a growing age behind an unchanging stamp.
+     */
+    @Volatile private var lastDecodeAtMs: Map<Int, Long> = emptyMap()
 
     /** The vehicle-level scalars one controller's SETUP frame contributes. */
     private data class SetupOverlay(
@@ -503,6 +605,14 @@ class VescGatewayProtocol(
         // yields no new sample) but false to every other reader, and this file
         // claims "no sample at all". Cheaper to make the claim true than to
         // leave an accessor that lies to the next caller.
+        // [lastDecodeAtMs] is NOT dropped here, and that is not an omission:
+        // it is only ever read in the same expression that reads [motion]
+        // (`publishDerivedBattery`), which this line does drop — so a stale age
+        // beside a missing decode can never be observed. Clearing it as well
+        // would be a line no test could distinguish from its absence, and on
+        // this branch that is a reason to leave code out rather than to
+        // annotate it. A future reader who wants to consult the age map on its
+        // own has to drop it here first.
         onSilence = {
             perUnit = perUnit - c.globalIndex
             motion = motion - c.globalIndex
@@ -519,10 +629,19 @@ class VescGatewayProtocol(
             // decoder flags it precisely so a consumer can drop it. We are that
             // consumer: publishing it would put 0 V / 0 % on the Battery screen.
             if (frame != null && !frame.noBmsDataYet) {
-                // Proof this gateway really does host a BMS for this slot. It
-                // latches (see [hostedBms]) so a later gap cannot swap the real
-                // reading for the derived fallback behind the rider's back.
-                hostedBms = hostedBms + p.globalIndex
+                // This gateway really does host a BMS for this slot, and said
+                // so just now. Outranks the substitute for [STALE_READING_MS].
+                hostedBmsAtMs = hostedBmsAtMs + (p.globalIndex to nowMs())
+                // [contentlessSinceMs] is deliberately NOT cleared here, and
+                // the argument is guarded rather than asserted: once a slot has
+                // ever produced a real reading, the substitute is gated by
+                // [STALE_READING_MS] from that reading, which is strictly
+                // LONGER than [HOSTED_BMS_WARMUP_MS] — so restarting the
+                // warm-up could never delay anything the precedence window was
+                // not already delaying. `the warm-up is shorter than the
+                // staleness window` pins the inequality the argument rests on;
+                // if a later tuning inverts it, that test fails and this
+                // comment stops being true in the same commit.
                 packData = packData + (p.globalIndex to frame.toBmsData())
             } else {
                 // An answer that carries no reading is, for a DERIVED slot,
@@ -530,7 +649,7 @@ class VescGatewayProtocol(
                 // replies with the sentinel rather than staying silent, and a
                 // rider whose plain VESC link showed a rail-derived battery
                 // must not lose it for having added a second controller.
-                publishDerivedBattery(p)
+                onContentlessBms(p)
             }
         },
         // For a real battery: nothing to forget — its last sample stays cached
@@ -544,18 +663,39 @@ class VescGatewayProtocol(
         // battery exactly ONE sample per cycle — publishing it from
         // [applyValues] instead would emit one per answering controller, which
         // is the duplicated-sample stutter in another costume.
-        onSilence = { publishDerivedBattery(p) }
+        onSilence = { onContentlessBms(p) }
     )
 
     /**
-     * Fill [slot] from the link's controllers' own rail telemetry — the
-     * gateway's [VescProtocol.deriveBattery] equivalent, and a no-op for
-     * anything that is not a derived slot.
+     * One cycle in which [slot]'s `COMM_BMS_GET_VALUES` produced no reading —
+     * the `can_id == 0xFF` sentinel, an undecodable frame, or silence.
      *
-     * Silent when the slot has a PROVEN hosted BMS ([hostedBms]) and when no
-     * controller on this link has a live per-unit decode: a derived battery is
-     * arithmetic on controller telemetry, so with no telemetry there is no
-     * battery, and the slot stays latent rather than materialising at 0 V.
+     * The substitute engages only once that has gone on for
+     * [HOSTED_BMS_WARMUP_MS]. **Nothing is published during the warm-up** — an
+     * absent battery is honest, a plausible wrong one is not, and on the
+     * rider's own head unit the first cycles of every connect are exactly when
+     * the ANT bridge is still coming up.
+     */
+    private fun onContentlessBms(p: GatewaySource) {
+        if (!p.derived) return
+        val now = nowMs()
+        val since = contentlessSinceMs[p.globalIndex]
+            ?: now.also { contentlessSinceMs = contentlessSinceMs + (p.globalIndex to it) }
+        if (now - since < HOSTED_BMS_WARMUP_MS) return
+        publishDerivedBattery(p, now)
+    }
+
+    /**
+     * Fill [slot] from the link's controllers' own rail telemetry — the
+     * gateway's [VescProtocol.deriveBattery] equivalent.
+     *
+     * Silent while a real hosted reading still outranks it ([hostedBmsAtMs]),
+     * and silent when no controller on this link has a per-unit decode young
+     * enough to trust: a derived battery is arithmetic on controller telemetry,
+     * so with no current telemetry there is no battery. Publishing nothing is
+     * what lets the orchestrator's ordinary staleness sweep grey the slot out —
+     * a fresh `BmsData` every cycle regardless of its inputs would make the
+     * derived battery structurally incapable of ever reading as stale.
      *
      * The fold is `copy()` onto the first answering controller rather than a
      * second `BmsData` constructor, so [derivedBatteryFrom] stays the ONE
@@ -573,28 +713,40 @@ class VescGatewayProtocol(
      *  - **battery level: the first controller that reports a real one.** `0f`
      *    is `VescValues`' "no battery configuration", which
      *    [derivedBatteryFrom] would otherwise turn into a confident 0 %;
-     *  - **timestamp: the newest**, so the sample is stamped by the freshest
-     *    contribution rather than by whichever controller happens to be first.
-     *
-     * **The timestamp line is an equivalent mutant today, and the argument is
-     * stated rather than assumed.** Every entry in [motion] was refreshed this
-     * cycle — [valuesRequest]'s `onSilence` deletes the entry of any controller
-     * that did not answer — so `max` and "the first contributor's" differ by at
-     * most one cycle's decode spread, which is sub-millisecond REAL time inside
-     * a virtual-time test and therefore not observable from one. `max` is kept
-     * because it stays correct if [motion] ever retains an older entry, and
-     * because the alternative is not cheaper. Somebody should try to disprove
-     * this: the last two "structurally unkillable" claims on this branch were
-     * both wrong.
+     *  - **timestamp: the newest**, and this one is load-bearing rather than
+     *    cosmetic. Contributors are NOT all same-cycle: a controller answering
+     *    `GET_VALUES` with a right-opcode-but-undecodable body has its reply
+     *    consumed, its waiter completed and its request settled — so
+     *    [valuesRequest]'s `onSilence` never runs and its [motion] entry
+     *    survives, frozen, for up to [STALE_READING_MS]. Stamping the derived
+     *    battery from the first contributor would date it by that frozen entry
+     *    while a live neighbour is what the numbers came from. Pinned by
+     *    `the derived battery is stamped by its newest contributor, not its
+     *    first`. (This paragraph replaces a claim that the line was an
+     *    equivalent mutant. It was not, and the same false premise was hiding
+     *    the staleness filter below.)
      */
-    private fun publishDerivedBattery(slot: GatewaySource) {
-        if (!slot.derived || slot.globalIndex in hostedBms) return
+    private fun publishDerivedBattery(slot: GatewaySource, now: Long) {
+        // No `if (!slot.derived) return` here. [onContentlessBms] is the only
+        // caller and already refuses a non-derived slot; a second copy of the
+        // same test made BOTH copies individually undetectable — each masked
+        // the other's removal, so the sweep reported two equivalent mutants
+        // where the guard is in fact load-bearing exactly once.
+        val hostedAt = hostedBmsAtMs[slot.globalIndex]
+        if (hostedAt != null && now - hostedAt <= STALE_READING_MS) return
         // [motion], not [perUnit]: the state of charge a VESC reports is on the
         // SETUP frame, so it reaches a controller only through its overlay, and
         // [perUnit] is the pre-overlay decode. Folding that instead would leave
         // every gateway-derived battery with `socKnown = false` — where a plain
         // VescProtocol link, which decodes SETUP directly, has the real gauge.
-        val units = controllers.mapNotNull { motion[it.globalIndex] }
+        //
+        // Filtered by AGE, not merely by presence: an entry left standing by an
+        // undecodable reply would otherwise contribute its frozen current and
+        // power to the sum for the rest of the ride.
+        val units = controllers.mapNotNull { c ->
+            val at = lastDecodeAtMs[c.globalIndex] ?: return@mapNotNull null
+            if (now - at > STALE_READING_MS) null else motion[c.globalIndex]
+        }
         val head = units.firstOrNull() ?: return
         val folded = head.copy(
             inputVoltageV = units.maxOf { it.inputVoltageV },
@@ -815,6 +967,7 @@ class VescGatewayProtocol(
 
     private fun applyValues(global: Int, decoded: ControllerData) {
         perUnit = perUnit + (global to decoded)
+        lastDecodeAtMs = lastDecodeAtMs + (global to nowMs())
         publishController(global)
     }
 
@@ -901,11 +1054,16 @@ class VescGatewayProtocol(
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()
-        // The next session may be a DIFFERENT vehicle, whose gateway hosts no
-        // BMS at all: a latch carried over would leave its derived slot
-        // permanently empty, waiting for a reply that only the old head unit
-        // ever sent.
-        hostedBms = emptySet()
+        // Every "how long since" this protocol holds is about THIS connection.
+        // The next one may be a different vehicle: carried over,
+        // [hostedBmsAtMs] would hold a substitute off a gateway that hosts
+        // nothing, and [contentlessSinceMs] would count a warm-up that already
+        // elapsed on somebody else's head unit as served.
+        hostedBmsAtMs = emptyMap()
+        contentlessSinceMs = emptyMap()
+        // [lastDecodeAtMs] is not cleared, for the reason given on
+        // [valuesRequest]'s `onSilence`: `motion` above is, and the two are only
+        // ever read together.
         overlays = emptyMap()
         tripBaselineKm = emptyMap()
     }

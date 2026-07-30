@@ -8,6 +8,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.data.ble.LinkSpec
@@ -236,7 +237,15 @@ class VescGatewayProtocolTest {
         }
     }
 
-    private fun protocol(
+    /**
+     * [nowMs] is wired to the scheduler's own virtual clock, which is the only
+     * reason the derived battery's three age rules
+     * ([VescGatewayProtocol.STALE_READING_MS] twice,
+     * [VescGatewayProtocol.HOSTED_BMS_WARMUP_MS] once) can be driven at all: they
+     * are measured in seconds, and a test that had to spend them in REAL time
+     * could only approximate them.
+     */
+    private fun TestScope.protocol(
         controllers: List<GatewaySource> = listOf(
             GatewaySource(globalIndex = 0, canId = CAN_A, motor = MotorConfig(wheelDiameterMm = 254)),
             GatewaySource(globalIndex = 1, canId = CAN_B, motor = MotorConfig(wheelDiameterMm = 254))
@@ -247,7 +256,8 @@ class VescGatewayProtocolTest {
         packs = packs,
         pollIntervalMs = CYCLE_GAP_MS,
         replyTimeoutMs = TIMEOUT_MS,
-        lateReplyGuardMs = GUARD_MS
+        lateReplyGuardMs = GUARD_MS,
+        nowMs = { currentTime }
     )
 
     /**
@@ -1150,7 +1160,7 @@ class VescGatewayProtocolTest {
     /**
      * **A derived battery is a request, so it moves the ceiling** (`I` Task 5).
      * A gateway that derives one spends `2 x controllers + 1`, which tops out at
-     * FOUR controllers (9 requests, 4400 ms) where a pack-less plan managed
+     * FOUR controllers (9 requests: 8 x 500 + 50 = 4050 ms) where a pack-less plan managed
      * five. Stated as a test rather than as arithmetic in a report, because the
      * number is the one a future timing change has to be re-derived against.
      */
@@ -1292,12 +1302,27 @@ class VescGatewayProtocolTest {
      * one their controller-only vehicle was created with, and which adding the
      * CAN controller used to delete.
      */
-    private fun derivedProtocol() = protocol(
+    private fun TestScope.derivedProtocol() = protocol(
         packs = listOf(GatewaySource(globalIndex = 0, canId = null, derived = true))
     )
 
     /** What a VESC with no BMS behind it answers opcode 96 with: the zeroed default. */
     private fun noBmsFrame() = bmsFrame(vTotRaw = 0, iInRaw = 0, socRaw = 0, canIdRaw = 0xFF)
+
+    /**
+     * `COMM_GET_VALUES` (4) with a body far too short to decode. The opcode
+     * MATCHES, so the request is answered and settled — `onSilence` never runs
+     * and the controller's cached decode is never dropped. That asymmetry is the
+     * whole reason the derived battery filters its contributors by age.
+     */
+    private fun undecodableValuesFrame() = VescPacket.frame(byteArrayOf(4, 0, 0))
+
+    /**
+     * Long enough for a contentless opcode-96 to stop being a warm-up, plus a
+     * couple of cycles for the loop to act on it. Named because every derived
+     * battery test has to spend it before it can assert anything at all.
+     */
+    private val pastWarmupMs = VescGatewayProtocol.HOSTED_BMS_WARMUP_MS + 2 * healthyCycleMs
 
     /**
      * Healthy, except that the FRONT uBox does not know the rail voltage
@@ -1336,7 +1361,8 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(1)
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
 
         val battery = assertNotNull(
             p.latestData(0),
@@ -1367,7 +1393,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(3 * oneSilentCycleMs)
+        advanceTimeBy(pastWarmupMs + 2 * oneSilentCycleMs)
         runCurrent()
 
         assertEquals(
@@ -1399,7 +1425,8 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(1)
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
 
         val battery = assertNotNull(p.latestData(0))
         assertTrue(battery.socKnown, "an unconfigured front uBox must not make the whole pack unknown")
@@ -1408,17 +1435,100 @@ class VescGatewayProtocolTest {
     }
 
     /**
-     * **The rider's own head unit**: it hosts an ANT BMS and emulates it
-     * correctly, so opcode 96 comes back with a real reading — which must beat
-     * the rail-derived fallback, and go on beating it once the BMS has proven it
-     * exists. Swapping a proven BMS's reading for a computed one the moment it
-     * misses a cycle would put a number on the Battery screen that reads exactly
-     * as real while the pack it describes has stopped talking; the orchestrator's
-     * staleness sweep is what is meant to handle that, and it cannot if
-     * something keeps the slot fresh.
+     * **The sentinel means two things and the wire cannot tell them apart.**
+     * `ant_bms.c:900-905` memsets `bms_values` and sets `can_id = -1` on every
+     * BLE disconnect of the pack — including the ordinary blips the bridge
+     * recovers from by itself — so `0xFF` is "this VESC has no BMS" *and* "the
+     * bridge is not up yet". Believing it immediately would put a rail-derived
+     * substitute on the Battery screen for the first cycles of every connect to
+     * the rider's own head unit, indistinguishable from the real reading.
+     *
+     * Sampled repeatedly across the warm-up rather than once at the end: a
+     * single assertion after the fact cannot tell "never published" from
+     * "published and then replaced".
      */
     @Test
-    fun `a proven hosted BMS is never replaced by the derived fallback`() = runTest {
+    fun `a sentinel is a warm-up before it is a verdict`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(LATENCY_MS, noBmsFrame())
+            else railScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // The controllers are answering the whole time, so a fallback with no
+        // warm-up would have published on the very first cycle.
+        var elapsed = 0L
+        while (elapsed + healthyCycleMs < VescGatewayProtocol.HOSTED_BMS_WARMUP_MS) {
+            advanceTimeBy(healthyCycleMs)
+            runCurrent()
+            elapsed += healthyCycleMs
+            assertNull(
+                p.latestData(0),
+                "at t=$elapsed ms the sentinel is still a bridge that may be coming up, not a verdict"
+            )
+        }
+        assertNotNull(p.latestMotion(1), "the premise: the controllers were reporting all along")
+
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+        assertNotNull(
+            p.latestData(0),
+            "and once it has persisted, the substitute is the honest reading to show"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The rider's own head unit, on the connect where the ANT bridge is still
+     * reconnecting.** It answers the sentinel for the first seconds and then the
+     * real frame. The rider must never be shown the substitute in between — that
+     * is a plausible wrong number standing in for a real one that is on its way,
+     * which is precisely the failure this part exists to remove.
+     */
+    @Test
+    fun `an ANT bridge that comes up during the warm-up is never preceded by a substitute`() = runTest {
+        var bridgeUp = false
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode != VescBmsValues.OPCODE_BMS_GET_VALUES -> railScript()(canId, opcode)
+                bridgeUp -> ScriptedReply(LATENCY_MS, bmsFrame())
+                else -> ScriptedReply(LATENCY_MS, noBmsFrame())
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // ant_bms.c's fast path: 500 ms settle, direct open, first poll — well
+        // inside the warm-up, and the whole time nothing may be published.
+        repeat(20) {
+            advanceTimeBy(healthyCycleMs)
+            runCurrent()
+            assertNull(p.latestData(0), "the bridge is reconnecting; a substitute here would be a lie")
+        }
+
+        bridgeUp = true
+        advanceTimeBy(2 * healthyCycleMs)
+        runCurrent()
+
+        assertEquals(
+            75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f,
+            "and the first thing the rider ever sees for this pack is the BMS's own number"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The rider's own head unit once it IS up**: a real reading outranks the
+     * substitute, and goes on outranking it across the gaps a live BMS has.
+     * Swapping a hosted reading for a computed one the moment it misses a cycle
+     * would put a number on the Battery screen that reads exactly as real while
+     * the pack it describes has stopped talking.
+     */
+    @Test
+    fun `a real hosted reading outranks the substitute while it is still current`() = runTest {
         var bmsAnswers = true
         val p = derivedProtocol()
         val link = FakeGateway(p) { canId, opcode ->
@@ -1431,26 +1541,125 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(1)
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
         assertEquals(
             75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f,
-            "a real BMS reading beats the fallback on the very first cycle"
+            "a real BMS reading beats the fallback, warm-up or no warm-up"
         )
 
         bmsAnswers = false
-        advanceTimeBy(3 * oneSilentCycleMs)
+        // Deliberately past the WARM-UP and short of the staleness window: this
+        // is the only stretch where the two rules disagree, so it is the only
+        // stretch that can tell "the hosted reading outranks the substitute"
+        // from "the substitute simply had not warmed up yet". Stopping at the
+        // warm-up boundary instead left the precedence rule pinned by nothing.
+        advanceTimeBy(VescGatewayProtocol.STALE_READING_MS - 4 * oneSilentCycleMs)
         runCurrent()
+        assertTrue(
+            currentTime > VescGatewayProtocol.HOSTED_BMS_WARMUP_MS,
+            "premise: the substitute has had every chance to warm up by now"
+        )
 
         assertEquals(
             75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f,
-            "and keeps beating it: the BMS's last reading ages out through the sweep, it is not " +
-                "quietly overwritten with 78.2 V computed off the controllers' rail"
+            "and it keeps beating it while it is current — not quietly overwritten with 78.2 V " +
+                "computed off the controllers' rail"
         )
         loop.cancel(); device.cancel()
     }
 
     /**
-     * The counterpart, on a slot the profile actually configured: a BMS the
+     * The inequality the "not clearing [contentlessSinceMs] on a real reading is
+     * equivalent" argument rests on: after a slot has ever produced a real
+     * reading the substitute is held off by the staleness window, so a warm-up
+     * shorter than that window can never be the binding constraint. Invert them
+     * and the argument in `bmsRequest` stops being true — this test is what
+     * makes that a build failure rather than a silent regression.
+     */
+    @Test
+    fun `the warm-up is shorter than the staleness window`() {
+        assertTrue(
+            VescGatewayProtocol.HOSTED_BMS_WARMUP_MS < VescGatewayProtocol.STALE_READING_MS,
+            "a warm-up longer than the precedence window would make the un-cleared contentless " +
+                "run observable, and `bmsRequest` claims it is not"
+        )
+    }
+
+    /**
+     * The warm-up is per CONNECTION. A reconnect is exactly when the head unit's
+     * ANT bridge is most likely to still be coming up, so a new session that
+     * inherited the old one's elapsed warm-up would publish a substitute on its
+     * very first cycle — the one moment this whole rule exists to cover.
+     */
+    @Test
+    fun `reset restarts the sentinel's warm-up`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(LATENCY_MS, noBmsFrame())
+            else railScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+        assertNotNull(p.latestData(0), "the first session's warm-up elapsed and the substitute served")
+
+        p.reset()
+        advanceTimeBy(4 * healthyCycleMs)
+        runCurrent()
+
+        assertNull(
+            p.latestData(0),
+            "the new session has to wait out its own warm-up — the bridge may be reconnecting, " +
+                "which is the whole reason a reconnect is not a verdict"
+        )
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+        assertNotNull(p.latestData(0), "and then it serves again")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **Precedence, not permanence.** The counterpart of the test above, and the
+     * reason the rule is an age rather than a latch: a bridge that dies
+     * permanently mid-ride used to leave the rider with no battery at all for
+     * the rest of the connection, while the substitute sat there available. Once
+     * the hosted reading is old enough that the orchestrator would be greying
+     * the pack out anyway, the substitute is better than an empty slot.
+     */
+    @Test
+    fun `a hosted BMS lost mid-ride hands back to the substitute once its reading is stale`() = runTest {
+        var bmsAnswers = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode != VescBmsValues.OPCODE_BMS_GET_VALUES -> railScript()(canId, opcode)
+                bmsAnswers -> ScriptedReply(LATENCY_MS, bmsFrame())
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+        assertEquals(75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f)
+
+        bmsAnswers = false
+        advanceTimeBy(VescGatewayProtocol.STALE_READING_MS + 4 * oneSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            78.2f, assertNotNull(p.latestData(0)).voltage, 0.01f,
+            "the bridge is not coming back; a rail-derived battery beats none at all"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The counterpart on a slot the profile actually configured: a BMS the
      * rider named must go offline when it goes quiet, never be impersonated by
      * the controllers beside it. Only a DERIVED slot has a fallback.
      */
@@ -1464,7 +1673,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(3 * oneSilentCycleMs)
+        advanceTimeBy(pastWarmupMs + 4 * oneSilentCycleMs)
         runCurrent()
 
         assertNull(p.latestData(0), "a configured BMS that stops answering must not be impersonated")
@@ -1486,7 +1695,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(2 * (5 * (TIMEOUT_MS + GUARD_MS) + CYCLE_GAP_MS))
+        advanceTimeBy(2 * VescGatewayProtocol.HOSTED_BMS_WARMUP_MS)
         runCurrent()
 
         assertNull(p.latestData(0), "nothing reported a rail, so there is no battery to compute")
@@ -1494,10 +1703,160 @@ class VescGatewayProtocolTest {
     }
 
     /**
-     * The latch is per CONNECTION, and on this app the next connection can be a
-     * different vehicle — one whose head unit hosts nothing at all. Carried
-     * over, it would leave that vehicle's derived slot permanently empty,
-     * waiting for a reply only the previous head unit ever sent.
+     * **The stamp is load-bearing, and the premise that made it look equivalent
+     * was false.** A controller answering `GET_VALUES` with a right-opcode but
+     * undecodable body has its reply CONSUMED and its request settled, so
+     * `onSilence` never runs and its `motion` entry survives frozen. The derived
+     * battery must be dated by the contributor the numbers actually came from,
+     * not by the frozen one that happens to be first in the list.
+     *
+     * The premise is asserted rather than assumed: if the two contributors ever
+     * carried the same decoder stamp this test would be vacuous, so it fails
+     * loudly instead.
+     */
+    @Test
+    fun `the derived battery is stamped by its newest contributor, not its first`() = runTest {
+        var frontDecodes = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode == VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, noBmsFrame())
+                opcode == VescValues.OPCODE_GET_VALUES && canId == CAN_A && !frontDecodes ->
+                    ScriptedReply(LATENCY_MS, undecodableValuesFrame())
+                else -> railScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(2 * healthyCycleMs)
+        runCurrent()
+        frontDecodes = false
+        // Past the warm-up so the substitute publishes at all, and well inside
+        // STALE_READING_MS so the frozen front uBox is still a contributor —
+        // which is what makes `first` and `max` disagree here.
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+
+        val stale = assertNotNull(p.latestMotion(0), "the front uBox's frozen decode is still there").timestamp
+        val fresh = assertNotNull(p.latestMotion(1), "while the rear keeps decoding").timestamp
+        assertTrue(fresh > stale, "premise: the two contributors carry different decoder stamps")
+        assertEquals(
+            fresh,
+            assertNotNull(p.latestData(0)).timestamp,
+            "the derived battery is dated by the contributor its numbers came from"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The same hole, as a behaviour rather than a stamp.** A controller stuck
+     * emitting undecodable `GET_VALUES` is never dropped by `onSilence`, so
+     * without an age filter it contributes its frozen current and power to the
+     * summed derived battery for the rest of the ride — a real 30 A that stopped
+     * being measured minutes ago.
+     */
+    @Test
+    fun `a controller whose decodes have gone stale stops feeding the derived battery`() = runTest {
+        var frontDecodes = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode == VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, noBmsFrame())
+                opcode == VescValues.OPCODE_GET_VALUES && canId == CAN_A && !frontDecodes ->
+                    ScriptedReply(LATENCY_MS, undecodableValuesFrame())
+                else -> railScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(2 * healthyCycleMs)
+        runCurrent()
+        frontDecodes = false
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+
+        assertEquals(
+            -60f, assertNotNull(p.latestData(0)).current, 0.01f,
+            "a decode that has only just gone stale still counts — one bad frame is not an outage"
+        )
+
+        advanceTimeBy(VescGatewayProtocol.STALE_READING_MS)
+        runCurrent()
+
+        assertEquals(
+            -30f, assertNotNull(p.latestData(0)).current, 0.01f,
+            "but a controller the orchestrator would already be drawing as offline must stop " +
+                "contributing its frozen 30 A"
+        )
+        assertEquals(
+            78.2f, assertNotNull(p.latestData(0)).voltage, 0.01f,
+            "the rear uBox is still measuring the rail, so the battery itself stays"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * And when EVERY contributor has gone stale, the derived battery must stop
+     * being republished at all — otherwise a fresh `BmsData` every cycle makes
+     * it structurally incapable of ever reading as stale, and the orchestrator's
+     * own sweep can never grey it out.
+     *
+     * Counted through the real [PackSampleGate] / [routePackSamples] pair a
+     * `ConnectionSession` uses, because "stopped publishing" is a statement
+     * about new SAMPLES: `latestData` keeps answering with the last one either
+     * way, so an accessor assertion could not tell the two apart.
+     */
+    @Test
+    fun `a derived battery stops producing samples once every contributor has gone stale`() = runTest {
+        var decodes = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode == VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, noBmsFrame())
+                opcode == VescValues.OPCODE_GET_VALUES && !decodes ->
+                    ScriptedReply(LATENCY_MS, undecodableValuesFrame())
+                else -> railScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+        val gate = PackSampleGate(p.packCount)
+        var samples = 0
+        fun drain() { routePackSamples(p, gate) { _, _, _ -> samples++ } }
+
+        advanceTimeBy(pastWarmupMs)
+        runCurrent()
+        drain()
+        assertEquals(1, samples, "the substitute is publishing while its contributors are live")
+
+        decodes = false
+        advanceTimeBy(2 * healthyCycleMs)
+        runCurrent()
+        drain()
+        assertEquals(2, samples, "a frozen-but-recent contributor still produces a sample")
+
+        advanceTimeBy(VescGatewayProtocol.STALE_READING_MS)
+        runCurrent()
+        drain()
+        val settled = samples
+        repeat(5) { advanceTimeBy(healthyCycleMs); runCurrent(); drain() }
+
+        assertEquals(
+            settled, samples,
+            "with every contributor older than the staleness window there is nothing to compute, " +
+                "and the pack has to be allowed to age out"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * Every "how long since" this protocol holds is about ONE connection, and on
+     * this app the next one can be a different vehicle — one whose head unit
+     * hosts nothing at all. A `hostedBmsAtMs` carried over would hold the
+     * substitute off that vehicle for a whole staleness window while its rider
+     * looked at an empty Battery screen.
      */
     @Test
     fun `reset forgets that the gateway hosted a BMS`() = runTest {
@@ -1513,19 +1872,22 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(1)
+        advanceTimeBy(2 * healthyCycleMs)
+        runCurrent()
         assertEquals(75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f)
 
         p.reset()
         bmsAnswers = false
-        advanceTimeBy(3 * oneSilentCycleMs)
+        // Past the new session's own warm-up, but well inside the staleness
+        // window the OLD session's hosted reading would otherwise still hold.
+        advanceTimeBy(pastWarmupMs + 4 * oneSilentCycleMs)
         runCurrent()
 
         assertEquals(
             78.2f,
             assertNotNull(
                 p.latestData(0),
-                "a new session must derive its own battery, not wait for the old head unit's BMS"
+                "a new session must derive its own battery, not wait out the old head unit's precedence"
             ).voltage,
             0.01f
         )

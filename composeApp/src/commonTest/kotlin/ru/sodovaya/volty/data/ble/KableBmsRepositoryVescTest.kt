@@ -918,52 +918,6 @@ class KableBmsRepositoryVescTest {
     }
 
     /**
-     * The same vehicle behind a head unit that hosts **no** BMS — a stock VESC
-     * gateway. Nothing answers opcode 96, and the battery must still be there,
-     * computed off the rail the uBox reports, exactly as the plain
-     * [VescProtocol] link did before the CAN controller was added.
-     *
-     * This is the end-to-end pin on the derived FLAG surviving the pack resize:
-     * every other test here is satisfied by a slot that merely exists, and a
-     * slot that exists without being marked derived has no fallback at all.
-     */
-    @Test
-    fun `a gateway with no BMS behind it still shows the battery its controllers see`() = repoTest { repo ->
-        val v = headUnitVehicle().withCanController()
-        repo.installLinksForTest(v, v.primaryAddress, type = null)
-        val spec = repo.linkSpecsForTest().single()
-        val gateway = assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, v))
-
-        val loop = launch {
-            gateway.runPollLoop { frame ->
-                val len = frame[1].toInt() and 0xFF
-                val payload = frame.copyOfRange(2, 2 + len)
-                val forwarded = (payload[0].toInt() and 0xFF) == VescCan.OPCODE_FORWARD_CAN
-                val inner = if (forwarded) payload[2].toInt() and 0xFF else payload[0].toInt() and 0xFF
-                // Only the uBox answers, and only its per-unit frame: the head
-                // unit handles neither GET_VALUES opcode and hosts no BMS.
-                if (forwarded && inner == VescValues.OPCODE_GET_VALUES) {
-                    gateway.onNotification(valuesFrame())
-                }
-            }
-        }
-        advanceTimeBy(5_000)
-        runCurrent()
-        loop.cancel()
-
-        val battery = assertNotNull(
-            gateway.latestData(0),
-            "no BMS answered, so the derived slot has to be filled from the controllers' rail"
-        )
-        assertEquals(78.2f, battery.voltage, absoluteTolerance = 0.01f)
-        assertEquals(-30f, battery.current, absoluteTolerance = 0.01f, "+ is charging; the uBox draws 30 A")
-        assertFalse(
-            battery.socKnown,
-            "and with no SETUP frame there is no gauge — unknown, not a confident 0 %"
-        )
-    }
-
-    /**
      * **The two-pass fixed point**, asserted directly on the one function that
      * answers it, because the two passes are built from two different specs and
      * an answer that grows between them gives the session a phantom battery it
@@ -973,14 +927,24 @@ class KableBmsRepositoryVescTest {
      * are the profile's stored ones, purely to size the pack list. Pass 2 asks
      * it of the EFFECTIVE spec, by which time the derived slot exists and is
      * numbered — and it must be RECOGNISED there, not counted a second time.
+     *
+     * Both specs are the rider's own, taken from the real planner and the real
+     * repository rather than hand-built, because the recognition rule reads
+     * `OwnedSource.canId`/`kind` and those tags are exactly what
+     * `effectiveLinkSpecs` is responsible for carrying through the resize.
+     *
+     * **`derived` on the pass-2 slot is what the fallback hangs off**, and it is
+     * asserted here rather than end-to-end for a stated reason: the warm-up and
+     * staleness rules are measured in seconds on the protocol's own clock, which
+     * `controllerMotionProtocol` does not thread through, so a
+     * repository-built protocol runs them against the REAL clock and no
+     * virtual-time test can spend them. `VescGatewayProtocolTest` owns the
+     * behaviour; this owns the wiring that reaches it.
      */
     @Test
-    fun `the derived slot is recognised again on the spec the session is built from`() {
-        val planned = LinkSpec(
-            address = CTRL_ADDR,
-            protocolKind = ProtocolKind.VESC,
-            ownedControllers = listOf(OwnedSource(0), OwnedSource(1, canId = U_BOX, kind = ProtocolKind.VESC))
-        )
+    fun `the derived slot is recognised again on the spec the session is built from`() = repoTest { repo ->
+        val v = headUnitVehicle().withCanController()
+        val planned = planLinks(v.packs, v.controllers).single()
         assertEquals(
             listOf(GatewaySource(globalIndex = -1, derived = true)),
             vescGatewayPacks(planned, deriveBattery = true),
@@ -992,11 +956,12 @@ class KableBmsRepositoryVescTest {
             "and a link whose battery a real BMS covers gets no slot at all"
         )
 
-        val effective = planned.copy(ownedPacks = listOf(OwnedSource(0)))
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
         assertEquals(
             listOf(GatewaySource(globalIndex = 0, derived = true)),
-            vescGatewayPacks(effective, deriveBattery = true),
-            "pass 2 must recognise the slot it asked for, not append a second one beside it"
+            vescGatewayPacks(repo.linkSpecsForTest().single(), deriveBattery = true),
+            "pass 2 must recognise the slot it asked for — as DERIVED, which is what gives it a " +
+                "fallback at all — and must not append a second one beside it"
         )
     }
 
