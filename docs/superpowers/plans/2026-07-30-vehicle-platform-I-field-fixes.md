@@ -78,6 +78,7 @@ Part G2's Tasks 8 and 9 follow this part, not precede it.
 | `domain/stats/MotionAggregator.kt` | the per-field known-flag fold rules | 7 |
 | `data/bms/vesc/VescValues.kt` | VESC producers must be *able* to clear a flag | 7 |
 | `domain/stats/RideEnergy.kt` (new) | trapezoidal Wh integration, provenance-marked | 8 |
+| `sqldelight/.../VehicleRow.sq` + a new learned-peaks table | move the two learned columns off `Vehicle` so an unwritable setter stops existing | 9 |
 
 ---
 
@@ -331,6 +332,16 @@ repository tests have an equivalent driver, reuse it rather than writing a secon
       snapshot is **not optional** — a migration without one makes `verifyMigrations`
       vacuous. Check the highest existing `N.sqm` and `N.db` before numbering: as of
       Part G2 Task 7 the migrations run to `7.sqm` and the snapshots to `8.db`.
+
+      **Do not copy the gauge-peak columns' pattern.** `gaugePeakCurrentA` and
+      `gaugePeakPowerW` (Part G2 Task 7) are deliberately **preserved** by `upsert`
+      via a COALESCE subselect, so `copy(gaugePeakCurrentA = …)` followed by `upsert`
+      compiles and silently does nothing — they are a telemetry cache with exactly
+      one writer. `cellCountEdited` is the opposite kind of field: it is **rider
+      intent**, its authority *is* the object graph, and it must travel through
+      `upsert` like every ordinary field. Task 9 removes the confusing shape
+      entirely; until it lands, read `VehicleRow.sq`'s comments before assuming a
+      column round-trips.
 
 - [ ] **Step 4: Restore the input.** An `OutlinedTextField` with `onCellCountChanged`,
       keyboard type number, blank → null (not 0 — `inputVoltageOrNull` treats
@@ -611,6 +622,49 @@ integrates a constant 0 W, and with Task 1 unfixed it divides by a negative dist
 
 ```bash
 git commit -m "feat(ride): a wheel that counts no watt-hours can still be measured"
+```
+
+---
+
+### Task 9 — a field that cannot be written should not look writable
+
+**Files:**
+- Modify: `composeApp/src/commonMain/sqldelight/ru/sodovaya/volty/data/db/VehicleRow.sq`
+  (drop the two learned columns and the COALESCE preserve they forced), plus a new
+  one-row-per-vehicle table for them and a migration + snapshot
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/domain/model/Vehicle.kt:78-81`
+  (remove `gaugePeakCurrentA` / `gaugePeakPowerW` from the model)
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/db/SqlDelightVehicleRepository.kt`,
+  `domain/repository/VehicleRepository.kt`, `presentation/ride/RideDashboardComponent.kt`,
+  `presentation/vehicle/VehicleEditComponent.kt`
+
+**Why.** Part G2 Task 7's review approved the *polarity* of making `upsert` preserve
+the learned dial ranges — a telemetry cache with one producer is not rider intent, and
+no snapshot holder has anything true to say about it — while naming the cost plainly:
+`copy(gaugePeakCurrentA = …)` plus `upsert` compiles and silently does nothing, and the
+only signal is a KDoc one layer away and an SQL comment two layers away. The interface
+now teaches the opposite of the rule Task 1 of that part established.
+
+The structural answer is that these values do not belong on `Vehicle` at all. Give them
+their own table keyed by vehicle id, reached by their own accessor, and the unwritable
+setter stops existing rather than being documented. **Do this before a third learned
+column arrives**, which is the reviewer's own deadline for it.
+
+- [ ] **Step 1: Write the failing test.** The learned peaks survive a whole-object
+      `upsert`, are cleared by their own accessor, and are **not reachable** from
+      `Vehicle` — the last one is a compile-time property, so state it as a deleted API
+      rather than an assertion, and let the six existing tests that pin the preserve
+      behaviour tell you what must keep working.
+- [ ] **Step 2: Run the existing suite and list every call site the compiler rejects.**
+      That list is the task's true scope; do not guess it in advance.
+- [ ] **Step 3: Migrate.** New table, migration, snapshot. Copy existing values across
+      — a rider who has learned their dial ranges must not lose them to a refactor.
+- [ ] **Step 4: Delete the COALESCE preserve** and the KDoc that explained it. The
+      explanation existing is the defect; removing the need for it is the fix.
+- [ ] **Step 5: Sweep, full suite, commit.**
+
+```bash
+git commit -m "refactor(db): the dial's memory is not part of the vehicle's description"
 ```
 
 ---
