@@ -311,8 +311,22 @@ class BegodeProtocol(
      *    per-wheel three-way preference precisely because it varies by firmware
      *    and motor wiring, and its own DEFAULT is `Math.abs`. Negating fixes these
      *    two wheels and breaks the next rider's into the same silent failure;
-     *  - **one convention, stated once per decoder**, is what stops this protocol
-     *    and VESC's disagreeing about what `ControllerData.speedKmh` means.
+     *  - **in the decoder, not in [rebuildMotion]**, so the convention is a
+     *    property of the decode and a second consumer of this protocol cannot
+     *    acquire the field without it. That is where
+     *    [ru.sodovaya.volty.data.bms.vesc.VescValues] states the same contract for
+     *    duty (`abs(duty) * 100`), which is the precedent this follows.
+     *
+     * **The two protocols do NOT yet agree about this field, and this KDoc used to
+     * claim they did.** `VescValues` publishes a **signed** speed on both of its
+     * paths — `speedMs * 3.6f` from `COMM_GET_VALUES`, and the eRPM-derived figure,
+     * which inherits eRPM's sign — so every consequence listed above is still live
+     * for a reversing VESC, or one whose motor direction is configured the other
+     * way round. That half is booked as **Part I Task 10** and recorded in the
+     * field report's latent-defect list; it is deliberately not fixed from here,
+     * being a different protocol with its own tests and its own `eRpm` consumers to
+     * check. Until Task 10 lands, "non-negative" is this decoder's contract, not
+     * `ControllerData.speedKmh`'s.
      *
      * No rider-facing polarity preference is offered: nothing in Volty consumes
      * the direction, so the setting would exist only to let a rider break their
@@ -327,13 +341,18 @@ class BegodeProtocol(
      * direction this particular firmware calls negative. Null on the same gate as
      * [speedKmh].
      *
+     * **This exists to RETAIN the sign, not to test it.** [speedKmh] discards
+     * information the frame carried, and the sign is the one part of a signed field
+     * that `abs` cannot be undone from. Keeping it means a later part that wants a
+     * reverse indicator starts from a decode that works, instead of having to
+     * revisit this decoder to recover a bit that was thrown away for a contract it
+     * was never needed by. (It is not needed to make the signedness *testable*:
+     * an unsigned read of a gentle roll answers 2340 km/h through [speedKmh] too,
+     * so that decode is pinned either way.)
+     *
      * **Decoded but deliberately unsurfaced**, the same shape as
      * [powerOnDistanceMeters], [tiltbackSpeed] and [wheelAlerts]: it has no
-     * production caller and must not acquire one by accident. It exists so that
-     * the signedness of bytes 4..5 stays a *testable* decode rather than a claim
-     * in a comment (an unsigned read of a gentle roll answers 2340 km/h in either
-     * accessor), and so a later part that wants a reverse indicator starts from a
-     * decode that works instead of from a field whose sign was thrown away.
+     * production caller and must not acquire one by accident.
      *
      * A consumer that ever does want the direction must first answer the question
      * the field report leaves open: which sign means forward is per-firmware, so
@@ -1045,10 +1064,21 @@ class BegodeProtocol(
             // [dutyPercent]'s: every consumer of [ControllerData.speedKmh]
             // treats it as a non-negative quantity compared against UPPER
             // thresholds, and the first hardware test found this field signing
-            // FORWARD negative on two wheels. One convention, stated once per
-            // decoder, is what stops two protocols disagreeing about what the
-            // shared field means. The signed value is kept above rather than
-            // discarded — see [signedSpeedKmh].
+            // FORWARD negative on two wheels.
+            //
+            // Taking it HERE rather than in [rebuildMotion] is what makes the
+            // convention a property of the decoder, so a second consumer cannot
+            // acquire this field without it. It does NOT yet mean the two
+            // protocols agree: `VescValues` publishes a SIGNED speed on both of
+            // its paths (`speedMs * 3.6f` from opcode 4, and the eRPM-derived
+            // figure, which inherits eRPM's sign), so a reversing VESC or one
+            // whose motor direction is configured the other way round still
+            // meets every consequence listed on [speedKmh]. Booked as Part I
+            // Task 10 — deliberately not fixed here, being a different protocol
+            // with its own tests and its own eRPM consumers.
+            //
+            // The signed value is kept above rather than discarded — see
+            // [signedSpeedKmh].
             speedKmhValue = abs(signedSpeedKmhValue)
             powerOnMetersValue = powerOnMeters
             sawLiveMotion = true
