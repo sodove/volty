@@ -748,6 +748,17 @@ git commit -m "fix(vesc): the other decoder was still signing its speed"
   and the filter closes the plausible case. Whoever adds the vehicle-settings
   screen should add the reset there.
 
+## Open, carried from Task 3's review
+
+- **A typed cell count reaches a live decoder only at connect time.** `BegodeProtocol`
+  takes it at construction (`ControllerProtocols.kt:124`, `KableBmsRepository.kt:2676`),
+  so a rider who edits an *already-connected* dumb wheel's profile sees no voltage, no
+  power and no consumption until they reconnect. Judged out of scope for Task 3 by its
+  implementer and I agree — but it is the exact wheel this part exists to serve, and
+  **a rider who types a number and sees nothing change will type it again.** The fix is
+  either forcing a reconnect on save or telling the rider one is needed; both are product
+  decisions, so neither was taken unilaterally.
+
 ## Open, and needing the rider rather than an implementer
 
 - **The bicycle's controller type**, which decides whether Part H or Part E comes next.
