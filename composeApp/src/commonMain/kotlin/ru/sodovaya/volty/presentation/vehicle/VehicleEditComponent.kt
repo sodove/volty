@@ -868,6 +868,18 @@ class DefaultVehicleEditComponent(
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
             val v = existing?.withEdits(s) ?: newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
             vehicleRepository.upsert(v)
+            // G §9.2 item 7, and it needs its own call rather than riding along on the `upsert`
+            // above: `upsert` deliberately CANNOT write the learned dial widths (see
+            // `Vehicle.gaugePeakCurrentA` and `VehicleRow.sq`), because every other caller of it
+            // holds a snapshot that would revert them. Clearing them is the one event that
+            // legitimately lowers them, so it says so explicitly, through their only writer.
+            //
+            // The same pure predicate `withEdits` used, on the same inputs. Asked twice rather than
+            // threaded through, because the two answers are for two different things: the in-memory
+            // Vehicle must be honest about its own fields, and the database must be told.
+            if (existing != null && !GaugeScale.peaksStillApply(existing.controllers, v.controllers)) {
+                vehicleRepository.updateGaugePeaks(v.id, currentA = 0f, powerW = 0f)
+            }
             // If the user saved while a guest connection was live, swap the
             // active connection to the freshly-persisted Vehicle so the
             // dashboard immediately reflects the saved identity (pill name,
@@ -928,6 +940,10 @@ class DefaultVehicleEditComponent(
  * field: they are cleared, not written, and only when the CONTROLLER SET changed
  * (`G §9.2` item 7) — a learned dial range describes hardware, so it cannot
  * outlive the hardware being swapped out. See the body.
+ *
+ * **Setting them here keeps the returned [Vehicle] honest; it does not persist
+ * them.** `upsert` cannot write those two columns at all, so [onSave] follows up
+ * with an explicit `updateGaugePeaks` — see there.
  *
  * `yieldBmsToHeadUnit` left that list in Task 4 and is now written from
  * [VehicleEditComponent.State.yieldBmsToHeadUnit] — which is **seeded** from

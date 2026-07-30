@@ -16,6 +16,88 @@ import kotlin.test.assertTrue
  */
 class GaugeScaleTest {
 
+    /** Folds [samples] in, oldest first. Every median assertion needs a full window of five. */
+    private fun feed(start: PeakTracker, vararg samples: Float): PeakTracker =
+        samples.fold(start) { acc, s -> acc.accept(s) }
+
+    /**
+     * **Why the window is five and not three, stated as the counterexample that changed it.**
+     *
+     * A median of three is moved by TWO adjacent corrupt frames -- `[6, 300, 300]` has a median of
+     * 300 -- and on a checksum-less protocol two adjacent bad frames are ordinary: a dropped BLE
+     * notification, a re-assembly boundary or a burst of interference hits consecutive frames far
+     * more often than isolated ones. A median of five needs THREE consecutive frames that all pass
+     * the tail check and the zero-payload gate.
+     *
+     * Both halves are asserted, including the boundary: three adjacent corrupt frames DO get through,
+     * because that is what a window of five buys and no more. Pretending otherwise would be a claim
+     * the code cannot keep.
+     */
+    @Test fun two_adjacent_corrupt_frames_are_rejected_and_three_are_the_documented_limit() {
+        assertEquals(
+            6f, feed(PeakTracker(), 6f, 6f, 6f, 300f, 300f).learnedPeak,
+            "two adjacent spikes must not move a median of five -- they WOULD move a median of three"
+        )
+        // The same two frames through a hand-rolled median of THREE, to show the counterexample is
+        // real rather than asserted: the last three samples are [6, 300, 300], median 300.
+        assertEquals(300f, listOf(6f, 300f, 300f).sorted()[1], "the median-of-three counterexample")
+
+        assertEquals(
+            300f, feed(PeakTracker(), 6f, 6f, 300f, 300f, 300f).learnedPeak,
+            "three adjacent frames are the honest limit of a five-window median"
+        )
+    }
+
+    // --- the displayed rung never narrows (item 3, as ruled in fix round 1) ----------------------
+
+    /**
+     * **Widening is instant; narrowing does not happen.**
+     *
+     * Item 3 asked for instant widening only. A symmetric rule would let a noisy vehicle step
+     * between rungs -- and, on the POWER dial, between tick UNITS -- frame to frame, which is exactly
+     * the animation the quantisation exists to prevent. So the previous rung is a floor.
+     */
+    @Test fun the_displayed_rung_never_narrows_for_the_life_of_a_session() {
+        val opening = GaugeScale.CURRENT_RUNGS_A.first()
+        // One excursion opens the dial up...
+        val peak = GaugeScale.currentDisplayRungA(opening, 0f, 200f)
+        assertEquals(300f, peak)
+        // ...and every quiet frame after it holds, however long the quiet lasts.
+        var rung = peak
+        repeat(50) { rung = GaugeScale.currentDisplayRungA(rung, 0f, 6f) }
+        assertEquals(300f, rung, "the dial narrowed back down after the excursion passed")
+
+        // Power's half, where narrowing would also flip the tick unit between watts and kilowatts.
+        var powerRung = GaugeScale.powerDisplayRungW(GaugeScale.POWER_RUNGS_W.first(), 0f, 9_000f)
+        assertEquals(20_000f, powerRung)
+        repeat(50) { powerRung = GaugeScale.powerDisplayRungW(powerRung, 0f, 400f) }
+        assertEquals(20_000f, powerRung)
+    }
+
+    /** A noisy vehicle must produce ONE rung change, not one per frame. */
+    @Test fun an_alternating_reading_settles_on_one_rung_instead_of_oscillating() {
+        var rung = GaugeScale.CURRENT_RUNGS_A.first()
+        val seen = mutableListOf(rung)
+        repeat(20) { i ->
+            rung = GaugeScale.currentDisplayRungA(rung, 0f, if (i % 2 == 0) 90f else 4f)
+            seen += rung
+        }
+        assertEquals(seen, seen.sorted(), "the displayed rung stepped back down")
+        assertEquals(listOf(10f, 150f), seen.distinct())
+    }
+
+    /**
+     * The floor is snapped onto the ladder, so a caller that hands back something that is not a rung
+     * cannot make the dial draw a width whose label step is not round.
+     */
+    @Test fun a_previous_rung_that_is_not_a_rung_is_snapped_up_onto_the_ladder() {
+        assertEquals(150f, GaugeScale.currentDisplayRungA(137f, 0f, 0f))
+        assertEquals(10f, GaugeScale.currentDisplayRungA(0f, 0f, 0f))
+        assertEquals(10f, GaugeScale.currentDisplayRungA(Float.NaN, 0f, 0f))
+        assertEquals(10f, GaugeScale.currentDisplayRungA(-50f, 0f, 0f))
+        assertEquals(500f, GaugeScale.currentDisplayRungA(Float.MAX_VALUE, 0f, 0f))
+    }
+
     // --- the ladder ------------------------------------------------------------------------------
 
     @Test fun the_two_ladders_are_the_ones_the_brief_names() {
@@ -117,8 +199,9 @@ class GaugeScaleTest {
      */
     @Test fun a_live_excursion_widens_the_dial_without_becoming_the_learned_peak() {
         val learned = 6f
-        val quiet = GaugeScale.currentDisplayRungA(learned, 6f)
-        val excursion = GaugeScale.currentDisplayRungA(learned, 200f)
+        val opening = GaugeScale.CURRENT_RUNGS_A.first()
+        val quiet = GaugeScale.currentDisplayRungA(opening, learned, 6f)
+        val excursion = GaugeScale.currentDisplayRungA(opening, learned, 200f)
 
         assertEquals(10f, quiet, "a 6 A dial sits on the 10 A rung")
         assertEquals(300f, excursion, "a 200 A sample must be on scale in the frame it arrives")
@@ -133,12 +216,12 @@ class GaugeScaleTest {
     /** The sample's SIGN is irrelevant: both dials are bipolar, so regen widens them too. */
     @Test fun the_display_rung_follows_the_absolute_sample() {
         assertEquals(
-            GaugeScale.currentDisplayRungA(0f, 200f),
-            GaugeScale.currentDisplayRungA(0f, -200f)
+            GaugeScale.currentDisplayRungA(0f, 0f, 200f),
+            GaugeScale.currentDisplayRungA(0f, 0f, -200f)
         )
         assertEquals(
-            GaugeScale.powerDisplayRungW(0f, 4_000f),
-            GaugeScale.powerDisplayRungW(0f, -4_000f)
+            GaugeScale.powerDisplayRungW(0f, 0f, 4_000f),
+            GaugeScale.powerDisplayRungW(0f, 0f, -4_000f)
         )
     }
 
@@ -148,16 +231,19 @@ class GaugeScaleTest {
      * single bad frame would visibly snap a 500 A ring down to 10 A.
      */
     @Test fun a_non_finite_sample_leaves_the_learned_dial_alone() {
-        val wide = GaugeScale.currentDisplayRungA(400f, 0f)
+        // previousRung is the NARROWEST rung on purpose, so the monotone floor cannot mask the
+        // sample guard: without the guard `rungFor(NaN)` answers the first rung and the floor agrees.
+        val opening = GaugeScale.CURRENT_RUNGS_A.first()
+        val wide = GaugeScale.currentDisplayRungA(opening, 400f, 0f)
         assertEquals(500f, wide)
-        assertEquals(wide, GaugeScale.currentDisplayRungA(400f, Float.NaN))
-        assertEquals(wide, GaugeScale.currentDisplayRungA(400f, Float.POSITIVE_INFINITY.let { -it }))
+        assertEquals(wide, GaugeScale.currentDisplayRungA(opening, 400f, Float.NaN))
+        assertEquals(wide, GaugeScale.currentDisplayRungA(opening, 400f, Float.NEGATIVE_INFINITY))
     }
 
     @Test fun a_non_finite_learned_peak_does_not_poison_the_display_rung() {
         assertEquals(
-            GaugeScale.currentDisplayRungA(0f, 50f),
-            GaugeScale.currentDisplayRungA(Float.NaN, 50f)
+            GaugeScale.currentDisplayRungA(0f, 0f, 50f),
+            GaugeScale.currentDisplayRungA(0f, Float.NaN, 50f)
         )
     }
 
@@ -165,7 +251,10 @@ class GaugeScaleTest {
 
     @Test fun a_fresh_tracker_has_learned_nothing() {
         assertEquals(0f, PeakTracker().learnedPeak)
-        assertEquals(3, PeakTracker.WINDOW)
+        assertEquals(
+            5, PeakTracker.WINDOW,
+            "five, not three: a median of three is moved by two ADJACENT corrupt frames"
+        )
     }
 
     /**
@@ -173,19 +262,19 @@ class GaugeScaleTest {
      * of the vehicle.** Begode frames carry no checksum, so this is not hypothetical.
      */
     @Test fun a_single_spurious_sample_never_becomes_the_learned_peak() {
-        val tracker = PeakTracker().accept(6f).accept(6f).accept(300f)
+        val tracker = feed(PeakTracker(), 6f, 6f, 6f, 6f, 300f)
         assertEquals(6f, tracker.learnedPeak)
         assertEquals(10f, GaugeScale.rungFor(tracker.learnedPeak, GaugeScale.CURRENT_RUNGS_A))
 
         // And it stays rejected as the window rolls past it.
-        val after = tracker.accept(6f).accept(6f)
-        assertEquals(6f, after.learnedPeak)
+        assertEquals(6f, feed(tracker, 6f, 6f).learnedPeak)
     }
 
     /** The spike in the middle, and as the first sample of a connection — same answer. */
     @Test fun a_spurious_sample_is_rejected_wherever_it_lands_in_the_window() {
-        assertEquals(6f, PeakTracker().accept(6f).accept(300f).accept(6f).learnedPeak)
-        assertEquals(6f, PeakTracker().accept(300f).accept(6f).accept(6f).learnedPeak)
+        assertEquals(6f, feed(PeakTracker(), 300f, 6f, 6f, 6f, 6f).learnedPeak)
+        assertEquals(6f, feed(PeakTracker(), 6f, 6f, 300f, 6f, 6f).learnedPeak)
+        assertEquals(6f, feed(PeakTracker(), 6f, 6f, 6f, 6f, 300f).learnedPeak)
     }
 
     /**
@@ -193,35 +282,39 @@ class GaugeScaleTest {
      * this, "ignores spikes" could be satisfied by a tracker that learns nothing at all.
      */
     @Test fun a_corroborated_reading_is_learned() {
-        // The MEDIAN of the run, not its maximum: 200 A is corroborated by 190, so 190 is what a
-        // window of three can honestly assert.
-        assertEquals(190f, PeakTracker().accept(180f).accept(190f).accept(200f).learnedPeak)
-        assertEquals(42f, PeakTracker().accept(42f).accept(42f).accept(42f).learnedPeak)
+        // The MEDIAN of the run, not its maximum: 220 A is corroborated by 210, so 200 -- the
+        // middle of five -- is what a window of five can honestly assert.
+        assertEquals(200f, feed(PeakTracker(), 180f, 190f, 200f, 210f, 220f).learnedPeak)
+        assertEquals(42f, feed(PeakTracker(), 42f, 42f, 42f, 42f, 42f).learnedPeak)
     }
 
     /** Nothing is learned before the window is full — a partial "median" is the sample itself. */
     @Test fun nothing_is_learned_until_the_window_is_full() {
-        assertEquals(0f, PeakTracker().accept(300f).learnedPeak)
-        assertEquals(0f, PeakTracker().accept(300f).accept(300f).learnedPeak)
-        assertEquals(300f, PeakTracker().accept(300f).accept(300f).accept(300f).learnedPeak)
+        (1 until PeakTracker.WINDOW).forEach { n ->
+            assertEquals(
+                0f, feed(PeakTracker(), *FloatArray(n) { 300f }).learnedPeak,
+                "$n samples is not a full window"
+            )
+        }
+        assertEquals(300f, feed(PeakTracker(), *FloatArray(PeakTracker.WINDOW) { 300f }).learnedPeak)
     }
 
     @Test fun the_learned_peak_never_decreases() {
         var tracker = PeakTracker()
         var seen = listOf<Float>()
-        listOf(90f, 100f, 110f, 5f, 5f, 5f, 0f, 0f, 0f, 120f, 130f, 140f).forEach { sample ->
+        (List(5) { 100f } + List(5) { 5f } + List(5) { 0f } + List(5) { 140f }).forEach { sample ->
             tracker = tracker.accept(sample)
             seen = seen + tracker.learnedPeak
         }
         assertEquals(seen, seen.sorted())
-        assertEquals(130f, tracker.learnedPeak)
+        assertEquals(140f, tracker.learnedPeak)
     }
 
     /** Bipolar: a regen braking run teaches the tracker exactly as much as an acceleration run. */
     @Test fun the_tracker_learns_from_the_absolute_value() {
         assertEquals(
-            PeakTracker().accept(120f).accept(130f).accept(140f).learnedPeak,
-            PeakTracker().accept(-120f).accept(-130f).accept(-140f).learnedPeak
+            feed(PeakTracker(), 120f, 130f, 140f, 150f, 160f).learnedPeak,
+            feed(PeakTracker(), -120f, -130f, -140f, -150f, -160f).learnedPeak
         )
     }
 
@@ -230,13 +323,13 @@ class GaugeScaleTest {
      * carry `NaN` through, and one poisoned [PeakTracker.learnedPeak] is permanent.
      */
     @Test fun a_non_finite_sample_is_ignored_rather_than_learned() {
-        val baseline = PeakTracker().accept(100f).accept(100f).accept(100f)
+        val baseline = feed(PeakTracker(), 100f, 100f, 100f, 100f, 100f)
         val poisoned = baseline.accept(Float.NaN).accept(Float.POSITIVE_INFINITY).accept(Float.NaN)
         assertEquals(100f, poisoned.learnedPeak)
         assertFalse(poisoned.learnedPeak.isNaN())
 
-        // Nor may a NaN advance the WINDOW: if it did, three NaNs would displace the three real
-        // samples and the next single genuine reading would be a full window on its own.
+        // Nor may a NaN advance the WINDOW: if it did, a run of NaNs would displace the real
+        // samples and the next few genuine readings would be a full window on their own.
         assertEquals(baseline, poisoned)
     }
 
@@ -249,11 +342,11 @@ class GaugeScaleTest {
         assertEquals(0f, PeakTracker.seededAt(Float.POSITIVE_INFINITY).learnedPeak)
         // A seed is a floor, not a ceiling: real riding still grows past a configured limit.
         assertEquals(
-            310f,
-            PeakTracker.seededAt(240f).accept(300f).accept(310f).accept(320f).learnedPeak
+            320f,
+            feed(PeakTracker.seededAt(240f), 300f, 310f, 320f, 330f, 340f).learnedPeak
         )
         // And a smaller corroborated run never pulls it back down.
-        assertEquals(240f, PeakTracker.seededAt(240f).accept(5f).accept(5f).accept(5f).learnedPeak)
+        assertEquals(240f, feed(PeakTracker.seededAt(240f), 5f, 5f, 5f, 5f, 5f).learnedPeak)
     }
 
     /**
@@ -271,7 +364,9 @@ class GaugeScaleTest {
 
         // What the component does: filter through MotionReadings, then fold.
         var tracker = PeakTracker()
-        repeat(6) { MotionReadings.powerW(incoherent)?.let { tracker = tracker.accept(it) } }
+        repeat(2 * PeakTracker.WINDOW) {
+            MotionReadings.powerW(incoherent)?.let { tracker = tracker.accept(it) }
+        }
         assertEquals(0f, tracker.learnedPeak)
         assertEquals(
             GaugeScale.POWER_RUNGS_W.first(),
@@ -282,7 +377,9 @@ class GaugeScaleTest {
         // The coherent twin, to prove the filter is not simply rejecting everything.
         val observed = incoherent.copy(hasPower = true)
         var learned = PeakTracker()
-        repeat(3) { MotionReadings.powerW(observed)?.let { learned = learned.accept(it) } }
+        repeat(PeakTracker.WINDOW) {
+            MotionReadings.powerW(observed)?.let { learned = learned.accept(it) }
+        }
         assertEquals(4200f, learned.learnedPeak)
     }
 
@@ -363,7 +460,7 @@ class GaugeScaleTest {
         var tracker = PeakTracker()
         val rungs = mutableListOf(GaugeScale.rungFor(tracker.learnedPeak, GaugeScale.CURRENT_RUNGS_A))
         // A cruise, then a hill, then a cruise again — every reading corroborated.
-        listOf(6f, 6f, 6f, 20f, 20f, 20f, 6f, 6f, 6f).forEach { sample ->
+        (List(5) { 6f } + List(5) { 20f } + List(5) { 6f }).forEach { sample ->
             tracker = tracker.accept(sample)
             rungs += GaugeScale.rungFor(tracker.learnedPeak, GaugeScale.CURRENT_RUNGS_A)
         }

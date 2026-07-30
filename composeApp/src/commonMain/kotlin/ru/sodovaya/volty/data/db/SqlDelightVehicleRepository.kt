@@ -113,13 +113,12 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 // off writes zero level rows, exactly like a rider who has never
                 // opened the screen — and the two must not read back the same.
                 // See AlertLevelRow.sq / Vehicle.motionAlerts.
-                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L,
-                // Zero is a value here, not an absence — see Vehicle.gaugePeakCurrentA
-                // and 7.sqm — so these two ride along on every upsert like any
-                // other NOT NULL column. `updateGaugePeaks` below is the hot path
-                // that avoids rewriting the child tables, not the only writer.
-                gaugePeakCurrentA = vehicle.gaugePeakCurrentA.toDouble(),
-                gaugePeakPowerW = vehicle.gaugePeakPowerW.toDouble()
+                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L
+                // gaugePeakCurrentA / gaugePeakPowerW are NOT parameters of this
+                // statement. `updateGaugePeaks` is their only writer and the
+                // statement preserves whatever is stored — see VehicleRow.sq's
+                // own note, and Vehicle.gaugePeakCurrentA, for why any caller
+                // holding a Vehicle snapshot must not be able to write them.
             )
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
@@ -210,12 +209,15 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     }
 
     /**
-     * Two columns, no children, no transaction — the same shape as [touch].
+     * Two columns, no children, no transaction — the same shape as [touch], and
+     * **the only writer of these two columns** ([upsert] preserves them).
      *
      * Overrides [VehicleRepository.updateGaugePeaks]'s correct-but-heavy default
-     * (read, `copy`, full upsert) for the reason stated there: this runs while the
-     * rider is riding, and the default would replay the caller's snapshot of the
-     * pack/controller/alert tables. A single UPDATE also needs no transaction —
+     * (read, `copy`, full upsert) for a reason the default cannot avoid: `upsert`
+     * replaces the alert-level set wholesale from the in-memory list, while
+     * `toRules()` deliberately SKIPS rows it cannot represent and leaves them in
+     * the table. A mid-ride peak write must not be the event that deletes a newer
+     * version's alert rows for good. A single UPDATE also needs no transaction —
      * there is no second statement for a crash to land between.
      */
     override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {

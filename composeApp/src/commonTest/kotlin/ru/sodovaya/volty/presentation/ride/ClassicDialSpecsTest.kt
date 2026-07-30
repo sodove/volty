@@ -278,8 +278,12 @@ class ClassicDialSpecsTest {
         val cruiseW = 571f
         val built = ClassicDialSpecs.build(
             motion.copy(batteryCurrentA = cruiseA, powerW = cruiseW), battery, UnitSystem.METRIC, 70f,
-            currentRangeA = GaugeScale.currentDisplayRungA(cruiseA, cruiseA),
-            powerRangeW = GaugeScale.powerDisplayRungW(cruiseW, cruiseW)
+            currentRangeA = GaugeScale.currentDisplayRungA(
+                GaugeScale.CURRENT_RUNGS_A.first(), cruiseA, cruiseA
+            ),
+            powerRangeW = GaugeScale.powerDisplayRungW(
+                GaugeScale.POWER_RUNGS_W.first(), cruiseW, cruiseW
+            )
         ).associateBy { it.slot }
 
         val currentFraction = cruiseA / built.getValue(VescClusterSlot.CURRENT).range.maximumValue

@@ -166,6 +166,17 @@ class VehicleEditComponentTest {
         override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle }
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
+
+        /**
+         * Recorded separately from [upserts] because the storage layer's `upsert` deliberately
+         * CANNOT write the learned dial widths (`VehicleRow.sq`) — so a composer that only set them
+         * on the upserted [Vehicle] would persist nothing. The `G §9.2` tests below assert both: the
+         * returned vehicle is honest about its own fields, and this explicit write happened.
+         */
+        val gaugePeakWrites = mutableListOf<Triple<String, Float, Float>>()
+        override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
+            gaugePeakWrites += Triple(id, currentA, powerW)
+        }
     }
 
     /**
@@ -1093,6 +1104,8 @@ class VehicleEditComponentTest {
         assertEquals(2, saved.controllers.size, "the hardware really did change")
         assertEquals(0f, saved.gaugePeakCurrentA, "137 A was one controller's peak, not two")
         assertEquals(0f, saved.gaugePeakPowerW)
+        // And the clear was PERSISTED, which the upsert above cannot do on its own.
+        assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
     }
 
     @Test
@@ -1111,6 +1124,7 @@ class VehicleEditComponentTest {
 
         assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
         assertEquals(0f, repo.upserts.single().gaugePeakPowerW)
+        assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
     }
 
     /**
@@ -1139,6 +1153,10 @@ class VehicleEditComponentTest {
         assertEquals(660, saved.controllers.single().motor.wheelDiameterMm)
         assertEquals(137f, saved.gaugePeakCurrentA, "a rename is not a hardware change")
         assertEquals(6421f, saved.gaugePeakPowerW)
+        assertEquals(
+            emptyList(), repo.gaugePeakWrites,
+            "and nothing was written -- a cosmetic edit must not touch the stored peaks at all"
+        )
     }
 
     /**
@@ -1156,6 +1174,25 @@ class VehicleEditComponentTest {
         c.onSave()
         advanceUntilIdle()
         assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
+        assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
+    }
+
+    /**
+     * The CREATE path has nothing to clear and must not pretend otherwise: a vehicle that does not
+     * exist yet has no stored peaks, and `updateGaugePeaks` on it would be a write against a row the
+     * upsert has only just inserted at zero.
+     */
+    @Test
+    fun `creating a vehicle writes no gauge-peak clear`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(emptyList())
+        val c = component(repo, vehicleId = null, prefilledBmsType = BmsType.JK_BMS, prefilledBmsAddress = "AA:BB")
+        advanceUntilIdle()
+        c.onNameChanged("Fresh")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(1, repo.upserts.size)
+        assertEquals(emptyList(), repo.gaugePeakWrites)
     }
 
     /**

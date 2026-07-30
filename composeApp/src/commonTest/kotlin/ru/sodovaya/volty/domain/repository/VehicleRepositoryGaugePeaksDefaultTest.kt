@@ -20,6 +20,11 @@ import kotlin.time.Instant
  * every one of those fakes report success while storing nothing, and no test above them could tell a
  * working writer from a missing one. That claim is only true if the default actually works, which is
  * what this file is for — nothing else exercises it.
+ *
+ * The default routes through `upsert`, which works for an in-memory fake precisely because a fake's
+ * `upsert` writes whatever it is handed. The *storage* layer's `upsert` deliberately does not
+ * (`VehicleRow.sq`), which is why it overrides this rather than inheriting it — the two facts fit
+ * together rather than contradicting each other.
  */
 @OptIn(ExperimentalTime::class)
 class VehicleRepositoryGaugePeaksDefaultTest {

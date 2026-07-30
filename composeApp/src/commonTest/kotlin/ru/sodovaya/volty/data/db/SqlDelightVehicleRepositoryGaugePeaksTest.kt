@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.withCellCount
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -54,12 +55,64 @@ class SqlDelightVehicleRepositoryGaugePeaksTest {
     )
 
     /** Values no default could produce, so a dropped column cannot pass by coincidence. */
-    @Test fun the_learned_peaks_round_trip_through_upsert() = runTest {
+    @Test fun the_learned_peaks_round_trip_through_their_own_writer() = runTest {
         val repo = newInMemoryRepo()
-        repo.upsert(vehicle(currentA = 137.5f, powerW = 6421.25f))
+        repo.upsert(vehicle())
+        repo.updateGaugePeaks("v1", currentA = 137.5f, powerW = 6421.25f)
         val back = repo.get("v1")!!
         assertEquals(137.5f, back.gaugePeakCurrentA)
         assertEquals(6421.25f, back.gaugePeakPowerW)
+    }
+
+    /**
+     * **`upsert` cannot write these two columns, and that is the fix for the whole class of bug.**
+     *
+     * Every caller of `upsert` holds a [Vehicle] *snapshot*, and a snapshot taken before the last
+     * peak write carries the older number. `KableBmsRepository.maybePersistCellCount` and
+     * `maybePersistPacks` both upsert from `_activeVehicle.value`, which is set at connect and never
+     * updated by a peak write — so before this rule, a wheel that discovered its cell count mid-ride
+     * silently threw away the ranges it had just learned. Part I makes the cell count rider-editable,
+     * which multiplies such callers, so the rule belongs in the statement rather than in a list of
+     * callers to remember.
+     *
+     * The stale snapshot here is deliberately the shape those callers produce: a `Vehicle` read
+     * BEFORE the peak write, then edited and written back.
+     */
+    @Test fun an_upsert_from_a_stale_snapshot_cannot_revert_the_learned_peaks() = runTest {
+        val repo = newInMemoryRepo()
+        repo.upsert(vehicle())
+        val staleSnapshot = repo.get("v1")!!          // peaks are still 0 here
+        repo.updateGaugePeaks("v1", currentA = 137f, powerW = 6421f)
+
+        // ...and now the auto-fill writes its edit back from the snapshot it has been holding.
+        repo.upsert(staleSnapshot.withCellCount(20))
+
+        val back = repo.get("v1")!!
+        assertEquals(137f, back.gaugePeakCurrentA, "a stale snapshot must not revert a learned peak")
+        assertEquals(6421f, back.gaugePeakPowerW)
+        assertEquals(20, back.packs.first().cellCount, "...and the edit it came for still landed")
+    }
+
+    /**
+     * The same rule seen from the other side: an `upsert` carrying a HIGHER value cannot write it
+     * either. "Preserve", not "take the maximum" — one rule, no arithmetic, and the only way to
+     * change these columns is to name them.
+     */
+    @Test fun an_upsert_cannot_write_the_peaks_even_when_it_carries_larger_ones() = runTest {
+        val repo = newInMemoryRepo()
+        repo.upsert(vehicle())
+        repo.updateGaugePeaks("v1", currentA = 24f, powerW = 1800f)
+        repo.upsert(repo.get("v1")!!.copy(gaugePeakCurrentA = 480f, gaugePeakPowerW = 49_000f))
+        assertEquals(24f, repo.get("v1")!!.gaugePeakCurrentA)
+        assertEquals(1800f, repo.get("v1")!!.gaugePeakPowerW)
+    }
+
+    /** A brand-new vehicle inserts at zero whatever it carries — the honest seed (`§9.2` item 5). */
+    @Test fun a_created_vehicle_starts_at_zero_even_if_it_claims_otherwise() = runTest {
+        val repo = newInMemoryRepo()
+        repo.upsert(vehicle(currentA = 137f, powerW = 6421f))
+        assertEquals(0f, repo.get("v1")!!.gaugePeakCurrentA)
+        assertEquals(0f, repo.get("v1")!!.gaugePeakPowerW)
     }
 
     /**
@@ -167,7 +220,9 @@ class SqlDelightVehicleRepositoryGaugePeaksTest {
     @Test fun updateGaugePeaks_touches_only_the_named_vehicle() = runTest {
         val repo = newInMemoryRepo()
         repo.upsert(vehicle(id = "v1"))
-        repo.upsert(vehicle(id = "v2", currentA = 90f, powerW = 4000f))
+        repo.upsert(vehicle(id = "v2"))
+        // Through the only writer -- `upsert` cannot set these, which is the rule two tests above.
+        repo.updateGaugePeaks("v2", currentA = 90f, powerW = 4000f)
         repo.updateGaugePeaks("v1", currentA = 24f, powerW = 1800f)
         assertEquals(24f, repo.get("v1")!!.gaugePeakCurrentA)
         assertEquals(90f, repo.get("v2")!!.gaugePeakCurrentA)

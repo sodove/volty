@@ -17,6 +17,7 @@ import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.PeakTracker
 import ru.sodovaya.volty.util.UnitSystem
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -122,7 +123,7 @@ class DefaultRideDashboardComponent(
     // samples of most rides.
     // -----------------------------------------------------------------------------------------
 
-    /** Which vehicle [currentPeak] / [powerPeak] describe. See [seedPeaksFrom]. */
+    /** Which vehicle [currentPeak] / [powerPeak] describe. See [adoptStoredPeaks]. */
     private var peakVehicleId: String? = null
     private var currentPeak = PeakTracker()
     private var powerPeak = PeakTracker()
@@ -133,27 +134,56 @@ class DefaultRideDashboardComponent(
      *
      * The write condition is a change in these (`§9.2` item 4: "written back only when the rung
      * changes"), which is what turns a per-notification stream into a handful of writes over a
-     * vehicle's life. It doubles as the reseed condition — see [seedPeaksFrom].
+     * vehicle's life. It doubles as the reseed condition — see [adoptStoredPeaks].
      */
     private var persistedCurrentRungA = GaugeScale.CURRENT_RUNGS_A.first()
     private var persistedPowerRungW = GaugeScale.POWER_RUNGS_W.first()
 
     /**
-     * Adopt [v]'s stored peaks, when they are not already the ones in hand.
+     * The widest rung each dial has DISPLAYED since the last adoption.
+     *
+     * Separate from the persisted rungs because they answer different questions: these are what the
+     * rider is currently looking at, including a live excursion the median has not confirmed, and
+     * they are the floor that makes the displayed width monotone — see [GaugeScale.displayRung].
+     * Without the floor a noisy vehicle would step between rungs, and on the POWER dial between tick
+     * units, frame to frame — the animation the whole quantisation exists to prevent.
+     */
+    private var displayedCurrentRungA = GaugeScale.CURRENT_RUNGS_A.first()
+    private var displayedPowerRungW = GaugeScale.POWER_RUNGS_W.first()
+
+    /**
+     * True while an [updateGaugePeaks] call is outstanding.
+     *
+     * The booking of [persistedCurrentRungA] happens only once the write has actually returned (see
+     * [persistPeaksIfRungChanged]), so without this a burst of samples during a fast climb would
+     * each see the unbooked rung and fan out into duplicate writes.
+     */
+    private var peakWriteInFlight = false
+
+    /**
+     * Adopt [v]'s **stored** peaks, when they are not already the ones in hand.
      *
      * Two events reach this, and the condition covers both without a second change-detector:
      *
      *  - **a different vehicle.** Its peaks describe its own hardware;
      *  - **the same vehicle whose stored peaks now resolve to a different rung.** That is the
      *    composer having cleared them (`§9.2` item 7) while this component sat in the back stack.
-     *    It cannot be triggered by our OWN write: we only write when the rung changes, and we set
+     *    It cannot be triggered by our OWN write: we only write when the rung changes, and we book
      *    [persistedCurrentRungA] to the rung we wrote, so the re-emission that follows agrees.
      *
      * Comparing RUNGS rather than raw peaks is what makes the second case safe. Raw peaks disagree
      * constantly — ours grows within a rung while the stored one stays put — so a raw comparison
      * would reseed on almost every sample and discard everything just learned.
+     *
+     * **[v] must come from [VehicleRepository.vehicles], not from
+     * [BmsRepository.activeVehicle].** The latter is a *snapshot* taken at connect and never updated
+     * by a peak write, so its `gaugePeakCurrentA` is stale for the whole ride — and re-publishing it
+     * (which `KableBmsRepository`'s cell-count and pack auto-fills can cause) would look exactly like
+     * a composer clear and discard the live trackers. The repository flow is the database's own
+     * truth, and it is the flow the composer's clear actually notifies. Identity still comes from
+     * `activeVehicle`; only the stored peaks come from here.
      */
-    private fun seedPeaksFrom(v: Vehicle?) {
+    private fun adoptStoredPeaks(v: Vehicle?) {
         val storedCurrent = v?.gaugePeakCurrentA ?: 0f
         val storedPower = v?.gaugePeakPowerW ?: 0f
         val storedCurrentRung = GaugeScale.rungFor(storedCurrent, GaugeScale.CURRENT_RUNGS_A)
@@ -169,6 +199,10 @@ class DefaultRideDashboardComponent(
         powerPeak = PeakTracker.seededAt(storedPower)
         persistedCurrentRungA = storedCurrentRung
         persistedPowerRungW = storedPowerRung
+        // An adoption ends the display's monotone chain: a different vehicle, or a peak the composer
+        // cleared, is precisely when the dial is allowed to narrow again.
+        displayedCurrentRungA = storedCurrentRung
+        displayedPowerRungW = storedPowerRung
     }
 
     /**
@@ -189,10 +223,19 @@ class DefaultRideDashboardComponent(
         return displayRungs(motion)
     }
 
-    /** The two rungs for [motion] against whatever the trackers hold now — folds nothing. */
-    private fun displayRungs(motion: ControllerData): Pair<Float, Float> =
-        GaugeScale.currentDisplayRungA(currentPeak.learnedPeak, motion.batteryCurrentA) to
-            GaugeScale.powerDisplayRungW(powerPeak.learnedPeak, MotionReadings.powerW(motion) ?: 0f)
+    /**
+     * The two rungs for [motion] against whatever the trackers hold now — folds no sample into a
+     * tracker, but does **ratchet** the displayed widths, which only ever grow between adoptions.
+     */
+    private fun displayRungs(motion: ControllerData): Pair<Float, Float> {
+        displayedCurrentRungA = GaugeScale.currentDisplayRungA(
+            displayedCurrentRungA, currentPeak.learnedPeak, motion.batteryCurrentA
+        )
+        displayedPowerRungW = GaugeScale.powerDisplayRungW(
+            displayedPowerRungW, powerPeak.learnedPeak, MotionReadings.powerW(motion) ?: 0f
+        )
+        return displayedCurrentRungA to displayedPowerRungW
+    }
 
     /**
      * Write the learned peaks back if — and only if — the rung one of them resolves to has moved.
@@ -203,22 +246,53 @@ class DefaultRideDashboardComponent(
      *
      * Guarded on the vehicle being real and persisted. A guest has no row to update and a demo must
      * never touch the saved-vehicle store — the same refusal every other writer in the app makes.
+     *
+     * **The rung is booked AFTER the write returns, not before.** [scope] is cancelled by
+     * `doOnDestroy`, so booking first meant a rung that changed as the screen closed was marked
+     * saved and then never written — and, because the booking is also the write condition, never
+     * retried. Booking after means the field says what it claims ("the database holds this rung")
+     * and a failed or cancelled write is simply retried on the next sample. The alternative — book
+     * optimistically and un-book on failure — has to guess whether a later booking has already
+     * superseded the one it is reverting; this does not.
+     *
+     * A rung crossing in the last frames before destroy can still be lost, because the only scope
+     * available dies with the screen. That loss is self-healing: the stored peak is the next
+     * session's seed, so the same reading re-crosses the same rung and writes then.
      */
     private fun persistPeaksIfRungChanged(v: Vehicle?) {
         if (v == null || v.isGuest || v.isDemo) return
+        if (peakWriteInFlight) return
         val currentRung = GaugeScale.rungFor(currentPeak.learnedPeak, GaugeScale.CURRENT_RUNGS_A)
         val powerRung = GaugeScale.rungFor(powerPeak.learnedPeak, GaugeScale.POWER_RUNGS_W)
         if (currentRung == persistedCurrentRungA && powerRung == persistedPowerRungW) return
-        persistedCurrentRungA = currentRung
-        persistedPowerRungW = powerRung
         val currentA = currentPeak.learnedPeak
         val powerW = powerPeak.learnedPeak
-        scope.launch { vehicleRepository.updateGaugePeaks(v.id, currentA, powerW) }
+        peakWriteInFlight = true
+        scope.launch {
+            try {
+                vehicleRepository.updateGaugePeaks(v.id, currentA, powerW)
+                persistedCurrentRungA = currentRung
+                persistedPowerRungW = powerRung
+            } catch (t: Throwable) {
+                // CancellationException must always propagate — swallowing it breaks the coroutine
+                // machinery. Anything else is swallowed on purpose: [scope] carries a SupervisorJob
+                // and NO exception handler, so a throw out of here is app-fatal on Android, and a
+                // transient storage error must not take the dashboard down mid-ride. The rung was
+                // not booked, so the next sample simply tries again.
+                if (t is CancellationException) throw t
+                println("[VOLTY-RIDE] gauge peak write failed, will retry: $t")
+            } finally {
+                peakWriteInFlight = false
+            }
+        }
     }
 
     private val _state: MutableStateFlow<RideDashboardComponent.State> = run {
         val initialVehicle = bmsRepository.activeVehicle.value
-        seedPeaksFrom(initialVehicle)
+        // The connect-time snapshot, and the ONE place it is a legitimate source of stored peaks:
+        // nothing has been written yet, so it is not stale. From here on the repository flow owns
+        // them — see [adoptStoredPeaks].
+        adoptStoredPeaks(initialVehicle)
         val initialMotion = bmsRepository.activeMotion.value
         val initialVehicleData = bmsRepository.activeVehicleData.value
         val initialUnits = appPrefs.unitSystem.value
@@ -297,10 +371,13 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicle.collect { vehicle ->
-                // The vehicle IS the peaks' owner, so this is where they are adopted — and it is
-                // the same emission the composer's own source-set change arrives on, which is why
-                // `§9.2` item 7 needs no second change-detector here (see [seedPeaksFrom]).
-                seedPeaksFrom(vehicle)
+                // IDENTITY only. This flow is a connect-time snapshot, so its `gaugePeak*` fields go
+                // stale the moment the dashboard writes one; adopting them here would let a
+                // re-publication (KableBmsRepository's cell-count / pack auto-fills) look exactly
+                // like a composer clear and discard the live trackers. `peakVehicleId` is what makes
+                // a genuine vehicle CHANGE reach [adoptStoredPeaks] — the repository flow below
+                // carries the stored numbers.
+                if (vehicle?.id != peakVehicleId) adoptStoredPeaks(vehicle)
                 val (currentRange, powerRange) = displayRungs(_state.value.motion)
                 _state.update { current ->
                     val secondary = vehicle?.secondaryGauge ?: SecondaryGauge.DUTY
@@ -328,6 +405,24 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             vehicleRepository.vehicles.collect { list ->
+                // The database's own truth about the active vehicle's STORED peaks — the only
+                // trustworthy source for them, and the flow the composer's clear notifies. A vehicle
+                // absent from this list (a guest, a demo) has no stored peaks to adopt, so it keeps
+                // whatever the connect-time seed gave it.
+                list.firstOrNull { it.id == peakVehicleId }?.let { stored ->
+                    adoptStoredPeaks(stored)
+                    val (currentRange, powerRange) = displayRungs(_state.value.motion)
+                    _state.update { current ->
+                        current.copy(
+                            currentRangeA = currentRange,
+                            powerRangeW = powerRange,
+                            secondaryReadout = SecondaryGaugeMapper.map(
+                                current.secondary, current.motion, current.battery, current.units,
+                                currentRangeA = currentRange, powerRangeW = powerRange
+                            )
+                        )
+                    }
+                }
                 _state.update { it.copy(savedVehicles = list) }
             }
         }

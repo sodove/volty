@@ -101,36 +101,53 @@ object GaugeScale {
     }
 
     /**
-     * **What the dial actually draws: `max(learnedPeak, abs(sample))`.**
+     * **What the dial actually draws: never below [previousRung], and otherwise
+     * `max(learnedPeak, abs(sample))`.**
      *
-     * The two inputs are different numbers on purpose (`§9.2` item 3). The
-     * learned peak is median-filtered and slow ([PeakTracker]) so a corrupt frame
-     * can never widen the scale for the life of the vehicle; the live sample is
-     * raw and instant so a *genuine* excursion is on-scale in the very frame it
-     * happens instead of three frames later, pinned at the end of the old rung.
+     * Two rules, and they are asymmetric on purpose.
      *
-     * Only the learned half is ever persisted. `a live excursion widens the dial
-     * without being learned or written` is the test that keeps the two from being
-     * collapsed into one number by a future tidy-up.
+     * **Widening is instant** (`§9.2` item 3). The learned peak is median-filtered
+     * and slow ([PeakTracker]) so a corrupt frame can never widen the scale for
+     * the life of the vehicle; the live sample is raw so a *genuine* excursion is
+     * on-scale in the very frame it happens rather than five frames later, pinned
+     * at the end of the old rung. Only the learned half is ever persisted — `a
+     * live excursion widens the dial without being learned or written` keeps the
+     * two from being collapsed into one number by a future tidy-up.
+     *
+     * **Narrowing does not happen at all.** Item 3 asked for instant widening; a
+     * *symmetric* rule would let a noisy vehicle step between rungs — and, on the
+     * POWER dial, between tick UNITS (`ClassicDialSpecs.powerTicksInKilowatts`) —
+     * frame to frame, which is exactly the animation the quantisation exists to
+     * prevent. So [previousRung] is a floor: the displayed rung is monotone
+     * non-decreasing for as long as the caller keeps feeding its own last answer
+     * back in. The caller resets that chain when it adopts a different vehicle or
+     * a cleared peak, which is what ends a "session" here.
+     *
+     * [previousRung] is snapped up onto [rungs] first (`headroom = 1f`, i.e. the
+     * smallest rung at or above it), so a caller that hands back a raw peak, a
+     * zero or a non-finite value cannot make the dial draw a width that is not a
+     * rung — the ring's label step is only round on a rung.
      *
      * A non-finite [sample] contributes nothing rather than poisoning the max:
      * `max(x, NaN)` is `NaN` in IEEE-754, and `rungFor(NaN)` answers the *first*
-     * rung — so without this guard one `NaN` frame would visibly collapse a wide
-     * dial to its narrowest scale.
+     * rung — so without this guard one `NaN` frame would ask for the narrowest
+     * scale (and, before the floor existed, visibly collapse a wide dial to it).
      */
-    fun displayRung(learnedPeak: Float, sample: Float, rungs: List<Float>): Float {
+    fun displayRung(previousRung: Float, learnedPeak: Float, sample: Float, rungs: List<Float>): Float {
         val instant = if (sample.isFinite()) abs(sample) else 0f
         val learned = if (learnedPeak.isFinite()) learnedPeak else 0f
-        return rungFor(max(learned, instant), rungs)
+        val wanted = rungFor(max(learned, instant), rungs)
+        val floor = rungFor(previousRung, rungs, headroom = 1f)
+        return max(wanted, floor)
     }
 
     /** [displayRung] against [CURRENT_RUNGS_A] — the CURRENT dial's `±max`, in amps. */
-    fun currentDisplayRungA(learnedPeakA: Float, sampleA: Float): Float =
-        displayRung(learnedPeakA, sampleA, CURRENT_RUNGS_A)
+    fun currentDisplayRungA(previousRungA: Float, learnedPeakA: Float, sampleA: Float): Float =
+        displayRung(previousRungA, learnedPeakA, sampleA, CURRENT_RUNGS_A)
 
     /** [displayRung] against [POWER_RUNGS_W] — the POWER dial's `±max`, in watts. */
-    fun powerDisplayRungW(learnedPeakW: Float, sampleW: Float): Float =
-        displayRung(learnedPeakW, sampleW, POWER_RUNGS_W)
+    fun powerDisplayRungW(previousRungW: Float, learnedPeakW: Float, sampleW: Float): Float =
+        displayRung(previousRungW, learnedPeakW, sampleW, POWER_RUNGS_W)
 
     /**
      * Does a peak learned on [before]'s controllers still describe [after]'s?
@@ -159,28 +176,45 @@ object GaugeScale {
  * The learned half of [GaugeScale] — a per-vehicle high-water mark that a single
  * corrupt frame cannot move.
  *
- * ## Why a median, and why three
+ * ## Why a median, and why FIVE
  *
  * Begode frames carry **no checksum** (`D`), so a garbled 300 A sample is
  * indistinguishable from a real one at the decode layer. The peak is monotone and
  * persisted, so accepting one such sample does not spoil a ride — it spoils the
  * vehicle, permanently, until somebody edits its source list. A median over the
- * last [WINDOW] samples costs two floats of state and rejects any *single*
- * outlier outright: to move the median, a reading has to be corroborated by at
- * least one of its neighbours.
+ * last [WINDOW] samples rejects any run of corrupt frames shorter than half the
+ * window: to move the median, a reading has to be corroborated by
+ * `WINDOW / 2 + 1` of its neighbours.
  *
- * Three is the smallest window with a median at all, and at the 5-10 Hz poll rate
- * these protocols run (`B §3`) it means a genuine acceleration is learned within
- * a few hundred milliseconds. It is also why nothing here needs a timer: the
- * window advances on samples, so this class can be folded synchronously in a
- * `collect` without scheduling a delay — the unbounded-delay shape that wedges
- * `runTest` instead of failing it.
+ * **Three was the original ruling and it was wrong.** A median of three moves on
+ * **two** *adjacent* corrupt frames — `[6, 300, 300]` has a median of 300 — and
+ * two adjacent bad frames on a checksum-less protocol are entirely ordinary: a
+ * dropped BLE notification, a re-assembly boundary, or a burst of interference
+ * hits consecutive frames far more often than isolated ones. A median of five
+ * needs **three** consecutive frames that all pass the `5A5A5A5A` tail check and
+ * the zero-payload gate, which is a materially different proposition.
+ *
+ * The cost is two extra samples of latency in **persistence only**. The displayed
+ * range is unaffected: [GaugeScale.displayRung] takes the raw sample, so the
+ * rider's own excursion is on scale in the frame it happens whatever the window
+ * is. At the 5-10 Hz poll rate these protocols run (`B §3`) the extra latency is
+ * a few hundred milliseconds before a number is *stored*, and nobody can see it.
+ *
+ * Five is also why nothing here needs a timer: the window advances on samples, so
+ * this class can be folded synchronously in a `collect` without scheduling a
+ * delay — the unbounded-delay shape that wedges `runTest` instead of failing it.
+ *
+ * What this does **not** have, deliberately: decay, shrinking, and a rider-facing
+ * reset. A peak that could shrink is a scale that moves during a ride. The reset
+ * path that exists is the composer's controller-set change
+ * ([GaugeScale.peaksStillApply]); anything more is a recorded open item, not a
+ * gap.
  *
  * The window must be **full** before anything is learned. With a partial window
- * the "median" of one sample is that sample, which would let a spike arriving as
- * the very first frame of a connection through — exactly the case the median is
- * here to stop. Nothing is lost by waiting: [GaugeScale.displayRung] already
- * shows the live sample on-scale in the meantime.
+ * the "median" of one or two samples is dominated by the newest of them, which
+ * would let a spike arriving in the first frames of a connection through —
+ * exactly the case the median is here to stop. Nothing is lost by waiting:
+ * [GaugeScale.displayRung] already shows the live sample on-scale in the meantime.
  *
  * ## What may be fed in
  *
@@ -217,7 +251,12 @@ data class PeakTracker(
     }
 
     companion object {
-        const val WINDOW: Int = 3
+        /**
+         * Five, not three — see this class' doc. A median of three is moved by two
+         * *adjacent* corrupt frames, which is an ordinary event on a protocol with
+         * no checksum; five requires three consecutive ones.
+         */
+        const val WINDOW: Int = 5
 
         /**
          * A tracker that already knows [peak] — the stored

@@ -54,7 +54,27 @@ INSERT OR REPLACE INTO VehicleRow(
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
-    :yieldBmsToHeadUnit, :motionAlertsConfigured, :gaugePeakCurrentA, :gaugePeakPowerW
+    :yieldBmsToHeadUnit, :motionAlertsConfigured,
+    -- THE LEARNED DIAL WIDTHS ARE NOT WRITTEN HERE, AND THAT IS THE POINT.
+    --
+    -- They are a cache of live telemetry owned by the ride dashboard, which
+    -- writes them through `updateGaugePeaks` while the rider is riding. Every
+    -- other writer of a vehicle holds a Vehicle SNAPSHOT, and a snapshot taken
+    -- before the last peak write carries the older number -- so an `upsert` that
+    -- wrote these columns would silently revert a whole ride's learning. That is
+    -- not hypothetical: `KableBmsRepository.maybePersistCellCount` and
+    -- `maybePersistPacks` both upsert from `_activeVehicle.value`, which is set
+    -- at connect and never updated by a peak write, and Part I makes the cell
+    -- count rider-editable, which multiplies such callers.
+    --
+    -- Naming the columns and preserving them (rather than omitting them) is
+    -- required because this is INSERT OR REPLACE: the row is deleted and
+    -- reinserted, so an unnamed column takes its DEFAULT rather than keeping its
+    -- value. The COALESCE is what makes the subselect total -- on a genuine
+    -- INSERT there is no row to read and 0 is the honest seed for a vehicle
+    -- nobody has ridden.
+    COALESCE((SELECT gaugePeakCurrentA FROM VehicleRow WHERE id = :id), 0),
+    COALESCE((SELECT gaugePeakPowerW FROM VehicleRow WHERE id = :id), 0)
 );
 
 delete:
@@ -63,12 +83,19 @@ DELETE FROM VehicleRow WHERE id = :id;
 touch:
 UPDATE VehicleRow SET lastConnectedAt = :now WHERE id = :id;
 
--- Two columns, no children — the same shape as `touch` and for the same reason.
--- The ride dashboard writes the learned dial widths while the rider is riding,
--- from a Vehicle snapshot that may be minutes old; a full `upsert` would replay
--- that snapshot's packs, controllers and alert levels over rows the connection
--- itself may have moved underneath it (KableBmsRepository.maybePersistPacks
--- appends a Begode's second branch mid-ride). A targeted UPDATE cannot.
+-- THE ONLY WRITER of the two learned dial widths (see `upsert` above, which
+-- deliberately preserves them instead).
+--
+-- Two columns, no children — the same shape as `touch` and for two reasons. It
+-- runs while the rider is riding, so it must not replay a snapshot's packs,
+-- controllers and alert levels over rows the connection itself may have moved
+-- underneath it. And, unlike `upsert`, it cannot destroy alert-level rows an
+-- older build cannot represent: `toRules()` skips those on read and leaves them
+-- in the table, while `upsert` replaces the level set wholesale.
+--
+-- Unconstrained on purpose: it is also how the composer CLEARS the peaks when a
+-- vehicle's controller set changes (G §9.2 item 7), which is the one event that
+-- legitimately lowers them.
 updateGaugePeaks:
 UPDATE VehicleRow
 SET gaugePeakCurrentA = :gaugePeakCurrentA, gaugePeakPowerW = :gaugePeakPowerW
