@@ -21,10 +21,13 @@ import kotlin.time.Instant
  *    lookup found none, `inputVoltageV` stayed 0, and the Ride dashboard read a
  *    confident **"0.0 kW"** and "0.0 Wh/km" for the life of the vehicle, with
  *    no screen in the app able to repair it. With a real pack the wheel takes
- *    exactly the route a Begode configured as a BATTERY has always taken: the
- *    cell-count auto-fill (`KableBmsRepository.maybePersistCellCount`) writes
- *    `packs[0].cellCount` once the wheel's own cells report it, and the next
- *    connect scales the 67.2 V-referenced rail voltage with it.
+ *    exactly the route a Begode configured as a BATTERY has always taken:
+ *    `packs[0].cellCount` gets filled in either of two ways (Task 3) — the
+ *    cell-count auto-fill (`KableBmsRepository.maybePersistCellCount`) once
+ *    the wheel's own smart-BMS cells confirm it, or the rider's own typed
+ *    value on a wheel with no smart BMS, which sends no cell frames and so
+ *    can never be auto-filled at all — and the next connect scales the
+ *    67.2 V-referenced rail voltage with whichever supplied it.
  *  - **every other type → [controllerVehicle]** — zero packs, the controller
  *    backing a DERIVED battery, which is what a VESC actually does.
  *
@@ -85,8 +88,11 @@ fun pickedControllerVehicle(
  * `planLinkPacks` to number a second, phantom battery beside the real branches.
  *
  * No cell count: the wheel does not advertise one and the picker has not
- * connected yet. It is auto-filled from the first smart-BMS cell frames
- * (`KableBmsRepository.maybePersistCellCount`), exactly as for any other pack.
+ * connected yet. A smart-BMS wheel gets it auto-filled from its first cell
+ * frames (`KableBmsRepository.maybePersistCellCount`), exactly as for any
+ * other pack; a wheel with no smart BMS sends no cell frames at all and the
+ * auto-fill can never fire, so the rider types it instead (Task 3) — the
+ * only route to a rail voltage that wheel has.
  */
 @OptIn(ExperimentalTime::class)
 fun wheelVehicle(

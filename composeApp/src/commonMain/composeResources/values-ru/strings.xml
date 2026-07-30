@@ -193,7 +193,7 @@
     <string name="vehicle_field_bms_address">Адрес BMS</string>
     <string name="vehicle_field_controller_type">Тип контроллера</string>
     <string name="vehicle_field_chemistry">Химия</string>
-    <string name="vehicle_field_cell_count">Кол-во ячеек (нужно, если нет BMS)</string>
+    <string name="vehicle_field_cell_count">Кол-во ячеек (посл.)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>
     <string name="vehicle_section_alerts">Пороги алертов</string>
     <string name="vehicle_field_cell_high">Макс. напряжение ячейки</string>

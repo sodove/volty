@@ -653,44 +653,65 @@ class KableBmsRepository private constructor(
     private var lastPersistedCellCount: Pair<String, Int>? = null
 
     /**
+     * The live protocol instance handling the vehicle's PRIMARY pack (global
+     * index 0) for the current connection, or null when none is wired (no
+     * pack, or the orchestrator has not been built yet). Set inside
+     * [createProtocol] the moment a link claiming global pack 0 builds its
+     * protocol — production ([connectLinkAttempt]) and the test seams that
+     * share that factory ([installLinksForTest], [createProtocolForTest],
+     * [linkSampleFunnelsForTest]) alike — and directly by
+     * [installProtocolPipelineForTest] for the single-link seam that never
+     * builds a [LinkSpec] at all. Cleared everywhere [_activeVehicleData] is
+     * reset to a fresh [VehicleData], so a stale reference from a torn-down
+     * connection can never answer for a new one.
+     *
+     * **Why this exists at all (Task 3's post-review redesign).** The first
+     * version of this gate tried to recompute a completeness ratio from
+     * [BmsData] alone (`cellVoltages.sum()` against `voltage`) — and that is
+     * unsound at THIS call site specifically: [BegodeProtocol.branchVoltage]
+     * already substitutes the cell sum into the published `voltage` once the
+     * sum clears its own LOOSE 90 % cutoff, so a ratio recomputed here from
+     * the published sample reduces to that same loose cutoff no matter what
+     * threshold the recomputation uses — a stuck 36-of-40 branch (ratio
+     * 0.9076, comfortably above 90 %) passes ANY one-sided ratio test built on
+     * the published sample, while [BegodeProtocol.derivedCellCount] correctly
+     * refuses it against the RAW, un-substituted frame field it holds
+     * internally. There is no way to reach that raw field from a published
+     * [BmsData] — so the fix is to ask the object that still has it.
+     */
+    private var primaryPackProtocol: BmsProtocol? = null
+
+    /**
      * The profile's cell count is an auto-filled cache of live telemetry, not
-     * user input: once the reported count is stable, write it back to the
-     * saved vehicle so the UI can show "16s" before the first sample arrives
-     * on later connects. Guests and demo are transient and never persisted.
+     * user input: once a candidate is CONFIRMED, write it back to the saved
+     * vehicle so the UI can show "16s" before the first sample arrives on
+     * later connects. Guests and demo are transient and never persisted.
      *
-     * **Stability alone is not enough (Task 3).** Three consecutive samples
-     * with an identical cell-list SIZE is exactly what a dead BMS branch also
-     * produces — 8 of 40 cells, stuck there for the life of the connection —
-     * and the streak check above cannot tell that apart from a genuinely
-     * complete reading. So a second gate,
-     * [BegodeProtocol.isCellCountConfirmed], must also pass before a write
-     * happens: it compares the candidate sample's own cell-sum against its own
-     * reported pack voltage, and a truncated set reads far short of that
-     * voltage no matter how many identical samples it produces.
-     *
-     * Reused rather than redefined — [BegodeProtocol]'s sibling
-     * `isCellSumComplete` is a DIFFERENT, LOOSE judgement `branchVoltage` uses
-     * for a different decision (which number to publish, not whether to trust
-     * a count) and is deliberately kept `private` so this call site cannot
-     * reach for it by mistake; see [BegodeProtocol.isCellCountConfirmed]'s
-     * KDoc for the measured numbers showing why a 36-of-40 run would clear
-     * that looser gate and must not clear this one.
+     * **Two different notions of "confirmed", by protocol (Task 3).**
+     *  - **Begode** ([primaryPackProtocol] is one): ask the decoder. Only
+     *    [BegodeProtocol.derivedCellCount] has ever seen the RAW,
+     *    un-substituted 0x01 frame field a completeness ratio needs — see
+     *    [primaryPackProtocol]'s KDoc for why nothing computed one layer up
+     *    from a published [BmsData] can reproduce that judgement. No
+     *    stability streak either: the decoder's own confirmation is a
+     *    single-shot, per-connection latch (`updateDerivedCellCount`), not
+     *    something this repository needs to re-derive by sampling it
+     *    repeatedly.
+     *  - **Every other BMS type:** the ORIGINAL rule — three consecutive
+     *    samples with an identical cell-list size. Restored verbatim rather
+     *    than gated by any ratio: a band measured on one Begode capture has
+     *    no evidence behind it for a Daly (whose 0.1 V/LSB total-voltage
+     *    field is 0.76 % of a 13.2 V 4S pack — quantisation plus a
+     *    charge-time offset could block that pack's auto-fill permanently).
+     *    A silent regression on hardware nobody here owns is worse than the
+     *    defect this task exists to fix.
      */
     private suspend fun maybePersistCellCount(data: BmsData) {
-        val source = primaryPackData()?.takeIf { it.cellVoltages.isNotEmpty() } ?: data
-        val n = source.cellVoltages.size
-        if (!data.isConnected || n == 0) {
+        if (!data.isConnected) {
             observedCellCountStreak = 0
             return
         }
-        if (n == observedCellCount) {
-            observedCellCountStreak++
-        } else {
-            observedCellCount = n
-            observedCellCountStreak = 1
-        }
-        if (observedCellCountStreak < cellCountStableSamples) return
-        if (!BegodeProtocol.isCellCountConfirmed(source.cellVoltages.sum(), source.voltage)) return
+        val n = confirmedCellCount(data) ?: return
         val vehicle = _activeVehicle.value ?: return
         if (vehicle.isGuest || vehicle.isDemo) return
         // packs.firstOrNull(), not the `Vehicle.cellCount` shim: that is
@@ -698,8 +719,9 @@ class KableBmsRepository private constructor(
         // This runs inside the _activeData collector on the repo's
         // SupervisorJob scope with no exception handler, so a throw here is
         // app-fatal on Android. Unreachable only by accident today (a derived
-        // VESC pack carries no cells, so `n == 0` short-circuits above) —
-        // exactly the kind of accident a later protocol change would undo.
+        // VESC pack carries no cells, so a non-Begode candidate of 0 already
+        // short-circuits in [confirmedCellCount]) — exactly the kind of
+        // accident a later protocol change would undo.
         if (vehicle.packs.firstOrNull()?.cellCount == n) return
         if (lastPersistedCellCount == vehicle.id to n) return
         lastPersistedCellCount = vehicle.id to n
@@ -708,18 +730,37 @@ class KableBmsRepository private constructor(
     }
 
     /**
-     * The PRIMARY pack's own decoded sample, or null when the orchestrator has
-     * not published one yet (then [maybePersistCellCount] falls back to the
-     * vehicle-level aggregate it was handed, for both the candidate count and
-     * the completeness check below — the same source for both, never mixed).
+     * The confirmed candidate cell count for the primary pack, or null when
+     * nothing has confirmed one yet — see [maybePersistCellCount]'s KDoc for
+     * the two different routes to "confirmed" this dispatches between.
+     */
+    private fun confirmedCellCount(data: BmsData): Int? {
+        val begode = primaryPackProtocol as? BegodeProtocol
+        if (begode != null) return begode.derivedCellCount()
+
+        val candidate = primaryPackCellCount() ?: data.cellVoltages.size
+        if (candidate == 0) {
+            observedCellCountStreak = 0
+            return null
+        }
+        if (candidate == observedCellCount) {
+            observedCellCountStreak++
+        } else {
+            observedCellCount = candidate
+            observedCellCountStreak = 1
+        }
+        return candidate.takeIf { observedCellCountStreak >= cellCountStableSamples }
+    }
+
+    /**
+     * Cell count of the PRIMARY pack, or null when the orchestrator has not
+     * published one yet (then [confirmedCellCount] falls back to the sample
+     * it was handed).
      *
      * [Vehicle.cellCount] describes one pack, but [_activeData] carries the
      * vehicle-level AGGREGATE, whose `cellVoltages` is the union of every
-     * online pack — 80 values for a two-branch Begode — and whose `voltage`
-     * is the parallel mean of every branch's own. Persisting the aggregate's
-     * count would store a 40S wheel as "80s"; gating on the aggregate's sum
-     * against the aggregate's voltage would compare a doubled sum against a
-     * single branch's voltage and refuse every two-branch wheel outright.
+     * online pack — 80 values for a two-branch Begode. Persisting that would
+     * store a 40S wheel as "80s".
      *
      * INVARIANT: [_activeVehicleData] is assumed to describe the SAME
      * connection as [_activeVehicle], which [maybePersistCellCount] persists
@@ -730,11 +771,12 @@ class KableBmsRepository private constructor(
      * alone, so the safety rests entirely on that ordering. A violation
      * would persist one vehicle's branch cell count into another's profile.
      */
-    private fun primaryPackData(): BmsData? =
+    private fun primaryPackCellCount(): Int? =
         _activeVehicleData.value.packs
             .firstOrNull()
             ?.takeIf { it.isOnline }
-            ?.data
+            ?.data?.cellVoltages?.size
+            ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
         // Keyed by EVERY address each vehicle can be recognised by — the same
@@ -850,6 +892,7 @@ class KableBmsRepository private constructor(
                 // in the one critical section this method already holds.
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
+                primaryPackProtocol = null // see disconnect()'s note on this line
                 // Reset the motion flow alongside the vehicle-level one so a
                 // prior connection's motion does not linger before the demo's
                 // own ride curve (Task 12) starts publishing its own.
@@ -1207,7 +1250,13 @@ class KableBmsRepository private constructor(
     private fun planLinkPacks(vehicle: Vehicle?, address: String, type: BmsType?): List<LinkPacks> {
         val stored = storedPacks(vehicle, address, type)
         val specs = planLinks(stored, vehicle?.controllers ?: emptyList())
-        val counts = specs.map { createProtocol(it, vehicle).packCount }
+        // buildProtocol, NOT createProtocol: this instance is thrown away the
+        // instant packCount is read, and createProtocol's side effect
+        // (capturing primaryPackProtocol — see its KDoc) would otherwise
+        // clobber the REAL, live decoder connectLinkAttempt builds later with
+        // this disposable, never-fed one, permanently starving the Begode
+        // cell-count auto-fill of a confirmable decoder.
+        val counts = specs.map { buildProtocol(it, vehicle).packCount }
         val sized = specs.mapIndexed { i, spec ->
             LinkPacks(
                 spec = spec,
@@ -1796,6 +1845,7 @@ class KableBmsRepository private constructor(
         if (vehicleConnection === installed) {
             vehicleConnection = null
             _activeVehicleData.value = VehicleData()
+            primaryPackProtocol = null // see disconnect()'s note on this line
             // The funnel was installed in the same critical section as the
             // orchestrator, so it belongs to the same failed attempt — the
             // identity guard above covers both.
@@ -1933,6 +1983,7 @@ class KableBmsRepository private constructor(
                 // Picker's "+ Add battery" from a live demo session, which
                 // connects without disconnecting first.
                 _activeVehicleData.value = VehicleData()
+                primaryPackProtocol = null // see disconnect()'s note on this line
             }
             // Initial state, written directly: the links are not installed yet,
             // so the fold cannot own this first transition. From installation
@@ -2368,6 +2419,17 @@ class KableBmsRepository private constructor(
         sessionsToTear.forEach { it.tearDown() }
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
+        // Reset alongside _activeVehicleData, same reason and same
+        // untestable-here status as that field's own INVARIANT note
+        // (primaryPackCellCount's KDoc): no test in this repo can drive a
+        // real disconnect-then-reconnect-to-a-different-vehicle sequence
+        // (ConnectionSession needs a real Kable peripheral), so nothing here
+        // can prove a stale reference would otherwise answer for the next
+        // connection. Removing this line was swept against the full suite
+        // and it stayed green — stated here rather than left silently
+        // unverified, per the same discipline [buildProtocol] documents at
+        // its own call site in planLinkPacks.
+        primaryPackProtocol = null
         _activeMotion.value = ControllerData()
         // Fresh acquisition: the block above has already released the lock,
         // and tearDown() must not run while holding it. The funnel closes
@@ -2602,6 +2664,23 @@ class KableBmsRepository private constructor(
         _activeData.map { MovingAverage.over(ringBuffer.within(window), window) }
 
     /**
+     * [buildProtocol] plus the one side effect every caller needs and none
+     * should have to remember: capturing [primaryPackProtocol] when this link
+     * owns the vehicle's PRIMARY pack (global index 0) — the same pack
+     * [primaryPackCellCount] / [confirmedCellCount] read, so this is the link
+     * [maybePersistCellCount] must be able to ask for a Begode-confirmed
+     * count. See [primaryPackProtocol]'s KDoc for why asking the decoder
+     * matters. Every caller of the factory goes through here (production
+     * [connectLinkAttempt] and every test seam that shares it), so there is
+     * exactly one place this capture happens.
+     */
+    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
+        val protocol = buildProtocol(spec, vehicle)
+        if (spec.ownedPacks.any { it.globalIndex == 0 }) primaryPackProtocol = protocol
+        return protocol
+    }
+
+    /**
      * The decode protocol ONE link speaks — the controller-aware factory.
      *
      * A controller kind has no [BmsType] at all ([ProtocolKind.toBmsType]
@@ -2634,7 +2713,7 @@ class KableBmsRepository private constructor(
      * because that is what the single-source branch needs; the gateway branch
      * reads every controller's geometry through `motorFor`.
      */
-    private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
+    private fun buildProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
         val controller = spec.ownedControllers.firstOrNull()?.globalIndex
             ?.let { idx -> vehicle?.controllers?.firstOrNull { it.index == idx } }
         controllerMotionProtocol(
@@ -2799,6 +2878,11 @@ class KableBmsRepository private constructor(
         type: BmsType
     ): Pair<BmsProtocol, (packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> {
         val protocol = createProtocol(type)
+        // This seam builds no LinkSpec at all, so [createProtocol]'s
+        // ownedPacks-based capture never runs — set it directly. Single-link
+        // by construction here, so whatever this builds IS the vehicle's one
+        // pack's protocol; see [primaryPackProtocol]'s KDoc.
+        primaryPackProtocol = protocol
         val pipeline = buildSamplePipeline(vehicle, address, type, protocol)
         // Unlocked writes — the one sanctioned test-seam exception to the
         // sessionLock discipline, see [vehicleConnection]. The REAL channel

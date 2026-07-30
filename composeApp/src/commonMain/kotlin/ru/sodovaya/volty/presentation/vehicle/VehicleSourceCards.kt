@@ -218,6 +218,15 @@ internal fun PackSourceCard(
         // from being reverted by a stale load-time snapshot on save while
         // leaving a SMART-BMS wheel's own live measurement free to keep
         // overwriting it on every later confirmed sample (`PackDraft` KDoc).
+        //
+        // The label itself is deliberately BMS-neutral, not "needed for a
+        // wheel with no BMS": this same card renders for every `BmsType`,
+        // including a smart-BMS Begode and every non-Begode pack, where the
+        // auto-fill already supplies the count and typing it is optional —
+        // `PackDraft` has no field that tells this composable which case it
+        // is looking at (`BmsType.BEGODE` alone does not distinguish a wheel
+        // WITH a smart BMS from one without), so a claim of necessity here
+        // would be wrong on every card except the one it was written for.
         IntField(
             stringResource(Res.string.vehicle_field_cell_count),
             draft.cellCount

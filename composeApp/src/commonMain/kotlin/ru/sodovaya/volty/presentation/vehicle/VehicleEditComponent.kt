@@ -946,8 +946,10 @@ class DefaultVehicleEditComponent(
  * [VehicleEditComponent.State] actually edits, and adding a field to [Vehicle]
  * requires no change here at all.
  *
- * Everything not listed follows from that: `cellCount`, `createdAt`,
- * `lastConnectedAt`, `isPinned`, `motionAlerts`.
+ * Everything not listed follows from that: `createdAt`, `lastConnectedAt`,
+ * `isPinned`, `motionAlerts`. (`cellCount` is NOT one of these plain
+ * preserved-by-default fields since Task 3 — it is a `Pack` field with its
+ * own per-pack, once-touched rule, same shape as `aliasGroup` below.)
  *
  * `gaugePeakCurrentA` / `gaugePeakPowerW` are **not named here at all**, and that
  * is deliberate rather than an omission. They are cleared when the controller set
@@ -962,7 +964,8 @@ class DefaultVehicleEditComponent(
  * the loaded vehicle rather than resolved, so the three-valued column survives
  * a save that never touched the toggle. `aliasGroup` left it too, but only
  * per pack and only once the rider has touched that pack's grouping — see
- * [PackDraft.aliasEdited].
+ * [PackDraft.aliasEdited]. `cellCount` (Task 3) left it on exactly the same
+ * terms, per pack and only once touched — see [PackDraft.cellCountEdited].
  *
  * ### The two source lists (G2 Task 2)
  *

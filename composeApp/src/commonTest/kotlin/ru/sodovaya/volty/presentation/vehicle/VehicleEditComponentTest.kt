@@ -1429,11 +1429,15 @@ class VehicleEditComponentTest {
      * this save writes. This is the whole point on a wheel with no smart BMS:
      * nothing else will ever supply this number.
      *
-     * Safe on a smart-BMS wheel too, for a reason this test does not need to
-     * exercise: `KableBmsRepository.maybePersistCellCount` keeps running on
-     * the SAME live connection and re-asserts its own measurement on the next
-     * confirmed, stable sample — a save landing a rider's typed value is not
-     * the last word there, only here.
+     * `KableBmsRepository.maybePersistCellCount` keeps running on the SAME
+     * live connection and is INTENDED to win with its own measurement over
+     * whatever a rider typed on a smart-BMS wheel — but not necessarily on
+     * the very next sample: `lastPersistedCellCount`'s de-dupe is never
+     * reset, so if the auto-fill already persisted this same count once
+     * before, it will not repeat the write until the wheel reports a
+     * genuinely different count. This test does not exercise that timing —
+     * only that a save this form performs never reverts what the rider just
+     * typed.
      */
     @Test
     fun `an edited cell count is not reverted by a save`() = runTest {
@@ -1453,6 +1457,27 @@ class VehicleEditComponentTest {
         advanceUntilIdle()
 
         assertEquals(24, repo.upserts.last().packs.single().cellCount, "the rider's typed value must land")
+    }
+
+    /**
+     * Clearing the field is a distinct act from typing a smaller number —
+     * `onPackCellCountChanged(key, null)` must land `null`, not silently keep
+     * whatever the pack already had. `IntField`'s own blank-clears-to-null
+     * behaviour is what feeds `null` in here from the real UI; this test
+     * pins what the component does with it once it arrives.
+     */
+    @Test
+    fun `clearing the cell count field persists null, not the old value`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle())) // pack's cellCount = 20
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onPackCellCountChanged(c.state.value.draft.packs.single().key, null)
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(null, repo.upserts.single().packs.single().cellCount, "a cleared field must save as null")
     }
 
     /**

@@ -127,13 +127,18 @@ fun derivedBatteryChoiceFor(controller: Controller, default: Boolean): DerivedBa
  * [aliasEdited] is for the field below, and for the same reason.
  *
  * This is deliberately **not** a guard against the auto-fill overwriting a
- * typed value *later*, while the connection stays open — a smart-BMS wheel's
- * own measurement should win over whatever the rider typed (forty measured
- * cells beat a rider's memory), and `maybePersistCellCount` simply keeps
- * running and re-asserts its count on the next confirmed, stable sample.
- * [cellCountEdited] only protects the one save *this form* performs from
- * clobbering a fresher stored value with a stale one; it is never persisted
- * and never reaches [Pack].
+ * typed value *later*, while the connection stays open — the INTENT is that a
+ * smart-BMS wheel's own measurement wins over whatever the rider typed (forty
+ * measured cells beat a rider's memory). That correction is not guaranteed to
+ * happen quickly, though, and stating it honestly matters more than the
+ * pattern being tidy: `KableBmsRepository.lastPersistedCellCount` de-dupes by
+ * (vehicle, count) pair and is **never reset**, so once the auto-fill has
+ * already persisted a given count once, a rider's later conflicting save
+ * sticks until the wheel reports a genuinely DIFFERENT count (or the app
+ * process restarts) — not merely until the next sample. What
+ * [cellCountEdited] protects is narrower and holds regardless of that: THIS
+ * save must not silently revert a fresher stored value with a stale one; it
+ * is never persisted and never reaches [Pack].
  *
  * ### [aliasGroup] is editable since Task 4, and [aliasEdited] is the same shape
  *

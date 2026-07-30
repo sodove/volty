@@ -513,7 +513,14 @@ private fun HeroCard(state: DashboardComponent.State) {
     val containerColor = if (isCharging) chargingContainer else MaterialTheme.colorScheme.primaryContainer
     val onColor = if (isCharging) chargingOn else MaterialTheme.colorScheme.onPrimaryContainer
     val barColor = if (isCharging) chargingAccent else MaterialTheme.colorScheme.primary
-    val nominalV = v?.cellCountOrNull?.let { count -> count * v.chemistry.nominalCellV }
+    // `count > 0`, matching every other reader of a stored cell count
+    // (VoltageSocEstimator, BegodeProtocol.inputVoltageOrNull,
+    // withScaledBegodeLiveVoltage): the field is typeable again since Task 3,
+    // and a typed literal "0" is `cellCount = 0`, not null — `nominalV = 0f`
+    // would force `timeRemainingDescription` to a permanent "—" even though
+    // the real live `data.voltage` fallback right below it is sitting there
+    // unused, which is worse than the blank this guard already handles.
+    val nominalV = v?.cellCountOrNull?.takeIf { it > 0 }?.let { count -> count * v.chemistry.nominalCellV }
         ?: data.voltage.coerceAtLeast(1f)
     val eta = timeRemainingDescription(
         isCharging = isCharging,
