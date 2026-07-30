@@ -1100,11 +1100,10 @@ class VehicleEditComponentTest {
         c.onSave()
         advanceUntilIdle()
 
-        val saved = repo.upserts.single()
-        assertEquals(2, saved.controllers.size, "the hardware really did change")
-        assertEquals(0f, saved.gaugePeakCurrentA, "137 A was one controller's peak, not two")
-        assertEquals(0f, saved.gaugePeakPowerW)
-        // And the clear was PERSISTED, which the upsert above cannot do on its own.
+        assertEquals(2, repo.upserts.single().controllers.size, "the hardware really did change")
+        // The clear is asserted ONLY on the explicit write. `withEdits` no longer names those two
+        // fields, because `upsert` cannot store them -- so a value on the upserted Vehicle would be
+        // a fiction, and an assertion about it would pin the fiction rather than the behaviour.
         assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
     }
 
@@ -1122,8 +1121,6 @@ class VehicleEditComponentTest {
         c.onSave()
         advanceUntilIdle()
 
-        assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
-        assertEquals(0f, repo.upserts.single().gaugePeakPowerW)
         assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
     }
 
@@ -1151,12 +1148,14 @@ class VehicleEditComponentTest {
         val saved = repo.upserts.single()
         assertEquals("Front", saved.controllers.single().label, "the edit really did land")
         assertEquals(660, saved.controllers.single().motor.wheelDiameterMm)
-        assertEquals(137f, saved.gaugePeakCurrentA, "a rename is not a hardware change")
-        assertEquals(6421f, saved.gaugePeakPowerW)
         assertEquals(
             emptyList(), repo.gaugePeakWrites,
-            "and nothing was written -- a cosmetic edit must not touch the stored peaks at all"
+            "a cosmetic edit must not touch the stored peaks at all"
         )
+        // The upserted Vehicle still carries them, by `withEdits`'s preserved-by-default rule --
+        // which is what `saving with nothing edited is an identity on the whole vehicle` pins.
+        assertEquals(137f, saved.gaugePeakCurrentA)
+        assertEquals(6421f, saved.gaugePeakPowerW)
     }
 
     /**
@@ -1173,7 +1172,6 @@ class VehicleEditComponentTest {
         c.onControllerAddressChanged(c.state.value.draft.controllers.single().key, "ZZ:ZZ")
         c.onSave()
         advanceUntilIdle()
-        assertEquals(0f, repo.upserts.single().gaugePeakCurrentA)
         assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
     }
 

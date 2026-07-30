@@ -94,6 +94,9 @@ class VehicleAlertsComponentTest {
         }
         override suspend fun delete(id: String) { stored = null }
         override suspend fun touch(id: String) {}
+        // Explicit, because VehicleRepository.updateGaugePeaks is abstract: no fake gets a
+        // silent default. Nothing in this file rides a learned dial range (G §9.2).
+        override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {}
 
         /** Simulate another screen (the edit form) saving while this one is open. */
         fun replaceStored(vehicle: Vehicle) { stored = vehicle }

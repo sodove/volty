@@ -868,15 +868,16 @@ class DefaultVehicleEditComponent(
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
             val v = existing?.withEdits(s) ?: newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
             vehicleRepository.upsert(v)
-            // G §9.2 item 7, and it needs its own call rather than riding along on the `upsert`
-            // above: `upsert` deliberately CANNOT write the learned dial widths (see
-            // `Vehicle.gaugePeakCurrentA` and `VehicleRow.sq`), because every other caller of it
-            // holds a snapshot that would revert them. Clearing them is the one event that
-            // legitimately lowers them, so it says so explicitly, through their only writer.
+            // G §9.2 item 7, and **the whole of it** — `withEdits` deliberately does not touch these
+            // two fields, because `upsert` cannot write them (see `Vehicle.gaugePeakCurrentA` and
+            // `VehicleRow.sq`): every other caller of `upsert` holds a snapshot that would revert
+            // them, so the columns have exactly one writer. Clearing them is the one event that
+            // legitimately lowers them, and this is it. One decision, asked once.
             //
-            // The same pure predicate `withEdits` used, on the same inputs. Asked twice rather than
-            // threaded through, because the two answers are for two different things: the in-memory
-            // Vehicle must be honest about its own fields, and the database must be told.
+            // A learned dial range describes HARDWARE, so the question is asked of the resulting
+            // controller list and not of `controllersEdited`: a rider who retypes a label has edited
+            // the controllers without changing an ohm, and losing a hard-learned range to a typo fix
+            // would be its own defect. `GaugeScale.peaksStillApply` owns which fields count.
             if (existing != null && !GaugeScale.peaksStillApply(existing.controllers, v.controllers)) {
                 vehicleRepository.updateGaugePeaks(v.id, currentA = 0f, powerW = 0f)
             }
@@ -936,14 +937,13 @@ class DefaultVehicleEditComponent(
  * Everything not listed follows from that: `cellCount`, `createdAt`,
  * `lastConnectedAt`, `isPinned`, `motionAlerts`.
  *
- * `gaugePeakCurrentA` / `gaugePeakPowerW` are the one entry that is not a form
- * field: they are cleared, not written, and only when the CONTROLLER SET changed
- * (`G §9.2` item 7) — a learned dial range describes hardware, so it cannot
- * outlive the hardware being swapped out. See the body.
- *
- * **Setting them here keeps the returned [Vehicle] honest; it does not persist
- * them.** `upsert` cannot write those two columns at all, so [onSave] follows up
- * with an explicit `updateGaugePeaks` — see there.
+ * `gaugePeakCurrentA` / `gaugePeakPowerW` are **not named here at all**, and that
+ * is deliberate rather than an omission. They are cleared when the controller set
+ * changes (`G §9.2` item 7) — a learned dial range describes hardware and cannot
+ * outlive it — but `upsert` cannot write those two columns, so naming them here
+ * would set a value nothing ever reads. [onSave]'s explicit `updateGaugePeaks` is
+ * the whole clear, and the only one. They therefore ride this function's
+ * preserved-by-default rule like any other field it does not edit.
  *
  * `yieldBmsToHeadUnit` left that list in Task 4 and is now written from
  * [VehicleEditComponent.State.yieldBmsToHeadUnit] — which is **seeded** from
@@ -993,18 +993,6 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
     } else {
         controllers
     }
-    // G §9.2 item 7. Hung off the SAME recomputation the derived-battery rule
-    // uses — `nextControllers` — rather than a second change-detector, and asked
-    // of the resulting list rather than of `controllersEdited`: a rider who opens
-    // the composer and retypes a label has "edited the controllers" without
-    // changing an ohm of hardware, and throwing away a hard-learned dial range
-    // for that would be its own defect. GaugeScale.peaksStillApply owns which
-    // fields count.
-    //
-    // These two names being here does not weaken this function's "a field nobody
-    // names is preserved" rule — they are named precisely BECAUSE the composer
-    // edits what they describe, which is the only kind of entry that belongs.
-    val peaksApply = GaugeScale.peaksStillApply(controllers, nextControllers)
     return copy(
         name = s.name,
         iconKey = s.iconKey,
@@ -1024,9 +1012,7 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
         controllers = nextControllers,
         dashboardStyle = s.dashboardStyle,
         secondaryGauge = s.secondaryGauge,
-        yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
-        gaugePeakCurrentA = if (peaksApply) gaugePeakCurrentA else 0f,
-        gaugePeakPowerW = if (peaksApply) gaugePeakPowerW else 0f
+        yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
     )
 }
 

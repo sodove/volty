@@ -74,13 +74,16 @@ data class Vehicle(
      * **Read-only through [VehicleRepository.upsert][ru.sodovaya.volty.domain.repository.VehicleRepository.upsert].**
      * Its only writer is
      * [VehicleRepository.updateGaugePeaks][ru.sodovaya.volty.domain.repository.VehicleRepository.updateGaugePeaks],
-     * and `upsert` deliberately preserves whatever is stored — because every
-     * caller of `upsert` holds a [Vehicle] *snapshot*, and a snapshot taken before
-     * the last peak write carries the older number. `KableBmsRepository`'s
-     * cell-count and pack auto-fills both upsert from a connect-time snapshot, so
-     * an `upsert` that wrote this field would let a wheel discovering its cell
-     * count mid-ride throw away the range it had just learned. Setting it on a
-     * `Vehicle` you pass to `upsert` is therefore a no-op; see `VehicleRow.sq`.
+     * and `upsert` deliberately preserves whatever is stored — because every caller
+     * of `upsert` holds a [Vehicle] *snapshot*, and a snapshot can be older than
+     * the last peak write. `KableBmsRepository`'s cell-count and pack auto-fills
+     * read `_activeVehicle.value` and write it back; that value is re-published
+     * from the repository flow and so is *usually* fresh, but the
+     * read-modify-write straddles the interval before a peak write's own
+     * re-publication lands, and inside that window it carries the older number. An
+     * `upsert` that wrote this field would therefore let a wheel discovering its
+     * cell count mid-ride throw away the range it had just learned. Setting it on a
+     * `Vehicle` you pass to `upsert` is a no-op; see `VehicleRow.sq`.
      *
      * Written by the ride dashboard, and only when the *rung* it resolves to
      * changes — so this is a handful of writes over a vehicle's life rather than

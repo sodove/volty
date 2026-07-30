@@ -45,6 +45,9 @@ class KableBmsRepositoryDisconnectLinkTest {
         override suspend fun upsert(vehicle: Vehicle) {}
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
+        // Explicit, because VehicleRepository.updateGaugePeaks is abstract: no fake gets a
+        // silent default. Nothing in this file rides a learned dial range (G §9.2).
+        override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {}
     }
 
     /** Every test here owns its repository through [bleRepositoryTest] — see there for why that is not optional. */

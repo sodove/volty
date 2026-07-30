@@ -59,13 +59,18 @@ INSERT OR REPLACE INTO VehicleRow(
     --
     -- They are a cache of live telemetry owned by the ride dashboard, which
     -- writes them through `updateGaugePeaks` while the rider is riding. Every
-    -- other writer of a vehicle holds a Vehicle SNAPSHOT, and a snapshot taken
-    -- before the last peak write carries the older number -- so an `upsert` that
-    -- wrote these columns would silently revert a whole ride's learning. That is
-    -- not hypothetical: `KableBmsRepository.maybePersistCellCount` and
-    -- `maybePersistPacks` both upsert from `_activeVehicle.value`, which is set
-    -- at connect and never updated by a peak write, and Part I makes the cell
-    -- count rider-editable, which multiplies such callers.
+    -- other writer of a vehicle holds a Vehicle SNAPSHOT, and a snapshot can be
+    -- older than the last peak write -- so an `upsert` that wrote these columns
+    -- would silently revert a whole ride's learning.
+    --
+    -- Not hypothetical. `KableBmsRepository.maybePersistCellCount` and
+    -- `maybePersistPacks` read `_activeVehicle.value` and write it back. That
+    -- value IS re-published from this repository's own `vehicles` flow, so it is
+    -- usually fresh -- but the read-modify-write straddles the interval before a
+    -- peak write's re-publication lands, and inside that window it carries the
+    -- older number. Part I makes the cell count rider-editable, which multiplies
+    -- such callers, so the rule belongs in the statement and not in a list of
+    -- callers to remember.
     --
     -- Naming the columns and preserving them (rather than omitting them) is
     -- required because this is INSERT OR REPLACE: the row is deleted and

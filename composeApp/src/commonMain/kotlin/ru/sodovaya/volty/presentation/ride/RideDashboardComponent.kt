@@ -161,6 +161,46 @@ class DefaultRideDashboardComponent(
     private var peakWriteInFlight = false
 
     /**
+     * The rung pair the last write was ATTEMPTED for, successful or not — the throttle.
+     *
+     * Distinct from [persistedCurrentRungA], which is what the database is known to hold. Booking
+     * only on success means a failing write leaves the rung unbooked and therefore eligible again on
+     * the very next sample, which at 5-10 Hz is a database call and a log line ten times a second
+     * for the rest of the ride. **A learned rung is worth almost nothing and must never cost a
+     * ride's battery or fill its log.** So: at most one attempt per rung value.
+     *
+     * Chosen over an exponential back-off because there is nothing to be gained by trying the same
+     * rung again — the value is quantised, so a retry would write the identical number — and because
+     * a back-off needs a clock, and a clock in here is the delayed-loop shape that wedges `runTest`
+     * instead of failing it. Nothing is lost either: the rung only ever grows, so the NEXT crossing
+     * writes a value that subsumes the one that failed, and a rung lost for a whole ride is
+     * re-learned from the stored seed on the next one.
+     */
+    private var attemptedCurrentRungA: Float? = null
+    private var attemptedPowerRungW: Float? = null
+
+    /**
+     * The saved-vehicle rows as [VehicleRepository.vehicles] last published them.
+     *
+     * Held so that [adoptStoredPeaks] can be handed a row from the database on a vehicle CHANGE
+     * without waiting for the flow to happen to re-emit. It used to be handed `activeVehicle`'s
+     * snapshot there, which contradicted its own documented rule and was safe only because
+     * `touch()` makes the table change on nearly every connect — a coincidence nothing pinned.
+     */
+    private var storedVehicles: List<Vehicle> = emptyList()
+
+    /**
+     * The connect-time seed, and **the one place a [BmsRepository.activeVehicle] snapshot may supply
+     * a stored peak.**
+     *
+     * Sound exactly here and nowhere else: this runs in the `_state` initializer, before any
+     * collector and therefore before this component has written anything, so the snapshot the
+     * connect just read cannot be behind the database. It exists as its own function so that
+     * [adoptStoredPeaks]' rule has no exceptions to document — see there.
+     */
+    private fun seedPeaksAtConnect(v: Vehicle?) = adoptPeaks(id = v?.id, stored = v)
+
+    /**
      * Adopt [v]'s **stored** peaks, when they are not already the ones in hand.
      *
      * Two events reach this, and the condition covers both without a second change-detector:
@@ -175,26 +215,39 @@ class DefaultRideDashboardComponent(
      * constantly — ours grows within a rung while the stored one stays put — so a raw comparison
      * would reseed on almost every sample and discard everything just learned.
      *
-     * **[v] must come from [VehicleRepository.vehicles], not from
-     * [BmsRepository.activeVehicle].** The latter is a *snapshot* taken at connect and never updated
-     * by a peak write, so its `gaugePeakCurrentA` is stale for the whole ride — and re-publishing it
-     * (which `KableBmsRepository`'s cell-count and pack auto-fills can cause) would look exactly like
-     * a composer clear and discard the live trackers. The repository flow is the database's own
-     * truth, and it is the flow the composer's clear actually notifies. Identity still comes from
-     * `activeVehicle`; only the stored peaks come from here.
+     * **[v] must come from [VehicleRepository.vehicles], and every call site takes it from
+     * [storedVehicles] — never from [BmsRepository.activeVehicle].**
+     *
+     * `activeVehicle` is a snapshot. It is *usually* fresh, because `KableBmsRepository` re-publishes
+     * it from this same repository flow — but there is a race window: its cell-count and pack
+     * auto-fills read and write inside the interval before a peak write's own re-publication lands,
+     * and a snapshot from inside that window carries the older peak. Adopting it there looks exactly
+     * like a composer clear and discards the live trackers. So the rule is not "prefer the
+     * repository flow", it is "a snapshot flow is never the authority on a value that changes
+     * underneath it", and it is enforced by both call sites reading [storedVehicles] rather than by
+     * this paragraph.
      */
-    private fun adoptStoredPeaks(v: Vehicle?) {
-        val storedCurrent = v?.gaugePeakCurrentA ?: 0f
-        val storedPower = v?.gaugePeakPowerW ?: 0f
+    private fun adoptStoredPeaks(id: String?, stored: Vehicle?) = adoptPeaks(id, stored)
+
+    /**
+     * [id] and [stored] are separate parameters because they come from different authorities: the
+     * vehicle being ridden is whatever `activeVehicle` says, while its stored peaks are whatever the
+     * database says — and for a guest, a demo, or a row this component has not seen yet, there IS no
+     * stored row and `stored` is null while [id] is not. Collapsing them would make a guest reset its
+     * own trackers on every re-emission, because [peakVehicleId] would never match.
+     */
+    private fun adoptPeaks(id: String?, stored: Vehicle?) {
+        val storedCurrent = stored?.gaugePeakCurrentA ?: 0f
+        val storedPower = stored?.gaugePeakPowerW ?: 0f
         val storedCurrentRung = GaugeScale.rungFor(storedCurrent, GaugeScale.CURRENT_RUNGS_A)
         val storedPowerRung = GaugeScale.rungFor(storedPower, GaugeScale.POWER_RUNGS_W)
-        if (v?.id == peakVehicleId &&
+        if (id == peakVehicleId &&
             storedCurrentRung == persistedCurrentRungA &&
             storedPowerRung == persistedPowerRungW
         ) {
             return
         }
-        peakVehicleId = v?.id
+        peakVehicleId = id
         currentPeak = PeakTracker.seededAt(storedCurrent)
         powerPeak = PeakTracker.seededAt(storedPower)
         persistedCurrentRungA = storedCurrentRung
@@ -203,6 +256,10 @@ class DefaultRideDashboardComponent(
         // cleared, is precisely when the dial is allowed to narrow again.
         displayedCurrentRungA = storedCurrentRung
         displayedPowerRungW = storedPowerRung
+        // A new vehicle, or a cleared peak, is also a new throttle budget: whatever attempt failed
+        // was about hardware or a peak that is no longer this dial's.
+        attemptedCurrentRungA = null
+        attemptedPowerRungW = null
     }
 
     /**
@@ -250,10 +307,14 @@ class DefaultRideDashboardComponent(
      * **The rung is booked AFTER the write returns, not before.** [scope] is cancelled by
      * `doOnDestroy`, so booking first meant a rung that changed as the screen closed was marked
      * saved and then never written — and, because the booking is also the write condition, never
-     * retried. Booking after means the field says what it claims ("the database holds this rung")
-     * and a failed or cancelled write is simply retried on the next sample. The alternative — book
-     * optimistically and un-book on failure — has to guess whether a later booking has already
-     * superseded the one it is reverting; this does not.
+     * retried. Booking after means the field says what it claims ("the database holds this rung").
+     * The alternative — book optimistically and un-book on failure — has to guess whether a later
+     * booking has already superseded the one it is reverting; this does not.
+     *
+     * **Retrying is throttled to one attempt per rung value** ([attemptedCurrentRungA]), because
+     * "not booked" would otherwise mean "eligible again on the very next sample" — a database call
+     * and a log line ten times a second for the rest of a ride whose disk is failing. A rung is
+     * worth almost nothing; a ride's battery is not.
      *
      * A rung crossing in the last frames before destroy can still be lost, because the only scope
      * available dies with the screen. That loss is self-healing: the stored peak is the next
@@ -265,6 +326,11 @@ class DefaultRideDashboardComponent(
         val currentRung = GaugeScale.rungFor(currentPeak.learnedPeak, GaugeScale.CURRENT_RUNGS_A)
         val powerRung = GaugeScale.rungFor(powerPeak.learnedPeak, GaugeScale.POWER_RUNGS_W)
         if (currentRung == persistedCurrentRungA && powerRung == persistedPowerRungW) return
+        // The throttle. Distinct from the booking above: that one says the database HOLDS this rung,
+        // this one says we have already asked it to.
+        if (currentRung == attemptedCurrentRungA && powerRung == attemptedPowerRungW) return
+        attemptedCurrentRungA = currentRung
+        attemptedPowerRungW = powerRung
         val currentA = currentPeak.learnedPeak
         val powerW = powerPeak.learnedPeak
         peakWriteInFlight = true
@@ -280,7 +346,7 @@ class DefaultRideDashboardComponent(
                 // transient storage error must not take the dashboard down mid-ride. The rung was
                 // not booked, so the next sample simply tries again.
                 if (t is CancellationException) throw t
-                println("[VOLTY-RIDE] gauge peak write failed, will retry: $t")
+                println("[VOLTY-RIDE] gauge peak write failed for rung ${currentRung}A/${powerRung}W: $t")
             } finally {
                 peakWriteInFlight = false
             }
@@ -289,10 +355,8 @@ class DefaultRideDashboardComponent(
 
     private val _state: MutableStateFlow<RideDashboardComponent.State> = run {
         val initialVehicle = bmsRepository.activeVehicle.value
-        // The connect-time snapshot, and the ONE place it is a legitimate source of stored peaks:
-        // nothing has been written yet, so it is not stale. From here on the repository flow owns
-        // them — see [adoptStoredPeaks].
-        adoptStoredPeaks(initialVehicle)
+        // Its own function, not `adoptStoredPeaks`, so that rule has no exception to document.
+        seedPeaksAtConnect(initialVehicle)
         val initialMotion = bmsRepository.activeMotion.value
         val initialVehicleData = bmsRepository.activeVehicleData.value
         val initialUnits = appPrefs.unitSystem.value
@@ -371,13 +435,21 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicle.collect { vehicle ->
-                // IDENTITY only. This flow is a connect-time snapshot, so its `gaugePeak*` fields go
-                // stale the moment the dashboard writes one; adopting them here would let a
-                // re-publication (KableBmsRepository's cell-count / pack auto-fills) look exactly
-                // like a composer clear and discard the live trackers. `peakVehicleId` is what makes
-                // a genuine vehicle CHANGE reach [adoptStoredPeaks] — the repository flow below
-                // carries the stored numbers.
-                if (vehicle?.id != peakVehicleId) adoptStoredPeaks(vehicle)
+                // IDENTITY only. This flow is a snapshot — usually fresh, because
+                // KableBmsRepository re-publishes it from `vehicleRepository.vehicles`, but its
+                // cell-count and pack auto-fills read and write inside the race window before a peak
+                // write's re-publication lands, and a snapshot from inside that window carries the
+                // older peak. So a vehicle CHANGE adopts the stored row by looking the new id up in
+                // [storedVehicles] — the database's own rows — and never reads `vehicle`'s own
+                // `gaugePeak*` fields. That is [adoptStoredPeaks]' rule, enforced rather than
+                // documented; looking it up rather than awaiting a re-emission is also what stops
+                // this depending on `touch()` happening to change the table.
+                if (vehicle?.id != peakVehicleId) {
+                    adoptStoredPeaks(
+                        id = vehicle?.id,
+                        stored = storedVehicles.firstOrNull { it.id == vehicle?.id }
+                    )
+                }
                 val (currentRange, powerRange) = displayRungs(_state.value.motion)
                 _state.update { current ->
                     val secondary = vehicle?.secondaryGauge ?: SecondaryGauge.DUTY
@@ -405,12 +477,15 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             vehicleRepository.vehicles.collect { list ->
+                // Kept so a vehicle CHANGE can look its stored row up here instead of waiting for
+                // this flow to happen to re-emit — see the activeVehicle collector above.
+                storedVehicles = list
                 // The database's own truth about the active vehicle's STORED peaks — the only
                 // trustworthy source for them, and the flow the composer's clear notifies. A vehicle
                 // absent from this list (a guest, a demo) has no stored peaks to adopt, so it keeps
                 // whatever the connect-time seed gave it.
                 list.firstOrNull { it.id == peakVehicleId }?.let { stored ->
-                    adoptStoredPeaks(stored)
+                    adoptStoredPeaks(id = stored.id, stored = stored)
                     val (currentRange, powerRange) = displayRungs(_state.value.motion)
                     _state.update { current ->
                         current.copy(

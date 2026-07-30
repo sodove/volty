@@ -761,13 +761,23 @@ class RideDashboardComponentTest {
         )
         assertEquals(20, vehicleRepo.get(stored.id)!!.packs.first().cellCount, "the auto-fill landed")
 
-        // The trackers must still hold what they learned: a quiet frame keeps the 150 A rung, and a
-        // reseed to zero would have narrowed it to 10.
+        // **The attributable assertion.** A quiet frame still shows the 150 A rung, but that alone
+        // proves little: the monotone display floor would hold it there even with the trackers wiped.
+        // What only an intact tracker can produce is SILENCE -- another corroborated run at 90 A must
+        // write nothing, because the learned peak is still 90 and its rung is still booked. Had the
+        // re-publication reseeded, the same run would re-learn 90 from zero and write a second time.
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 90f, powerW = 6000f, seq = 90 + it))
+            advanceUntilIdle()
+        }
+        assertEquals(
+            1, vehicleRepo.gaugePeakWrites.size,
+            "the live trackers were discarded and had to re-learn what they already knew"
+        )
+        // Corroborating, not load-bearing: the dial is still 150 A.
         repo.emitMotion(sample(currentA = 6f, powerW = 380f, seq = 99))
         advanceUntilIdle()
-        c.state.test {
-            assertEquals(150f, awaitItem().currentRangeA, "the live trackers were discarded")
-        }
+        c.state.test { assertEquals(150f, awaitItem().currentRangeA) }
     }
 
     /**
@@ -807,49 +817,181 @@ class RideDashboardComponentTest {
     }
 
     /**
-     * **Fix round 1, Minor 1: a rung is booked as persisted only once the write has returned.**
+     * **A failing write is attempted ONCE per rung, not once per sample** (fix round 2).
      *
-     * The booking is also the write CONDITION, so booking before launching meant a write that never
-     * happened — the scope is cancelled by `doOnDestroy` — was nonetheless marked saved and never
-     * retried. Here the first write fails; the next sample must try again rather than treat the rung
-     * as stored.
+     * "Booked only on success" means the rung stays eligible, and eligible-on-every-sample is a
+     * database call and a log line five to ten times a second for the rest of a ride whose storage is
+     * failing. A learned rung is worth almost nothing; a ride's battery and log are not. So the
+     * throttle is one attempt per rung VALUE — and the next rung up is a fresh budget, which is what
+     * keeps the throttle from being a permanent silence.
      */
     @Test
-    fun a_failed_peak_write_is_retried_rather_than_treated_as_saved() = runTest {
+    fun a_failing_write_is_attempted_once_per_rung_not_once_per_sample() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         val vehicleRepo = FakeVehicleRepo(listOf(vehicleWith(null, SecondaryGauge.DUTY)))
         val c = component(repo, vehicleRepo = vehicleRepo)
         advanceUntilIdle()
-
-        // Every write fails. The rung crossing therefore happens, is attempted, and must NOT be
-        // booked — so each later sample tries again.
         vehicleRepo.failGaugePeakWrites = true
-        repeat(PeakTracker.WINDOW + 3) {
+
+        // Twenty samples on the 30 A rung, every write failing.
+        repeat(PeakTracker.WINDOW + 15) {
             repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = it))
             advanceUntilIdle()
         }
         assertEquals(emptyList(), vehicleRepo.gaugePeakWrites, "nothing was stored")
-        assertTrue(
-            vehicleRepo.gaugePeakAttempts >= 2,
-            "a booked-before-writing rung is attempted once and then never again; " +
-                "attempts=${vehicleRepo.gaugePeakAttempts}"
+        assertEquals(
+            1, vehicleRepo.gaugePeakAttempts,
+            "an unbooked rung must not be re-attempted on every sample for the rest of the ride"
         )
 
-        // The disk comes back. The very next sample must store it, because the rung was never booked.
-        vehicleRepo.failGaugePeakWrites = false
-        repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = 99))
-        advanceUntilIdle()
-        assertEquals(listOf(Triple("v1", 20f, 400f)), vehicleRepo.gaugePeakWrites)
+        // The next rung up is a new budget: the learned peak crosses into 60 A and is tried again.
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 40f, powerW = 400f, seq = 100 + it))
+            advanceUntilIdle()
+        }
+        assertEquals(2, vehicleRepo.gaugePeakAttempts, "a NEW rung must still be attempted")
+        assertEquals(emptyList(), vehicleRepo.gaugePeakWrites)
 
-        // ...and now it IS booked: no further sample writes again.
+        // The disk comes back, and the rung after that stores — carrying a peak that subsumes both
+        // the values the failures lost, because the learned peak only ever grows.
+        vehicleRepo.failGaugePeakWrites = false
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 90f, powerW = 400f, seq = 200 + it))
+            advanceUntilIdle()
+        }
+        assertEquals(listOf(Triple("v1", 90f, 400f)), vehicleRepo.gaugePeakWrites)
+
+        // ...and a stored rung is not rewritten.
         val after = vehicleRepo.gaugePeakAttempts
         repeat(5) {
-            repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = 200 + it))
+            repo.emitMotion(sample(currentA = 90f, powerW = 400f, seq = 300 + it))
             advanceUntilIdle()
         }
         assertEquals(after, vehicleRepo.gaugePeakAttempts, "a stored rung must not be rewritten")
+        c.state.test { assertEquals(150f, awaitItem().currentRangeA) }
+    }
+
+    /**
+     * **The booking-order claim, with an observable that does not depend on the retry.**
+     *
+     * If a failed write booked its rung anyway, `persistedCurrentRungA` would claim the database holds
+     * 30 A while it actually holds 0 — and that field is also the reseed comparator. So the very next
+     * emission of the (unchanged) stored row looks like a mismatch, trips an adoption, and discards
+     * the live trackers. Here the row is re-emitted unchanged after a failed write: with truthful
+     * booking nothing happens; with optimistic booking the learned 20 A is thrown away and the dial
+     * narrows.
+     */
+    @Test
+    fun a_failed_write_does_not_claim_the_database_holds_its_rung() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val stored = vehicleWith(null, SecondaryGauge.DUTY)
+        repo.activeVehicle.value = stored
+        val vehicleRepo = FakeVehicleRepo(listOf(stored))
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+        vehicleRepo.failGaugePeakWrites = true
+
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = it))
+            advanceUntilIdle()
+        }
+        assertEquals(emptyList(), vehicleRepo.gaugePeakWrites)
+
+        // The saved-vehicle list re-emits, unchanged. `persistedCurrentRungA` must still say 10 A --
+        // what the database really holds -- so this is not a mismatch and nothing is adopted.
+        vehicleRepo.rows.value = listOf(stored.copy())
+        advanceUntilIdle()
+
+        // The learned 20 A is intact, so the dial still shows the 30 A rung on a quiet frame. A
+        // spurious adoption would have reset the tracker and narrowed it to 10 A.
+        vehicleRepo.failGaugePeakWrites = false
+        repo.emitMotion(sample(currentA = 2f, powerW = 100f, seq = 99))
+        advanceUntilIdle()
+        c.state.test {
+            assertEquals(30f, awaitItem().currentRangeA, "the trackers were discarded")
+        }
+    }
+
+    /**
+     * **The throttle is per rung, and one vehicle's failure must not silence another's first write.**
+     *
+     * Found by mutation sweep: the throttle budget is reset on adoption, and nothing pinned it. The
+     * hole it leaves is specific and nasty — two vehicles can easily learn the *same* rung, so a
+     * failed write on the wheel would suppress the scooter's very first write, permanently, with the
+     * disk perfectly healthy by then.
+     */
+    @Test
+    fun a_failed_write_on_one_vehicle_does_not_throttle_another() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val wheel = vehicleWith(null, SecondaryGauge.DUTY)
+        val scooter = wheel.copy(id = "v2", name = "Scooter")
+        repo.activeVehicle.value = wheel
+        val vehicleRepo = FakeVehicleRepo(listOf(wheel, scooter))
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+
+        // The wheel crosses into the 30 A rung and the write fails.
+        vehicleRepo.failGaugePeakWrites = true
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = it))
+            advanceUntilIdle()
+        }
+        assertEquals(1, vehicleRepo.gaugePeakAttempts)
+        assertEquals(emptyList(), vehicleRepo.gaugePeakWrites)
+
+        // The rider switches to the scooter, on a healthy disk, and rides it to the SAME rung.
+        vehicleRepo.failGaugePeakWrites = false
+        repo.activeVehicle.value = scooter
+        advanceUntilIdle()
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 20f, powerW = 400f, seq = 100 + it))
+            advanceUntilIdle()
+        }
+        assertEquals(
+            listOf(Triple("v2", 20f, 400f)), vehicleRepo.gaugePeakWrites,
+            "the wheel's failed attempt at the same rung silenced the scooter"
+        )
         c.state.test { assertEquals(30f, awaitItem().currentRangeA) }
+    }
+
+    /**
+     * Switching vehicles must adopt the new vehicle's STORED peaks, **without waiting for the saved
+     * -vehicle table to change.**
+     *
+     * `adoptStoredPeaks`' rule is that stored peaks come from `VehicleRepository.vehicles` and never
+     * from `activeVehicle`, which is a snapshot. Honouring that by *awaiting* a re-emission would make
+     * this depend on `touch()` happening to write a row on every connect — true today, pinned by
+     * nothing. So an id change looks the row up in the list already published. Here the table does not
+     * change at all after the switch.
+     */
+    @Test
+    fun switching_vehicles_adopts_the_new_vehicles_stored_peaks_without_a_table_change() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val wheel = vehicleWith(null, SecondaryGauge.DUTY)
+        val storedScooter = wheel.copy(id = "v2", name = "Scooter", gaugePeakCurrentA = 240f)
+        // What `activeVehicle` publishes on the switch: the same vehicle, but with its OWN peak
+        // fields at zero. That is the forbidden read made visible — a snapshot whose `gaugePeak*`
+        // disagrees with the row. Reading it instead of the stored row opens the scooter's dial at
+        // its narrowest rung.
+        val publishedScooter = storedScooter.copy(gaugePeakCurrentA = 0f, gaugePeakPowerW = 0f)
+        repo.activeVehicle.value = wheel
+        val vehicleRepo = FakeVehicleRepo(listOf(wheel, storedScooter))
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+        c.state.test { assertEquals(10f, awaitItem().currentRangeA, "the wheel has learned nothing") }
+
+        repo.activeVehicle.value = publishedScooter
+        advanceUntilIdle()
+        c.state.test {
+            assertEquals(
+                300f, awaitItem().currentRangeA,
+                "240 A * 1.25 = 300, from the STORED row -- adopted on the switch, not on a table change"
+            )
+        }
     }
 
     /**
