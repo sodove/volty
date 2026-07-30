@@ -1877,17 +1877,22 @@ class BegodeProtocol(
          * refusing a sum wildly inconsistent with its own frame field (see
          * `aCellSumWellAboveTheFrameFieldRefusesToDeriveACellCount`).
          *
-         * Kept in the companion object, `internal`: this — not
-         * [isCellSumComplete] — is the judgement a later caller outside this
-         * class should reuse for a cell-COUNT decision. Task 3's
-         * `KableBmsRepository.maybePersistCellCount` derives its persisted
-         * count from a sample's cell-list size today with no completeness
-         * check at all, and that is a count decision exactly like this one —
-         * a dead branch's few surviving cells must not overwrite a good
-         * stored count. It takes only the two primitives that decision needs,
-         * so reusing it costs nothing.
+         * **Not for a caller outside this class to reuse — the ruling that
+         * closed this task's review was the opposite of an earlier version of
+         * this note.** `KableBmsRepository.maybePersistCellCount` does not
+         * recompute this ratio from a published `BmsData`: for a Begode wheel
+         * it asks [derivedCellCount] on the live protocol instance directly,
+         * because [branchVoltage] has already substituted the cell sum into
+         * `BmsData.voltage` once [isCellSumComplete]'s LOOSE cutoff clears —
+         * so a ratio recomputed from that published sample collapses to
+         * `isCellSumComplete` no matter what threshold is used, and would
+         * confirm the same stuck 36-of-40 branch this function's own KDoc
+         * above describes as a real, caught defect. Only code inside this
+         * class ever sees the raw, un-substituted frame field this band
+         * needs. `private`, not `internal`: nothing outside this class reads
+         * it today, and nothing outside this class safely can.
          */
-        internal fun isCellCountConfirmed(cellSum: Float, frameVoltage: Float): Boolean {
+        private fun isCellCountConfirmed(cellSum: Float, frameVoltage: Float): Boolean {
             val ratio = cellSum / frameVoltage
             return ratio >= 1f - CELL_COUNT_LOWER_TOLERANCE && ratio <= 1f + CELL_COUNT_UPPER_TOLERANCE
         }

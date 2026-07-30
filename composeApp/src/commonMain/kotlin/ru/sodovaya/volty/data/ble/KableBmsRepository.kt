@@ -2419,16 +2419,18 @@ class KableBmsRepository private constructor(
         sessionsToTear.forEach { it.tearDown() }
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
-        // Reset alongside _activeVehicleData, same reason and same
-        // untestable-here status as that field's own INVARIANT note
-        // (primaryPackCellCount's KDoc): no test in this repo can drive a
-        // real disconnect-then-reconnect-to-a-different-vehicle sequence
-        // (ConnectionSession needs a real Kable peripheral), so nothing here
-        // can prove a stale reference would otherwise answer for the next
-        // connection. Removing this line was swept against the full suite
-        // and it stayed green — stated here rather than left silently
-        // unverified, per the same discipline [buildProtocol] documents at
-        // its own call site in planLinkPacks.
+        // Reset alongside _activeVehicleData, same reason as that field's
+        // own INVARIANT note (primaryPackCellCount's KDoc): without this, a
+        // stale BegodeProtocol from THIS connection would still answer for
+        // the next one. Pinned by
+        // KableBmsRepositoryCellCountTest.`a stale Begode decoder does not
+        // answer for the next connected vehicle` — install a real Begode
+        // pipeline, confirm 40S, disconnect, connect a different (JK, 4S)
+        // vehicle, and feed three stable samples: with this line removed,
+        // the stale decoder answers 40 for the new vehicle instead of the
+        // real 4. No ConnectionSession or Kable peripheral needed — the test
+        // seams this file already uses (installProtocolPipelineForTest,
+        // disconnect, primeConnectedForTest) reach it directly.
         primaryPackProtocol = null
         _activeMotion.value = ControllerData()
         // Fresh acquisition: the block above has already released the lock,

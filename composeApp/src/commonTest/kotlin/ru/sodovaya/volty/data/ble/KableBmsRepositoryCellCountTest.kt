@@ -228,8 +228,8 @@ class KableBmsRepositoryCellCountTest {
     }
 
     /**
-     * Fires the cell-count collector explicitly, once, after the protocol has
-     * already been driven to its final state.
+     * Fires the cell-count collector, THREE distinct times, after the protocol
+     * has already been driven to its final state.
      *
      * Feeding `_activeData` purely through [Wire.notify]'s production funnel
      * is NOT reliable here: `_activeData` is a `StateFlow`, which conflates
@@ -245,10 +245,25 @@ class KableBmsRepositoryCellCountTest {
      * a shortcut around "asking the decoder" — it is the most direct way to
      * ask the exact question this test is about, once the decode itself
      * (driven by real notification bytes) has already run its course.
+     *
+     * **Three calls, not one (re-review Finding 3).** One emitted sample
+     * starves `confirmedCellCount`'s non-Begode fallback path before its
+     * stability streak (`cellCountStableSamples = 3`) can ever reach three —
+     * so a test built on a single call still passes when the Begode dispatch
+     * is deleted entirely, for the wrong reason: the mutant's own driver
+     * never gets far enough to matter, not because the gate refused it. The
+     * three samples must be genuinely DISTINCT values, not three of the same
+     * one — `_activeData` is a `StateFlow`, so three identical emissions
+     * would conflate into the single collector firing this helper used to
+     * produce. Varying `voltage` per call keeps them distinct without
+     * touching anything the Begode path actually reads (only `isConnected`,
+     * per [confirmedCellCount]'s own KDoc).
      */
     private fun TestScope.evaluateCellCountAutoFill(repo: KableBmsRepository) {
-        repo.emitActiveDataForTest(BmsData(isConnected = true))
-        runCurrent()
+        repeat(3) { i ->
+            repo.emitActiveDataForTest(BmsData(isConnected = true, voltage = i.toFloat()))
+            runCurrent()
+        }
     }
 
     /**
@@ -347,6 +362,86 @@ class KableBmsRepositoryCellCountTest {
         assertTrue(
             vehicleRepo.upserts.any { it.packs.first().cellCount == 40 },
             "the spec-based factory's protocol must be the one the gate asks"
+        )
+    }
+
+    /**
+     * Re-review Finding 2: the reset at `disconnect()` (`primaryPackProtocol =
+     * null`, mirroring `_activeVehicleData`'s own reset points) was reported
+     * as unkillable — "no test in this repo can drive a real
+     * disconnect-then-reconnect-to-a-different-vehicle sequence, since
+     * [ConnectionSession] needs a real Kable peripheral". That argument is
+     * false: the line's OBSERVABLE consequence needs no [ConnectionSession]
+     * at all, only the same test seams every other test in this file
+     * already uses. Vehicle A (a Begode wheel) confirms 40S through a real
+     * decode; [disconnect] is called; vehicle B (an unrelated JK 4S pack)
+     * connects next. Without the reset, [confirmedCellCount] would still
+     * find vehicle A's stale [BegodeProtocol] behind [primaryPackProtocol]
+     * and answer 40 for vehicle B — one wheel's cell count written into a
+     * different vehicle's profile, the exact cross-vehicle corruption
+     * [primaryPackCellCount]'s own INVARIANT note warns about.
+     */
+    @Test
+    fun `a stale Begode decoder does not answer for the next connected vehicle`() = repoTest { repo ->
+        val a = wheel("v5").withCellCount(40)
+        repo.primeConnectedForTest(a, a.primaryAddress, a.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
+        runCurrent()
+        val wireA = Wire(repo, a)
+        BegodeDumpFixture.chunks().forEach { wireA.notify(it) }
+        assertEquals(40, wireA.protocol.derivedCellCount(), "precondition: vehicle A's wheel confirms 40S")
+
+        repo.disconnect()
+        runCurrent()
+
+        val b = vehicle(id = "v6", cellCount = null)
+        repo.primeConnectedForTest(b, b.primaryAddress, b.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
+        runCurrent()
+        emitSamples(repo, cells = 4, count = 3)
+
+        assertEquals(
+            4,
+            vehicleRepo.upserts.last().packs.first().cellCount,
+            "vehicle A's stale Begode decoder must not answer for vehicle B's cell count"
+        )
+    }
+
+    /**
+     * Re-review Finding 1: the `spec.ownedPacks.any { it.globalIndex == 0 }`
+     * guard at the capture site (`createProtocol(spec, vehicle)`) is what
+     * stops a link that does NOT own the vehicle's primary pack from
+     * clobbering [primaryPackProtocol]. Dropping it left the full suite
+     * green, because no existing test built a second link's protocol through
+     * the spec-based factory after the wheel's own. This test does: it
+     * confirms 40S on the primary link first, then runs a second,
+     * independent link's protocol through the same factory with
+     * `ownedPacks = listOf(OwnedSource(1))` (NOT global index 0), and checks
+     * the auto-fill still asks the FIRST protocol rather than the second.
+     */
+    @Test
+    fun `a second link's protocol does not clobber the primary pack's capture`() = repoTest { repo ->
+        val v = wheel("v7")
+        repo.primeConnectedForTest(v, v.primaryAddress, v.packs.first().bmsType, Clock.System.now().toEpochMilliseconds())
+        runCurrent()
+        val primarySpec = planLinks(v.packs, v.controllers).single()
+
+        val primaryProtocol = repo.createProtocolForTest(primarySpec, v) as BegodeProtocol
+        BegodeDumpFixture.chunks().forEach { primaryProtocol.onNotification(it) }
+        assertEquals(40, primaryProtocol.derivedCellCount(), "precondition: the primary link confirms 40S")
+
+        // A second, independent link that owns a DIFFERENT pack (global index
+        // 1, not 0) -- must not become primaryPackProtocol.
+        val secondSpec = LinkSpec(
+            address = "AA:BB:CC:DD:EE:22",
+            protocolKind = ProtocolKind.JK,
+            ownedPacks = listOf(OwnedSource(1))
+        )
+        repo.createProtocolForTest(secondSpec, v)
+
+        evaluateCellCountAutoFill(repo)
+
+        assertTrue(
+            vehicleRepo.upserts.any { it.packs.first().cellCount == 40 },
+            "a non-primary link's protocol must not clobber the primary pack's capture"
         )
     }
 }

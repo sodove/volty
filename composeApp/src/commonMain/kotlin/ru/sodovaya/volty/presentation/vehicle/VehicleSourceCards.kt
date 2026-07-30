@@ -215,9 +215,13 @@ internal fun PackSourceCard(
         // auto-fill can never derive this count, and that is exactly the wheel
         // that cannot show a rail voltage any other way. `onPackCellCountChanged`
         // marks the pack `cellCountEdited`, which is what stops this typed value
-        // from being reverted by a stale load-time snapshot on save while
-        // leaving a SMART-BMS wheel's own live measurement free to keep
-        // overwriting it on every later confirmed sample (`PackDraft` KDoc).
+        // from being reverted by a stale load-time snapshot on save. It is NOT
+        // a guard against the auto-fill overwriting a typed value later while
+        // the connection stays open: `lastPersistedCellCount` de-dupes by
+        // (vehicle, count) and is never reset, so a rider's conflicting save
+        // sticks until the wheel reports a genuinely DIFFERENT count (or the
+        // app process restarts) — not merely until the next confirmed sample
+        // (`PackDraft` KDoc).
         //
         // The label itself is deliberately BMS-neutral, not "needed for a
         // wheel with no BMS": this same card renders for every `BmsType`,
