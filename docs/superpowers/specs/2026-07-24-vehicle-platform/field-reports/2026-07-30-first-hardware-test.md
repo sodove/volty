@@ -25,10 +25,19 @@ once on this project:
 Riding **forward** shows a **negative** speed; rolling **backward** shows a
 **positive** one. Two different wheels, same inversion.
 
-Nothing was said about the speed's **magnitude** being wrong, on either wheel —
-which is the first (weak) evidence that `SPEED_KMH_PER_UNIT = 0.036f` is in the
-right decade. Weak because a rider watching a minus sign is not reading the
-number. **Unconfirmed, not confirmed.**
+The **magnitude** was asked about separately and the rider's answer (2026-07-30)
+is: *"родное приложение мусор полное, а судя по раскруту колеса там плюс-минус
+верная скорость"* — the wheel's own app is not worth comparing against, but
+judged against how fast the wheel is visibly turning, the number is about right.
+
+So `SPEED_KMH_PER_UNIT = 0.036f` now has **corroboration from the machine
+itself**, on two wheels, which is a great deal more than it had (it was read off
+WheelLog's source and pinned by nothing). It is not yet a measurement: "about
+right by eye" cannot separate 0.036 from, say, 0.034. What it does do is close
+the two failure modes that mattered — the constant is not 3.6x low (the 0.01 that
+nearly shipped) and not 10x high (the 0.36 that was proposed as its correction).
+**No further work is justified on this constant**; a GPS comparison would refine
+a number that is already inside its useful tolerance.
 
 ### S2 — no power and no consumption (Begode ET Max)
 Both read as absent. The ET Max **does** have a smart BMS and its battery
