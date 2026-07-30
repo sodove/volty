@@ -81,6 +81,11 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  * index, because a gateway carries several controllers and each has its own.
  * It defaults to [motor] for the single-controller case, which is every
  * existing caller.
+ *
+ * **[deriveBattery] is honoured on BOTH VESC branches** — it was not, and the
+ * omission deleted a rider's battery the moment they added a CAN controller.
+ * [vescGatewayPacks] is where the gateway branch answers it; read that KDoc
+ * before changing either branch's arguments.
  */
 fun controllerMotionProtocol(
     kind: ProtocolKind,
@@ -96,7 +101,11 @@ fun controllerMotionProtocol(
                 controllers = link.ownedControllers.map {
                     GatewaySource(it.globalIndex, it.canId, motorFor(it.globalIndex))
                 },
-                packs = link.ownedPacks.map { GatewaySource(it.globalIndex, it.canId) }
+                // NOT `link.ownedPacks.map { … }` — see [vescGatewayPacks].
+                // Re-listing the multiplexer's pack sources here is precisely
+                // how [deriveBattery] came to be answered on one branch and
+                // silently dropped on the other.
+                packs = vescGatewayPacks(link, deriveBattery)
             )
         } else {
             VescProtocol(deriveBattery = deriveBattery, motor = motor)
@@ -127,6 +136,104 @@ fun controllerMotionProtocol(
     // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
     ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null
+}
+
+/**
+ * The global index a derived slot carries before [KableBmsRepository]'s pack
+ * plan has numbered it — see [vescGatewayPacks]. Negative because every real
+ * index is a position in the vehicle's own pack list and so is `>= 0`; nothing
+ * is ever keyed by it, because the only protocol instance that can hold one is
+ * discarded the instant its `packCount` has been read.
+ */
+internal const val UNNUMBERED_DERIVED_PACK: Int = -1
+
+/**
+ * **THE single statement of which pack slots a VESC gateway link decodes**, and
+ * the reason it is a named function rather than a `map` inlined at the one call
+ * site above.
+ *
+ * `deriveBattery` used to be answered on the plain-[VescProtocol] branch and
+ * simply not mentioned on the gateway branch, which re-listed the multiplexer's
+ * arguments from [LinkSpec] alone. That is the third instance on this project of
+ * a branch silently losing a field the other branch keeps (`G §8`'s
+ * rebuild-on-save was the first two), and this time it cost a rider their
+ * battery: adding a CAN-forwarded controller flips a link to `isGatewayLink`,
+ * so the act of adding it took `packCount` from 1 to 0 and
+ * `KableBmsRepository.planLinkPacks` then allocated no slot at all. Adding one
+ * more line to the gateway branch's argument list would fix this instance and
+ * leave the shape that produced it, so the pack list is derived from ONE source
+ * of truth instead — [link]'s own owned packs, plus the derived slot when this
+ * link's controllers back one.
+ *
+ * ### Which owned slot is the derived one
+ *
+ * The one carrying neither a CAN id nor a [ProtocolKind] of its own. That is
+ * exact rather than a heuristic: `planLinks` tags every source it plans off a
+ * real profile pack whose kind differs from the link's, and on a VESC link
+ * **every** profile pack's kind differs (no [ru.sodovaya.volty.domain.model.BmsType]
+ * maps to [ProtocolKind.VESC]), so an untagged slot can only be one
+ * `KableBmsRepository` synthesised.
+ *
+ * ### A link that already owns a battery does not get a second one
+ *
+ * The derived slot is appended only when [link] owns **no** pack, and that is a
+ * decision rather than an oversight — the one place this function does not
+ * simply honour [deriveBattery], so here is why:
+ *
+ *  - a gateway's own hosted battery is reached by `COMM_BMS_GET_VALUES` to the
+ *    node we are connected to, which is *the identical request* a derived slot
+ *    would send. A second slot would ask the same node the same question and
+ *    publish the same answer twice, as two packs;
+ *  - and it would not stay runtime-only. A slot beside a stored pack on the
+ *    same address comes from `expandedTo`, not from `planLinkPacks`' derived
+ *    pass, so `KableBmsRepository.maybePersistPacks` sees it as **discovered
+ *    hardware** and writes it into the profile — after which the next connect
+ *    expands again. A ratchet that grows a rider's battery list by one pack per
+ *    ride is a far worse outcome than a flag with no effect.
+ *
+ * Reachable only by a rider explicitly forcing `DerivedBatteryChoice.ON` on a
+ * controller of a gateway that already hosts a battery; the composer's own rule
+ * (`G §6`, `VehicleDraft.derivedBatteryDefault`) answers false for it. Behaviour
+ * for that shape is therefore exactly what it was before `I` Task 5.
+ *
+ * The narrow cost, stated because nothing else states it: a gateway owning only
+ * **CAN-forwarded** batteries — whose requests really do go somewhere else —
+ * forgoes a derived slot it could in principle have had. No screen creates that
+ * shape today.
+ *
+ * ### Why this is a fixed point, and why it has to be
+ *
+ * It is asked TWICE per connection with two different specs, and both answers
+ * must agree or the protocol that SIZED the pack list and the protocol the
+ * session speaks disagree — the same class of defect as the dropped
+ * `OwnedSource.kind` tag (`effectiveLinkSpecs`):
+ *
+ *  1. `planLinkPacks` asks it of the PLANNED spec, whose owned packs are the
+ *     profile's stored ones, purely to read `packCount`. A link that derives a
+ *     battery therefore answers `stored + 1`, with the extra slot carrying
+ *     [UNNUMBERED_DERIVED_PACK] because nothing has numbered it yet;
+ *  2. the session's real protocol is built from the EFFECTIVE spec, by which
+ *     time that slot exists, is numbered, and is untagged — so it is recognised
+ *     as the derived one and no SECOND slot is appended.
+ *
+ * A derived slot is asked `COMM_BMS_GET_VALUES` like any other pack; see
+ * [GatewaySource.derived] for what fills it when nothing answers.
+ */
+internal fun vescGatewayPacks(link: LinkSpec, deriveBattery: Boolean): List<GatewaySource> {
+    if (link.ownedPacks.isEmpty()) {
+        return if (deriveBattery) {
+            listOf(GatewaySource(globalIndex = UNNUMBERED_DERIVED_PACK, derived = true))
+        } else {
+            emptyList()
+        }
+    }
+    return link.ownedPacks.map {
+        GatewaySource(
+            globalIndex = it.globalIndex,
+            canId = it.canId,
+            derived = deriveBattery && it.canId == null && it.kind == null
+        )
+    }
 }
 
 /**

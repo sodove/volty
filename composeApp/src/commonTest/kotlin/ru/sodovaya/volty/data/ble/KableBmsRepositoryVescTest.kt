@@ -2,9 +2,11 @@ package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
+import ru.sodovaya.volty.data.bms.GatewaySource
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
+import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.data.bms.vesc.VescValues
@@ -19,6 +21,7 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.pickedControllerVehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
@@ -747,8 +750,286 @@ class KableBmsRepositoryVescTest {
         loop.cancel()
     }
 
+    // ----- 6. `I` Task 5: adding a CAN controller must not delete the battery -----
+
+    /**
+     * **The rider's own vehicle, in the two states their 2026-07-30 ride went
+     * through.** They picked the head unit as a Controller — which is
+     * [pickedControllerVehicle]'s controller shape: zero packs, one controller
+     * backing a derived battery — saw no battery, and then added the main uBox
+     * over CAN forwarding to fix it.
+     *
+     * [withCanController] is that add, in the form the composer produces it:
+     * `VehicleDraft.derivedBatteryDefault` is `packs.isEmpty()`, so on a
+     * pack-less vehicle BOTH controllers are saved with
+     * `providesDerivedBattery = true`.
+     */
+    private fun headUnitVehicle(): Vehicle = pickedControllerVehicle(
+        id = "v-head-unit",
+        name = "Scooter",
+        iconKey = "scooter",
+        controllerType = ControllerType.VESC,
+        address = CTRL_ADDR,
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L)
+    )
+
+    private fun Vehicle.withCanController(): Vehicle = copy(
+        controllers = controllers + Controller(
+            index = 1,
+            label = "uBox",
+            controllerType = ControllerType.VESC,
+            address = CTRL_ADDR,
+            canId = U_BOX,
+            motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254),
+            providesDerivedBattery = true
+        )
+    )
+
+    /** `COMM_BMS_GET_VALUES` (96) — what the head unit's ANT bridge answers with. */
+    private fun bmsFrame(): ByteArray {
+        val o = mutableListOf<Byte>()
+        fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
+        fun i32(v: Int) {
+            o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
+            o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte()
+        }
+        o += 96
+        i32(75_500_000); i32(0); i32(-12_500_000); i32(-12_500_000)   // v_tot 75.5 V, i_in -12.5 A
+        i32(18_200); i32(1_374_100)
+        o += 2; i16(4_012); i16(3_998); o += 0; o += 1                // 2 cells + balancing
+        o += 1; i16(2_350)                                            // 1 temperature sensor
+        i16(3_120); i16(2_880); i16(0); i16(2_410)
+        i16(812); i16(990)                                            // soc 0.812
+        o += 10                                                       // can_id — NOT the 0xFF sentinel
+        return VescPacket.frame(o.toByteArray())
+    }
+
+    /**
+     * **The literal mechanism behind *"это ничем не помогло"*.** Adding the CAN
+     * controller flips the link to [LinkSpec.isGatewayLink], and the gateway arm
+     * of [controllerMotionProtocol] used to rebuild the multiplexer's pack list
+     * from `LinkSpec.ownedPacks` alone — never answering `deriveBattery`. So
+     * `packCount` went 1 → 0, `planLinkPacks` allocated no slot, and the rider's
+     * attempt to FIX the missing battery is what removed its slot entirely.
+     *
+     * Both states are asserted in one test on purpose: "the gateway has a pack
+     * slot" on its own would pass on a build where the picker's own vehicle had
+     * none either, and the defect is the DIFFERENCE between the two.
+     */
+    @Test
+    fun `adding a CAN controller must not delete the vehicle's battery`() = repoTest { repo ->
+        val before = headUnitVehicle()
+        repo.installLinksForTest(before, before.primaryAddress, type = null)
+        val plainSpec = repo.linkSpecsForTest().single()
+        assertFalse(plainSpec.isGatewayLink, "one controller, no CAN id: still a plain VESC link")
+        assertEquals(
+            listOf(OwnedSource(0)), plainSpec.ownedPacks,
+            "the picker's own vehicle has a derived battery slot to begin with"
+        )
+        assertEquals(1, repo.createProtocolForTest(plainSpec, before).packCount)
+
+        val after = before.withCanController()
+        repo.installLinksForTest(after, after.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertTrue(spec.isGatewayLink, "the CAN controller is what makes this a gateway — that IS the mechanism")
+        assertEquals(
+            listOf(OwnedSource(0)), spec.ownedPacks,
+            "and the derived slot must survive it: the rider added a controller, not removed a battery"
+        )
+        val gateway = assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, after))
+        assertEquals(2, gateway.controllerCount, "both the head unit and the uBox ride this link")
+        // Exactly one, not merely "at least one": the protocol that SIZES the
+        // pack list and the protocol the session speaks are built from two
+        // different specs (planned, then effective), and a derived slot that is
+        // appended on BOTH passes gives the session a phantom second battery it
+        // then polls for every cycle. `>= 1` would not see it.
+        assertEquals(
+            1, gateway.packCount,
+            "one battery: the slot the repository used to bail out on at 0, and no phantom beside it"
+        )
+    }
+
+    /**
+     * The other half: opcode 96 was **never sent at all** on that vehicle,
+     * because [VescGatewayProtocol]'s only sender is built per owned pack and a
+     * picker-built vehicle owns none. The head unit's ANT bridge was working and
+     * emulating correctly the whole time — nothing ever asked it anything.
+     *
+     * Driven end to end from the stored vehicle: the link plan, the production
+     * protocol factory, the real poll loop, and the real routing helper into the
+     * link's own pack funnel. The assertion that the opcode reached the wire and
+     * the assertion that its reply reached the Battery screen are both here,
+     * because either alone is satisfiable without the other.
+     */
+    @Test
+    fun `a gateway that hosts a BMS is finally asked for it`() = repoTest { repo ->
+        val v = headUnitVehicle().withCanController()
+        val funnels = repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val spec = repo.linkSpecsForTest().single()
+        val gateway = assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, v))
+
+        val sent = mutableListOf<Pair<Int?, Int>>()
+        val loop = launch {
+            gateway.runPollLoop { frame ->
+                val len = frame[1].toInt() and 0xFF
+                val payload = frame.copyOfRange(2, 2 + len)
+                val forwarded = (payload[0].toInt() and 0xFF) == VescCan.OPCODE_FORWARD_CAN
+                val inner = if (forwarded) payload[2].toInt() and 0xFF else payload[0].toInt() and 0xFF
+                sent += (if (forwarded) payload[1].toInt() and 0xFF else null) to inner
+                // The head unit answers for its BMS and for nothing else — its
+                // own firmware falls through to `default: break;` on both
+                // GET_VALUES opcodes, and the uBox is not scripted here at all,
+                // so nothing but opcode 96 can produce the battery below.
+                if (inner == VescBmsValues.OPCODE_BMS_GET_VALUES && !forwarded) {
+                    gateway.onNotification(bmsFrame())
+                }
+            }
+        }
+        advanceTimeBy(5_000)
+        runCurrent()
+        // Cancelled BEFORE the advanceUntilIdle below: the poll loop delays
+        // forever, so idling a scheduler it is still running on advances virtual
+        // time without bound and wedges the build instead of failing it.
+        loop.cancel()
+
+        assertTrue(
+            sent.contains(null to VescBmsValues.OPCODE_BMS_GET_VALUES),
+            "the head unit hosts the BMS, so the ask is UNWRAPPED — and it has to be made: $sent"
+        )
+        val battery = assertNotNull(
+            gateway.latestData(0),
+            "…and its reply is the vehicle's battery"
+        )
+        assertEquals(75.5f, battery.voltage, absoluteTolerance = 0.01f)
+
+        // Through the production routing helper into the link's own funnel, so
+        // the latent slot materialises exactly as it does on a real connection.
+        routePackSamples(gateway, PackSampleGate(gateway.packCount)) { local, data, sections ->
+            funnels.single()(local, data, sections)
+        }
+        advanceUntilIdle()
+
+        val snap = repo.activeVehicleData.value
+        assertEquals(1, snap.packs.size, "the derived slot materialises on its first real reading")
+        assertEquals(75.5f, snap.packs.single().data.voltage, absoluteTolerance = 0.01f)
+        assertTrue(snap.packs.single().isOnline)
+    }
+
+    /**
+     * The same vehicle behind a head unit that hosts **no** BMS — a stock VESC
+     * gateway. Nothing answers opcode 96, and the battery must still be there,
+     * computed off the rail the uBox reports, exactly as the plain
+     * [VescProtocol] link did before the CAN controller was added.
+     *
+     * This is the end-to-end pin on the derived FLAG surviving the pack resize:
+     * every other test here is satisfied by a slot that merely exists, and a
+     * slot that exists without being marked derived has no fallback at all.
+     */
+    @Test
+    fun `a gateway with no BMS behind it still shows the battery its controllers see`() = repoTest { repo ->
+        val v = headUnitVehicle().withCanController()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val spec = repo.linkSpecsForTest().single()
+        val gateway = assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, v))
+
+        val loop = launch {
+            gateway.runPollLoop { frame ->
+                val len = frame[1].toInt() and 0xFF
+                val payload = frame.copyOfRange(2, 2 + len)
+                val forwarded = (payload[0].toInt() and 0xFF) == VescCan.OPCODE_FORWARD_CAN
+                val inner = if (forwarded) payload[2].toInt() and 0xFF else payload[0].toInt() and 0xFF
+                // Only the uBox answers, and only its per-unit frame: the head
+                // unit handles neither GET_VALUES opcode and hosts no BMS.
+                if (forwarded && inner == VescValues.OPCODE_GET_VALUES) {
+                    gateway.onNotification(valuesFrame())
+                }
+            }
+        }
+        advanceTimeBy(5_000)
+        runCurrent()
+        loop.cancel()
+
+        val battery = assertNotNull(
+            gateway.latestData(0),
+            "no BMS answered, so the derived slot has to be filled from the controllers' rail"
+        )
+        assertEquals(78.2f, battery.voltage, absoluteTolerance = 0.01f)
+        assertEquals(-30f, battery.current, absoluteTolerance = 0.01f, "+ is charging; the uBox draws 30 A")
+        assertFalse(
+            battery.socKnown,
+            "and with no SETUP frame there is no gauge — unknown, not a confident 0 %"
+        )
+    }
+
+    /**
+     * **The two-pass fixed point**, asserted directly on the one function that
+     * answers it, because the two passes are built from two different specs and
+     * an answer that grows between them gives the session a phantom battery it
+     * then polls for every cycle.
+     *
+     * Pass 1 (`planLinkPacks`) asks it of the PLANNED spec, whose owned packs
+     * are the profile's stored ones, purely to size the pack list. Pass 2 asks
+     * it of the EFFECTIVE spec, by which time the derived slot exists and is
+     * numbered — and it must be RECOGNISED there, not counted a second time.
+     */
+    @Test
+    fun `the derived slot is recognised again on the spec the session is built from`() {
+        val planned = LinkSpec(
+            address = CTRL_ADDR,
+            protocolKind = ProtocolKind.VESC,
+            ownedControllers = listOf(OwnedSource(0), OwnedSource(1, canId = U_BOX, kind = ProtocolKind.VESC))
+        )
+        assertEquals(
+            listOf(GatewaySource(globalIndex = -1, derived = true)),
+            vescGatewayPacks(planned, deriveBattery = true),
+            "pass 1 has nothing to number the slot with yet, but must still COUNT it"
+        )
+        assertEquals(
+            emptyList(),
+            vescGatewayPacks(planned, deriveBattery = false),
+            "and a link whose battery a real BMS covers gets no slot at all"
+        )
+
+        val effective = planned.copy(ownedPacks = listOf(OwnedSource(0)))
+        assertEquals(
+            listOf(GatewaySource(globalIndex = 0, derived = true)),
+            vescGatewayPacks(effective, deriveBattery = true),
+            "pass 2 must recognise the slot it asked for, not append a second one beside it"
+        )
+    }
+
+    /**
+     * The one shape where [vescGatewayPacks] deliberately does not honour
+     * `deriveBattery`: a gateway that already hosts a battery. A second slot
+     * there would send a byte-identical `COMM_BMS_GET_VALUES` to the same node —
+     * and, being an `expandedTo` slot beside a stored pack rather than a derived
+     * one, `maybePersistPacks` would write it into the profile and the next
+     * connect would expand again. Reachable only by a rider forcing the toggle
+     * on; pinned so the choice is visible rather than assumed.
+     */
+    @Test
+    fun `a gateway that already hosts a battery does not grow a second slot`() = repoTest { repo ->
+        val v = gatewayScooter().let { g ->
+            g.copy(controllers = g.controllers.map { it.copy(providesDerivedBattery = true) })
+        }
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertEquals(
+            listOf(OwnedSource(globalIndex = 0, canId = null, kind = ProtocolKind.VESC_BMS)),
+            spec.ownedPacks,
+            "the hosted ANT battery, and nothing beside it"
+        )
+        assertEquals(1, assertIs<VescGatewayProtocol>(repo.createProtocolForTest(spec, v)).packCount)
+    }
+
     private companion object {
         const val ADDR = "AA:BB:CC:DD:EE:01"
         const val CTRL_ADDR = "AA:BB:CC:DD:EE:0C"
+
+        /** The CAN id of the rider's uBox, behind the head unit. */
+        const val U_BOX = 24
     }
 }

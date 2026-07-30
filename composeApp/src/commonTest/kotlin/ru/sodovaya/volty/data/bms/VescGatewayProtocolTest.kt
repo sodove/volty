@@ -80,7 +80,9 @@ class VescGatewayProtocolTest {
         dutyRaw: Int = 500,
         currentInRaw: Int = 3_000,
         rpm: Int = 12_000,
-        tempMosRaw: Int = 400
+        tempMosRaw: Int = 400,
+        /** `v_in` /10 — the rail this unit measures. 0 is a unit that does not know it. */
+        vInRaw: Int = 782
     ): ByteArray {
         val o = mutableListOf<Byte>()
         o += VescValues.OPCODE_GET_VALUES.toByte()
@@ -89,7 +91,7 @@ class VescGatewayProtocolTest {
         i32(o, 0); i32(o, 0)                      // id, iq
         i16(o, dutyRaw)
         i32(o, rpm)
-        i16(o, 782)
+        i16(o, vInRaw)
         i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
         i32(o, 0); i32(o, 0)                      // tachometer counts
         o += 0                                    // fault
@@ -1127,16 +1129,46 @@ class VescGatewayProtocolTest {
         // Two requests per controller now — a SETUP and a GET_VALUES — so 5
         // controllers are 10 requests: 9 x 500 ms + the 50 ms cycle gap =
         // 4550 ms, inside the 5 s budget.
-        VescGatewayProtocol(controllers = (0 until 5).map { GatewaySource(globalIndex = it, canId = it + 1) })
+        VescGatewayProtocol(
+            controllers = (0 until 5).map { GatewaySource(globalIndex = it, canId = it + 1) },
+            packs = emptyList()
+        )
 
         val e = assertFailsWith<IllegalArgumentException> {
             // One more controller is two more requests: 11 x 500 + 50 = 5550 ms.
-            VescGatewayProtocol(controllers = (0 until 6).map { GatewaySource(globalIndex = it, canId = it + 1) })
+            VescGatewayProtocol(
+                controllers = (0 until 6).map { GatewaySource(globalIndex = it, canId = it + 1) },
+                packs = emptyList()
+            )
         }
         assertTrue(
             e.message.orEmpty().contains("stale-sample budget"),
             "the refusal has to say what it is protecting, not just that it refused: ${e.message}"
         )
+    }
+
+    /**
+     * **A derived battery is a request, so it moves the ceiling** (`I` Task 5).
+     * A gateway that derives one spends `2 x controllers + 1`, which tops out at
+     * FOUR controllers (9 requests, 4400 ms) where a pack-less plan managed
+     * five. Stated as a test rather than as arithmetic in a report, because the
+     * number is the one a future timing change has to be re-derived against.
+     */
+    @Test
+    fun `the derived battery's own request counts against the budget`() {
+        VescGatewayProtocol(
+            controllers = (0 until 4).map { GatewaySource(globalIndex = it, canId = it + 1) },
+            packs = listOf(GatewaySource(globalIndex = 0, canId = null, derived = true))
+        )
+
+        assertFailsWith<IllegalArgumentException>(
+            "5 controllers + a derived battery is 11 requests — one past what the budget allows"
+        ) {
+            VescGatewayProtocol(
+                controllers = (0 until 5).map { GatewaySource(globalIndex = it, canId = it + 1) },
+                packs = listOf(GatewaySource(globalIndex = 0, canId = null, derived = true))
+            )
+        }
     }
 
     // ------------------------------------------------------------------
@@ -1181,6 +1213,323 @@ class VescGatewayProtocolTest {
         runCurrent()
         assertEquals(0, writes)
         assertTrue(loop.isCompleted, "an empty plan returns rather than looping on a delay")
+    }
+
+    /**
+     * **The third unattributable-late-reply pair** the plan's KDoc records: two
+     * batteries on one gateway put two byte-identical `COMM_BMS_GET_VALUES`
+     * requests next to each other, exactly as the two SETUPs and the two
+     * `GET_VALUES` are. Task 4 reasoned it was covered by the same quiet window
+     * and left it pinned by nothing; `I` Task 5 makes the shape reachable from a
+     * single rider action (a head unit that hosts a battery AND derives one), so
+     * the belief needs a test under it.
+     *
+     * The hosted battery's reply lands 10 ms after we gave up on it. Without the
+     * guard the CAN-forwarded battery's request is already armed by then, and
+     * the hosted pack's 75.5 V would be published as the OTHER pack's voltage —
+     * on a vehicle whose two packs are meant to be separately readable.
+     *
+     * Driven from a plain scripted send rather than [FakeGateway], for the same
+     * reason `a late SETUP reply is not credited to the next controller` is: the
+     * fake retires requests on the DEVICE's clock, so a late reply makes its
+     * in-flight counter `fail` before the attribution assertions can speak.
+     */
+    @Test
+    fun `a late BMS reply is not credited to the next battery`() = runTest {
+        val p = protocol(
+            controllers = listOf(GatewaySource(globalIndex = 0, canId = CAN_A)),
+            packs = listOf(
+                GatewaySource(globalIndex = 0, canId = null),
+                GatewaySource(globalIndex = 1, canId = 7)
+            )
+        )
+        val scope = this
+        val loop = launch {
+            p.runPollLoop { frame ->
+                val len = frame[1].toInt() and 0xFF
+                val payload = frame.copyOfRange(2, 2 + len)
+                val forwarded = (payload[0].toInt() and 0xFF) == VescCan.OPCODE_FORWARD_CAN
+                val inner = if (forwarded) payload[2].toInt() and 0xFF else payload[0].toInt() and 0xFF
+                val reply: Pair<Long, ByteArray> = when {
+                    inner == VescValues.OPCODE_GET_VALUES_SETUP -> LATENCY_MS to setupFrame()
+                    inner == VescValues.OPCODE_GET_VALUES -> LATENCY_MS to valuesFrame()
+                    // The HOSTED battery answers just after we gave up, inside
+                    // the window where the forwarded battery's byte-identical
+                    // request would already be armed without the guard.
+                    !forwarded -> (TIMEOUT_MS + LATENCY_MS / 2) to bmsFrame(vTotRaw = 75_500_000)
+                    else -> LATENCY_MS to bmsFrame(vTotRaw = 60_000_000)
+                }
+                reply.let { (after, load) -> scope.launch { delay(after); p.onNotification(load) } }
+            }
+        }
+
+        // The controller's two requests answer at 20 ms each (t = 40); the
+        // hosted battery times out at t = 440 and holds the quiet window to
+        // t = 540; the forwarded one is sent there and answers at t = 560.
+        advanceTimeBy(2 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + LATENCY_MS + 10)
+        runCurrent()
+
+        assertEquals(
+            60.0f,
+            assertNotNull(p.latestData(1), "the forwarded battery answered its own request").voltage,
+            0.001f,
+            "the CAN battery reports ITS own 60.0 V, not the 75.5 V meant for the hosted one"
+        )
+        assertNull(
+            p.latestData(0),
+            "and the hosted battery's own request went unanswered inside its window, so it has nothing"
+        )
+        loop.cancel()
+    }
+
+    // ------------------------------------------------------------------
+    // 6b. The battery a gateway link DERIVES (`I` Task 5)
+    // ------------------------------------------------------------------
+
+    /**
+     * The rider's own shape: one head-unit address, two controllers, and **no
+     * pack in the profile at all** — so the link's battery slot is the DERIVED
+     * one their controller-only vehicle was created with, and which adding the
+     * CAN controller used to delete.
+     */
+    private fun derivedProtocol() = protocol(
+        packs = listOf(GatewaySource(globalIndex = 0, canId = null, derived = true))
+    )
+
+    /** What a VESC with no BMS behind it answers opcode 96 with: the zeroed default. */
+    private fun noBmsFrame() = bmsFrame(vTotRaw = 0, iInRaw = 0, socRaw = 0, canIdRaw = 0xFF)
+
+    /**
+     * Healthy, except that the FRONT uBox does not know the rail voltage
+     * (`v_in = 0`) and the rear does. Any fold that took the first contributor,
+     * or averaged them, reads 0 V or 39.1 V instead of the 78.2 V one of them
+     * actually measured.
+     */
+    private fun railScript(): (Int?, Int) -> ScriptedReply = { canId, opcode ->
+        if (opcode == VescValues.OPCODE_GET_VALUES) {
+            ScriptedReply(
+                LATENCY_MS,
+                valuesFrame(
+                    dutyRaw = if (canId == CAN_A) 500 else 250,
+                    vInRaw = if (canId == CAN_A) 0 else 782
+                )
+            )
+        } else {
+            healthyScript()(canId, opcode)
+        }
+    }
+
+    /**
+     * A stock VESC hosts no BMS and says so — with the `can_id == 0xFF`
+     * sentinel, which is an ANSWER, not silence. A rider whose plain VESC link
+     * showed a rail-derived battery must not lose it for having added a second
+     * controller over CAN, so the fallback has to hang off this path as well as
+     * off the timeout.
+     */
+    @Test
+    fun `a derived slot falls back to the controllers' rail when the gateway hosts no BMS`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(LATENCY_MS, noBmsFrame())
+            else railScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+
+        val battery = assertNotNull(
+            p.latestData(0),
+            "adding a CAN controller must not take away the battery the link already derived"
+        )
+        assertEquals(78.2f, battery.voltage, 0.01f, "the rail is what the unit that MEASURED it says")
+        assertEquals(-60f, battery.current, 0.01f, "both uBoxes draw 30 A off one pack, and + is charging")
+        assertEquals(-2346f, battery.power, 1f, "and only the unit with a rail contributes power")
+        assertTrue(battery.socKnown, "the controllers' own gauge is a real state of charge")
+        assertEquals(84f, battery.soc, 0.1f, "which rides the SETUP overlay, not the per-unit decode")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The other road to the same place: a head unit that does not answer opcode
+     * 96 **at all**, rather than answering it with the sentinel. Silence and a
+     * contentless answer are two distinct paths through [VescGatewayProtocol] —
+     * the request's `onSilence` and its `consume` — and a fallback wired to only
+     * one of them leaves a whole class of head unit with no battery.
+     */
+    @Test
+    fun `a derived slot falls back to the rail when the gateway answers nothing at all`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(TIMEOUT_MS, null)
+            else railScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(3 * oneSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            78.2f,
+            assertNotNull(p.latestData(0), "a silent BMS ask must still leave a derived battery").voltage,
+            0.01f
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * `0` is `VescValues`' "this controller has no battery configuration", and
+     * [ru.sodovaya.volty.data.bms.derivedBatteryFrom] would render it as a
+     * confident 0 % — the same unknown-vs-zero trap `G §9` names, reached
+     * through the fold this time. The controller that DOES have a battery
+     * configured is the one to ask.
+     */
+    @Test
+    fun `an unconfigured controller's zero battery level is not a confident zero percent`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when (opcode) {
+                VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, noBmsFrame())
+                VescValues.OPCODE_GET_VALUES_SETUP ->
+                    ScriptedReply(LATENCY_MS, setupFrame(battLevelRaw = if (canId == CAN_A) 0 else 500))
+                else -> railScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+
+        val battery = assertNotNull(p.latestData(0))
+        assertTrue(battery.socKnown, "an unconfigured front uBox must not make the whole pack unknown")
+        assertEquals(50f, battery.soc, 0.1f, "the rear uBox's real gauge is the one that answers")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The rider's own head unit**: it hosts an ANT BMS and emulates it
+     * correctly, so opcode 96 comes back with a real reading — which must beat
+     * the rail-derived fallback, and go on beating it once the BMS has proven it
+     * exists. Swapping a proven BMS's reading for a computed one the moment it
+     * misses a cycle would put a number on the Battery screen that reads exactly
+     * as real while the pack it describes has stopped talking; the orchestrator's
+     * staleness sweep is what is meant to handle that, and it cannot if
+     * something keeps the slot fresh.
+     */
+    @Test
+    fun `a proven hosted BMS is never replaced by the derived fallback`() = runTest {
+        var bmsAnswers = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode != VescBmsValues.OPCODE_BMS_GET_VALUES -> railScript()(canId, opcode)
+                bmsAnswers -> ScriptedReply(LATENCY_MS, bmsFrame())
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertEquals(
+            75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f,
+            "a real BMS reading beats the fallback on the very first cycle"
+        )
+
+        bmsAnswers = false
+        advanceTimeBy(3 * oneSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f,
+            "and keeps beating it: the BMS's last reading ages out through the sweep, it is not " +
+                "quietly overwritten with 78.2 V computed off the controllers' rail"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The counterpart, on a slot the profile actually configured: a BMS the
+     * rider named must go offline when it goes quiet, never be impersonated by
+     * the controllers beside it. Only a DERIVED slot has a fallback.
+     */
+    @Test
+    fun `a battery the profile owns is never filled from the controllers' rail`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(TIMEOUT_MS, null)
+            else railScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(3 * oneSilentCycleMs)
+        runCurrent()
+
+        assertNull(p.latestData(0), "a configured BMS that stops answering must not be impersonated")
+        assertNotNull(p.latestMotion(0), "while the controllers that would have fed a fallback answer fine")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * A derived battery is arithmetic on controller telemetry, so with no
+     * telemetry there is no battery. Materialising the slot at 0 V would put a
+     * permanently-flat pack on the Battery screen of a vehicle whose CAN bus is
+     * simply asleep — and, worse, would end the slot's latency, so it could
+     * never go back to being invisible.
+     */
+    @Test
+    fun `a derived slot stays empty while no controller has answered`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { _, _ -> ScriptedReply(TIMEOUT_MS, null) }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(2 * (5 * (TIMEOUT_MS + GUARD_MS) + CYCLE_GAP_MS))
+        runCurrent()
+
+        assertNull(p.latestData(0), "nothing reported a rail, so there is no battery to compute")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The latch is per CONNECTION, and on this app the next connection can be a
+     * different vehicle — one whose head unit hosts nothing at all. Carried
+     * over, it would leave that vehicle's derived slot permanently empty,
+     * waiting for a reply only the previous head unit ever sent.
+     */
+    @Test
+    fun `reset forgets that the gateway hosted a BMS`() = runTest {
+        var bmsAnswers = true
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode != VescBmsValues.OPCODE_BMS_GET_VALUES -> railScript()(canId, opcode)
+                bmsAnswers -> ScriptedReply(LATENCY_MS, bmsFrame())
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertEquals(75.5f, assertNotNull(p.latestData(0)).voltage, 0.001f)
+
+        p.reset()
+        bmsAnswers = false
+        advanceTimeBy(3 * oneSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            78.2f,
+            assertNotNull(
+                p.latestData(0),
+                "a new session must derive its own battery, not wait for the old head unit's BMS"
+            ).voltage,
+            0.01f
+        )
+        loop.cancel(); device.cancel()
     }
 
     // ------------------------------------------------------------------

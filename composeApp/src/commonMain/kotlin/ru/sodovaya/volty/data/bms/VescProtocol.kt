@@ -167,7 +167,7 @@ class VescProtocol(
                 val baseline = tripBaselineKm ?: decoded.odometerKm.also { tripBaselineKm = it }
                 val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
                 motion = withSessionTrip
-                if (deriveBattery) battery = synthesiseBattery(withSessionTrip)
+                if (deriveBattery) battery = derivedBatteryFrom(withSessionTrip)
             }
         }
     }
@@ -192,36 +192,46 @@ class VescProtocol(
         canScan = null
     }
 
-    /**
-     * Synthesise the pack the controller can see. Sign is the one real trap:
-     * VESC input current is POSITIVE while discharging, [BmsData.current] is
-     * "+ = charging" — so it is negated here, and the power with it.
-     *
-     * `batteryLevelFraction` is the controller's own gauge (computed from its
-     * configured battery cutoffs). When it is absent or zero the VESC has no
-     * battery configuration, so the SoC is left unknown (`socKnown = false`)
-     * and VoltageSocEstimator fills it in downstream from the vehicle's
-     * chemistry — the same path a dumb Begode takes.
-     */
-    private fun synthesiseBattery(m: ControllerData): BmsData {
-        val level = m.batteryLevelFraction
-        val known = level != null && level > 0f
-        return BmsData(
-            voltage = m.inputVoltageV,
-            current = -m.batteryCurrentA,
-            power = -m.powerW,
-            soc = if (known) level * 100f else 0f,
-            socKnown = known,
-            // No cells and no pack thermistor: a controller measures neither.
-            // The ESC temperature is motion telemetry and stays out of the
-            // battery's temperature list, so it can never trip a battery
-            // over-temperature alert.
-            cellVoltages = emptyList(),
-            temperatures = emptyList(),
-            chargeEnabled = true,
-            dischargeEnabled = true,
-            isConnected = true,
-            timestamp = m.timestamp
-        )
-    }
+}
+
+/**
+ * Synthesise the pack a controller can see, from that controller's own
+ * telemetry. Sign is the one real trap: VESC input current is POSITIVE while
+ * discharging, [BmsData.current] is "+ = charging" — so it is negated here, and
+ * the power with it.
+ *
+ * `batteryLevelFraction` is the controller's own gauge (computed from its
+ * configured battery cutoffs). When it is absent or zero the VESC has no
+ * battery configuration, so the SoC is left unknown (`socKnown = false`)
+ * and VoltageSocEstimator fills it in downstream from the vehicle's
+ * chemistry — the same path a dumb Begode takes.
+ *
+ * **Top-level and shared, not a private method**, since `I` Task 5: a VESC link
+ * that is a gateway ([VescGatewayProtocol]) derives a battery too, and the
+ * sign convention, the `socKnown` rule and the deliberately empty cell /
+ * temperature lists must be ONE statement rather than two that can drift.
+ * [VescGatewayProtocol] folds its several controllers into one [ControllerData]
+ * and calls this with the result — so the fold is the only thing that differs
+ * between the two callers, which is exactly what does differ.
+ */
+internal fun derivedBatteryFrom(m: ControllerData): BmsData {
+    val level = m.batteryLevelFraction
+    val known = level != null && level > 0f
+    return BmsData(
+        voltage = m.inputVoltageV,
+        current = -m.batteryCurrentA,
+        power = -m.powerW,
+        soc = if (known) level * 100f else 0f,
+        socKnown = known,
+        // No cells and no pack thermistor: a controller measures neither.
+        // The ESC temperature is motion telemetry and stays out of the
+        // battery's temperature list, so it can never trip a battery
+        // over-temperature alert.
+        cellVoltages = emptyList(),
+        temperatures = emptyList(),
+        chargeEnabled = true,
+        dischargeEnabled = true,
+        isConnected = true,
+        timestamp = m.timestamp
+    )
 }

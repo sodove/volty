@@ -33,7 +33,25 @@ data class GatewaySource(
     val globalIndex: Int,
     val canId: Int? = null,
     /** Wheel geometry for [VescValues.decodeValues]'s derived speed. Controllers only. */
-    val motor: MotorConfig = MotorConfig()
+    val motor: MotorConfig = MotorConfig(),
+    /**
+     * **Packs only.** This slot is the link's DERIVED battery — a pack no BMS
+     * of the profile's own backs, which exists because some controller on this
+     * link carries `Controller.providesDerivedBattery`
+     * (`ru.sodovaya.volty.data.ble.vescGatewayPacks` is the one place it is
+     * decided).
+     *
+     * It changes NOTHING about the request: a derived slot is asked
+     * `COMM_BMS_GET_VALUES` exactly like any other pack, because the node we
+     * are connected to is a head unit and a head unit may well host a BMS the
+     * profile was never told about — the rider's own does, and that ask was the
+     * one thing never sent (`I` Task 5). What the flag adds is the FALLBACK:
+     * when that ask is not answered, or is answered with the firmware's "no BMS
+     * data yet" sentinel, the slot is filled from the link's controllers' own
+     * rail telemetry instead of left empty ([VescProtocol]'s derived battery,
+     * folded across the controllers this link owns).
+     */
+    val derived: Boolean = false
 )
 
 /**
@@ -71,6 +89,37 @@ data class GatewaySource(
  *    fault.
  * 3. `BMS_GET_VALUES` per owned battery, **unwrapped** when it is hosted (the
  *    gateway answers it itself), forwarded when it sits on the CAN bus.
+ *
+ * ## The battery a gateway link DERIVES (field report 2026-07-30, `I` Task 5)
+ *
+ * "Owned battery" above includes the link's derived slot — see
+ * [GatewaySource.derived]. Until `I` Task 5 it did not, and the omission is the
+ * literal mechanism behind the rider's *"это ничем не помогло"*: their scooter
+ * was picked as a controller-only vehicle (zero packs, one controller backing a
+ * derived battery), and the act of adding the uBox over CAN forwarding turned
+ * the link into a gateway — at which point `controllerMotionProtocol`'s gateway
+ * arm, which re-listed the multiplexer's arguments from
+ * `LinkSpec.ownedControllers`/`ownedPacks` alone, **dropped `deriveBattery` on
+ * the floor**. `packCount` fell to 0, `KableBmsRepository.planLinkPacks` then
+ * allocated no slot for it, and the rider's action DELETED the battery it was
+ * meant to fix. The same drop is why opcode 96 was never sent at all on that
+ * vehicle: [bmsRequest] is built per owned pack and there were none, so the
+ * head unit's working, correctly-emulating ANT bridge was never asked anything.
+ *
+ * Both halves are one fix, because a derived slot IS a pack request here. What
+ * fills it is decided per cycle, in this order:
+ *
+ *  1. a real `COMM_BMS_GET_VALUES` reply — the head unit hosts a BMS after all,
+ *     which is the rider's case. Once one such frame has been decoded the slot
+ *     is latched to it for the rest of the connection ([hostedBms]): a link
+ *     that has PROVEN it has a BMS must age its readings out through the
+ *     ordinary staleness sweep, not silently swap in a rail-derived substitute
+ *     that reads just as plausibly;
+ *  2. otherwise the link's controllers' own rail telemetry
+ *     ([publishDerivedBattery]) — a stock VESC with no BMS answers opcode 96
+ *     with the `can_id == 0xFF` "no BMS data yet" sentinel, and a plain
+ *     [VescProtocol] link would have shown a rail-derived battery. Adding a
+ *     second controller must not take that away either.
  *
  * ## Why SETUP is asked of EVERY controller (field report 2026-07-30)
  *
@@ -161,8 +210,18 @@ data class GatewaySource(
 class VescGatewayProtocol(
     /** Owned controllers, in the link's own order — index i IS local index i. */
     private val controllers: List<GatewaySource>,
-    /** Owned batteries, in the link's own order — index i IS local index i. */
-    private val packs: List<GatewaySource> = emptyList(),
+    /**
+     * Owned batteries, in the link's own order — index i IS local index i.
+     *
+     * **No default, deliberately.** It had one, and the gateway arm of
+     * `controllerMotionProtocol` re-listed this list from `link.ownedPacks`
+     * while quietly not answering `deriveBattery` at all — the third instance
+     * on this project of a branch losing a field the other branch keeps. There
+     * is now exactly one function that answers "which pack slots does a VESC
+     * link decode" (`ru.sodovaya.volty.data.ble.vescGatewayPacks`), and no
+     * caller may reach this constructor without having gone through it.
+     */
+    private val packs: List<GatewaySource>,
     /**
      * Gap between cycles. Shorter than [VescProtocol]'s 150 ms on purpose: a
      * gateway cycle already costs one serialised round-trip per source, so the
@@ -240,8 +299,11 @@ class VescGatewayProtocol(
          * [pollIntervalMs] when the run straddles the cycle boundary.
          *
          * [planSize] is the request count, `2 × controllers + packs` — two per
-         * controller since SETUP is asked of each of them (class KDoc). The
-         * rider's scooter (head unit + one uBox + the hosted battery) is 5
+         * controller since SETUP is asked of each of them (class KDoc), and
+         * `packs` counts the link's DERIVED slot when it has one, since that is
+         * a `COMM_BMS_GET_VALUES` request like any other (`I` Task 5). The
+         * rider's scooter (head unit + one uBox + the battery the head unit
+         * hosts, derived because their profile never listed it) is 5
          * requests: 4 × 500 + 50 = 2050 ms against a 5 s budget. It grows
          * LINEARLY with the plan, so a vehicle with enough sources behind one
          * head unit would silently reconnect forever while most of its CAN bus
@@ -293,6 +355,18 @@ class VescGatewayProtocol(
     @Volatile private var motion: Map<Int, ControllerData> = emptyMap()
 
     @Volatile private var packData: Map<Int, BmsData> = emptyMap()
+
+    /**
+     * Pack slots that have produced a REAL `COMM_BMS_GET_VALUES` reading on
+     * this connection — so a [GatewaySource.derived] slot stops falling back to
+     * the controllers' rail once the gateway has proven it hosts a BMS.
+     *
+     * A latch, not a per-cycle flag, and cleared only by [reset]: a hosted BMS
+     * that drops out for a cycle must age out through the orchestrator's
+     * staleness sweep like any other battery, not be quietly replaced by a
+     * derived number that looks exactly as real on the Battery screen.
+     */
+    @Volatile private var hostedBms: Set<Int> = emptySet()
 
     /** The vehicle-level scalars one controller's SETUP frame contributes. */
     private data class SetupOverlay(
@@ -368,13 +442,13 @@ class VescGatewayProtocol(
      * (`… is not credited to the next controller` for `GET_VALUES`,
      * `a late SETUP reply is not credited to the next controller` for SETUP).
      *
-     * **There is a THIRD such pair and this task did not create it**: two packs
-     * on one gateway put two byte-identical `COMM_BMS_GET_VALUES` requests
-     * adjacent, and the product's own four-source plan (two controllers, two
-     * packs) reaches it. The guard is the same mechanism and covers it by
-     * construction, but **no test pins that pair** — recorded rather than
-     * quietly assumed, because the other two were pinned only after someone
-     * looked.
+     * **There is a THIRD such pair**: two packs on one gateway put two
+     * byte-identical `COMM_BMS_GET_VALUES` requests adjacent, and the product's
+     * own four-source plan (two controllers, two packs) reaches it. Task 4
+     * recorded it as covered-by-construction but pinned by nothing; `I` Task 5
+     * pins it (`a late BMS reply is not credited to the next battery`) — and
+     * had to, because a link that owns a hosted battery AND derives one now
+     * reaches the pair from a shape a single rider action can create.
      * The trade is deliberate: one guard mechanism covering two known pairs
      * beats an ordering whose safety comes from opcodes happening not to
      * collide, which no test can hold in place.
@@ -445,14 +519,94 @@ class VescGatewayProtocol(
             // decoder flags it precisely so a consumer can drop it. We are that
             // consumer: publishing it would put 0 V / 0 % on the Battery screen.
             if (frame != null && !frame.noBmsDataYet) {
+                // Proof this gateway really does host a BMS for this slot. It
+                // latches (see [hostedBms]) so a later gap cannot swap the real
+                // reading for the derived fallback behind the rider's back.
+                hostedBms = hostedBms + p.globalIndex
                 packData = packData + (p.globalIndex to frame.toBmsData())
+            } else {
+                // An answer that carries no reading is, for a DERIVED slot,
+                // exactly as informative as no answer: a stock VESC with no BMS
+                // replies with the sentinel rather than staying silent, and a
+                // rider whose plain VESC link showed a rail-derived battery
+                // must not lose it for having added a second controller.
+                publishDerivedBattery(p)
             }
         },
-        // Nothing to forget: the battery's last sample stays cached and the
-        // orchestrator's staleness sweep greys it out on its own schedule,
-        // exactly as for a directly-connected BMS that goes quiet.
-        onSilence = {}
+        // For a real battery: nothing to forget — its last sample stays cached
+        // and the orchestrator's staleness sweep greys it out on its own
+        // schedule, exactly as for a directly-connected BMS that goes quiet.
+        //
+        // For a DERIVED slot this is where the fallback lives, and the position
+        // is the point: the pack requests come last in the cycle (see [plan]),
+        // so every controller that is going to answer this cycle already has,
+        // and the fold below sees a complete picture. It also makes the derived
+        // battery exactly ONE sample per cycle — publishing it from
+        // [applyValues] instead would emit one per answering controller, which
+        // is the duplicated-sample stutter in another costume.
+        onSilence = { publishDerivedBattery(p) }
     )
+
+    /**
+     * Fill [slot] from the link's controllers' own rail telemetry — the
+     * gateway's [VescProtocol.deriveBattery] equivalent, and a no-op for
+     * anything that is not a derived slot.
+     *
+     * Silent when the slot has a PROVEN hosted BMS ([hostedBms]) and when no
+     * controller on this link has a live per-unit decode: a derived battery is
+     * arithmetic on controller telemetry, so with no telemetry there is no
+     * battery, and the slot stays latent rather than materialising at 0 V.
+     *
+     * The fold is `copy()` onto the first answering controller rather than a
+     * second `BmsData` constructor, so [derivedBatteryFrom] stays the ONE
+     * statement of the sign convention and the `socKnown` rule, and only what
+     * genuinely differs between one controller and several is written here:
+     *
+     *  - **voltage: `max`.** Every controller on the link sits on the same
+     *    rail, so they should agree; `max` is what survives a contributor that
+     *    reports 0 V because it has no measurement (`hasInputVoltage` is
+     *    unreachable for VESC — field report §4 — so a mean would be dragged
+     *    down by a node that simply does not know);
+     *  - **current and power: summed**, because they are per-unit draws off one
+     *    pack. This is the same arithmetic `MotionAggregator` does across
+     *    controllers, applied here because a derived pack has to be one number;
+     *  - **battery level: the first controller that reports a real one.** `0f`
+     *    is `VescValues`' "no battery configuration", which
+     *    [derivedBatteryFrom] would otherwise turn into a confident 0 %;
+     *  - **timestamp: the newest**, so the sample is stamped by the freshest
+     *    contribution rather than by whichever controller happens to be first.
+     *
+     * **The timestamp line is an equivalent mutant today, and the argument is
+     * stated rather than assumed.** Every entry in [motion] was refreshed this
+     * cycle — [valuesRequest]'s `onSilence` deletes the entry of any controller
+     * that did not answer — so `max` and "the first contributor's" differ by at
+     * most one cycle's decode spread, which is sub-millisecond REAL time inside
+     * a virtual-time test and therefore not observable from one. `max` is kept
+     * because it stays correct if [motion] ever retains an older entry, and
+     * because the alternative is not cheaper. Somebody should try to disprove
+     * this: the last two "structurally unkillable" claims on this branch were
+     * both wrong.
+     */
+    private fun publishDerivedBattery(slot: GatewaySource) {
+        if (!slot.derived || slot.globalIndex in hostedBms) return
+        // [motion], not [perUnit]: the state of charge a VESC reports is on the
+        // SETUP frame, so it reaches a controller only through its overlay, and
+        // [perUnit] is the pre-overlay decode. Folding that instead would leave
+        // every gateway-derived battery with `socKnown = false` — where a plain
+        // VescProtocol link, which decodes SETUP directly, has the real gauge.
+        val units = controllers.mapNotNull { motion[it.globalIndex] }
+        val head = units.firstOrNull() ?: return
+        val folded = head.copy(
+            inputVoltageV = units.maxOf { it.inputVoltageV },
+            batteryCurrentA = units.map { it.batteryCurrentA }.sum(),
+            powerW = units.map { it.powerW }.sum(),
+            batteryLevelFraction = units.firstNotNullOfOrNull { u ->
+                u.batteryLevelFraction?.takeIf { it > 0f }
+            },
+            timestamp = units.maxOf { it.timestamp }
+        )
+        packData = packData + (slot.globalIndex to derivedBatteryFrom(folded))
+    }
 
     // ---- the serial loop ----------------------------------------------
 
@@ -747,6 +901,11 @@ class VescGatewayProtocol(
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()
+        // The next session may be a DIFFERENT vehicle, whose gateway hosts no
+        // BMS at all: a latch carried over would leave its derived slot
+        // permanently empty, waiting for a reply that only the old head unit
+        // ever sent.
+        hostedBms = emptySet()
         overlays = emptyMap()
         tripBaselineKm = emptyMap()
     }
