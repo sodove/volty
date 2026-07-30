@@ -64,13 +64,45 @@ data class GatewaySource(
  *
  * ## What one cycle asks for (spec §3 + §9.3)
  *
- * 1. **one** `GET_VALUES_SETUP` to the PRIMARY controller — the only frame
- *    carrying a controller-computed ground speed and odometer. Not to every
- *    unit: every extra forward is a full serialised round-trip.
+ * 1. `GET_VALUES_SETUP` per owned controller — the only frame carrying a
+ *    controller-computed ground speed, odometer and battery level. **Per
+ *    controller, not to a nominated "primary"** — see below.
  * 2. `GET_VALUES` per owned controller — per-unit duty, currents, rpm, temps,
  *    fault.
  * 3. `BMS_GET_VALUES` per owned battery, **unwrapped** when it is hosted (the
  *    gateway answers it itself), forwarded when it sits on the CAN bus.
+ *
+ * ## Why SETUP is asked of EVERY controller (field report 2026-07-30)
+ *
+ * This used to send exactly one SETUP, to `controllers.firstOrNull()`, on the
+ * argument that every extra forward costs a full serialised round-trip. On the
+ * rider's scooter controller 0 is the **head unit itself** — VESC Express on an
+ * ESP32-C6, a CAN bridge with no motor — and its firmware does not handle
+ * opcode 47 at all: the switch in `commands.c` falls through to
+ * `default: break;` and no reply frame is ever built. So the one frame carrying
+ * speed, trip, odometer and battery level was addressed to the only node on the
+ * vehicle that cannot answer it, and all four read 0 however well the real uBox
+ * answered everything else.
+ *
+ * Re-electing a better primary was considered and rejected: choosing one needs a
+ * liveness signal this protocol does not have (silence is indistinguishable from
+ * a slow node, and `GET_VALUES` answering says nothing about opcode 47), and any
+ * election leaves the same class of bug for the next topology. Asking everybody
+ * has no such failure mode — whichever nodes can answer, do, and the ones that
+ * cannot simply cost their timeout.
+ *
+ * The traffic this adds is one request per controller per cycle: the plan grows
+ * from `1 + controllers + packs` to `2 x controllers + packs`. That growth is
+ * bounded by [checkSilenceBudget], which is computed from the plan size and
+ * therefore already accounts for it — a plan that no longer fits is refused at
+ * construction rather than discovered on the road.
+ *
+ * Each answering controller now carries its own overlay, which is correct at the
+ * fold: `MotionAggregator` takes `maxOf` for speed/odometer/trip and averages
+ * the battery level over the controllers that report one, so N controllers
+ * reporting the same setup-wide scalars aggregate to that scalar rather than to
+ * N times it. (Only the per-unit numbers are summed, and those still come from
+ * `GET_VALUES` alone — see the OVERLAY section below.)
  *
  * A source that does not answer within [replyTimeoutMs] is skipped for this
  * cycle and the loop moves on — it can never wedge the cycle, which is how a
@@ -86,12 +118,15 @@ data class GatewaySource(
  * `COMM_GET_VALUES_SETUP` reports the **setup**, not the unit: VESC's
  * `mc_interface_get_setup_values()` sums current, power and amp-hours across
  * every CAN node it has heard from, and divides the tachometer by the number of
- * VESCs. Publishing that decode as the primary controller's `ControllerData`
+ * VESCs. Publishing that decode as the answering controller's `ControllerData`
  * would hand `MotionAggregator` — which SUMS currents across controllers — a
  * figure that already includes the other uBox, and the dashboard would read
  * roughly double the real current. So only the vehicle-level scalars it is
  * asked for are taken from it (speed, odometer, trip, battery level); every
- * per-unit number stays the one `GET_VALUES` decoded for that unit.
+ * per-unit number stays the one `GET_VALUES` decoded for that unit. Asking
+ * every controller for SETUP makes that separation MORE load-bearing, not
+ * less: two controllers each publishing a CAN-wide current sum would be
+ * summed a second time by the fold.
  *
  * ## `ah_cnt` stays unmapped, deliberately
  *
@@ -188,16 +223,19 @@ class VescGatewayProtocol(
          * What must fit is the longest run of silence that still leaves
          * somebody reporting, because [ConnectionSession]'s watchdog measures
          * the gap between two SAMPLES, not the length of a cycle. The worst
-         * such run is every source but one, each costing a full
+         * such run is every REQUEST but one, each costing a full
          * [replyTimeoutMs] + [lateReplyGuardMs], plus the inter-cycle
          * [pollIntervalMs] when the run straddles the cycle boundary.
          *
-         * At the product owner's 4-source plan that is 3 × 500 + 50 = 1550 ms
-         * against a 5 s budget. It grows LINEARLY with the plan, so a vehicle
-         * with enough sources behind one head unit would silently reconnect
-         * forever while most of its CAN bus was healthy. Failing loudly at
-         * construction is the honest outcome: a plan that cannot meet this
-         * bound does not work, and the message says which knob to turn.
+         * [planSize] is the request count, `2 × controllers + packs` — two per
+         * controller since SETUP is asked of each of them (class KDoc). The
+         * rider's scooter (head unit + one uBox + the hosted battery) is 5
+         * requests: 4 × 500 + 50 = 2050 ms against a 5 s budget. It grows
+         * LINEARLY with the plan, so a vehicle with enough sources behind one
+         * head unit would silently reconnect forever while most of its CAN bus
+         * was healthy. Failing loudly at construction is the honest outcome: a
+         * plan that cannot meet this bound does not work, and the message says
+         * which knob to turn.
          */
         internal fun checkSilenceBudget(
             planSize: Int,
@@ -209,7 +247,7 @@ class VescGatewayProtocol(
             val worstSilentRunMs =
                 (planSize - 1) * (replyTimeoutMs + lateReplyGuardMs) + pollIntervalMs
             require(worstSilentRunMs < WATCHDOG_SILENCE_BUDGET_MS) {
-                "A gateway plan of $planSize sources can go $worstSilentRunMs ms between samples " +
+                "A gateway plan of $planSize requests can go $worstSilentRunMs ms between samples " +
                     "when all but one are silent, which exceeds the ${WATCHDOG_SILENCE_BUDGET_MS} ms " +
                     "stale-sample budget — the link would be torn down while most of the CAN bus is " +
                     "healthy. Lower replyTimeoutMs/lateReplyGuardMs, split the sources across links, " +
@@ -223,13 +261,6 @@ class VescGatewayProtocol(
         notifyCharUuid = VescProtocol.NUS_NOTIFY,
         writeCharUuid = VescProtocol.NUS_WRITE
     )
-
-    /**
-     * The controller whose `GET_VALUES_SETUP` speaks for the whole vehicle —
-     * the first controller the link owns, i.e. the vehicle's lowest-numbered
-     * one (`planLinks` emits owned sources ascending by index).
-     */
-    private val primary: GatewaySource? = controllers.firstOrNull()
 
     private val accumulator = VescFrameAccumulator()
 
@@ -246,12 +277,12 @@ class VescGatewayProtocol(
     /** Last per-unit `GET_VALUES` decode, dropped as soon as its unit goes quiet. */
     @Volatile private var perUnit: Map<Int, ControllerData> = emptyMap()
 
-    /** What is published to [latestMotion] — per-unit data plus, for the primary, [overlay]. */
+    /** What is published to [latestMotion] — per-unit data plus that unit's [overlays] entry. */
     @Volatile private var motion: Map<Int, ControllerData> = emptyMap()
 
     @Volatile private var packData: Map<Int, BmsData> = emptyMap()
 
-    /** The vehicle-level scalars the primary's SETUP frame contributes. */
+    /** The vehicle-level scalars one controller's SETUP frame contributes. */
     private data class SetupOverlay(
         val speedKmh: Float,
         val speedSource: SpeedSource,
@@ -260,15 +291,29 @@ class VescGatewayProtocol(
         val batteryLevelFraction: Float?
     )
 
-    @Volatile private var overlay: SetupOverlay? = null
+    /**
+     * Per controller, keyed by GLOBAL index like every other map here: the
+     * scalars that controller's own SETUP reply carried, or no entry at all
+     * when it did not answer one. Was a single vehicle-wide field back when a
+     * single nominated controller was asked; a head unit that answers nothing
+     * is exactly the case that made "one controller speaks for the vehicle"
+     * wrong (see the class KDoc).
+     */
+    @Volatile private var overlays: Map<Int, SetupOverlay> = emptyMap()
 
     /**
-     * Odometer at this connection's first SETUP frame, so `tripKm` is distance
-     * since the link came up rather than the ESC's since-boot counter — the
-     * same session-baseline rule (and the same "absolute counter only" reason)
-     * as [VescProtocol.tripBaselineKm]. Cleared by [reset].
+     * Odometer at this connection's first SETUP frame **from that controller**,
+     * so `tripKm` is distance since the link came up rather than the ESC's
+     * since-boot counter — the same session-baseline rule (and the same
+     * "absolute counter only" reason) as [VescProtocol.tripBaselineKm].
+     * Cleared by [reset].
+     *
+     * Per controller, not vehicle-wide: two nodes' tachometers are two
+     * counters, and subtracting one's baseline from the other's reading is
+     * arithmetic on unrelated numbers. It reads as a plausible trip, which is
+     * the worst kind of wrong.
      */
-    @Volatile private var tripBaselineKm: Float? = null
+    @Volatile private var tripBaselineKm: Map<Int, Float> = emptyMap()
 
     // ---- the request plan, built once ---------------------------------
 
@@ -287,8 +332,24 @@ class VescGatewayProtocol(
         val onSilence: () -> Unit
     )
 
+    /**
+     * Every SETUP first, then every `GET_VALUES`, then the batteries.
+     *
+     * The grouping is not cosmetic. Two things depend on it:
+     *
+     * 1. **A controller's SETUP always precedes its own `GET_VALUES` within the
+     *    cycle**, which is what lets [setupRequest]'s `onSilence` drop the
+     *    overlay entry and leave republishing to the `GET_VALUES` that follows.
+     *    Reverse the two and a controller whose SETUP has just gone quiet keeps
+     *    publishing last cycle's reported speed for a whole further cycle.
+     * 2. **The two `GET_VALUES` requests stay adjacent.** They are the only
+     *    pair in the plan that is byte-identical on the wire, so they are the
+     *    pair [lateReplyGuardMs] exists for; interleaving SETUP between them
+     *    would leave the guard with nothing to guard against in this plan and
+     *    quietly retire the regression test that pins it.
+     */
     private val plan: List<Request> = buildList {
-        primary?.let { add(setupRequest(it)) }
+        controllers.forEach { add(setupRequest(it)) }
         controllers.forEach { add(valuesRequest(it)) }
         packs.forEach { add(bmsRequest(it)) }
     }
@@ -306,8 +367,16 @@ class VescGatewayProtocol(
         consume = { payload ->
             VescValues.decodeSetupValues(payload)?.let { applySetup(c.globalIndex, it) }
         },
-        // A speed nobody is still reporting must not stay on the dashboard.
-        onSilence = { overlay = null }
+        // A speed this controller is no longer reporting must not stay on the
+        // dashboard. Only ITS entry goes: a head unit that never answers
+        // opcode 47 must not take the uBox's speed down with it, which is the
+        // whole point of asking per controller.
+        //
+        // No republish here — the same controller's `GET_VALUES` comes later in
+        // this very cycle (see [plan]) and republishes without the overlay, or
+        // is itself silent and drops the sample outright. Pinned by
+        // `a silent SETUP drops the reported speed instead of freezing it`.
+        onSilence = { overlays = overlays - c.globalIndex }
     )
 
     private fun valuesRequest(c: GatewaySource) = Request(
@@ -566,27 +635,29 @@ class VescGatewayProtocol(
 
     private fun applySetup(global: Int, decoded: ControllerData) {
         val odometerKm = decoded.odometerKm
-        val baseline = tripBaselineKm ?: odometerKm.also { tripBaselineKm = it }
-        overlay = SetupOverlay(
+        val baseline = tripBaselineKm[global]
+            ?: odometerKm.also { tripBaselineKm = tripBaselineKm + (global to it) }
+        val overlay = SetupOverlay(
             speedKmh = decoded.speedKmh,
             speedSource = decoded.speedSource,
             odometerKm = odometerKm,
             tripKm = (odometerKm - baseline).coerceAtLeast(0f),
             batteryLevelFraction = decoded.batteryLevelFraction
         )
+        overlays = overlays + (global to overlay)
         publishController(global)
     }
 
     /**
-     * Publish [global]'s per-unit decode, with the vehicle-level overlay folded
-     * in when it is the primary. Publishes NOTHING while there is no per-unit
-     * decode: the overlay describes the whole setup, so on its own it is not a
-     * sample of any single controller.
+     * Publish [global]'s per-unit decode, with that controller's own setup
+     * overlay folded in when it answered one. Publishes NOTHING while there is
+     * no per-unit decode: the overlay describes the whole setup, so on its own
+     * it is not a sample of any single controller.
      */
     private fun publishController(global: Int) {
         val base = perUnit[global] ?: return
-        val o = overlay
-        val out = if (global == primary?.globalIndex && o != null) {
+        val o = overlays[global]
+        val out = if (o != null) {
             base.copy(
                 speedKmh = o.speedKmh,
                 speedSource = o.speedSource,
@@ -619,7 +690,7 @@ class VescGatewayProtocol(
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()
-        overlay = null
-        tripBaselineKm = null
+        overlays = emptyMap()
+        tripBaselineKm = emptyMap()
     }
 }

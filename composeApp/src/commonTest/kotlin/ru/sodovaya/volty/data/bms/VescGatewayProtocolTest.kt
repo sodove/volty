@@ -159,6 +159,9 @@ class VescGatewayProtocolTest {
         const val CYCLE_GAP_MS = 50L
         const val CAN_A = 41
         const val CAN_B = 42
+
+        /** The CAN id of the rider's real uBox, behind the head unit. */
+        const val U_BOX = 24
     }
 
     /**
@@ -245,10 +248,26 @@ class VescGatewayProtocolTest {
         lateReplyGuardMs = GUARD_MS
     )
 
-    /** Answers everything promptly with the frame its opcode calls for. */
+    /**
+     * Answers everything promptly with the frame its opcode calls for.
+     *
+     * **The two uBoxes answer DIFFERENT setup frames**, which is what makes the
+     * per-controller overlay observable at all: a protocol that kept one shared
+     * vehicle-wide overlay would publish the last answer for both, and every
+     * assertion that names a speed or an odometer below would catch it.
+     */
     private fun healthyScript(): (Int?, Int) -> ScriptedReply = { canId, opcode ->
         when (opcode) {
-            VescValues.OPCODE_GET_VALUES_SETUP -> ScriptedReply(LATENCY_MS, setupFrame())
+            VescValues.OPCODE_GET_VALUES_SETUP ->
+                if (canId == CAN_A) {
+                    ScriptedReply(LATENCY_MS, setupFrame())
+                } else {
+                    // 8.0 m/s -> 28.8 km/h, 500 000 m -> 500.0 km, 50 %.
+                    ScriptedReply(
+                        LATENCY_MS,
+                        setupFrame(speedMsRaw = 8_000, tachAbsMRaw = 500_000_000, battLevelRaw = 500)
+                    )
+                }
             VescValues.OPCODE_GET_VALUES ->
                 ScriptedReply(LATENCY_MS, valuesFrame(dutyRaw = if (canId == CAN_A) 500 else 250))
             VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, bmsFrame())
@@ -256,15 +275,27 @@ class VescGatewayProtocolTest {
         }
     }
 
-    /** One healthy cycle: 4 answered round-trips plus the inter-cycle gap. */
-    private val healthyCycleMs = 4 * LATENCY_MS + CYCLE_GAP_MS
+    /**
+     * One healthy cycle of the default plan: FIVE answered round-trips — a
+     * SETUP and a `GET_VALUES` for each of the two uBoxes, plus the hosted
+     * battery — and the inter-cycle gap.
+     */
+    private val healthyCycleMs = 5 * LATENCY_MS + CYCLE_GAP_MS
 
     /**
-     * One cycle of the default plan with exactly ONE source silent: three
+     * One cycle of the default plan with exactly ONE REQUEST silent: four
      * answered round-trips, one that costs the full timeout plus the quiet
      * window, and the inter-cycle gap.
      */
-    private val oneSilentCycleMs = 3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS
+    private val oneSilentCycleMs = 4 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS
+
+    /**
+     * One cycle with TWO of the five requests silent — which is what a whole
+     * silent CONTROLLER now costs, since it is asked for both a SETUP and a
+     * `GET_VALUES`. Also the shape of a cycle where both SETUPs go unanswered.
+     */
+    private val twoSilentCycleMs =
+        3 * LATENCY_MS + 2 * (TIMEOUT_MS + GUARD_MS) + CYCLE_GAP_MS
 
     /**
      * Advance to just inside the end of [count] full cycles — one millisecond
@@ -291,19 +322,27 @@ class VescGatewayProtocolTest {
 
         assertEquals(
             listOf(
-                CAN_A to VescValues.OPCODE_GET_VALUES_SETUP,   // one speed request, primary only
+                CAN_A to VescValues.OPCODE_GET_VALUES_SETUP,   // speed/odometer, per controller
+                CAN_B to VescValues.OPCODE_GET_VALUES_SETUP,
                 CAN_A to VescValues.OPCODE_GET_VALUES,         // per-unit
                 CAN_B to VescValues.OPCODE_GET_VALUES,         // per-unit
                 null to VescBmsValues.OPCODE_BMS_GET_VALUES    // hosted: NOT forwarded
             ),
             link.sent,
-            "one cycle = one request per owned source, plus the single SETUP"
+            "one cycle = a SETUP and a GET_VALUES per controller, plus one request per battery"
         )
         loop.cancel(); device.cancel()
     }
 
+    /**
+     * The frame that carries speed, trip, odometer and battery level goes to
+     * **every** controller, not to a nominated one. It used to go to
+     * `controllers.firstOrNull()`, and on the rider's scooter that is the head
+     * unit — a VESC Express bridge with no motor, whose firmware falls through
+     * to `default: break;` on opcode 47 and never builds a reply.
+     */
     @Test
-    fun `the speed request goes to the primary controller only, once per cycle`() = runTest {
+    fun `the speed request goes to every controller, once each per cycle`() = runTest {
         val p = protocol()
         val link = FakeGateway(p, healthyScript())
         val device = link.runDevice(this)
@@ -312,8 +351,12 @@ class VescGatewayProtocolTest {
         runCycles(3)
 
         val setups = link.sent.filter { it.second == VescValues.OPCODE_GET_VALUES_SETUP }
-        assertEquals(3, setups.size, "exactly one SETUP per cycle — every extra one is a full round-trip")
-        assertTrue(setups.all { it.first == CAN_A }, "SETUP goes to the primary uBox, never to all of them")
+        assertEquals(
+            listOf(CAN_A, CAN_B, CAN_A, CAN_B, CAN_A, CAN_B),
+            setups.map { it.first },
+            "3 cycles x 2 controllers: one SETUP each, every cycle — asking only the first " +
+                "controller is what pinned the rider's speed at zero"
+        )
         loop.cancel(); device.cancel()
     }
 
@@ -341,7 +384,7 @@ class VescGatewayProtocolTest {
 
         runCycles(4)
 
-        assertEquals(16, link.sent.size, "4 cycles x 4 sources — the loop really ran")
+        assertEquals(20, link.sent.size, "4 cycles x 5 requests — the loop really ran")
         assertEquals(1, link.maxOutstanding, "never more than one request in flight")
         assertEquals(0, link.outstanding, "and every one of them settled")
         loop.cancel(); device.cancel()
@@ -357,12 +400,12 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(4, cycleMs = oneSilentCycleMs)
+        runCycles(4, cycleMs = twoSilentCycleMs)
 
         assertEquals(
-            16,
+            20,
             link.sent.size,
-            "4 cycles x 4 sources: a silent uBox costs its cycle the timeout, never a skipped request"
+            "4 cycles x 5 requests: a silent uBox costs its cycle two timeouts, never a skipped request"
         )
         assertEquals(1, link.maxOutstanding, "a timing-out request is still exactly one request")
         assertEquals(0, link.outstanding, "and every one of them settled")
@@ -399,14 +442,18 @@ class VescGatewayProtocolTest {
         // GLOBALITY, and asserted WITHOUT going back through
         // GatewaySource.globalIndex — which is what the two duty assertions
         // above do, so on their own they pin canId->slot and nothing more.
-        // The overlay is folded in only for the source whose key equals the
-        // primary's GLOBAL index (3 here). Key the decode state by arrival
-        // position instead and 0 never equals 3, so the SETUP frame's reported
-        // speed silently stops reaching anyone — with no wheel configured on
-        // these sources, that shows up as NONE.
-        assertEquals(SpeedSource.REPORTED, a.speedSource, "the overlay found the primary by its global index 3")
-        assertTrue(abs(a.speedKmh - 47.0f) < 0.05f, "and it is the SETUP frame's speed")
-        assertEquals(SpeedSource.NONE, b.speedSource, "while global 1 is not the primary and gets no overlay")
+        // Each controller's overlay is folded in under its own GLOBAL key (3
+        // and 1 here). Key the overlay by arrival position instead and 0 never
+        // equals 3, so canId 41's SETUP reply silently stops reaching anyone —
+        // with no wheel configured on these sources, that shows up as NONE.
+        assertEquals(SpeedSource.REPORTED, a.speedSource, "the overlay found canId $CAN_A by its global index 3")
+        assertEquals(SpeedSource.REPORTED, b.speedSource, "and canId $CAN_B by its own global index 1")
+        // And each carries ITS OWN setup scalars: one shared vehicle-wide
+        // overlay would publish the last reply for both.
+        assertTrue(abs(a.speedKmh - 47.0f) < 0.05f, "canId $CAN_A's own SETUP speed")
+        assertTrue(abs(b.speedKmh - 28.8f) < 0.05f, "canId $CAN_B's own SETUP speed, not its neighbour's")
+        assertTrue(abs(a.odometerKm - 1284.6f) < 0.1f, "and its own odometer")
+        assertTrue(abs(b.odometerKm - 500.0f) < 0.1f, "and its own odometer")
 
         val battery = assertNotNull(p.latestData(0))
         assertTrue(abs(battery.voltage - 75.5f) < 0.001f)
@@ -426,6 +473,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
+        // One controller (2 requests) + two batteries = 4 answered round-trips.
         runCycles(1, cycleMs = 4 * LATENCY_MS + CYCLE_GAP_MS)
 
         assertEquals(
@@ -467,15 +515,176 @@ class VescGatewayProtocolTest {
         )
         assertTrue(abs(primary.dutyPercent - 50f) < 0.01f, "per-unit duty likewise")
 
-        // The second uBox gets no overlay at all: its speed is derived.
+        // The second uBox has its OWN overlay from its own SETUP reply — and
+        // still its own per-unit numbers underneath it.
         val second = assertNotNull(p.latestMotion(1))
-        assertEquals(SpeedSource.DERIVED, second.speedSource)
-        assertEquals(0f, second.odometerKm, "only the primary carries the setup odometer")
+        assertEquals(SpeedSource.REPORTED, second.speedSource)
+        assertTrue(abs(second.speedKmh - 28.8f) < 0.05f, "the rear uBox's own reported speed")
+        assertTrue(abs(second.odometerKm - 500.0f) < 0.1f, "and its own odometer")
+        assertEquals(0.5f, second.batteryLevelFraction)
+        assertTrue(
+            abs(second.batteryCurrentA - 30f) < 0.01f,
+            "and its per-unit current is still GET_VALUES', not the SETUP frame's CAN-wide sum"
+        )
+        assertTrue(abs(second.dutyPercent - 25f) < 0.01f, "per-unit duty likewise")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The rider's own scooter, and the reason this frame is asked of everybody.**
+     *
+     * Controller 0 is the head unit: VESC Express on an ESP32-C6, a CAN bridge
+     * with no motor. Its firmware handles neither opcode 4 nor opcode 47 — both
+     * fall through to `default: break;` in `commands.c` and no reply is ever
+     * built — while it does answer for the ANT BMS it hosts. Controller 1 is
+     * the real uBox, reachable only through `FORWARD_CAN`.
+     *
+     * Addressing the single SETUP request to `controllers.firstOrNull()` sent
+     * it to the one node on the vehicle that cannot answer it, and speed, trip,
+     * odometer and battery level were all pinned at zero however well the uBox
+     * answered everything else.
+     *
+     * Note the uBox is built with a **bare `MotorConfig()`** — `wheelDiameterMm
+     * = 0`, exactly as CAN discovery creates one today (`I` Task 6). So the
+     * eRPM→speed fallback is unavailable and `REPORTED` here can only have come
+     * from the SETUP frame: this test cannot pass by accident on a derived speed.
+     */
+    @Test
+    fun `setup is read from whichever controller answers it, not from controller 0`() = runTest {
+        val p = protocol(
+            controllers = listOf(
+                GatewaySource(globalIndex = 0, canId = null, motor = MotorConfig()),
+                GatewaySource(globalIndex = 1, canId = U_BOX, motor = MotorConfig())
+            ),
+            packs = listOf(GatewaySource(globalIndex = 0, canId = null))
+        )
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                // The head unit emulates the ANT BMS and answers that, itself.
+                opcode == VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, bmsFrame())
+                // 11.67 m/s -> 42.0 km/h, 812 000 m -> 812.0 km.
+                canId == U_BOX && opcode == VescValues.OPCODE_GET_VALUES_SETUP ->
+                    ScriptedReply(
+                        LATENCY_MS,
+                        setupFrame(speedMsRaw = 11_670, tachAbsMRaw = 812_000_000)
+                    )
+                canId == U_BOX && opcode == VescValues.OPCODE_GET_VALUES ->
+                    ScriptedReply(LATENCY_MS, valuesFrame(dutyRaw = 250))
+                // Everything addressed to the head unit itself: silence.
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // Three answered round-trips, two silent ones (the head unit's).
+        runCycles(1, cycleMs = twoSilentCycleMs)
+
+        assertTrue(
+            link.sent.contains(U_BOX to VescValues.OPCODE_GET_VALUES_SETUP),
+            "the uBox must be ASKED for the setup frame: ${link.sent}"
+        )
+        val uBox = assertNotNull(p.latestMotion(1), "the uBox answered everything it was asked")
+        assertEquals(SpeedSource.REPORTED, uBox.speedSource, "and its ground speed is a measurement")
+        assertEquals(42.0f, uBox.speedKmh, 0.05f)
+        assertEquals(812.0f, uBox.odometerKm, 0.1f)
+        assertEquals(0f, uBox.tripKm, 0.01f, "the first frame of the connection is the trip baseline")
+        assertEquals(0.84f, assertNotNull(uBox.batteryLevelFraction), 0.001f)
+
+        assertNull(p.latestMotion(0), "the head unit answers nothing, so it has no sample at all")
+        assertNotNull(p.latestData(0), "while the BMS it hosts reports normally")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * Trip is distance since the link came up — and the baseline is **per
+     * controller**, because two nodes' tachometers are two independent
+     * counters. The two here start 784.6 km apart on purpose: one shared
+     * baseline gives the second controller either a negative trip (coerced to a
+     * flat 0 that never moves) or an absurd 787 km, depending which reply won.
+     */
+    @Test
+    fun `trip starts at zero for this connection and grows with each controller's own odometer`() =
+        runTest {
+            var odoARaw = 1_284_600_000                       // 1284.6 km
+            var odoBRaw = 500_000_000                         //  500.0 km
+            val p = protocol()
+            val link = FakeGateway(p) { canId, opcode ->
+                if (opcode == VescValues.OPCODE_GET_VALUES_SETUP) {
+                    ScriptedReply(
+                        LATENCY_MS,
+                        setupFrame(tachAbsMRaw = if (canId == CAN_A) odoARaw else odoBRaw)
+                    )
+                } else {
+                    healthyScript()(canId, opcode)
+                }
+            }
+            val device = link.runDevice(this)
+            val loop = launch { p.runPollLoop(link.send) }
+
+            runCycles(1)
+            assertEquals(0f, assertNotNull(p.latestMotion(0)).tripKm, "the first frame is the baseline")
+            assertEquals(0f, assertNotNull(p.latestMotion(1)).tripKm, "and so it is for the rear uBox")
+
+            odoARaw += 2_500_000                              // +2500 m
+            odoBRaw += 1_200_000                              // +1200 m
+            runCycles(2)
+            assertTrue(
+                abs(assertNotNull(p.latestMotion(0)).tripKm - 2.5f) < 0.01f,
+                "trip is distance since the link came up, not the ESC's since-boot counter"
+            )
+            assertTrue(
+                abs(assertNotNull(p.latestMotion(1)).tripKm - 1.2f) < 0.01f,
+                "and it is measured against THIS controller's own baseline, not its neighbour's"
+            )
+            loop.cancel(); device.cancel()
+        }
+
+    /**
+     * A torn-down session must not leave its ground speed behind for the next
+     * one — on this app the next session can be a DIFFERENT vehicle.
+     *
+     * The malformed reply is what makes the leak observable: a SETUP that times
+     * out would have its overlay dropped by the silence path anyway, so it
+     * cannot tell "reset cleared it" from "the timeout cleared it". A reply that
+     * arrives and fails to decode goes down neither path, leaving whatever
+     * [VescGatewayProtocol.reset] did (or did not do) on display.
+     */
+    @Test
+    fun `reset forgets the setup overlay`() = runTest {
+        var malformed = false
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescValues.OPCODE_GET_VALUES_SETUP && malformed) {
+                // Opcode 47, body far too short: `decodeSetupValues` returns
+                // null, so the request is ANSWERED but contributes nothing.
+                ScriptedReply(LATENCY_MS, VescPacket.frame(byteArrayOf(47, 0, 0)))
+            } else {
+                healthyScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertEquals(SpeedSource.REPORTED, assertNotNull(p.latestMotion(0)).speedSource)
+
+        p.reset()
+        malformed = true
+        runCycles(3)
+
+        val front = assertNotNull(p.latestMotion(0), "the loop kept running through the reset")
+        assertEquals(
+            SpeedSource.DERIVED, front.speedSource,
+            "a new session must not inherit the old one's reported speed"
+        )
+        assertFalse(abs(front.speedKmh - 47.0f) < 0.05f, "nor its number")
+        assertEquals(0f, front.odometerKm, "nor its odometer")
         loop.cancel(); device.cancel()
     }
 
     @Test
-    fun `trip starts at zero for this connection and grows with the odometer`() = runTest {
+    fun `reset forgets the trip baseline`() = runTest {
         var odoRaw = 1_284_600_000
         val p = protocol()
         val link = FakeGateway(p) { canId, opcode ->
@@ -489,13 +698,15 @@ class VescGatewayProtocolTest {
         val loop = launch { p.runPollLoop(link.send) }
 
         runCycles(1)
-        assertEquals(0f, assertNotNull(p.latestMotion(0)).tripKm, "the first frame is the baseline")
+        assertEquals(0f, assertNotNull(p.latestMotion(0)).tripKm)
 
-        odoRaw += 2_500_000                                   // +2500 m
-        runCycles(2)
-        assertTrue(
-            abs(assertNotNull(p.latestMotion(0)).tripKm - 2.5f) < 0.01f,
-            "trip is distance since the link came up, not the ESC's since-boot counter"
+        p.reset()
+        odoRaw += 2_500_000                                   // the vehicle moved 2.5 km
+        runCycles(3)
+
+        assertEquals(
+            0f, assertNotNull(p.latestMotion(0)).tripKm,
+            "the reconnected session's trip restarts from its own first frame, not the old one's"
         )
         loop.cancel(); device.cancel()
     }
@@ -518,15 +729,51 @@ class VescGatewayProtocolTest {
         assertEquals(SpeedSource.REPORTED, assertNotNull(p.latestMotion(0)).speedSource)
 
         setupAnswers = false
-        advanceTimeBy(3 * (3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS))
+        advanceTimeBy(3 * twoSilentCycleMs)
         runCurrent()
 
-        val primary = assertNotNull(p.latestMotion(0))
+        val front = assertNotNull(p.latestMotion(0))
         assertEquals(
-            SpeedSource.DERIVED, primary.speedSource,
+            SpeedSource.DERIVED, front.speedSource,
             "with nobody reporting a speed the dashboard must fall back, not hold 47 km/h forever"
         )
-        assertFalse(abs(primary.speedKmh - 47.0f) < 0.05f, "the stale reported speed is gone")
+        assertFalse(abs(front.speedKmh - 47.0f) < 0.05f, "the stale reported speed is gone")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The counterpart, and the reason the overlay is dropped **per controller**
+     * rather than wholesale: a node that stops answering opcode 47 — the head
+     * unit's permanent state — must not take its neighbour's reported speed
+     * down with it. Clearing the whole map on any silence would restore exactly
+     * the symptom this task exists to fix.
+     *
+     * It is the REAR uBox that goes quiet here, deliberately: its SETUP is the
+     * second of the two in the cycle, so a wholesale clear runs AFTER the front
+     * one's reply has been filed and destroys it. Silence the front one instead
+     * and the rear's later reply would refill the map, leaving the mutant alive.
+     */
+    @Test
+    fun `one controller's silent SETUP does not drop the other's reported speed`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescValues.OPCODE_GET_VALUES_SETUP && canId == CAN_B) {
+                ScriptedReply(TIMEOUT_MS, null)
+            } else {
+                healthyScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(3 * oneSilentCycleMs)
+        runCurrent()
+
+        val front = assertNotNull(p.latestMotion(0))
+        assertEquals(SpeedSource.REPORTED, front.speedSource, "the answering one keeps its ground speed")
+        assertTrue(abs(front.speedKmh - 47.0f) < 0.05f, "and it is still its own SETUP frame's speed")
+        val rear = assertNotNull(p.latestMotion(1))
+        assertEquals(SpeedSource.DERIVED, rear.speedSource, "the silent one falls back to its wheel")
         loop.cancel(); device.cancel()
     }
 
@@ -543,7 +790,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(3 * (3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS))
+        advanceTimeBy(3 * twoSilentCycleMs)
         runCurrent()
 
         assertNotNull(p.latestMotion(0), "the awake uBox keeps reporting")
@@ -567,7 +814,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(2 * (3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS))
+        advanceTimeBy(2 * twoSilentCycleMs)
         runCurrent()
         assertNull(p.latestMotion(1))
 
@@ -603,7 +850,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(3 * LATENCY_MS + TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS)
+        advanceTimeBy(oneSilentCycleMs)
         runCurrent()
 
         // NOT "the late reply was dropped": this stays null however the reply
@@ -642,7 +889,7 @@ class VescGatewayProtocolTest {
         assertNotNull(p.latestMotion(1), "the rear uBox did answer to begin with")
 
         awake = false
-        runCycles(2, cycleMs = oneSilentCycleMs)
+        runCycles(2, cycleMs = twoSilentCycleMs)
 
         assertNull(
             p.latestMotion(1),
@@ -717,13 +964,14 @@ class VescGatewayProtocolTest {
      */
     @Test
     fun `a plan too large for the stale-sample budget is refused at construction`() {
-        // 9 controllers + the SETUP request = 10 sources: 9 x 500 ms + the
-        // 50 ms cycle gap = 4550 ms, inside the 5 s budget.
-        VescGatewayProtocol(controllers = (0 until 9).map { GatewaySource(globalIndex = it, canId = it + 1) })
+        // Two requests per controller now — a SETUP and a GET_VALUES — so 5
+        // controllers are 10 requests: 9 x 500 ms + the 50 ms cycle gap =
+        // 4550 ms, inside the 5 s budget.
+        VescGatewayProtocol(controllers = (0 until 5).map { GatewaySource(globalIndex = it, canId = it + 1) })
 
         val e = assertFailsWith<IllegalArgumentException> {
-            // One more source pushes the worst silent run to 5550 ms.
-            VescGatewayProtocol(controllers = (0 until 10).map { GatewaySource(globalIndex = it, canId = it + 1) })
+            // One more controller is two more requests: 11 x 500 + 50 = 5550 ms.
+            VescGatewayProtocol(controllers = (0 until 6).map { GatewaySource(globalIndex = it, canId = it + 1) })
         }
         assertTrue(
             e.message.orEmpty().contains("stale-sample budget"),
