@@ -170,7 +170,8 @@ class DefaultRideDashboardComponent(
      * ride's battery or fill its log.** So: at most one attempt per rung value.
      *
      * Chosen over an exponential back-off because there is nothing to be gained by trying the same
-     * rung again — the value is quantised, so a retry would write the identical number — and because
+     * rung again — the *decision* is quantised, so a retry would write a different float but land on
+     * the same rung, which is the only thing anything downstream reads — and because
      * a back-off needs a clock, and a clock in here is the delayed-loop shape that wedges `runTest`
      * instead of failing it. Nothing is lost either: the rung only ever grows, so the NEXT crossing
      * writes a value that subsumes the one that failed, and a rung lost for a whole ride is
@@ -224,8 +225,10 @@ class DefaultRideDashboardComponent(
      * and a snapshot from inside that window carries the older peak. Adopting it there looks exactly
      * like a composer clear and discards the live trackers. So the rule is not "prefer the
      * repository flow", it is "a snapshot flow is never the authority on a value that changes
-     * underneath it", and it is enforced by both call sites reading [storedVehicles] rather than by
-     * this paragraph.
+     * underneath it", and what holds it is both call sites reading [storedVehicles] plus the two
+     * tests that pin them — not this paragraph, and not the type system: [seedPeaksAtConnect] passes
+     * a snapshot by design, so the rule cannot be structurally enforced while that exception is
+     * sound. Adding a call site is therefore a decision, not a detail.
      */
     private fun adoptStoredPeaks(id: String?, stored: Vehicle?) = adoptPeaks(id, stored)
 
