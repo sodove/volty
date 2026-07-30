@@ -70,8 +70,8 @@ Part G2's Tasks 8 and 9 follow this part, not precede it.
 |---|---|---|
 | `data/bms/BegodeProtocol.kt` | wheel decode: speed magnitude, derived cell count, rail-voltage precedence | 1, 2 |
 | `presentation/vehicle/VehicleSourceCards.kt` | the cell-count input widget deleted in `9277097` | 3 |
-| `presentation/vehicle/VehicleComposer.kt` | `PackDraft.cellCountEdited`, the not-overwritten flag | 3 |
-| `data/ble/KableBmsRepository.kt` | `maybePersistCellCount` must respect an edited value; `motionSamples()` accessor | 3, 8 |
+| `presentation/vehicle/VehicleComposer.kt` | `PackDraft.toPack` must carry the typed cell count | 3 |
+| `data/ble/KableBmsRepository.kt` | `maybePersistCellCount` gated on completeness; `motionSamples()` accessor | 3, 8 |
 | `data/bms/vesc/VescGatewayProtocol.kt` | SETUP per controller, not from `primary`; the opcode-96 ask | 4, 5 |
 | `data/ble/ControllerProtocols.kt` | `deriveBattery` must survive the gateway branch | 5 |
 | `presentation/vehicle/VehicleEditComponent.kt` | motor config for a CAN-discovered controller | 6 |
@@ -279,20 +279,19 @@ git commit -m "fix(begode): a wheel that counts its own cells needs no cell coun
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/vehicle/VehicleSourceCards.kt:213-221`
   (`ReadOnlyRow` → an input, mirroring the field deleted in commit `9277097`)
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/vehicle/VehicleComposer.kt:112-158`
-  (`PackDraft`: add `cellCountEdited`, mirroring the existing `aliasEdited` at `:143,157`)
+  (`PackDraft.toPack` deliberately omits `cellCount` from its `copy()` — see `:112-117`)
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/KableBmsRepository.kt:661-688`
-  (`maybePersistCellCount` must not overwrite an edited value)
+  (`maybePersistCellCount` must gate on cell-set COMPLETENESS)
 - Modify: `composeApp/src/commonMain/composeResources/values/strings.xml` and
   `values-ru/strings.xml` — `vehicle_field_cell_count` already survives at `:198` as
   an orphan; **verify it exists in both locales** and reword it: it is no longer
   "optional" on a wheel with no smart BMS, it is the only way to get a voltage.
-- Test: the composer component tests, and a repository test for the no-overwrite rule
+- Test: the composer component tests, and a repository test for the completeness gate
 
 **Interfaces:**
 - Consumes: `Pack.cellCount: Int?` (`domain/model/Pack.kt:27`), `Vehicle.withCellCount`
-  (`domain/model/Vehicle.kt:154-155`)
-- Produces: `PackDraft.cellCountEdited: Boolean` — true once the rider typed a count,
-  which `maybePersistCellCount` must respect.
+  (`domain/model/Vehicle.kt:154-155`), and Task 2's cell-set completeness test.
+- Produces: nothing new on the model — see below.
 
 **Why this reverses an earlier decision.** `9277097` deleted the input on the premise
 that "the cell count is auto-filled from telemetry" (the comment at
@@ -303,45 +302,53 @@ wheel that cannot derive a voltage any other way (Task 2 covers the wheels that 
 The premise held for every source Volty spoke to when it was written; it does not hold
 for a dumb EUC.
 
-- [ ] **Step 1: Write the failing test — the rider's value survives telemetry.**
+**Pre-flight correction (2026-07-30), before this task was dispatched.** This task
+originally specified a persisted `cellCountEdited` flag, on the `aliasEdited` pattern, so
+the auto-fill could not overwrite a typed value. **That flag is unnecessary and is
+cancelled** — a column, a migration and a permanent divergence between the stored and the
+runtime count, all bought for nothing:
+
+- **On a wheel with no smart BMS the auto-fill cannot fire at all.** It computes
+  `n = primaryPackCellCount() ?: data.cellVoltages.size`, and both are 0 when no cell
+  frames arrive, so it returns at the `n == 0` guard. The typed value is already safe on
+  exactly the vehicle that needs typing.
+- **On a wheel WITH a smart BMS, the measurement should win.** Forty measured cells beat a
+  rider's memory, and a rider who typed 30 either mistyped or changed the pack. A flag
+  that pinned 30 against a measured 40 would also split the two readers apart:
+  `VoltageSocEstimator` reads the *stored* count while Task 2's decoder prefers the
+  *measured* one, so the dashboard would show a voltage from 40 cells and a state of
+  charge from 30.
+- **What the flag was really guarding is a different bug, and it deserves the real fix:**
+  a *stably partial* cell set. Three consecutive identical samples of 8 cells out of 40 —
+  a dead BMS branch — pass the auto-fill's stability test today and would overwrite a good
+  count with 8. So gate the auto-fill on the same **completeness** test Task 2 introduces,
+  not on who typed the value.
+
+- [ ] **Step 1: Write the failing test — a stably partial cell set must not be believed.**
 
 ```kotlin
 @Test
-fun anEditedCellCountIsNotOverwrittenByTheAutoFill() {
-    // Rider typed 30S; the wheel then streams three stable 40-cell samples.
-    val vehicle = wheelVehicle(name = "EXN", address = ADDRESS)
-        .withCellCount(30, edited = true)
+fun aStablyPartialCellSetDoesNotOverwriteTheStoredCount() {
+    // A branch has dropped out: 8 of 40 cells, identical for three samples.
+    val vehicle = wheelVehicle(name = "ET Max", address = ADDRESS).withCellCount(40)
     repository.connect(vehicle)
-    feedThreeStableSamples(cellVoltages = List(40) { 4.1f })
-    assertEquals(30, savedVehicle().packs.first().cellCount)
+    feedStableSamples(count = 3, cellVoltages = List(8) { 4.1f })
+    assertEquals(40, savedVehicle().packs.first().cellCount)
 }
 ```
 
-`withCellCount` (`Vehicle.kt:154-155`) takes only a count today — widen it, or set the
-flag on the `Pack` and leave the helper alone; either is fine, but pick one and use it
-in both the composer and the repository so there is one spelling. `wheelVehicle` is
-`VehicleBuilders.kt:105`; `feedThreeStableSamples` does not exist — the existing
-repository tests have an equivalent driver, reuse it rather than writing a second.
+`wheelVehicle` is `VehicleBuilders.kt:105`; `feedStableSamples` does not exist — the
+existing repository tests have an equivalent driver, reuse it rather than writing a
+second.
 
-- [ ] **Step 2: Run it and watch it fail** — the auto-fill overwrites after 3 stable
-      samples (`cellCountStableSamples = 3`, `KableBmsRepository.kt:649`).
+- [ ] **Step 2: Run it and watch it fail** — the auto-fill overwrites after three
+      identical samples (`cellCountStableSamples = 3`, `KableBmsRepository.kt:649`),
+      stability being the only thing it checks.
 
-- [ ] **Step 3: Add the persisted `edited` flag.** Follow `aliasEdited`'s existing
-      shape exactly (`VehicleComposer.kt:143,157`) rather than inventing a second
-      pattern. The flag needs a column: SQLDelight migration + snapshot, and the
-      snapshot is **not optional** — a migration without one makes `verifyMigrations`
-      vacuous. Check the highest existing `N.sqm` and `N.db` before numbering: as of
-      Part G2 Task 7 the migrations run to `7.sqm` and the snapshots to `8.db`.
-
-      **Do not copy the gauge-peak columns' pattern.** `gaugePeakCurrentA` and
-      `gaugePeakPowerW` (Part G2 Task 7) are deliberately **preserved** by `upsert`
-      via a COALESCE subselect, so `copy(gaugePeakCurrentA = …)` followed by `upsert`
-      compiles and silently does nothing — they are a telemetry cache with exactly
-      one writer. `cellCountEdited` is the opposite kind of field: it is **rider
-      intent**, its authority *is* the object graph, and it must travel through
-      `upsert` like every ordinary field. Task 9 removes the confusing shape
-      entirely; until it lands, read `VehicleRow.sq`'s comments before assuming a
-      column round-trips.
+- [ ] **Step 3: Gate the auto-fill on completeness.** Reuse Task 2's test rather than
+      writing a second definition of "complete" — if that means lifting it into a shared
+      place, lift it; two definitions of complete would be the same defect this part is
+      about. No new column, no migration, nothing added to `Vehicle`.
 
 - [ ] **Step 4: Restore the input.** An `OutlinedTextField` with `onCellCountChanged`,
       keyboard type number, blank → null (not 0 — `inputVoltageOrNull` treats
