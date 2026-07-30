@@ -571,27 +571,34 @@ class BegodeProtocolTest {
         // PARALLEL — see the class KDoc); branch 1 is not evidence of anything
         // beyond itself. Branch 0's own telemetry sets a real frame voltage
         // (147.2 V, matching the ET Max), but branch 0's cells never arrive —
-        // so branch 0 has proven nothing. Branch 1 gets a matching frame
-        // voltage (realistic: parallel branches report the same nominal
-        // voltage) and 34 cells at 4.00 V, chosen to be complete AND
-        // self-consistent for a WRONG hypothetical 34S reading (136 V against
-        // 147.2 V clears CELL_SUM_COMPLETE_RATIO; the live frame is scaled to
-        // match exactly). If branch 1 could derive the count, it would wrongly
-        // report 34; branch 0 having proven nothing must leave it null.
+        // so branch 0 has proven nothing.
+        //
+        // Branch 1 gets a matching frame voltage (realistic: parallel
+        // branches report the same nominal voltage) and 34 cells at 4.329 V —
+        // deliberately chosen so [isCellCountConfirmed] would ACCEPT this set
+        // on its own (147.186 V against a 147.2 V frame is a ratio of 0.99990,
+        // comfortably inside the tight lower edge) and the live-frame
+        // convention check would too (avg 4.329 V against the 4.2 V the 67.2 V
+        // reference assumes is a 3.07 % deviation, inside its 5 % tolerance).
+        // So this is NOT a test of either ratio gate: if branch 1's cells
+        // could reach [updateDerivedCellCount] at all, they would wrongly
+        // derive 34S here — only the `packIndex == 0` gate in `rebuild`
+        // refuses it, and branch 0 having proven nothing must leave the count
+        // null.
         val protocol = BegodeProtocol(cellCount = null)
-        protocol.onNotification(liveFrame(voltageRaw = 6400)) // 64.00 V
+        protocol.onNotification(liveFrame(voltageRaw = 6720)) // 67.2 V — the reference scale itself
         protocol.onNotification(
             telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
         )
         protocol.onNotification(
             telemetryFrame(bmsnum = 2, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
         )
-        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 0, mv = IntArray(8) { 4000 }))
-        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 1, mv = IntArray(8) { 4000 }))
-        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 2, mv = IntArray(8) { 4000 }))
-        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 3, mv = IntArray(8) { 4000 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 0, mv = IntArray(8) { 4329 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 1, mv = IntArray(8) { 4329 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 2, mv = IntArray(8) { 4329 }))
+        protocol.onNotification(cellFrameOf(type = 0x03, packetIndex = 3, mv = IntArray(8) { 4329 }))
         protocol.onNotification(
-            cellFrameOf(type = 0x03, packetIndex = 4, mv = intArrayOf(4000, 4000, 0, 0, 0, 0, 0, 0))
+            cellFrameOf(type = 0x03, packetIndex = 4, mv = intArrayOf(4329, 4329, 0, 0, 0, 0, 0, 0))
         )
         assertEquals(
             34, assertNotNull(protocol.latestData(1)).cellVoltages.size,
@@ -642,9 +649,13 @@ class BegodeProtocolTest {
         // capture's opening ~13 frames). With no frame voltage to check a cell
         // sum against, that is a missing witness, not a free pass — it must
         // not be read as "nothing to disprove completeness with, so anything
-        // goes". Constructed so completeness and the cross-check would BOTH
-        // trivially pass without this guard: 8 cells summing to ~29.71 V and a
-        // live frame chosen so the ratio matches an assumed 8S exactly.
+        // goes". There is no separate `frameVoltage <= 0f` guard in
+        // `updateDerivedCellCount` (see its comment): `cellSum / 0f` is
+        // +Infinity, which fails `isCellCountConfirmed`'s upper edge outright,
+        // so the boot-zero case is refused by the ratio itself. The live
+        // frame here is chosen so the (irrelevant, since gate 1 already
+        // refuses) live-frame convention check would ALSO have passed, to
+        // keep this test pointed at the frame-voltage case specifically.
         val protocol = BegodeProtocol(cellCount = null)
         protocol.onNotification(liveFrame(voltageRaw = 5942))
         protocol.onNotification(
@@ -669,7 +680,8 @@ class BegodeProtocolTest {
             telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
         )
         // Only the first of five cell packets: 8 cells summing to ~29.7 V —
-        // far short of 132.48 V (90 % of the 147.2 V a complete set must clear).
+        // far short of 145.73 V, isCellCountConfirmed's tight lower edge (99 %
+        // of the 147.2 V a confirmed count must clear).
         protocol.onNotification(cellFrame(type = 0x02, packetIndex = 0, baseMv = 3710))
         assertEquals(
             8, assertNotNull(protocol.latestData(0)).cellVoltages.size,
@@ -688,11 +700,11 @@ class BegodeProtocolTest {
 
     @Test
     fun aBranchWhoseCellsContradictTheLiveFrameRefusesToDeriveACellCount() {
-        // Completeness alone is not enough: 20 cells at 4.00 V sum to exactly
-        // the reported 80.0 V pack voltage (complete per
-        // CELL_SUM_COMPLETE_RATIO), but the live frame's OWN 67.2 V-scale
-        // reading implies a ~32S pack (actual ratio 2.0 against the 1.25
-        // expected for 20S) — the two witnesses disagree, and a wheel that
+        // Count confirmation alone is not enough: 20 cells at 4.00 V sum to
+        // exactly the reported 80.0 V pack voltage (ratio 1.0, comfortably
+        // inside isCellCountConfirmed's band), but the live frame's OWN
+        // 67.2 V-scale reading implies a ~32S pack (actual ratio 2.0 against
+        // the 1.25 expected for 20S) — the two witnesses disagree, and a wheel that
         // contradicts itself gets an honest absence rather than a guess.
         val protocol = BegodeProtocol(cellCount = null)
         protocol.onNotification(liveFrame(voltageRaw = 4000))
@@ -716,6 +728,38 @@ class BegodeProtocolTest {
         )
         val motion = assertNotNull(protocol.latestMotion(0))
         assertFalse(motion.hasInputVoltage, "no profile count and the derived one was refused")
+    }
+
+    @Test
+    fun aCellSumWellAboveTheFrameFieldRefusesToDeriveACellCount() {
+        // isCellCountConfirmed's upper edge is deliberately LOOSE (5 %, not a
+        // mirror of the 1 % lower edge) — see its KDoc — but it still has to
+        // have SOME limit, or a branch reporting sums wildly inconsistent
+        // with its own 0x01 frame would still latch a count. 20 cells at
+        // 5.00 V (the maximum this parser accepts) sum to 100.0 V against a
+        // 90.0 V frame field — a ratio of 1.111, 11.1 % above 1.0, well past
+        // the 5 % edge. The live frame is chosen so the (irrelevant, since
+        // gate 1 already refuses) live-frame convention check would ALSO
+        // have passed, to keep this test pointed at the upper edge alone:
+        // avg 5.00 V x 67.2 / 80.0 V = 4.20 V, exactly FULL_CELL_V.
+        val protocol = BegodeProtocol(cellCount = null)
+        protocol.onNotification(liveFrame(voltageRaw = 8000)) // 80.00 V
+        protocol.onNotification(
+            telemetryFrame(bmsnum = 0, packVoltageRaw = 900, t1 = 28, t2 = 26, sectionVoltageRaw = 450)
+        )
+        protocol.onNotification(cellFrameOf(type = 0x02, packetIndex = 0, mv = IntArray(8) { 5000 }))
+        protocol.onNotification(cellFrameOf(type = 0x02, packetIndex = 1, mv = IntArray(8) { 5000 }))
+        protocol.onNotification(
+            cellFrameOf(type = 0x02, packetIndex = 2, mv = intArrayOf(5000, 5000, 5000, 5000, 0, 0, 0, 0))
+        )
+        assertEquals(
+            20, assertNotNull(protocol.latestData(0)).cellVoltages.size,
+            "precondition: 20 cells, contiguous"
+        )
+        assertNull(
+            protocol.derivedCellCount(),
+            "a sum 11 % above the frame field must not be mistaken for a confirmed count"
+        )
     }
 
     @Test

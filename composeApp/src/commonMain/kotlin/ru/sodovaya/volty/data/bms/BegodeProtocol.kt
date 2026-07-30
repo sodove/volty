@@ -802,11 +802,14 @@ class BegodeProtocol(
      * scale the live frame to a confidently wrong voltage. That is the single
      * most likely way to get this task wrong, so nothing here trusts a raw
      * list size: [isCellCountConfirmed] requires `cellSum / frameVoltage` to
-     * sit within [CELL_COUNT_RATIO_TOLERANCE] of **1.0**, a band tight enough
-     * that even ONE missing cell falls outside it. See that function's KDoc
-     * for the measured numbers a reader can check the band against, and for
-     * why this is a DIFFERENT, tighter judgement from [isCellSumComplete] —
-     * reusing that one here was the bug an earlier version of this file had.
+     * sit within an ASYMMETRIC band around **1.0** — tight
+     * ([CELL_COUNT_LOWER_TOLERANCE]) below, so even ONE missing cell falls
+     * outside it, and deliberately loose ([CELL_COUNT_UPPER_TOLERANCE]) above,
+     * because nothing realistic pushes a genuine sum meaningfully above the
+     * frame field. See that function's KDoc for the measured numbers and for
+     * why the two edges are not the same size, and for why this is a
+     * DIFFERENT, tighter judgement from [isCellSumComplete] — reusing that one
+     * here was the bug an earlier version of this file had.
      *
      * **Gate 2 — the live-frame convention, NOT a second vote on the count.**
      * This gate used to be documented as "a second witness for the count that
@@ -844,22 +847,33 @@ class BegodeProtocol(
         // loosened, this line silently mixes another branch's cells with
         // branch 0's frame voltage.
         val frameVoltage = branches[0].packVoltageV
-        if (frameVoltage <= 0f) return
-        // Genuinely redundant with gate 2 below, verified rather than assumed:
-        // `cellSum / 0f` in Kotlin is +Infinity (IEEE 754), not NaN, and
-        // `abs(Infinity - x) > y` is always true for finite x, y — so gate 2
-        // already refuses a missing live frame on its own. Kept anyway: a
-        // reader should not have to re-derive that float semantics to see
-        // that "no live frame yet" is refused.
+        // No separate `frameVoltage <= 0f` guard, unlike an earlier version of
+        // this function: [isCellCountConfirmed]'s ratio is `cellSum /
+        // frameVoltage`, and frameVoltage == 0f (before any telemetry, or a
+        // zero-padded boot 0x01 frame — see parseBmsTelemetry's
+        // isBootPlaceholder) makes that division +Infinity (cellSum > 0) or
+        // NaN (cellSum == 0 too). Both fail the range check inside
+        // [isCellCountConfirmed] by construction — Infinity is never `<=` a
+        // finite upper edge, and NaN is never `>=` or `<=` anything — so the
+        // empty/boot case is already refused without a separate early return.
+        // Verified, not merely reasoned: removing an explicit guard here was
+        // swept and the suite stayed green.
+        //
+        // Genuinely redundant with gate 2 below for the same reason, verified
+        // rather than assumed: `cellSum / 0f` in Kotlin is +Infinity (IEEE
+        // 754), not NaN, and `abs(Infinity - x) > y` is always true for
+        // finite x, y — so gate 2 already refuses a missing live frame on its
+        // own. Kept anyway: a reader should not have to re-derive that float
+        // semantics to see that "no live frame yet" is refused.
         if (liveVoltageRaw <= 0) return
         val cellSum = cells.sum()
         if (!isCellCountConfirmed(cellSum, frameVoltage)) return
         val count = cells.size
         // Unreachable given isCellCountConfirmed just passed: an empty list
-        // sums to 0f, and [isCellCountConfirmed] would need `0f` within
-        // [CELL_COUNT_RATIO_TOLERANCE] of 1.0 times a positive frameVoltage,
-        // which cannot happen once frameVoltage > 0f (already checked above).
-        // Kept for defensive clarity rather than relying on that chain.
+        // sums to 0f, and 0f / frameVoltage (> 0f, else the ratio above would
+        // have been Infinity/NaN and already refused) is 0f — which fails
+        // [isCellCountConfirmed]'s LOWER edge outright. Kept for defensive
+        // clarity rather than relying on that chain.
         if (count <= 0) return
         val liveVoltageV = liveVoltageRaw * 0.01f
         val avgCellV = cellSum / count
@@ -1822,18 +1836,46 @@ class BegodeProtocol(
          * candidate cell COUNT for [derivedCellCount] — a TIGHT band around
          * ratio 1.0, not [isCellSumComplete]'s loose one-sided cutoff.
          *
-         * The band, and the arithmetic a reader can check it against — all
-         * measured on the ET Max capture, branch 0, `cellSum / frameVoltage`:
+         * **The band is deliberately ASYMMETRIC, and review corrected an
+         * earlier version of this KDoc that got the margins wrong** (it
+         * claimed "roughly double the margin either side", which was neither
+         * the right number nor, on reflection, the right shape for the band
+         * to have at all).
+         *
+         * The arithmetic a reader can check the edges against — all measured
+         * on the ET Max capture, branch 0, `cellSum / frameVoltage`:
          *  - complete (40 of 40): ratio **1.00851** (0.85 % ABOVE 1.0);
          *  - one cell short (39 of 40): ratio **0.98328** (1.67 % below 1.0);
          *  - two cells short (38 of 40): ratio **0.95806** (4.19 % below);
          *  - one packet short, 8 cells (32 of 40): ratio **0.80671** (19.33 %
          *    below).
-         * [CELL_COUNT_RATIO_TOLERANCE] (1 %) sits comfortably above the
-         * complete reading's 0.85 % deviation and comfortably below even a
-         * SINGLE missing cell's 1.67 % — a genuinely full set always clears
-         * it, and the smallest possible shortfall on real hardware (one cell)
-         * never does, with roughly double the margin either side.
+         *
+         * **Lower edge, [CELL_COUNT_LOWER_TOLERANCE] (1 %), stays TIGHT.** A
+         * truncated run only ever LOWERS the sum — cells that have not
+         * arrived cannot contribute — so the complete reading's 0.85 %
+         * deviation and even a single missing cell's 1.67 % sit either side
+         * of a 1 % cutoff with real but modest margin (0.15 pp above the
+         * complete reading, 0.67 pp below the smallest real shortfall). A
+         * truncated set is exactly what must be refused, and nothing
+         * realistic pushes the sum low enough to threaten a false accept.
+         *
+         * **Upper edge, [CELL_COUNT_UPPER_TOLERANCE] (5 %), stays LOOSE, on
+         * purpose.** A high ratio is not evidence of a wrong count at all —
+         * "extra" cells cannot be counted, so nothing pushes a genuine sum
+         * meaningfully above the frame field except the SAME kind of scale
+         * discrepancy [branchVoltage] already documents (0.1009 V/unit
+         * measured against the 0.1 the frame nominally uses). A wheel whose
+         * own discrepancy runs a little larger than the one ET Max happens to
+         * have would still be a genuinely complete, correctly-counted branch —
+         * and the failure of over-tightening this edge is NOT symmetric with
+         * the failure of under-tightening the lower one: too loose BELOW lets
+         * a truncated set through as a CONFIDENT WRONG voltage (the defect
+         * this task exists to fix); too TIGHT above silently returns a
+         * perfectly good wheel to NO voltage at all — the exact bug this
+         * whole part exists to remove, arriving quietly on hardware nobody
+         * here has measured. 5 % gives that wheel real room while still
+         * refusing a sum wildly inconsistent with its own frame field (see
+         * `aCellSumWellAboveTheFrameFieldRefusesToDeriveACellCount`).
          *
          * Kept in the companion object, `internal`: this — not
          * [isCellSumComplete] — is the judgement a later caller outside this
@@ -1847,14 +1889,22 @@ class BegodeProtocol(
          */
         internal fun isCellCountConfirmed(cellSum: Float, frameVoltage: Float): Boolean {
             val ratio = cellSum / frameVoltage
-            return ratio in (1f - CELL_COUNT_RATIO_TOLERANCE)..(1f + CELL_COUNT_RATIO_TOLERANCE)
+            return ratio >= 1f - CELL_COUNT_LOWER_TOLERANCE && ratio <= 1f + CELL_COUNT_UPPER_TOLERANCE
         }
 
         /**
-         * Half-width of [isCellCountConfirmed]'s band around ratio 1.0 — see
-         * that function's KDoc for the measured numbers this sits between.
+         * Lower half-width of [isCellCountConfirmed]'s band — see that
+         * function's KDoc for why this edge is tight and the measured numbers
+         * it sits between.
          */
-        private const val CELL_COUNT_RATIO_TOLERANCE = 0.01f
+        private const val CELL_COUNT_LOWER_TOLERANCE = 0.01f
+
+        /**
+         * Upper half-width of [isCellCountConfirmed]'s band — see that
+         * function's KDoc for why this edge is deliberately loose rather than
+         * symmetric with [CELL_COUNT_LOWER_TOLERANCE].
+         */
+        private const val CELL_COUNT_UPPER_TOLERANCE = 0.05f
 
         /**
          * How far the average cell voltage, scaled by [LIVE_VOLTAGE_REFERENCE_V]
