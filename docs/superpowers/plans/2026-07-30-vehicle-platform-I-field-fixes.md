@@ -72,7 +72,7 @@ Part G2's Tasks 8 and 9 follow this part, not precede it.
 | `presentation/vehicle/VehicleSourceCards.kt` | the cell-count input widget deleted in `9277097` | 3 |
 | `presentation/vehicle/VehicleComposer.kt` | `PackDraft.toPack` must carry the typed cell count | 3 |
 | `data/ble/KableBmsRepository.kt` | `maybePersistCellCount` gated on completeness; `motionSamples()` accessor | 3, 8 |
-| `data/bms/vesc/VescGatewayProtocol.kt` | SETUP per controller, not from `primary`; the opcode-96 ask | 4, 5 |
+| `data/bms/VescGatewayProtocol.kt` | SETUP per controller, not from `primary`; the opcode-96 ask | 4, 5 |
 | `data/ble/ControllerProtocols.kt` | `deriveBattery` must survive the gateway branch | 5 |
 | `presentation/vehicle/VehicleEditComponent.kt` | motor config for a CAN-discovered controller | 6 |
 | `domain/stats/MotionAggregator.kt` | the per-field known-flag fold rules | 7 |
@@ -370,7 +370,7 @@ git commit -m "fix(composer): the wheel that can't count its cells needs someone
 ### Task 4 — SETUP is asked of every controller, not of `primary`
 
 **Files:**
-- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocol.kt:232`
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/VescGatewayProtocol.kt:232`
   (the `primary` target), with reference to the machinery that already works:
   `:293` (request assembly), `:300-301` (the `FORWARD_CAN` wrapper), `:317` (the
   `c.globalIndex` reply key), `:399` (the per-cycle walk)
@@ -436,7 +436,7 @@ git commit -m "fix(vesc): asking the dashboard how fast it is going was never go
 **Files:**
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/ControllerProtocols.kt:95-100`
   (`deriveBattery` silently dropped on the gateway branch)
-- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocol.kt:542`
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/VescGatewayProtocol.kt:542`
   (`packCount = packs.size`), `:293`/`:339` (where the opcode-96 ask belongs and where
   its only sender is built)
 - Reference: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/KableBmsRepository.kt:1198`
@@ -725,16 +725,21 @@ git commit -m "fix(vesc): the other decoder was still signing its speed"
 ### Task 11 — stop asking the node that never answers
 
 **Files:**
-- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocol.kt`
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/VescGatewayProtocol.kt`
   (the per-cycle request walk and its timeout handling)
 - Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocolTest.kt`
 
-**Why, and why it exists only because Task 4 measured it.** Task 4 fixed the request that
-was going to the wrong node, and its own frame-budget arithmetic produced the number that
-justifies this task: cycle time goes from ~610 ms to ~1110 ms on the rider's vehicle, so
-the dashboard's refresh falls from ~1.6 Hz to ~0.9 Hz — and **1000 of those 1110 ms are
-the head unit's two dead requests timing out.** Nine tenths of the ride's telemetry
-latency is spent politely asking a bridge that never answers, twice a cycle, forever.
+**Why.** On the rider's vehicle roughly **1000 ms of every ~1110 ms poll cycle is the head
+unit's two dead requests timing out** — nine tenths of the ride's telemetry latency spent
+politely asking a bridge that never answers, twice a cycle, forever. The dashboard
+refreshes at about 0.9 Hz when it could refresh at ten times that.
+
+**Corrected (2026-07-31), because the first version of this section blamed the wrong
+commit.** Task 4's report presented this as a regression its own change caused — 610 ms
+becoming 1110 ms — and I passed that on as fact. It is wrong: before Task 4, `primary` was
+*already* the head unit, so `setup(head)` **and** `values(head)` were both already dead
+requests and the cycle was already ~1090 ms. Task 4 costs about **20 ms**, not 500. The
+waste is real and worth this task; it simply predates the fix that revealed it.
 
 When Task 4 was specified I refused a "re-elect a better primary" design on the grounds
 that no liveness signal existed. That was wrong: **a timeout is the liveness signal.** It
