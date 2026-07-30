@@ -722,6 +722,53 @@ git commit -m "fix(vesc): the other decoder was still signing its speed"
 
 ---
 
+### Task 11 — stop asking the node that never answers
+
+**Files:**
+- Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocol.kt`
+  (the per-cycle request walk and its timeout handling)
+- Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/data/bms/vesc/VescGatewayProtocolTest.kt`
+
+**Why, and why it exists only because Task 4 measured it.** Task 4 fixed the request that
+was going to the wrong node, and its own frame-budget arithmetic produced the number that
+justifies this task: cycle time goes from ~610 ms to ~1110 ms on the rider's vehicle, so
+the dashboard's refresh falls from ~1.6 Hz to ~0.9 Hz — and **1000 of those 1110 ms are
+the head unit's two dead requests timing out.** Nine tenths of the ride's telemetry
+latency is spent politely asking a bridge that never answers, twice a cycle, forever.
+
+When Task 4 was specified I refused a "re-elect a better primary" design on the grounds
+that no liveness signal existed. That was wrong: **a timeout is the liveness signal.** It
+was simply not being remembered.
+
+**The rule:** after a small number of consecutive non-answers for one (controller, opcode)
+pair, stop sending that request and record the node as not supporting it. Re-probe rarely
+— on reconnect, and on a long timer — so a controller that was merely asleep or booting
+recovers on its own.
+
+- [ ] **Step 1: Write the failing test.** A two-controller gateway where controller 0
+      never answers: after the suppression threshold, the cycle contains no request for
+      controller 0, and the cycle's wall-clock cost drops accordingly. Assert on the
+      **requests actually issued**, not on timing alone.
+- [ ] **Step 2: Run it and watch it fail** — today every cycle re-asks forever.
+- [ ] **Step 3: Implement suppression per (controller, opcode)**, not per controller: a
+      head unit answers `COMM_BMS_GET_VALUES` while refusing `GET_VALUES` and
+      `GET_VALUES_SETUP`, so suppressing the whole node would silence its BMS bridge —
+      which is the one thing it is actually good at.
+- [ ] **Step 4: Re-probe.** On reconnect always; on a timer otherwise. Pin both, and pin
+      that a node which starts answering is fully restored.
+- [ ] **Step 5: Restore the construction ceiling if it is still narrowed.** Task 4 dropped
+      the maximum controllers from 9 to 5 at default timings because the budget counts
+      requests that will never be answered. With suppression, the steady-state count is
+      lower than the worst case — decide explicitly whether the ceiling follows the
+      steady state or the worst case, and say which and why.
+- [ ] **Step 6: Sweep, full suite, commit.**
+
+```bash
+git commit -m "fix(vesc): a node that has never answered is not asked twice a second"
+```
+
+---
+
 ## Out of scope
 
 - **Reading `GET_MCCONF`** (`B §14`). Part G2 Task 7 made gauge ranges self-learning,
