@@ -342,11 +342,22 @@ class VescGatewayProtocol(
      *    overlay entry and leave republishing to the `GET_VALUES` that follows.
      *    Reverse the two and a controller whose SETUP has just gone quiet keeps
      *    publishing last cycle's reported speed for a whole further cycle.
-     * 2. **The two `GET_VALUES` requests stay adjacent.** They are the only
-     *    pair in the plan that is byte-identical on the wire, so they are the
-     *    pair [lateReplyGuardMs] exists for; interleaving SETUP between them
-     *    would leave the guard with nothing to guard against in this plan and
-     *    quietly retire the regression test that pins it.
+     * 2. **The two `GET_VALUES` requests stay adjacent.** Interleaving SETUP
+     *    between them would leave `a reply that arrives after its timeout is
+     *    not credited to the next controller` — the regression test that pins
+     *    [lateReplyGuardMs] — passing by opcode mismatch rather than by the
+     *    guard, i.e. green under the very mutant it exists to kill.
+     *
+     * Note what the grouping COSTS, since it is not free: the two SETUP
+     * requests are now adjacent too, and two SETUP replies are as
+     * byte-identical on the wire as two `GET_VALUES` replies are. So this plan
+     * has **two** unattributable-late-reply pairs where the brief's interleaved
+     * order would have had none — the guard covers both, and both are pinned
+     * (`… is not credited to the next controller` for `GET_VALUES`,
+     * `a late SETUP reply is not credited to the next controller` for SETUP).
+     * The trade is deliberate: one guard mechanism covering two known pairs
+     * beats an ordering whose safety comes from opcodes happening not to
+     * collide, which no test can hold in place.
      */
     private val plan: List<Request> = buildList {
         controllers.forEach { add(setupRequest(it)) }
@@ -645,7 +656,29 @@ class VescGatewayProtocol(
             batteryLevelFraction = decoded.batteryLevelFraction
         )
         overlays = overlays + (global to overlay)
-        publishController(global)
+        // Deliberately NOT publishing here, and this is not a micro-optimisation.
+        //
+        // It used to publish, back when the SETUP frame was the primary's and
+        // arrived immediately before that same primary's `GET_VALUES`. Under
+        // this plan every SETUP is answered before any `GET_VALUES` is even
+        // sent, so `perUnit[global]` at this instant is LAST cycle's decode —
+        // and [ConnectionSession] drains the routing helpers on **every
+        // notification**, so a publish here is not an invisible intermediate
+        // value. It is a real sample, restamped `Clock.System.now()` on the way
+        // out, carrying a whole cycle's-old duty and current beside this
+        // cycle's speed.
+        //
+        // That is the exact lie [valuesRequest]'s `onSilence` refuses to tell,
+        // reached by another road: a controller whose `GET_VALUES` has died but
+        // whose SETUP still answers would keep submitting samples — refreshing
+        // its `lastSeen` and staying "online" with frozen per-unit numbers
+        // forever. Pinned by `a SETUP reply does not resubmit last cycle's
+        // per-unit numbers`, which drains per notification the way the session
+        // does; every test that drains only between whole cycles is blind to it.
+        //
+        // The overlay reaches [motion] one round-trip later, when this
+        // controller's own `GET_VALUES` lands and [publishController] folds the
+        // two together — which is the only moment both halves are current.
     }
 
     /**

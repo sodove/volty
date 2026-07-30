@@ -230,6 +230,45 @@ class MotionAggregatorTest {
     }
 
     /**
+     * **The gateway shape, folded here rather than reasoned about in a comment.**
+     *
+     * `COMM_GET_VALUES_SETUP` reports the whole SETUP, not one unit: VESC has
+     * already summed across every CAN node and divided the tachometer by the
+     * number of VESCs before answering. Since `I` Task 4 that frame is asked of
+     * **every** controller instead of one nominated one, so a two-uBox scooter
+     * hands this fold the SAME vehicle odometer, the SAME trip and the SAME
+     * pack level twice.
+     *
+     * `maxOf` and `average` are what make that harmless. Turn any of the three
+     * into a sum — the instinct four other fields in this object correctly
+     * follow — and the dashboard reads twice the distance the vehicle has ever
+     * travelled and a 168 % battery. This is the test that says so; the comment
+     * beside each fold points here.
+     */
+    @Test fun one_vehicle_odometer_reported_by_two_controllers_is_not_doubled() {
+        // What a gateway publishes: identical setup scalars on both units,
+        // different per-unit numbers underneath them.
+        val setupScalars = ControllerData(
+            speedKmh = 42f, speedSource = SpeedSource.REPORTED,
+            odometerKm = 812f, tripKm = 12.5f, batteryLevelFraction = 0.84f,
+            isConnected = true
+        )
+        val front = setupScalars.copy(dutyPercent = 50f, batteryCurrentA = 30f)
+        val rear = setupScalars.copy(dutyPercent = 25f, batteryCurrentA = 28f)
+
+        val agg = MotionAggregator.aggregate(listOf(state(0, front), state(1, rear)))
+
+        assertEquals(812f, agg.odometerKm, "one vehicle's odometer, not 1624 km")
+        assertEquals(12.5f, agg.tripKm, "one vehicle's trip, not 25 km")
+        assertEquals(0.84f, agg.batteryLevelFraction, "one pack's level, not 168 %")
+        assertEquals(42f, agg.speedKmh, "and one ground speed, not 84 km/h")
+        // The per-unit numbers underneath still fold the way they always did —
+        // this is the separation `VescGatewayProtocol` keeps the overlay for.
+        assertEquals(58f, agg.batteryCurrentA, "per-unit currents are genuinely summed")
+        assertEquals(50f, agg.dutyPercent, "and per-unit duty is genuinely a max")
+    }
+
+    /**
      * **The fold change must not alter what the alarm sees** (Part F owns that, and
      * this task owns the display and the fold).
      *

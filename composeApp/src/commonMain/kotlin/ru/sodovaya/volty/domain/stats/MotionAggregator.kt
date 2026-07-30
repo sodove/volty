@@ -92,6 +92,23 @@ object MotionAggregator {
             escTempC = d.maxOf { it.escTempC },
             motorTempC = d.maxOf { it.motorTempC },
             hasMotorTemp = d.any { it.hasMotorTemp },
+            // `maxOf`, and it MUST NOT become a sum — this is the one fold in
+            // this object where the obvious "totals are sums" instinct is
+            // actively wrong.
+            //
+            // On a VESC gateway these two do not come from the controllers at
+            // all. They come from `COMM_GET_VALUES_SETUP`, which reports the
+            // whole SETUP: `mc_interface_get_setup_values()` has already summed
+            // across every CAN node and divided the tachometer by the number of
+            // VESCs before answering. Since `I` Task 4 that frame is asked of
+            // **every** controller, so a two-uBox vehicle hands this fold the
+            // SAME vehicle odometer twice. `maxOf` returns that odometer; a sum
+            // would return twice the distance the vehicle has ever travelled,
+            // and the trip with it.
+            //
+            // Pinned by `MotionAggregatorTest.one vehicle odometer reported by
+            // two controllers is not doubled`. See `VescGatewayProtocol`'s
+            // "Why the SETUP frame is an OVERLAY" section for the wire detail.
             odometerKm = d.maxOf { it.odometerKm },
             tripKm = d.maxOf { it.tripKm },
             consumedAh = d.sumOf { it.consumedAh.toDouble() }.toFloat(),
@@ -113,6 +130,12 @@ object MotionAggregator {
             // on one vehicle sees one pack, so a level any of them computed is
             // the vehicle's level. Already nullable, so it needs no flag of its
             // own — it is the shape the rest of this contract has to fake.
+            //
+            // Same warning as odometerKm above, and the same wire reason: since
+            // `I` Task 4 a gateway asks `GET_VALUES_SETUP` of every controller,
+            // so several controllers now report the SAME pack's level from the
+            // SAME setup frame. An average of equal numbers is that number; a
+            // sum would read 168 % on a two-uBox scooter.
             batteryLevelFraction = d.mapNotNull { it.batteryLevelFraction }
                 .takeIf { it.isNotEmpty() }
                 ?.average()

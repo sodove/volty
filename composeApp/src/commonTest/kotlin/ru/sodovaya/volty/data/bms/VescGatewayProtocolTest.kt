@@ -434,7 +434,7 @@ class VescGatewayProtocolTest {
         runCycles(1)
 
         // Local index -> the owned source at that position, whatever its global.
-        val a = assertNotNull(p.latestMotion(0), "the primary answered")
+        val a = assertNotNull(p.latestMotion(0), "the front uBox answered")
         val b = assertNotNull(p.latestMotion(1), "the second uBox answered")
         assertTrue(abs(a.dutyPercent - 50f) < 0.01f, "canId $CAN_A's duty (0.500) landed on local 0")
         assertTrue(abs(b.dutyPercent - 25f) < 0.01f, "canId $CAN_B's duty (0.250) landed on local 1")
@@ -490,7 +490,7 @@ class VescGatewayProtocolTest {
     /**
      * The trap: `COMM_GET_VALUES_SETUP` reports the whole SETUP — VESC sums
      * current, power and amp-hours across every CAN node before answering. Let
-     * that decode through as the primary's own `ControllerData` and
+     * that decode through as the answering controller's own `ControllerData` and
      * `MotionAggregator`, which SUMS currents across controllers, doubles it.
      */
     @Test
@@ -502,18 +502,18 @@ class VescGatewayProtocolTest {
 
         runCycles(1)
 
-        val primary = assertNotNull(p.latestMotion(0))
+        val front = assertNotNull(p.latestMotion(0))
         // From SETUP: the vehicle-level scalars.
-        assertEquals(SpeedSource.REPORTED, primary.speedSource)
-        assertTrue(abs(primary.speedKmh - 47.0f) < 0.05f, "speed came from the SETUP frame")
-        assertTrue(abs(primary.odometerKm - 1284.6f) < 0.1f, "odometer came from the SETUP frame")
-        assertEquals(0.84f, primary.batteryLevelFraction)
+        assertEquals(SpeedSource.REPORTED, front.speedSource)
+        assertTrue(abs(front.speedKmh - 47.0f) < 0.05f, "speed came from the SETUP frame")
+        assertTrue(abs(front.odometerKm - 1284.6f) < 0.1f, "odometer came from the SETUP frame")
+        assertEquals(0.84f, front.batteryLevelFraction)
         // From GET_VALUES: everything per-unit. 3_000/100 = 30 A, not 9_999/100.
         assertTrue(
-            abs(primary.batteryCurrentA - 30f) < 0.01f,
+            abs(front.batteryCurrentA - 30f) < 0.01f,
             "per-unit current must come from GET_VALUES, not the SETUP frame's CAN-wide sum"
         )
-        assertTrue(abs(primary.dutyPercent - 50f) < 0.01f, "per-unit duty likewise")
+        assertTrue(abs(front.dutyPercent - 50f) < 0.01f, "per-unit duty likewise")
 
         // The second uBox has its OWN overlay from its own SETUP reply — and
         // still its own per-unit numbers underneath it.
@@ -551,6 +551,16 @@ class VescGatewayProtocolTest {
      */
     @Test
     fun `setup is read from whichever controller answers it, not from controller 0`() = runTest {
+        // The PREMISE, asserted rather than assumed: with a bare MotorConfig()
+        // there is no wheel, so `GET_VALUES` cannot derive a speed at any rpm.
+        // Whatever REPORTED this test sees came from the SETUP frame — and if
+        // Task 6 ever gives CAN-discovered controllers a real wheel, this line
+        // fails and tells the next reader the test needs rewriting rather than
+        // silently starting to pass for the wrong reason.
+        assertNull(
+            VescValues.derivedSpeedKmh(eRpm = 12_000f, motor = MotorConfig()),
+            "a CAN-discovered controller has wheelDiameterMm = 0, so the eRPM fallback is closed"
+        )
         val p = protocol(
             controllers = listOf(
                 GatewaySource(globalIndex = 0, canId = null, motor = MotorConfig()),
@@ -838,7 +848,7 @@ class VescGatewayProtocolTest {
         val p = protocol()
         val link = FakeGateway(p) { canId, opcode ->
             when {
-                // The primary's per-unit request answers just after we gave up
+                // The front uBox's per-unit request answers just after we gave up
                 // — inside the window where, WITHOUT the quiet guard, the
                 // second uBox's byte-identical request would still be armed
                 // (it is sent at T+timeout and answered at T+timeout+latency).
@@ -855,14 +865,87 @@ class VescGatewayProtocolTest {
 
         // NOT "the late reply was dropped": this stays null however the reply
         // is mis-credited, because a reply credited to the NEXT request lands
-        // on local 1, not here. What it pins is that the primary produced no
+        // on local 1, not here. What it pins is that the front uBox produced no
         // sample of its own — the drop itself is the assertion below.
-        assertNull(p.latestMotion(0), "the primary's own request went unanswered, so it has no sample")
+        assertNull(p.latestMotion(0), "the front uBox's own request went unanswered, so it has no sample")
         assertTrue(
             abs(assertNotNull(p.latestMotion(1)).dutyPercent - 25f) < 0.01f,
             "the second uBox reports ITS own 0.250 duty, not the late 0.500 meant for the first"
         )
         loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The same hazard on the pair THIS task created.** Grouping the plan as
+     * `[all SETUPs][all GET_VALUES]` puts the two SETUP requests next to each
+     * other, and two SETUP replies are as byte-identical as two `GET_VALUES`
+     * replies — the wire carries no transaction id either way. So the quiet
+     * window has to hold for this pair too, and asserting it only for
+     * `GET_VALUES` would leave the new pair covered by nothing but the belief
+     * that the guard is generic.
+     *
+     * The front uBox's SETUP answers 10 ms after we gave up on it. Without the
+     * guard the rear's SETUP is already armed by then, and the front's
+     * 47.0 km/h / 1284.6 km would be published as the REAR's ground speed and
+     * odometer — a number that is real, plausible, and 784 km wrong.
+     *
+     * Deliberately NOT on [FakeGateway]: its in-flight counter retires a
+     * request on the DEVICE's clock, so when a late reply lets the client run
+     * ahead of the device's queue the counter reports an overlap the client
+     * never created — and `fail`ing there aborts before the attribution
+     * assertions below can speak. That would still detect a missing guard, but
+     * it would not show WHAT the guard prevents, which is the whole point of
+     * this test. A plain scripted link has no such coupling.
+     */
+    @Test
+    fun `a late SETUP reply is not credited to the next controller`() = runTest {
+        val p = protocol(packs = emptyList())
+        val scope = this
+        val loop = launch {
+            p.runPollLoop { frame ->
+                // [2] FORWARD_CAN, [3] canId, [4] the inner opcode.
+                val canId = frame[3].toInt() and 0xFF
+                val inner = frame[4].toInt() and 0xFF
+                val reply: Pair<Long, ByteArray>? = when {
+                    inner == VescValues.OPCODE_GET_VALUES_SETUP && canId == CAN_A ->
+                        // Answers just after we gave up: inside the window
+                        // where, without the guard, the REAR's byte-identical
+                        // SETUP request would already be armed.
+                        (TIMEOUT_MS + LATENCY_MS / 2) to setupFrame()
+                    inner == VescValues.OPCODE_GET_VALUES_SETUP ->
+                        LATENCY_MS to setupFrame(
+                            speedMsRaw = 8_000, tachAbsMRaw = 500_000_000, battLevelRaw = 500
+                        )
+                    inner == VescValues.OPCODE_GET_VALUES ->
+                        LATENCY_MS to valuesFrame(dutyRaw = if (canId == CAN_A) 500 else 250)
+                    else -> null
+                }
+                reply?.let { (after, payload) ->
+                    scope.launch { delay(after); p.onNotification(payload) }
+                }
+            }
+        }
+
+        // setupA times out (400) + quiet window (100), then three answered
+        // round-trips and the inter-cycle gap.
+        advanceTimeBy(TIMEOUT_MS + GUARD_MS + 3 * LATENCY_MS + CYCLE_GAP_MS)
+        runCurrent()
+
+        val rear = assertNotNull(p.latestMotion(1))
+        assertTrue(
+            abs(rear.speedKmh - 28.8f) < 0.05f,
+            "the rear uBox reports ITS own 28.8 km/h, not the late 47.0 meant for the front"
+        )
+        assertTrue(
+            abs(rear.odometerKm - 500.0f) < 0.1f,
+            "and its own 500.0 km odometer, not the front's 1284.6"
+        )
+        val front = assertNotNull(p.latestMotion(0), "the front uBox still answered its GET_VALUES")
+        assertEquals(
+            SpeedSource.DERIVED, front.speedSource,
+            "while the front's own SETUP went unanswered, so it falls back to its wheel"
+        )
+        loop.cancel()
     }
 
     /**
@@ -899,6 +982,83 @@ class VescGatewayProtocolTest {
         assertNotNull(p.latestMotion(0), "its awake neighbour is untouched")
         assertNotNull(p.latestData(0), "and so is the hosted battery, which caches deliberately")
         loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **`applySetup` must not publish, and this is the test that says why.**
+     *
+     * Every other test here drains between whole cycles, where an extra publish
+     * from the SETUP reply is invisible: the controller's own `GET_VALUES`
+     * overwrites it microseconds later and only the final value is ever read.
+     * That is what makes deleting the publish look equivalent. It is not.
+     * [ru.sodovaya.volty.data.ble.ConnectionSession] drains the routing helpers
+     * on **every notification**, so a publish between a SETUP reply and its
+     * controller's `GET_VALUES` reply is a real sample, restamped with the
+     * arrival time on its way out — carrying a whole cycle's-old duty and
+     * current beside this cycle's speed.
+     *
+     * The uBox reports a DIFFERENT duty every cycle, so every submitted sample
+     * can be traced to the reply it came from. With the publish in place the
+     * sequence stutters — each cycle opens by resubmitting the previous cycle's
+     * duty under the new speed — and when the per-unit frame dies while SETUP
+     * keeps answering, one further sample goes out carrying numbers the
+     * controller has stopped confirming.
+     */
+    @Test
+    fun `a SETUP reply does not resubmit last cycle's per-unit numbers`() = runTest {
+        var valuesAnswer = true
+        var reply = 0
+        val p = protocol(
+            controllers = listOf(
+                GatewaySource(globalIndex = 0, canId = CAN_A, motor = MotorConfig(wheelDiameterMm = 254))
+            ),
+            packs = emptyList()
+        )
+        val gate = MotionSampleGate(p.controllerCount)
+        val duties = mutableListOf<Float>()
+
+        val loop = launch {
+            p.runPollLoop { frame ->
+                // [2] FORWARD_CAN, [3] canId, [4] the inner opcode.
+                when (frame[4].toInt() and 0xFF) {
+                    VescValues.OPCODE_GET_VALUES_SETUP -> p.onNotification(setupFrame())
+                    VescValues.OPCODE_GET_VALUES ->
+                        if (valuesAnswer) {
+                            reply++
+                            // 10 %, 20 %, 30 % … — one distinguishable reading
+                            // per cycle, so a resubmitted one is visible.
+                            p.onNotification(valuesFrame(dutyRaw = reply * 100))
+                        }
+                    else -> Unit
+                }
+                // Exactly what ConnectionSession does after every notification.
+                routeControllerSamples(p, gate) { _, data -> duties += data.dutyPercent }
+            }
+        }
+
+        // Both answer: the uBox is healthy and reporting.
+        advanceTimeBy(4 * CYCLE_GAP_MS)
+        runCurrent()
+        assertTrue(duties.size >= 3, "the healthy uBox submitted samples to begin with: $duties")
+        assertEquals(
+            duties.distinct(), duties,
+            "no per-unit reading may be submitted twice — a publish on the SETUP reply reopens " +
+                "each cycle with the PREVIOUS cycle's duty and current under the new speed: $duties"
+        )
+
+        // Its per-unit frame dies; its SETUP keeps answering.
+        valuesAnswer = false
+        val settled = duties.size
+        advanceTimeBy(3 * (TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS))
+        runCurrent()
+
+        assertEquals(
+            settled, duties.size,
+            "a SETUP reply on its own is not a sample of any controller: it must not submit " +
+                "numbers the controller has stopped confirming, restamped as if they were now"
+        )
+        assertNull(p.latestMotion(0), "and its cached decode is gone, as `no reply, no sample` says")
+        loop.cancel()
     }
 
     /**
