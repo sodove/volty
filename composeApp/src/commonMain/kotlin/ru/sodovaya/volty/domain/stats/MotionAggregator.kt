@@ -142,8 +142,16 @@ object MotionAggregator {
             // — i.e. `maxOf` ALREADY composes with the sentinel encoding to give
             // exactly the `any` fold every other maxOf field gets, and a
             // `filter { it.hasEscTemp }.ifEmpty { d }.maxOf { … }` returns the
-            // same float for every input. (Without the `ifEmpty` it would throw
-            // on a vehicle where nobody has an ESC sensor — strictly worse.)
+            // same float for **every value a producer can emit**. (Without the
+            // `ifEmpty` it would throw on a vehicle where nobody has an ESC
+            // sensor — strictly worse.)
+            //
+            // The equivalence is over producible inputs, not over the whole
+            // Float domain: `NaN` breaks it, because `NaN > -50f` is false (so
+            // the filter drops it) while `maxOf` propagates it. No decoder can
+            // produce one — every `escTempC` on this path is a scaled i16 —
+            // so the claim is stated at the strength it actually holds rather
+            // than as an algebraic identity.
             //
             // What makes that sound is the SENTINEL, which is why both producers
             // are careful to write one: `BegodeProtocol.NO_TEMP_SENSOR_C` is

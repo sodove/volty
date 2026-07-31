@@ -708,9 +708,20 @@ class VescGatewayProtocol(
      *
      *  - **voltage: `max`.** Every controller on the link sits on the same
      *    rail, so they should agree; `max` is what survives a contributor that
-     *    reports 0 V because it has no measurement (`hasInputVoltage` is
-     *    unreachable for VESC — field report §4 — so a mean would be dragged
-     *    down by a node that simply does not know);
+     *    reports 0 V because it has no measurement, where a mean would be
+     *    dragged down by a node that simply does not know.
+     *
+     *    The reason originally given here — "`hasInputVoltage` is unreachable
+     *    for VESC (field report §4), so the flag cannot be consulted" — was
+     *    **made false by `I` Task 7**, which taught `VescValues` to clear that
+     *    flag on a reply carrying `v_in = 0`. The arithmetic is unaffected: a
+     *    phantom contributor still reports `0`, which never wins a `max` over a
+     *    real rail, so this fold behaves identically with or without the flag.
+     *    A flag-filtered MEAN is now expressible and is NOT the same function
+     *    (78.0 and 78.4 mean to 78.2 and max to 78.4) — but changing it is a
+     *    behaviour change on the BATTERY path, which `I` Task 7 was forbidden to
+     *    make. Left as a pointer for whoever owns that decision, not as an
+     *    oversight;
      *  - **current and power: summed**, because they are per-unit draws off one
      *    pack. This is the same arithmetic `MotionAggregator` does across
      *    controllers, applied here because a derived pack has to be one number;

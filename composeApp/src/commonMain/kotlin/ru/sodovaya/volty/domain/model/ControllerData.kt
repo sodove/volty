@@ -173,7 +173,11 @@ data class ControllerData(
      * `max(xs) > SENTINEL` is already identical to `∃x ∈ xs : x > SENTINEL` —
      * the fold composes with this getter to give exactly the `any` rule every
      * other maxOf field gets its flag folded by, and adding the filter would be
-     * a line no implementation could distinguish from its absence. Every
+     * a line no test could distinguish from its absence for any value a
+     * producer can emit. (Over the whole `Float` domain it is not an identity —
+     * a `NaN` is dropped by the filter and propagated by `maxOf` — but every
+     * `escTempC` on this path is a scaled i16, so no decoder can reach that.)
+     * Every
      * producer therefore owes a sentinel here rather than a `0f`
      * (`BegodeProtocol.NO_TEMP_SENSOR_C`), because a `0f` claims a sensor
      * before any fold can see it.

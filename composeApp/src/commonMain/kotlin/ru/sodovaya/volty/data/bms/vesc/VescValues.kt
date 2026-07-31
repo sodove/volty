@@ -41,6 +41,51 @@ object VescValues {
      * `powerW` here IS `v_in × current_in`, so a phantom rail makes the power a
      * phantom `0 W` by construction. The two flags still fold differently
      * downstream, which is why they remain two fields.
+     *
+     * ## Why [ControllerData.hasDuty] and [ControllerData.hasEnergyCounters] are NOT cleared here
+     *
+     * `I` Task 7's brief asked for all four flags to become assignable. Two of
+     * them are, above. The other two are left at their `true` default **because
+     * these frames carry no witness that could clear them**, and a flag set from
+     * a guess is worse than a flag left honest. Stated here rather than omitted,
+     * so a later reader does not read the asymmetry as an oversight.
+     *
+     * The asymmetry is not arbitrary. `v_in` is a MEASUREMENT OF AN EXTERNAL
+     * QUANTITY through an ADC: a node can answer the frame without having the
+     * sensor behind it, and a powered board reporting a true `0.0 V` rail is
+     * physically impossible — so `0` is decidable evidence of absence. The other
+     * two fields are not measurements of anything outside the firmware:
+     *
+     *  - **`duty_now` is the controller's own commanded state variable.** Any
+     *    firmware that runs a motor and answers opcode 4 or 47 necessarily has
+     *    one, so there is nothing to "not have", and `0.000` is a genuine
+     *    reading — a coasting or idle wheel, which is most of a ride. There is no
+     *    `duty == 0 && x` conjunction that separates the two: a freewheeling
+     *    motor at high `rpm` with zero duty is exactly what descending a hill
+     *    looks like. Contrast [ControllerData.hasMotorTemp] just above, which IS
+     *    clearable for the same reason `v_in` is — a thermistor is an external
+     *    sensor and its absence has a sentinel on the wire.
+     *  - **the four `amp_hours`/`watt_hours` counters are RAM totals kept from
+     *    boot.** `0 Ah` on a VESC that booted a minute ago is a measurement, and
+     *    it is the same four zeros a hypothetical firmware keeping no counters
+     *    would send. The one witness worth testing — "all four are exactly 0
+     *    while the odometer is not" — does not hold either: on the SETUP frame
+     *    the tachometer is SETUP-WIDE (already summed across CAN by
+     *    `mc_interface_get_setup_values`), so a freshly-booted node legitimately
+     *    reports 0 counters beside a neighbour's non-zero distance; on
+     *    `GET_VALUES` the tachometer is raw counts this decoder does not publish
+     *    at all.
+     *
+     * **Coupling them to `v_in` was considered and rejected.** A node that
+     * answers with a wholly zeroed struct has a phantom duty as surely as a
+     * phantom rail — but the fields are independent on the wire, and a
+     * controller whose rail divider is unfitted while its motor runs is a
+     * shape nobody has ruled out. `hasDuty` folds with `any`, so clearing it
+     * would change nothing on a multi-controller vehicle and would blank a
+     * REAL ШИМ alarm on a single-controller one: "a worse bug than the
+     * unmeasured-duty one the flag exists for", in the words of the fold that
+     * already refuses this trade
+     * ([ru.sodovaya.volty.domain.stats.MotionAggregator]).
      */
     private const val NO_RAIL_AT_OR_BELOW_V = 0f
 

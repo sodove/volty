@@ -142,10 +142,16 @@ class MotionAggregatorTest {
         val measuring = ControllerData(powerW = 4000f, consumedWh = 500f, isConnected = true)
         // The placeholders are deliberately NON-zero, and deliberately incoherent
         // with their own flags. Every producer that sets these flags false also
-        // writes 0, so a fixture that copied that invariant could not tell "the fold
-        // flags an unmeasured term" from "the fold DROPS an unmeasured term" — and
-        // dropping it is the plausible wrong fix, because it makes the total look
-        // tidy. The flag is what changes; the arithmetic must not.
+        // writes 0, and on such a fixture "the fold SKIPPED the unmeasured term"
+        // and "the fold ADDED it, and it happened to be zero" produce the same
+        // total — so nothing below could tell the two apart. The non-zero
+        // placeholder is what makes the skip observable at all, and it is what
+        // the assertions on the sums six lines down actually rest on.
+        //
+        // (This comment used to end "the flag is what changes; the arithmetic
+        // must not". That claim was RETRACTED by `I` Task 7 — see the note on
+        // those assertions. The fixture's purpose above survives the retraction
+        // unchanged; only the conclusion drawn from it moved.)
         val notMeasuring = ControllerData(
             powerW = 1500f, hasPower = false,
             consumedWh = 250f, hasEnergyCounters = false,
@@ -463,7 +469,10 @@ class MotionAggregatorTest {
      * `max(xs) > SENTINEL` is therefore already identical to `∃x ∈ xs : x > SENTINEL`
      * — the raw `maxOf` composes with the sentinel encoding to give exactly the `any`
      * fold every other maxOf field gets, and filtering it by `hasEscTemp` would be a
-     * line no implementation could distinguish from its absence.
+     * line no test could distinguish from its absence for any value a producer can
+     * emit. (Not an identity over the whole `Float` domain: a `NaN` is dropped by the
+     * filter and propagated by `maxOf`. Every `escTempC` here is a scaled i16, so no
+     * decoder can reach that — hence "producible", not "every".)
      *
      * The assertions below are not tautologies: they fail for `average` (62 °C beside
      * a -100 °C sentinel folds to -19 °C and the vehicle LOSES a sensor it has), for
