@@ -114,6 +114,7 @@ class VehicleEditComponentTest {
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
+        override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() {}
     }

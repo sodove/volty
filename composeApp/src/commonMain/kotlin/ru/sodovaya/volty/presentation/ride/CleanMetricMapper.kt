@@ -112,9 +112,35 @@ object CleanMetricMapper {
      *
      * Takes the already-computed figure rather than the sample, because
      * `RideDashboardComponent` folds it into its state from the motion stream
-     * (via [MotionReadings.sessionWhPerKm], which is where `§9.1`'s flag is
+     * (via [MotionReadings.sessionConsumption], which is where `§9.1`'s flag is
      * honoured) and the card must not recompute a second, disagreeing answer.
+     *
+     * **[synthesised] prefixes the number with [SYNTHESISED_PREFIX].** On a
+     * Begode the figure is integrated from `power × dt`
+     * ([ru.sodovaya.volty.domain.stats.RideEnergy]) rather than read off a
+     * counter the wheel does not keep, and the rider is owed that difference —
+     * the reconstruction is only as good as the BLE arrival gaps it was sampled
+     * over, and it silently misses whatever the wheel drew while the phone was
+     * out of range.
+     *
+     * A one-character marker rather than a word, and marked HERE rather than in
+     * the composable, for three reasons: it needs no `values/` + `values-ru/`
+     * pair to translate, it costs no layout width in readouts that sit inside
+     * fixed-width gauge faces, and Compose is not unit-testable in this repo, so
+     * a decision left in `ConsumptionCard` is a decision no test can reach —
+     * which is exactly how `§9.1`'s "avg 0.0 Wh/km" survived review.
      */
-    fun sessionConsumptionValue(sessionWhPerKm: Float?): String? =
-        sessionWhPerKm?.let { formatFixed(it, 1) }
+    fun sessionConsumptionValue(sessionWhPerKm: Float?, synthesised: Boolean): String? =
+        sessionWhPerKm?.let { (if (synthesised) SYNTHESISED_PREFIX else "") + formatFixed(it, 1) }
 }
+
+/**
+ * The marker for a figure this app **derived** rather than read off the source
+ * — currently only the synthesised session consumption of a protocol that keeps
+ * no energy counters.
+ *
+ * Sibling of [UNKNOWN_READOUT], and the same kind of decision: one spelling, in
+ * one place, language-neutral, visibly different from the plain number beside
+ * it. "≈" says "about this" in every locale this app ships and needs no room.
+ */
+const val SYNTHESISED_PREFIX: String = "≈"

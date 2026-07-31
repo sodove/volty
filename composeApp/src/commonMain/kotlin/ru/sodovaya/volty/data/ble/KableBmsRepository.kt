@@ -375,8 +375,11 @@ class KableBmsRepository private constructor(
     // windows regardless of per-BMS poll rate (JK ~1Hz, ANT 2Hz, etc).
     private val ringBuffer = SampleRingBuffer<BmsData> { it.timestamp }
 
-    // Motion twin of [ringBuffer]: retains the per-controller motion samples
-    // funnelled through the SAME single consumer, keyed by their own timestamp.
+    // Motion twin of [ringBuffer]: retains the VEHICLE-LEVEL motion aggregates
+    // produced by the SAME single consumer, keyed by their own timestamp — the
+    // motion mirror of `ringBuffer` holding `forActive` rather than one pack's
+    // sample. Read through [motionSamples]; see the funnel's motion branch for
+    // why the aggregate and not the raw contributor.
     private val motionRingBuffer = SampleRingBuffer<ControllerData> { it.timestamp }
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
@@ -1506,8 +1509,36 @@ class KableBmsRepository private constructor(
                         // through onVehicleData, which sets _activeMotion — so
                         // nothing sets it here (mirrors how _activeData rides
                         // off the battery submit's snapshot, not a direct write).
-                        vehicleConnection?.submitMotion(sample.globalControllerIndex, sample.data)
-                        motionRingBuffer.push(sample.data)
+                        val motionSnap = vehicleConnection
+                            ?.submitMotion(sample.globalControllerIndex, sample.data)
+                        // The VEHICLE-LEVEL fold, not this controller's own
+                        // sample. (`submitMotion`'s snapshot used to be
+                        // discarded here; the "dropped on purpose" note below
+                        // is about `reRaiseYieldedLinksWhoseHostedWentSilent`,
+                        // which still is.)
+                        //
+                        // [motionSamples] is integrated as `power x dt`, and on
+                        // a two-controller vehicle the raw samples INTERLEAVE:
+                        // a trapezoid over front, rear, front, rear reads one
+                        // controller's power as the whole vehicle's and reports
+                        // half the energy. Buffering the same aggregate
+                        // `activeMotion` publishes makes the integral the
+                        // vehicle's, and is an identity on the one-controller
+                        // vehicles this buffer used to see.
+                        //
+                        // `isConnected` is the guard, not a null check: an
+                        // orchestrator that could not place this controller
+                        // index returns its unchanged snapshot, and with no
+                        // online controller at all that snapshot is
+                        // `ControllerData(isConnected = false)` — a fresh
+                        // timestamp over a 0 W placeholder whose `hasPower`
+                        // still defaults true, i.e. precisely the phantom zero
+                        // the integrator must never be handed. A sample the
+                        // vehicle refused to attribute contributed no distance
+                        // either, so it contributes no energy: nothing is
+                        // buffered.
+                        motionSnap?.motion?.takeIf { it.isConnected }
+                            ?.let { motionRingBuffer.push(it) }
                         // THE sample kind that matters for the silent-hosted
                         // case: a head unit whose CAN controllers keep
                         // reporting while the battery it hosts has gone quiet
@@ -2656,6 +2687,26 @@ class KableBmsRepository private constructor(
 
     override fun samples(window: Duration): Flow<List<BmsData>> =
         _activeData.map { ringBuffer.within(window) }
+
+    /**
+     * Motion twin of [samples], off [motionRingBuffer] and keyed to
+     * [_activeMotion] — which is the flow that moves when a motion sample
+     * arrives, exactly as `_activeData` is on the battery side.
+     *
+     * **This trails the newest sample by one emission**, and unlike the battery
+     * side that cannot be fixed by ordering: `VehicleConnection.submitMotion`
+     * publishes through `onVehicleData` from *inside* itself, so the aggregate
+     * that gets buffered only exists after `_activeMotion` has already moved.
+     * Harmless for the one consumer — a cumulative integral recomputed from the
+     * whole buffer converges on the next sample, i.e. within one BLE
+     * notification — and the alternative (buffering the raw per-controller
+     * sample, which is available before the submit) is the multi-controller
+     * defect this buffer's contents were changed to avoid. Said out loud here
+     * because the battery branch's own note takes the opposite decision for a
+     * consumer that PLOTS its samples, where a one-frame lag is visible.
+     */
+    override fun motionSamples(window: Duration): Flow<List<ControllerData>> =
+        _activeMotion.map { motionRingBuffer.within(window) }
 
     /**
      * Cold flow — one collector per consumer, cancelled with the consumer's

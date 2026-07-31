@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.stats.RideEnergy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -109,21 +110,29 @@ class DefaultGraphComponent(
 
     private fun extractValue(d: BmsData, metric: GraphMetric): Float = extractValueOf(d, metric)
 
+    /**
+     * Wh (POWER) or Ah (CURRENT) over the window; 0 for the metrics that are not
+     * rates and have no integral worth showing.
+     *
+     * The trapezoid itself lives in [RideEnergy.integrateHours], because the Ride
+     * dashboard now integrates the same quantity for a wheel that keeps no energy
+     * counters and two copies of this arithmetic would drift apart.
+     *
+     * **The negation stays HERE, and must not move into the shared integrator.**
+     * [BmsData] is charge-positive (`+ = charging`), so a discharge integrates
+     * negative and is flipped so the readout is consumption-positive, with
+     * charging periods subtracting into a net figure. The other caller's samples
+     * are [ru.sodovaya.volty.domain.model.ControllerData], whose `powerW` carries
+     * VESC's *opposite* convention and therefore does not get flipped — see
+     * [RideEnergy]'s KDoc.
+     */
     private fun computeUsed(samples: List<BmsData>, metric: GraphMetric): Float {
-        if (samples.size < 2) return 0f
-        var acc = 0.0
-        for (i in 1 until samples.size) {
-            val dtHours = (samples[i].timestamp - samples[i - 1].timestamp).inWholeMilliseconds / 1000.0 / 3600.0
-            val v = (extractValue(samples[i - 1], metric) + extractValue(samples[i], metric)) / 2.0
-            acc += v * dtHours
-        }
-        // Consumption-positive: negate so a discharge session reports positive
-        // Wh/Ah used (charging periods subtract -> net consumption).
-        return when (metric) {
-            GraphMetric.POWER -> -acc.toFloat()                 // Wh
-            GraphMetric.CURRENT -> -acc.toFloat()               // Ah
-            else -> 0f
-        }
+        if (metric != GraphMetric.POWER && metric != GraphMetric.CURRENT) return 0f
+        val integral = RideEnergy.integrateHours(
+            samples,
+            timestampOf = { it.timestamp }
+        ) { extractValue(it, metric) } ?: return 0f
+        return -integral.toFloat()
     }
 
     override fun onMetricSelected(metric: GraphMetric) {

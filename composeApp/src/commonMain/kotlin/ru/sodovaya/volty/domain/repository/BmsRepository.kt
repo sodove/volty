@@ -88,6 +88,31 @@ interface BmsRepository {
     fun samples(window: Duration): Flow<List<BmsData>>
 
     /**
+     * Motion twin of [samples]: the retained **vehicle-level** motion aggregates
+     * over the given [window].
+     *
+     * **Emits once per motion sample, alongside [activeMotion].** That pairing is
+     * part of the contract rather than an implementation accident:
+     * `RideDashboardComponent` publishes the session consumption from this flow
+     * alone, and the divisor it uses is the `tripKm` of the sample [activeMotion]
+     * just carried. An implementation that emitted on some other schedule would
+     * leave the two halves of that division from different moments.
+     *
+     * Vehicle-level, not per-controller, and that is the load-bearing part: the
+     * one consumer integrates `power × dt` over this list
+     * ([ru.sodovaya.volty.domain.stats.RideEnergy]), and a two-controller
+     * vehicle interleaves its contributors — a trapezoid over the interleave
+     * would read one controller's power as the whole vehicle's and report half
+     * the energy. These are the same folds [activeMotion] publishes.
+     *
+     * The existence of this accessor is the point: the buffer behind it has been
+     * written since Part A and read nowhere, which is why a wheel that keeps no
+     * watt-hour counters had a blank consumption readout while the Graph screen
+     * integrated the identical quantity correctly.
+     */
+    fun motionSamples(window: Duration): Flow<List<ControllerData>>
+
+    /**
      * Cold flow of [MovingAvg] over the given [window], emitting on each new
      * sample. Callers should [kotlinx.coroutines.flow.stateIn] this into their
      * own [kotlinx.coroutines.CoroutineScope] so the collector is cancelled

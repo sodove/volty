@@ -105,8 +105,51 @@ class CleanMetricMapperTest {
     }
 
     @Test fun the_session_average_chip_is_hidden_rather_than_dashed() {
-        assertEquals("16.9", CleanMetricMapper.sessionConsumptionValue(980f / 58f))
-        assertNull(CleanMetricMapper.sessionConsumptionValue(null))
-        assertEquals("0.0", CleanMetricMapper.sessionConsumptionValue(0f), "a measured 0 still shows")
+        assertEquals("16.9", CleanMetricMapper.sessionConsumptionValue(980f / 58f, synthesised = false))
+        assertNull(CleanMetricMapper.sessionConsumptionValue(null, synthesised = false))
+        assertEquals(
+            "0.0",
+            CleanMetricMapper.sessionConsumptionValue(0f, synthesised = false),
+            "a measured 0 still shows"
+        )
+    }
+
+    /**
+     * `I` Task 8. A Begode keeps no watt-hour counters, so its session figure is
+     * integrated from `power × dt` — and the rider is owed the difference between
+     * that and a number the firmware stands behind.
+     */
+    @Test fun a_synthesised_average_is_marked_and_a_measured_one_is_not() {
+        assertEquals("≈10.0", CleanMetricMapper.sessionConsumptionValue(10f, synthesised = true))
+        assertEquals(
+            "10.0",
+            CleanMetricMapper.sessionConsumptionValue(10f, synthesised = false),
+            "the SAME number, unmarked, when it came off a counter — the flag is the only difference"
+        )
+        assertEquals(
+            SYNTHESISED_PREFIX,
+            CleanMetricMapper.sessionConsumptionValue(10f, synthesised = true)
+                ?.removeSuffix(CleanMetricMapper.sessionConsumptionValue(10f, synthesised = false)!!),
+            "the marker is a prefix on the same formatting, not a second way of writing the number"
+        )
+    }
+
+    /**
+     * The absence beats the marker. "≈—" would be a claim that we approximately
+     * do not know, and the chip is hidden entirely rather than dashed anyway
+     * (see [CleanMetricMapper.sessionConsumptionValue]) — but a `synthesised`
+     * flag left true beside a null figure must not conjure a chip out of it.
+     */
+    @Test fun a_synthesis_that_produced_nothing_still_shows_nothing() {
+        assertNull(CleanMetricMapper.sessionConsumptionValue(null, synthesised = true))
+    }
+
+    /**
+     * Regen can outweigh the draw over a descent, and the integral is a NET
+     * figure, so the mark and the sign have to survive each other. `≈-3.2`, not
+     * `-≈3.2` and not a swallowed sign.
+     */
+    @Test fun a_synthesised_net_negative_keeps_both_its_marker_and_its_sign() {
+        assertEquals("≈-3.2", CleanMetricMapper.sessionConsumptionValue(-3.2f, synthesised = true))
     }
 }

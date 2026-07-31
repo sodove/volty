@@ -4,8 +4,10 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 /**
  * The unknown-vs-zero contract (`G §9`), tested where every decision it makes
@@ -124,6 +126,72 @@ class MotionReadingsTest {
         // not be swallowed by the session fallback or turned into an absence.
         val coasting = vesc.copy(powerW = 0f)
         assertEquals(0f, MotionReadings.whPerKm(coasting))
+    }
+
+    // -------------------------------------------------------------------------
+    // `I` Task 8 — the session figure may be SYNTHESISED, but never disguised
+    // -------------------------------------------------------------------------
+
+    /**
+     * The provenance is a **separate** signal, and the sample is left alone.
+     *
+     * The temptation this rejects: flipping `hasEnergyCounters` to true for a
+     * synthesised figure would make the whole thing work with no new field and
+     * no new parameter — and would tell every consumer of the sample, including
+     * the aggregator's `all` fold and any future one, that a Begode keeps
+     * counters. A derived number presented as a measurement is the exact defect
+     * this contract exists to prevent.
+     */
+    @Test fun a_synthesised_session_figure_is_marked_and_leaves_the_counter_flag_alone() {
+        val counterless = begode.copy(tripKm = 2f)
+        val reading = assertNotNull(MotionReadings.sessionConsumption(counterless, synthesisedWh = 30f))
+
+        assertEquals(15f, reading.whPerKm, "30 Wh over 2 km")
+        assertTrue(reading.synthesised)
+        // The half that would survive if the flag were flipped instead:
+        assertFalse(counterless.hasEnergyCounters, "the sample still says the wheel counts nothing")
+        assertNull(
+            MotionReadings.sessionWhPerKm(counterless),
+            "and the measurement-only accessor still refuses, for every consumer that has not heard of synthesis"
+        )
+    }
+
+    /** A measurement always wins, and is never marked. */
+    @Test fun a_measured_session_figure_beats_a_synthesised_one_and_carries_no_marker() {
+        val reading = assertNotNull(MotionReadings.sessionConsumption(vesc, synthesisedWh = 1f))
+        assertEquals(980f / 58f, reading.whPerKm, "the counter's figure, not 1 Wh / 58 km")
+        assertFalse(reading.synthesised)
+    }
+
+    /**
+     * Nothing to synthesise from is the pre-existing blank — never a zero, and
+     * never a chip claiming to be an approximation of nothing.
+     */
+    @Test fun a_session_with_nothing_to_synthesise_from_stays_absent() {
+        assertNull(MotionReadings.sessionConsumption(begode.copy(tripKm = 12f), synthesisedWh = null))
+    }
+
+    /**
+     * The synthesised branch goes through the SAME divisor guard as the measured
+     * one: a trip that has not started is not a distance.
+     */
+    @Test fun a_synthesised_figure_cannot_invent_a_division_the_measured_one_refuses() {
+        assertNull(MotionReadings.sessionConsumption(begode.copy(tripKm = 0f), synthesisedWh = 30f))
+        assertNull(MotionReadings.sessionConsumption(vesc.copy(tripKm = 0f), synthesisedWh = 30f))
+    }
+
+    /**
+     * A synthesised **zero** is a figure. The integral of a balanced interval is
+     * a real 0.0 Wh/km, and an implementation that treated a falsy Wh as
+     * "nothing to offer" would swallow it — the same confident-zero-vs-absence
+     * confusion, arriving from the other side.
+     */
+    @Test fun a_synthesised_zero_is_still_a_figure_and_is_still_marked() {
+        val reading = assertNotNull(
+            MotionReadings.sessionConsumption(begode.copy(tripKm = 2f), synthesisedWh = 0f)
+        )
+        assertEquals(0f, reading.whPerKm)
+        assertTrue(reading.synthesised)
     }
 
     @Test fun the_disconnected_placeholder_claims_nothing_it_has_not_seen() {

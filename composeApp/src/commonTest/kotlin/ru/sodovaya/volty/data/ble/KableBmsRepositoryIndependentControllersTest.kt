@@ -14,6 +14,7 @@ import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -25,6 +26,7 @@ import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.hours
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -240,6 +242,87 @@ class KableBmsRepositoryIndependentControllersTest {
         repo.disconnect()
         runCurrent()
         assertFalse(jobB.isActive, "disconnect must stop the dropped link's loop")
+    }
+
+    // ----- `I` Task 8: the retained motion window is VEHICLE-level, not per-controller -----
+
+    /**
+     * **[KableBmsRepository.motionSamples] retains the fold, not the contributors.**
+     *
+     * The buffer behind it was written since Part A and read nowhere, so nothing
+     * had ever forced the question. Its one consumer integrates `power × dt`
+     * ([ru.sodovaya.volty.domain.stats.RideEnergy]) — and on this vehicle the raw
+     * samples INTERLEAVE front, rear, front, rear. A trapezoid over that reads one
+     * controller's 700 W as the whole vehicle's, i.e. reports roughly half the
+     * energy an AWD scooter actually drew, which is the same class of quiet lie
+     * this whole part is about.
+     *
+     * Asserted through the real link funnels rather than by pushing into the
+     * buffer, because the decision under test is *which value the funnel pushes*.
+     */
+    @Test
+    fun `the retained motion window holds the vehicle-level fold and not one controller's sample`() = repoTest { repo ->
+        val v = dualVescVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val funnels = repo.linkMotionFunnelsForTest()
+
+        funnels[0](0, motion(speed = 30f, duty = 50f, motorA = 20f, battA = 10f, power = 700f))
+        advanceUntilIdle()
+        funnels[1](0, motion(speed = 29f, duty = 55f, motorA = 22f, battA = 12f, power = 800f))
+        advanceUntilIdle()
+
+        val window = repo.motionSamples(1.hours).first()
+        assertEquals(2, window.size, "one retained entry per motion sample, as before")
+        // The first entry is the fold of the front controller alone (the rear has
+        // not reported yet); the second is the fold of both. Neither is a raw
+        // contributor: 1500 W is a number no single sample carried.
+        assertEquals(700f, window[0].powerW, absoluteTolerance = 0.001f)
+        assertEquals(
+            1500f,
+            window[1].powerW,
+            absoluteTolerance = 0.001f,
+            "SUM(700, 800) — the raw rear sample's own 800 W would be the per-controller bug"
+        )
+        assertEquals(22f, window[1].batteryCurrentA, absoluteTolerance = 0.001f)
+        assertEquals(30f, window[1].speedKmh, absoluteTolerance = 0.001f, "MAX, not the rear's 29")
+        assertEquals(repo.activeMotion.value, window.last(), "the retained tail IS what activeMotion published")
+    }
+
+    /**
+     * A motion sample the orchestrator cannot place is not retained.
+     *
+     * `submitMotion` returns its snapshot unchanged for an unknown controller
+     * index, and with no controller online at all that snapshot is
+     * `ControllerData(isConnected = false)` — a freshly-timestamped 0 W placeholder
+     * whose `hasPower` still defaults true, i.e. exactly the phantom zero the
+     * integrator must never be handed. A sample the vehicle refused to attribute
+     * contributed no distance either, so it contributes no energy.
+     */
+    @Test
+    fun `a motion sample the vehicle cannot place is not retained as a phantom zero`() = repoTest { repo ->
+        val v = dualVescVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val channel = assertNotNull(repo.sampleFunnelChannelForTest())
+
+        // Global controller index 7 on a two-controller vehicle: no slot, no
+        // latent slot, so `submitMotion` returns its snapshot untouched — and
+        // with neither controller yet online that snapshot is
+        // `ControllerData(isConnected = false)`, i.e. a 0 W row wearing a fresh
+        // timestamp. Integrating THAT is the confident zero this contract is about.
+        channel.trySend(
+            MotionSample(
+                globalControllerIndex = 7,
+                data = motion(speed = 30f, duty = 50f, motorA = 20f, battA = 10f, power = 700f)
+            )
+        )
+        advanceUntilIdle()
+
+        assertFalse(repo.activeMotion.value.isConnected, "precondition: the vehicle placed nothing")
+        assertEquals(
+            emptyList(),
+            repo.motionSamples(1.hours).first(),
+            "nothing placed, nothing retained — neither the phantom nor the unattributed raw sample"
+        )
     }
 
     private companion object {

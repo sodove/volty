@@ -184,6 +184,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
                 ConsumptionCard(
                     motion = motion,
                     sessionWhPerKm = state.sessionWhPerKm,
+                    sessionWhPerKmSynthesised = state.sessionWhPerKmSynthesised,
                     recentSpeeds = recentSpeeds
                 )
             }
@@ -394,13 +395,15 @@ private fun TempMetricCard(
 private fun ConsumptionCard(
     motion: ControllerData,
     sessionWhPerKm: Float?,
+    sessionWhPerKmSynthesised: Boolean,
     recentSpeeds: List<Float>
 ) {
     // Both strings come from CleanMetricMapper rather than being formatted here:
     // Compose is not unit-testable in this repo, and these two readouts are where
     // `G §9`'s "0.0 kW" and `§9.1`'s "avg 0.0 Wh/km" lived.
     val instantConsumption = CleanMetricMapper.instantConsumptionValue(motion)
-    val sessionConsumption = CleanMetricMapper.sessionConsumptionValue(sessionWhPerKm)
+    val sessionConsumption =
+        CleanMetricMapper.sessionConsumptionValue(sessionWhPerKm, sessionWhPerKmSynthesised)
     Column(
         modifier = Modifier
             .fillMaxWidth()

@@ -60,6 +60,7 @@ class AlertEngineTest {
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = emptyFlow()
+        override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
         override fun movingAverage(window: Duration): Flow<MovingAvg> =
             flowOf(MovingAvg(0f, 0f, window))
         override suspend fun onAppResumed() {}

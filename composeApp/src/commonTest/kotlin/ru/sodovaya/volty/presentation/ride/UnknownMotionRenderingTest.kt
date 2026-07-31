@@ -223,7 +223,9 @@ class UnknownMotionRenderingTest {
         assertEquals(UNKNOWN_READOUT, secondary(wheel, SecondaryGauge.CONSUMPTION).value)
         assertEquals(UNKNOWN_READOUT, CleanMetricMapper.instantConsumptionValue(wheel))
         assertNull(
-            CleanMetricMapper.sessionConsumptionValue(MotionReadings.sessionWhPerKm(wheel)),
+            CleanMetricMapper.sessionConsumptionValue(
+                MotionReadings.sessionWhPerKm(wheel), synthesised = false
+            ),
             "Clean's `avg … Wh/km` chip is hidden rather than dashed — see its doc"
         )
     }
@@ -236,7 +238,12 @@ class UnknownMotionRenderingTest {
         assertNull(classic(vesc, VescClusterSlot.CONSUMPTION).valueTextOverride)
         assertEquals("100.0", secondary(vesc, SecondaryGauge.CONSUMPTION).value)
         assertEquals("100.0", CleanMetricMapper.instantConsumptionValue(vesc))
-        assertEquals("20.0", CleanMetricMapper.sessionConsumptionValue(MotionReadings.sessionWhPerKm(vesc)))
+        assertEquals(
+            "20.0",
+            CleanMetricMapper.sessionConsumptionValue(
+                MotionReadings.sessionWhPerKm(vesc), synthesised = false
+            )
+        )
     }
 
     // -----------------------------------------------------------------------------

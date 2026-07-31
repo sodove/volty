@@ -44,14 +44,19 @@ import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Instant
 import kotlin.time.ExperimentalTime
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
@@ -73,11 +78,39 @@ class RideDashboardComponentTest {
         override suspend fun disconnect() {}
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
+        /**
+         * The motion RING BUFFER's contents — a plain field, not a flow, exactly
+         * as in `KableBmsRepository`.
+         */
+        var motionWindow: List<ControllerData> = emptyList()
+
+        /**
+         * **Derived from [activeMotion], like the real one** (`_activeMotion.map
+         * { motionRingBuffer.within(window) }`), and that is not a detail: it
+         * means ONE emission wakes BOTH of the component's collectors, in
+         * subscriber order — the motion collector first, with the integral it
+         * has in hand, then this one with the fresh window. Modelling the two as
+         * independent flows would let the window collector always run first and
+         * would hide whether the component publishes the newest integral for the
+         * newest sample or one sample late.
+         */
+        override fun motionSamples(window: Duration): Flow<List<ControllerData>> =
+            activeMotion.map { motionWindow }
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() {}
 
         fun emitMotion(data: ControllerData) {
             activeMotion.value = data
+        }
+
+        /**
+         * Retain [samples] and publish the newest of them, the way a real ride
+         * does: the buffer is filled by the funnel and the flow that announces
+         * it is [activeMotion].
+         */
+        fun emitMotionWindow(samples: List<ControllerData>) {
+            motionWindow = samples
+            samples.lastOrNull()?.let { activeMotion.value = it }
         }
     }
 
@@ -298,7 +331,198 @@ class RideDashboardComponentTest {
         )
         advanceUntilIdle()
         c.state.test {
-            assertNull(awaitItem().sessionWhPerKm, "a counterless wheel consumes an unknown amount")
+            val s = awaitItem()
+            assertNull(s.sessionWhPerKm, "a counterless wheel with no samples behind it is still unknown")
+            assertFalse(s.sessionWhPerKmSynthesised, "an absence is not an approximation of anything")
+        }
+    }
+
+    // -----------------------------------------------------------------------------
+    // `I` Task 8 — the motion ring buffer finally has a reader
+    // -----------------------------------------------------------------------------
+
+    /**
+     * A Begode has no watt-hour counters, so the chip was blank for a whole real
+     * ride. Fed the retained motion window, the component integrates `power × dt`
+     * and answers — **marked** as derived.
+     *
+     * The synthetic ride is the brief's: 600 W held for a minute over 1 km, i.e.
+     * 10 Wh and 10 Wh/km.
+     */
+    @Test
+    fun a_counterless_wheel_gets_a_consumption_integrated_from_its_own_power() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val t0 = Instant.fromEpochSeconds(1_000_000)
+        fun begode(atSeconds: Long, tripKm: Float) = ControllerData(
+            powerW = 600f,
+            hasEnergyCounters = false,
+            consumedWh = 0f,
+            tripKm = tripKm,
+            isConnected = true,
+            timestamp = t0 + atSeconds.seconds
+        )
+        // The first sample also starts the session clock, which is what bounds
+        // the integral — see RideEnergy.sessionWh's `since`.
+        repo.emitMotion(begode(0, tripKm = 0f))
+        advanceUntilIdle()
+        repo.emitMotionWindow(listOf(begode(0, tripKm = 0f), begode(60, tripKm = 1f)))
+        advanceUntilIdle()
+
+        c.state.test {
+            val s = awaitItem()
+            assertEquals(10f, assertNotNull(s.sessionWhPerKm), 0.01f, "600 W for a minute over 1 km")
+            assertTrue(s.sessionWhPerKmSynthesised, "integrated, and the state says so")
+            assertFalse(
+                s.motion.hasEnergyCounters,
+                "the SAMPLE is untouched: the wheel still keeps no counters, and every " +
+                    "consumer that has not heard of synthesis still reads it that way"
+            )
+        }
+
+        // The trip counter moves on nearly every motion sample, i.e. far more
+        // often than the window is re-read, so the motion collector has to carry
+        // the synthesis forward on its own rather than blank it back to a
+        // measurement it does not have.
+        repo.emitMotion(begode(60, tripKm = 2f))
+        advanceUntilIdle()
+        c.state.test {
+            val s = awaitItem()
+            assertEquals(5f, assertNotNull(s.sessionWhPerKm), 0.01f, "the same 10 Wh, now over 2 km")
+            assertTrue(s.sessionWhPerKmSynthesised, "still derived, and still says so")
+        }
+    }
+
+    /**
+     * The same window on hardware that keeps counters changes nothing: the
+     * measurement wins and the readout is not marked.
+     *
+     * Without this, an implementation that always preferred the integral would
+     * pass the test above while silently replacing every VESC's own coulomb
+     * counting with a reconstruction from BLE arrival gaps.
+     */
+    @Test
+    fun a_vehicle_that_keeps_counters_is_not_overridden_by_the_integral() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val t0 = Instant.fromEpochSeconds(2_000_000)
+        fun vesc(atSeconds: Long, tripKm: Float) = ControllerData(
+            powerW = 600f,
+            hasEnergyCounters = true,
+            consumedWh = 980f,
+            tripKm = tripKm,
+            isConnected = true,
+            timestamp = t0 + atSeconds.seconds
+        )
+        repo.emitMotion(vesc(0, tripKm = 58f))
+        advanceUntilIdle()
+        repo.emitMotionWindow(listOf(vesc(0, tripKm = 58f), vesc(60, tripKm = 58f)))
+        advanceUntilIdle()
+
+        c.state.test {
+            val s = awaitItem()
+            assertEquals(980f / 58f, assertNotNull(s.sessionWhPerKm), 0.01f, "the counter's figure")
+            assertFalse(s.sessionWhPerKmSynthesised)
+        }
+    }
+
+    /**
+     * A retained window whose samples carry no measured power synthesises
+     * nothing — the readout is exactly as blank as before this task, never a
+     * confident `≈0.0`.
+     *
+     * **Deliberately incoherent fixture**: `powerW = 4200f` behind
+     * `hasPower = false` is a pair no producer emits, which is why it separates
+     * "the integrator honoured the flag" from "the integrator added the number,
+     * and every producer happens to write 0 there".
+     */
+    @Test
+    fun a_window_with_no_measured_power_synthesises_nothing() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val t0 = Instant.fromEpochSeconds(3_000_000)
+        fun unscaled(atSeconds: Long, tripKm: Float) = ControllerData(
+            powerW = 4200f,
+            hasPower = false,
+            hasEnergyCounters = false,
+            tripKm = tripKm,
+            isConnected = true,
+            timestamp = t0 + atSeconds.seconds
+        )
+        repo.emitMotion(unscaled(0, tripKm = 0f))
+        advanceUntilIdle()
+        repo.emitMotionWindow(listOf(unscaled(0, tripKm = 0f), unscaled(60, tripKm = 1f)))
+        advanceUntilIdle()
+
+        c.state.test {
+            val s = awaitItem()
+            assertNull(s.sessionWhPerKm, "a wheel with no voltage scale has no power to integrate")
+            assertFalse(s.sessionWhPerKmSynthesised)
+        }
+    }
+
+    /**
+     * **A reconnect restarts the trip, so it must restart the energy too.**
+     *
+     * The motion ring buffer deliberately survives a reconnect to the same
+     * address (the graph keeps its history), while `tripKm` is a session delta
+     * the protocol rebuilds from a fresh baseline. Integrate the whole retained
+     * buffer and the previous leg's watt-hours get charged against the new leg's
+     * kilometres — here, 3600 Wh over 1 km instead of 10.
+     */
+    @Test
+    fun a_reconnect_restarts_the_integral_because_it_restarts_the_trip() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        val v = assertNotNull(repo.activeVehicle.value)
+        repo.connectionState.value = ConnectionState.Connected(v)
+        advanceUntilIdle()
+
+        val t0 = Instant.fromEpochSeconds(4_000_000)
+        fun leg(atSeconds: Long, powerW: Float, tripKm: Float) = ControllerData(
+            powerW = powerW,
+            hasEnergyCounters = false,
+            tripKm = tripKm,
+            isConnected = true,
+            timestamp = t0 + atSeconds.seconds
+        )
+        // The first leg: an hour at 3600 W, i.e. 3600 Wh.
+        repo.emitMotionWindow(listOf(leg(0, 3600f, tripKm = 20f), leg(3600, 3600f, tripKm = 40f)))
+        advanceUntilIdle()
+
+        // The link drops and comes back. The buffer keeps everything; `tripKm`
+        // starts over from the protocol's new baseline.
+        repo.connectionState.value = ConnectionState.Connecting(v)
+        advanceUntilIdle()
+        repo.connectionState.value = ConnectionState.Connected(v)
+        // The new session's own first sample is what starts its clock.
+        val keptFromBefore = listOf(leg(0, 3600f, tripKm = 20f), leg(3600, 3600f, tripKm = 40f))
+        repo.emitMotionWindow(keptFromBefore + leg(3660, 600f, tripKm = 0f))
+        advanceUntilIdle()
+        repo.emitMotionWindow(
+            keptFromBefore + leg(3660, 600f, tripKm = 0f) + leg(3720, 600f, tripKm = 1f)
+        )
+        advanceUntilIdle()
+
+        c.state.test {
+            val s = awaitItem()
+            assertEquals(
+                10f,
+                assertNotNull(s.sessionWhPerKm),
+                0.05f,
+                "the new leg's 10 Wh over its own 1 km — not the buffer's whole 3645 Wh"
+            )
+            assertTrue(s.sessionWhPerKmSynthesised)
         }
     }
 

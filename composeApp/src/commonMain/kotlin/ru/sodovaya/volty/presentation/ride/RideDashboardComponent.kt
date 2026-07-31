@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.PeakTracker
+import ru.sodovaya.volty.domain.stats.RideEnergy
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -69,6 +70,19 @@ interface RideDashboardComponent {
         val powerRangeW: Float = GaugeScale.POWER_RUNGS_W.first(),
         val sessionWhPerKm: Float? = null,
         /**
+         * True when [sessionWhPerKm] was **integrated from power** rather than
+         * read off counters the protocol keeps — see
+         * [ru.sodovaya.volty.domain.stats.MotionReadings.SessionConsumption].
+         *
+         * A separate field rather than a flipped `hasEnergyCounters`, which is
+         * the point of the whole thing: the motion sample on this same state
+         * still says, truthfully, that the wheel counts no watt-hours, so
+         * every consumer that has not heard of synthesis keeps reading the
+         * measurement contract it was written against. Only the one renderer
+         * that knows ([CleanMetricMapper.sessionConsumptionValue]) marks it.
+         */
+        val sessionWhPerKmSynthesised: Boolean = false,
+        /**
          * Elapsed time since the first motion sample of the current
          * connection — no ticker involved. See [DefaultRideDashboardComponent].
          */
@@ -109,6 +123,35 @@ class DefaultRideDashboardComponent(
         } else {
             null
         }
+
+    /**
+     * Watt-hours this connection has drawn, **integrated** from the motion
+     * stream's power — or null while the stream has offered fewer than two
+     * samples carrying a measured power.
+     *
+     * A plain `var` rather than a State field, exactly like the peak trackers
+     * above and for the same reason: it is not what the screen draws. What the
+     * screen draws is [RideDashboardComponent.State.sessionWhPerKm], which is
+     * this divided by the session distance and gated by
+     * [MotionReadings.sessionConsumption] — and on any vehicle that keeps real
+     * counters, this number is computed and then ignored, because a measurement
+     * wins.
+     */
+    private var synthesisedSessionWh: Float? = null
+
+    /**
+     * The session consumption for [motion] against whatever
+     * [synthesisedSessionWh] currently holds, with its provenance.
+     *
+     * Called from exactly one place — the [BmsRepository.motionSamples]
+     * collector, which is the **single writer** of
+     * [RideDashboardComponent.State.sessionWhPerKm] and its `…Synthesised`
+     * twin. That flow emits once per motion sample by contract, so both halves
+     * of the answer (a longer integral, and the newer `tripKm` it is divided
+     * by) arrive together and neither needs a second collector to notice it.
+     */
+    private fun sessionConsumptionOf(motion: ControllerData) =
+        MotionReadings.sessionConsumption(motion, synthesisedSessionWh)
 
     // -----------------------------------------------------------------------------------------
     // G §9.2 — the learned widths of the CURRENT and POWER dials
@@ -386,8 +429,10 @@ class DefaultRideDashboardComponent(
                 ),
                 currentRangeA = initialCurrentRange,
                 powerRangeW = initialPowerRange,
+                // The measured branch, unchanged: no samples have been collected
+                // yet, so there is nothing to synthesise from.
                 sessionWhPerKm = MotionReadings.sessionWhPerKm(initialMotion),
-                uptimeSeconds = sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
+                uptimeSeconds =sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
             )
         )
     }
@@ -405,17 +450,46 @@ class DefaultRideDashboardComponent(
                 // count the same sample twice towards a median (`§9.2` item 2).
                 val (currentRange, powerRange) = foldPeaks(motion)
                 persistPeaksIfRungChanged(_state.value.vehicle)
+                // NOT the session consumption: [BmsRepository.motionSamples] emits
+                // once per motion sample, so the collector below runs for this same
+                // sample with the fresh integral in hand and is the single writer of
+                // those two fields. Computing them here as well was a second
+                // derivation that the sweep showed nothing could tell from its
+                // absence — whichever collector ran second decided the state, and
+                // that was always the other one.
                 _state.update { current ->
                     current.copy(
                         motion = motion,
                         uptimeSeconds = uptime,
-                        sessionWhPerKm = MotionReadings.sessionWhPerKm(motion),
                         currentRangeA = currentRange,
                         powerRangeW = powerRange,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, motion, current.battery, current.units,
                             currentRangeA = currentRange, powerRangeW = powerRange
                         )
+                    )
+                }
+            }
+        }
+
+        // The synthesised half of the consumption figure (`I` Task 8). Its own
+        // collector rather than a fold inside the motion one above, because the
+        // repository re-reads the ring buffer per emission and the integral is
+        // over the whole retained window — folding it in beside `foldPeaks`
+        // would make it look like a per-sample accumulator, which it is not:
+        // it is recomputed from scratch, so a re-run of `_state.update` or a
+        // duplicated emission cannot double-count.
+        scope.launch {
+            bmsRepository.motionSamples(RideEnergy.SESSION_WINDOW).collect { samples ->
+                // Bounded to THIS connection: the buffer deliberately survives a
+                // reconnect to the same address, while `tripKm` — the divisor
+                // waiting downstream — restarts with the protocol.
+                synthesisedSessionWh = RideEnergy.sessionWh(samples, since = sessionStartedAt)
+                _state.update { current ->
+                    val session = sessionConsumptionOf(current.motion)
+                    current.copy(
+                        sessionWhPerKm = session?.whPerKm,
+                        sessionWhPerKmSynthesised = session?.synthesised == true
                     )
                 }
             }
