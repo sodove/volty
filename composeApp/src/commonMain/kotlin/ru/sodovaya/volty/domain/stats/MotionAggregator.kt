@@ -178,15 +178,29 @@ object MotionAggregator {
             // this object where the obvious "totals are sums" instinct is
             // actively wrong.
             //
-            // On a VESC gateway these two do not come from the controllers at
-            // all. They come from `COMM_GET_VALUES_SETUP`, which reports the
-            // whole SETUP: `mc_interface_get_setup_values()` has already summed
+            // These come from `COMM_GET_VALUES_SETUP`, which since `I` Task 4 is
+            // asked of **every** controller — so a two-uBox vehicle hands this
+            // fold two readings of the same journey. `maxOf` returns it once; a
+            // sum would return twice the distance the vehicle has ever
+            // travelled, and the trip with it.
+            //
+            // **The reason is the ground, not the firmware.** This comment used
+            // to say `mc_interface_get_setup_values()` "has already summed
             // across every CAN node and divided the tachometer by the number of
-            // VESCs before answering. Since `I` Task 4 that frame is asked of
-            // **every** controller, so a two-uBox vehicle hands this fold the
-            // SAME vehicle odometer twice. `maxOf` returns that odometer; a sum
-            // would return twice the distance the vehicle has ever travelled,
-            // and the trip with it.
+            // VESCs" — that is the firmware inverted, and no such division
+            // exists anywhere. The SETUP frame's two distance fields are
+            // `mc_interface_get_distance()` / `_abs()` (`commands.c:853,856`),
+            // which scale this node's OWN tachometer by its OWN wheel config
+            // (`mc_interface.c:1624-1643`); `mc_interface_get_setup_values()`
+            // CAN-sums the currents and the four Ah/Wh counters and never
+            // touches a tachometer at all (`mc_interface.c:1651-1688`).
+            //
+            // `maxOf` survives the correction, on a stronger reason: two
+            // controllers bolted to one vehicle travel the same ground, so their
+            // LOCAL odometers agree, and the max of equal numbers is that
+            // number. The old reason needed the firmware to be doing something
+            // clever; this one only needs the wheels to be attached to the same
+            // frame.
             //
             // Pinned by `MotionAggregatorTest.one vehicle odometer reported by
             // two controllers is not doubled`. See `VescGatewayProtocol`'s
@@ -196,6 +210,16 @@ object MotionAggregator {
             // Summed over the contributors that KEEP counters, for the same
             // reason as powerW above — one filtered list ([counting]) because
             // one flag answers for all four.
+            //
+            // The sum is safe even though these four ARE CAN-summed on the wire
+            // (`mc_interface.c:1655-1679` — unlike the distances above, which
+            // are not). It is safe because of a decision taken elsewhere:
+            // `VescGatewayProtocol.publishController` copies only speed, its
+            // source, odometer, trip and battery level out of the SETUP overlay,
+            // so the counters reaching this fold come from `GET_VALUES` and are
+            // genuinely per-node. If anyone ever adds them to that overlay, THIS
+            // fold starts double-counting — the two decisions are coupled, and
+            // this is the only place that says so.
             consumedAh = counting.sumOf { it.consumedAh.toDouble() }.toFloat(),
             consumedWh = counting.sumOf { it.consumedWh.toDouble() }.toFloat(),
             regenAh = counting.sumOf { it.regenAh.toDouble() }.toFloat(),

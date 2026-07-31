@@ -63,18 +63,55 @@ object VescValues {
      *    `duty == 0 && x` conjunction that separates the two: a freewheeling
      *    motor at high `rpm` with zero duty is exactly what descending a hill
      *    looks like. Contrast [ControllerData.hasMotorTemp] just above, which IS
-     *    clearable for the same reason `v_in` is — a thermistor is an external
-     *    sensor and its absence has a sentinel on the wire.
+     *    clearable — but only on ONE of its two paths, and the distinction
+     *    matters because this contrast is what makes the rule falsifiable:
+     *
+     *      - a **failed reading** (an unwired NTC divider reading 0 on the ADC,
+     *        so the conversion divides by zero) produces NaN/inf/out-of-range,
+     *        and `mc_interface.c:2303-2305` clamps that to `-100.0` — below
+     *        [NO_MOTOR_SENSOR_BELOW_C], so it IS a sentinel on the wire and
+     *        [hasMotorTemp] catches it. That is the path the rule predicts and
+     *        it holds;
+     *      - `TEMP_SENSOR_DISABLED` — the NORMAL setting on a motor with no
+     *        thermistor — takes `mc_interface.c:2295-2296`,
+     *        `temp_motor = motor->m_temp_override`, which is zero-initialised
+     *        and only ever written by an LBM script (`:1788`). So the wire
+     *        carries **`0.0 °C`**, and this decoder reads it as a real 0 °C with
+     *        `hasMotorTemp = true`.
+     *
+     *    **That second path is a producer-side absence we cannot detect at
+     *    all** — the same debt as the `escTempC` phantom recorded on
+     *    [ControllerData.hasEscTemp], and for the same reason: an unmeasured
+     *    quantity published as a plausible number, with nothing on the frame to
+     *    say so. It is not fixed here and it is not fixable from these bytes.
      *  - **the four `amp_hours`/`watt_hours` counters are RAM totals kept from
      *    boot.** `0 Ah` on a VESC that booted a minute ago is a measurement, and
      *    it is the same four zeros a hypothetical firmware keeping no counters
      *    would send. The one witness worth testing — "all four are exactly 0
-     *    while the odometer is not" — does not hold either: on the SETUP frame
-     *    the tachometer is SETUP-WIDE (already summed across CAN by
-     *    `mc_interface_get_setup_values`), so a freshly-booted node legitimately
-     *    reports 0 counters beside a neighbour's non-zero distance; on
-     *    `GET_VALUES` the tachometer is raw counts this decoder does not publish
-     *    at all.
+     *    while the odometer is not" — fails in **both** directions, and the
+     *    firmware is the other way round from what an earlier revision of this
+     *    comment claimed:
+     *
+     *      - **false positives.** `mc_interface.c:2015` integrates all four
+     *        counters only `if (fabsf(current_filtered) > 1.0)`, while the
+     *        distance behind them accumulates from raw rotor-angle steps with no
+     *        current condition at all (`mcpwm_foc.c:3799-3811`). A vehicle
+     *        pushed or rolled after a fresh boot therefore shows four zero
+     *        counters beside a genuinely non-zero odometer, on ONE node, with no
+     *        CAN neighbour involved;
+     *      - **false negatives.** The counters ARE CAN-summed — that is exactly
+     *        what `mc_interface_get_setup_values()` does
+     *        (`mc_interface.c:1655-1679`, `ah_tot`/`wh_tot` accumulate every
+     *        live `can_status_msg_2`/`_3`) — so a counter-less node sharing a
+     *        bus with a real VESC reports NON-ZERO counters and the witness
+     *        misses the case it exists to detect.
+     *
+     *    The distances are **not** setup-wide, which is where the earlier claim
+     *    inverted the firmware: the SETUP frame's two distance fields are
+     *    `mc_interface_get_distance()` / `_abs()` (`commands.c:853,856`), and
+     *    those read this node's OWN tachometer scaled by its OWN wheel config
+     *    (`mc_interface.c:1624-1643`). `mc_interface_get_setup_values()` never
+     *    touches a tachometer.
      *
      * **Coupling them to `v_in` was considered and rejected.** A node that
      * answers with a wholly zeroed struct has a phantom duty as surely as a

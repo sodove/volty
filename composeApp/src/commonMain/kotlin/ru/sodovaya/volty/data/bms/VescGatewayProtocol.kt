@@ -187,8 +187,19 @@ data class GatewaySource(
  *
  * `COMM_GET_VALUES_SETUP` reports the **setup**, not the unit: VESC's
  * `mc_interface_get_setup_values()` sums current, power and amp-hours across
- * every CAN node it has heard from, and divides the tachometer by the number of
- * VESCs. Publishing that decode as the answering controller's `ControllerData`
+ * every CAN node it has heard from (`mc_interface.c:1651-1688`).
+ *
+ * It does **not** touch the tachometer, and an earlier revision of this
+ * paragraph claiming it "divides the tachometer by the number of VESCs" was the
+ * firmware inverted — no such division exists. The frame's two distance fields
+ * are `mc_interface_get_distance()` / `_abs()` (`commands.c:853,856`), read off
+ * this node's own tachometer and its own wheel config. That does not weaken the
+ * overlay: speed, odometer and trip are vehicle-level because two controllers
+ * bolted to one frame cover the same ground, which is a stronger guarantee than
+ * a firmware behaviour. `num_vescs` IS on the frame (`commands.c:874`), as its
+ * own field, and this decoder does not read it.
+ *
+ * Publishing that decode as the answering controller's `ControllerData`
  * would hand `MotionAggregator` — which SUMS currents across controllers — a
  * figure that already includes the other uBox, and the dashboard would read
  * roughly double the real current. So only the vehicle-level scalars it is
