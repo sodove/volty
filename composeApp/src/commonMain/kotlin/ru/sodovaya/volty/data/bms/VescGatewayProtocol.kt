@@ -151,21 +151,66 @@ data class GatewaySource(
  *
  * That statement is about a SINGLE cycle, and it is worth being precise, because
  * the cost of "the ones that cannot simply cost their timeout" is not small: on
- * the rider's vehicle it is roughly 1000 ms of every ~1110 ms cycle. **Repeated**
- * silence, accumulated across cycles, IS a usable signal — one timeout is
- * ambiguous, twenty are not. `I` Task 11 uses it, and uses it to **suppress**
- * rather than to elect: after several consecutive non-answers a (controller,
- * opcode) pair stops being asked, with a re-probe on reconnect and on a long
- * timer. That is compatible with everything above rather than a reversal of it —
- * asking everybody remains the right default, and suppression is per opcode
- * because this very head unit refuses both `GET_VALUES` opcodes while answering
- * `COMM_BMS_GET_VALUES` perfectly well.
+ * the rider's vehicle it was roughly 1000 ms of every ~1110 ms cycle.
+ * **Repeated** silence, accumulated across cycles, IS a usable signal — one
+ * timeout is ambiguous, twenty are not. That is what [suppressedAtMs] does with
+ * it, and it **suppresses** rather than elects: see the next section.
  *
  * The traffic this adds is one request per controller per cycle: the plan grows
  * from `1 + controllers + packs` to `2 x controllers + packs`. That growth is
  * bounded by [checkSilenceBudget], which is computed from the plan size and
  * therefore already accounts for it — a plan that no longer fits is refused at
  * construction rather than discovered on the road.
+ *
+ * ## A node that has never answered is not asked twice a second (`I` Task 11)
+ *
+ * After [SUPPRESS_AFTER_SILENT_CYCLES] consecutive non-answers, one
+ * (controller, opcode) pair stops being sent at all — [suppressedAtMs] — and is
+ * probed once more only on reconnect ([reset]) or after
+ * [REPROBE_INTERVAL_MS]. On the rider's scooter that takes the cycle from five
+ * requests costing ~1110 ms to three costing ~110 ms: the head unit's two dead
+ * `GET_VALUES` opcodes were nine tenths of the ride's telemetry latency.
+ *
+ * Three things about it are load-bearing rather than incidental:
+ *
+ *  - **it is per (controller, OPCODE), never per node.** The rider's head unit
+ *    answers `COMM_BMS_GET_VALUES` — it is the only thing on the vehicle that
+ *    answers for the ANT pack — while refusing both `GET_VALUES` opcodes.
+ *    Suppressing the node would silence the one thing it is good at;
+ *  - **pack requests do not participate at all.** [bmsRequest]'s silence is
+ *    already claimed by [HOSTED_BMS_WARMUP_MS]: a contentless outcome, silence
+ *    included, is a warm-up for six seconds before it is a verdict, because the
+ *    same outcome is what an ANT bridge reports while it is merely
+ *    reconnecting. A pack suppressed after three silent cycles (~0.3 s on a
+ *    suppressed plan) would stop being asked long before that warm-up expired,
+ *    and — because [onContentlessBms] is driven BY the request — the derived
+ *    battery would then never be published at all. The bridge that is slow to
+ *    come up is exactly the case the warm-up exists to survive, so suppression
+ *    stays away from it. Pinned by `a battery request is never suppressed,
+ *    however long the gateway stays silent`, and, from the other side, by
+ *    `a derived slot falls back to the rail when the gateway answers nothing at
+ *    all` and `a hosted BMS lost mid-ride hands back to the substitute once its
+ *    reading is stale`, both of which go dark the moment a pack can be
+ *    suppressed;
+ *  - **at most ONE suppressed request is re-probed per cycle.** Re-probes that
+ *    all fire on the same timer would periodically cost the full worst case
+ *    again — a loop that stalls on a schedule instead of being permanently
+ *    slow, which is strictly harder to diagnose. The pairs stagger themselves:
+ *    a re-probe that goes unanswered restarts its own clock, so the next one
+ *    due gets the following cycle. Pinned by `at most one suppressed request is
+ *    re-probed per cycle`.
+ *
+ * A **failed write is not a node's silence** and does not count towards
+ * suppression: the request never reached the wire, so the node was never asked.
+ * Counting it would let one dropped link suppress a CAN bus that is perfectly
+ * healthy — the same confident-wrong-conclusion class this part exists to
+ * close. Pinned by `a write that never reached the wire is not the node's
+ * silence`.
+ *
+ * A right-opcode-but-undecodable reply IS an answer, here as everywhere else in
+ * this file: the node handles the opcode, and what came back is a decode
+ * problem rather than an unsupported request. Suppression is about what the
+ * node will not answer, not about what we cannot read.
  *
  * Each answering controller now carries its own overlay, which is correct at the
  * fold: `MotionAggregator` takes `maxOf` for speed/odometer/trip and averages
@@ -344,6 +389,56 @@ class VescGatewayProtocol(
         const val HOSTED_BMS_WARMUP_MS: Long = 6_000L
 
         /**
+         * How many consecutive cycles one (controller, opcode) pair may go
+         * unanswered before it stops being sent — the number of timeouts it
+         * takes to turn "a slow or booting node" into "a node that does not
+         * handle this opcode".
+         *
+         * Three, and the two ends are what fix it. One timeout is ambiguous by
+         * construction (§10.1: silence is indistinguishable from a slow node),
+         * and two is one cycle's bad luck — a uBox that misses a beat while it
+         * reboots must not vanish for [REPROBE_INTERVAL_MS]. Beyond three the
+         * evidence stops improving and the cost does not: every extra cycle of
+         * proof is another `replyTimeoutMs + lateReplyGuardMs` per dead pair,
+         * paid at the start of every single connection. On the rider's scooter
+         * three cycles is ~3.3 s of the old slow loop before the fast one
+         * begins.
+         *
+         * Pinned from both sides by `a controller that never answers stops
+         * being asked`, which asserts the dead node is asked exactly three
+         * times and then not at all.
+         */
+        const val SUPPRESS_AFTER_SILENT_CYCLES: Int = 3
+
+        /**
+         * How long a suppressed (controller, opcode) pair stays suppressed
+         * before one request is spent probing it again.
+         *
+         * The trade is one-sided in both directions, so it is set where they
+         * cross. A re-probe costs `replyTimeoutMs + lateReplyGuardMs` (500 ms
+         * at the defaults) when it fails, which against 30 s is ~1.7 % of the
+         * loop per suppressed pair — invisible next to the ~90 % this
+         * suppression gives back. Shortening it buys a faster recovery at a
+         * cost that climbs linearly; lengthening it saves almost nothing and
+         * makes a woken uBox invisible for longer.
+         *
+         * What the number really buys is the recovery bound: **a controller
+         * that was asleep or booting rejoins within half a minute**, without
+         * the rider doing anything. That is the same order as the 60 s ceiling
+         * `ant_bms.c`'s own reconnect backs off to, so nothing on this vehicle
+         * recovers on a slower schedule than the firmware does.
+         *
+         * Stated plainly, because it is a real regression against the loop this
+         * replaces: before suppression a sleeping controller came back on its
+         * FIRST reply, one cycle after it woke. It now comes back within
+         * [REPROBE_INTERVAL_MS] of waking. That is the price of not asking a
+         * dead node twice a second, and it is pinned end-to-end — through the
+         * real orchestrator and its staleness sweep — by `a silent controller
+         * goes offline while the hosted battery stays online`.
+         */
+        const val REPROBE_INTERVAL_MS: Long = 30_000L
+
+        /**
          * The budget one link may spend on a run of silent sources before the
          * session's stale-sample watchdog tears it down — a restatement of
          * `BleConfig.staleSampleMs`, NOT an import: `data/ble` depends on
@@ -398,6 +493,22 @@ class VescGatewayProtocol(
          * was healthy. Failing loudly at construction is the honest outcome: a
          * plan that cannot meet this bound does not work, and the message says
          * which knob to turn.
+         *
+         * **`I` Task 11's suppression does NOT widen this**, and the decision
+         * is deliberate rather than an omission. Suppression makes the
+         * STEADY-STATE cycle smaller — the rider's five requests become three —
+         * but it is a runtime property that engages only after
+         * [SUPPRESS_AFTER_SILENT_CYCLES] cycles have already timed out. A
+         * vehicle legal only once suppression had engaged would blow this
+         * budget during the first seconds of every connect, and "correct on
+         * average, broken exactly when it matters" is the defect class this
+         * whole part has been closing. So the ceiling keeps following the WORST
+         * case: [planSize] is still the whole plan, and the five-controller
+         * limit Task 4 arrived at stands unchanged. The arithmetic stays honest
+         * in the other direction too — the set of requests a cycle issues is
+         * always a SUBSET of the plan (a suppressed pair is skipped, and at
+         * most one re-probe is added back), so no cycle can ever cost more than
+         * this bound allows.
          */
         internal fun checkSilenceBudget(
             planSize: Int,
@@ -532,8 +643,48 @@ class VescGatewayProtocol(
         /** Apply a matching reply payload. */
         val consume: (ByteArray) -> Unit,
         /** Forget whatever this request last produced, because it went unanswered. */
-        val onSilence: () -> Unit
+        val onSilence: () -> Unit,
+        /**
+         * The (controller, opcode) pair this request's silence accumulates
+         * under, or **null for a request that is never suppressed** — every
+         * pack request, and the composer's `PING_CAN`.
+         *
+         * Baked in at build time like [frame] is, so "whose silence was that"
+         * is answered by what we asked for rather than by anything on the wire.
+         */
+        val suppression: SilentPair? = null
     )
+
+    /**
+     * One (controller, opcode) pair, the unit suppression works in.
+     *
+     * The opcode is part of the key and that is the whole point: the rider's
+     * head unit answers `COMM_BMS_GET_VALUES` while refusing both `GET_VALUES`
+     * opcodes, so a key without it would silence the only node on the vehicle
+     * that speaks for the ANT pack.
+     */
+    private data class SilentPair(val globalIndex: Int, val opcode: Int)
+
+    /**
+     * How many consecutive cycles each pair has now gone unanswered, for the
+     * pairs that are neither answering nor yet suppressed. A pair reaching
+     * [SUPPRESS_AFTER_SILENT_CYCLES] moves to [suppressedAtMs] and leaves here;
+     * any answer at all drops it. Only the poll loop writes it.
+     */
+    @Volatile private var silentRunCycles: Map<SilentPair, Int> = emptyMap()
+
+    /**
+     * The suppressed pairs, each stamped with **when it was last put on the
+     * wire** — the moment it was suppressed, or the moment its most recent
+     * re-probe went unanswered. Not "when it was suppressed": a failed re-probe
+     * restarts the clock, which is what keeps two pairs suppressed moments
+     * apart from coming due in the same cycle forever after.
+     *
+     * Cleared wholesale by [reset], which is the "re-probe on reconnect,
+     * always" half of the rule: a reconnect is the one moment where a node's
+     * previous refusal says nothing at all about this session.
+     */
+    @Volatile private var suppressedAtMs: Map<SilentPair, Long> = emptyMap()
 
     /**
      * Every SETUP first, then every `GET_VALUES`, then the batteries.
@@ -598,7 +749,10 @@ class VescGatewayProtocol(
         // this very cycle (see [plan]) and republishes without the overlay, or
         // is itself silent and drops the sample outright. Pinned by
         // `a silent SETUP drops the reported speed instead of freezing it`.
-        onSilence = { overlays = overlays - c.globalIndex }
+        onSilence = { overlays = overlays - c.globalIndex },
+        // The rider's head unit's permanent state: `commands.c` falls through
+        // to `default: break;` on opcode 47 and never builds a reply.
+        suppression = SilentPair(c.globalIndex, VescValues.OPCODE_GET_VALUES_SETUP)
     )
 
     private fun valuesRequest(c: GatewaySource) = Request(
@@ -631,7 +785,8 @@ class VescGatewayProtocol(
         onSilence = {
             perUnit = perUnit - c.globalIndex
             motion = motion - c.globalIndex
-        }
+        },
+        suppression = SilentPair(c.globalIndex, VescValues.OPCODE_GET_VALUES)
     )
 
     private fun bmsRequest(p: GatewaySource) = Request(
@@ -679,6 +834,11 @@ class VescGatewayProtocol(
         // [applyValues] instead would emit one per answering controller, which
         // is the duplicated-sample stutter in another costume.
         onSilence = { onContentlessBms(p) }
+        // NO `suppression` key, deliberately — see the class KDoc. This
+        // request's silence is already spoken for by [HOSTED_BMS_WARMUP_MS],
+        // and the line above is why suppressing it could not merely slow the
+        // battery down: `onContentlessBms` is driven BY the request, so a pack
+        // that stopped being asked would stop being derived at all.
     )
 
     /**
@@ -828,8 +988,68 @@ class VescGatewayProtocol(
         if (plan.isEmpty()) return
         while (currentCoroutineContext().isActive) {
             serviceCanScan(send)
-            for (request in plan) exchange(request, send)
+            // At most ONE suppressed pair is re-probed per cycle. Without this
+            // every pair suppressed within the same cycle comes due within the
+            // same cycle too, and the loop periodically pays the whole
+            // pre-suppression worst case again — a stall on a schedule, which
+            // is harder to diagnose than the permanently slow loop it replaced.
+            // Per cycle, so it resets here rather than being protocol state.
+            var reprobedThisCycle = false
+            for (request in plan) {
+                val key = request.suppression
+                val suppressedAt = if (key == null) null else suppressedAtMs[key]
+                if (suppressedAt != null) {
+                    if (reprobedThisCycle) continue
+                    if (nowMs() - suppressedAt < REPROBE_INTERVAL_MS) continue
+                    reprobedThisCycle = true
+                }
+                // A plan whose every suppressible request is suppressed and
+                // whose packs are empty issues nothing at all this cycle and
+                // paces on [pollIntervalMs] alone. That is a delay loop, not a
+                // spin, and unlike the empty-plan case above it must NOT
+                // return: the re-probe above is what lets a bus that wakes back
+                // up be found again.
+                when (exchange(request, send)) {
+                    Outcome.ANSWERED -> if (key != null) rememberAnswer(key)
+                    Outcome.SILENT -> if (key != null) rememberSilence(key)
+                    // A write that never reached the wire says nothing about
+                    // the node — see the class KDoc.
+                    Outcome.LINK_FAILED -> Unit
+                }
+            }
             delay(pollIntervalMs)
+        }
+    }
+
+    /**
+     * This pair answered. Forget both the run of silences it had accumulated
+     * and any suppression, so a node that starts answering is **fully**
+     * restored to the every-cycle walk rather than left on the re-probe timer.
+     *
+     * Per pair, and only this pair: an answer to `GET_VALUES` is not evidence
+     * about `GET_VALUES_SETUP`, which is the exact confusion the rider's head
+     * unit exists to punish.
+     */
+    private fun rememberAnswer(key: SilentPair) {
+        silentRunCycles = silentRunCycles - key
+        suppressedAtMs = suppressedAtMs - key
+    }
+
+    /** This pair was asked and said nothing. */
+    private fun rememberSilence(key: SilentPair) {
+        if (key in suppressedAtMs) {
+            // A re-probe that went unanswered. It stays suppressed, and its
+            // clock restarts from now — which is what staggers the pairs: the
+            // next one due gets the next cycle rather than sharing this one.
+            suppressedAtMs = suppressedAtMs + (key to nowMs())
+            return
+        }
+        val run = (silentRunCycles[key] ?: 0) + 1
+        if (run < SUPPRESS_AFTER_SILENT_CYCLES) {
+            silentRunCycles = silentRunCycles + (key to run)
+        } else {
+            silentRunCycles = silentRunCycles - key
+            suppressedAtMs = suppressedAtMs + (key to nowMs())
         }
     }
 
@@ -911,6 +1131,22 @@ class VescGatewayProtocol(
         }
     }
 
+    /** How one exchange settled. Only the loop reads it, for suppression. */
+    private enum class Outcome {
+        /** A reply with the expected opcode landed inside the window. */
+        ANSWERED,
+
+        /** The request went out and nothing came back — the node's own silence. */
+        SILENT,
+
+        /**
+         * The write threw: the request never reached the wire, so this is our
+         * link failing and not the node refusing. Deliberately distinct from
+         * [SILENT], because suppression must not blame a node for it.
+         */
+        LINK_FAILED
+    }
+
     /**
      * Send one request and wait for its bare reply, or give up.
      *
@@ -927,9 +1163,10 @@ class VescGatewayProtocol(
          * on `PING_CAN` alone (`C §10.2`) and would never answer inside 400 ms.
          */
         timeoutMs: Long = replyTimeoutMs
-    ) {
+    ): Outcome {
         val waiter = CompletableDeferred<Unit>()
         pending = Pending(request.expectedOpcode, request.consume, waiter)
+        var linkFailed = false
         val answered = try {
             withTimeoutOrNull(timeoutMs) {
                 send(request.frame)
@@ -947,18 +1184,20 @@ class VescGatewayProtocol(
             // to a request that was never sent. (This is the same reasoning as
             // the quiet window below, applied to the path that used to skip it.)
             pending = null
+            linkFailed = true
             // Pace the loop with the budget the reply would have cost so a dead
             // link cannot spin the CPU while the session's watchdog decides.
             delay(replyTimeoutMs)
             null
         }
-        if (answered != null) return
+        if (answered != null) return Outcome.ANSWERED
         // Timed out (or the write failed). Disarm FIRST, so a late reply lands
         // in the quiet window below and is dropped rather than credited to
         // whatever we ask next.
         pending = null
         request.onSilence()
         delay(lateReplyGuardMs)
+        return if (linkFailed) Outcome.LINK_FAILED else Outcome.SILENT
     }
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
@@ -1092,5 +1331,14 @@ class VescGatewayProtocol(
         // ever read together.
         overlays = emptyMap()
         tripBaselineKm = emptyMap()
+        // "Re-probe on reconnect, always." A node's refusal is evidence about
+        // the session it was collected in and nothing more: the next connection
+        // may be a different vehicle, or the same one with the uBox now awake,
+        // and a rider who power-cycles their scooter after a bad ride is
+        // entitled to have that work. Cheap, too — a reconnect already pays a
+        // handshake, so the few cycles it costs to re-learn the dead opcodes
+        // are lost in it.
+        silentRunCycles = emptyMap()
+        suppressedAtMs = emptyMap()
     }
 }

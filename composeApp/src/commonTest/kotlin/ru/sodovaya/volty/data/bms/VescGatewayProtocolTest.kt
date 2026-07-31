@@ -149,6 +149,14 @@ class VescGatewayProtocolTest {
 
     private companion object {
         const val LATENCY_MS = 20L
+
+        /**
+         * A link that answers in 300 ms rather than 20 — an ordinary BLE hop
+         * plus a CAN forward, and the condition under which `I` Task 11's
+         * re-probe stagger actually binds (see
+         * `at most one suppressed request is re-probed per cycle`).
+         */
+        const val SLOW_LATENCY_MS = 300L
         const val TIMEOUT_MS = 400L
         const val GUARD_MS = 100L
         const val CYCLE_GAP_MS = 50L
@@ -302,6 +310,40 @@ class VescGatewayProtocolTest {
         3 * LATENCY_MS + 2 * (TIMEOUT_MS + GUARD_MS) + CYCLE_GAP_MS
 
     /**
+     * One cycle of the default plan once a whole controller's two opcodes have
+     * been SUPPRESSED (`I` Task 11): three answered round-trips and the gap.
+     *
+     * It is the number the task exists for — the same vehicle, the same wire,
+     * 110 ms where [twoSilentCycleMs] was 1110.
+     */
+    private val suppressedCycleMs = 3 * LATENCY_MS + CYCLE_GAP_MS
+
+    /**
+     * A recorded request list split into cycles. The pack request is always a
+     * cycle's LAST (see `VescGatewayProtocol.plan`), so a boundary is the entry
+     * after each opcode-96, and anything past the final one belongs to a cycle
+     * the observation window cut in half.
+     */
+    private fun List<Pair<Int?, Int>>.cycles(): List<List<Pair<Int?, Int>>> {
+        val out = mutableListOf<List<Pair<Int?, Int>>>()
+        var start = 0
+        forEachIndexed { i, request ->
+            if (request.second == VescBmsValues.OPCODE_BMS_GET_VALUES) {
+                out += subList(start, i + 1)
+                start = i + 1
+            }
+        }
+        return out
+    }
+
+    /**
+     * The same list trimmed to whole cycles, for the assertions that compare
+     * one request's count against the cycle count: without the trim every one
+     * of them would be hostage to wherever `advanceTimeBy` happened to stop.
+     */
+    private fun List<Pair<Int?, Int>>.wholeCycles(): List<Pair<Int?, Int>> = cycles().flatten()
+
+    /**
      * Advance to just inside the end of [count] full cycles — one millisecond
      * short of the next cycle's first request, which lands exactly on the
      * boundary and would otherwise be counted here.
@@ -394,7 +436,17 @@ class VescGatewayProtocolTest {
         loop.cancel(); device.cancel()
     }
 
-    /** Same invariant when a source is silent — the timeout must not overlap the next request. */
+    /**
+     * Same invariant when a source is silent — the timeout must not overlap the
+     * next request.
+     *
+     * The request COUNT changes across the window, and deliberately: for
+     * [VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES] cycles the quiet uBox
+     * is asked exactly like a live one (a slow node must never be skipped for
+     * being slow), and after that its two opcodes are suppressed and the cycle
+     * drops to three requests. Both stretches are counted here, because the
+     * one-in-flight invariant has to hold across the transition too.
+     */
     @Test
     fun `one request in flight still holds while a controller is silent`() = runTest {
         val p = protocol()
@@ -404,12 +456,14 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(4, cycleMs = twoSilentCycleMs)
+        advanceTimeBy(3 * twoSilentCycleMs + 2 * suppressedCycleMs - 1)
+        runCurrent()
 
         assertEquals(
-            20,
+            21,
             link.sent.size,
-            "4 cycles x 5 requests: a silent uBox costs its cycle two timeouts, never a skipped request"
+            "3 cycles x 5 requests while the rear uBox is merely quiet, then 2 x 3 once its two " +
+                "opcodes are suppressed — a timeout is never a skipped request, a verdict is"
         )
         assertEquals(1, link.maxOutstanding, "a timing-out request is still exactly one request")
         assertEquals(0, link.outstanding, "and every one of them settled")
@@ -1976,6 +2030,22 @@ class VescGatewayProtocolTest {
      * offline while the hosted battery keeps reporting. Nothing in this task
      * builds a second mechanism; this drives the real one, through the real
      * routing helpers a [ru.sodovaya.volty.data.ble.ConnectionSession] uses.
+     *
+     * **The tail of this test states `I` Task 11's price at the level a rider
+     * feels it.** It used to end "and it comes back online on its first reply",
+     * three seconds after waking. Under suppression a node that has gone quiet
+     * for twenty seconds is no longer being asked at all, so waking up is not
+     * enough — it comes back on the next re-probe, or immediately on the
+     * reconnect asserted here. That is a real regression against the old loop
+     * and it is written down rather than hidden: the compensation is that the
+     * cycle it leaves behind is ten times faster.
+     *
+     * The reconnect arm is the one this test can drive at all.
+     * `controllerMotionProtocol` does not thread a clock (`I` Task 5, A4), so a
+     * protocol the repository built measures [VescGatewayProtocol.REPROBE_INTERVAL_MS]
+     * against the real one while the loop above runs in virtual time — the
+     * timer arm is therefore owned by `a suppressed request is probed again on
+     * the long timer`, which builds its protocol directly.
      */
     @Test
     fun `a silent controller goes offline while the hosted battery stays online`() = runTest {
@@ -2030,9 +2100,17 @@ class VescGatewayProtocolTest {
 
         awake = true
         repeat(3) { advanceTimeBy(1_000); runCurrent(); nowMs += 1_000; drain() }
+        assertFalse(
+            assertNotNull(latest).controllers.first { it.controller.index == 1 }.isOnline,
+            "waking up is not enough once it has been suppressed: nothing on the link is asking it"
+        )
+
+        // The reconnect, which re-probes everything unconditionally.
+        p.reset()
+        repeat(3) { advanceTimeBy(1_000); runCurrent(); nowMs += 1_000; drain() }
         assertTrue(
             assertNotNull(latest).controllers.first { it.controller.index == 1 }.isOnline,
-            "and it comes back online on its first reply"
+            "and on a fresh connection it comes back online on its first reply"
         )
         loop.cancel(); device.cancel()
     }
@@ -2243,5 +2321,484 @@ class VescGatewayProtocolTest {
         assertEquals(50f, motion.dutyPercent, 0.01f)
         assertEquals(60f, motion.batteryCurrentA, 0.01f)
         loop.cancel(); device.cancel()
+    }
+
+    // ------------------------------------------------------------------
+    // 9. A node that has never answered is not asked twice a second (`I` Task 11)
+    // ------------------------------------------------------------------
+
+    /** Everything healthy except [CAN_A], which answers neither of its opcodes. */
+    private fun deadFrontScript(): (Int?, Int) -> ScriptedReply = { canId, opcode ->
+        if (canId == CAN_A) ScriptedReply(TIMEOUT_MS, null) else healthyScript()(canId, opcode)
+    }
+
+    /**
+     * **The task, stated as a cycle's worth of requests.** On the rider's
+     * scooter roughly 1000 ms of every 1110 ms cycle was two dead requests
+     * timing out — nine tenths of the ride's telemetry latency spent politely
+     * asking a bridge that never answers, twice a second, forever.
+     *
+     * Asserted on the requests actually ISSUED rather than on elapsed virtual
+     * time, and both ends are pinned: exactly three cycles of asking (one
+     * timeout is indistinguishable from a slow node, two is a reboot), then
+     * none at all. The throughput claim rides on the same list — the 1100 ms
+     * window that used to hold ONE cycle holds ten.
+     */
+    @Test
+    fun `a controller that never answers stops being asked`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p, deadFrontScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(3, cycleMs = twoSilentCycleMs)
+
+        assertEquals(
+            3, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "a node that has merely gone quiet is asked exactly like a live one, three cycles over"
+        )
+        assertEquals(
+            3, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES },
+            "and its per-unit request too — the evidence is per opcode, so it accrues per opcode"
+        )
+
+        val mark = link.sent.size
+        advanceTimeBy(10 * suppressedCycleMs)
+        runCurrent()
+        val after = link.sent.drop(mark)
+
+        assertTrue(
+            after.none { it.first == CAN_A },
+            "the dead node is not asked again: $after"
+        )
+        assertEquals(
+            List(10) {
+                listOf(
+                    CAN_B to VescValues.OPCODE_GET_VALUES_SETUP,
+                    CAN_B to VescValues.OPCODE_GET_VALUES,
+                    null to VescBmsValues.OPCODE_BMS_GET_VALUES
+                )
+            }.flatten(),
+            after,
+            "and the 1100 ms that used to hold ONE five-request cycle now holds ten three-request " +
+                "ones — the dashboard refreshes ten times faster on the same wire"
+        )
+        assertNull(p.latestMotion(0), "the suppressed node still has no sample, as `no reply, no sample` says")
+        assertNotNull(p.latestMotion(1), "and its neighbour is reporting throughout")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The rider's own vehicle**, and the reason suppression is keyed by
+     * (controller, OPCODE) rather than by node: their head unit is listed as a
+     * controller and answers neither `GET_VALUES` opcode, while being the only
+     * thing on the whole scooter that answers `COMM_BMS_GET_VALUES` — it hosts
+     * the ANT bridge. Suppress the node and the vehicle loses its battery,
+     * which is the defect `I` Task 5 spent a whole task restoring.
+     */
+    @Test
+    fun `suppression is per opcode, so the head unit's own battery bridge keeps answering`() = runTest {
+        val p = protocol(
+            controllers = listOf(
+                // The head unit itself: no CAN id, because it IS the endpoint.
+                GatewaySource(globalIndex = 0, canId = null),
+                GatewaySource(globalIndex = 1, canId = U_BOX, motor = MotorConfig(wheelDiameterMm = 254))
+            ),
+            packs = listOf(GatewaySource(globalIndex = 0, canId = null, derived = true))
+        )
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                opcode == VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, bmsFrame())
+                // VESC Express falls through to `default: break;` on both.
+                canId == null -> ScriptedReply(TIMEOUT_MS, null)
+                opcode == VescValues.OPCODE_GET_VALUES_SETUP -> ScriptedReply(LATENCY_MS, setupFrame())
+                else -> ScriptedReply(LATENCY_MS, valuesFrame(dutyRaw = 250))
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(3, cycleMs = twoSilentCycleMs)
+
+        val mark = link.sent.size
+        advanceTimeBy(10 * suppressedCycleMs)
+        runCurrent()
+        val after = link.sent.drop(mark).wholeCycles()
+
+        assertEquals(
+            10, after.count { it == null to VescBmsValues.OPCODE_BMS_GET_VALUES },
+            "the head unit is asked for the battery every single cycle: $after"
+        )
+        assertTrue(
+            after.none { it.first == null && it.second != VescBmsValues.OPCODE_BMS_GET_VALUES },
+            "while the two opcodes it refuses are gone from the cycle: $after"
+        )
+        assertEquals(
+            75.5f, assertNotNull(p.latestData(0), "the ANT bridge is still being read").voltage, 0.001f,
+            "suppressing the NODE would have silenced the one thing it is actually good at"
+        )
+        assertNotNull(p.latestMotion(1), "and the uBox behind it keeps reporting")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **Pack requests never participate, and this is not a tidiness rule.**
+     * `bmsRequest`'s silence is already claimed by
+     * [VescGatewayProtocol.HOSTED_BMS_WARMUP_MS]: a contentless outcome —
+     * sentinel, undecodable, or silence — is a warm-up for six seconds before
+     * it is a verdict, because it is also what an ANT bridge reports while it
+     * is merely reconnecting. Three silent cycles is ~0.3 s on a suppressed
+     * plan, so a suppressible pack would be given up on twenty times inside
+     * that window; and because `onContentlessBms` is driven BY the request, a
+     * pack that stopped being asked would never be derived at all.
+     */
+    @Test
+    fun `a battery request is never suppressed, however long the gateway stays silent`() = runTest {
+        val p = derivedProtocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(20, cycleMs = oneSilentCycleMs)
+
+        assertEquals(
+            20, link.sent.count { it.second == VescBmsValues.OPCODE_BMS_GET_VALUES },
+            "twenty cycles, twenty asks — six of them past the point three silences would have " +
+                "suppressed a controller"
+        )
+        assertEquals(
+            78.2f,
+            assertNotNull(
+                p.latestData(0),
+                "and the derived battery is still being published, which only the request can do"
+            ).voltage,
+            0.01f
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **Re-probe, arm one of two: the long timer.** A controller that was
+     * merely asleep or booting has to be able to recover without the rider
+     * doing anything — so a suppressed pair is spent one request every
+     * [VescGatewayProtocol.REPROBE_INTERVAL_MS], and no more than that.
+     *
+     * Both halves are asserted: the probe happens (once per opcode, not once
+     * per cycle), and the node that stays dead is suppressed again rather than
+     * returning to the every-cycle walk.
+     */
+    @Test
+    fun `a suppressed request is probed again on the long timer`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p, deadFrontScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(3, cycleMs = twoSilentCycleMs)
+        val mark = link.sent.size
+
+        // Just past the re-probe for both of CAN_A's opcodes, which were
+        // suppressed 520 ms apart and therefore come due 520 ms apart.
+        advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 4 * twoSilentCycleMs)
+        runCurrent()
+        val probes = link.sent.drop(mark)
+
+        assertEquals(
+            1, probes.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "one probe for its SETUP in the whole window, not none and not a cycle's worth"
+        )
+        assertEquals(
+            1, probes.count { it == CAN_A to VescValues.OPCODE_GET_VALUES },
+            "and one for its per-unit request — the pairs are probed independently"
+        )
+
+        val mark2 = link.sent.size
+        advanceTimeBy(20 * suppressedCycleMs)
+        runCurrent()
+        assertTrue(
+            link.sent.drop(mark2).none { it.first == CAN_A },
+            "a probe that goes unanswered restores nothing: it is one request, not a reprieve"
+        )
+        assertNull(p.latestMotion(0), "and the node still has no sample")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The other side of the same rule: a node that ANSWERS a re-probe is put
+     * back in the every-cycle walk in full, per opcode, rather than left on the
+     * timer for the rest of the ride.
+     *
+     * The stated price is asserted first, because it is the honest cost of this
+     * task: a woken node is invisible until its probe comes round, however long
+     * it has been awake. Nothing is asking it.
+     */
+    @Test
+    fun `a node that starts answering is fully restored`() = runTest {
+        var awake = false
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (canId == CAN_A && !awake) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(3, cycleMs = twoSilentCycleMs)
+        awake = true
+
+        val napMark = link.sent.size
+        advanceTimeBy(100 * suppressedCycleMs)
+        runCurrent()
+        assertTrue(
+            link.sent.drop(napMark).none { it.first == CAN_A },
+            "a hundred cycles awake and still unasked — the price of not asking a dead node"
+        )
+        assertNull(p.latestMotion(0), "so it has no sample either, however healthy it now is")
+
+        advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS)
+        runCurrent()
+
+        val mark = link.sent.size
+        advanceTimeBy(20 * healthyCycleMs)
+        runCurrent()
+        // `drop(1)` as well as the trailing trim: [mark] falls inside a cycle
+        // here rather than on a boundary, so the first chunk is the tail of a
+        // cycle whose own CAN_A requests went out before the window opened.
+        val after = link.sent.drop(mark).cycles().drop(1).flatten()
+        val cycles = after.count { it.second == VescBmsValues.OPCODE_BMS_GET_VALUES }
+
+        assertTrue(cycles >= 10, "premise: whole cycles were observed after the probe ($cycles)")
+        assertEquals(
+            cycles, after.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "its SETUP is back in every cycle, not still on the re-probe timer"
+        )
+        assertEquals(
+            cycles, after.count { it == CAN_A to VescValues.OPCODE_GET_VALUES },
+            "and so is its per-unit request — restored in full, per opcode"
+        )
+        assertTrue(
+            abs(assertNotNull(p.latestMotion(0)).speedKmh - 47.0f) < 0.05f,
+            "and it is reporting its own ground speed again"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **CONSECUTIVE is a word in the rule and it has to be one in the code.** A
+     * uBox that drops the odd reply — a busy CAN bus, a frame lost to
+     * interference — is not a node that refuses the opcode, and three misses
+     * spread over twenty cycles must never add up to a verdict the way three in
+     * a row do. An answer resets the count, not merely the suppression.
+     */
+    @Test
+    fun `a controller that misses the odd reply is never suppressed`() = runTest {
+        var cycle = 0
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            // The pack request is the cycle's last, so this counts cycles.
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) cycle++
+            if (canId == CAN_B && opcode == VescValues.OPCODE_GET_VALUES && cycle % 2 == 0) {
+                ScriptedReply(TIMEOUT_MS, null)
+            } else {
+                healthyScript()(canId, opcode)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // Ten misses, none of them next to another.
+        advanceTimeBy(10 * (oneSilentCycleMs + healthyCycleMs) - 1)
+        runCurrent()
+
+        val cycles = link.sent.cycles()
+        assertTrue(cycles.size >= 15, "premise: plenty of cycles to look at (${cycles.size})")
+        assertTrue(
+            cycles.all { it.contains(CAN_B to VescValues.OPCODE_GET_VALUES) },
+            "every single cycle still asks it: " +
+                cycles.count { !it.contains(CAN_B to VescValues.OPCODE_GET_VALUES) } + " did not"
+        )
+        assertTrue(
+            abs(assertNotNull(p.latestMotion(1)).dutyPercent - 25f) < 0.01f,
+            "and it is reporting on the cycles it does answer"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The same word, on the other seam. A run of silences half-collected in one
+     * session must not be topped up by the next: a reconnect is exactly when a
+     * node's previous behaviour stops being evidence, and a session that
+     * inherited two silences would give the new one a single cycle to prove
+     * itself where the rule promises three.
+     */
+    @Test
+    fun `a reconnect forgets a half-finished run of silences`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p, deadFrontScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(2, cycleMs = twoSilentCycleMs)
+        assertEquals(
+            2, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "premise: a run is half collected — two silences of the three it takes"
+        )
+
+        p.reset()
+        val mark = link.sent.size
+        advanceTimeBy(4 * twoSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            3, link.sent.drop(mark).count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "the new session collects its own three silences, not one on top of the old two"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **Re-probe, arm two: a reconnect, always and immediately.** A refusal is
+     * evidence about the session it was collected in and nothing more — the
+     * next connection may be a different vehicle, or the same one with the uBox
+     * now awake, and a rider who power-cycles their scooter after a bad ride is
+     * entitled to have that work rather than to wait out half a minute.
+     */
+    @Test
+    fun `reconnecting asks the suppressed node again immediately`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p, deadFrontScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(3, cycleMs = twoSilentCycleMs)
+        val quietMark = link.sent.size
+        advanceTimeBy(5 * suppressedCycleMs)
+        runCurrent()
+        assertTrue(
+            link.sent.drop(quietMark).none { it.first == CAN_A },
+            "premise: it really was suppressed before the reconnect"
+        )
+
+        p.reset()
+        val mark = link.sent.size
+        advanceTimeBy(twoSilentCycleMs + suppressedCycleMs)
+        runCurrent()
+        val after = link.sent.drop(mark)
+
+        assertTrue(
+            after.any { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "a new session asks it again without waiting out the timer: $after"
+        )
+        assertTrue(
+            after.any { it == CAN_A to VescValues.OPCODE_GET_VALUES },
+            "both of its opcodes, not just the first one the plan reaches: $after"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The stagger, which is a hazard and not a polish note.** Every suppressed
+     * pair re-probing on the same timer means the cycle periodically costs the
+     * full pre-suppression worst case again — a loop that stalls on a schedule
+     * rather than one that is permanently slow, and strictly harder to diagnose.
+     *
+     * It binds whenever a suppressed cycle is LONGER than the gap between two
+     * pairs' due times, which is the ordinary case on a real link: the pairs
+     * come due as far apart as their timeouts were (500 ms at the defaults),
+     * and a cycle with several sources answering over BLE-plus-CAN-forwarding
+     * is longer than that. Hence [SLOW_LATENCY_MS] here — nothing exotic, just
+     * a link that answers in 300 ms instead of the fixture's usual 20.
+     *
+     * With the guard each of `CAN_A`'s two opcodes gets its own cycle. Without
+     * it the second is checked LATER IN THE SAME CYCLE, by which time the first
+     * one's own 500 ms timeout has carried the clock past its due time, and the
+     * cycle pays both.
+     */
+    @Test
+    fun `at most one suppressed request is re-probed per cycle`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            when {
+                canId == CAN_A -> ScriptedReply(TIMEOUT_MS, null)
+                opcode == VescValues.OPCODE_GET_VALUES_SETUP ->
+                    ScriptedReply(SLOW_LATENCY_MS, setupFrame())
+                opcode == VescValues.OPCODE_GET_VALUES ->
+                    ScriptedReply(SLOW_LATENCY_MS, valuesFrame(dutyRaw = 250))
+                else -> ScriptedReply(SLOW_LATENCY_MS, bmsFrame())
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // Well past both pairs' re-probes, which come due 800 ms apart while a
+        // suppressed cycle here lasts 950.
+        advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 8_000)
+        runCurrent()
+
+        // The first three are the cycles that collected the evidence, and each
+        // legitimately carries both of CAN_A's requests.
+        val settled = link.sent.cycles().drop(3)
+        assertTrue(settled.size >= 20, "premise: plenty of settled cycles to look at (${settled.size})")
+        assertTrue(
+            settled.any { cycle -> cycle.count { it.first == CAN_A } == 1 },
+            "premise: the re-probes really did fire inside the window"
+        )
+        assertTrue(
+            settled.all { cycle -> cycle.count { it.first == CAN_A } <= 1 },
+            "no cycle may pay for two re-probes at once — that is the pre-suppression worst case " +
+                "back on a schedule: " + settled.filter { c -> c.count { it.first == CAN_A } > 1 }
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **A failed write is our link dropping, not the node refusing.** The
+     * request never reached the wire, so nothing behind the gateway was asked
+     * and nothing behind it can be blamed — counting it would let one flaky
+     * link suppress a CAN bus that is answering perfectly, and leave it
+     * suppressed for [VescGatewayProtocol.REPROBE_INTERVAL_MS] after the link
+     * recovered.
+     */
+    @Test
+    fun `a write that never reached the wire is not the node's silence`() = runTest {
+        var writesFail = true
+        var setupSends = 0
+        val p = protocol(
+            controllers = listOf(GatewaySource(globalIndex = 0, canId = CAN_A)),
+            packs = emptyList()
+        )
+        val loop = launch {
+            p.runPollLoop { frame ->
+                // [2] FORWARD_CAN, [3] canId, [4] the inner opcode.
+                if ((frame[4].toInt() and 0xFF) == VescValues.OPCODE_GET_VALUES_SETUP) {
+                    setupSends++
+                    if (writesFail) throw IllegalStateException("write failed — the link dropped")
+                    p.onNotification(setupFrame())
+                } else {
+                    p.onNotification(valuesFrame())
+                }
+            }
+        }
+
+        // Six cycles of failed writes — twice over the suppression threshold.
+        // Each costs the reply budget it would have cost, then the quiet window.
+        advanceTimeBy(6 * (TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS) - 1)
+        runCurrent()
+        assertEquals(
+            6, setupSends,
+            "a request the link never sent is not evidence about the node that never heard it"
+        )
+
+        writesFail = false
+        advanceTimeBy(4 * CYCLE_GAP_MS)
+        runCurrent()
+        assertTrue(
+            abs(assertNotNull(p.latestMotion(0)).speedKmh - 47.0f) < 0.05f,
+            "so the moment the link recovers the node reports, with no 30 s probe to wait out"
+        )
+        loop.cancel()
     }
 }
