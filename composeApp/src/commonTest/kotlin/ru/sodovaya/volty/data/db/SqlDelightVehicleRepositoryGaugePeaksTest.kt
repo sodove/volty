@@ -216,6 +216,51 @@ class SqlDelightVehicleRepositoryGaugePeaksTest {
         assertEquals(GaugePeaks(24f, 1800f), repo.peaksOf("v1"), "...and it still wrote the peak")
     }
 
+    /**
+     * **An id nobody stored creates nothing — a genuine regression test, not a carried-over one.**
+     *
+     * Before `8.sqm` this was free: the writer was an `UPDATE ... WHERE id`, and an unknown id
+     * matched no row. `GaugePeakRow` has no row to update for a vehicle that has never been ridden,
+     * so the writer is an INSERT — and an unguarded one would write a parentless row where the
+     * UPDATE did nothing. `GaugePeakRow.sq`'s `WHERE EXISTS` is what keeps the old guarantee.
+     *
+     * The path is named, not hypothetical: `RideDashboardComponent.persistPeaksIfRungChanged` guards
+     * non-guest and non-demo but **not persisted**, and takes its vehicle from `activeVehicle`, which
+     * nothing disconnects when a vehicle is deleted (`SettingsComponent` just calls `delete`). A
+     * rider who deletes the vehicle they are riding keeps a live dashboard, and its next rung
+     * crossing arrives *after* the delete that could have cleaned up after it. Vehicle ids are
+     * caller-supplied strings, so the row left behind would be adopted by whoever next reuses the
+     * id — the same argument `deleteByVehicle`'s WHERE clause exists for.
+     */
+    @Test fun updateGaugePeaks_on_an_unknown_id_creates_nothing() = runTest {
+        val (repo, provider) = newInMemoryProvider()
+        repo.updateGaugePeaks("ghost", currentA = 24f, powerW = 1800f)
+        assertNull(repo.peaksOf("ghost"))
+        assertEquals(
+            emptyList(),
+            provider.database.gaugePeakRowQueries.selectAll().executeAsList(),
+            "a learned range was stored for a vehicle that does not exist"
+        )
+    }
+
+    /** The delete-mid-ride path exactly: the dashboard's next write lands after the delete. */
+    @Test fun a_peak_write_after_the_vehicle_was_deleted_leaves_nothing_behind() = runTest {
+        val (repo, provider) = newInMemoryProvider()
+        repo.upsert(vehicle())
+        repo.updateGaugePeaks("v1", currentA = 137f, powerW = 6421f)
+
+        // The rider deletes the vehicle from Settings while the ride dashboard is still connected...
+        repo.delete("v1")
+        // ...and the dashboard, which nothing disconnected, crosses one more rung.
+        repo.updateGaugePeaks("v1", currentA = 200f, powerW = 9000f)
+
+        assertEquals(
+            emptyList(),
+            provider.database.gaugePeakRowQueries.selectAll().executeAsList(),
+            "the deleted vehicle's dial range came back, with no parent row to own it"
+        )
+    }
+
     /** Two vehicles, one write — the `WHERE id` clause, which a missing one would silently drop. */
     @Test fun updateGaugePeaks_touches_only_the_named_vehicle() = runTest {
         val repo = newInMemoryRepo()
@@ -250,8 +295,8 @@ class SqlDelightVehicleRepositoryGaugePeaksTest {
         repo.delete("v1")
 
         assertEquals(
-            emptyList(),
-            provider.database.gaugePeakRowQueries.selectByVehicle("v1").executeAsList(),
+            listOf("v2"),
+            provider.database.gaugePeakRowQueries.selectAll().executeAsList().map { it.vehicleId },
             "the learned range outlived the vehicle it describes"
         )
         assertEquals(

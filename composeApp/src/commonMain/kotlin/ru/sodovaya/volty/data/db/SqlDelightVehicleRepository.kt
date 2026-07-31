@@ -66,7 +66,6 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         .map { rows ->
             rows.associate { it.vehicleId to GaugePeaks(it.currentA.toFloat(), it.powerW.toFloat()) }
         }
-        .flowOn(Dispatchers.Default)
 
     override val vehicles: Flow<List<Vehicle>> =
         combine(vehicleRows, packRows, controllerRows, alertLevelRows) { rows, packs, ctrls, levels ->
@@ -249,13 +248,17 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
      * alert rows for good. A single statement also needs no transaction: there is
      * no second one for a crash to land between.
      *
-     * **No `WHERE id` guard against an unknown vehicle.** `GaugePeakRow` has no
-     * row to update for a vehicle that has never been ridden, so this is an
-     * INSERT OR REPLACE, and an id nobody stored therefore leaves an orphan row
-     * behind rather than doing nothing. Harmless — [gaugePeaks] is only ever
-     * consulted by id, and [delete] clears the row on the way out — and the
-     * callers cannot produce it anyway: both guard on a persisted, non-guest,
-     * non-demo vehicle.
+     * **An id nobody stored creates nothing**, and the guard for that is in the
+     * statement (`GaugePeakRow.sq`'s `WHERE EXISTS`) rather than here. It is not
+     * theoretical. `GaugePeakRow` has no row to update for a vehicle that has
+     * never been ridden, so this is an INSERT — which, unguarded, writes a
+     * parentless row where the `UPDATE ... WHERE id` it replaced was a no-op. And
+     * `RideDashboardComponent.persistPeaksIfRungChanged` can reach it: its guard
+     * is non-guest and non-demo, **not persisted**, and its vehicle comes from
+     * `BmsRepository.activeVehicle`, which nothing disconnects when a vehicle is
+     * deleted (`SettingsComponent` just calls [delete]). A rider who deletes the
+     * vehicle they are riding keeps a live dashboard, and its next rung crossing
+     * would land after the delete that could have cleaned up after it.
      */
     override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
         gaugePeakQueries.upsert(

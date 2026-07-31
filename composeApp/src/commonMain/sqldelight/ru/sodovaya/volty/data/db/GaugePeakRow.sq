@@ -38,18 +38,27 @@ CREATE TABLE GaugePeakRow (
 selectAll:
 SELECT * FROM GaugePeakRow;
 
-selectByVehicle:
-SELECT * FROM GaugePeakRow WHERE vehicleId = :vehicleId;
-
 -- THE ONLY WRITER. INSERT OR REPLACE because the first peak a vehicle ever
 -- learns has no row to update, and every later one has exactly one.
 --
--- Unconstrained on purpose: it is also how the composer CLEARS the peaks when a
--- vehicle's controller set changes (G §9.2 item 7), which is the one event that
--- legitimately lowers them.
+-- Unconstrained as to VALUE on purpose: it is also how the composer CLEARS the
+-- peaks when a vehicle's controller set changes (G §9.2 item 7), which is the
+-- one event that legitimately lowers them.
+--
+-- Constrained as to EXISTENCE, and that is not belt-and-braces. This replaced an
+-- `UPDATE ... WHERE id`, which was a no-op for an id nobody stored; a plain
+-- INSERT here would instead leave an orphan row, and RideDashboardComponent can
+-- reach that. Its guard is non-guest and non-demo -- NOT persisted -- and its
+-- vehicle comes from `activeVehicle`, which nothing disconnects when a vehicle is
+-- deleted (SettingsComponent just calls `delete`). So a rider connected to a
+-- vehicle they delete from Settings keeps a live dashboard whose next rung
+-- crossing would write a parentless row, AFTER the delete that could have cleaned
+-- it up. Vehicle ids are caller-supplied strings, so that row would be adopted by
+-- whoever next reuses the id -- the same argument `deleteByVehicle`'s WHERE
+-- clause exists for.
 upsert:
 INSERT OR REPLACE INTO GaugePeakRow(vehicleId, currentA, powerW)
-VALUES (:vehicleId, :currentA, :powerW);
+SELECT :vehicleId, :currentA, :powerW WHERE EXISTS (SELECT 1 FROM VehicleRow WHERE id = :vehicleId);
 
 deleteByVehicle:
 DELETE FROM GaugePeakRow WHERE vehicleId = :vehicleId;
