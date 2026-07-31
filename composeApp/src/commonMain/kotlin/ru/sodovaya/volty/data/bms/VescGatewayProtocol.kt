@@ -164,12 +164,32 @@ data class GatewaySource(
  *
  * ## A node that has never answered is not asked twice a second (`I` Task 11)
  *
- * After [SUPPRESS_AFTER_SILENT_CYCLES] consecutive non-answers, one
- * (controller, opcode) pair stops being sent at all — [suppressedAtMs] — and is
- * probed once more only on reconnect ([reset]) or after
- * [REPROBE_INTERVAL_MS]. On the rider's scooter that takes the cycle from five
- * requests costing ~1110 ms to three costing ~110 ms: the head unit's two dead
- * `GET_VALUES` opcodes were nine tenths of the ride's telemetry latency.
+ * After a run of consecutive non-answers, one (controller, opcode) pair stops
+ * being sent at all — [suppressedAtMs] — and is probed once more only on
+ * reconnect ([reset]) or after [REPROBE_INTERVAL_MS]. On the rider's scooter
+ * that takes the cycle from five requests costing ~1110 ms to three costing
+ * ~110 ms: the head unit's two dead `GET_VALUES` opcodes were nine tenths of
+ * the ride's telemetry latency.
+ *
+ * **How long a run has to be depends on what the pair has already proved**, and
+ * the three thresholds are all in [rememberSilence]:
+ *
+ *  - a pair that has answered at least once this connection —
+ *    [everAnswered] — gets [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES];
+ *  - one that has never answered gets [SUPPRESS_AFTER_SILENT_CYCLES], **and**
+ *    must additionally have been silent for [UNPROVEN_SILENCE_WARMUP_MS] on
+ *    the clock, so that a node still booting when the link came up is not
+ *    given up on for being slow. The count bounds the cost of proof; the
+ *    warm-up bounds the boot window, and a cycle is not a duration.
+ *
+ * [everAnswered] is never pruned within a connection, which has one named
+ * consequence: a node that answers a single re-probe and then dies again is
+ * proven from that instant, so it pays the full
+ * [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] run before being suppressed a second
+ * time, and again after every subsequent probe it happens to answer. Contrived
+ * — it needs a node that answers exactly one request per re-probe interval —
+ * bounded (one long run per 30 s at worst), and cheaper than the alternative,
+ * which is deciding how much answering un-proves a node.
  *
  * Three things about it are load-bearing rather than incidental:
  *
@@ -204,11 +224,14 @@ data class GatewaySource(
  *    pre-suppression cycle carry stamps separated by however long the walk
  *    between them took; the loop's own walk between their two *checks* takes
  *    that same time, since it is the same requests in the same order. So the
- *    second pair comes due inside the same cycle as the first however fast the
- *    link is — on the default fixture it lands 30 090 ms past a 30 000 ms
- *    window — and without the guard both fire together. It goes slack only
- *    when a request *between* the two is itself suppressed and skipped, which
- *    shortens the walk without shortening the gap.
+ *    two elapsed times are **equal, exactly** — if the re-probe cycle starts at
+ *    `C` and the pairs were stamped at `S` and `S + d`, the first is checked at
+ *    `C` and the second at `C + d`, both `C - S` past their own stamps. The
+ *    second is therefore due in the same cycle as the first however fast the
+ *    link is (30 080 ms past a 30 000 ms window on the test fixture), and
+ *    without the guard both fire together. It goes slack only when a request
+ *    *between* the two is itself suppressed and skipped, which shortens the
+ *    walk without shortening the gap.
  *
  *    After the first wave the pairs stagger themselves: a re-probe that goes
  *    unanswered restarts its own clock, so the next one due gets the following
@@ -434,21 +457,61 @@ class VescGatewayProtocol(
          * existing. Anything that has answered once is worth twenty-five times
          * the benefit of the doubt, and gets it.
          *
-         * **The residual risk, named rather than mitigated:** a node that is
-         * still booting when the link comes up has answered nothing either, so
-         * a uBox that takes longer than three cycles (~3.3 s on the rider's
-         * plan) to start answering CAN after the BLE connect is suppressed for
-         * [REPROBE_INTERVAL_MS]. `reset` clearing [everAnswered] is what makes
-         * that reachable, and it is correct that it does — a new connection has
-         * no evidence. Whether real hardware needs longer than three cycles at
-         * connect is the first thing to measure on a debug build; if it does,
-         * this is the number to raise, not the re-probe.
+         * **This count is not a duration, and it is not on its own sufficient.**
+         * A first revision of this constant called three cycles "~3.3 s"; that
+         * is three cycles *of the rider's plan*, and the same three cycles are
+         * 1.65 s on a one-controller link. What has to be protected at connect
+         * is a **window** — how long a node may take to boot — and a window
+         * measured in cycles varies with the vehicle, which is the objection
+         * this file already makes against a cycle-counted re-probe one section
+         * away. So a pair that has never answered must clear
+         * [UNPROVEN_SILENCE_WARMUP_MS] on the clock **as well as** this count
+         * before it is suppressed. The count bounds the cost of proof; the
+         * warm-up bounds the boot window; neither does the other's job.
          *
          * Pinned from both sides by `a controller that never answers stops
-         * being asked`, which asserts the dead node is asked exactly three
-         * times and then not at all.
+         * being asked` (both gates satisfied) and by `a node that is merely
+         * slow to boot is not suppressed for being slow` (the count satisfied
+         * and the clock not).
          */
         const val SUPPRESS_AFTER_SILENT_CYCLES: Int = 3
+
+        /**
+         * How long a pair that has **never answered in this connection** must
+         * have been silent, on the clock, before the cycle count is allowed to
+         * suppress it. Six seconds — deliberately the same as
+         * [HOSTED_BMS_WARMUP_MS], and for the same reason at the same moment.
+         *
+         * **The parallel with the sentinel's warm-up is exact, not decorative.**
+         * That constant exists because believing `can_id == 0xFF` immediately
+         * would put a rail-derived substitute on the Battery screen for the
+         * first cycles of every connect, indistinguishable from a real reading.
+         * Substitute "suppressing a node that is still booting" for "believing
+         * the sentinel" and the sentence survives word for word: a confident
+         * wrong number at connect, in a place the rider cannot tell from a
+         * right one. A suppressed booting controller is not shown as offline
+         * and not shown as stale — its slot simply ages out while its
+         * contribution quietly leaves the derived pack's summed current
+         * (see [REPROBE_INTERVAL_MS]). Not stale, not greyed out, just smaller.
+         *
+         * Set equal to [HOSTED_BMS_WARMUP_MS] rather than derived
+         * independently, and the honesty of that is worth stating: no firmware
+         * constant in this repository describes how long a uBox takes to answer
+         * CAN after a VESC Express comes up, so an independent derivation would
+         * be invention wearing a derivation's clothes. What IS true is that
+         * both windows answer the same question — how long may a thing behind
+         * this head unit take to come up before silence becomes a verdict — at
+         * the same instant of the same connection. Keeping them equal also
+         * means a connect is either wholly warm or wholly cold rather than
+         * staggered, which is one fewer state to reason about.
+         *
+         * It is inert for a pair that has answered: passing
+         * [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] costs at least 12 s of silence,
+         * which is past this by construction. The inequality is asserted by
+         * `a proven pair is only given up on once the app has already drawn it
+         * offline`, so this stays a guarantee rather than an observation.
+         */
+        const val UNPROVEN_SILENCE_WARMUP_MS: Long = 6_000L
 
         /**
          * The same count for a pair that **has answered at least once in this
@@ -461,6 +524,17 @@ class VescGatewayProtocol(
          * rebuilt the original defect from the other end: the ~1000 ms of dead
          * requests per cycle that this whole task exists to remove would simply
          * need a slightly different vehicle to reappear on.
+         *
+         * **What it costs, since the floor below is the side that makes 25 look
+         * cheap.** On the rider's vehicle a pre-suppression cycle is ~1110 ms,
+         * so 25 cycles is roughly **27 seconds** during which a uBox that dies
+         * mid-ride holds the dashboard at ~0.9 Hz — against the ~7.8 s a node
+         * that never spoke costs, and the ~3.3 s the first revision of this
+         * task charged for both. That is the deliberate trade: a node that has
+         * proved it works is worth far more patience than a fast recovery from
+         * its death, because its death is rare and its nap is not. If field
+         * data says mid-ride deaths are common on this hardware, this is the
+         * number that pays for it.
          *
          * **Twenty-five, anchored to the rest of the app rather than picked.** A
          * silent pair costs at least `replyTimeoutMs + lateReplyGuardMs` per
@@ -761,6 +835,21 @@ class VescGatewayProtocol(
      * any answer at all drops it. Only the poll loop writes it.
      */
     @Volatile private var silentRunCycles: Map<SilentPair, Int> = emptyMap()
+
+    /**
+     * When each pair's CURRENT unbroken run of silences began, on [nowMs]'
+     * clock — the input to [UNPROVEN_SILENCE_WARMUP_MS], and the half of the
+     * rule that is a window rather than a count.
+     *
+     * Kept beside [silentRunCycles] and dropped with it, on suppression and on
+     * [reset]. **Not** dropped by [rememberAnswer], and that omission is
+     * load-bearing-by-absence rather than an oversight: an answer makes the
+     * pair [everAnswered], and for a proven pair this window is inert by
+     * construction (25 cycles of silence cost at least 12 s, past the 6 s this
+     * gates on). A line no implementation could falsify is left out on this
+     * branch rather than written and annotated.
+     */
+    @Volatile private var silentSinceMs: Map<SilentPair, Long> = emptyMap()
 
     /**
      * The suppressed pairs, each stamped with **when it was last put on the
@@ -1158,25 +1247,49 @@ class VescGatewayProtocol(
         everAnswered = everAnswered + key
     }
 
-    /** This pair was asked and said nothing. */
+    /**
+     * This pair was asked and said nothing.
+     *
+     * **One path, deliberately, including for a pair that is already
+     * suppressed.** An earlier revision had an `if (key in suppressedAtMs)`
+     * early return here to restamp a failed re-probe. It was removed once the
+     * sweep showed it equivalent, and the reason it is equivalent is worth
+     * keeping: a suppressed pair's run count only ever grew past its limit and
+     * its first-silence stamp is never cleared, so the ordinary path below
+     * reaches the same `else` branch and restamps it anyway. Two ways of
+     * spelling one outcome is how a guard ends up indistinguishable from its
+     * absence.
+     */
     private fun rememberSilence(key: SilentPair) {
-        if (key in suppressedAtMs) {
-            // A re-probe that went unanswered. It stays suppressed, and its
-            // clock restarts from now — which is what staggers the pairs: the
-            // next one due gets the next cycle rather than sharing this one.
-            suppressedAtMs = suppressedAtMs + (key to nowMs())
-            return
-        }
         // A node that has proved it handles this opcode is worth far more
         // patience than one that has produced nothing since the link came up.
         val limit =
             if (key in everAnswered) SUPPRESS_PROVEN_AFTER_SILENT_CYCLES else SUPPRESS_AFTER_SILENT_CYCLES
+        val now = nowMs()
+        val since = silentSinceMs[key]
+            ?: now.also { silentSinceMs = silentSinceMs + (key to it) }
         val run = (silentRunCycles[key] ?: 0) + 1
-        if (run < limit) {
+        // TWO gates, and they measure different things. The cycle count bounds
+        // the cost of proof; the warm-up bounds the boot window, which is a
+        // duration and cannot be counted in cycles because a cycle is 1.65 s on
+        // one vehicle and 2.55 s on another. Inert for a proven pair by the
+        // inequality asserted in `a proven pair is only given up on once the
+        // app has already drawn it offline`.
+        val warmedUp = now - since >= UNPROVEN_SILENCE_WARMUP_MS
+        if (run < limit || !warmedUp) {
             silentRunCycles = silentRunCycles + (key to run)
         } else {
-            silentRunCycles = silentRunCycles - key
-            suppressedAtMs = suppressedAtMs + (key to nowMs())
+            // Suppressed, or — for a pair that already was — its failed
+            // re-probe restamped. The stamp is "last put on the wire", and
+            // restarting it is what staggers the pairs: the next one due gets
+            // the next cycle rather than sharing this one.
+            //
+            // The run's count and clock are deliberately NOT cleared. A
+            // suppressed pair leaves this state by exactly two doors, both of
+            // which clear them — a re-probe that answers ([rememberAnswer]) and
+            // [reset] — so a clear here is a line no implementation could
+            // falsify.
+            suppressedAtMs = suppressedAtMs + (key to now)
         }
     }
 
@@ -1466,6 +1579,7 @@ class VescGatewayProtocol(
         // handshake, so the few cycles it costs to re-learn the dead opcodes
         // are lost in it.
         silentRunCycles = emptyMap()
+        silentSinceMs = emptyMap()
         suppressedAtMs = emptyMap()
         everAnswered = emptySet()
     }

@@ -311,6 +311,24 @@ class VescGatewayProtocolTest {
     private val suppressedCycleMs = 3 * LATENCY_MS + CYCLE_GAP_MS
 
     /**
+     * How many cycles of [twoSilentCycleMs] it takes to suppress a pair that
+     * has never answered — **both** gates, not just the count.
+     *
+     * The cycle count is satisfied at three; the boot warm-up is not, because a
+     * run's clock starts at its FIRST silence and n silences are only (n - 1)
+     * cycles apart. On this fixture six cycles is 5550 ms and short, seven is
+     * 6660 and enough. Computed rather than written as `7` so that retuning
+     * either constant moves every test that depends on it instead of failing
+     * them one at a time.
+     */
+    private val bootProofCycles: Int
+        get() = maxOf(
+            VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES,
+            ((VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS + twoSilentCycleMs - 1) /
+                twoSilentCycleMs).toInt() + 1
+        )
+
+    /**
      * A recorded request list split into cycles. The pack request is always a
      * cycle's LAST (see `VescGatewayProtocol.plan`), so a boundary is the entry
      * after each opcode-96, and anything past the final one belongs to a cycle
@@ -448,14 +466,15 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        advanceTimeBy(3 * twoSilentCycleMs + 2 * suppressedCycleMs - 1)
+        advanceTimeBy(bootProofCycles * twoSilentCycleMs + 2 * suppressedCycleMs - 1)
         runCurrent()
 
         assertEquals(
-            21,
+            bootProofCycles * 5 + 2 * 3,
             link.sent.size,
-            "3 cycles x 5 requests while the rear uBox is merely quiet, then 2 x 3 once its two " +
-                "opcodes are suppressed — a timeout is never a skipped request, a verdict is"
+            "$bootProofCycles cycles x 5 requests while the rear uBox is merely quiet, then 2 x 3 " +
+                "once its two opcodes are suppressed — a timeout is never a skipped request, a " +
+                "verdict is"
         )
         assertEquals(1, link.maxOutstanding, "a timing-out request is still exactly one request")
         assertEquals(0, link.outstanding, "and every one of them settled")
@@ -2323,10 +2342,15 @@ class VescGatewayProtocolTest {
      * asking a bridge that never answers, twice a second, forever.
      *
      * Asserted on the requests actually ISSUED rather than on elapsed virtual
-     * time, and both ends are pinned: exactly three cycles of asking (one
-     * timeout is indistinguishable from a slow node, two is a reboot), then
-     * none at all. The throughput claim rides on the same list — the 1100 ms
-     * window that used to hold ONE cycle holds ten.
+     * time, and both ends are pinned: every cycle up to [bootProofCycles] asks
+     * the dead node exactly like a live one, and none after. The throughput
+     * claim rides on the same list — the 1100 ms window that used to hold ONE
+     * cycle holds ten.
+     *
+     * Note which gate the count is: three cycles of silence satisfy
+     * [VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES] and the node is STILL
+     * asked, because [VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS] has not
+     * been spent. A node still booting is not a node that refuses the opcode.
      */
     @Test
     fun `a controller that never answers stops being asked`() = runTest {
@@ -2335,17 +2359,20 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(3, cycleMs = twoSilentCycleMs)
+        runCycles(bootProofCycles - 1, cycleMs = twoSilentCycleMs)
 
         assertEquals(
-            3, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
-            "a node that has merely gone quiet is asked exactly like a live one, three cycles over"
+            bootProofCycles - 1, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "the cycle count was satisfied cycles ago and it is still being asked: the boot " +
+                "warm-up has to agree as well, and a cycle is not a duration"
         )
         assertEquals(
-            3, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES },
+            bootProofCycles - 1, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES },
             "and its per-unit request too — the evidence is per opcode, so it accrues per opcode"
         )
 
+        // The cycle in which both gates finally agree.
+        runCycles(1, cycleMs = twoSilentCycleMs)
         val mark = link.sent.size
         advanceTimeBy(10 * suppressedCycleMs)
         runCurrent()
@@ -2402,7 +2429,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(3, cycleMs = twoSilentCycleMs)
+        runCycles(bootProofCycles, cycleMs = twoSilentCycleMs)
 
         val mark = link.sent.size
         advanceTimeBy(10 * suppressedCycleMs)
@@ -2481,7 +2508,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(3, cycleMs = twoSilentCycleMs)
+        runCycles(bootProofCycles, cycleMs = twoSilentCycleMs)
         val mark = link.sent.size
 
         // Just past the re-probe for both of CAN_A's opcodes, which were
@@ -2530,7 +2557,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(3, cycleMs = twoSilentCycleMs)
+        runCycles(bootProofCycles, cycleMs = twoSilentCycleMs)
         awake = true
 
         val napMark = link.sent.size
@@ -2662,6 +2689,14 @@ class VescGatewayProtocolTest {
                 VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES,
             "the whole point is that the two are different, and which way round"
         )
+        // The claim `rememberSilence` rests on when it applies the boot warm-up
+        // unconditionally: for a proven pair the gate is inert, because passing
+        // its cycle count already costs more silence than the warm-up asks for.
+        assertTrue(
+            silentRunMs > VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS,
+            "a proven pair must clear the boot warm-up on its way to its own threshold, or the " +
+                "unconditional gate in rememberSilence would be doing something to it"
+        )
     }
 
     /**
@@ -2687,13 +2722,13 @@ class VescGatewayProtocolTest {
         awake = false
         p.reset()
         val mark = link.sent.size
-        advanceTimeBy(6 * twoSilentCycleMs)
+        advanceTimeBy((bootProofCycles + 3) * twoSilentCycleMs)
         runCurrent()
 
         assertEquals(
-            3, link.sent.drop(mark).count { it == CAN_B to VescValues.OPCODE_GET_VALUES },
-            "the new session gives it three cycles, not twenty-five: what it did on the last " +
-                "connection is not evidence about this one"
+            bootProofCycles, link.sent.drop(mark).count { it == CAN_B to VescValues.OPCODE_GET_VALUES },
+            "the new session holds it to the never-answered rule, not to the twenty-five cycles " +
+                "it had earned: what it did on the last connection is not evidence about this one"
         )
         loop.cancel(); device.cancel()
     }
@@ -2815,20 +2850,87 @@ class VescGatewayProtocolTest {
     }
 
     /**
+     * A plan on which the CYCLE COUNT is the binding gate, which takes a long
+     * reply budget: at the fixture's usual timings one cycle of total silence
+     * is 1110 ms, so the boot warm-up needs seven silences and the count's
+     * three never decide anything. Here a silent cycle is 6450 ms, the warm-up
+     * is spent by the second silence, and only the count can still hold the
+     * verdict off.
+     *
+     * **This is the only shape that can tell the count from its absence**, and
+     * that is worth knowing on its own: with the default timings the warm-up
+     * strictly dominates, because `checkSilenceBudget` caps a plan at ten
+     * requests and therefore a cycle at ~5050 ms, which is shorter than the
+     * 6 s warm-up. The count is a floor, and this is the plan it is a floor on.
+     */
+    @Test
+    fun `the cycle count is a floor the boot warm-up cannot lower`() = runTest {
+        val timeout = 1_500L
+        val guard = 100L
+        val p = VescGatewayProtocol(
+            controllers = listOf(
+                GatewaySource(globalIndex = 0, canId = CAN_A),
+                GatewaySource(globalIndex = 1, canId = CAN_B)
+            ),
+            packs = emptyList(),
+            pollIntervalMs = CYCLE_GAP_MS,
+            replyTimeoutMs = timeout,
+            lateReplyGuardMs = guard,
+            nowMs = { currentTime }
+        )
+        val deadCycleMs = 4 * (timeout + guard) + CYCLE_GAP_MS
+        assertTrue(
+            deadCycleMs > VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS,
+            "premise: one cycle outlasts the warm-up, so the clock stops being the binding gate"
+        )
+
+        val link = FakeGateway(p) { _, _ -> ScriptedReply(timeout, null) }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(4 * deadCycleMs - 1)
+        runCurrent()
+
+        assertEquals(
+            VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES,
+            link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "the warm-up was spent after the second silence and the count still demanded a third"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
      * The same word, on the other seam. A run of silences half-collected in one
      * session must not be topped up by the next: a reconnect is exactly when a
      * node's previous behaviour stops being evidence, and a session that
      * inherited two silences would give the new one a single cycle to prove
      * itself where the rule promises three.
+     *
+     * On the long-budget plan for the reason given above — a leaked COUNT is
+     * invisible on a fixture where the clock decides.
      */
     @Test
     fun `a reconnect forgets a half-finished run of silences`() = runTest {
-        val p = protocol()
-        val link = FakeGateway(p, deadFrontScript())
+        val timeout = 1_500L
+        val guard = 100L
+        val p = VescGatewayProtocol(
+            controllers = listOf(
+                GatewaySource(globalIndex = 0, canId = CAN_A),
+                GatewaySource(globalIndex = 1, canId = CAN_B)
+            ),
+            packs = emptyList(),
+            pollIntervalMs = CYCLE_GAP_MS,
+            replyTimeoutMs = timeout,
+            lateReplyGuardMs = guard,
+            nowMs = { currentTime }
+        )
+        val deadCycleMs = 4 * (timeout + guard) + CYCLE_GAP_MS
+        val link = FakeGateway(p) { _, _ -> ScriptedReply(timeout, null) }
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(2, cycleMs = twoSilentCycleMs)
+        advanceTimeBy(2 * deadCycleMs - 1)
+        runCurrent()
         assertEquals(
             2, link.sent.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
             "premise: a run is half collected — two silences of the three it takes"
@@ -2836,12 +2938,93 @@ class VescGatewayProtocolTest {
 
         p.reset()
         val mark = link.sent.size
-        advanceTimeBy(4 * twoSilentCycleMs)
+        advanceTimeBy(5 * deadCycleMs)
         runCurrent()
 
         assertEquals(
-            3, link.sent.drop(mark).count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES,
+            link.sent.drop(mark).count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
             "the new session collects its own three silences, not one on top of the old two"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * And the reconnect forgets the run's CLOCK too, not only its count. A
+     * session that inherited the last one's first-silence stamp would find the
+     * boot warm-up already spent and suppress on the cycle count alone — which
+     * is precisely the defect this round exists to close, reached through the
+     * one moment a booting node is most likely to be found: a reconnect.
+     */
+    @Test
+    fun `a reconnect restarts the boot warm-up as well as the count`() = runTest {
+        val p = protocol()
+        val link = FakeGateway(p, deadFrontScript())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(2, cycleMs = twoSilentCycleMs)
+        p.reset()
+        val mark = link.sent.size
+        advanceTimeBy((bootProofCycles + 3) * twoSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            bootProofCycles,
+            link.sent.drop(mark).count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "the new session spends its own warm-up: a carried-over stamp would let the count " +
+                "suppress a node that may still be booting"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **The defect this round closes.** A node that is merely slow to come up
+     * has answered nothing either, so the cycle count alone would give up on it
+     * at three — and on the rider's plan that is 3.3 s after the BLE connect,
+     * which is not obviously longer than a uBox takes to start answering CAN.
+     *
+     * The parallel with [VescGatewayProtocol.HOSTED_BMS_WARMUP_MS] is exact:
+     * believing silence immediately at connect is the same failure as believing
+     * the `can_id == 0xFF` sentinel immediately at connect — a confident wrong
+     * number in a place the rider cannot tell from a right one.
+     */
+    @Test
+    fun `a node that is merely slow to boot is not suppressed for being slow`() = runTest {
+        var cycle = 0
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            // The pack request is the cycle's last, so this counts cycles.
+            if (opcode == VescBmsValues.OPCODE_BMS_GET_VALUES) cycle++
+            if (canId == CAN_A && cycle < 5) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        // Five silent cycles: well past SUPPRESS_AFTER_SILENT_CYCLES, and still
+        // inside UNPROVEN_SILENCE_WARMUP_MS because five cycles is 5550 ms.
+        runCycles(5, cycleMs = twoSilentCycleMs)
+        assertTrue(
+            5 * twoSilentCycleMs < VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS +
+                twoSilentCycleMs,
+            "premise: the boot window has not been spent when the node finally speaks"
+        )
+
+        val mark = link.sent.size
+        advanceTimeBy(10 * healthyCycleMs)
+        runCurrent()
+        val after = link.sent.drop(mark).cycles().drop(1).flatten()
+        val cycles = after.count { it.second == VescBmsValues.OPCODE_BMS_GET_VALUES }
+
+        assertTrue(cycles >= 5, "premise: whole cycles were observed after it booted ($cycles)")
+        assertEquals(
+            cycles, after.count { it == CAN_A to VescValues.OPCODE_GET_VALUES_SETUP },
+            "a node that took five cycles to boot was still being asked when it finally answered"
+        )
+        assertTrue(
+            abs(assertNotNull(p.latestMotion(0)).speedKmh - 47.0f) < 0.05f,
+            "and it is reporting, rather than invisible for thirty seconds for having been slow"
         )
         loop.cancel(); device.cancel()
     }
@@ -2860,7 +3043,7 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        runCycles(3, cycleMs = twoSilentCycleMs)
+        runCycles(bootProofCycles, cycleMs = twoSilentCycleMs)
         val quietMark = link.sent.size
         advanceTimeBy(5 * suppressedCycleMs)
         runCurrent()
@@ -2897,10 +3080,14 @@ class VescGatewayProtocolTest {
      * pairs are suppressed 520 ms apart — the walk between their two timeouts —
      * so they come due 520 ms apart. But the loop's walk between their two
      * CHECKS is that same 520 ms, because it is the same requests in the same
-     * order. So the second is due the moment it is looked at, in the SAME
-     * cycle: on this fixture it is checked 30 080 ms past a 30 000 ms window.
-     * Without the guard both fire together and that cycle pays 1110 ms — the
-     * whole pre-suppression worst case, back on a schedule.
+     * order. The two elapsed times are therefore **equal, exactly**: with a
+     * re-probe cycle starting at `C` and stamps at `S` and `S + 520`, the first
+     * is checked at `C` and the second at `C + 520`, both `C - S` past their
+     * own stamps. So the second is due the moment it is looked at, in the SAME
+     * cycle — 30 080 ms past a 30 000 ms window here, the same figure the class
+     * KDoc quotes, both re-derived after round 1 stated two different numbers
+     * for the one quantity. Without the guard both fire together and that cycle
+     * pays 1110 ms: the whole pre-suppression worst case, back on a schedule.
      *
      * Read off the recorded request list rather than the clock: the pack
      * request is every cycle's last, so it is a cycle boundary, and no settled
@@ -2914,12 +3101,12 @@ class VescGatewayProtocolTest {
         val loop = launch { p.runPollLoop(link.send) }
 
         // Well past both pairs' re-probes.
-        advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 8_000)
+        advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 12_000)
         runCurrent()
 
         // The first three are the cycles that collected the evidence, and each
         // legitimately carries both of CAN_A's requests.
-        val settled = link.sent.cycles().drop(3)
+        val settled = link.sent.cycles().drop(bootProofCycles)
         assertTrue(settled.size >= 20, "premise: plenty of settled cycles to look at (${settled.size})")
         assertTrue(
             settled.any { cycle -> cycle.count { it.first == CAN_A } == 1 },
@@ -2962,12 +3149,20 @@ class VescGatewayProtocolTest {
             }
         }
 
-        // Six cycles of failed writes — twice over the suppression threshold.
-        // Each costs the reply budget it would have cost, then the quiet window.
-        advanceTimeBy(6 * (TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS) - 1)
+        // Fourteen cycles of failed writes. Long enough to clear BOTH gates a
+        // real silence would have to clear — the cycle count several times
+        // over, and UNPROVEN_SILENCE_WARMUP_MS on the clock, since one cycle
+        // here is 550 ms. A shorter window would leave the mutant that counts
+        // write failures alive on the warm-up alone.
+        val failCycleMs = TIMEOUT_MS + GUARD_MS + CYCLE_GAP_MS
+        assertTrue(
+            13 * failCycleMs > VescGatewayProtocol.UNPROVEN_SILENCE_WARMUP_MS,
+            "premise: the boot warm-up is spent inside this window"
+        )
+        advanceTimeBy(14 * failCycleMs - 1)
         runCurrent()
         assertEquals(
-            6, setupSends,
+            14, setupSends,
             "a request the link never sent is not evidence about the node that never heard it"
         )
 
