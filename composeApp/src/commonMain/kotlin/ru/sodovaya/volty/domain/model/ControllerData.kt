@@ -54,6 +54,13 @@ data class ControllerData(
      * fixed 67.2 V reference and turning that into volts needs the pack's cell
      * count, which the rider may not have supplied (`D §2`).
      *
+     * Since `I` Task 7 it is no longer the ONLY one:
+     * [ru.sodovaya.volty.data.bms.vesc.VescValues] clears this on a reply
+     * carrying `v_in = 0`, which is what a node that answers the frame without
+     * measuring a rail sends. Until then nothing in the VESC path could reach
+     * the false branch at all, so `G §9.3` was written up as fixed-by-flag while
+     * the flag was unreachable for every VESC in the app.
+     *
      * Folded across controllers with `any`, because
      * [ru.sodovaya.volty.domain.stats.MotionAggregator.aggregate] AVERAGES the
      * voltage over the controllers that measure it: one measurement is a
@@ -159,6 +166,17 @@ data class ControllerData(
      * exact sentinel `VescValues` decodes the motor sensor against, instead of
      * threading one more constructor parameter through every call site that
      * builds a [ControllerData].
+     *
+     * **It is also why [ru.sodovaya.volty.domain.stats.MotionAggregator]'s
+     * `escTempC` fold is the one `maxOf` there that is NOT filtered by its
+     * flag.** Because the predicate is a threshold on the value,
+     * `max(xs) > SENTINEL` is already identical to `∃x ∈ xs : x > SENTINEL` —
+     * the fold composes with this getter to give exactly the `any` rule every
+     * other maxOf field gets its flag folded by, and adding the filter would be
+     * a line no implementation could distinguish from its absence. Every
+     * producer therefore owes a sentinel here rather than a `0f`
+     * (`BegodeProtocol.NO_TEMP_SENSOR_C`), because a `0f` claims a sensor
+     * before any fold can see it.
      */
     val hasEscTemp: Boolean get() = escTempC > NO_TEMP_SENSOR_BELOW_C
 }

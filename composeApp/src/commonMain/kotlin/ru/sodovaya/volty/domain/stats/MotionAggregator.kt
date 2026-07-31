@@ -33,16 +33,48 @@ object MotionAggregator {
         val d = online.map { it.data }
         val labelled = online.size > 1
 
+        // Deliberately NOT filtered by `speedKnown`, even though the value fold
+        // below is: a `NONE` contributor matches neither branch, so filtering
+        // the election would be a line no implementation could distinguish from
+        // its absence. The two are consulted together — the value fold takes the
+        // max over exactly the contributors this election is decided by.
         val speedSource = when {
             d.any { it.speedSource == SpeedSource.REPORTED } -> SpeedSource.REPORTED
             d.any { it.speedSource == SpeedSource.DERIVED } -> SpeedSource.DERIVED
             else -> SpeedSource.NONE
         }
 
+        // The four energy counters share one flag and one filtered contributor
+        // list, because they answer one question — see [ControllerData.hasEnergyCounters].
+        val counting = d.measuring { it.hasEnergyCounters }
+
         return ControllerData(
-            speedKmh = d.maxOf { it.speedKmh },
+            // Filtered, and the filter is what stops a hollow contributor
+            // WINNING a maxOf. Two distinct ways it can:
+            //
+            //  - a speed nobody measured is published as `0f` (VescValues'
+            //    `derived ?: 0f`), and `I` Part I Task 10 makes VESC speed
+            //    SIGNED again — at which point a hollow 0 floors a reversing
+            //    vehicle's -12 km/h at zero, i.e. the max is the placeholder;
+            //  - a contributor whose flag and value disagree (`speedKmh = 99f`
+            //    with `speedSource = NONE`) hands the vehicle a speed nobody
+            //    observed, which is what the alarm then compares a threshold
+            //    against.
+            //
+            // `ifEmpty { d }` for the same reason as inputVoltageV below: with
+            // nobody measuring there is nothing to prefer, `speedKnown` on the
+            // aggregate already says so, and the one-controller fold stays an
+            // identity even on a sample whose flag and value disagree.
+            speedKmh = d.measuring { it.speedKnown }.maxOf { it.speedKmh },
             speedSource = speedSource,
-            dutyPercent = d.maxOf { it.dutyPercent },
+            // Filtered by the same rule, and this one is named as a HAZARD in
+            // `MotionAlertAvailability`'s DUTY branch: on a mixed vehicle DUTY is
+            // Available because ONE controller supplies it, while the maxOf ran
+            // over BOTH — so a decoder that writes a non-zero number into a
+            // `dutyPercent` its protocol does not actually report would raise
+            // the ШИМ alarm on a number that is not a duty measurement. The
+            // filter is what makes the availability claim and the number agree.
+            dutyPercent = d.measuring { it.hasDuty }.maxOf { it.dutyPercent },
             // `any`, exactly like hasMotorTemp below: one controller that
             // MEASURES duty is enough for the vehicle, because the maxOf fold
             // above already carries that controller's real reading. Folding
@@ -65,8 +97,7 @@ object MotionAggregator {
             // nothing to prefer, `hasInputVoltage` below already says the
             // number is not a measurement, and this keeps the one-controller
             // fold an identity even on a sample whose flag and value disagree.
-            inputVoltageV = d.filter { it.hasInputVoltage }
-                .ifEmpty { d }
+            inputVoltageV = d.measuring { it.hasInputVoltage }
                 .map { it.inputVoltageV }
                 .average()
                 .toFloat(),
@@ -74,7 +105,18 @@ object MotionAggregator {
             // measures the rail answers for the vehicle, and the average is
             // taken over exactly those controllers. Same shape as hasDuty.
             hasInputVoltage = d.any { it.hasInputVoltage },
-            powerW = d.sumOf { it.powerW.toDouble() }.toFloat(),
+            // Summed over the contributors that MEASURE a power, so the figure
+            // behind a false flag is a partial of real measurements rather than
+            // a partial of garbage. The flag below still folds with `all`, so
+            // nothing downstream reads this partial as the vehicle's power —
+            // what the filter buys is that the number and the flag stop
+            // DISAGREEING: a contributor with `powerW = 4200f, hasPower = false`
+            // (a combination no producer emits, which is exactly why the fixture
+            // uses it) used to add 4200 W of placeholder to the total.
+            //
+            // Invisible to any fixture whose unmeasured fields happen to hold
+            // `0f`, which every producer's do and every fixture's used to.
+            powerW = d.measuring { it.hasPower }.sumOf { it.powerW.toDouble() }.toFloat(),
             // `all`, NOT `any` — and this is the rule, not an exception: **a
             // known-flag folds the way its field's arithmetic does.** `maxOf`
             // and `average` fields (duty, temperature, voltage) take `any`,
@@ -89,8 +131,40 @@ object MotionAggregator {
             // `any` agree and the fold is the identity either way.
             hasPower = d.all { it.hasPower },
             eRpm = d.maxOf { it.eRpm },
+            // **Unfiltered, and that is the fix rather than an omission.**
+            //
+            // `hasEscTemp` is a GETTER over the value (`escTempC > -50f`), not a
+            // stored flag, so filtering this `maxOf` by it would be a line no
+            // implementation could distinguish from its absence:
+            //
+            //     max(xs) > SENTINEL  ⟺  ∃x ∈ xs : x > SENTINEL
+            //
+            // — i.e. `maxOf` ALREADY composes with the sentinel encoding to give
+            // exactly the `any` fold every other maxOf field gets, and a
+            // `filter { it.hasEscTemp }.ifEmpty { d }.maxOf { … }` returns the
+            // same float for every input. (Without the `ifEmpty` it would throw
+            // on a vehicle where nobody has an ESC sensor — strictly worse.)
+            //
+            // What makes that sound is the SENTINEL, which is why both producers
+            // are careful to write one: `BegodeProtocol.NO_TEMP_SENSOR_C` is
+            // -100 °C and `VescValues` passes VESC's own implausibly-low reading
+            // through. A future decoder that left this at its `0f` default would
+            // CLAIM a sensor — but it would claim one on its own
+            // `ControllerData` too, before any fold sees it, so the defect would
+            // be that decoder's and not this one's.
+            //
+            // Pinned by `the esc temperature fold carries the sentinel through
+            // untouched`, which fails for `average`, `minOf`, `first` and for an
+            // `ifEmpty`-less filter.
             escTempC = d.maxOf { it.escTempC },
-            motorTempC = d.maxOf { it.motorTempC },
+            // Filtered, UNLIKE escTempC above, and the difference is the whole
+            // reason `hasMotorTemp` is a stored flag: it is independent of the
+            // value, so a contributor can carry `motorTempC = 0f` (the field's
+            // own default, beside `hasMotorTemp = false`, also the default) and
+            // beat a real winter reading of -8 °C in an unfiltered `maxOf`. The
+            // aggregate would then claim a sensor — correctly, one controller
+            // has one — while reporting the OTHER controller's placeholder.
+            motorTempC = d.measuring { it.hasMotorTemp }.maxOf { it.motorTempC },
             hasMotorTemp = d.any { it.hasMotorTemp },
             // `maxOf`, and it MUST NOT become a sum — this is the one fold in
             // this object where the obvious "totals are sums" instinct is
@@ -111,10 +185,13 @@ object MotionAggregator {
             // "Why the SETUP frame is an OVERLAY" section for the wire detail.
             odometerKm = d.maxOf { it.odometerKm },
             tripKm = d.maxOf { it.tripKm },
-            consumedAh = d.sumOf { it.consumedAh.toDouble() }.toFloat(),
-            consumedWh = d.sumOf { it.consumedWh.toDouble() }.toFloat(),
-            regenAh = d.sumOf { it.regenAh.toDouble() }.toFloat(),
-            regenWh = d.sumOf { it.regenWh.toDouble() }.toFloat(),
+            // Summed over the contributors that KEEP counters, for the same
+            // reason as powerW above — one filtered list ([counting]) because
+            // one flag answers for all four.
+            consumedAh = counting.sumOf { it.consumedAh.toDouble() }.toFloat(),
+            consumedWh = counting.sumOf { it.consumedWh.toDouble() }.toFloat(),
+            regenAh = counting.sumOf { it.regenAh.toDouble() }.toFloat(),
+            regenWh = counting.sumOf { it.regenWh.toDouble() }.toFloat(),
             // `all`, for the same reason as hasPower: the four counters above
             // are sums.
             hasEnergyCounters = d.all { it.hasEnergyCounters },
@@ -147,4 +224,35 @@ object MotionAggregator {
             timestamp = d.maxOfOrNull { it.timestamp } ?: Clock.System.now()
         )
     }
+
+    /**
+     * The contributors that MEASURE the quantity a fold is about — or, when
+     * none of them do, all of them.
+     *
+     * **The unknown-vs-zero contract, applied at the fold.** Every value in
+     * [ControllerData] is a non-nullable magnitude, so a quantity a controller
+     * cannot answer is published as some placeholder (`0f`, or a sentinel) with
+     * a known-flag beside it saying so ([ru.sodovaya.volty.domain.stats.MotionReadings]
+     * is the whole rule). Folding the placeholder in as though it were a
+     * reading is how that flag stopped being load-bearing: an average of a real
+     * 78 V and a phantom 0 V is 39 V, a `maxOf` over a real -12 km/h and a
+     * hollow 0 is 0, and a sum of a real 4000 W and a placeholder 4200 W is a
+     * number describing nothing.
+     *
+     * **The `ifEmpty` is not a fallback to zero, and that is deliberate.** With
+     * nobody measuring, the fold has nothing to prefer: the flag beside the
+     * result already says the number is not a measurement, and keeping the
+     * contributors makes the one-controller fold an IDENTITY — including on a
+     * sample whose flag and value disagree, which is what
+     * `KableBmsRepositoryBegodeFunnelTest` relies on. Substituting a `0` here
+     * would be the confident zero this contract exists to remove, re-introduced
+     * one layer down.
+     *
+     * Not applied to [ControllerData.escTempC] — see the argument at that fold —
+     * nor to the currents, eRPM, odometer or trip, which have no flag because no
+     * producer can tell an unreported one from a genuine zero.
+     */
+    private fun List<ControllerData>.measuring(
+        knows: (ControllerData) -> Boolean
+    ): List<ControllerData> = filter(knows).ifEmpty { this }
 }

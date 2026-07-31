@@ -21,6 +21,29 @@ object VescValues {
     /** A motor temperature this low means "no sensor wired", not a cold motor. */
     private const val NO_MOTOR_SENSOR_BELOW_C = -50f
 
+    /**
+     * A `v_in` at or below this means "this node does not measure the rail",
+     * not a dead pack — the producer half of [ControllerData.hasInputVoltage],
+     * which until now **no VESC decoder could ever clear** (`G §9.3` was written
+     * up as fixed-by-flag while `BegodeProtocol` was the only producer in the
+     * app that could reach the false branch).
+     *
+     * Exactly `0`, not a plausibility band. A powered VESC reads its own rail
+     * through a divider that cannot report a true zero while the board is alive
+     * enough to answer an opcode, so `0.0 V` in a decoded reply is the
+     * unpopulated field of a node that answers the frame without measuring it —
+     * a VESC Express bridge is the shape one firmware update away (class KDoc of
+     * [ru.sodovaya.volty.data.bms.VescGatewayProtocol]). Any wider band would
+     * start rejecting genuinely low readings, and "a rail below N volts is not a
+     * rail" is a claim about packs we have not seen.
+     *
+     * [ControllerData.hasPower] takes the same test rather than a separate one:
+     * `powerW` here IS `v_in × current_in`, so a phantom rail makes the power a
+     * phantom `0 W` by construction. The two flags still fold differently
+     * downstream, which is why they remain two fields.
+     */
+    private const val NO_RAIL_AT_OR_BELOW_V = 0f
+
     // Per-field widths, named so the body-length sums below are self-documenting
     // and cannot silently drift out of sync with the fields actually read.
     private const val I8_BYTES = 1
@@ -91,12 +114,14 @@ object VescValues {
         val fault = r.i8()
         return ControllerData(
             speedKmh = speedMs * 3.6f,
-            speedSource = SpeedSource.REPORTED,
+            speedSource = reportedSpeedSource(speedMs, rpm),
             dutyPercent = abs(duty) * 100f,
             motorCurrentA = currentMotor,
             batteryCurrentA = currentIn,
             inputVoltageV = vIn,
+            hasInputVoltage = vIn > NO_RAIL_AT_OR_BELOW_V,
             powerW = vIn * currentIn,
+            hasPower = vIn > NO_RAIL_AT_OR_BELOW_V,
             eRpm = rpm,
             escTempC = tempMos,
             motorTempC = tempMotor,
@@ -109,7 +134,12 @@ object VescValues {
             regenWh = wattHoursChg,
             faults = listOfNotNull(VescFaults.label(fault)),
             isConnected = true,
-            batteryLevelFraction = battLevel
+            // `0` is "this node has no battery configuration", not a flat pack —
+            // the same test `derivedBatteryFrom` (VescProtocol.kt) already
+            // applies one file over. Publishing the 0 made it a real term of
+            // `MotionAggregator`'s average: one uBox at 84 % beside a node with
+            // no configuration reported the vehicle at 42 %.
+            batteryLevelFraction = battLevel.takeIf { it > 0f }
         )
     }
 
@@ -139,7 +169,9 @@ object VescValues {
             motorCurrentA = currentMotor,
             batteryCurrentA = currentIn,
             inputVoltageV = vIn,
+            hasInputVoltage = vIn > NO_RAIL_AT_OR_BELOW_V,
             powerW = vIn * currentIn,
+            hasPower = vIn > NO_RAIL_AT_OR_BELOW_V,
             eRpm = rpm,
             escTempC = tempMos,
             motorTempC = tempMotor,
@@ -152,6 +184,36 @@ object VescValues {
             isConnected = true
         )
     }
+
+    /**
+     * Whether a SETUP reply's `speed` field is a MEASUREMENT — `REPORTED` — or
+     * an unconfigured node's empty field, which must read as [SpeedSource.NONE]
+     * rather than as a confident 0 km/h.
+     *
+     * This used to be hardcoded `REPORTED`, which made
+     * [ControllerData.speedKnown] unfalsifiable for every VESC and put a
+     * permanent, believed **0 km/h** on the dashboard of any node that answers
+     * opcode 47 without a speed pipeline behind it.
+     *
+     * **`rpm` is the witness, and it is the only one on the frame.** VESC's
+     * `mc_interface_get_speed()` is a linear function of the same `rpm` this
+     * reply also carries, scaled by the setup's wheel diameter, gear ratio and
+     * pole count. So:
+     *
+     *  - `speed != 0` — a measurement, whatever the geometry is;
+     *  - `speed == 0` **and** `rpm == 0` — the motor is not turning, and 0 km/h
+     *    is then a genuine reading. A stationary vehicle must keep its speed
+     *    gauge, not blank it;
+     *  - `speed == 0` **while `rpm != 0`** — the only combination the physics
+     *    forbids. The scale factor is zero, i.e. the setup has no wheel
+     *    configured, and the field is empty rather than low.
+     *
+     * Per-frame and stateless, unlike `BegodeProtocol`'s `truePWM` latch: this
+     * one needs no evidence to accumulate because the disproof is on the same
+     * frame as the claim.
+     */
+    private fun reportedSpeedSource(speedMs: Float, rpm: Float): SpeedSource =
+        if (speedMs != 0f || rpm == 0f) SpeedSource.REPORTED else SpeedSource.NONE
 
     /**
      * eRPM → ground speed. Mechanical RPM = eRPM / polePairs; wheel RPM =

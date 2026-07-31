@@ -155,8 +155,14 @@ class MotionAggregatorTest {
         val mixed = MotionAggregator.aggregate(listOf(state(0, measuring), state(1, notMeasuring)))
         assertFalse(mixed.hasPower, "a sum missing a term is not the vehicle's power")
         assertFalse(mixed.hasEnergyCounters, "…and the same for the energy counters")
-        assertEquals(5500f, mixed.powerW, "the sum itself is unchanged — only the claim about it")
-        assertEquals(750f, mixed.consumedWh, "…and the energy sum, likewise")
+        // `I` Task 7 changed these two numbers, deliberately. The flag still folds
+        // with `all` — that decision stands — but the SUM now runs over the
+        // contributors that measure, so the partial behind a false flag is a
+        // partial of real measurements instead of `4000 + a placeholder`. See
+        // `a partial total is a partial of real measurements, not of placeholders`
+        // for the full argument and the incoherent fixture that shows it.
+        assertEquals(4000f, mixed.powerW, "the placeholder term is not added to the total")
+        assertEquals(500f, mixed.consumedWh, "…and the energy sum, likewise")
 
         // Order-independent, and the positive is reachable: with everyone measuring the
         // vehicle measures. A fold hardcoded to `false` would pass the assertions above.
@@ -309,6 +315,256 @@ class MotionAggregatorTest {
         // …and the thing that DID change is the one this task is about.
         assertEquals(78f, with.inputVoltageV, "the rail is the uBox's, not two thirds of it")
         assertFalse(with.hasPower, "the vehicle's power total is no longer a claim")
+    }
+
+    // ---------------------------------------------------------------------------------
+    // `I` Task 7 — the known-flag contract reaches the REST of the folds.
+    //
+    // Every fixture below is deliberately INCOHERENT: a placeholder that is neither
+    // zero nor plausible sitting beside a flag that says it was never measured
+    // (`powerW = 4200f, hasPower = false`). No producer emits that combination, which
+    // is exactly why it separates the contract from the producers' current habits —
+    // a fixture whose unknown fields all held `0f` cannot tell "the fold skips an
+    // unmeasured contributor" from "the placeholder happened to lose the maxOf".
+    // ---------------------------------------------------------------------------------
+
+    @Test fun a_speed_no_controller_measured_never_becomes_the_vehicles() {
+        val real = ControllerData(speedKmh = 30f, speedSource = SpeedSource.REPORTED, isConnected = true)
+        // Incoherent on purpose, and the number is chosen to WIN an unfiltered maxOf.
+        val phantom = ControllerData(speedKmh = 99f, speedSource = SpeedSource.NONE, isConnected = true)
+
+        val mixed = MotionAggregator.aggregate(listOf(state(0, real), state(1, phantom)))
+        assertEquals(30f, mixed.speedKmh, "a speed nobody observed must not become the vehicle's")
+        assertEquals(SpeedSource.REPORTED, mixed.speedSource)
+        assertTrue(mixed.speedKnown)
+        // Order must not matter — a filter over the whole list, not a preference for
+        // the first contributor.
+        assertEquals(
+            30f,
+            MotionAggregator.aggregate(listOf(state(0, phantom), state(1, real))).speedKmh
+        )
+
+        // Two contributors that BOTH measure still take the max, so this is a filter on
+        // the flag and not a `first`.
+        val faster = ControllerData(speedKmh = 40f, speedSource = SpeedSource.DERIVED, isConnected = true)
+        assertEquals(
+            40f,
+            MotionAggregator.aggregate(listOf(state(0, real), state(1, faster))).speedKmh,
+            "measured speeds are still maxed against each other"
+        )
+
+        // With NOBODY measuring the fold keeps what it has rather than fabricating a 0
+        // — the single-controller identity, on a sample whose flag and value disagree.
+        val lone = MotionAggregator.aggregate(listOf(state(0, phantom)))
+        assertEquals(99f, lone.speedKmh, "with nothing to prefer, the fold keeps what it has")
+        assertFalse(lone.speedKnown)
+    }
+
+    /**
+     * The half of the same fold that is **one task away from a real vehicle**, kept
+     * separate because it is the only one an unsigned reading cannot expose.
+     *
+     * `I` Task 1 made Begode publish a speed MAGNITUDE, but Part I Task 10 makes VESC
+     * speed signed again. A `maxOf` over a signed field is FLOORED AT ZERO by any
+     * contributor publishing the `0f` that means "no speed here" — so a reversing
+     * vehicle would read 0 km/h on the dashboard the moment a second controller that
+     * does not report speed joined it, with `speedKnown` true and the SPEED alarm
+     * comparing its thresholds against the floor.
+     */
+    @Test fun a_reversing_vehicle_is_not_floored_at_zero_by_a_controller_with_no_speed() {
+        val reversing = ControllerData(speedKmh = -12f, speedSource = SpeedSource.REPORTED, isConnected = true)
+        // The shape `VescValues.decodeValues` actually emits for an unconfigured
+        // wheel: `derived ?: 0f` beside `SpeedSource.NONE`, every other flag left at
+        // its `true` default.
+        val noSpeed = ControllerData(speedKmh = 0f, speedSource = SpeedSource.NONE, isConnected = true)
+
+        val agg = MotionAggregator.aggregate(listOf(state(0, reversing), state(1, noSpeed)))
+        assertEquals(-12f, agg.speedKmh, "a hollow 0 must not floor a signed speed at zero")
+        assertEquals(SpeedSource.REPORTED, agg.speedSource)
+        assertEquals(
+            -12f,
+            MotionAggregator.aggregate(listOf(state(0, noSpeed), state(1, reversing))).speedKmh
+        )
+    }
+
+    /**
+     * The HAZARD `MotionAlertAvailability`'s DUTY branch writes down in prose and
+     * nothing pinned: on a mixed vehicle DUTY is *Available* because ONE controller
+     * supplies it, while the `maxOf` ran over BOTH — so a decoder that writes a
+     * non-zero number into a `dutyPercent` its protocol does not actually report
+     * raises the ШИМ alarm, the headline safety feature for a wheel, on a number
+     * that is not a duty measurement.
+     */
+    @Test fun a_duty_no_controller_measured_never_becomes_the_vehicles() {
+        val measuring = ControllerData(dutyPercent = 62f, isConnected = true)
+        val phantom = ControllerData(dutyPercent = 91f, hasDuty = false, isConnected = true)
+
+        val mixed = MotionAggregator.aggregate(listOf(state(0, measuring), state(1, phantom)))
+        assertEquals(62f, mixed.dutyPercent, "the ШИМ alarm must see a measured duty or none")
+        assertTrue(mixed.hasDuty, "…and the flag still folds with `any`, as it did")
+        assertEquals(
+            62f,
+            MotionAggregator.aggregate(listOf(state(0, phantom), state(1, measuring))).dutyPercent
+        )
+
+        val other = ControllerData(dutyPercent = 70f, isConnected = true)
+        assertEquals(
+            70f,
+            MotionAggregator.aggregate(listOf(state(0, measuring), state(1, other))).dutyPercent,
+            "measured duties are still maxed against each other"
+        )
+
+        val lone = MotionAggregator.aggregate(listOf(state(0, phantom)))
+        assertEquals(91f, lone.dutyPercent, "the one-controller fold stays an identity")
+        assertFalse(lone.hasDuty)
+    }
+
+    @Test fun a_motor_temperature_no_controller_measured_never_becomes_the_vehicles() {
+        // A real thermistor on a cold morning, which is what makes an unfiltered
+        // `maxOf` lose: `hasMotorTemp` DEFAULTS to false and `motorTempC` to `0f`, so
+        // the hollow contributor here is the field's own default shape rather than a
+        // hand-built one — and 0 beats -8 in a max.
+        val winter = ControllerData(motorTempC = -8f, hasMotorTemp = true, isConnected = true)
+        val hollow = ControllerData(isConnected = true)
+
+        val cold = MotionAggregator.aggregate(listOf(state(0, winter), state(1, hollow)))
+        assertEquals(-8f, cold.motorTempC, "the placeholder must not outvote the thermistor")
+        assertTrue(cold.hasMotorTemp)
+
+        // And the incoherent direction: a placeholder high enough to trip the alarm.
+        val hot = ControllerData(motorTempC = 140f, isConnected = true)
+        val real = ControllerData(motorTempC = 60f, hasMotorTemp = true, isConnected = true)
+        assertEquals(
+            60f,
+            MotionAggregator.aggregate(listOf(state(0, real), state(1, hot))).motorTempC,
+            "a MOTOR_TEMP alarm must not fire on a temperature nobody measured"
+        )
+        assertEquals(
+            60f,
+            MotionAggregator.aggregate(listOf(state(0, hot), state(1, real))).motorTempC
+        )
+
+        // Two thermistors still take the max — the filter is on the flag, not the value.
+        val hotter = ControllerData(motorTempC = 88f, hasMotorTemp = true, isConnected = true)
+        assertEquals(
+            88f,
+            MotionAggregator.aggregate(listOf(state(0, real), state(1, hotter))).motorTempC
+        )
+
+        val lone = MotionAggregator.aggregate(listOf(state(0, hot)))
+        assertEquals(140f, lone.motorTempC, "the one-controller fold stays an identity")
+        assertFalse(lone.hasMotorTemp)
+    }
+
+    /**
+     * **The fold this task deliberately did NOT change, pinned so the reason survives.**
+     *
+     * `hasEscTemp` is a getter over the value (`escTempC > -50f`), not a stored flag.
+     * `max(xs) > SENTINEL` is therefore already identical to `∃x ∈ xs : x > SENTINEL`
+     * — the raw `maxOf` composes with the sentinel encoding to give exactly the `any`
+     * fold every other maxOf field gets, and filtering it by `hasEscTemp` would be a
+     * line no implementation could distinguish from its absence.
+     *
+     * The assertions below are not tautologies: they fail for `average` (62 °C beside
+     * a -100 °C sentinel folds to -19 °C and the vehicle LOSES a sensor it has), for
+     * `minOf`, for `first`, and for a `filter { it.hasEscTemp }.maxOf { … }` written
+     * without the `ifEmpty` — which throws on the two-sentinel vehicle below.
+     */
+    @Test fun the_esc_temperature_fold_carries_the_sentinel_through_untouched() {
+        val sensor = ControllerData(escTempC = 62f, isConnected = true)
+        val begodeSentinel = ControllerData(escTempC = -100f, isConnected = true)
+        val vescSentinel = ControllerData(escTempC = -200f, isConnected = true)
+
+        val one = MotionAggregator.aggregate(listOf(state(0, sensor), state(1, begodeSentinel)))
+        assertEquals(62f, one.escTempC, "one controller with a real sensor answers for the vehicle")
+        assertTrue(one.hasEscTemp)
+        assertEquals(
+            62f,
+            MotionAggregator.aggregate(listOf(state(0, begodeSentinel), state(1, sensor))).escTempC
+        )
+
+        val nobody = MotionAggregator.aggregate(listOf(state(0, begodeSentinel), state(1, vescSentinel)))
+        assertFalse(nobody.hasEscTemp, "two sentinels must not fold into a claimed sensor")
+        assertEquals(-100f, nobody.escTempC, "…and the aggregate still carries a sentinel")
+
+        // A real reading colder than the placeholders still wins, which is what a
+        // `maxOf` over the SENTINEL encoding buys and a naive filter cannot.
+        val chilly = ControllerData(escTempC = -20f, isConnected = true)
+        assertEquals(
+            -20f,
+            MotionAggregator.aggregate(listOf(state(0, chilly), state(1, vescSentinel))).escTempC
+        )
+        assertTrue(MotionAggregator.aggregate(listOf(state(0, chilly), state(1, vescSentinel))).hasEscTemp)
+
+        // The boundary itself is a sentinel, not a reading — `> -50f`, not `>=`.
+        val atBoundary = ControllerData(escTempC = -50f, isConnected = true)
+        assertFalse(
+            MotionAggregator.aggregate(listOf(state(0, atBoundary), state(1, vescSentinel))).hasEscTemp
+        )
+    }
+
+    /**
+     * **The summed fields, and the ruling this task took.** The FLAG still folds with
+     * `all` — that decision has been through review and stands. What changes is that
+     * the sum itself now runs over the contributors that measure, so the figure behind
+     * a false flag is a partial of real measurements rather than a partial of garbage.
+     *
+     * Invisible to any fixture whose unknown fields hold `0f`, which is every fixture
+     * this suite had and every shape a producer emits.
+     */
+    @Test fun a_partial_total_is_a_partial_of_real_measurements_not_of_placeholders() {
+        val measuring = ControllerData(
+            powerW = 4000f, batteryCurrentA = 30f,
+            consumedAh = 15f, consumedWh = 900f, regenAh = 2f, regenWh = 120f,
+            isConnected = true
+        )
+        val phantom = ControllerData(
+            powerW = 4200f, hasPower = false,
+            batteryCurrentA = 28f,
+            consumedAh = 7f, consumedWh = 250f, regenAh = 1f, regenWh = 60f,
+            hasEnergyCounters = false,
+            isConnected = true
+        )
+
+        val mixed = MotionAggregator.aggregate(listOf(state(0, measuring), state(1, phantom)))
+        assertFalse(mixed.hasPower)
+        assertFalse(mixed.hasEnergyCounters)
+        assertEquals(4000f, mixed.powerW, "4200 W nobody measured is not a term of any total")
+        assertEquals(15f, mixed.consumedAh)
+        assertEquals(900f, mixed.consumedWh)
+        assertEquals(2f, mixed.regenAh)
+        assertEquals(120f, mixed.regenWh)
+
+        // Order-independent.
+        val reversed = MotionAggregator.aggregate(listOf(state(0, phantom), state(1, measuring)))
+        assertEquals(4000f, reversed.powerW)
+        assertEquals(900f, reversed.consumedWh)
+
+        // The fields with NO flag are untouched: nothing can tell an unreported
+        // current from a genuine zero, so both terms are still summed. A fix that
+        // dropped the whole contributor — the plausible wrong one — fails here.
+        assertEquals(58f, mixed.batteryCurrentA, "a flagless field still sums every contributor")
+
+        // Everybody measuring: genuinely summed, so the filter is not a `first`.
+        val both = MotionAggregator.aggregate(listOf(state(0, measuring), state(1, measuring)))
+        assertTrue(both.hasPower)
+        assertTrue(both.hasEnergyCounters)
+        assertEquals(8000f, both.powerW)
+        assertEquals(30f, both.consumedAh)
+        assertEquals(1800f, both.consumedWh)
+        assertEquals(4f, both.regenAh)
+        assertEquals(240f, both.regenWh)
+
+        // Nobody measuring: the one-controller fold is still an identity, and the sum
+        // is NOT collapsed to a confident 0 — the flag beside it already says enough.
+        val lone = MotionAggregator.aggregate(listOf(state(0, phantom)))
+        assertEquals(4200f, lone.powerW)
+        assertEquals(250f, lone.consumedWh)
+        assertEquals(7f, lone.consumedAh)
+        assertEquals(1f, lone.regenAh)
+        assertEquals(60f, lone.regenWh)
+        assertFalse(lone.hasPower)
+        assertFalse(lone.hasEnergyCounters)
     }
 
     @Test fun faults_labelled_only_when_more_than_one_online() {

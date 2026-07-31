@@ -10,8 +10,19 @@ import kotlin.test.assertTrue
 
 class VescValuesTest {
 
-    /** Builds a COMM_GET_VALUES_SETUP payload in the pinned field order. */
-    private fun setupPayload(): ByteArray {
+    /**
+     * Builds a COMM_GET_VALUES_SETUP payload in the pinned field order.
+     *
+     * The four parameters are the fields whose "this node did not measure it"
+     * encoding `I` Task 7 taught this decoder — a `0` rail, a `0` battery level
+     * and a `0` speed beside a turning motor. Defaults are a healthy uBox.
+     */
+    private fun setupPayload(
+        rpm: Int = 12000,
+        speedRaw: Int = 13056,
+        vInRaw: Int = 782,
+        battLevelRaw: Int = 840
+    ): ByteArray {
         val o = mutableListOf<Byte>()
         fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
         fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
@@ -22,10 +33,10 @@ class VescValuesTest {
         i32(-8250)                    // current_motor /100 = -82.5
         i32(5240)                     // current_in /100 = 52.4
         i16(760)                      // duty_now /1000 = 0.760
-        i32(12000)                    // rpm
-        i32(13056)                    // speed /1000 = 13.056 m/s = 47.0 km/h
-        i16(782)                      // v_in /10 = 78.2
-        i16(840)                      // battery_level /1000 = 0.840
+        i32(rpm)                      // rpm
+        i32(speedRaw)                 // speed /1000 = 13.056 m/s = 47.0 km/h
+        i16(vInRaw)                   // v_in /10 = 78.2
+        i16(battLevelRaw)             // battery_level /1000 = 0.840
         i32(154000)                   // amp_hours /1e4 = 15.4
         i32(21000)                    // amp_hours_charged /1e4 = 2.1
         i32(9800000)                  // watt_hours /1e4 = 980.0
@@ -47,7 +58,10 @@ class VescValuesTest {
         assertTrue(abs(d.motorCurrentA - (-82.5f)) < 0.01f)
         assertTrue(abs(d.batteryCurrentA - 52.4f) < 0.01f)
         assertTrue(abs(d.inputVoltageV - 78.2f) < 0.01f)
+        assertTrue(d.hasInputVoltage)
         assertTrue(abs(d.powerW - (78.2f * 52.4f)) < 0.5f)
+        assertTrue(d.hasPower)
+        assertEquals(0.84f, d.batteryLevelFraction)
         assertEquals(12000f, d.eRpm)
         assertTrue(abs(d.escTempC - 52.0f) < 0.01f)
         assertTrue(abs(d.motorTempC - 68.0f) < 0.01f)
@@ -106,6 +120,93 @@ class VescValuesTest {
         assertTrue(VescValues.decodeSetupValues(full) != null)
     }
 
+    // ---------------------------------------------------------------------------
+    // `I` Task 7 — the known-flag contract gets a VESC producer that can reach it.
+    //
+    // Until now no VESC decoder could clear `hasInputVoltage`, `hasPower` or
+    // `speedSource`, and `batteryLevelFraction` was published as a confident `0f`.
+    // `G §9.3` was written up as fixed-by-flag while `BegodeProtocol` was the only
+    // producer in the whole app that could ever reach the false branch.
+    // ---------------------------------------------------------------------------
+
+    @Test fun a_setup_reply_with_no_rail_reports_the_voltage_and_the_power_unmeasured() {
+        val d = VescValues.decodeSetupValues(setupPayload(vInRaw = 0))!!
+        assertEquals(0f, d.inputVoltageV)
+        assertTrue(!d.hasInputVoltage, "0.0 V from a node that answered is an empty field, not a rail")
+        assertEquals(0f, d.powerW)
+        assertTrue(!d.hasPower, "power is v_in x current_in, so a phantom rail is a phantom power")
+        // Every other field of the same reply is untouched — this clears two flags,
+        // it does not reject the frame.
+        assertTrue(abs(d.speedKmh - 47.0f) < 0.05f)
+        assertTrue(abs(d.escTempC - 52.0f) < 0.01f)
+
+        // The positive is reachable, and the boundary is `> 0`, not `>= 0`.
+        assertTrue(VescValues.decodeSetupValues(setupPayload(vInRaw = 1))!!.hasInputVoltage)
+        assertTrue(VescValues.decodeSetupValues(setupPayload(vInRaw = 1))!!.hasPower)
+    }
+
+    @Test fun a_plain_values_reply_with_no_rail_reports_the_voltage_and_the_power_unmeasured() {
+        val healthy = VescValues.decodeValues(valuesPayload(), MotorConfig(wheelDiameterMm = 254))!!
+        assertTrue(healthy.hasInputVoltage)
+        assertTrue(healthy.hasPower)
+
+        val d = VescValues.decodeValues(valuesPayload(vInRaw = 0), MotorConfig(wheelDiameterMm = 254))!!
+        assertTrue(!d.hasInputVoltage)
+        assertTrue(!d.hasPower)
+        assertEquals(0f, d.powerW)
+    }
+
+    /**
+     * `batteryLevelFraction` is the seed for a controller-derived battery, and `0f`
+     * is VESC's "no battery configuration" — not a flat pack. `derivedBatteryFrom`
+     * one file over already tests it with `> 0f`; publishing the `0` made it a real
+     * term of `MotionAggregator`'s average, so one uBox at 84 % beside a node with
+     * no configuration reported the vehicle at 42 %.
+     */
+    @Test fun a_setup_reply_with_no_battery_configuration_reports_no_battery_level() {
+        assertNull(VescValues.decodeSetupValues(setupPayload(battLevelRaw = 0))!!.batteryLevelFraction)
+        assertEquals(0.84f, VescValues.decodeSetupValues(setupPayload())!!.batteryLevelFraction)
+        // The boundary: one thousandth is a configuration, and a nearly-flat pack
+        // must not be mistaken for an absent one.
+        assertEquals(
+            0.001f,
+            VescValues.decodeSetupValues(setupPayload(battLevelRaw = 1))!!.batteryLevelFraction
+        )
+    }
+
+    /**
+     * `speedSource` was hardcoded `REPORTED` here, which made
+     * `ControllerData.speedKnown` unfalsifiable for every VESC and put a permanent,
+     * believed **0 km/h** on the dashboard of any node that answers opcode 47
+     * without a speed pipeline behind it.
+     *
+     * `rpm` is the witness and the only one on the frame: VESC's
+     * `mc_interface_get_speed()` is that same `rpm` scaled by the setup's wheel
+     * geometry, so a zero speed beside a turning motor is a zero SCALE.
+     */
+    @Test fun a_setup_reply_whose_speed_field_is_empty_beside_a_turning_motor_is_not_reported() {
+        val unconfigured = VescValues.decodeSetupValues(setupPayload(rpm = 12000, speedRaw = 0))!!
+        assertEquals(SpeedSource.NONE, unconfigured.speedSource)
+        assertTrue(!unconfigured.speedKnown, "a 0 the geometry produced is not a measurement of 0 km/h")
+
+        // A vehicle that is genuinely standing still keeps its speed gauge: 0 rpm and
+        // 0 speed agree, so the field is a reading.
+        val stationary = VescValues.decodeSetupValues(setupPayload(rpm = 0, speedRaw = 0))!!
+        assertEquals(SpeedSource.REPORTED, stationary.speedSource)
+        assertEquals(0f, stationary.speedKmh)
+
+        // Any non-zero speed is a measurement whatever the rpm — including a reversing
+        // one, which Part I Task 10 makes signed again.
+        assertEquals(SpeedSource.REPORTED, VescValues.decodeSetupValues(setupPayload())!!.speedSource)
+        val reversing = VescValues.decodeSetupValues(setupPayload(rpm = -12000, speedRaw = -13056))!!
+        assertEquals(SpeedSource.REPORTED, reversing.speedSource)
+        // And a motor turning backwards with an empty speed field is still empty.
+        assertEquals(
+            SpeedSource.NONE,
+            VescValues.decodeSetupValues(setupPayload(rpm = -12000, speedRaw = 0))!!.speedSource
+        )
+    }
+
     @Test fun wrong_opcode_is_rejected() {
         val p = setupPayload().copyOf(); p[0] = 99
         assertNull(VescValues.decodeSetupValues(p))
@@ -121,7 +222,8 @@ class VescValuesTest {
         assertNull(VescValues.derivedSpeedKmh(10000f, MotorConfig(wheelDiameterMm = 0)))
     }
 
-    @Test fun plain_get_values_derives_speed_and_has_no_reported_source() {
+    /** Builds a COMM_GET_VALUES payload in the pinned field order. */
+    private fun valuesPayload(rpm: Int = 10000, vInRaw: Int = 782): ByteArray {
         val o = mutableListOf<Byte>()
         fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
         fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
@@ -131,12 +233,16 @@ class VescValuesTest {
         i32(-8250); i32(5240)         // motor / input current
         i32(0); i32(0)                // id, iq
         i16(760)                      // duty
-        i32(10000)                    // rpm
-        i16(782)                      // v_in
+        i32(rpm)                      // rpm
+        i16(vInRaw)                   // v_in
         i32(154000); i32(21000); i32(9800000); i32(1200000)   // Ah / Wh
         i32(1000); i32(2000)          // tachometer, tachometer_abs (raw counts)
         o += 0                        // fault
-        val d = VescValues.decodeValues(o.toByteArray(), MotorConfig(polePairs = 15, wheelDiameterMm = 254))!!
+        return o.toByteArray()
+    }
+
+    @Test fun plain_get_values_derives_speed_and_has_no_reported_source() {
+        val d = VescValues.decodeValues(valuesPayload(), MotorConfig(polePairs = 15, wheelDiameterMm = 254))!!
         assertEquals(SpeedSource.DERIVED, d.speedSource)
         assertTrue(abs(d.speedKmh - 31.9f) < 0.3f)
         assertTrue(abs(d.dutyPercent - 76.0f) < 0.01f)

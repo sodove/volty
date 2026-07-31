@@ -2093,4 +2093,104 @@ class VescGatewayProtocolTest {
         assertTrue(published.controllers.all { it.isOnline })
         loop.cancel(); device.cancel()
     }
+
+    // ------------------------------------------------------------------
+    // 8. The decoder's output, folded by the REAL aggregator (`I` Task 7)
+    // ------------------------------------------------------------------
+
+    /**
+     * **The cross-layer test nobody wrote.** Everything above stops at
+     * [VescGatewayProtocol.latestMotion]; `MotionAggregatorTest` starts at a
+     * hand-built [ru.sodovaya.volty.domain.model.ControllerData]. The only thing
+     * that ever connected the two was a sentence in a comment — which is why a
+     * decoder that could not express "I did not measure this" and a fold that
+     * would have honoured it if it could were invisible to the whole suite.
+     *
+     * The vehicle here is the one shape a VESC head unit makes reachable: a
+     * healthy uBox on [CAN_A] beside a node on [CAN_B] that **answers both
+     * opcodes** while measuring nothing behind them — `v_in = 0`,
+     * `battery_level = 0`, and a `speed` field left at 0 while its motor turns
+     * at 12 000 eRPM. Every byte is the frame table's, every decode is
+     * `VescValues`', and the number asserted is what
+     * [ru.sodovaya.volty.data.ble.VehicleConnection] publishes off
+     * [ru.sodovaya.volty.domain.stats.MotionAggregator].
+     *
+     * Before `I` Task 7 that node's three phantom fields were indistinguishable
+     * from measurements at every layer: the decoder could not clear
+     * `hasInputVoltage` (nothing in the VESC path ever assigned it), so the
+     * average over both controllers reported **39.1 V** on a 78.2 V pack, and
+     * the battery level was averaged with a confident `0` to **42 %**.
+     */
+    @Test
+    fun `a node that answers without measuring does not halve the vehicle's rail`() = runTest {
+        val (spec, p) = scooter()
+        val link = FakeGateway(p) { canId, opcode ->
+            when (opcode) {
+                VescValues.OPCODE_GET_VALUES_SETUP ->
+                    if (canId == CAN_A) ScriptedReply(LATENCY_MS, setupFrame())
+                    // Answers opcode 47 with an empty speed field beside a
+                    // turning motor, and no battery configuration.
+                    else ScriptedReply(
+                        LATENCY_MS,
+                        setupFrame(speedMsRaw = 0, battLevelRaw = 0)
+                    )
+                VescValues.OPCODE_GET_VALUES ->
+                    if (canId == CAN_A) ScriptedReply(LATENCY_MS, valuesFrame(dutyRaw = 500))
+                    // Answers opcode 4 with a 0 V rail — a node that relays the
+                    // frame without an ADC behind it.
+                    else ScriptedReply(LATENCY_MS, valuesFrame(dutyRaw = 250, vInRaw = 0))
+                VescBmsValues.OPCODE_BMS_GET_VALUES -> ScriptedReply(LATENCY_MS, bmsFrame())
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        var latest: VehicleData? = null
+        val orchestrator = VehicleConnection(
+            packs = listOf(Pack(0, "ANT", BmsType.VESC_BMS, "HEAD")),
+            controllers = listOf(
+                Controller(0, "Front", ControllerType.VESC, "HEAD", canId = CAN_A),
+                Controller(1, "Rear", ControllerType.VESC, "HEAD", canId = CAN_B)
+            ),
+            topology = PackTopology.PARALLEL,
+            onVehicleData = { latest = it }
+        )
+
+        runCycles(1)
+        routeControllerSamples(p, MotionSampleGate(p.controllerCount)) { local, data ->
+            orchestrator.submitMotion(spec.globalControllerIndex(local), data)
+        }
+
+        val published = assertNotNull(latest)
+        // Both controllers really are in the fold — an aggregate that simply
+        // never saw the second node would pass most of what follows.
+        assertEquals(2, published.controllers.size)
+        assertTrue(published.controllers.all { it.isOnline }, "the phantom node ANSWERED; it is online")
+        assertFalse(
+            published.controllers.first { it.controller.index == 1 }.data.hasInputVoltage,
+            "and the decoder is what says its rail is not a measurement"
+        )
+
+        val motion = published.motion
+        assertEquals(78.2f, motion.inputVoltageV, 0.01f, "the uBox's rail, NOT 39.1 V")
+        assertTrue(motion.hasInputVoltage, "one controller measured it, and the average is over that one")
+        assertEquals(
+            0.84f, assertNotNull(motion.batteryLevelFraction), 0.001f,
+            "the uBox's pack level, NOT 42 %"
+        )
+        assertFalse(motion.hasPower, "a total missing a term is not the vehicle's power")
+        assertEquals(
+            78.2f * 30f, motion.powerW, 1f,
+            "…and the partial behind that flag is the uBox's real watts, not its watts plus a placeholder"
+        )
+        assertEquals(SpeedSource.REPORTED, motion.speedSource)
+        assertEquals(47.0f, motion.speedKmh, 0.05f, "the only controller that reported a speed")
+
+        // The per-unit folds are untouched by any of it: duty still maxes, and
+        // the flagless currents still sum BOTH nodes.
+        assertEquals(50f, motion.dutyPercent, 0.01f)
+        assertEquals(60f, motion.batteryCurrentA, 0.01f)
+        loop.cancel(); device.cancel()
+    }
 }
