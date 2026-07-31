@@ -37,6 +37,13 @@ class RideEnergyTest {
     private fun at(seconds: Long) = Instant.fromEpochSeconds(seconds)
 
     /**
+     * The window's watt-hours alone — the numerator half of
+     * [RideEnergy.windowedRide], which is the only way production reads it.
+     */
+    private fun wh(samples: List<ControllerData>, since: Instant? = null) =
+        RideEnergy.windowedRide(samples, since)?.wh
+
+    /**
      * One motion sample of a **counterless** wheel — `hasEnergyCounters = false`
      * is the fixture's whole reason for existing, and leaving it at
      * `ControllerData`'s default `true` would send every assertion below down
@@ -69,10 +76,15 @@ class RideEnergyTest {
     @Test fun a_constant_600_W_minute_over_a_kilometre_is_ten_watt_hours_and_says_it_was_derived() {
         val ride = listOf(sample(0, 600f, tripKm = 0f), sample(60, 600f, tripKm = 1f))
 
-        val wh = assertNotNull(RideEnergy.sessionWh(ride, since = null))
-        assertEquals(10f, wh, 0.0001f, "600 W for a minute")
+        val ridden = assertNotNull(RideEnergy.windowedRide(ride, since = null))
+        assertEquals(10f, ridden.wh, 0.0001f, "600 W for a minute")
+        assertEquals(1f, ridden.km, 0.0001f, "and the kilometre that same minute covered")
 
-        val reading = assertNotNull(MotionReadings.sessionConsumption(ride.last(), synthesisedWh = wh))
+        val reading = assertNotNull(
+            MotionReadings.sessionConsumption(
+                ride.last(), RideEnergy.synthesisedWhPerKm(ride, since = null)
+            )
+        )
         assertEquals(10f, reading.whPerKm, 0.0001f, "10 Wh over 1 km")
         assertTrue(reading.synthesised, "integrated from power, not read off a counter")
     }
@@ -89,7 +101,7 @@ class RideEnergyTest {
     @Test fun a_protocol_that_keeps_counters_is_believed_over_the_reconstruction() {
         val counting = sample(60, 600f, tripKm = 1f).copy(consumedWh = 42f, hasEnergyCounters = true)
 
-        val reading = assertNotNull(MotionReadings.sessionConsumption(counting, synthesisedWh = 10f))
+        val reading = assertNotNull(MotionReadings.sessionConsumption(counting, synthesisedWhPerKm = 10f))
         assertEquals(42f, reading.whPerKm, 0.0001f, "the counter's 42 Wh, not the integral's 10")
         assertTrue(!reading.synthesised)
     }
@@ -134,12 +146,12 @@ class RideEnergyTest {
      */
     @Test fun a_ride_draws_positive_watt_hours_and_regen_subtracts_from_them() {
         val drawing = listOf(sample(0, 600f), sample(60, 600f))
-        assertTrue(assertNotNull(RideEnergy.sessionWh(drawing, since = null)) > 0f)
+        assertTrue(assertNotNull(wh(drawing)) > 0f)
 
         // A descent that puts more back than it took: the NET figure is negative,
         // and that is the honest answer rather than a magnitude.
         val descending = listOf(sample(0, -600f), sample(60, -600f))
-        assertEquals(-10f, assertNotNull(RideEnergy.sessionWh(descending, since = null)), 0.0001f)
+        assertEquals(-10f, assertNotNull(wh(descending)), 0.0001f)
     }
 
     // -----------------------------------------------------------------------------
@@ -152,7 +164,7 @@ class RideEnergyTest {
      */
     @Test fun the_rule_is_trapezoidal_so_a_ramp_is_its_mean_and_not_either_end() {
         val ramp = listOf(sample(0, 0f), sample(3600, 1000f))
-        assertEquals(500f, assertNotNull(RideEnergy.sessionWh(ramp, since = null)), 0.0001f)
+        assertEquals(500f, assertNotNull(wh(ramp)), 0.0001f)
     }
 
     /**
@@ -167,12 +179,12 @@ class RideEnergyTest {
         // multiplying by the span answers 1000 Wh, and assuming a uniform dt of
         // span/(n-1) answers 900 Wh.
         val uneven = listOf(sample(0, 900f), sample(600, 300f), sample(7200, 300f))
-        assertEquals(650f, assertNotNull(RideEnergy.sessionWh(uneven, since = null)), 0.01f)
+        assertEquals(650f, assertNotNull(wh(uneven)), 0.01f)
     }
 
     /** Two samples at the same instant span no time and add no energy. */
     @Test fun samples_sharing_an_instant_span_no_time_and_add_nothing() {
-        assertEquals(0f, assertNotNull(RideEnergy.sessionWh(listOf(sample(0, 900f), sample(0, 900f)), null)), 0f)
+        assertEquals(0f, assertNotNull(wh(listOf(sample(0, 900f), sample(0, 900f)))), 0f)
     }
 
     // -----------------------------------------------------------------------------
@@ -201,14 +213,14 @@ class RideEnergyTest {
         val withoutIt = listOf(sample(0, 600f), sample(60, 600f))
 
         assertEquals(
-            assertNotNull(RideEnergy.sessionWh(withoutIt, since = null)),
-            assertNotNull(RideEnergy.sessionWh(withHole, since = null)),
+            assertNotNull(wh(withoutIt)),
+            assertNotNull(wh(withHole)),
             0.0001f,
             "the hole is bridged between the measured neighbours"
         )
         // Both wrong answers, named, so a regression cannot be mistaken for noise:
         // integrating the placeholder gives 40 Wh, reading it as 0 W gives 5 Wh.
-        assertEquals(10f, assertNotNull(RideEnergy.sessionWh(withHole, since = null)), 0.0001f)
+        assertEquals(10f, assertNotNull(wh(withHole)), 0.0001f)
     }
 
     /**
@@ -220,7 +232,7 @@ class RideEnergyTest {
         val coast = listOf(sample(0, 1000f), sample(3600, 0f), sample(7200, 0f))
         assertEquals(
             500f,
-            assertNotNull(RideEnergy.sessionWh(coast, since = null)),
+            assertNotNull(wh(coast)),
             0.0001f,
             "the second hour is a measured 0 W, so it adds nothing but is not skipped"
         )
@@ -234,17 +246,17 @@ class RideEnergyTest {
      * not reach a gauge wearing that number.
      */
     @Test fun nothing_to_integrate_is_an_absence_and_not_a_zero() {
-        assertNull(RideEnergy.sessionWh(emptyList(), since = null))
-        assertNull(RideEnergy.sessionWh(listOf(sample(0, 600f)), since = null))
+        assertNull(wh(emptyList()))
+        assertNull(wh(listOf(sample(0, 600f))))
         assertNull(
-            RideEnergy.sessionWh(
+            wh(
                 listOf(sample(0, 600f), sample(60, 4200f, hasPower = false)),
                 since = null
             ),
             "one measured sample beside one unmeasured one is still one measured sample"
         )
         // …and a real integral that happens to come out at zero is NOT an absence.
-        assertEquals(0f, assertNotNull(RideEnergy.sessionWh(listOf(sample(0, 0f), sample(60, 0f)), null)), 0f)
+        assertEquals(0f, assertNotNull(wh(listOf(sample(0, 0f), sample(60, 0f)))), 0f)
     }
 
     /**
@@ -253,13 +265,113 @@ class RideEnergyTest {
      */
     @Test fun a_refused_integral_leaves_the_session_reading_absent() {
         val counterless = sample(60, 600f, tripKm = 12f)
-        assertNull(MotionReadings.sessionConsumption(counterless, synthesisedWh = null))
+        assertNull(RideEnergy.synthesisedWhPerKm(listOf(counterless), since = null))
+        assertNull(MotionReadings.sessionConsumption(counterless, synthesisedWhPerKm = null))
     }
 
-    /** A trip that has not started is not a distance, whatever the integral says. */
-    @Test fun a_synthesised_figure_still_needs_a_trip_to_divide_by() {
-        val parked = sample(60, 600f, tripKm = 0f)
-        assertNull(MotionReadings.sessionConsumption(parked, synthesisedWh = 10f))
+    // -----------------------------------------------------------------------------
+    // The DIVISOR — windowed, like the numerator it is paired with
+    // -----------------------------------------------------------------------------
+
+    /**
+     * **The distance is a delta across the retained window, not the session
+     * total.**
+     *
+     * The buffer evicts (on age, and on a 60 000-sample hard cap that a Begode's
+     * 17 Hz notification rate reaches in a couple of hours) while `tripKm` keeps
+     * counting the whole ride. Here the vehicle has already travelled 100 km when
+     * the retained window opens, and covers 1 km inside it: pairing the window's
+     * 10 Wh with the session's 101 km reads **0.099 Wh/km**, off by a factor of a
+     * hundred, with nothing but the tilde to say so.
+     */
+    @Test fun the_distance_is_the_windows_own_and_not_the_rides_running_total() {
+        val afterAHundredKm = listOf(
+            sample(0, 600f, tripKm = 100f),
+            sample(60, 600f, tripKm = 101f)
+        )
+        val ridden = assertNotNull(RideEnergy.windowedRide(afterAHundredKm, since = null))
+        assertEquals(10f, ridden.wh, 0.0001f)
+        assertEquals(1f, ridden.km, 0.0001f, "101 - 100, not 101")
+        assertEquals(
+            10f,
+            assertNotNull(RideEnergy.synthesisedWhPerKm(afterAHundredKm, since = null)),
+            0.0001f,
+            "a session divisor would answer 0.099 here and drift further every kilometre"
+        )
+    }
+
+    /**
+     * **Eviction does not change the answer on a steady ride** — which is the
+     * property that makes the windowed average worth having rather than merely
+     * cheaper. The same 10 Wh/km whether the buffer holds the whole hour or only
+     * its last minute.
+     */
+    @Test fun dropping_the_oldest_samples_leaves_a_steady_rides_figure_where_it_was() {
+        val whole = (0..60).map { sample(it * 60L, 600f, tripKm = it.toFloat()) }
+        val evicted = whole.takeLast(2)
+
+        assertEquals(
+            assertNotNull(RideEnergy.synthesisedWhPerKm(whole, since = null)),
+            assertNotNull(RideEnergy.synthesisedWhPerKm(evicted, since = null)),
+            0.0001f
+        )
+        assertEquals(10f, assertNotNull(RideEnergy.synthesisedWhPerKm(whole, since = null)), 0.0001f)
+    }
+
+    /**
+     * A window the vehicle stood still through is not a distance, so there is no
+     * figure — the same refusal [RideMetrics.sessionWhPerKm] already makes for
+     * the measured branch, reached through the same call.
+     */
+    @Test fun a_window_that_covered_no_ground_yields_no_consumption() {
+        val parked = listOf(sample(0, 600f, tripKm = 12f), sample(60, 600f, tripKm = 12f))
+        assertEquals(0f, assertNotNull(RideEnergy.windowedRide(parked, since = null)).km, 0f)
+        assertNull(
+            RideEnergy.synthesisedWhPerKm(parked, since = null),
+            "a wheel balancing in place draws watts over no kilometres"
+        )
+    }
+
+    /**
+     * **The divisor spans the same samples the numerator did.**
+     *
+     * The first two samples have no measured power, so the integral starts at the
+     * third — and the distance must start there too. Counting the 5 km covered
+     * before the voltage scale existed would charge them against energy nobody
+     * measured: 10 Wh over 6 km instead of over 1.
+     */
+    @Test fun the_distance_starts_where_the_measured_energy_starts() {
+        val scaleArrivesLate = listOf(
+            sample(0, 4200f, hasPower = false, tripKm = 0f),
+            sample(30, 4200f, hasPower = false, tripKm = 5f),
+            sample(60, 600f, tripKm = 5f),
+            sample(120, 600f, tripKm = 6f)
+        )
+        val ridden = assertNotNull(RideEnergy.windowedRide(scaleArrivesLate, since = null))
+        assertEquals(10f, ridden.wh, 0.0001f, "the measured minute only")
+        assertEquals(1f, ridden.km, 0.0001f, "6 - 5, not 6 - 0")
+        assertEquals(
+            10f,
+            assertNotNull(RideEnergy.synthesisedWhPerKm(scaleArrivesLate, since = null)),
+            0.0001f
+        )
+    }
+
+    /** `since` bounds the distance too, not just the energy. */
+    @Test fun the_session_boundary_bounds_the_distance_as_well_as_the_energy() {
+        val acrossAReconnect = listOf(
+            sample(0, 3600f, tripKm = 40f),   // the previous leg, still retained
+            sample(3600, 3600f, tripKm = 80f),
+            sample(3660, 600f, tripKm = 0f),  // this connection: tripKm restarted
+            sample(3720, 600f, tripKm = 1f)
+        )
+        val ridden = assertNotNull(RideEnergy.windowedRide(acrossAReconnect, since = at(3660)))
+        assertEquals(1f, ridden.km, 0.0001f, "not 1 - 40, which is a distance travelled backwards")
+        assertEquals(
+            10f,
+            assertNotNull(RideEnergy.synthesisedWhPerKm(acrossAReconnect, since = at(3660))),
+            0.0001f
+        )
     }
 
     // -----------------------------------------------------------------------------
@@ -284,12 +396,12 @@ class RideEnergyTest {
         )
         assertEquals(
             10f,
-            assertNotNull(RideEnergy.sessionWh(acrossAReconnect, since = at(3660))),
+            assertNotNull(wh(acrossAReconnect, at(3660))),
             0.0001f,
             "only the minute at 600 W"
         )
         assertTrue(
-            assertNotNull(RideEnergy.sessionWh(acrossAReconnect, since = null)) > 3000f,
+            assertNotNull(wh(acrossAReconnect)) > 3000f,
             "…and without a boundary the whole retained buffer is integrated, which is why one is passed"
         )
     }
@@ -297,6 +409,6 @@ class RideEnergyTest {
     /** The boundary is inclusive: the session's own first sample is in it. */
     @Test fun the_first_sample_of_the_session_is_inside_the_session() {
         val ride = listOf(sample(3660, 600f), sample(3720, 600f))
-        assertEquals(10f, assertNotNull(RideEnergy.sessionWh(ride, since = at(3660))), 0.0001f)
+        assertEquals(10f, assertNotNull(wh(ride, at(3660))), 0.0001f)
     }
 }

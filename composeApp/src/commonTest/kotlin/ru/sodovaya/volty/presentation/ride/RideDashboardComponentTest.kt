@@ -357,8 +357,8 @@ class RideDashboardComponentTest {
         advanceUntilIdle()
 
         val t0 = Instant.fromEpochSeconds(1_000_000)
-        fun begode(atSeconds: Long, tripKm: Float) = ControllerData(
-            powerW = 600f,
+        fun begode(atSeconds: Long, tripKm: Float, powerW: Float = 600f) = ControllerData(
+            powerW = powerW,
             hasEnergyCounters = false,
             consumedWh = 0f,
             tripKm = tripKm,
@@ -366,7 +366,7 @@ class RideDashboardComponentTest {
             timestamp = t0 + atSeconds.seconds
         )
         // The first sample also starts the session clock, which is what bounds
-        // the integral — see RideEnergy.sessionWh's `since`.
+        // the integral — see RideEnergy.windowedRide's `since`.
         repo.emitMotion(begode(0, tripKm = 0f))
         advanceUntilIdle()
         repo.emitMotionWindow(listOf(begode(0, tripKm = 0f), begode(60, tripKm = 1f)))
@@ -383,15 +383,22 @@ class RideDashboardComponentTest {
             )
         }
 
-        // The trip counter moves on nearly every motion sample, i.e. far more
-        // often than the window is re-read, so the motion collector has to carry
-        // the synthesis forward on its own rather than blank it back to a
-        // measurement it does not have.
-        repo.emitMotion(begode(60, tripKm = 2f))
+        // The ride continues. Both halves of the figure follow the window: a
+        // third minute at 1800 W adds 20 Wh and a second kilometre, so 30 Wh
+        // over 2 km. (A divisor taken from the newest sample's own `tripKm`
+        // would agree here only because this window has not been evicted from —
+        // RideEnergyTest is where that distinction is pinned.)
+        repo.emitMotionWindow(
+            listOf(
+                begode(0, tripKm = 0f),
+                begode(60, tripKm = 1f),
+                begode(120, tripKm = 2f, powerW = 1800f)
+            )
+        )
         advanceUntilIdle()
         c.state.test {
             val s = awaitItem()
-            assertEquals(5f, assertNotNull(s.sessionWhPerKm), 0.01f, "the same 10 Wh, now over 2 km")
+            assertEquals(15f, assertNotNull(s.sessionWhPerKm), 0.01f, "30 Wh over 2 km")
             assertTrue(s.sessionWhPerKmSynthesised, "still derived, and still says so")
         }
     }

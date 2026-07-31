@@ -325,6 +325,47 @@ class KableBmsRepositoryIndependentControllersTest {
         )
     }
 
+    /**
+     * **[KableBmsRepository.motionSamples] emits once PER MOTION SAMPLE, and that
+     * cadence is the contract — not merely the contents.**
+     *
+     * `RideDashboardComponent` is the sole writer of `sessionWhPerKm` for **every**
+     * vehicle since `I` Task 8, counterless or not, and it writes only from this
+     * flow. So a `motionSamples` that answered once and completed — a `flowOf(...)`,
+     * a `take(1)`, a debounce — would freeze the consumption chip on real hardware
+     * for the rest of the ride, including a VESC's *measured* average, which worked
+     * before this branch. The two tests above read the flow with `first()`: they
+     * assert what it says and nothing about how often it says it, so neither of
+     * them can see that regression.
+     *
+     * Three emissions, not two: a `StateFlow`-derived flow replays its current
+     * value on subscription, and that initial empty window is what the component's
+     * collector starts from.
+     */
+    @Test
+    fun `the retained motion window re-emits on every sample and not once per collector`() = repoTest { repo ->
+        val v = dualVescVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+        val funnels = repo.linkMotionFunnelsForTest()
+        val scheduler = testScheduler
+
+        repo.motionSamples(1.hours).test {
+            assertEquals(emptyList(), awaitItem(), "the window as it stands at subscription")
+
+            funnels[0](0, motion(speed = 30f, duty = 50f, motorA = 20f, battA = 10f, power = 700f))
+            scheduler.advanceUntilIdle()
+            assertEquals(1, awaitItem().size, "the front controller's sample re-opened the window")
+
+            funnels[1](0, motion(speed = 29f, duty = 55f, motorA = 22f, battA = 12f, power = 800f))
+            scheduler.advanceUntilIdle()
+            val second = awaitItem()
+            assertEquals(2, second.size, "and so did the rear's — a one-shot flow ends before here")
+            assertEquals(1500f, second.last().powerW, absoluteTolerance = 0.001f)
+
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
     private companion object {
         const val ADDR_A = "AA:BB:CC:DD:EE:0A"
         const val ADDR_B = "AA:BB:CC:DD:EE:0B"

@@ -125,33 +125,38 @@ class DefaultRideDashboardComponent(
         }
 
     /**
-     * Watt-hours this connection has drawn, **integrated** from the motion
-     * stream's power — or null while the stream has offered fewer than two
-     * samples carrying a measured power.
+     * Consumption **integrated** from the motion stream's power over the
+     * retained window, in Wh/km — or null while the stream has offered fewer
+     * than two samples carrying a measured power, or has covered no distance.
+     *
+     * Already divided when it gets here ([RideEnergy.synthesisedWhPerKm]),
+     * because its numerator and its divisor are both bounded by what the ring
+     * buffer still holds and must be taken over the same samples. Holding the
+     * watt-hours alone and dividing by `motion.tripKm` here would pair a
+     * windowed numerator with a session total.
      *
      * A plain `var` rather than a State field, exactly like the peak trackers
      * above and for the same reason: it is not what the screen draws. What the
      * screen draws is [RideDashboardComponent.State.sessionWhPerKm], which is
-     * this divided by the session distance and gated by
-     * [MotionReadings.sessionConsumption] — and on any vehicle that keeps real
-     * counters, this number is computed and then ignored, because a measurement
-     * wins.
+     * this gated by [MotionReadings.sessionConsumption] — and on any vehicle
+     * that keeps real counters this number is computed and then ignored,
+     * because a measurement wins.
      */
-    private var synthesisedSessionWh: Float? = null
+    private var synthesisedWhPerKm: Float? = null
 
     /**
      * The session consumption for [motion] against whatever
-     * [synthesisedSessionWh] currently holds, with its provenance.
+     * [synthesisedWhPerKm] currently holds, with its provenance.
      *
      * Called from exactly one place — the [BmsRepository.motionSamples]
      * collector, which is the **single writer** of
      * [RideDashboardComponent.State.sessionWhPerKm] and its `…Synthesised`
-     * twin. That flow emits once per motion sample by contract, so both halves
-     * of the answer (a longer integral, and the newer `tripKm` it is divided
-     * by) arrive together and neither needs a second collector to notice it.
+     * twin. That flow emits once per motion sample by contract, so the
+     * synthesised figure and the sample its measured rival is read from arrive
+     * together and neither needs a second collector to notice it.
      */
     private fun sessionConsumptionOf(motion: ControllerData) =
-        MotionReadings.sessionConsumption(motion, synthesisedSessionWh)
+        MotionReadings.sessionConsumption(motion, synthesisedWhPerKm)
 
     // -----------------------------------------------------------------------------------------
     // G §9.2 — the learned widths of the CURRENT and POWER dials
@@ -432,7 +437,7 @@ class DefaultRideDashboardComponent(
                 // The measured branch, unchanged: no samples have been collected
                 // yet, so there is nothing to synthesise from.
                 sessionWhPerKm = MotionReadings.sessionWhPerKm(initialMotion),
-                uptimeSeconds =sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
+                uptimeSeconds = sessionStartedAt?.let { (initialMotion.timestamp - it).inWholeSeconds.coerceAtLeast(0) } ?: 0L
             )
         )
     }
@@ -472,19 +477,33 @@ class DefaultRideDashboardComponent(
             }
         }
 
-        // The synthesised half of the consumption figure (`I` Task 8). Its own
-        // collector rather than a fold inside the motion one above, because the
-        // repository re-reads the ring buffer per emission and the integral is
-        // over the whole retained window — folding it in beside `foldPeaks`
-        // would make it look like a per-sample accumulator, which it is not:
-        // it is recomputed from scratch, so a re-run of `_state.update` or a
-        // duplicated emission cannot double-count.
+        // The consumption figure (`I` Task 8), and the ONLY writer of the two
+        // session fields — for every vehicle, measured or synthesised.
+        //
+        // Its own collector rather than a fold inside the motion one above,
+        // because the repository re-reads the ring buffer per emission and the
+        // integral is over the whole retained window: folding it in beside
+        // `foldPeaks` would make it look like a per-sample accumulator, which it
+        // is not — it is recomputed from scratch, so a re-run of `_state.update`
+        // or a duplicated emission cannot double-count.
+        //
+        // **LAUNCHED AFTER THE MOTION COLLECTOR ABOVE, AND THAT ORDER IS
+        // LOAD-BEARING.** `motionSamples` is derived from `activeMotion`
+        // (BmsRepository.motionSamples' contract), so ONE emission wakes both of
+        // these, on one dispatcher, in subscription order — i.e. launch order.
+        // Launched first, this one would read `current.motion` before the
+        // collector above had written it, and the MEASURED branch (which reads
+        // `consumedWh` / `tripKm` off that sample) would trail the ride by one
+        // notification. Swapping the two `scope.launch` blocks is therefore a
+        // behaviour change, not a tidy-up. Pinned by
+        // RideDashboardComponentTest's synthesis tests, whose fake derives
+        // `motionSamples` from `activeMotion` for exactly this reason.
         scope.launch {
             bmsRepository.motionSamples(RideEnergy.SESSION_WINDOW).collect { samples ->
                 // Bounded to THIS connection: the buffer deliberately survives a
-                // reconnect to the same address, while `tripKm` — the divisor
-                // waiting downstream — restarts with the protocol.
-                synthesisedSessionWh = RideEnergy.sessionWh(samples, since = sessionStartedAt)
+                // reconnect to the same address, while the `tripKm` the distance
+                // delta is taken from restarts with the protocol.
+                synthesisedWhPerKm = RideEnergy.synthesisedWhPerKm(samples, since = sessionStartedAt)
                 _state.update { current ->
                     val session = sessionConsumptionOf(current.motion)
                     current.copy(

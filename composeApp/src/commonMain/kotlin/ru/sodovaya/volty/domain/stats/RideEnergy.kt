@@ -61,43 +61,64 @@ object RideEnergy {
      *
      * Matches [SampleRingBuffer][ru.sodovaya.volty.data.memory.SampleRingBuffer]'s
      * own default `maxAge`, i.e. "everything retained" — the buffer's retention,
-     * not this number, is the real bound. The **session** boundary is the
-     * `since` argument of [sessionWh], not the window: the buffer is cleared on
-     * disconnect and on connecting to a different device, but deliberately kept
-     * across a reconnect to the same address so the graph survives link drops,
-     * and a reconnect restarts [ControllerData.tripKm] (it is a session delta).
+     * not this number, is the real bound, and the buffer evicts on a
+     * `hardCap = 60_000` sample count as well as on age. The **session** boundary
+     * is the `since` argument of [windowedRide], not the window: the buffer is
+     * cleared on disconnect and on connecting to a different device, but
+     * deliberately kept across a reconnect to the same address so the graph
+     * survives link drops, and a reconnect restarts [ControllerData.tripKm] (it
+     * is a session delta).
      */
     val SESSION_WINDOW: Duration = 4.hours
+
+    /**
+     * The energy and the distance of one retained window, **measured over the
+     * same samples**.
+     *
+     * The pairing is the whole point of the type. [wh] can only ever cover what
+     * the ring buffer still holds, so pairing it with a *session-total* distance
+     * would make the quotient read progressively low the moment eviction starts,
+     * with nothing but the `≈` to say so — and eviction is reachable on the very
+     * vehicle this exists for: the Begode capture behind
+     * [ru.sodovaya.volty.data.ble.BleConfig] is 228 notifications in 13 s, one
+     * buffered aggregate apiece, so the 60 000-sample hard cap arrives in a
+     * couple of hours.
+     */
+    data class WindowedRide(val wh: Float, val km: Float)
 
     /**
      * Trapezoidal `∫ value·dt` over [samples], in **value-units × hours**, in
      * the samples' own sign — see this object's KDoc on why it does not negate.
      *
-     * Returns **null** when fewer than two samples carry a value, i.e. when
-     * there is no interval to integrate over. Null rather than `0.0` because
-     * those are different statements: `0.0` is what a genuinely balanced
-     * interval integrates to, and "nothing to integrate yet" must not arrive at
-     * a gauge as a confident zero.
+     * Returns **null** when fewer than two samples are given, i.e. when there is
+     * no interval to integrate over. Null rather than `0.0` because those are
+     * different statements: `0.0` is what a genuinely balanced interval
+     * integrates to, and "nothing to integrate yet" must not arrive at a gauge
+     * as a confident zero.
      *
-     * **A sample whose [valueOf] is null is DROPPED, not read as zero.** That is
-     * the whole reason the extractor is nullable: since `I` Task 7 a VESC node
-     * answering with `v_in = 0` genuinely clears [ControllerData.hasPower], so
-     * integrating an unmeasured power as 0 W is reachable today rather than
-     * hypothetical — and it is the same "an unobserved value is not a zero"
-     * defect [MotionReadings] exists for. Dropping bridges the gap with the
-     * trapezoid between the two nearest *measured* samples, which assumes the
-     * power varied smoothly across the hole; treating the hole as 0 W would
-     * assume the vehicle coasted through it, which is a claim nobody made.
+     * **Every sample handed over is integrated; deciding which samples are
+     * measurements belongs to the caller.** [windowedRide] filters first,
+     * because it needs the very same set for its distance — and a second,
+     * private "is this a measurement" rule in here would be a rule the divisor
+     * could disagree with. (The nullable-extractor version of this function was
+     * exactly that: once [windowedRide] pre-filtered, no null could reach it,
+     * and mutants R2/S4 could not be told from the code they replaced.)
      *
      * [timestampOf] is read from the sample rather than from a clock, so the
-     * arithmetic is pure and the gaps are the real arrival gaps.
+     * arithmetic is pure and the gaps are the real arrival gaps. **A pair of
+     * samples in descending time order therefore SUBTRACTS energy**, and nothing
+     * here re-sorts them: both callers hand over a list in arrival order (a
+     * `SampleRingBuffer`, which only ever appends), and the motion aggregate's
+     * own timestamp is a `maxOf` across contributors, so it cannot go backwards
+     * while the buffer moves forwards. Stated rather than guarded because a
+     * `sortedBy` here would be a line no producer could make observable.
      */
     fun <T> integrateHours(
         samples: List<T>,
         timestampOf: (T) -> Instant,
-        valueOf: (T) -> Float?
+        valueOf: (T) -> Float
     ): Double? {
-        val points = samples.mapNotNull { s -> valueOf(s)?.let { timestampOf(s) to it } }
+        val points = samples.map { s -> timestampOf(s) to valueOf(s) }
         if (points.size < 2) return null
         var acc = 0.0
         for (i in 1 until points.size) {
@@ -110,28 +131,83 @@ object RideEnergy {
     }
 
     /**
-     * Watt-hours drawn over [samples] since [since], or null when fewer than
-     * two of them carry a measured power.
+     * The watt-hours and the kilometres of the retained window since [since], or
+     * null when fewer than two of its samples carry a measured power.
      *
-     * **Positive for a ride** — [ControllerData.powerW] is discharge-positive,
-     * so no negation happens here (this object's KDoc argues the asymmetry with
-     * the Graph screen's caller). A stretch of regen subtracts, so a descent
-     * that puts more back than it took reports a **negative** figure; that is
-     * the honest answer and the same net convention the Graph screen's "used"
-     * already reports for the pack. It is deliberately NOT the gross
-     * `amp_hours`-style counter VESC keeps, because there is no `regenWh`
-     * published beside it to make a gross figure readable.
+     * **Both numbers are taken over the SAME samples** — the ones whose power is
+     * a measurement — and that is what makes their quotient a consumption figure
+     * rather than a ratio of two different rides. A sample dropped from the
+     * integral for having no power is dropped from the distance too; charging
+     * the kilometres it covered against energy nobody measured would read low
+     * for exactly the reason the whole contract exists.
      *
-     * [since] bounds the integral to the CURRENT connection. The motion ring
-     * buffer survives a reconnect to the same address on purpose, but
-     * [ControllerData.tripKm] — the denominator this figure is about to be
-     * divided by — restarts with the protocol, so energy from before the
-     * reconnect would be charged against distance travelled after it. Null
-     * means "no session start known yet", and then everything retained is
-     * integrated.
+     * **The filter is where "an unobserved power is not a zero" is enforced**, and
+     * it is deliberately the ONLY place: since `I` Task 7 a VESC node answering
+     * with `v_in = 0` genuinely clears [ControllerData.hasPower], so integrating
+     * an unmeasured power as 0 W is reachable today rather than hypothetical.
+     * Dropping such a sample bridges the hole with the trapezoid between the two
+     * nearest *measured* neighbours, which assumes the power varied smoothly
+     * across it; reading it as 0 W would assume the vehicle coasted through it,
+     * which is a claim nobody made. Note that the predicate is
+     * [MotionReadings.powerW] and not `powerW != 0f`: a measured zero is a
+     * reading, and a stretch of it is most of a coasting ride.
+     *
+     * **[wh] is positive for a ride.** [ControllerData.powerW] is
+     * discharge-positive, so no negation happens here (this object's KDoc argues
+     * the asymmetry with the Graph screen's caller). A stretch of regen
+     * subtracts, so a descent that puts more back than it took reports a
+     * **negative** figure; that is the honest answer and the same net convention
+     * the Graph screen's "used" already reports for the pack. It is deliberately
+     * NOT the gross `amp_hours`-style counter VESC keeps, because there is no
+     * `regenWh` published beside it to make a gross figure readable.
+     *
+     * **[km] is a delta across the window, not [ControllerData.tripKm] itself.**
+     * `tripKm` is a session counter and the buffer is not: it evicts on age and
+     * on a sample-count hard cap. Dividing a windowed numerator by a session
+     * divisor is wrong the instant the first sample is evicted, and wrong by a
+     * factor that grows silently for the rest of the ride. A delta across the
+     * same window stays *correct* instead of degrading. The subtraction is sound
+     * because `tripKm` is monotonic non-decreasing within one connection (it is
+     * a delta from a baseline the protocol takes at its first frame, folded
+     * across controllers with `maxOf`) and [since] excludes the previous
+     * connection, where it restarted.
+     *
+     * [since] bounds both halves to the CURRENT connection. The motion ring
+     * buffer survives a reconnect to the same address on purpose, but `tripKm`
+     * restarts with the protocol, so without the bound the previous leg's
+     * watt-hours would be charged against distance travelled after it — and the
+     * distance delta would straddle a counter that went backwards. Null means
+     * "no session start known yet", and then everything retained is used.
      */
-    fun sessionWh(samples: List<ControllerData>, since: Instant?): Float? {
-        val inSession = if (since == null) samples else samples.filter { it.timestamp >= since }
-        return integrateHours(inSession, { it.timestamp }) { MotionReadings.powerW(it) }?.toFloat()
+    fun windowedRide(samples: List<ControllerData>, since: Instant?): WindowedRide? {
+        val measured = (if (since == null) samples else samples.filter { it.timestamp >= since })
+            .filter { MotionReadings.powerW(it) != null }
+        // `it.powerW` and not `MotionReadings.powerW(it)`: the filter above has
+        // already decided that every remaining sample's power IS a measurement,
+        // and asking the gate a second time would be a question with one answer.
+        val wh = integrateHours(measured, { it.timestamp }) { it.powerW } ?: return null
+        // Non-null above ⇒ at least two measured samples ⇒ first()/last() are safe.
+        return WindowedRide(wh = wh.toFloat(), km = measured.last().tripKm - measured.first().tripKm)
     }
+
+    /**
+     * **The synthesised consumption: a WINDOWED average, not a session one.**
+     *
+     * Wh over the retained window divided by the kilometres of that same window
+     * ([windowedRide]). Null when there is nothing to integrate, and null when
+     * the window covers no positive distance — the refusal is
+     * [RideMetrics.sessionWhPerKm]'s, so a synthesised figure cannot invent a
+     * division the measured branch would decline.
+     *
+     * **This equals the session average until the ring buffer starts evicting,
+     * and stays a true consumption figure afterwards** — which is the reason it
+     * is windowed and not accumulated. Please do not "restore" a session-total
+     * divisor: pairing a numerator that can only cover the retained tail with a
+     * distance that covers the whole ride makes the readout drift low with no
+     * symptom a rider could notice. An accumulator that survived eviction would
+     * also have to be kept in step with connects, resets and vehicle switches,
+     * which is state this object deliberately does not own.
+     */
+    fun synthesisedWhPerKm(samples: List<ControllerData>, since: Instant?): Float? =
+        windowedRide(samples, since)?.let { RideMetrics.sessionWhPerKm(it.wh, it.km) }
 }

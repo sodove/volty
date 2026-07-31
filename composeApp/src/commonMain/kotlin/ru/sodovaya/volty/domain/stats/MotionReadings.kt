@@ -129,8 +129,8 @@ object MotionReadings {
 
     /**
      * The session average a gauge may show, with its provenance — the measured
-     * figure when the protocol keeps counters, otherwise [synthesisedWh]
-     * divided by the same session distance, otherwise null.
+     * figure when the protocol keeps counters, otherwise
+     * [synthesisedWhPerKm], otherwise null.
      *
      * **A measurement always wins.** A protocol that keeps counters is reporting
      * what its own coulomb counting says; an integral of `power × dt` over BLE
@@ -139,18 +139,21 @@ object MotionReadings {
      * up. The synthesis is a floor under the vehicles that have nothing, not an
      * improvement on the ones that do.
      *
-     * [synthesisedWh] is null when the caller has nothing to offer (no samples
-     * yet, or a stream in which fewer than two samples carried a measured
-     * power), which is exactly the pre-existing "blank" — never a zero.
+     * [synthesisedWhPerKm] arrives already divided
+     * ([RideEnergy.synthesisedWhPerKm]) because its numerator and its divisor
+     * are both windowed and must come from the same samples — a caller that
+     * handed over watt-hours alone would leave this function to divide them by
+     * [ControllerData.tripKm], which is a session total and therefore the wrong
+     * denominator once the ring buffer starts evicting. Null when the caller has
+     * nothing to offer, which is exactly the pre-existing blank — never a zero.
+     *
+     * The two branches are therefore **not the same average**: the measured one
+     * is a session figure the firmware kept, the synthesised one is a windowed
+     * figure equal to it until eviction begins. Both are honest answers to "what
+     * is this ride costing"; the flag is what tells them apart.
      */
-    fun sessionConsumption(motion: ControllerData, synthesisedWh: Float?): SessionConsumption? {
+    fun sessionConsumption(motion: ControllerData, synthesisedWhPerKm: Float?): SessionConsumption? {
         sessionWhPerKm(motion)?.let { return SessionConsumption(it, synthesised = false) }
-        val wh = synthesisedWh ?: return null
-        // The same divisor and the same "a trip that has not started is not a
-        // distance" guard the measured branch goes through — RideMetrics owns
-        // that rule for both, so a synthesised figure cannot invent a division
-        // the measured one refuses.
-        val perKm = RideMetrics.sessionWhPerKm(wh, motion.tripKm) ?: return null
-        return SessionConsumption(perKm, synthesised = true)
+        return synthesisedWhPerKm?.let { SessionConsumption(it, synthesised = true) }
     }
 }

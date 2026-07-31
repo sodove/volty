@@ -144,9 +144,11 @@ class MotionReadingsTest {
      */
     @Test fun a_synthesised_session_figure_is_marked_and_leaves_the_counter_flag_alone() {
         val counterless = begode.copy(tripKm = 2f)
-        val reading = assertNotNull(MotionReadings.sessionConsumption(counterless, synthesisedWh = 30f))
+        val reading = assertNotNull(
+            MotionReadings.sessionConsumption(counterless, synthesisedWhPerKm = 15f)
+        )
 
-        assertEquals(15f, reading.whPerKm, "30 Wh over 2 km")
+        assertEquals(15f, reading.whPerKm)
         assertTrue(reading.synthesised)
         // The half that would survive if the flag were flipped instead:
         assertFalse(counterless.hasEnergyCounters, "the sample still says the wheel counts nothing")
@@ -158,8 +160,8 @@ class MotionReadingsTest {
 
     /** A measurement always wins, and is never marked. */
     @Test fun a_measured_session_figure_beats_a_synthesised_one_and_carries_no_marker() {
-        val reading = assertNotNull(MotionReadings.sessionConsumption(vesc, synthesisedWh = 1f))
-        assertEquals(980f / 58f, reading.whPerKm, "the counter's figure, not 1 Wh / 58 km")
+        val reading = assertNotNull(MotionReadings.sessionConsumption(vesc, synthesisedWhPerKm = 1f))
+        assertEquals(980f / 58f, reading.whPerKm, "the counter's figure, not the reconstruction's 1.0")
         assertFalse(reading.synthesised)
     }
 
@@ -168,16 +170,26 @@ class MotionReadingsTest {
      * never a chip claiming to be an approximation of nothing.
      */
     @Test fun a_session_with_nothing_to_synthesise_from_stays_absent() {
-        assertNull(MotionReadings.sessionConsumption(begode.copy(tripKm = 12f), synthesisedWh = null))
+        assertNull(MotionReadings.sessionConsumption(begode.copy(tripKm = 12f), synthesisedWhPerKm = null))
     }
 
     /**
-     * The synthesised branch goes through the SAME divisor guard as the measured
-     * one: a trip that has not started is not a distance.
+     * **The synthesised figure is NOT divided here**, and `tripKm` is not what it
+     * was divided by.
+     *
+     * [RideEnergy.synthesisedWhPerKm] hands over a quotient whose numerator and
+     * divisor are both bounded by what the ring buffer still holds. This function
+     * dividing by the sample's own `tripKm` — a session total — would be right
+     * only until the first eviction and then quietly wrong for the rest of the
+     * ride. So a wheel that has travelled 58 km still reports the windowed 15.0
+     * it was handed, unchanged.
      */
-    @Test fun a_synthesised_figure_cannot_invent_a_division_the_measured_one_refuses() {
-        assertNull(MotionReadings.sessionConsumption(begode.copy(tripKm = 0f), synthesisedWh = 30f))
-        assertNull(MotionReadings.sessionConsumption(vesc.copy(tripKm = 0f), synthesisedWh = 30f))
+    @Test fun the_synthesised_figure_arrives_already_divided_and_is_not_divided_again() {
+        val farIntoTheRide = begode.copy(tripKm = 58f)
+        val reading = assertNotNull(
+            MotionReadings.sessionConsumption(farIntoTheRide, synthesisedWhPerKm = 15f)
+        )
+        assertEquals(15f, reading.whPerKm, "passed through, not 15 / 58")
     }
 
     /**
@@ -188,7 +200,7 @@ class MotionReadingsTest {
      */
     @Test fun a_synthesised_zero_is_still_a_figure_and_is_still_marked() {
         val reading = assertNotNull(
-            MotionReadings.sessionConsumption(begode.copy(tripKm = 2f), synthesisedWh = 0f)
+            MotionReadings.sessionConsumption(begode.copy(tripKm = 2f), synthesisedWhPerKm = 0f)
         )
         assertEquals(0f, reading.whPerKm)
         assertTrue(reading.synthesised)
