@@ -149,14 +149,6 @@ class VescGatewayProtocolTest {
 
     private companion object {
         const val LATENCY_MS = 20L
-
-        /**
-         * A link that answers in 300 ms rather than 20 — an ordinary BLE hop
-         * plus a CAN forward, and the condition under which `I` Task 11's
-         * re-probe stagger actually binds (see
-         * `at most one suppressed request is re-probed per cycle`).
-         */
-        const val SLOW_LATENCY_MS = 300L
         const val TIMEOUT_MS = 400L
         const val GUARD_MS = 100L
         const val CYCLE_GAP_MS = 50L
@@ -2031,21 +2023,20 @@ class VescGatewayProtocolTest {
      * builds a second mechanism; this drives the real one, through the real
      * routing helpers a [ru.sodovaya.volty.data.ble.ConnectionSession] uses.
      *
-     * **The tail of this test states `I` Task 11's price at the level a rider
-     * feels it.** It used to end "and it comes back online on its first reply",
-     * three seconds after waking. Under suppression a node that has gone quiet
-     * for twenty seconds is no longer being asked at all, so waking up is not
-     * enough — it comes back on the next re-probe, or immediately on the
-     * reconnect asserted here. That is a real regression against the old loop
-     * and it is written down rather than hidden: the compensation is that the
-     * cycle it leaves behind is ten times faster.
+     * **This test also fixes `I` Task 11's blast radius, and it is the reason
+     * the two-threshold split exists.** The rear uBox here ANSWERS for three
+     * seconds before it goes quiet, so it is held to
+     * [VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] (25 cycles,
+     * ~12.5 s of unbroken silence at the defaults past which the sweep below is
+     * already drawing it offline) rather than to the three that suppress a node
+     * which has never spoken. Twenty seconds of silence is eighteen cycles, so
+     * it is never suppressed, and the last assertion is exactly the one this
+     * test made before the task: **it comes back online on its first reply.**
      *
-     * The reconnect arm is the one this test can drive at all.
-     * `controllerMotionProtocol` does not thread a clock (`I` Task 5, A4), so a
-     * protocol the repository built measures [VescGatewayProtocol.REPROBE_INTERVAL_MS]
-     * against the real one while the loop above runs in virtual time — the
-     * timer arm is therefore owned by `a suppressed request is probed again on
-     * the long timer`, which builds its protocol directly.
+     * A first revision of this task did suppress it, and the tail had to be
+     * rewritten to say the node stayed dark until a reconnect. That version was
+     * shipped as "inherent to the design"; it was not — it was a threshold that
+     * could not tell "has never answered" from "answered and stopped".
      */
     @Test
     fun `a silent controller goes offline while the hosted battery stays online`() = runTest {
@@ -2100,17 +2091,10 @@ class VescGatewayProtocolTest {
 
         awake = true
         repeat(3) { advanceTimeBy(1_000); runCurrent(); nowMs += 1_000; drain() }
-        assertFalse(
-            assertNotNull(latest).controllers.first { it.controller.index == 1 }.isOnline,
-            "waking up is not enough once it has been suppressed: nothing on the link is asking it"
-        )
-
-        // The reconnect, which re-probes everything unconditionally.
-        p.reset()
-        repeat(3) { advanceTimeBy(1_000); runCurrent(); nowMs += 1_000; drain() }
         assertTrue(
             assertNotNull(latest).controllers.first { it.controller.index == 1 }.isOnline,
-            "and on a fresh connection it comes back online on its first reply"
+            "and it comes back online on its first reply — a node that has answered before is " +
+                "never suppressed for a twenty-second nap"
         )
         loop.cancel(); device.cancel()
     }
@@ -2550,6 +2534,12 @@ class VescGatewayProtocolTest {
         awake = true
 
         val napMark = link.sent.size
+        // ~11 s of suppressed cycles, so this body assumes
+        // REPROBE_INTERVAL_MS > 100 * suppressedCycleMs. That is an undeclared
+        // lower bound on a constant flagged as the one to revisit after field
+        // data: shorten it past ~11 s and this assertion fails, which is the
+        // right outcome (the nap is what the assertion is about) but the reason
+        // is not in the test's name.
         advanceTimeBy(100 * suppressedCycleMs)
         runCurrent()
         assertTrue(
@@ -2587,11 +2577,205 @@ class VescGatewayProtocolTest {
     }
 
     /**
+     * **A node that has spoken has earned a far longer benefit of the doubt.**
+     * "You cannot both stop asking and notice immediately" is only true if
+     * suppression cannot tell a pair that has NEVER answered from one that
+     * answered and then stopped — and the rider's entire motivating case is the
+     * former: their head unit answers opcode 47 zero times, ever.
+     *
+     * Both ends are asserted, because only one of them is the interesting one.
+     * Twenty consecutive misses is not a verdict for a uBox that was reporting
+     * a moment ago (a busy CAN bus behind a BLE hop drops runs of frames). And
+     * it is still not a reprieve: a uBox unplugged mid-ride is given up on
+     * eventually, or we would have rebuilt the original defect — a cycle
+     * spending 1000 ms on dead requests forever — from the other end.
+     */
+    @Test
+    fun `a proven controller is given a far longer benefit of the doubt`() = runTest {
+        var awake = true
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (canId == CAN_B && !awake) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertNotNull(p.latestMotion(1), "premise: the rear uBox has proved it answers both opcodes")
+
+        awake = false
+        advanceTimeBy(15 * twoSilentCycleMs)
+        runCurrent()
+
+        val mark = link.sent.size
+        advanceTimeBy(5 * twoSilentCycleMs)
+        runCurrent()
+        assertEquals(
+            5, link.sent.drop(mark).count { it == CAN_B to VescValues.OPCODE_GET_VALUES_SETUP },
+            "twenty consecutive misses is not a verdict for a node that has answered — three is, " +
+                "and only for one that never has"
+        )
+        assertEquals(
+            5, link.sent.drop(mark).count { it == CAN_B to VescValues.OPCODE_GET_VALUES },
+            "and the same for its per-unit request"
+        )
+
+        // Past the proven threshold: patience, not immunity.
+        advanceTimeBy(10 * twoSilentCycleMs)
+        runCurrent()
+        val mark2 = link.sent.size
+        advanceTimeBy(10 * suppressedCycleMs)
+        runCurrent()
+        assertTrue(
+            link.sent.drop(mark2).none { it.first == CAN_B },
+            "a uBox unplugged mid-ride is still given up on: `never once it has answered` would " +
+                "rebuild the original defect from the other end"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * The inequality the proven threshold is anchored to, stated as a test so a
+     * retune breaks the build rather than the argument.
+     *
+     * A silent pair costs at least `replyTimeoutMs + lateReplyGuardMs` per
+     * cycle, so its threshold in cycles is a floor on how long it must have
+     * been silent. Keeping that floor past
+     * [VescGatewayProtocol.STALE_READING_MS] — which restates
+     * `BleConfig.packOfflineAfterMs` — is what guarantees suppression is never
+     * the thing that removes a controller the rider can still see: by the time
+     * it engages, `VehicleConnection`'s own sweep has been drawing that
+     * controller offline for some time on its own authority.
+     */
+    @Test
+    fun `a proven pair is only given up on once the app has already drawn it offline`() {
+        val silentRunMs = VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES *
+            (VescGatewayProtocol.DEFAULT_REPLY_TIMEOUT_MS + VescGatewayProtocol.DEFAULT_LATE_REPLY_GUARD_MS)
+        assertTrue(
+            silentRunMs >= VescGatewayProtocol.STALE_READING_MS,
+            "$silentRunMs ms of proof against a ${VescGatewayProtocol.STALE_READING_MS} ms staleness " +
+                "window: below it, suppression would be what takes a controller off the dashboard"
+        )
+        assertTrue(
+            VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES >
+                VescGatewayProtocol.SUPPRESS_AFTER_SILENT_CYCLES,
+            "the whole point is that the two are different, and which way round"
+        )
+    }
+
+    /**
+     * A new connection has no evidence, so a node that answered in the LAST one
+     * is back on the short threshold. That is deliberate and it is the half of
+     * the split that costs something: a uBox still booting when the link comes
+     * up has, by this definition, never answered.
+     */
+    @Test
+    fun `a reconnect forgets that a node has ever answered`() = runTest {
+        var awake = true
+        val p = protocol()
+        val link = FakeGateway(p) { canId, opcode ->
+            if (canId == CAN_B && !awake) ScriptedReply(TIMEOUT_MS, null)
+            else healthyScript()(canId, opcode)
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1)
+        assertNotNull(p.latestMotion(1), "premise: it answered, so it is proven in THIS session")
+
+        awake = false
+        p.reset()
+        val mark = link.sent.size
+        advanceTimeBy(6 * twoSilentCycleMs)
+        runCurrent()
+
+        assertEquals(
+            3, link.sent.drop(mark).count { it == CAN_B to VescValues.OPCODE_GET_VALUES },
+            "the new session gives it three cycles, not twenty-five: what it did on the last " +
+                "connection is not evidence about this one"
+        )
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * **What the suppression window costs somewhere the request-level rule does
+     * not reach** (Global Constraint 6: a behaviour change on the battery path
+     * gets named).
+     *
+     * The pack request carries no suppression key, which protects the *request*.
+     * The derived pack's *value* comes from the controller path:
+     * `publishDerivedBattery` sums `batteryCurrentA` and `powerW` across the
+     * controllers present in `motion`, and a controller whose `GET_VALUES` is
+     * suppressed is not one of them. So a rider whose second uBox naps past the
+     * proven threshold and then wakes sees a pack current that is confidently
+     * too low — not stale, not greyed out, just smaller — until its probe.
+     *
+     * Asserted across the window AND after it, because "understated" and
+     * "broken" are different claims and only the recovery separates them.
+     */
+    @Test
+    fun `a controller suppressed while it sleeps understates the derived battery until its probe`() =
+        runTest {
+            var awake = true
+            val p = derivedProtocol()
+            val link = FakeGateway(p) { canId, opcode ->
+                when {
+                    opcode == VescBmsValues.OPCODE_BMS_GET_VALUES ->
+                        ScriptedReply(LATENCY_MS, noBmsFrame())
+                    canId == CAN_A && !awake -> ScriptedReply(TIMEOUT_MS, null)
+                    else -> railScript()(canId, opcode)
+                }
+            }
+            val device = link.runDevice(this)
+            val loop = launch { p.runPollLoop(link.send) }
+
+            advanceTimeBy(pastWarmupMs)
+            runCurrent()
+            assertEquals(
+                -60f, assertNotNull(p.latestData(0)).current, 0.01f,
+                "premise: both uBoxes draw 30 A off the one pack and both are in the sum"
+            )
+
+            // A nap long enough to exhaust even a proven pair's patience.
+            awake = false
+            advanceTimeBy((VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES + 2) * twoSilentCycleMs)
+            runCurrent()
+
+            awake = true
+            advanceTimeBy(20 * suppressedCycleMs)
+            runCurrent()
+            assertEquals(
+                -30f, assertNotNull(p.latestData(0)).current, 0.01f,
+                "the woken uBox is healthy and absent from the sum, because nothing is asking it — " +
+                    "the pack reads confidently too low, and this is the cost being named"
+            )
+            assertEquals(
+                78.2f, assertNotNull(p.latestData(0)).voltage, 0.01f,
+                "the rail is unaffected: it is a max, not a sum, so only the summed terms understate"
+            )
+
+            advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 20 * twoSilentCycleMs)
+            runCurrent()
+            assertEquals(
+                -60f, assertNotNull(p.latestData(0)).current, 0.01f,
+                "and the probe closes it: understated for a bounded window, not broken"
+            )
+            loop.cancel(); device.cancel()
+        }
+
+    /**
      * **CONSECUTIVE is a word in the rule and it has to be one in the code.** A
      * uBox that drops the odd reply — a busy CAN bus, a frame lost to
-     * interference — is not a node that refuses the opcode, and three misses
-     * spread over twenty cycles must never add up to a verdict the way three in
-     * a row do. An answer resets the count, not merely the suppression.
+     * interference — is not a node that refuses the opcode, and thirty misses
+     * spread over sixty cycles must never add up to a verdict the way
+     * [VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] in a row do. An
+     * answer resets the count, not merely the suppression.
+     *
+     * Run past that longer threshold rather than past the short one: this uBox
+     * answers on its first cycle, so it is a PROVEN pair from then on, and a
+     * window shorter than 25 misses could not tell a broken reset from a
+     * working one.
      */
     @Test
     fun `a controller that misses the odd reply is never suppressed`() = runTest {
@@ -2609,12 +2793,15 @@ class VescGatewayProtocolTest {
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        // Ten misses, none of them next to another.
-        advanceTimeBy(10 * (oneSilentCycleMs + healthyCycleMs) - 1)
+        // Thirty misses, none of them next to another.
+        advanceTimeBy(30 * (oneSilentCycleMs + healthyCycleMs) - 1)
         runCurrent()
 
         val cycles = link.sent.cycles()
-        assertTrue(cycles.size >= 15, "premise: plenty of cycles to look at (${cycles.size})")
+        assertTrue(
+            cycles.size > 2 * VescGatewayProtocol.SUPPRESS_PROVEN_AFTER_SILENT_CYCLES,
+            "premise: more cycles than even a proven pair's threshold (${cycles.size})"
+        )
         assertTrue(
             cycles.all { it.contains(CAN_B to VescValues.OPCODE_GET_VALUES) },
             "every single cycle still asks it: " +
@@ -2705,36 +2892,28 @@ class VescGatewayProtocolTest {
      * full pre-suppression worst case again — a loop that stalls on a schedule
      * rather than one that is permanently slow, and strictly harder to diagnose.
      *
-     * It binds whenever a suppressed cycle is LONGER than the gap between two
-     * pairs' due times, which is the ordinary case on a real link: the pairs
-     * come due as far apart as their timeouts were (500 ms at the defaults),
-     * and a cycle with several sources answering over BLE-plus-CAN-forwarding
-     * is longer than that. Hence [SLOW_LATENCY_MS] here — nothing exotic, just
-     * a link that answers in 300 ms instead of the fixture's usual 20.
+     * **It binds at any link latency**, which is worth stating because it is
+     * easy to talk yourself into believing it is a corner case. `CAN_A`'s two
+     * pairs are suppressed 520 ms apart — the walk between their two timeouts —
+     * so they come due 520 ms apart. But the loop's walk between their two
+     * CHECKS is that same 520 ms, because it is the same requests in the same
+     * order. So the second is due the moment it is looked at, in the SAME
+     * cycle: on this fixture it is checked 30 080 ms past a 30 000 ms window.
+     * Without the guard both fire together and that cycle pays 1110 ms — the
+     * whole pre-suppression worst case, back on a schedule.
      *
-     * With the guard each of `CAN_A`'s two opcodes gets its own cycle. Without
-     * it the second is checked LATER IN THE SAME CYCLE, by which time the first
-     * one's own 500 ms timeout has carried the clock past its due time, and the
-     * cycle pays both.
+     * Read off the recorded request list rather than the clock: the pack
+     * request is every cycle's last, so it is a cycle boundary, and no settled
+     * cycle may carry two requests to the dead node.
      */
     @Test
     fun `at most one suppressed request is re-probed per cycle`() = runTest {
         val p = protocol()
-        val link = FakeGateway(p) { canId, opcode ->
-            when {
-                canId == CAN_A -> ScriptedReply(TIMEOUT_MS, null)
-                opcode == VescValues.OPCODE_GET_VALUES_SETUP ->
-                    ScriptedReply(SLOW_LATENCY_MS, setupFrame())
-                opcode == VescValues.OPCODE_GET_VALUES ->
-                    ScriptedReply(SLOW_LATENCY_MS, valuesFrame(dutyRaw = 250))
-                else -> ScriptedReply(SLOW_LATENCY_MS, bmsFrame())
-            }
-        }
+        val link = FakeGateway(p, deadFrontScript())
         val device = link.runDevice(this)
         val loop = launch { p.runPollLoop(link.send) }
 
-        // Well past both pairs' re-probes, which come due 800 ms apart while a
-        // suppressed cycle here lasts 950.
+        // Well past both pairs' re-probes.
         advanceTimeBy(VescGatewayProtocol.REPROBE_INTERVAL_MS + 8_000)
         runCurrent()
 

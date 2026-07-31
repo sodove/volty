@@ -195,10 +195,24 @@ data class GatewaySource(
  *  - **at most ONE suppressed request is re-probed per cycle.** Re-probes that
  *    all fire on the same timer would periodically cost the full worst case
  *    again — a loop that stalls on a schedule instead of being permanently
- *    slow, which is strictly harder to diagnose. The pairs stagger themselves:
- *    a re-probe that goes unanswered restarts its own clock, so the next one
- *    due gets the following cycle. Pinned by `at most one suppressed request is
- *    re-probed per cycle`.
+ *    slow, which is strictly harder to diagnose. Pinned by `at most one
+ *    suppressed request is re-probed per cycle`.
+ *
+ *    **The guard binds at ANY link latency, and it is worth being exact about
+ *    why**, because a first revision of this paragraph claimed it was a
+ *    slow-link corner case and that is wrong. Two pairs suppressed in the same
+ *    pre-suppression cycle carry stamps separated by however long the walk
+ *    between them took; the loop's own walk between their two *checks* takes
+ *    that same time, since it is the same requests in the same order. So the
+ *    second pair comes due inside the same cycle as the first however fast the
+ *    link is — on the default fixture it lands 30 090 ms past a 30 000 ms
+ *    window — and without the guard both fire together. It goes slack only
+ *    when a request *between* the two is itself suppressed and skipped, which
+ *    shortens the walk without shortening the gap.
+ *
+ *    After the first wave the pairs stagger themselves: a re-probe that goes
+ *    unanswered restarts its own clock, so the next one due gets the following
+ *    cycle.
  *
  * A **failed write is not a node's silence** and does not count towards
  * suppression: the request never reached the wire, so the node was never asked.
@@ -394,21 +408,74 @@ class VescGatewayProtocol(
          * takes to turn "a slow or booting node" into "a node that does not
          * handle this opcode".
          *
-         * Three, and the two ends are what fix it. One timeout is ambiguous by
-         * construction (§10.1: silence is indistinguishable from a slow node),
-         * and two is one cycle's bad luck — a uBox that misses a beat while it
-         * reboots must not vanish for [REPROBE_INTERVAL_MS]. Beyond three the
-         * evidence stops improving and the cost does not: every extra cycle of
-         * proof is another `replyTimeoutMs + lateReplyGuardMs` per dead pair,
-         * paid at the start of every single connection. On the rider's scooter
-         * three cycles is ~3.3 s of the old slow loop before the fast one
-         * begins.
+         * **This is the threshold for a pair that has NEVER answered in this
+         * connection.** One that has is held to
+         * [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] instead, and that split is what
+         * makes three defensible — see below.
+         *
+         * The two costs are wildly asymmetric and the first revision of this
+         * comment argued only from the cheaper one. **The cost of proof** is
+         * one more `replyTimeoutMs + lateReplyGuardMs` per dead pair per extra
+         * cycle, paid once per connection: on the rider's scooter three cycles
+         * is ~3.3 s of the old slow loop before the fast one begins, and a
+         * fourth would be 4.4 s. **The cost of being wrong** is
+         * [REPROBE_INTERVAL_MS] of a controller that is invisible while
+         * perfectly healthy, *plus* a derived pack whose summed current and
+         * power silently omit it for the same window (see [REPROBE_INTERVAL_MS]).
+         * Half a minute of a confidently-too-low pack current against half a
+         * second of politeness is not a close trade, and three consecutive
+         * misses on a busy CAN bus behind a BLE hop is not exotic.
+         *
+         * What resolves it is that this number no longer applies to a node that
+         * has ever spoken. The only pairs held to three are ones that have
+         * produced **nothing at all** since the link came up — the rider's head
+         * unit answers opcode 47 zero times, ever — and for those a false
+         * positive costs thirty seconds of something that has shown no sign of
+         * existing. Anything that has answered once is worth twenty-five times
+         * the benefit of the doubt, and gets it.
+         *
+         * **The residual risk, named rather than mitigated:** a node that is
+         * still booting when the link comes up has answered nothing either, so
+         * a uBox that takes longer than three cycles (~3.3 s on the rider's
+         * plan) to start answering CAN after the BLE connect is suppressed for
+         * [REPROBE_INTERVAL_MS]. `reset` clearing [everAnswered] is what makes
+         * that reachable, and it is correct that it does — a new connection has
+         * no evidence. Whether real hardware needs longer than three cycles at
+         * connect is the first thing to measure on a debug build; if it does,
+         * this is the number to raise, not the re-probe.
          *
          * Pinned from both sides by `a controller that never answers stops
          * being asked`, which asserts the dead node is asked exactly three
          * times and then not at all.
          */
         const val SUPPRESS_AFTER_SILENT_CYCLES: Int = 3
+
+        /**
+         * The same count for a pair that **has answered at least once in this
+         * connection** — a far longer benefit of the doubt, because it has
+         * proved the node handles the opcode and all that is in question is
+         * whether it is awake.
+         *
+         * Deliberately not "never suppress once it has answered". A uBox
+         * unplugged mid-ride would then time out forever and we would have
+         * rebuilt the original defect from the other end: the ~1000 ms of dead
+         * requests per cycle that this whole task exists to remove would simply
+         * need a slightly different vehicle to reappear on.
+         *
+         * **Twenty-five, anchored to the rest of the app rather than picked.** A
+         * silent pair costs at least `replyTimeoutMs + lateReplyGuardMs` per
+         * cycle, so 25 cycles is at least 12.5 s of unbroken silence at the
+         * defaults — past [STALE_READING_MS], which restates
+         * `BleConfig.packOfflineAfterMs`, the age at which `VehicleConnection`'s
+         * own sweep is *already* drawing that controller offline. So suppression
+         * can never be the thing that removes a controller the rider can still
+         * see: by the time it engages, the dashboard has said the node is gone
+         * for some time on its own authority. The inequality is pinned by `a
+         * proven pair is only given up on once the app has already drawn it
+         * offline`, so a retune that inverts it breaks the build in the same
+         * commit rather than quietly making this paragraph false.
+         */
+        const val SUPPRESS_PROVEN_AFTER_SILENT_CYCLES: Int = 25
 
         /**
          * How long a suppressed (controller, opcode) pair stays suppressed
@@ -428,13 +495,35 @@ class VescGatewayProtocol(
          * `ant_bms.c`'s own reconnect backs off to, so nothing on this vehicle
          * recovers on a slower schedule than the firmware does.
          *
+         * ## What this window costs, in full
+         *
          * Stated plainly, because it is a real regression against the loop this
          * replaces: before suppression a sleeping controller came back on its
-         * FIRST reply, one cycle after it woke. It now comes back within
-         * [REPROBE_INTERVAL_MS] of waking. That is the price of not asking a
-         * dead node twice a second, and it is pinned end-to-end — through the
-         * real orchestrator and its staleness sweep — by `a silent controller
-         * goes offline while the hosted battery stays online`.
+         * FIRST reply, one cycle after it woke. It now comes back up to this
+         * long after waking. [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] makes the
+         * window hard to reach — a controller that has ever answered must be
+         * silent past [STALE_READING_MS] first — but it is reachable, and there
+         * is a **second cost that is easy to miss** because it lands somewhere
+         * else entirely:
+         *
+         * **The derived battery is understated for the same window.**
+         * [publishDerivedBattery] sums `batteryCurrentA` and `powerW` across the
+         * controllers present in [motion], and a controller whose `GET_VALUES`
+         * is suppressed is not in [motion]. So a rider whose second uBox naps
+         * and wakes sees a pack current and power that are confidently too low
+         * — not stale, not greyed out, just *smaller* — until its probe comes
+         * round. It is not caught by the pack request carrying no suppression
+         * key: that protects the *request*, and this is the *value*.
+         * `I` Task 5's `STALE_READING_MS` contributor filter has the same shape
+         * and is deliberate for the same reason; the difference is that this
+         * window is opened by suppression rather than by the contributor going
+         * stale, so it is named here. Pinned by `a controller suppressed while
+         * it sleeps understates the derived battery until its probe`, which
+         * asserts the sum across the window and its recovery after.
+         *
+         * Both halves are why this number is short rather than generous, and
+         * they are the first thing to revisit if field data says a nap of more
+         * than [STALE_READING_MS] is ordinary on this hardware.
          */
         const val REPROBE_INTERVAL_MS: Long = 30_000L
 
@@ -685,6 +774,27 @@ class VescGatewayProtocol(
      * previous refusal says nothing at all about this session.
      */
     @Volatile private var suppressedAtMs: Map<SilentPair, Long> = emptyMap()
+
+    /**
+     * The pairs that have answered **at least once in this connection**, which
+     * is the difference between the two suppression thresholds.
+     *
+     * The distinction is the whole reason the aggressive threshold is
+     * defensible. "You cannot both stop asking and notice immediately" is only
+     * true if suppression cannot tell a pair that has NEVER answered from one
+     * that answered and then stopped — and those are different claims about
+     * different hardware. The rider's motivating case is entirely the former:
+     * their head unit answers opcode 47 zero times, ever, so three cycles of
+     * proof cost it nothing it was going to use. A uBox that has spoken is held
+     * to [SUPPRESS_PROVEN_AFTER_SILENT_CYCLES] instead.
+     *
+     * Cleared by [reset] with everything else, and that is correct rather than
+     * an oversight: a new connection has no evidence, and a healthy node earns
+     * the flag back on its first reply. What it costs is named on
+     * [SUPPRESS_AFTER_SILENT_CYCLES] — a node still booting when the link comes
+     * up is, by this definition, a node that has never answered.
+     */
+    @Volatile private var everAnswered: Set<SilentPair> = emptySet()
 
     /**
      * Every SETUP first, then every `GET_VALUES`, then the batteries.
@@ -1014,6 +1124,18 @@ class VescGatewayProtocol(
                     Outcome.SILENT -> if (key != null) rememberSilence(key)
                     // A write that never reached the wire says nothing about
                     // the node — see the class KDoc.
+                    //
+                    // It also does not restamp a suppressed pair, which has one
+                    // bounded consequence worth knowing about rather than
+                    // fixing: while every write is failing, the FIRST suppressed
+                    // pair in plan order stays due, takes the single re-probe
+                    // slot above every cycle, and the pairs behind it starve.
+                    // Self-correcting — the moment writes work again the probe
+                    // either answers (restored) or is silenced (restamped, and
+                    // the queue moves on) — and a link on which every write
+                    // throws is one the session's watchdog is already tearing
+                    // down. Restamping here would be worse: it would let a
+                    // broken link postpone probes of nodes it never asked.
                     Outcome.LINK_FAILED -> Unit
                 }
             }
@@ -1033,6 +1155,7 @@ class VescGatewayProtocol(
     private fun rememberAnswer(key: SilentPair) {
         silentRunCycles = silentRunCycles - key
         suppressedAtMs = suppressedAtMs - key
+        everAnswered = everAnswered + key
     }
 
     /** This pair was asked and said nothing. */
@@ -1044,8 +1167,12 @@ class VescGatewayProtocol(
             suppressedAtMs = suppressedAtMs + (key to nowMs())
             return
         }
+        // A node that has proved it handles this opcode is worth far more
+        // patience than one that has produced nothing since the link came up.
+        val limit =
+            if (key in everAnswered) SUPPRESS_PROVEN_AFTER_SILENT_CYCLES else SUPPRESS_AFTER_SILENT_CYCLES
         val run = (silentRunCycles[key] ?: 0) + 1
-        if (run < SUPPRESS_AFTER_SILENT_CYCLES) {
+        if (run < limit) {
             silentRunCycles = silentRunCycles + (key to run)
         } else {
             silentRunCycles = silentRunCycles - key
@@ -1340,5 +1467,6 @@ class VescGatewayProtocol(
         // are lost in it.
         silentRunCycles = emptyMap()
         suppressedAtMs = emptyMap()
+        everAnswered = emptySet()
     }
 }
