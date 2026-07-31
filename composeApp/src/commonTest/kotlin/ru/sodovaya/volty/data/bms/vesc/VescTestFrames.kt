@@ -1,15 +1,24 @@
 package ru.sodovaya.volty.data.bms.vesc
 
 /**
- * **The one encoder for VESC telemetry payloads in this suite.**
+ * **The shared encoder for VESC telemetry payloads — for the files that use it.**
  *
- * Three test files hand-assembled these two payloads from the field tables, each
- * with its own copy of the big-endian writers and its own transcription of the
- * field ORDER — `VescValuesTest`, `VescGatewayProtocolTest`, and (as of `I` Task
- * 10) the cross-layer consumption test. Divergent CONSTANTS are the point of
- * those files and stay theirs; a divergent field order would mean one of them
- * silently testing a different wire than the decoder reads, which is the failure
- * mode a hand-copied encoder has.
+ * Four transcriptions of the `GET_VALUES` layout and three of `SETUP` were
+ * hand-assembled from the field tables, each with its own copy of the big-endian
+ * writers and its own transcription of the field ORDER, across `VescValuesTest`,
+ * `VescGatewayProtocolTest` and (as of `I` Task 10) the cross-layer consumption
+ * test. Divergent CONSTANTS are the point of those files and stay theirs; a
+ * divergent field order would mean one of them silently testing a different wire
+ * than the decoder reads, which is the failure mode a hand-copied encoder has.
+ *
+ * **Three further test files still hand-roll these same two payloads** and were
+ * deliberately left alone as outside `I` Task 10's diff: `VescProtocolTest`,
+ * `KableBmsRepositoryVescTest` (both layouts) and `CanBusScanTest`. So this is
+ * not yet the only encoder in the suite, and saying otherwise — as the first
+ * draft of this KDoc did — is exactly the overclaim `I` Task 10 exists to
+ * correct. Taking those three, and `VescGatewayProtocolTest`'s private writer
+ * pair for its BMS frames, is the follow-up that would make the stronger
+ * sentence true.
  *
  * So: this object owns the layout and the two writers, every parameter is named
  * after its wire field, and each call site keeps a thin wrapper supplying its own

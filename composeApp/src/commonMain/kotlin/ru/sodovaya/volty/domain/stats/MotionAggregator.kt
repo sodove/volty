@@ -144,8 +144,15 @@ object MotionAggregator {
             // motion after `I` Task 10 made both speed producers publish a
             // magnitude — but only on a CONTROLLER sample. Unfiltered `maxOf`
             // over a signed field means one controller reversing at -12 000
-            // beside anything reporting `0` (every Begode does, and so does a
-            // VESC whose `GET_VALUES` has not landed) folds to `0`.
+            // beside anything reporting `0` — every Begode does, and so does a
+            // VESC that is simply standing still — folds to `0`.
+            //
+            // NOT "a VESC whose `GET_VALUES` has not landed", which an earlier
+            // draft of this comment claimed: such a unit publishes no sample at
+            // all (`VescGatewayProtocol.publishController` returns without a
+            // per-unit decode) and is never marked online, so it cannot be a
+            // contributor here. `VescValues`' KDoc says the same, and the two
+            // must not drift apart.
             //
             // Left as it is, deliberately: no consumer reads this for direction
             // — `ComposerDuplicates` uses `eRpm != 0f` only as a liveness
