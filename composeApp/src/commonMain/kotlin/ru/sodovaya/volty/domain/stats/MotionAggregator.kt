@@ -50,16 +50,22 @@ object MotionAggregator {
 
         return ControllerData(
             // Filtered, and the filter is what stops a hollow contributor
-            // WINNING a maxOf. Two distinct ways it can:
+            // WINNING a maxOf: a contributor whose flag and value disagree
+            // (`speedKmh = 99f` with `speedSource = NONE`) hands the vehicle a
+            // speed nobody observed, which is what the alarm then compares a
+            // threshold against. A speed nobody measured is published as `0f`
+            // (VescValues' `derived ?: 0f`), and this filter is what keeps that
+            // placeholder out of the max.
             //
-            //  - a speed nobody measured is published as `0f` (VescValues'
-            //    `derived ?: 0f`), and `I` Part I Task 10 makes VESC speed
-            //    SIGNED again — at which point a hollow 0 floors a reversing
-            //    vehicle's -12 km/h at zero, i.e. the max is the placeholder;
-            //  - a contributor whose flag and value disagree (`speedKmh = 99f`
-            //    with `speedSource = NONE`) hands the vehicle a speed nobody
-            //    observed, which is what the alarm then compares a threshold
-            //    against.
+            // **This fold is NOT what protects the vehicle from a signed
+            // speed**, and an earlier revision of this comment implied it was.
+            // Since `I` Task 10 both producers publish a MAGNITUDE at decode, so
+            // no negative contributor can reach here at all — and if one ever
+            // did, the filter would make things WORSE rather than better: with
+            // the sole measuring contributor at -12 km/h, `measuring` keeps only
+            // it and the max is -12, delivered downstream unattenuated. The
+            // guarantee is the decoders' (`VescValues`' object KDoc,
+            // `BegodeProtocol.speedKmh`), and it is not restatable here.
             //
             // `ifEmpty { d }` for the same reason as inputVoltageV below: with
             // nobody measuring there is nothing to prefer, `speedKnown` on the

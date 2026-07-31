@@ -196,7 +196,8 @@ class VescValuesTest {
         assertEquals(0f, stationary.speedKmh)
 
         // Any non-zero speed is a measurement whatever the rpm — including a reversing
-        // one, which Part I Task 10 makes signed again.
+        // one, whose speed `I` Task 10 publishes as a MAGNITUDE (the election below
+        // is unaffected: it is decided on the raw field, and `abs(0) == 0`).
         assertEquals(SpeedSource.REPORTED, VescValues.decodeSetupValues(setupPayload())!!.speedSource)
         val reversing = VescValues.decodeSetupValues(setupPayload(rpm = -12000, speedRaw = -13056))!!
         assertEquals(SpeedSource.REPORTED, reversing.speedSource)
@@ -204,6 +205,69 @@ class VescValuesTest {
         assertEquals(
             SpeedSource.NONE,
             VescValues.decodeSetupValues(setupPayload(rpm = -12000, speedRaw = 0))!!.speedSource
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // `I` Task 10 — the OTHER decoder was still signing its speed.
+    //
+    // Task 1 took the magnitude in `BegodeProtocol` and justified it with "so the
+    // two protocols agree on what the shared field means"; both VESC sources still
+    // published a signed one, so the claim was an intention. These two tests are
+    // what makes it a fact. The consequence-level pin is
+    // `domain/stats/VescForwardRideConsumptionTest`.
+    // ---------------------------------------------------------------------------
+
+    /**
+     * A reversing controller — or one whose motor direction is configured the
+     * other way round, which reports a negative speed while moving FORWARD —
+     * publishes the same magnitude as one configured the other way.
+     *
+     * The pair of assertions is what distinguishes `abs` from a NEGATION: a
+     * negating decoder answers 47.0 for the reversing sample and fails the
+     * equality.
+     */
+    @Test fun a_setup_reply_from_a_reversing_controller_publishes_the_speed_as_a_magnitude() {
+        val forward = VescValues.decodeSetupValues(setupPayload(rpm = 12000, speedRaw = 13056))!!
+        val reversing = VescValues.decodeSetupValues(setupPayload(rpm = -12000, speedRaw = -13056))!!
+
+        assertEquals(SpeedSource.REPORTED, reversing.speedSource, "precondition: it is a measurement")
+        assertTrue(abs(reversing.speedKmh - 47.0f) < 0.05f, "got ${reversing.speedKmh}")
+        assertEquals(
+            forward.speedKmh, reversing.speedKmh, 0.001f,
+            "one motion, two motor-direction conventions, one speed — which a negation would not give"
+        )
+
+        // The direction is NOT discarded, and this is why VESC needs no
+        // equivalent of Begode's `signedSpeedKmh()`: the frame's own `rpm` field
+        // carries it, unchanged, beside the magnitude.
+        assertEquals(-12000f, reversing.eRpm, "the sign lives on eRpm and stays there")
+        assertEquals(12000f, forward.eRpm)
+    }
+
+    /**
+     * The eRPM-derived source takes the same magnitude, at the same place — the
+     * assignment into `ControllerData.speedKmh`.
+     *
+     * [VescValues.derivedSpeedKmh] itself stays a FAITHFUL signed conversion,
+     * asserted below: it is this decoder's signed intermediate, the counterpart
+     * of `BegodeProtocol.signedSpeedKmhValue`, and taking the magnitude inside it
+     * would put the convention somewhere other than the point of publication.
+     */
+    @Test fun plain_get_values_from_a_reversing_motor_derives_a_positive_speed() {
+        val wheel = MotorConfig(polePairs = 15, wheelDiameterMm = 254, gearRatio = 1f)
+        val forward = VescValues.decodeValues(valuesPayload(rpm = 10000), wheel)!!
+        val reversing = VescValues.decodeValues(valuesPayload(rpm = -10000), wheel)!!
+
+        assertEquals(SpeedSource.DERIVED, reversing.speedSource, "precondition: the wheel is configured")
+        assertTrue(abs(reversing.speedKmh - 31.9f) < 0.3f, "got ${reversing.speedKmh}")
+        assertEquals(forward.speedKmh, reversing.speedKmh, 0.001f, "one motion, one speed")
+        assertEquals(-10000f, reversing.eRpm, "the sign lives on eRpm and stays there")
+
+        val signed = VescValues.derivedSpeedKmh(-10000f, wheel)!!
+        assertTrue(
+            abs(signed - (-31.9f)) < 0.3f,
+            "the conversion keeps the sign; the magnitude is taken where the value is PUBLISHED. got $signed"
         )
     }
 

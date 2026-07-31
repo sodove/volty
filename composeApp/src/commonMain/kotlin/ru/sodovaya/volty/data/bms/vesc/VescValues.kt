@@ -12,6 +12,47 @@ import kotlin.math.abs
  * one carrying a controller-computed ground speed and battery level. Plain
  * GET_VALUES (opcode 4) is the fallback for setups that do not answer SETUP;
  * its speed must then be derived from eRPM (see 01-linking §2).
+ *
+ * ## The published speed is a MAGNITUDE, and both sources take it
+ *
+ * `I` Task 10. Both frames sign their speed — SETUP's `speed` field is
+ * `mc_interface_get_speed()`, plain GET_VALUES' figure is derived from a signed
+ * `rpm` — and a controller whose motor direction is configured the other way
+ * round reports NEGATIVE while riding **forward**. That is the same
+ * firmware-variance case the first hardware ride found on the rider's two
+ * Begodes (field report `2026-07-30-first-hardware-test` S1), and it fails
+ * SILENTLY in the worst direction, because every consumer of
+ * [ControllerData.speedKmh] treats it as a non-negative quantity compared
+ * against UPPER thresholds:
+ *
+ *  - `RideMetrics.instantWhPerKm` nulls consumption below `MIN_SPEED_KMH = 0.5`,
+ *    which every negative speed is — and unlike a Begode this protocol keeps
+ *    energy counters, so the gauge falls back to the session average and shows
+ *    the rider a *different confident number* rather than a blank;
+ *  - `MotionAggregator`'s speed fold is a `maxOf`, so a negative can only ever
+ *    lose;
+ *  - the Ride dashboard's session peak cannot advance;
+ *  - the SPEED alarm is graded against upper thresholds and cannot fire.
+ *
+ * **Not a negation.** Which sign means forward is per-setup, so negating fixes
+ * one configuration and breaks the opposite one into the same silent failure.
+ * VESC Tool itself makes the polarity a PREFERENCE rather than a fact
+ * (`VescInterface::speedGaugeUseNegativeValues`, default true, read by
+ * `mobile/RtDataSetup.qml`) — but it only draws a needle, and a needle has none
+ * of the consumers listed above.
+ *
+ * **Taken at the two assignments into [ControllerData.speedKmh]**, one per
+ * decoder, which is the same place and the same rule as
+ * `BegodeProtocol.parseLiveFrame`. So the two protocols now genuinely agree
+ * about what the shared field means, which Task 1 claimed before it was true.
+ *
+ * **The direction is not destroyed, and that is why no signed accessor was
+ * added.** Begode needed `signedSpeedKmh()` because no other field on its frame
+ * carried the sign; here [ControllerData.eRpm] does, unchanged, on BOTH sources
+ * and on every path that publishes one — including
+ * [ru.sodovaya.volty.data.bms.VescGatewayProtocol]'s SETUP overlay, which copies
+ * the speed but never the eRPM beside it. [derivedSpeedKmh] stays a faithful
+ * signed conversion for the same reason.
  */
 object VescValues {
 
@@ -195,7 +236,12 @@ object VescValues {
         r.d32(1e6f)                                   // position — unused
         val fault = r.i8()
         return ControllerData(
-            speedKmh = speedMs * 3.6f,
+            // MAGNITUDE — see this object's KDoc for why, and why not a
+            // negation. The source election below is deliberately decided on the
+            // RAW field: `abs` cannot change "is it zero", so which side of it
+            // the election sits on is inert, and the raw value is what
+            // [reportedSpeedSource]'s witness rule is written about.
+            speedKmh = abs(speedMs) * 3.6f,
             speedSource = reportedSpeedSource(speedMs, rpm),
             dutyPercent = abs(duty) * 100f,
             motorCurrentA = currentMotor,
@@ -245,7 +291,11 @@ object VescValues {
         val fault = r.i8()
         val derived = derivedSpeedKmh(rpm, motor)
         return ControllerData(
-            speedKmh = derived ?: 0f,
+            // MAGNITUDE — see this object's KDoc. [derivedSpeedKmh] itself stays
+            // a faithful signed conversion; the magnitude is taken HERE, at the
+            // assignment into the shared field, exactly as it is in
+            // [decodeSetupValues] and in `BegodeProtocol.parseLiveFrame`.
+            speedKmh = derived?.let { abs(it) } ?: 0f,
             speedSource = if (derived != null) SpeedSource.DERIVED else SpeedSource.NONE,
             dutyPercent = abs(duty) * 100f,
             motorCurrentA = currentMotor,
@@ -293,6 +343,11 @@ object VescValues {
      * Per-frame and stateless, unlike `BegodeProtocol`'s `truePWM` latch: this
      * one needs no evidence to accumulate because the disproof is on the same
      * frame as the claim.
+     *
+     * **Unaffected by `I` Task 10's magnitude**, and the argument is one line:
+     * every test here is `== 0f` / `!= 0f`, and `abs` preserves both. The caller
+     * passes the RAW field so this stays true by construction rather than by the
+     * caller remembering to.
      */
     private fun reportedSpeedSource(speedMs: Float, rpm: Float): SpeedSource =
         if (speedMs != 0f || rpm == 0f) SpeedSource.REPORTED else SpeedSource.NONE
@@ -301,6 +356,15 @@ object VescValues {
      * eRPM → ground speed. Mechanical RPM = eRPM / polePairs; wheel RPM =
      * mechanical / gearRatio (motor revolutions per wheel revolution). Null when
      * the wheel is unconfigured — an unknown speed must read as unknown, never 0.
+     *
+     * **SIGNED**, deliberately: this is a unit conversion, and it inherits
+     * [eRpm]'s sign untouched. This decoder's published speed is a magnitude
+     * (see the object KDoc), but the `abs` belongs at the assignment into
+     * [ControllerData.speedKmh] rather than in here — one convention, stated at
+     * the point of publication, so it holds for the SETUP path too, which never
+     * calls this. It also leaves this function what its other callers use it as:
+     * a predicate for "can this controller derive a speed at all"
+     * ([ru.sodovaya.volty.presentation.vehicle.VehicleComposer]).
      */
     fun derivedSpeedKmh(eRpm: Float, motor: MotorConfig): Float? {
         if (motor.wheelDiameterMm <= 0 || motor.polePairs <= 0 || motor.gearRatio <= 0f) return null

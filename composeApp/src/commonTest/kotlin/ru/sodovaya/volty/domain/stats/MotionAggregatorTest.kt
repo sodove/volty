@@ -367,15 +367,22 @@ class MotionAggregatorTest {
     }
 
     /**
-     * The half of the same fold that is **one task away from a real vehicle**, kept
-     * separate because it is the only one an unsigned reading cannot expose.
+     * The same fold against a **deliberately out-of-contract** contributor: a
+     * negative speed.
      *
-     * `I` Task 1 made Begode publish a speed MAGNITUDE, but Part I Task 10 makes VESC
-     * speed signed again. A `maxOf` over a signed field is FLOORED AT ZERO by any
-     * contributor publishing the `0f` that means "no speed here" — so a reversing
-     * vehicle would read 0 km/h on the dashboard the moment a second controller that
-     * does not report speed joined it, with `speedKnown` true and the SPEED alarm
-     * comparing its thresholds against the floor.
+     * **No producer can emit one any more, and the KDoc here used to say the
+     * opposite.** `I` Task 1 made Begode publish a MAGNITUDE and `I` Task 10 did
+     * the same for both VESC sources, so "signed speed" is now a shape only a
+     * fixture can build. It is still worth pinning: a `maxOf` over a signed field
+     * is FLOORED AT ZERO by any contributor publishing the `0f` that means "no
+     * speed here", which would put 0 km/h on the dashboard with `speedKnown` true
+     * and the SPEED alarm grading its thresholds against the floor — a defect
+     * whether or not a decoder can currently reach it.
+     *
+     * What it does NOT do is protect the vehicle from a signed speed. The filter
+     * keeps the sole measuring contributor and hands its -12 km/h straight
+     * downstream; the guarantee lives in the decoders, which is where the
+     * aggregator's own comment now says it lives.
      */
     @Test fun a_reversing_vehicle_is_not_floored_at_zero_by_a_controller_with_no_speed() {
         val reversing = ControllerData(speedKmh = -12f, speedSource = SpeedSource.REPORTED, isConnected = true)

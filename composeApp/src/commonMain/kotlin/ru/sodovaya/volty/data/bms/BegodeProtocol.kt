@@ -328,16 +328,15 @@ class BegodeProtocol(
      *    [ru.sodovaya.volty.data.bms.vesc.VescValues] states the same contract for
      *    duty (`abs(duty) * 100`), which is the precedent this follows.
      *
-     * **The two protocols do NOT yet agree about this field, and this KDoc used to
-     * claim they did.** `VescValues` publishes a **signed** speed on both of its
-     * paths — `speedMs * 3.6f` from `COMM_GET_VALUES`, and the eRPM-derived figure,
-     * which inherits eRPM's sign — so every consequence listed above is still live
-     * for a reversing VESC, or one whose motor direction is configured the other
-     * way round. That half is booked as **Part I Task 10** and recorded in the
-     * field report's latent-defect list; it is deliberately not fixed from here,
-     * being a different protocol with its own tests and its own `eRpm` consumers to
-     * check. Until Task 10 lands, "non-negative" is this decoder's contract, not
-     * `ControllerData.speedKmh`'s.
+     * **The two protocols now agree about this field.** This KDoc claimed they did
+     * before it was true, then retracted it: `VescValues` published a **signed**
+     * speed on both of its paths, so every consequence listed above stayed live for
+     * a reversing VESC. `I` Task 10 closed that half — both VESC sources take the
+     * magnitude at their own assignment into `ControllerData.speedKmh` — so
+     * "non-negative" is now the SHARED field's contract and not merely this
+     * decoder's. The one asymmetry left is where the direction survives: VESC keeps
+     * it on `ControllerData.eRpm`, which a Begode never reports, which is why only
+     * this decoder needed [signedSpeedKmh].
      *
      * No rider-facing polarity preference is offered: nothing in Volty consumes
      * the direction, so the setting would exist only to let a rider break their
@@ -1224,14 +1223,11 @@ class BegodeProtocol(
             //
             // Taking it HERE rather than in [rebuildMotion] is what makes the
             // convention a property of the decoder, so a second consumer cannot
-            // acquire this field without it. It does NOT yet mean the two
-            // protocols agree: `VescValues` publishes a SIGNED speed on both of
-            // its paths (`speedMs * 3.6f` from opcode 4, and the eRPM-derived
-            // figure, which inherits eRPM's sign), so a reversing VESC or one
-            // whose motor direction is configured the other way round still
-            // meets every consequence listed on [speedKmh]. Booked as Part I
-            // Task 10 — deliberately not fixed here, being a different protocol
-            // with its own tests and its own eRPM consumers.
+            // acquire this field without it. `VescValues` takes it in the same
+            // place, at each of its two assignments into
+            // `ControllerData.speedKmh` (`I` Task 10) — so the two protocols now
+            // agree about the shared field, which this comment used to say they
+            // did not.
             //
             // The signed value is kept above rather than discarded — see
             // [signedSpeedKmh].

@@ -109,14 +109,15 @@ class VescGatewayProtocolTest {
         speedMsRaw: Int = 13_056,           // /1000 m/s -> 47.0 km/h
         tachAbsMRaw: Int = 1_284_600_000,   // /1000 m  -> 1284600.0 km
         currentInRaw: Int = 9_999,
-        battLevelRaw: Int = 840
+        battLevelRaw: Int = 840,
+        rpm: Int = 12_000
     ): ByteArray {
         val o = mutableListOf<Byte>()
         o += VescValues.OPCODE_GET_VALUES_SETUP.toByte()
         i16(o, 520); i16(o, 680)
         i32(o, -8_250); i32(o, currentInRaw)
         i16(o, 760)
-        i32(o, 12_000)
+        i32(o, rpm)
         i32(o, speedMsRaw)
         i16(o, 782); i16(o, battLevelRaw)
         i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
@@ -615,6 +616,65 @@ class VescGatewayProtocolTest {
 
         assertNull(p.latestMotion(0), "the head unit answers nothing, so it has no sample at all")
         assertNotNull(p.latestData(0), "while the BMS it hosts reports normally")
+        loop.cancel(); device.cancel()
+    }
+
+    /**
+     * `I` Task 10 — **the second place a VESC speed reaches a consumer.**
+     *
+     * `applySetup` copies `speedKmh` and `speedSource` out of the SETUP decode
+     * into its `SetupOverlay`, and `publishController` copies them again over the
+     * per-unit decode. So a magnitude taken in only one of `VescValues`' two
+     * decoders would still let a signed number reach the dashboard by this road:
+     * both take it, or neither does.
+     *
+     * The uBox here reverses on BOTH frames, which is the coherent shape (a
+     * controller whose motor direction is configured the other way round signs
+     * both its `rpm` and the ground speed derived from it), and the two sources
+     * are made to disagree in MAGNITUDE — 42.0 reported against 38.3 derived —
+     * so the number asserted below is attributable to the overlay rather than to
+     * the fallback.
+     */
+    @Test
+    fun `a reversing controller publishes its speed as a magnitude through the setup overlay`() = runTest {
+        val wheel = MotorConfig(wheelDiameterMm = 254)
+        val derived = assertNotNull(
+            VescValues.derivedSpeedKmh(eRpm = -12_000f, motor = wheel),
+            "precondition: this controller CAN derive a speed, so REPORTED has to beat it"
+        )
+        assertTrue(
+            abs(abs(derived) - 42.0f) > 1f,
+            "precondition: the two sources disagree, so 42.0 below can only be the overlay's"
+        )
+
+        val p = protocol(
+            controllers = listOf(GatewaySource(globalIndex = 0, canId = U_BOX, motor = wheel)),
+            packs = emptyList()
+        )
+        val link = FakeGateway(p) { _, opcode ->
+            when (opcode) {
+                // -11.67 m/s -> a magnitude of 42.0 km/h.
+                VescValues.OPCODE_GET_VALUES_SETUP ->
+                    ScriptedReply(LATENCY_MS, setupFrame(speedMsRaw = -11_670, rpm = -12_000))
+                VescValues.OPCODE_GET_VALUES -> ScriptedReply(LATENCY_MS, valuesFrame(rpm = -12_000))
+                else -> ScriptedReply(TIMEOUT_MS, null)
+            }
+        }
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        runCycles(1, cycleMs = 2 * LATENCY_MS + CYCLE_GAP_MS)
+
+        val uBox = assertNotNull(p.latestMotion(0), "the uBox answered both of its requests")
+        assertEquals(SpeedSource.REPORTED, uBox.speedSource, "the overlay's source won")
+        assertEquals(
+            42.0f, uBox.speedKmh, 0.05f,
+            "the overlay carries the MAGNITUDE; a signed one nulls consumption and freezes the peak"
+        )
+        assertEquals(
+            -12_000f, uBox.eRpm,
+            "and the direction survives the overlay untouched — eRpm is not a magnitude"
+        )
         loop.cancel(); device.cancel()
     }
 
