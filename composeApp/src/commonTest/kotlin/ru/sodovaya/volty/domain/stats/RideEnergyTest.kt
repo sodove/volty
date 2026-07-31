@@ -141,7 +141,7 @@ class RideEnergyTest {
     }
 
     /**
-     * [RideEnergy.sessionWh] is the caller that must NOT negate, and a ride
+     * [RideEnergy.windowedRide] is the caller that must NOT negate, and a ride
      * therefore reports positive watt-hours drawn.
      */
     @Test fun a_ride_draws_positive_watt_hours_and_regen_subtracts_from_them() {
@@ -379,7 +379,7 @@ class RideEnergyTest {
     // -----------------------------------------------------------------------------
 
     /**
-     * **[RideEnergy.sessionWh] integrates only from `since`.**
+     * **[RideEnergy.windowedRide] integrates only from `since`.**
      *
      * The motion ring buffer deliberately survives a reconnect to the same
      * address so the graph keeps its history — but `tripKm`, the divisor waiting

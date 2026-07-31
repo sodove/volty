@@ -40,7 +40,7 @@ import kotlin.time.Instant
  *
  * So [integrateHours] returns the integral **in the samples' own sign**, and
  * each caller applies its own convention on top: the Graph screen negates its
- * `BmsData` result so a discharge reports positive Wh used, and [sessionWh]
+ * `BmsData` result so a discharge reports positive Wh used, and [windowedRide]
  * does **not** negate its `ControllerData` result, because a ride is already
  * positive there. A shared integrator that silently baked in one caller's sign
  * would be worse than two integrators.
