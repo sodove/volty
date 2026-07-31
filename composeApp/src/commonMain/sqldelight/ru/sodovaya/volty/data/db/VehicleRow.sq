@@ -28,12 +28,7 @@ CREATE TABLE VehicleRow (
     -- AlarmDefaults apply; 1 = yes, so AlertLevelRow is the whole truth even
     -- when it holds no rows for this vehicle (= every kind switched off).
     -- Not inferable from AlertLevelRow being empty — see 6.sqm.
-    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0,
-    -- The learned widths of the CURRENT and POWER dials (G §9.2), in amps and
-    -- watts. NOT NULL DEFAULT 0 because zero IS the answer for a vehicle nobody
-    -- has ridden — see Vehicle.gaugePeakCurrentA and 7.sqm.
-    gaugePeakCurrentA        REAL NOT NULL DEFAULT 0,
-    gaugePeakPowerW          REAL NOT NULL DEFAULT 0
+    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -49,37 +44,12 @@ INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
-    yieldBmsToHeadUnit, motionAlertsConfigured, gaugePeakCurrentA, gaugePeakPowerW
+    yieldBmsToHeadUnit, motionAlertsConfigured
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
-    :yieldBmsToHeadUnit, :motionAlertsConfigured,
-    -- THE LEARNED DIAL WIDTHS ARE NOT WRITTEN HERE, AND THAT IS THE POINT.
-    --
-    -- They are a cache of live telemetry owned by the ride dashboard, which
-    -- writes them through `updateGaugePeaks` while the rider is riding. Every
-    -- other writer of a vehicle holds a Vehicle SNAPSHOT, and a snapshot can be
-    -- older than the last peak write -- so an `upsert` that wrote these columns
-    -- would silently revert a whole ride's learning.
-    --
-    -- Not hypothetical. `KableBmsRepository.maybePersistCellCount` and
-    -- `maybePersistPacks` read `_activeVehicle.value` and write it back. That
-    -- value IS re-published from this repository's own `vehicles` flow, so it is
-    -- usually fresh -- but the read-modify-write straddles the interval before a
-    -- peak write's re-publication lands, and inside that window it carries the
-    -- older number. Part I makes the cell count rider-editable, which multiplies
-    -- such callers, so the rule belongs in the statement and not in a list of
-    -- callers to remember.
-    --
-    -- Naming the columns and preserving them (rather than omitting them) is
-    -- required because this is INSERT OR REPLACE: the row is deleted and
-    -- reinserted, so an unnamed column takes its DEFAULT rather than keeping its
-    -- value. The COALESCE is what makes the subselect total -- on a genuine
-    -- INSERT there is no row to read and 0 is the honest seed for a vehicle
-    -- nobody has ridden.
-    COALESCE((SELECT gaugePeakCurrentA FROM VehicleRow WHERE id = :id), 0),
-    COALESCE((SELECT gaugePeakPowerW FROM VehicleRow WHERE id = :id), 0)
+    :yieldBmsToHeadUnit, :motionAlertsConfigured
 );
 
 delete:
@@ -87,21 +57,3 @@ DELETE FROM VehicleRow WHERE id = :id;
 
 touch:
 UPDATE VehicleRow SET lastConnectedAt = :now WHERE id = :id;
-
--- THE ONLY WRITER of the two learned dial widths (see `upsert` above, which
--- deliberately preserves them instead).
---
--- Two columns, no children — the same shape as `touch` and for two reasons. It
--- runs while the rider is riding, so it must not replay a snapshot's packs,
--- controllers and alert levels over rows the connection itself may have moved
--- underneath it. And, unlike `upsert`, it cannot destroy alert-level rows an
--- older build cannot represent: `toRules()` skips those on read and leaves them
--- in the table, while `upsert` replaces the level set wholesale.
---
--- Unconstrained on purpose: it is also how the composer CLEARS the peaks when a
--- vehicle's controller set changes (G §9.2 item 7), which is the one event that
--- legitimately lowers them.
-updateGaugePeaks:
-UPDATE VehicleRow
-SET gaugePeakCurrentA = :gaugePeakCurrentA, gaugePeakPowerW = :gaugePeakPowerW
-WHERE id = :id;

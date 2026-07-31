@@ -27,6 +27,7 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -38,6 +39,8 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -122,36 +125,48 @@ class RideDashboardComponentTest {
      * last-value fake cannot tell one write from forty identical ones.
      *
      * [updateGaugePeaks] is overridden rather than inherited so this fake records the call itself.
-     * The interface's default would route through `get`/`upsert` — correct, but it would make every
-     * assertion below about the wrong member.
      */
-    private class FakeVehicleRepo(initial: List<Vehicle> = emptyList()) : VehicleRepository {
-        /**
-         * Hot, because `DefaultRideDashboardComponent` now takes the active vehicle's STORED peaks
-         * from this flow rather than from `activeVehicle` (which is a connect-time snapshot). A
-         * `flowOf` could not model a stored value changing.
-         */
+    private class FakeVehicleRepo(
+        initial: List<Vehicle> = emptyList(),
+        initialPeaks: Map<String, GaugePeaks> = emptyMap()
+    ) : VehicleRepository {
         val rows = MutableStateFlow(initial)
         override val vehicles: Flow<List<Vehicle>> = rows
         override suspend fun get(id: String): Vehicle? = rows.value.firstOrNull { it.id == id }
-        override suspend fun delete(id: String) { rows.value = rows.value.filterNot { it.id == id } }
+        override suspend fun delete(id: String) {
+            rows.value = rows.value.filterNot { it.id == id }
+            peaks.value = peaks.value - id
+        }
         override suspend fun touch(id: String) {}
 
         /**
-         * **Mirrors `VehicleRow.sq`: an upsert PRESERVES the two learned dial widths.** Modelled
-         * rather than ignored, because the component's reaction to an upsert from a stale snapshot is
-         * exactly what one of these tests is about, and a fake that let the upsert revert the peaks
-         * would be testing a storage layer that does not exist.
+         * Hot, and **the only place a learned dial width lives in this fake** — since `8.sqm` the
+         * peaks are not a `Vehicle` field, so [rows] cannot carry a stale copy of one and [upsert]
+         * cannot revert one by accident. A `flowOf` could not model the composer's clear arriving
+         * while the dashboard is in the back stack, which two tests below are about.
+         *
+         * **A vehicle with no entry has learned nothing** ([GaugePeaks.NONE]) — the map is not
+         * padded, exactly like `GaugePeakRow`, so `a vehicle nobody has ridden` is a state this fake
+         * can actually be in rather than one it papers over with a zeroed entry.
          */
+        val peaks = MutableStateFlow(initialPeaks)
+
+        /**
+         * Holds the peaks flow SILENT until completed — the window a real database has between the
+         * component being constructed and its first row arriving. Nothing else can model it: a
+         * [MutableStateFlow] answers on subscription, so with it alone the gap
+         * `DefaultRideDashboardComponent.storedPeaksSeen` exists for is unreachable.
+         */
+        var peaksGate: CompletableDeferred<Unit>? = null
+        override val gaugePeaks: Flow<Map<String, GaugePeaks>> = flow {
+            peaksGate?.await()
+            emitAll(peaks)
+        }
+
         val upserts = mutableListOf<Vehicle>()
         override suspend fun upsert(vehicle: Vehicle) {
             upserts += vehicle
-            val stored = rows.value.firstOrNull { it.id == vehicle.id }
-            val kept = vehicle.copy(
-                gaugePeakCurrentA = stored?.gaugePeakCurrentA ?: 0f,
-                gaugePeakPowerW = stored?.gaugePeakPowerW ?: 0f
-            )
-            rows.value = rows.value.filterNot { it.id == vehicle.id } + kept
+            rows.value = rows.value.filterNot { it.id == vehicle.id } + vehicle
         }
 
         val gaugePeakWrites = mutableListOf<Triple<String, Float, Float>>()
@@ -171,9 +186,7 @@ class RideDashboardComponentTest {
                 throw IllegalStateException("disk full")
             }
             gaugePeakWrites += Triple(id, currentA, powerW)
-            rows.value = rows.value.map {
-                if (it.id == id) it.copy(gaugePeakCurrentA = currentA, gaugePeakPowerW = powerW) else it
-            }
+            peaks.value = peaks.value + (id to GaugePeaks(currentA, powerW))
         }
     }
 
@@ -581,15 +594,24 @@ class RideDashboardComponentTest {
     /**
      * A stored peak must arrive on the state as a RUNG, not as itself — the dials draw the state.
      * 137 A * 1.25 = 171.25, so the 200 A rung; 6421 W * 1.25 = 8026, so the 10 kW rung.
+     *
+     * **The stored peak is supplied through the peaks flow and not on the vehicle**, because since
+     * `8.sqm` there is nowhere on a [Vehicle] to put one. The vehicle row and its learned range are
+     * two separate answers from two separate tables, and this fake keeps them separate too.
      */
     @Test
     fun a_stored_peak_opens_the_dials_on_its_own_rung() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         val ridden = vehicleWith(null, SecondaryGauge.DUTY)
-            .copy(gaugePeakCurrentA = 137f, gaugePeakPowerW = 6421f)
         repo.activeVehicle.value = ridden
-        val c = component(repo, vehicleRepo = FakeVehicleRepo(listOf(ridden)))
+        val c = component(
+            repo,
+            vehicleRepo = FakeVehicleRepo(
+                listOf(ridden),
+                mapOf(ridden.id to GaugePeaks(currentA = 137f, powerW = 6421f))
+            )
+        )
         advanceUntilIdle()
         c.state.test {
             val s = awaitItem()
@@ -863,13 +885,21 @@ class RideDashboardComponentTest {
     /**
      * The Clean renderer's inner ring divides by the same learned range the Classic dial draws — the
      * "a range that only one style honours is half a fix" half of the task.
+     *
+     * **Step 1 is no longer the synchronous initial state, and that is a real behaviour change Task 9
+     * paid for.** The connect-time seed used to read the peaks off the `activeVehicle` snapshot, so
+     * the very first `_state` a rider saw already carried the learned rung. Since `8.sqm` a snapshot
+     * carries no peak at all and the only authority is a flow, so the dials open on the narrowest
+     * rung for the one dispatch it takes the peaks flow to answer. What must still hold — and is what
+     * this test now pins — is that once it *has* answered, every collector divides by the learned
+     * range rather than by a default.
      */
     @Test
     fun the_secondary_current_ring_divides_by_the_learned_range_on_every_collector() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
-        repo.activeVehicle.value = vehicleWith(null, SecondaryGauge.CURRENT)
-            .copy(gaugePeakCurrentA = 137f)
+        val ridden = vehicleWith(null, SecondaryGauge.CURRENT)
+        repo.activeVehicle.value = ridden
         repo.activeMotion.value = sample(currentA = 50f, powerW = 400f, seq = 0)
         val prefs = mutablePreferencesOf(
             stringPreferencesKey("unit_system") to UnitSystem.METRIC.name,
@@ -881,7 +911,10 @@ class RideDashboardComponentTest {
         val c = DefaultRideDashboardComponent(
             componentContext = DefaultComponentContext(LifecycleRegistry()),
             bmsRepository = repo,
-            vehicleRepository = FakeVehicleRepo(),
+            vehicleRepository = FakeVehicleRepo(
+                listOf(ridden),
+                mapOf(ridden.id to GaugePeaks(currentA = 137f))
+            ),
             appPrefs = appPrefs,
             onOpenGraphRequested = {},
             onOpenSettingsRequested = {},
@@ -900,9 +933,11 @@ class RideDashboardComponentTest {
             }
         }
 
-        // 1. the synchronous initial state, before any collector has run.
-        assertRing("initial state")
+        // 1. the state as it stands once the peaks flow has answered and nothing else has run. The
+        //    stored range has to reach the ring through the peaks collector's own `_state.update`,
+        //    which is the copy the sweep otherwise cannot kill.
         advanceUntilIdle()
+        assertRing("peaks collector")
 
         // 2. the motion collector.
         repo.emitMotion(sample(currentA = 50f, powerW = 400f, seq = 1))
@@ -987,7 +1022,7 @@ class RideDashboardComponentTest {
         advanceUntilIdle()
 
         assertEquals(
-            90f, vehicleRepo.get(stored.id)!!.gaugePeakCurrentA,
+            GaugePeaks(currentA = 90f, powerW = 6000f), vehicleRepo.peaks.value[stored.id],
             "the stored peak was reverted by an upsert that had no business writing it"
         )
         assertEquals(20, vehicleRepo.get(stored.id)!!.packs.first().cellCount, "the auto-fill landed")
@@ -1192,30 +1227,33 @@ class RideDashboardComponentTest {
      * Switching vehicles must adopt the new vehicle's STORED peaks, **without waiting for the saved
      * -vehicle table to change.**
      *
-     * `adoptStoredPeaks`' rule is that stored peaks come from `VehicleRepository.vehicles` and never
+     * `adoptStoredPeaks`' rule is that stored peaks come from `VehicleRepository.gaugePeaks` and never
      * from `activeVehicle`, which is a snapshot. Honouring that by *awaiting* a re-emission would make
      * this depend on `touch()` happening to write a row on every connect — true today, pinned by
-     * nothing. So an id change looks the row up in the list already published. Here the table does not
-     * change at all after the switch.
+     * nothing. So an id change looks the new id up in the map already published. Here **nothing on
+     * either flow changes after the switch**: only `activeVehicle` moves.
+     *
+     * **The fixture is deliberately incoherent** in the way `GaugePeakRow` makes real: the wheel is a
+     * saved vehicle with NO entry in the peaks map, and the scooter is one WITH an entry. No producer
+     * emits a map padded with zeroes, so a component that read absence as anything other than
+     * [GaugePeaks.NONE] would be caught by the first assertion here rather than by nothing.
      */
     @Test
     fun switching_vehicles_adopts_the_new_vehicles_stored_peaks_without_a_table_change() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()
         val wheel = vehicleWith(null, SecondaryGauge.DUTY)
-        val storedScooter = wheel.copy(id = "v2", name = "Scooter", gaugePeakCurrentA = 240f)
-        // What `activeVehicle` publishes on the switch: the same vehicle, but with its OWN peak
-        // fields at zero. That is the forbidden read made visible — a snapshot whose `gaugePeak*`
-        // disagrees with the row. Reading it instead of the stored row opens the scooter's dial at
-        // its narrowest rung.
-        val publishedScooter = storedScooter.copy(gaugePeakCurrentA = 0f, gaugePeakPowerW = 0f)
+        val scooter = wheel.copy(id = "v2", name = "Scooter")
         repo.activeVehicle.value = wheel
-        val vehicleRepo = FakeVehicleRepo(listOf(wheel, storedScooter))
+        val vehicleRepo = FakeVehicleRepo(
+            listOf(wheel, scooter),
+            mapOf(scooter.id to GaugePeaks(currentA = 240f))
+        )
         val c = component(repo, vehicleRepo = vehicleRepo)
         advanceUntilIdle()
         c.state.test { assertEquals(10f, awaitItem().currentRangeA, "the wheel has learned nothing") }
 
-        repo.activeVehicle.value = publishedScooter
+        repo.activeVehicle.value = scooter
         advanceUntilIdle()
         c.state.test {
             assertEquals(
@@ -1223,6 +1261,92 @@ class RideDashboardComponentTest {
                 "240 A * 1.25 = 300, from the STORED row -- adopted on the switch, not on a table change"
             )
         }
+    }
+
+    /**
+     * **Nothing may be persisted until the database has said what it already holds** — the gap Task 9
+     * opened and `storedPeaksSeen` closes.
+     *
+     * Before `8.sqm` the learned range arrived synchronously, on the `activeVehicle` snapshot the
+     * `_state` initializer reads, so the trackers were seeded before the first sample could be
+     * folded. It cannot now: the only authority is a flow, and a flow answers on its own schedule. A
+     * rider who connects mid-acceleration therefore has a window in which five samples can be folded,
+     * a rung crossed, and a median five samples old written over a range learned across weeks — the
+     * exact loss this whole feature exists to prevent, arriving through the fix for a different one.
+     *
+     * So: hold the peaks flow silent, ride hard enough to cross a rung, and require silence. Then let
+     * the range through and require that it is the STORED 137 A that wins, not the fresh 90 A — and
+     * that no write ever happened, because 90 is below what the vehicle already knew.
+     *
+     * The gate suspends rather than delaying, so nothing here can run virtual time away and wedge
+     * `runTest` instead of failing it.
+     */
+    @Test
+    fun no_peak_is_written_before_the_stored_range_has_arrived() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val ridden = vehicleWith(null, SecondaryGauge.DUTY)
+        repo.activeVehicle.value = ridden
+        val vehicleRepo = FakeVehicleRepo(
+            listOf(ridden),
+            mapOf(ridden.id to GaugePeaks(currentA = 137f, powerW = 6421f))
+        )
+        val gate = CompletableDeferred<Unit>()
+        vehicleRepo.peaksGate = gate
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 90f, powerW = 6000f, seq = it))
+            advanceUntilIdle()
+        }
+        assertEquals(
+            0, vehicleRepo.gaugePeakAttempts,
+            "a range learned across weeks was overwritten by a median five samples old"
+        )
+
+        gate.complete(Unit)
+        advanceUntilIdle()
+        // The stored range wins the adoption, so a further run at 90 A is not news either.
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 90f, powerW = 6000f, seq = 50 + it))
+            advanceUntilIdle()
+        }
+        assertEquals(emptyList(), vehicleRepo.gaugePeakWrites)
+        assertEquals(
+            GaugePeaks(currentA = 137f, powerW = 6421f), vehicleRepo.peaks.value[ridden.id],
+            "the stored range must be exactly what it was"
+        )
+        c.state.test {
+            assertEquals(200f, awaitItem().currentRangeA, "137 A * 1.25 = 171.25, so the 200 A rung")
+        }
+    }
+
+    /**
+     * The other side of the gate: once the stored range HAS arrived, a genuinely new rung is written.
+     * Without this, `storedPeaksSeen` could be pinned to `false` forever and the test above would
+     * still pass while the dashboard silently persisted nothing for the rest of the app's life.
+     */
+    @Test
+    fun a_new_rung_is_written_once_the_stored_range_has_arrived() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val ridden = vehicleWith(null, SecondaryGauge.DUTY)
+        repo.activeVehicle.value = ridden
+        val vehicleRepo = FakeVehicleRepo(listOf(ridden))
+        val gate = CompletableDeferred<Unit>()
+        vehicleRepo.peaksGate = gate
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+        gate.complete(Unit)
+        advanceUntilIdle()
+
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(sample(currentA = 90f, powerW = 6000f, seq = it))
+            advanceUntilIdle()
+        }
+        assertEquals(listOf(Triple("v1", 90f, 6000f)), vehicleRepo.gaugePeakWrites)
+        c.state.test { assertEquals(150f, awaitItem().currentRangeA) }
     }
 
     /**

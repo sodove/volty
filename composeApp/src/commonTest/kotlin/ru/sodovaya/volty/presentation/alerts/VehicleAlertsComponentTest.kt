@@ -41,6 +41,7 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.notification.AlarmPreview
@@ -95,8 +96,11 @@ class VehicleAlertsComponentTest {
         }
         override suspend fun delete(id: String) { stored = null }
         override suspend fun touch(id: String) {}
-        // Explicit, because VehicleRepository.updateGaugePeaks is abstract: no fake gets a
-        // silent default. Nothing in this file rides a learned dial range (G §9.2).
+        // Explicit, because both of VehicleRepository's gauge-peak members are abstract:
+        // no fake gets a silent default. Nothing in this file rides a learned dial range
+        // (G §9.2), and an EMPTY map is the honest answer rather than a missing one --
+        // absence in that map means "has learned nothing", which is exactly the case here.
+        override val gaugePeaks: Flow<Map<String, GaugePeaks>> = flowOf(emptyMap())
         override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {}
 
         /** Simulate another screen (the edit form) saving while this one is open. */

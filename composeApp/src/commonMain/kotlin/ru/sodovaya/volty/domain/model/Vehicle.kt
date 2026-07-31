@@ -59,41 +59,7 @@ data class Vehicle(
      * the storage layer can make; nothing inside
      * [AlertRule][ru.sodovaya.volty.domain.alert.AlertRule] knows about it.
      */
-    val motionAlerts: List<AlertRule>? = null,
-    /**
-     * The largest battery current this vehicle has ever been *observed* pulling,
-     * in amps — the learned width of the CURRENT dial (`G §9.2`).
-     *
-     * **Zero is the honest seed, not a missing value**, which is why this is a
-     * plain `Float` and not a nullable the way [dashboardStyle] is: "nobody has
-     * ridden this yet" and "this vehicle peaks at 0 A" are the same statement,
-     * and both correctly open the dial on
-     * [GaugeScale.CURRENT_RUNGS_A][ru.sodovaya.volty.domain.stats.GaugeScale.CURRENT_RUNGS_A]'s
-     * first rung. There is no third state to keep room for.
-     *
-     * **Read-only through [VehicleRepository.upsert][ru.sodovaya.volty.domain.repository.VehicleRepository.upsert].**
-     * Its only writer is
-     * [VehicleRepository.updateGaugePeaks][ru.sodovaya.volty.domain.repository.VehicleRepository.updateGaugePeaks],
-     * and `upsert` deliberately preserves whatever is stored — because every caller
-     * of `upsert` holds a [Vehicle] *snapshot*, and a snapshot can be older than
-     * the last peak write. `KableBmsRepository`'s cell-count and pack auto-fills
-     * read `_activeVehicle.value` and write it back; that value is re-published
-     * from the repository flow and so is *usually* fresh, but the
-     * read-modify-write straddles the interval before a peak write's own
-     * re-publication lands, and inside that window it carries the older number. An
-     * `upsert` that wrote this field would therefore let a wheel discovering its
-     * cell count mid-ride throw away the range it had just learned. Setting it on a
-     * `Vehicle` you pass to `upsert` is a no-op; see `VehicleRow.sq`.
-     *
-     * Written by the ride dashboard, and only when the *rung* it resolves to
-     * changes — so this is a handful of writes over a vehicle's life rather than
-     * one per BLE notification. Cleared by the composer when the controller set
-     * changes, because it describes hardware
-     * ([GaugeScale.peaksStillApply][ru.sodovaya.volty.domain.stats.GaugeScale.peaksStillApply]).
-     */
-    val gaugePeakCurrentA: Float = 0f,
-    /** The learned width of the POWER dial, in watts. See [gaugePeakCurrentA]. */
-    val gaugePeakPowerW: Float = 0f
+    val motionAlerts: List<AlertRule>? = null
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }

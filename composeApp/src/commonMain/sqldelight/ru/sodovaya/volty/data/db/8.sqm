@@ -1,0 +1,95 @@
+-- v8 -> v9: the learned dial widths move off the vehicle row (Part I Task 9).
+--
+-- `7.sqm` put them ON VehicleRow, which made them `Vehicle` fields — and a
+-- `Vehicle` field that `upsert` refuses to write is an interface that teaches
+-- the opposite of the rule. `upsert` had to COALESCE both columns back out of
+-- the row it was replacing (INSERT OR REPLACE deletes and reinserts, so an
+-- unnamed column takes its DEFAULT rather than keeping its value), and
+-- `copy(gaugePeakCurrentA = ...)` plus `upsert` compiled and silently did
+-- nothing. Off the row, the unwritable setter stops existing.
+--
+-- Three steps, in this order:
+--
+--   1. create GaugePeakRow;
+--   2. CARRY THE LEARNED VALUES ACROSS. A rider who has learned their dial
+--      ranges over weeks of riding must not lose them to a refactor. Only
+--      non-zero rows are copied: absence in the new table IS zero (see
+--      GaugePeakRow.sq), so a row of zeroes would be a second spelling of
+--      "nothing learned" and this migration must not invent one;
+--   3. rebuild VehicleRow without the two columns.
+--
+-- Step 3 is a full table rebuild rather than `ALTER TABLE ... DROP COLUMN`
+-- because DROP COLUMN needs SQLite 3.35 (2021) and this app's minSdk is 26 —
+-- Android 8 ships SQLite 3.19, where DROP COLUMN is a syntax error at runtime.
+-- The desktop sqlite-jdbc the migration VERIFIER runs on is new enough, so the
+-- verifier could not have caught that; the rebuild is portable to every version
+-- either target ships.
+--
+-- Dropping the parent table is safe with the child tables' FOREIGN KEY clauses
+-- still pointing at it: PRAGMA foreign_keys is OFF (nothing in this app turns it
+-- on), so nothing is enforced, and an FK target is not resolved when a schema is
+-- parsed. The index is not: DROP TABLE takes its indexes with it, so
+-- VehicleRow_pinned_recent is recreated below or `selectAll`'s ORDER BY silently
+-- degrades to a scan on every launch.
+
+CREATE TABLE GaugePeakRow (
+    vehicleId  TEXT NOT NULL PRIMARY KEY,
+    currentA   REAL NOT NULL,
+    powerW     REAL NOT NULL,
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+INSERT INTO GaugePeakRow(vehicleId, currentA, powerW)
+SELECT id, gaugePeakCurrentA, gaugePeakPowerW FROM VehicleRow
+WHERE gaugePeakCurrentA <> 0 OR gaugePeakPowerW <> 0;
+
+CREATE TABLE VehicleRow_new (
+    id                       TEXT NOT NULL PRIMARY KEY,
+    name                     TEXT NOT NULL,
+    iconKey                  TEXT NOT NULL,
+    topology                 TEXT NOT NULL DEFAULT 'PARALLEL',
+    chemistry                TEXT NOT NULL,
+    averagingWindowMin       INTEGER NOT NULL DEFAULT 5,
+    cellHighV                REAL,
+    cellLowV                 REAL,
+    cellDeltaMv              INTEGER,
+    temperatureWarnC         REAL,
+    temperatureHighC         REAL,
+    socLowPercent            INTEGER,
+    socCutoffPercent         INTEGER,
+    disconnectNotify         INTEGER NOT NULL DEFAULT 1,
+    chargeCompleteNotify     INTEGER NOT NULL DEFAULT 1,
+    createdAt                TEXT NOT NULL,
+    lastConnectedAt          TEXT,
+    isPinned                 INTEGER NOT NULL DEFAULT 0,
+    dashboardStyle           TEXT,
+    secondaryGauge           TEXT,
+    yieldBmsToHeadUnit       INTEGER,
+    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0
+);
+
+INSERT INTO VehicleRow_new(
+    id, name, iconKey, topology, chemistry, averagingWindowMin,
+    cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC,
+    socLowPercent, socCutoffPercent, disconnectNotify, chargeCompleteNotify,
+    createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
+    yieldBmsToHeadUnit, motionAlertsConfigured
+)
+SELECT
+    id, name, iconKey, topology, chemistry, averagingWindowMin,
+    cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC,
+    socLowPercent, socCutoffPercent, disconnectNotify, chargeCompleteNotify,
+    createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
+    yieldBmsToHeadUnit, motionAlertsConfigured
+FROM VehicleRow;
+
+-- Explicitly, before the table that owns it. SQLite would take the index with
+-- the table anyway; SQLDelight's static schema model would not, and reports the
+-- CREATE INDEX at the bottom as a duplicate.
+DROP INDEX VehicleRow_pinned_recent;
+
+DROP TABLE VehicleRow;
+
+ALTER TABLE VehicleRow_new RENAME TO VehicleRow;
+
+CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);

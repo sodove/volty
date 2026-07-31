@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -41,8 +42,11 @@ class KableBmsRepositoryDumbBegodeTest {
         override suspend fun upsert(vehicle: Vehicle) {}
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
-        // Explicit, because VehicleRepository.updateGaugePeaks is abstract: no fake gets a
-        // silent default. Nothing in this file rides a learned dial range (G §9.2).
+        // Explicit, because both of VehicleRepository's gauge-peak members are abstract:
+        // no fake gets a silent default. Nothing in this file rides a learned dial range
+        // (G §9.2), and an EMPTY map is the honest answer rather than a missing one --
+        // absence in that map means "has learned nothing", which is exactly the case here.
+        override val gaugePeaks: Flow<Map<String, GaugePeaks>> = flowOf(emptyMap())
         override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {}
     }
 

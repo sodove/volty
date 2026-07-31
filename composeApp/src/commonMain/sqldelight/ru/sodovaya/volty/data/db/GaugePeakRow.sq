@@ -1,0 +1,55 @@
+-- The learned widths of the ride dashboard's CURRENT and POWER dials (G §9.2),
+-- one row per vehicle that has been ridden.
+--
+-- **A table of its own rather than two columns on VehicleRow, and that is the
+-- whole point of `8.sqm`.** As columns they were reachable as `Vehicle` fields,
+-- so `copy(gaugePeakCurrentA = ...)` plus `upsert` compiled and silently did
+-- nothing: `upsert` had to COALESCE them back out of the row it was replacing,
+-- because every caller of it holds a Vehicle SNAPSHOT and a snapshot can be
+-- older than the last peak write. The rule was real; the interface taught its
+-- opposite, and the only signal was a KDoc one layer away. Off the vehicle, the
+-- unwritable setter stops existing rather than being documented.
+--
+-- **ABSENCE IS ZERO, and there is no third state.** A vehicle nobody has ridden
+-- has no row here, and reads back as 0 A / 0 W — the same answer as a vehicle
+-- that genuinely peaks at nothing, and both correctly open the dial on
+-- GaugeScale.CURRENT_RUNGS_A's first rung. So `upsert` on a vehicle writes NO
+-- row here, and the only statement that creates one is `upsert` below, called
+-- from VehicleRepository.updateGaugePeaks.
+--
+-- REAL, because both are physical magnitudes the decoders already carry as
+-- floats, and quantising them to the rung ladder here would throw away the
+-- distinction the ladder itself needs (a peak that grows WITHIN a rung must be
+-- retained, or it could never cross into the next one).
+--
+-- The declared cascade is documentation of intent only — SQLite leaves
+-- PRAGMA foreign_keys OFF by default and neither driver factory turns it on
+-- (AndroidSqliteDriver / JdbcSqliteDriver, both stock), so
+-- SqlDelightVehicleRepository.delete deletes this row explicitly in the same
+-- transaction as the vehicle. Same convention as PackRow, ControllerRow and
+-- AlertLevelRow; this table adds no fourth one.
+CREATE TABLE GaugePeakRow (
+    vehicleId  TEXT NOT NULL PRIMARY KEY,
+    currentA   REAL NOT NULL,
+    powerW     REAL NOT NULL,
+    FOREIGN KEY (vehicleId) REFERENCES VehicleRow(id) ON DELETE CASCADE
+);
+
+selectAll:
+SELECT * FROM GaugePeakRow;
+
+selectByVehicle:
+SELECT * FROM GaugePeakRow WHERE vehicleId = :vehicleId;
+
+-- THE ONLY WRITER. INSERT OR REPLACE because the first peak a vehicle ever
+-- learns has no row to update, and every later one has exactly one.
+--
+-- Unconstrained on purpose: it is also how the composer CLEARS the peaks when a
+-- vehicle's controller set changes (G §9.2 item 7), which is the one event that
+-- legitimately lowers them.
+upsert:
+INSERT OR REPLACE INTO GaugePeakRow(vehicleId, currentA, powerW)
+VALUES (:vehicleId, :currentA, :powerW);
+
+deleteByVehicle:
+DELETE FROM GaugePeakRow WHERE vehicleId = :vehicleId;

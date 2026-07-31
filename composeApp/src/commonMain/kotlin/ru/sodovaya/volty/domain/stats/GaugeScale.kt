@@ -260,7 +260,8 @@ data class PeakTracker(
 
         /**
          * A tracker that already knows [peak] — the stored
-         * `Vehicle.gaugePeakCurrentA` / `gaugePeakPowerW` on connect.
+         * [GaugePeaks][ru.sodovaya.volty.domain.repository.GaugePeaks] this
+         * vehicle carried into the ride.
          *
          * **This is the `GET_MCCONF` seam** (`B §14`): the day a VESC's
          * `l_current_max` is readable, it seeds a tracker here exactly the way a
@@ -270,8 +271,8 @@ data class PeakTracker(
          * reporting its own behaviour outranks its paperwork.
          *
          * A non-finite or negative seed is read as "nothing learned" rather than
-         * carried: the column is `REAL NOT NULL DEFAULT 0` but SQLite will hand
-         * back whatever is in the file.
+         * carried: `GaugePeakRow`'s columns are `REAL NOT NULL` but SQLite will
+         * hand back whatever is in the file.
          */
         fun seededAt(peak: Float): PeakTracker =
             PeakTracker(learnedPeak = if (peak.isFinite() && peak > 0f) peak else 0f)

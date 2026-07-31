@@ -885,11 +885,11 @@ class DefaultVehicleEditComponent(
             val existing = if (s.isEditing) vehicleRepository.get(vehicleId!!) else null
             val v = existing?.withEdits(s) ?: newVehicle(s, id = vehicleId ?: "v-${Random.nextLong()}")
             vehicleRepository.upsert(v)
-            // G §9.2 item 7, and **the whole of it** — `withEdits` deliberately does not touch these
-            // two fields, because `upsert` cannot write them (see `Vehicle.gaugePeakCurrentA` and
-            // `VehicleRow.sq`): every other caller of `upsert` holds a snapshot that would revert
-            // them, so the columns have exactly one writer. Clearing them is the one event that
-            // legitimately lowers them, and this is it. One decision, asked once.
+            // G §9.2 item 7, and **the whole of it**. The learned dial ranges are not part of a
+            // vehicle's description at all since `8.sqm` — they live in `GaugePeakRow`, reached only
+            // through `updateGaugePeaks` — so `upsert` above cannot have touched them, and there is
+            // no field on `v` to have forgotten. Clearing them is the one event that legitimately
+            // lowers them, and this is it. One decision, asked once.
             //
             // A learned dial range describes HARDWARE, so the question is asked of the resulting
             // controller list and not of `controllersEdited`: a rider who retypes a label has edited
@@ -956,13 +956,11 @@ class DefaultVehicleEditComponent(
  * preserved-by-default fields since Task 3 — it is a `Pack` field with its
  * own per-pack, once-touched rule, same shape as `aliasGroup` below.)
  *
- * `gaugePeakCurrentA` / `gaugePeakPowerW` are **not named here at all**, and that
- * is deliberate rather than an omission. They are cleared when the controller set
- * changes (`G §9.2` item 7) — a learned dial range describes hardware and cannot
- * outlive it — but `upsert` cannot write those two columns, so naming them here
- * would set a value nothing ever reads. [onSave]'s explicit `updateGaugePeaks` is
- * the whole clear, and the only one. They therefore ride this function's
- * preserved-by-default rule like any other field it does not edit.
+ * The learned dial ranges are **not `Vehicle` fields**, so they cannot appear
+ * here even by accident — that is what `8.sqm` bought. They are cleared when the
+ * controller set changes (`G §9.2` item 7), because a learned range describes
+ * hardware and cannot outlive it, and [onSave]'s explicit `updateGaugePeaks` is
+ * the whole of that clear.
  *
  * `yieldBmsToHeadUnit` left that list in Task 4 and is now written from
  * [VehicleEditComponent.State.yieldBmsToHeadUnit] — which is **seeded** from

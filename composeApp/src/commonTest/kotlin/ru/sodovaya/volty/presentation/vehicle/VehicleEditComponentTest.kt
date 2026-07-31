@@ -35,6 +35,7 @@ import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
@@ -143,7 +144,10 @@ class VehicleEditComponentTest {
         fun answerWith(r: Result<List<Int>>) { result = r }
     }
 
-    private class FakeVehicleRepo(private val saved: List<Vehicle>) : VehicleRepository {
+    private class FakeVehicleRepo(
+        private val saved: List<Vehicle>,
+        savedPeaks: Map<String, GaugePeaks> = emptyMap()
+    ) : VehicleRepository {
         val upserts = mutableListOf<Vehicle>()
         override val vehicles: Flow<List<Vehicle>> = flowOf(saved)
         /**
@@ -170,14 +174,26 @@ class VehicleEditComponentTest {
         override suspend fun touch(id: String) {}
 
         /**
-         * Recorded separately from [upserts] because the storage layer's `upsert` deliberately
-         * CANNOT write the learned dial widths (`VehicleRow.sq`) — so a composer that only set them
-         * on the upserted [Vehicle] would persist nothing. The `G §9.2` tests below assert both: the
-         * returned vehicle is honest about its own fields, and this explicit write happened.
+         * The learned dial widths, in their own store — since `8.sqm` they are not a [Vehicle] field,
+         * so [upserts] cannot carry one and this fake cannot accidentally model a composer that
+         * "cleared" them by setting a field nothing reads.
+         *
+         * A vehicle with no entry has learned nothing; the map is not padded (see `GaugePeakRow.sq`),
+         * which is what lets `creating a vehicle writes no gauge-peak clear` be a real state rather
+         * than a zeroed one.
+         */
+        val peaks = MutableStateFlow(savedPeaks)
+        override val gaugePeaks: Flow<Map<String, GaugePeaks>> = peaks
+
+        /**
+         * Recorded as a LIST as well as applied to [peaks], because the `G §9.2` tests are about
+         * whether the clear HAPPENED — and a store that merely ends up at zero cannot tell "cleared"
+         * from "never learned".
          */
         val gaugePeakWrites = mutableListOf<Triple<String, Float, Float>>()
         override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
             gaugePeakWrites += Triple(id, currentA, powerW)
+            peaks.value = peaks.value + (id to GaugePeaks(currentA, powerW))
         }
     }
 
@@ -250,14 +266,20 @@ class VehicleEditComponentTest {
         // Every kind deliberately silenced (F §10.2: an empty level list is the
         // only way to say "off"). Non-null, so it is an ANSWER — and a
         // non-default one, which is what makes a dropped field visible below.
-        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) },
-        // G §9.2's learned dial widths. Non-zero, so a save that CLEARED them
-        // when it should not have is visible to the identity test — and the two
-        // are deliberately different numbers, so swapping the amps for the watts
-        // is visible too.
-        gaugePeakCurrentA = 137f,
-        gaugePeakPowerW = 6421f
+        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) }
+        // G §9.2's learned dial widths are NOT here, and cannot be: since `8.sqm`
+        // they are not fields of a Vehicle at all. Tests that need a vehicle
+        // which has been ridden seed [learnedRanges] into the fake instead.
     )
+
+    /**
+     * What a vehicle that has been ridden has learned (`G §9.2`) — seeded into the fake repository
+     * rather than onto the [Vehicle], because that is where it lives.
+     *
+     * Deliberately two DIFFERENT numbers, so a save that swapped the amps for the watts is visible,
+     * and both non-zero, so a clear is distinguishable from "never learned".
+     */
+    private val learnedRanges = mapOf("v1" to GaugePeaks(currentA = 137f, powerW = 6421f))
 
     /**
      * A Begode wheel after the pack auto-fill has persisted the second branch
@@ -294,11 +316,9 @@ class VehicleEditComponentTest {
         packs = emptyList(),
         controllers = originalControllers,
         chemistry = Chemistry.LI_ION_NMC,
-        createdAt = createdAtFixture,
-        // A vehicle that has been ridden, so the G §9.2 tests below can see a range being CLEARED
-        // rather than merely staying at its default. Same two values as existingVehicle().
-        gaugePeakCurrentA = 137f,
-        gaugePeakPowerW = 6421f
+        createdAt = createdAtFixture
+        // A vehicle that has been ridden carries no range of its own: the G §9.2 tests below pair
+        // this with [learnedRanges] on the fake repository, which is where a range lives.
     )
 
     private fun component(
@@ -1094,7 +1114,7 @@ class VehicleEditComponentTest {
     @Test
     fun `adding a controller clears the learned dial ranges`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()), learnedRanges)
         val c = component(repo)
         advanceUntilIdle()
 
@@ -1103,10 +1123,13 @@ class VehicleEditComponentTest {
         advanceUntilIdle()
 
         assertEquals(2, repo.upserts.single().controllers.size, "the hardware really did change")
-        // The clear is asserted ONLY on the explicit write. `withEdits` no longer names those two
-        // fields, because `upsert` cannot store them -- so a value on the upserted Vehicle would be
-        // a fiction, and an assertion about it would pin the fiction rather than the behaviour.
+        // The clear is asserted on the explicit write, because there is nowhere else it could
+        // happen: since `8.sqm` the ranges are not fields of the upserted Vehicle at all.
         assertEquals(listOf(Triple("v1", 0f, 0f)), repo.gaugePeakWrites)
+        assertEquals(
+            GaugePeaks(currentA = 0f, powerW = 0f), repo.peaks.value["v1"],
+            "...and the store really is at zero afterwards, not merely written to"
+        )
     }
 
     @Test
@@ -1114,7 +1137,8 @@ class VehicleEditComponentTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val rear = Controller(index = 1, label = "Rear", controllerType = ControllerType.VESC, address = "CC:DD")
         val repo = FakeVehicleRepo(
-            listOf(controllerOnlyVehicle().copy(controllers = originalControllers + rear))
+            listOf(controllerOnlyVehicle().copy(controllers = originalControllers + rear)),
+            learnedRanges
         )
         val c = component(repo)
         advanceUntilIdle()
@@ -1137,7 +1161,7 @@ class VehicleEditComponentTest {
     @Test
     fun `renaming a controller or fixing its geometry keeps the learned dial ranges`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()), learnedRanges)
         val c = component(repo)
         advanceUntilIdle()
 
@@ -1154,10 +1178,10 @@ class VehicleEditComponentTest {
             emptyList(), repo.gaugePeakWrites,
             "a cosmetic edit must not touch the stored peaks at all"
         )
-        // The upserted Vehicle still carries them, by `withEdits`'s preserved-by-default rule --
-        // which is what `saving with nothing edited is an identity on the whole vehicle` pins.
-        assertEquals(137f, saved.gaugePeakCurrentA)
-        assertEquals(6421f, saved.gaugePeakPowerW)
+        // And the STORE still holds what the rider learned. This is what the deleted
+        // `saved.gaugePeakCurrentA` assertions were protecting -- that a save which had no business
+        // touching the ranges leaves them where they were -- asked of the place they now live.
+        assertEquals(GaugePeaks(currentA = 137f, powerW = 6421f), repo.peaks.value["v1"])
     }
 
     /**
@@ -1167,7 +1191,7 @@ class VehicleEditComponentTest {
     @Test
     fun `re-addressing a controller clears the learned dial ranges`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()))
+        val repo = FakeVehicleRepo(listOf(controllerOnlyVehicle()), learnedRanges)
         val c = component(repo)
         advanceUntilIdle()
 

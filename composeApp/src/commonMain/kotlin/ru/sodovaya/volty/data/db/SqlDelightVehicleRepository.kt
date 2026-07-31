@@ -17,11 +17,13 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -33,6 +35,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val packQueries = provider.database.packRowQueries
     private val controllerQueries = provider.database.controllerRowQueries
     private val alertLevelQueries = provider.database.alertLevelRowQueries
+    private val gaugePeakQueries = provider.database.gaugePeakRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
         .asFlow()
@@ -49,6 +52,21 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val alertLevelRows: Flow<List<AlertLevelRow>> = alertLevelQueries.selectAll()
         .asFlow()
         .mapToList(Dispatchers.Default)
+
+    /**
+     * Only the vehicles that have learned something are in this map — nothing is
+     * padded with zeroes, because absence and zero are the same statement (see
+     * [GaugePeaks]). Its own flow, off `GaugePeakRow` alone, so a peak write
+     * notifies it without re-emitting the whole vehicle list, and so an `upsert`
+     * of a vehicle cannot carry a stale value into it.
+     */
+    override val gaugePeaks: Flow<Map<String, GaugePeaks>> = gaugePeakQueries.selectAll()
+        .asFlow()
+        .mapToList(Dispatchers.Default)
+        .map { rows ->
+            rows.associate { it.vehicleId to GaugePeaks(it.currentA.toFloat(), it.powerW.toFloat()) }
+        }
+        .flowOn(Dispatchers.Default)
 
     override val vehicles: Flow<List<Vehicle>> =
         combine(vehicleRows, packRows, controllerRows, alertLevelRows) { rows, packs, ctrls, levels ->
@@ -114,12 +132,14 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 // opened the screen — and the two must not read back the same.
                 // See AlertLevelRow.sq / Vehicle.motionAlerts.
                 motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L
-                // gaugePeakCurrentA / gaugePeakPowerW are NOT parameters of this
-                // statement. `updateGaugePeaks` is their only writer and the
-                // statement preserves whatever is stored — see VehicleRow.sq's
-                // own note, and Vehicle.gaugePeakCurrentA, for why any caller
-                // holding a Vehicle snapshot must not be able to write them.
             )
+            // GaugePeakRow is deliberately NOT touched here — not written, and
+            // not deleted either. It is not part of a vehicle's description; a
+            // rider renaming their scooter has not unlearned its dial. Since
+            // `8.sqm` there is nothing on the `Vehicle` this could even write
+            // from, which is the whole point of that migration: the preserve
+            // rule used to live in a COALESCE inside the statement above, where
+            // a caller could not see it.
             // Replace the pack set wholesale. Stored indices are whatever the
             // caller provided — nothing guarantees a contiguous 0..n-1 — so
             // trimming by index cannot be trusted to remove every stale row.
@@ -189,17 +209,23 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
 
     override suspend fun delete(id: String) {
         // Explicit rather than relying on ON DELETE CASCADE: foreign keys are
-        // off by default in SQLite unless PRAGMA foreign_keys is enabled.
+        // off by default in SQLite unless PRAGMA foreign_keys is enabled, and
+        // neither driver factory enables it (AndroidSqliteDriver and
+        // JdbcSqliteDriver are both constructed stock — see SqlDriverFactory).
+        // A cascade that silently does not fire is a guard indistinguishable
+        // from its absence; `deleting a vehicle deletes its learned dial widths`
+        // is what actually holds this.
         //
-        // In one transaction for the same reason upsert is: four statements
-        // means three windows in which process death leaves child rows behind
+        // In one transaction for the same reason upsert is: five statements
+        // means four windows in which process death leaves child rows behind
         // with no parent, and a recycled vehicle id would then adopt a stranger's
-        // packs, controllers and alarm thresholds. It also collapses four change
-        // notifications into one.
+        // packs, controllers, alarm thresholds and dial ranges. It also collapses
+        // five change notifications into one.
         queries.transaction {
             packQueries.deleteByVehicle(id)
             controllerQueries.deleteByVehicle(id)
             alertLevelQueries.deleteByVehicle(id)
+            gaugePeakQueries.deleteByVehicle(id)
             queries.delete(id)
         }
     }
@@ -209,22 +235,33 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     }
 
     /**
-     * Two columns, no children, no transaction — the same shape as [touch], and
-     * **the only writer of these two columns** ([upsert] preserves them).
+     * One row in one table, no children, no transaction — the same shape as
+     * [touch], and **the only writer of the learned dial widths**.
      *
-     * Overrides [VehicleRepository.updateGaugePeaks]'s correct-but-heavy default
-     * (read, `copy`, full upsert) for a reason the default cannot avoid: `upsert`
-     * replaces the alert-level set wholesale from the in-memory list, while
-     * `toRules()` deliberately SKIPS rows it cannot represent and leaves them in
-     * the table. A mid-ride peak write must not be the event that deletes a newer
-     * version's alert rows for good. A single UPDATE also needs no transaction —
-     * there is no second statement for a crash to land between.
+     * It touches neither `VehicleRow` nor any child table, and that is not an
+     * optimisation: it runs while the rider is riding, from a snapshot the
+     * dashboard may have loaded minutes ago, so anything that went through
+     * [upsert] would replay that snapshot's packs, controllers and alert levels
+     * over rows the live connection has since moved — and `upsert` replaces the
+     * alert-level set *wholesale from the in-memory list*, while `toRules()`
+     * deliberately SKIPS rows it cannot represent and leaves them in the table. A
+     * mid-ride peak write must not be the event that deletes a newer version's
+     * alert rows for good. A single statement also needs no transaction: there is
+     * no second one for a crash to land between.
+     *
+     * **No `WHERE id` guard against an unknown vehicle.** `GaugePeakRow` has no
+     * row to update for a vehicle that has never been ridden, so this is an
+     * INSERT OR REPLACE, and an id nobody stored therefore leaves an orphan row
+     * behind rather than doing nothing. Harmless — [gaugePeaks] is only ever
+     * consulted by id, and [delete] clears the row on the way out — and the
+     * callers cannot produce it anyway: both guard on a persisted, non-guest,
+     * non-demo vehicle.
      */
     override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
-        queries.updateGaugePeaks(
-            gaugePeakCurrentA = currentA.toDouble(),
-            gaugePeakPowerW = powerW.toDouble(),
-            id = id
+        gaugePeakQueries.upsert(
+            vehicleId = id,
+            currentA = currentA.toDouble(),
+            powerW = powerW.toDouble()
         )
     }
 }
@@ -290,13 +327,7 @@ private fun VehicleRow.toDomain(
     // Null — "never configured, use AlarmDefaults" — comes from the column, NOT
     // from the row list being empty. `motionAlertsConfigured = 1` with no rows
     // is a rider who switched everything off, and stays off.
-    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null,
-    // No `runCatching` and no null-coalesce: the columns are NOT NULL DEFAULT 0
-    // and zero is a legitimate reading. A hostile file could still hand back a
-    // NaN or an infinity, which is why PeakTracker.seededAt — the one consumer —
-    // treats a non-finite seed as "nothing learned" rather than trusting it.
-    gaugePeakCurrentA = gaugePeakCurrentA.toFloat(),
-    gaugePeakPowerW = gaugePeakPowerW.toFloat()
+    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null
 )
 
 /**
