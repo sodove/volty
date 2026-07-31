@@ -2857,11 +2857,20 @@ class VescGatewayProtocolTest {
      * is spent by the second silence, and only the count can still hold the
      * verdict off.
      *
-     * **This is the only shape that can tell the count from its absence**, and
-     * that is worth knowing on its own: with the default timings the warm-up
-     * strictly dominates, because `checkSilenceBudget` caps a plan at ten
-     * requests and therefore a cycle at ~5050 ms, which is shorter than the
-     * 6 s warm-up. The count is a floor, and this is the plan it is a floor on.
+     * **This is the only shape in this suite that can tell the count from its
+     * absence**, and that is worth knowing on its own: on a default-timed cycle
+     * with no CAN scan parked in it, the warm-up dominates — `checkSilenceBudget`
+     * caps a plan at ten requests and so a cycle at ~5050 ms, shorter than the
+     * 6 s warm-up, which alone forces three silences. The count is a floor, and
+     * this is the plan it is a floor on.
+     *
+     * "With the default timings the warm-up STRICTLY dominates" was the round-2
+     * wording and it is too absolute. `serviceCanScan` runs a parked `PING_CAN`
+     * through the ordinary `exchange` on `CanBusScanner.REPLY_TIMEOUT_MS`, which
+     * `checkSilenceBudget` does not count — a silent scan adds ~3600 ms to one
+     * cycle, so a three-controller all-silent link reaches 6650 ms in a scan
+     * cycle and the count is the only thing holding the verdict off at the
+     * second silence. The count is less dead than the round-2 claim said.
      */
     @Test
     fun `the cycle count is a floor the boot warm-up cannot lower`() = runTest {
@@ -3084,9 +3093,11 @@ class VescGatewayProtocolTest {
      * re-probe cycle starting at `C` and stamps at `S` and `S + 520`, the first
      * is checked at `C` and the second at `C + 520`, both `C - S` past their
      * own stamps. So the second is due the moment it is looked at, in the SAME
-     * cycle — 30 080 ms past a 30 000 ms window here, the same figure the class
-     * KDoc quotes, both re-derived after round 1 stated two different numbers
-     * for the one quantity. Without the guard both fire together and that cycle
+     * cycle — 30 090 ms past a 30 000 ms window here, the same figure the class
+     * KDoc quotes. Round 1 stated two different numbers for the one quantity
+     * and round 2 settled on the wrong one: a silence is stamped at
+     * `replyTimeoutMs + lateReplyGuardMs`, not at the timeout, because
+     * `exchange` waits out the guard before returning. Without the guard both fire together and that cycle
      * pays 1110 ms: the whole pre-suppression worst case, back on a schedule.
      *
      * Read off the recorded request list rather than the clock: the pack

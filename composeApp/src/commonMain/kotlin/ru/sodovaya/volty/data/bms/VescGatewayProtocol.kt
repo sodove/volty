@@ -228,7 +228,11 @@ data class GatewaySource(
  *    `C` and the pairs were stamped at `S` and `S + d`, the first is checked at
  *    `C` and the second at `C + d`, both `C - S` past their own stamps. The
  *    second is therefore due in the same cycle as the first however fast the
- *    link is (30 080 ms past a 30 000 ms window on the test fixture), and
+ *    link is (30 090 ms past a 30 000 ms window on the test fixture — the
+ *    stamp lands at `replyTimeoutMs + lateReplyGuardMs`, because `exchange`
+ *    waits out the guard before returning and the loop only then calls
+ *    [rememberSilence]; a round-2 revision dropped that 100 ms and put 30 080
+ *    here and in the test, and this is the correction), and
  *    without the guard both fire together. It goes slack only when a request
  *    *between* the two is itself suppressed and skipped, which shortens the
  *    walk without shortening the gap.
@@ -829,10 +833,16 @@ class VescGatewayProtocol(
     private data class SilentPair(val globalIndex: Int, val opcode: Int)
 
     /**
-     * How many consecutive cycles each pair has now gone unanswered, for the
-     * pairs that are neither answering nor yet suppressed. A pair reaching
-     * [SUPPRESS_AFTER_SILENT_CYCLES] moves to [suppressedAtMs] and leaves here;
+     * How many consecutive cycles each pair has now gone unanswered. A pair
+     * reaching its limit is added to [suppressedAtMs] and **stays here too**;
      * any answer at all drops it. Only the poll loop writes it.
+     *
+     * It staying is what lets [rememberSilence] have one path instead of two:
+     * the count only ever grows past the limit, so a suppressed pair's later
+     * silences recompute the same verdict and restamp harmlessly. An earlier
+     * revision both cleared this on suppression and guarded against the clear
+     * with an early return — two spellings of one outcome, and the sweep
+     * found the guard indistinguishable from its absence.
      */
     @Volatile private var silentRunCycles: Map<SilentPair, Int> = emptyMap()
 
@@ -841,8 +851,10 @@ class VescGatewayProtocol(
      * clock — the input to [UNPROVEN_SILENCE_WARMUP_MS], and the half of the
      * rule that is a window rather than a count.
      *
-     * Kept beside [silentRunCycles] and dropped with it, on suppression and on
-     * [reset]. **Not** dropped by [rememberAnswer], and that omission is
+     * Kept beside [silentRunCycles] and dropped with it — by [reset], and by
+     * nothing else. Neither map is dropped on suppression; see
+     * [silentRunCycles] for why that is what keeps [rememberSilence] single-
+     * pathed. **Not** dropped by [rememberAnswer] either, and that omission is
      * load-bearing-by-absence rather than an oversight: an answer makes the
      * pair [everAnswered], and for a proven pair this window is inert by
      * construction (25 cycles of silence cost at least 12 s, past the 6 s this
