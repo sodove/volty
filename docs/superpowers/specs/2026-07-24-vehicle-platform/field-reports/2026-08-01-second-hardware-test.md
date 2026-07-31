@@ -130,14 +130,40 @@ The rider's evidence makes the obvious explanations unavailable: the uBox's spee
 GPS-calibrated, VESC Tool displays it perfectly, and the head unit's own display reports
 1-2 km/h while the scooter is pushed by hand. So the number exists on the bus.
 
-**Discriminating observation, one push down a corridor:**
+**The leading mechanism, and it makes every reported observation true at once.**
 
-- `0` at a standstill, `—` while rolling → the uBox has no wheel geometry in its mcconf, and
-  the app is behaving correctly (Part J is then the answer);
-- `0` both at a standstill **and** while rolling → zeros are reaching us where VESC Tool sees
-  numbers, and the question is whether the SETUP request reaches the uBox at all.
+`mc_interface_get_speed()` is a pure function of `mc_interface_get_rpm()`
+(`mc_interface.c:1604-1617`), which under FOC is the **PLL** speed estimate. A scooter pushed
+by hand injects no current, so there is no BEMF for the observer to track and the PLL reads
+zero — therefore `speed` and `rpm` are zero **together, by construction**, and
+`reportedSpeedSource(0f, 0f)` returns `REPORTED`. That is the confident zero, and the uBox
+genuinely said it.
 
-Not yet settled. **Do not design a fix until this is observed.**
+The head unit's 1-2 km/h is **not the same quantity**. Distance behind
+`mc_interface_get_distance()` accumulates from raw rotor-angle steps with **no current
+condition at all** (`mcpwm_foc.c:3799-3811` — already cited in our own `VescValues` KDoc), so
+a head unit computing Δdistance/Δt reads a real 1-2 km/h on a hand-pushed wheel while the
+uBox's PLL sits at zero. Both numbers are honest measurements of different things.
+
+This also reconciles *"VESC Tool показывает её идеально"*: VESC Tool's realtime page computes
+speed client-side from `rpm` and the mcconf it loaded, and it is looked at **under power**,
+where the PLL tracks.
+
+**If this is right, speed is not broken — it was tested in the one condition that cannot
+produce it.**
+
+**Discriminating observation — push the scooter and watch ODOMETER and TRIP**, which come from
+the same frame one round-trip away and are the only fields that do *not* depend on the PLL:
+
+- **odometer/trip tick up while speed stays `0`** → the SETUP frame lands, decodes, and the
+  uBox's geometry IS set (the distance fields are scaled by that same `si_wheel_diameter`).
+  The zero is a genuine freewheel PLL zero. **Next test is riding under power, not pushing.**
+- **odometer/trip sit at `0.0` too** → nothing from SETUP is reaching the sample, the
+  deduction above fails, and the zero is a different fault with a different fix.
+
+Not yet settled. **Do not design a fix until this is observed** — and note that the most
+likely outcome is that there is nothing here to fix except the app's inability to say which
+of three things a `0` means.
 
 ### O3 — the plain VESC path asks exactly one question and cannot ask another.
 
@@ -216,7 +242,7 @@ indistinguishable from a deliberate value, with no placeholder, no caption and *
 
 | Item | Needs |
 |---|---|
-| O2 (speed `0`) | One push down a corridor: standstill vs rolling. Nothing else. |
+| O2 (speed `0`) | Push the scooter and watch **odometer/trip**, not the speed. Then ride it under power. |
 | O3 (plain path) | nRF Connect on the module: RX characteristic properties, then write our framed 47 and a framed 4, and see which answers. |
 | O1 (composer) | A decision from the rider on what "multi-level" should mean — a link/source tree, or a scenario-led wizard. |
 | O4, O5 | Nothing external. Both are ours to design. |
