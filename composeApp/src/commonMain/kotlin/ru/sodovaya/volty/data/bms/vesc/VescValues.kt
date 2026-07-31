@@ -29,8 +29,11 @@ import kotlin.math.abs
  *    which every negative speed is — and unlike a Begode this protocol keeps
  *    energy counters, so the gauge falls back to the session average and shows
  *    the rider a *different confident number* rather than a blank;
- *  - `MotionAggregator`'s speed fold is a `maxOf`, so a negative can only ever
- *    lose;
+ *  - `MotionAggregator` does NOT attenuate it. Its speed fold is a `maxOf`, but
+ *    over `d.measuring { it.speedKnown }` — so a negative contributor that is the
+ *    only measuring one (a single-VESC vehicle, i.e. most of them) is the max,
+ *    and it reaches the aggregate unchanged. Nothing downstream is protected by
+ *    the fold; the guarantee has to be here;
  *  - the Ride dashboard's session peak cannot advance;
  *  - the SPEED alarm is graded against upper thresholds and cannot fire.
  *
@@ -46,13 +49,22 @@ import kotlin.math.abs
  * `BegodeProtocol.parseLiveFrame`. So the two protocols now genuinely agree
  * about what the shared field means, which Task 1 claimed before it was true.
  *
- * **The direction is not destroyed, and that is why no signed accessor was
- * added.** Begode needed `signedSpeedKmh()` because no other field on its frame
- * carried the sign; here [ControllerData.eRpm] does, unchanged, on BOTH sources
- * and on every path that publishes one — including
+ * **The direction is not destroyed PER CONTROLLER, and that is why no signed
+ * accessor was added.** Begode needed `signedSpeedKmh()` because no other field
+ * on its frame carried the sign; here [ControllerData.eRpm] does, unchanged, on
+ * BOTH sources and on every path that publishes a controller sample — including
  * [ru.sodovaya.volty.data.bms.VescGatewayProtocol]'s SETUP overlay, which copies
- * the speed but never the eRPM beside it. [derivedSpeedKmh] stays a faithful
+ * the speed but never the eRPM beside it (and which publishes nothing at all
+ * without a per-unit decode to fold it into). [derivedSpeedKmh] stays a faithful
  * signed conversion for the same reason.
+ *
+ * **The qualifier is load-bearing: it does NOT survive the fold.**
+ * `MotionAggregator`'s `eRpm` fold is an unfiltered `maxOf`, so a controller
+ * reversing at -12 000 eRPM beside anything reporting `0` — every Begode does —
+ * gives a vehicle-level `eRpm` of `0`. Nothing reads it for direction today, and
+ * `I` Task 10 deliberately left the fold alone; but anyone building a reverse
+ * indicator must take it from a CONTROLLER sample, not from the aggregate. The
+ * same warning sits at the fold itself.
  */
 object VescValues {
 
@@ -360,11 +372,9 @@ object VescValues {
      * **SIGNED**, deliberately: this is a unit conversion, and it inherits
      * [eRpm]'s sign untouched. This decoder's published speed is a magnitude
      * (see the object KDoc), but the `abs` belongs at the assignment into
-     * [ControllerData.speedKmh] rather than in here — one convention, stated at
-     * the point of publication, so it holds for the SETUP path too, which never
-     * calls this. It also leaves this function what its other callers use it as:
-     * a predicate for "can this controller derive a speed at all"
-     * ([ru.sodovaya.volty.presentation.vehicle.VehicleComposer]).
+     * [ControllerData.speedKmh] rather than in here — **one convention, stated
+     * at the point of publication**, so it holds for the SETUP path too, which
+     * never calls this and would otherwise need the rule stated a second way.
      */
     fun derivedSpeedKmh(eRpm: Float, motor: MotorConfig): Float? {
         if (motor.wheelDiameterMm <= 0 || motor.polePairs <= 0 || motor.gearRatio <= 0f) return null

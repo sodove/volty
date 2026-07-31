@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
@@ -179,47 +180,19 @@ class VescForwardRideConsumptionTest {
         )
     }
 
-    // --- Frame builders: the field order `VescValues` pins ---
-
-    private fun i16(o: MutableList<Byte>, v: Int) {
-        o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte()
-    }
-
-    private fun i32(o: MutableList<Byte>, v: Int) {
-        o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
-        o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte()
-    }
+    // --- Frames: the layout is `VescTestFrames`', the numbers are this file's ---
 
     /** `COMM_GET_VALUES_SETUP` (47): 78.2 V rail, 52.4 A in, 980 Wh consumed. */
-    private fun setupFrame(speedMsRaw: Int, rpm: Int, tachAbsMRaw: Int): ByteArray {
-        val o = mutableListOf<Byte>()
-        o += VescValues.OPCODE_GET_VALUES_SETUP.toByte()
-        i16(o, 520); i16(o, 680)                  // temps
-        i32(o, -8_250); i32(o, 5_240)             // motor current, input current /100
-        i16(o, 760)                               // duty
-        i32(o, rpm)
-        i32(o, speedMsRaw)                        // speed /1000 m/s
-        i16(o, 782); i16(o, 840)                  // v_in /10, battery level /1000
-        i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
-        i32(o, 12_400_000); i32(o, tachAbsMRaw)   // tachometer, tachometer_abs /1000 m
-        i32(o, 0)                                 // position
-        o += 0                                    // fault
-        return VescPacket.frame(o.toByteArray())
-    }
+    private fun setupFrame(speedMsRaw: Int, rpm: Int, tachAbsMRaw: Int): ByteArray =
+        VescPacket.frame(
+            VescTestFrames.setupPayload(
+                rpm = rpm,
+                speedMsRaw = speedMsRaw,
+                tachAbsMRaw = tachAbsMRaw
+            )
+        )
 
     /** `COMM_GET_VALUES` (4): the same rail and current, no ground speed, no metres. */
-    private fun valuesFrame(rpm: Int): ByteArray {
-        val o = mutableListOf<Byte>()
-        o += VescValues.OPCODE_GET_VALUES.toByte()
-        i16(o, 520); i16(o, 680)
-        i32(o, -8_250); i32(o, 5_240)
-        i32(o, 0); i32(o, 0)                      // id, iq
-        i16(o, 760)
-        i32(o, rpm)
-        i16(o, 782)
-        i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
-        i32(o, 1_000); i32(o, 2_000)              // tachometer counts, not metres
-        o += 0                                    // fault
-        return VescPacket.frame(o.toByteArray())
-    }
+    private fun valuesFrame(rpm: Int): ByteArray =
+        VescPacket.frame(VescTestFrames.valuesPayload(rpm = rpm))
 }

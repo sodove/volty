@@ -23,6 +23,7 @@ import ru.sodovaya.volty.data.ble.routePackSamples
 import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Controller
@@ -84,20 +85,16 @@ class VescGatewayProtocolTest {
         tempMosRaw: Int = 400,
         /** `v_in` /10 — the rail this unit measures. 0 is a unit that does not know it. */
         vInRaw: Int = 782
-    ): ByteArray {
-        val o = mutableListOf<Byte>()
-        o += VescValues.OPCODE_GET_VALUES.toByte()
-        i16(o, tempMosRaw); i16(o, 680)
-        i32(o, -8_250); i32(o, currentInRaw)
-        i32(o, 0); i32(o, 0)                      // id, iq
-        i16(o, dutyRaw)
-        i32(o, rpm)
-        i16(o, vInRaw)
-        i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
-        i32(o, 0); i32(o, 0)                      // tachometer counts
-        o += 0                                    // fault
-        return VescPacket.frame(o.toByteArray())
-    }
+    ): ByteArray = VescPacket.frame(
+        VescTestFrames.valuesPayload(
+            tempMosRaw = tempMosRaw,
+            currentInRaw = currentInRaw,
+            dutyRaw = dutyRaw,
+            rpm = rpm,
+            vInRaw = vInRaw,
+            tachRaw = 0, tachAbsRaw = 0           // tachometer counts, unread here
+        )
+    )
 
     /**
      * `COMM_GET_VALUES_SETUP` (47) — the SETUP frame. Its currents/amp-hours are
@@ -111,21 +108,15 @@ class VescGatewayProtocolTest {
         currentInRaw: Int = 9_999,
         battLevelRaw: Int = 840,
         rpm: Int = 12_000
-    ): ByteArray {
-        val o = mutableListOf<Byte>()
-        o += VescValues.OPCODE_GET_VALUES_SETUP.toByte()
-        i16(o, 520); i16(o, 680)
-        i32(o, -8_250); i32(o, currentInRaw)
-        i16(o, 760)
-        i32(o, rpm)
-        i32(o, speedMsRaw)
-        i16(o, 782); i16(o, battLevelRaw)
-        i32(o, 154_000); i32(o, 21_000); i32(o, 9_800_000); i32(o, 1_200_000)
-        i32(o, 12_400_000); i32(o, tachAbsMRaw)
-        i32(o, 0)
-        o += 0                                    // fault
-        return VescPacket.frame(o.toByteArray())
-    }
+    ): ByteArray = VescPacket.frame(
+        VescTestFrames.setupPayload(
+            currentInRaw = currentInRaw,
+            rpm = rpm,
+            speedMsRaw = speedMsRaw,
+            battLevelRaw = battLevelRaw,
+            tachAbsMRaw = tachAbsMRaw
+        )
+    )
 
     /** `COMM_BMS_GET_VALUES` (96) — 2 cells, 1 sensor, tail through `can_id`. */
     private fun bmsFrame(

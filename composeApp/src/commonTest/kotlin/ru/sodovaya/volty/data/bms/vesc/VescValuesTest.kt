@@ -22,32 +22,15 @@ class VescValuesTest {
         speedRaw: Int = 13056,
         vInRaw: Int = 782,
         battLevelRaw: Int = 840
-    ): ByteArray {
-        val o = mutableListOf<Byte>()
-        fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
-                          o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        o += 47                       // opcode
-        i16(520)                      // temp_mos   /10  = 52.0
-        i16(680)                      // temp_motor /10  = 68.0
-        i32(-8250)                    // current_motor /100 = -82.5
-        i32(5240)                     // current_in /100 = 52.4
-        i16(760)                      // duty_now /1000 = 0.760
-        i32(rpm)                      // rpm
-        i32(speedRaw)                 // speed /1000 = 13.056 m/s = 47.0 km/h
-        i16(vInRaw)                   // v_in /10 = 78.2
-        i16(battLevelRaw)             // battery_level /1000 = 0.840
-        i32(154000)                   // amp_hours /1e4 = 15.4
-        i32(21000)                    // amp_hours_charged /1e4 = 2.1
-        i32(9800000)                  // watt_hours /1e4 = 980.0
-        i32(1200000)                  // watt_hours_charged /1e4 = 120.0
-        i32(12400000)                 // tachometer /1e3 = 12400.0 m
-        i32(1284600000)               // tachometer_abs /1e3 = 1284600.0 m = 1284.6 km
-        i32(0)                        // position
-        o += 0                        // fault_code = 0
-        o += 11                       // vesc_id
-        return o.toByteArray()
-    }
+    ): ByteArray = VescTestFrames.setupPayload(
+        rpm = rpm,
+        speedMsRaw = speedRaw,          // /1000 = 13.056 m/s = 47.0 km/h
+        vInRaw = vInRaw,                // /10 = 78.2 V
+        battLevelRaw = battLevelRaw,    // /1000 = 0.840
+        // The `vesc_id` byte the firmware sends after `fault_code` and this
+        // decoder never reads — the 57th byte the length tests count.
+        trailing = byteArrayOf(11)
+    )
 
     @Test fun setup_values_decode_every_field() {
         val d = VescValues.decodeSetupValues(setupPayload())!!
@@ -287,23 +270,8 @@ class VescValuesTest {
     }
 
     /** Builds a COMM_GET_VALUES payload in the pinned field order. */
-    private fun valuesPayload(rpm: Int = 10000, vInRaw: Int = 782): ByteArray {
-        val o = mutableListOf<Byte>()
-        fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
-                          o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        o += 4                        // opcode
-        i16(520); i16(680)            // temps
-        i32(-8250); i32(5240)         // motor / input current
-        i32(0); i32(0)                // id, iq
-        i16(760)                      // duty
-        i32(rpm)                      // rpm
-        i16(vInRaw)                   // v_in
-        i32(154000); i32(21000); i32(9800000); i32(1200000)   // Ah / Wh
-        i32(1000); i32(2000)          // tachometer, tachometer_abs (raw counts)
-        o += 0                        // fault
-        return o.toByteArray()
-    }
+    private fun valuesPayload(rpm: Int = 10000, vInRaw: Int = 782): ByteArray =
+        VescTestFrames.valuesPayload(rpm = rpm, vInRaw = vInRaw)
 
     @Test fun plain_get_values_derives_speed_and_has_no_reported_source() {
         val d = VescValues.decodeValues(valuesPayload(), MotorConfig(polePairs = 15, wheelDiameterMm = 254))!!
@@ -314,13 +282,14 @@ class VescValuesTest {
     }
 
     @Test fun plain_get_values_without_wheel_config_reports_speed_unknown() {
-        val o = mutableListOf<Byte>()
-        fun i16(v: Int) { o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        fun i32(v: Int) { o += ((v shr 24) and 0xFF).toByte(); o += ((v shr 16) and 0xFF).toByte()
-                          o += ((v shr 8) and 0xFF).toByte(); o += (v and 0xFF).toByte() }
-        o += 4; i16(520); i16(680); i32(0); i32(0); i32(0); i32(0); i16(0); i32(10000); i16(782)
-        i32(0); i32(0); i32(0); i32(0); i32(0); i32(0); o += 0
-        val d = VescValues.decodeValues(o.toByteArray(), MotorConfig(wheelDiameterMm = 0))!!
+        // Everything but the temperatures, the rpm and the rail zeroed: the
+        // question here is only whether an unconfigured wheel refuses to derive.
+        val payload = VescTestFrames.valuesPayload(
+            currentMotorRaw = 0, currentInRaw = 0, dutyRaw = 0, rpm = 10000,
+            ampHoursRaw = 0, ampHoursChgRaw = 0, wattHoursRaw = 0, wattHoursChgRaw = 0,
+            tachRaw = 0, tachAbsRaw = 0
+        )
+        val d = VescValues.decodeValues(payload, MotorConfig(wheelDiameterMm = 0))!!
         assertEquals(SpeedSource.NONE, d.speedSource)
         assertTrue(!d.speedKnown)
     }

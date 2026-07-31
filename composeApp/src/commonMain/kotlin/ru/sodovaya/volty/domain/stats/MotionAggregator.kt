@@ -61,10 +61,13 @@ object MotionAggregator {
             // speed**, and an earlier revision of this comment implied it was.
             // Since `I` Task 10 both producers publish a MAGNITUDE at decode, so
             // no negative contributor can reach here at all — and if one ever
-            // did, the filter would make things WORSE rather than better: with
-            // the sole measuring contributor at -12 km/h, `measuring` keeps only
-            // it and the max is -12, delivered downstream unattenuated. The
-            // guarantee is the decoders' (`VescValues`' object KDoc,
+            // did, NEITHER outcome would be protection: with the sole measuring
+            // contributor at -12 km/h the filter keeps it and the max is -12,
+            // while an unfiltered fold would floor it at a hollow 0. Downstream
+            // the two are near-indistinguishable — instant consumption is null
+            // either way, the session peak cannot advance either way, and the
+            // SPEED alarm cannot fire either way; only the number drawn differs.
+            // The guarantee is the decoders' (`VescValues`' object KDoc,
             // `BegodeProtocol.speedKmh`), and it is not restatable here.
             //
             // `ifEmpty { d }` for the same reason as inputVoltageV below: with
@@ -136,6 +139,22 @@ object MotionAggregator {
             // Costs nothing on a single-controller vehicle, where `all` and
             // `any` agree and the fold is the identity either way.
             hasPower = d.all { it.hasPower },
+            // **This fold DESTROYS the direction, and nothing else in the app
+            // does.** `eRpm` is the one field that still carries the sign of the
+            // motion after `I` Task 10 made both speed producers publish a
+            // magnitude — but only on a CONTROLLER sample. Unfiltered `maxOf`
+            // over a signed field means one controller reversing at -12 000
+            // beside anything reporting `0` (every Begode does, and so does a
+            // VESC whose `GET_VALUES` has not landed) folds to `0`.
+            //
+            // Left as it is, deliberately: no consumer reads this for direction
+            // — `ComposerDuplicates` uses `eRpm != 0f` only as a liveness
+            // witness — and what a vehicle-level eRPM should mean when two
+            // motors have opposite polarity is a question no producer has posed
+            // yet. **A reverse indicator must read a controller sample, not
+            // this.** Recorded here rather than only in a report, because the
+            // claim it qualifies ("the direction is not destroyed") is stated in
+            // `VescValues`' object KDoc two files away.
             eRpm = d.maxOf { it.eRpm },
             // **Unfiltered, and that is the fix rather than an omission.**
             //

@@ -8,6 +8,42 @@ enum class SpeedSource { REPORTED, DERIVED, NONE }
 
 @OptIn(ExperimentalTime::class)
 data class ControllerData(
+    /**
+     * Ground speed — **a MAGNITUDE. Never negative, on any protocol.**
+     *
+     * The contract every producer owes, stated on the field rather than in the
+     * decoders that happen to keep it. It was learned the expensive way twice:
+     * a Begode signs FORWARD negative on the rider's two wheels (`I` Task 1,
+     * field report `2026-07-30-first-hardware-test` S1), and a VESC does the
+     * same whenever its motor direction is configured the other way round
+     * (`I` Task 10). Between those two tasks the two decoders disagreed about
+     * this field for a whole part, and the reason nobody noticed is that there
+     * was nothing here to disagree WITH.
+     *
+     * **It has to be a magnitude because every consumer compares it against an
+     * UPPER threshold**, so a negative fails silently and totally rather than
+     * loudly: [ru.sodovaya.volty.domain.stats.RideMetrics] nulls instant
+     * consumption below `0.5`, the Ride dashboard's session peak cannot advance,
+     * the SPEED alarm cannot fire, and both dial renderers draw it as a fraction
+     * of full scale. [ru.sodovaya.volty.domain.stats.MotionAggregator]'s fold
+     * does NOT rescue any of that — see the comment at its speed fold.
+     *
+     * **A new producer takes the magnitude at its own decode**, at the
+     * assignment into this field, exactly as the four existing ones do
+     * ([ru.sodovaya.volty.data.bms.vesc.VescValues] twice,
+     * [ru.sodovaya.volty.data.bms.BegodeProtocol], and the demo simulator, whose
+     * speeds are non-negative by construction). Not in a renderer, and not in
+     * the aggregator: this is a property of the decode, so that a second
+     * consumer of a protocol cannot acquire the field without it.
+     *
+     * The SIGN is not a direction and must not be treated as one — which sign
+     * means forward is per-firmware and per-motor-wiring. Where it survives at
+     * all it survives beside this field, never in it:
+     * `BegodeProtocol.signedSpeedKmh()` and [eRpm] for VESC.
+     *
+     * `0f` is a real reading only when [speedSource] says so — see [speedKnown]
+     * and [ru.sodovaya.volty.domain.stats.MotionReadings].
+     */
     val speedKmh: Float = 0f,
     val speedSource: SpeedSource = SpeedSource.NONE,
     val dutyPercent: Float = 0f,
