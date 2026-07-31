@@ -211,15 +211,28 @@ object MotionAggregator {
             // reason as powerW above — one filtered list ([counting]) because
             // one flag answers for all four.
             //
-            // The sum is safe even though these four ARE CAN-summed on the wire
-            // (`mc_interface.c:1655-1679` — unlike the distances above, which
-            // are not). It is safe because of a decision taken elsewhere:
-            // `VescGatewayProtocol.publishController` copies only speed, its
-            // source, odometer, trip and battery level out of the SETUP overlay,
-            // so the counters reaching this fold come from `GET_VALUES` and are
-            // genuinely per-node. If anyone ever adds them to that overlay, THIS
-            // fold starts double-counting — the two decisions are coupled, and
-            // this is the only place that says so.
+            // These four ARE CAN-summed on the wire (`mc_interface.c:1655-1679`
+            // — unlike the distances above, which are not), so whether the sum
+            // is safe depends on WHICH protocol produced the contributor, and
+            // the answer differs:
+            //
+            //  - **`VescGatewayProtocol` — safe, by a decision taken elsewhere.**
+            //    `publishController` copies only speed, its source, odometer,
+            //    trip and battery level out of the SETUP overlay, so the counters
+            //    it publishes come from `GET_VALUES` and are genuinely per-node.
+            //    If anyone ever adds them to that overlay, THIS fold starts
+            //    double-counting — the two decisions are coupled, and this is
+            //    the only place that says so.
+            //  - **`VescProtocol` — safe only because of the topology today.**
+            //    It publishes the whole `decodeSetupValues` result
+            //    (`VescProtocol.kt:164`), CAN-summed counters included. One such
+            //    link folds to itself, so nothing is wrong on any vehicle the
+            //    composer can currently build. Two independent `VescProtocol`
+            //    links whose controllers share one CAN bus would each report the
+            //    bus-wide total and this fold would sum them again. Nothing
+            //    forbids that config; it is a hazard on the ledger, not a fixed
+            //    property, and it is the reason the bullet above is scoped to
+            //    one protocol rather than stated of the fold.
             consumedAh = counting.sumOf { it.consumedAh.toDouble() }.toFloat(),
             consumedWh = counting.sumOf { it.consumedWh.toDouble() }.toFloat(),
             regenAh = counting.sumOf { it.regenAh.toDouble() }.toFloat(),
