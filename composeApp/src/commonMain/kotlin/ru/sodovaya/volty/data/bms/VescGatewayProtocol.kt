@@ -450,7 +450,11 @@ class VescGatewayProtocol(
     /**
      * When the CURRENT unbroken run of contentless `COMM_BMS_GET_VALUES`
      * outcomes began, per pack slot — a sentinel frame, an undecodable one, or
-     * silence. Cleared the moment a real reading lands.
+     * silence. Cleared by [reset] alone, so the warm-up is spent once per
+     * connection: a real reading deliberately does NOT restart it, for the
+     * reason argued where that decision is taken (see [bmsRequest]'s `consume`).
+     * A second bridge outage inside one connection is therefore covered by the
+     * [STALE_READING_MS] precedence window rather than by another warm-up.
      *
      * The input to [HOSTED_BMS_WARMUP_MS]: the sentinel has to persist before it
      * is believed, because on the rider's own head unit it is also what a bridge
