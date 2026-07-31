@@ -845,8 +845,13 @@ class DefaultVehicleEditComponent(
                 it.addPack(BmsType.VESC_BMS, target, label, canId = candidate.canId)
             }
         } else {
+            // addCanController, not addController: a device found on this bus
+            // inherits the gateway's wheel geometry, because a bare
+            // MotorConfig() has wheelDiameterMm = 0 and leaves the eRPM->speed
+            // fallback permanently unavailable for it. See its doc for why the
+            // inheritance is a snapshot rather than a live link.
             mutateDraft(controllers = true) {
-                it.addController(ControllerType.VESC, target, label, canId = candidate.canId)
+                it.addCanController(ControllerType.VESC, target, label, canId = candidate.canId)
             }
         }
     }

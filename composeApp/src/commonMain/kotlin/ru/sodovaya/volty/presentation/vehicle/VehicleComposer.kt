@@ -467,22 +467,83 @@ fun VehicleDraft.addPack(
     nextKey = nextKey + 1
 )
 
-/** See [addPack] for what [canId] is for and why it defaults to null. */
+/**
+ * See [addPack] for what [canId] is for and why it defaults to null.
+ *
+ * [motor] defaults to [MotorDraft]'s own defaults — which is `MotorConfig()`'s,
+ * i.e. `wheelDiameterMm = 0` — because a controller a rider added by hand is one
+ * they are about to fill the geometry in for, on the card the add just opened.
+ * Only [addCanController] passes anything else; see its doc for why.
+ */
 fun VehicleDraft.addController(
     controllerType: ControllerType,
     address: String,
     label: String = "",
-    canId: Int? = null
+    canId: Int? = null,
+    motor: MotorDraft = MotorDraft()
 ): VehicleDraft = copy(
     controllers = controllers + ControllerDraft(
         key = "c-new-$nextKey",
         label = label.ifBlank { "Controller ${controllers.size + 1}" },
         controllerType = controllerType,
         address = address,
-        canId = canId
+        canId = canId,
+        motor = motor
     ),
     nextKey = nextKey + 1
 )
+
+/**
+ * **Which controller on [address] is the gateway** — the one a device discovered
+ * on that link's CAN bus should copy its wheel from.
+ *
+ * The gateway is the source whose requests `VescGatewayProtocol` sends
+ * UNWRAPPED, and on a composed link that is exactly the controller with a null
+ * [ControllerDraft.canId] (`C §6`; a second one is
+ * [ComposerIssue.AmbiguousGatewaySource]). A draft assembled entirely out of
+ * discovery may not have one yet — the rider can add slaves before the head unit
+ * itself — so the fallback is the lowest CAN id on the link, which is stable
+ * under add order and under a re-scan that returns the same bus in a different
+ * sequence.
+ *
+ * Returns `MotorDraft()` when the link carries no controller at all. **Inventing
+ * a wheel diameter would be worse than admitting there is not one**: a made-up
+ * diameter turns eRPM into a confident wrong speed, whereas the zero default
+ * leaves [ru.sodovaya.volty.data.bms.vesc.VescValues.derivedSpeedKmh] null and
+ * the gauges reading `—` (`G §9`).
+ */
+fun VehicleDraft.gatewayMotorAt(address: String): MotorDraft {
+    val onLink = controllers.filter { it.address == address }
+    val gateway = onLink.firstOrNull { it.canId == null }
+        ?: onLink.mapNotNull { c -> c.canId?.let { it to c } }.minByOrNull { it.first }?.second
+    return gateway?.motor ?: MotorDraft()
+}
+
+/**
+ * Add a controller **found by a CAN scan of [address]**, inheriting that link's
+ * gateway motor geometry ([gatewayMotorAt]).
+ *
+ * The defect this exists for: a CAN-discovered controller used to be created
+ * with a bare `MotorConfig()`, whose `wheelDiameterMm` is 0, so
+ * [ru.sodovaya.volty.data.bms.vesc.VescValues.derivedSpeedKmh] refused to derive
+ * a speed for it forever. After Task 4 that is no longer the only road — a
+ * controller answering `COMM_GET_VALUES_SETUP` reports ground speed directly —
+ * but it is still the only road for one that answers `GET_VALUES` and not SETUP,
+ * and a rider who has already measured the wheel once, on the gateway, has told
+ * us the number: slaves on one vehicle almost always turn the same size wheel.
+ *
+ * **A snapshot, never a link.** The geometry is copied at add time and is
+ * independently editable afterwards, so correcting the gateway's wheel later
+ * does not silently move a second controller under the rider — and a slave with
+ * a genuinely different wheel is one edit away rather than unrepresentable.
+ * Inheritance is a default, not a lock.
+ */
+fun VehicleDraft.addCanController(
+    controllerType: ControllerType,
+    address: String,
+    label: String = "",
+    canId: Int?
+): VehicleDraft = addController(controllerType, address, label, canId, gatewayMotorAt(address))
 
 /**
  * `G §3` flow 3: **one** add producing a controller and a battery on **one

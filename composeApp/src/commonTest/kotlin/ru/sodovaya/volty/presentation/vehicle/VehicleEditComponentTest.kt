@@ -26,6 +26,7 @@ import ru.sodovaya.volty.renderedFields
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
+import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
@@ -1829,13 +1830,19 @@ class VehicleEditComponentTest {
     // =====================================================================
 
     /** A head unit as the picker leaves it: one VESC controller, no CAN id. */
-    private fun headUnitVehicle() = Vehicle(
+    private fun headUnitVehicle(motor: MotorConfig = MotorConfig()) = Vehicle(
         id = "v1",
         name = "Scooter",
         iconKey = "scooter",
         packs = emptyList(),
         controllers = listOf(
-            Controller(index = 0, label = "Head unit", controllerType = ControllerType.VESC, address = "HU:01")
+            Controller(
+                index = 0,
+                label = "Head unit",
+                controllerType = ControllerType.VESC,
+                address = "HU:01",
+                motor = motor
+            )
         ),
         chemistry = Chemistry.LI_ION_NMC,
         createdAt = createdAtFixture
@@ -2216,6 +2223,85 @@ class VehicleEditComponentTest {
             "one head unit, two identified slaves and a hosted battery is a legal gateway"
         )
         assertEquals("HU:01", s.draft.linkAddresses.single(), "everything behind one link")
+    }
+
+    /**
+     * **Part I Task 6.** A controller found on the gateway's CAN bus arrives with
+     * the gateway's wheel geometry, not with a bare `MotorConfig()` — whose
+     * `wheelDiameterMm` is 0, which `VescValues.derivedSpeedKmh` refuses to
+     * derive a speed from, permanently, for any slave that answers `GET_VALUES`
+     * and not SETUP.
+     *
+     * The head unit here carries a geometry a rider actually measured, and every
+     * one of its three fields differs from `MotorConfig()`'s own: a fix that
+     * copied the diameter alone would leave the pole pairs at 15 and produce a
+     * speed off by a factor of 1.4, which reads as a measurement.
+     *
+     * Asserted through `onSave` as well as on the draft, because the draft is
+     * where the geometry is CARRIED and the stored [MotorConfig] is what the
+     * decoder will actually be handed.
+     */
+    @Test
+    fun `a CAN-discovered controller inherits the gateway's wheel`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val measured = MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f)
+        val v = headUnitVehicle(motor = measured)
+        val bms = FakeBmsRepo()
+        val repo = FakeVehicleRepo(listOf(v))
+        val c = component(repo, bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        c.state.value.canCandidates
+            .filter { it.kind == CanCandidateKind.NODE }
+            .forEach { c.onAddCanCandidate(it, asBattery = false) }
+
+        assertEquals(
+            listOf(MotorDraft.of(measured), MotorDraft.of(measured), MotorDraft.of(measured)),
+            c.state.value.draft.controllers.map { it.motor },
+            "both discovered slaves start from the wheel the rider already measured"
+        )
+
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals(
+            listOf(measured, measured, measured),
+            repo.upserts.single().controllers.map { it.motor }
+        )
+    }
+
+    /**
+     * The other half of the same rule: a gateway nobody has measured hands down
+     * nothing, and the slave says so rather than claiming a wheel. `0` is what
+     * makes `derivedSpeedKmh` return null, which is what makes the gauges read
+     * `—` instead of a confident `0 km/h` — see `UnknownMotionRenderingTest`.
+     *
+     * Inventing a plausible diameter here would be strictly worse: it would turn
+     * eRPM into a speed that is wrong and looks measured.
+     */
+    @Test
+    fun `an unmeasured gateway hands its slaves an unset wheel rather than a guess`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val v = headUnitVehicle()
+        val bms = FakeBmsRepo()
+        val repo = FakeVehicleRepo(listOf(v))
+        val c = component(repo, bmsRepo = bms, canDiscovery = FakeCanDiscovery())
+        advanceUntilIdle()
+        bms.goLive(v)
+        advanceUntilIdle()
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+
+        c.onAddCanCandidate(c.state.value.canCandidates.first { it.canId == 10 }, asBattery = false)
+        c.onSave()
+        advanceUntilIdle()
+
+        val slave = repo.upserts.single().controllers.single { it.canId == 10 }
+        assertEquals(0, slave.motor.wheelDiameterMm, "unset, so the speed reads as unknown")
+        assertNull(VescValues.derivedSpeedKmh(3000f, slave.motor), "which is what the decoder does with it")
     }
 
     /**

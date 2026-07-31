@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.presentation.ride
 
+import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.stats.DutyBands
@@ -11,6 +13,7 @@ import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -234,6 +237,64 @@ class UnknownMotionRenderingTest {
         assertEquals("100.0", secondary(vesc, SecondaryGauge.CONSUMPTION).value)
         assertEquals("100.0", CleanMetricMapper.instantConsumptionValue(vesc))
         assertEquals("20.0", CleanMetricMapper.sessionConsumptionValue(MotionReadings.sessionWhPerKm(vesc)))
+    }
+
+    // -----------------------------------------------------------------------------
+    // Speed — Part I Task 6's instance: the controller nobody measured a wheel for
+    // -----------------------------------------------------------------------------
+
+    /**
+     * **Deliberately incoherent**: 42 km/h in the field, [SpeedSource.NONE] beside
+     * it. No producer emits that pair — `VescValues.decodeValues` writes
+     * `speedKmh = derived ?: 0f`, so every real unknown-speed sample carries a
+     * `0f` — and that is precisely why the fixture has to. On a realistic sample
+     * `speed ?: 0f` and `motion.speedKmh` are the same number, so every assertion
+     * below would pass against the unguarded `motion.speedKmh / vehicleMaxSpeed`
+     * this task replaced. The contract is about the FLAG, not about a producer's
+     * habit of zeroing the field beside it.
+     */
+    private val unmeasuredWheel = wheel.copy(speedKmh = 42f, speedSource = SpeedSource.NONE)
+
+    @Test fun a_controller_with_no_wheel_diameter_reports_its_speed_as_unknown() {
+        assertFalse(unmeasuredWheel.speedKnown, "SpeedSource.NONE is the whole of `not observed`")
+        assertNull(MotionReadings.speedKmh(unmeasuredWheel))
+        // The producer's own path to that state, so the contract is anchored to a
+        // real decoder outcome and not only to a hand-built sample: an unconfigured
+        // wheel makes the eRPM fallback unavailable.
+        assertNull(VescValues.derivedSpeedKmh(3000f, MotorConfig(wheelDiameterMm = 0)))
+    }
+
+    @Test fun every_renderer_dashes_the_speed_of_a_controller_with_no_wheel_diameter() {
+        val dial = classic(unmeasuredWheel, VescClusterSlot.SPEED)
+        assertEquals(UNKNOWN_READOUT, dial.valueTextOverride, "Classic's speed dial")
+        assertEquals(0f, dial.value, "…with the needle parked rather than swung to 42")
+
+        assertEquals(
+            UNKNOWN_READOUT,
+            CleanMetricMapper.heroSpeedValue(unmeasuredWheel, UnitSystem.METRIC),
+            "the Clean hero's readout"
+        )
+        assertEquals(
+            0f,
+            CleanMetricMapper.heroSpeedFraction(unmeasuredWheel, 70f),
+            "…and its ring stays empty rather than 60 % full beside that dash"
+        )
+    }
+
+    @Test fun every_renderer_prints_a_speed_that_was_actually_reported_as_zero() {
+        // The standstill this contract must never hide: stopped at a light, and the
+        // firmware said so. A renderer that dashed every zero fails here.
+        val stopped = wheel.copy(speedKmh = 0f)
+        assertNull(classic(stopped, VescClusterSlot.SPEED).valueTextOverride, "Classic prints the number")
+        assertEquals("0", CleanMetricMapper.heroSpeedValue(stopped, UnitSystem.METRIC))
+        assertEquals(0f, CleanMetricMapper.heroSpeedFraction(stopped, 70f))
+    }
+
+    @Test fun a_real_speed_reaches_both_renderers_unchanged() {
+        assertEquals(34f, classic(wheel, VescClusterSlot.SPEED).value)
+        assertNull(classic(wheel, VescClusterSlot.SPEED).valueTextOverride)
+        assertEquals("34", CleanMetricMapper.heroSpeedValue(wheel, UnitSystem.METRIC))
+        assertEquals(34f / 70f, CleanMetricMapper.heroSpeedFraction(wheel, 70f))
     }
 
     // -----------------------------------------------------------------------------

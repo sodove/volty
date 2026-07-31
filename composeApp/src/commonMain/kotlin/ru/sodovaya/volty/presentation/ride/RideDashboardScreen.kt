@@ -254,7 +254,10 @@ private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float
         state.secondary, motion, state.battery, state.units, secondaryLabels,
         currentRangeA = state.currentRangeA, powerRangeW = state.powerRangeW
     )
-    val speedFraction = motion.speedKmh / vehicleMaxSpeed
+    // Through the mapper, not `motion.speedKmh / vehicleMaxSpeed`: an unobserved
+    // speed is 0f in the field, so the raw division drew a confident empty ring
+    // beside the `—` the readout below already showed (`G §9`, Part I Task 6).
+    val speedFraction = CleanMetricMapper.heroSpeedFraction(motion, vehicleMaxSpeed)
     val secondaryColor = severityColor(secondary.severity)
 
     Box(
@@ -279,7 +282,7 @@ private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float
                     color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                 )
                 Text(
-                    text = if (motion.speedKnown) UnitFormatter.speed(motion.speedKmh, state.units) else "—",
+                    text = CleanMetricMapper.heroSpeedValue(motion, state.units),
                     style = MaterialTheme.typography.displayLarge.copy(
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold

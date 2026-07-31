@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.vehicle
 import ru.sodovaya.volty.data.ble.ProtocolKind
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planLinks
+import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
@@ -14,6 +15,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -1033,6 +1035,121 @@ class VehicleComposerTest {
         // shows the geometry it will be saved with rather than three empty
         // boxes.
         assertEquals(MotorDraft.of(MotorConfig()), MotorDraft())
+    }
+
+    // -----------------------------------------------------------------------
+    // A CAN-discovered controller inherits the gateway's wheel (Part I Task 6)
+    // -----------------------------------------------------------------------
+
+    /** A gateway whose wheel a rider has already measured, plus one slave on its bus. */
+    private val measuredWheel = MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f)
+
+    /**
+     * **The defect, in one assertion.** A CAN-discovered controller used to be
+     * created with a bare `MotorConfig()` — `wheelDiameterMm = 0`, which
+     * `VescValues.derivedSpeedKmh` refuses to derive a speed from — even though
+     * the rider had already told us the wheel on the gateway sitting on the same
+     * link.
+     *
+     * The value asserted is [measuredWheel], not merely "not the default": a
+     * diameter is the field that matters, but a fix that copied only the
+     * diameter and left the pole pairs at 15 would produce a speed off by a
+     * factor of 1.4 and pass a `wheelDiameterMm != 0` assertion. All three
+     * fields, and all three differ from `MotorConfig()`'s own.
+     */
+    @Test
+    fun `a CAN-discovered controller inherits the gateway's motor config`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head unit", motor = MotorDraft.of(measuredWheel))
+            .addCanController(ControllerType.VESC, "HU:01", "CAN 10", canId = 10)
+
+        assertEquals(MotorDraft.of(measuredWheel), d.controllers[1].motor)
+        assertEquals(measuredWheel, d.toControllers()[1].motor, "…and it survives the save")
+        assertEquals(10, d.controllers[1].canId, "the id the add already carried is untouched")
+        // The point of all of it, asserted through the decoder that consumes it:
+        // the eRPM fallback is now OPEN for this slave. Stated on the saved
+        // MotorConfig, because that is the object VescValues is actually handed.
+        assertNotNull(
+            VescValues.derivedSpeedKmh(3000f, d.toControllers()[1].motor),
+            "the eRPM->speed fallback is available to the slave now"
+        )
+    }
+
+    /**
+     * The negative half, and the reason this is not "copy anything you find":
+     * an add by hand must NOT inherit. A rider adding a controller by typing an
+     * address has not said it shares a wheel with anything — only a CAN scan of
+     * a specific gateway says that — and silently prefilling a diameter they
+     * never measured is the confident-wrong-speed failure this task's other half
+     * exists to prevent.
+     */
+    @Test
+    fun `a hand-added controller on the same address inherits nothing`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head unit", motor = MotorDraft.of(measuredWheel))
+            .addController(ControllerType.VESC, "HU:01", "Typed by hand")
+
+        assertEquals(MotorDraft(), d.controllers[1].motor)
+        assertEquals(0, d.toControllers()[1].motor.wheelDiameterMm, "unset, so the speed reads as unknown")
+    }
+
+    /**
+     * Which controller on the link IS the gateway. The null [ControllerDraft.canId]
+     * is the definition (`C §6`: its requests go out unwrapped); the lowest id is
+     * the fallback for a draft assembled out of discovery before the head unit
+     * itself was added, and it is order-independent so a re-scan cannot change
+     * the answer.
+     */
+    @Test
+    fun `the gateway is the null-id controller on that link, else the lowest id`() {
+        val other = MotorConfig(polePairs = 7, wheelDiameterMm = 200, gearRatio = 2f)
+
+        // The null id wins even when it was added last and carries the higher id's
+        // neighbours on either side — position must not be what decides.
+        val withHeadUnit = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Slave", canId = 10, motor = MotorDraft.of(other))
+            .addController(ControllerType.VESC, "HU:01", "Head unit", motor = MotorDraft.of(measuredWheel))
+        assertEquals(MotorDraft.of(measuredWheel), withHeadUnit.gatewayMotorAt("HU:01"))
+
+        // No null id anywhere: the lowest CAN id, regardless of add order.
+        val slavesOnly = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Slave 11", canId = 11, motor = MotorDraft.of(other))
+            .addController(ControllerType.VESC, "HU:01", "Slave 3", canId = 3, motor = MotorDraft.of(measuredWheel))
+        assertEquals(MotorDraft.of(measuredWheel), slavesOnly.gatewayMotorAt("HU:01"))
+
+        // A controller on a DIFFERENT link is not this link's gateway, however
+        // null its id: a vehicle with two BLE links has two gateways.
+        val twoLinks = VehicleDraft()
+            .addController(ControllerType.VESC, "AN:01", "Other link", motor = MotorDraft.of(measuredWheel))
+            .addController(ControllerType.VESC, "HU:01", "This link", motor = MotorDraft.of(other))
+        assertEquals(MotorDraft.of(other), twoLinks.gatewayMotorAt("HU:01"))
+
+        // Nothing on the link at all: the bare default. Inventing a diameter is
+        // worse than admitting there is not one.
+        assertEquals(MotorDraft(), VehicleDraft().gatewayMotorAt("HU:01"))
+    }
+
+    /**
+     * Inheritance is a **snapshot**, not a live link. A rider who later corrects
+     * the gateway's wheel must not have a second controller silently change
+     * under them, and a slave with a genuinely different wheel must stay one
+     * edit away rather than being unrepresentable.
+     */
+    @Test
+    fun `the inherited motor config is a snapshot and stays independently editable`() {
+        val d = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head unit", motor = MotorDraft.of(measuredWheel))
+            .addCanController(ControllerType.VESC, "HU:01", "CAN 10", canId = 10)
+
+        val gatewayKey = d.controllers[0].key
+        val corrected = d.updateController(gatewayKey) { it.copy(motor = it.motor.copy(wheelDiameterMm = 660)) }
+        assertEquals(660, corrected.controllers[0].motor.wheelDiameterMm, "precondition: the gateway moved")
+        assertEquals(500, corrected.controllers[1].motor.wheelDiameterMm, "the slave did not follow it")
+
+        val slaveKey = d.controllers[1].key
+        val rewheeled = d.updateController(slaveKey) { it.copy(motor = it.motor.copy(wheelDiameterMm = 300)) }
+        assertEquals(300, rewheeled.controllers[1].motor.wheelDiameterMm, "the slave is editable on its own")
+        assertEquals(500, rewheeled.controllers[0].motor.wheelDiameterMm, "and the gateway did not follow it")
     }
 
     // -----------------------------------------------------------------------

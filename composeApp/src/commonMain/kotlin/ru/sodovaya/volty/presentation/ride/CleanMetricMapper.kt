@@ -2,6 +2,8 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.util.UnitFormatter
+import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
 
@@ -23,6 +25,51 @@ import ru.sodovaya.volty.util.formatSigned
  * see `UnknownMotionRenderingTest`, which spans them.
  */
 object CleanMetricMapper {
+
+    /**
+     * **How full the hero's outer speed ring is drawn** — 0..1, and **0 for a
+     * speed nobody has observed**.
+     *
+     * The one place `G §9`'s contract leaked past the three mappers. The hero's
+     * readout has always dashed an unknown speed ([heroSpeedValue]), but the
+     * needle beside it was computed as a bare `motion.speedKmh / vehicleMaxSpeed`
+     * inside `RideHero`, and `speedKmh` is `0f` on exactly the samples
+     * [ru.sodovaya.volty.domain.model.SpeedSource.NONE] marks — a VESC slave
+     * whose wheel diameter nobody measured. So the arc drew a confident empty
+     * ring, i.e. a claim of "standing still", right next to the `—` that says we
+     * do not know. Both halves must say the same thing; the arc parks, exactly
+     * as [ClassicDialSpecs]' SPEED dial already parks its needle.
+     *
+     * A parked ring and a genuine 0 km/h look alike, and that is fine: an empty
+     * arc is not a *reading*, it is the absence of one, and the readout in the
+     * middle of it is what distinguishes the two cases. What was wrong was
+     * letting a placeholder DRIVE the arc — with a reported speed above the
+     * scale, or a decoder writing into `speedKmh` without setting a source, the
+     * two spellings differ.
+     *
+     * Guarded against a non-positive [maxSpeedKmh] the same way
+     * [SecondaryGaugeMapper]'s own `frac` is: a fraction of `x / 0` is a NaN, and
+     * a NaN sweep angle draws nothing while quietly poisoning the animation.
+     */
+    fun heroSpeedFraction(motion: ControllerData, maxSpeedKmh: Float): Float {
+        val speed = MotionReadings.speedKmh(motion) ?: return 0f
+        if (maxSpeedKmh <= 0f) return 0f
+        return (speed / maxSpeedKmh).coerceIn(0f, 1f)
+    }
+
+    /**
+     * The hero's big number: the speed in the rider's units, or
+     * [UNKNOWN_READOUT] when [ru.sodovaya.volty.domain.model.ControllerData.speedKnown]
+     * is false.
+     *
+     * The behaviour is what `RideHero` already did; what moves here is the
+     * *decision*, out of the `@Composable` a test cannot reach and off a local
+     * `"—"` literal that was a second spelling of [UNKNOWN_READOUT]. The unit
+     * caption above it stays in the composable — it swaps for a localized
+     * `ride_speed_unknown` string, which needs a resource resolver.
+     */
+    fun heroSpeedValue(motion: ControllerData, units: UnitSystem): String =
+        MotionReadings.speedKmh(motion).readoutOr { UnitFormatter.speed(it, units) }
 
     /**
      * The POWER card's headline: kilowatts to one decimal, or [UNKNOWN_READOUT]

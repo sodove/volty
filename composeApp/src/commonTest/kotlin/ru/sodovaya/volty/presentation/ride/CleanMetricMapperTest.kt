@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
@@ -63,6 +64,43 @@ class CleanMetricMapperTest {
             "0.0",
             CleanMetricMapper.instantConsumptionValue(vesc.copy(powerW = 0f)),
             "coasting with regen balancing the draw is a real 0.0"
+        )
+    }
+
+    // ---------------------------------------------------------------------------
+    // The hero — Part I Task 6. Its ARC was the last §9 leak: the readout dashed,
+    // the ring beside it drew a confident zero.
+    // ---------------------------------------------------------------------------
+
+    @Test fun the_hero_readout_is_the_speed_in_the_riders_own_units() {
+        assertEquals("42", CleanMetricMapper.heroSpeedValue(vesc, UnitSystem.METRIC))
+        assertEquals("26", CleanMetricMapper.heroSpeedValue(vesc, UnitSystem.IMPERIAL))
+    }
+
+    @Test fun the_hero_ring_fills_with_the_speed_and_stops_at_the_scale() {
+        assertEquals(0.6f, CleanMetricMapper.heroSpeedFraction(vesc, 70f))
+        assertEquals(
+            1f,
+            CleanMetricMapper.heroSpeedFraction(vesc.copy(speedKmh = 120f), 70f),
+            "a scale the rider has outrun draws a full ring, not an arc past its own end"
+        )
+        assertEquals(
+            0f,
+            CleanMetricMapper.heroSpeedFraction(vesc, 0f),
+            "a collapsed scale is a zero ring, not a NaN sweep angle"
+        )
+    }
+
+    @Test fun the_hero_dashes_and_parks_a_speed_nobody_measured() {
+        // speedKmh is 42 AND the source is NONE — a pair no decoder emits, which is
+        // why it separates the flag from the field. See UnknownMotionRenderingTest.
+        val noWheel = vesc.copy(speedSource = SpeedSource.NONE)
+        assertEquals(UNKNOWN_READOUT, CleanMetricMapper.heroSpeedValue(noWheel, UnitSystem.METRIC))
+        assertEquals(0f, CleanMetricMapper.heroSpeedFraction(noWheel, 70f))
+        assertEquals(
+            "0",
+            CleanMetricMapper.heroSpeedValue(vesc.copy(speedKmh = 0f), UnitSystem.METRIC),
+            "a reported standstill still prints a number"
         )
     }
 
