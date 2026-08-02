@@ -1508,6 +1508,9 @@ class BegodeProtocol(
             voltage = voltage,
             current = current,
             power = voltage * current,
+            // The 0x01 frame has voltage but no fuel gauge. Cells are the
+            // first evidence from which a branch's charge can be estimated.
+            socKnown = cells.isNotEmpty(),
             cellVoltages = cells,
             temperatures = branch.sectionTemps.filterNotNull(),
             // A Begode reports no charge/discharge MOSFET state at all, and a

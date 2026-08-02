@@ -127,6 +127,46 @@ class BegodeProtocolTest {
     }
 
     @Test
+    fun branchWithTelemetryButNoCellsDoesNotKnowItsCharge() {
+        // The pack-voltage field is enough to render voltage, but it is not a
+        // fuel gauge. Until a branch supplies cells, a downstream estimator
+        // has no evidence from which to earn a charge percentage.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+
+        val data = assertNotNull(protocol.latestData(0))
+        assertTrue(data.cellVoltages.isEmpty(), "precondition: no cells arrived")
+        assertFalse(data.socKnown, "telemetry without cells must not claim a known charge")
+    }
+
+    @Test
+    fun branchKnowsItsChargeOnceItsCellsComplete() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+        for (packet in 0 until 5) {
+            protocol.onNotification(cellFrame(type = 0x02, packetIndex = packet, baseMv = 3710))
+        }
+
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(40, data.cellVoltages.size, "precondition: cells complete")
+        assertTrue(data.socKnown, "cells make the branch charge estimate knowable")
+    }
+
+    @Test
+    fun nonZeroChargeOnABranchWithoutCellsRemainsUnknown() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
+
+        val data = assertNotNull(protocol.latestData(0))
+        val estimatorFilledSoc = data.copy(soc = 80.6f)
+        assertTrue(estimatorFilledSoc.cellVoltages.isEmpty(), "precondition: no cells arrived")
+        assertFalse(
+            estimatorFilledSoc.socKnown,
+            "a non-zero estimate cannot turn absent cells into evidence"
+        )
+    }
+
+    @Test
     fun aPartialCellSetNeverBecomesTheBranchVoltage() {
         val protocol = BegodeProtocol()
         protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))

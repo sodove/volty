@@ -117,15 +117,16 @@ class BegodeNoBmsProtocolTest {
     }
 
     @Test
-    fun aRealBranchSampleKeepsSocKnownTrue() {
-        // A smart-BMS branch streams cells; its SoC is estimated from them
-        // downstream, so the sample itself stays on the known-SoC default.
+    fun aRealBranchSampleWithoutCellsKeepsSocUnknown() {
+        // This is smart-BMS telemetry, but the first 0x01 frame carries only
+        // voltage — no fuel gauge and no cells from which an estimate can be
+        // earned. It remains unknown until cell evidence arrives.
         val protocol = BegodeProtocol()
         protocol.onNotification(
             telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
         )
         val data = assertNotNull(protocol.latestData(0))
-        assertTrue(data.socKnown, "only the synthetic no-BMS pack may claim an unknown SoC")
+        assertFalse(data.socKnown, "a smart-BMS branch without cells cannot know its SoC")
     }
 
     // --- The synthetic pack yields to a smart BMS and never returns ---
