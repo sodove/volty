@@ -725,7 +725,11 @@ class KableBmsRepository private constructor(
         // VESC pack carries no cells, so a non-Begode candidate of 0 already
         // short-circuits in [confirmedCellCount]) — exactly the kind of
         // accident a later protocol change would undo.
-        if (vehicle.packs.firstOrNull()?.cellCount == n) return
+        val primaryPack = vehicle.packs.firstOrNull()
+        if (primaryPack != null && vehicle.packs.all { pack ->
+                pack.bmsAddress != primaryPack.bmsAddress || pack.cellCount == n
+            }
+        ) return
         if (lastPersistedCellCount == vehicle.id to n) return
         lastPersistedCellCount = vehicle.id to n
         println("[VOLTY-BLE] cell count auto-fill: ${vehicle.name} -> ${n}s")

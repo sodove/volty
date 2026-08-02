@@ -333,6 +333,58 @@ class KableBmsRepositoryCellCountTest {
         )
     }
 
+    @Test
+    fun `a confirmed wheel count repairs a legacy second branch without touching another address`() = repoTest { repo ->
+        val firstBranch = wheel("v8").packs.single().copy(cellCount = 40)
+        val stale = wheel("v8").copy(
+            packs = listOf(
+                firstBranch,
+                firstBranch.copy(index = 1, label = "Pack 2", cellCount = null),
+                firstBranch.copy(index = 2, label = "Independent", bmsAddress = "AA:BB:CC:DD:EE:01", cellCount = 24)
+            )
+        )
+        repo.primeConnectedForTest(
+            stale, stale.primaryAddress, stale.packs.first().bmsType, Clock.System.now().toEpochMilliseconds()
+        )
+        runCurrent()
+        val wire = Wire(repo, stale)
+
+        BegodeDumpFixture.chunks().forEach { wire.notify(it) }
+        assertEquals(40, wire.protocol.derivedCellCount(), "precondition: the real capture confirms 40S")
+        evaluateCellCountAutoFill(repo)
+
+        assertEquals(1, vehicleRepo.upserts.size, "the legacy missing branch must issue its repair upsert")
+        assertEquals(
+            listOf(40, 40, 24),
+            vehicleRepo.upserts.single().packs.map { it.cellCount },
+            "only the wheel's two branches receive its count"
+        )
+    }
+
+    @Test
+    fun `an unrelated address with no count does not force an otherwise complete wheel rewrite`() = repoTest { repo ->
+        val firstBranch = wheel("v9").packs.single().copy(cellCount = 40)
+        val completeWheel = wheel("v9").copy(
+            packs = listOf(
+                firstBranch,
+                firstBranch.copy(index = 1, label = "Pack 2"),
+                firstBranch.copy(index = 2, label = "Independent", bmsAddress = "AA:BB:CC:DD:EE:01", cellCount = null)
+            )
+        )
+        repo.primeConnectedForTest(
+            completeWheel, completeWheel.primaryAddress, completeWheel.packs.first().bmsType,
+            Clock.System.now().toEpochMilliseconds()
+        )
+        runCurrent()
+        val wire = Wire(repo, completeWheel)
+
+        BegodeDumpFixture.chunks().forEach { wire.notify(it) }
+        assertEquals(40, wire.protocol.derivedCellCount(), "precondition: the real capture confirms 40S")
+        evaluateCellCountAutoFill(repo)
+
+        assertTrue(vehicleRepo.upserts.isEmpty(), "another BLE address has no claim on this wheel's repair")
+    }
+
     /**
      * The seam above ([Wire], via [installProtocolPipelineForTest]'s
      * single-arg [createProtocol]) is not the one PRODUCTION uses to build a

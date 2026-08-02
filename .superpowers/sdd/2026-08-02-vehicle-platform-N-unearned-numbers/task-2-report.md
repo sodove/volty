@@ -106,3 +106,91 @@ BASELINE  SURVIVED exit=0 tests=1644 failed=0
 
 None.  The test/build output continues to include unrelated existing Kotlin
 expect/actual and redundant-conversion warnings; no new warning was added.
+
+## Fix round 1/5 — persisted legacy branch repair
+
+### Finding and implementation
+
+The original Task 2 `withCellCount` propagation was unreachable for a profile
+already stored as `{ branch 0 = 40, branch 1 = null }`: the repository's
+auto-fill gate returned as soon as branch 0 matched 40.  `expandedTo()` also
+leaves that already-two-branch profile unchanged, so reconnecting could never
+repair branch 1.
+
+`KableBmsRepository.maybePersistCellCount` now returns only when every pack at
+the primary pack's BLE address already holds the confirmed count.  A pack at a
+different address neither receives the repair nor makes an otherwise complete
+wheel write again.
+
+Additional changed files in this fix-round commit:
+
+- `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/data/ble/KableBmsRepository.kt`
+- `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/data/ble/KableBmsRepositoryCellCountTest.kt`
+
+No BLE write path changed; Begode FFE1 remains untouched.
+
+### TDD evidence
+
+Before writing the tests, the named breaks were:
+
+1. restoring the primary-only guard suppresses the upsert before branch 1 can
+   be repaired;
+2. requiring all packs, including another address, to match makes an unrelated
+   pack force a needless rewrite.
+
+RED command:
+
+```powershell
+.\gradlew.bat :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.data.ble.KableBmsRepositoryCellCountTest"
+```
+
+RED result: the 11-test focused class had exactly one failure:
+`a confirmed wheel count repairs a legacy second branch without touching
+another address` expected one real persistence upsert and observed zero.  Its
+driver feeds `BegodeDumpFixture` through the real `BegodeProtocol`, asserts
+the decoder confirmed 40S, and only then evaluates the repository collector;
+the failure is therefore the real persistence gate, not a direct
+`withCellCount` call.
+
+GREEN command: same focused command.
+
+GREEN result: `BUILD SUCCESSFUL`; all 11 focused tests passed.
+
+### Audited mutation / full-suite evidence
+
+The audited harness command was rerun with the new exact count:
+
+```powershell
+& 'C:\Users\sodovaya\Desktop\volty\.superpowers\sdd\2026-07-30-vehicle-platform-I-field-fixes\t11sweep.ps1' -Only 'BASELINE,CONTROL' -Expected 1646
+```
+
+Result: `BASELINE SURVIVED exit=0 tests=1646 failed=0`; its independent
+bytecode-changing control was `KILLED(18) exit=1 tests=1646`.  The harness
+wipes results and appends/restores a fresh GUID nonce for every invocation.
+
+For each temporary guard mutation below, the same audited harness was run as
+`-Only 'BASELINE' -Expected 1646` while that mutation was active:
+
+| Behavior | Temporary mutation | Result / killing assertion |
+| --- | --- | --- |
+| A stale same-address branch is repaired | address-scoped all-branches predicate → old `packs.firstOrNull()?.cellCount == n` guard | `KILLED(1) exit=1 tests=1646`: legacy-branch repair upsert assertion |
+| An unrelated address does not force a rewrite | address-scoped predicate → `vehicle.packs.all { it.cellCount == n }` | `KILLED(1) exit=1 tests=1646`: unrelated-address no-upsert assertion |
+
+Final restored baseline, run through the audited harness at `-Expected 1646`:
+
+```text
+BASELINE  SURVIVED exit=0 tests=1646 failed=0
+```
+
+### Fix-round self-review and concerns
+
+- The gate is scoped by the same BLE-address identity used by `withCellCount`.
+- The regression starts from the exact pre-patch persisted shape and asserts
+  the issued repository upsert, so it cannot pass merely because a direct
+  domain helper works.
+- The independent-address fixture checks both directions: it remains 24 while
+  a legacy wheel branch is repaired, and its own missing count cannot trigger
+  a wheel rewrite.
+- Reviewer Minor stale-comment item was intentionally not changed in this
+  round, as directed.
+- `git diff --check` passed. No new concerns.
