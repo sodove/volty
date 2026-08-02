@@ -39,6 +39,11 @@ object PackAggregator {
         if (online.isEmpty()) return BmsData(isConnected = false)
 
         val data = online.map { it.data }
+        // SoC is an evidence-bearing measurement: a value with socKnown =
+        // false must not participate in an average or become a series
+        // string's weakest link. Charge and capacity have no corresponding
+        // knownness flag, so their physical folds still use every online pack.
+        val knownSoc = data.filter { it.socKnown }
         val labelled = online.size > 1
 
         val voltage = when (topology) {
@@ -61,22 +66,29 @@ object PackAggregator {
             PackTopology.PARALLEL -> {
                 charge = data.sumOf { it.charge.toDouble() }.toFloat()
                 capacity = data.sumOf { it.capacity.toDouble() }.toFloat()
-                // Capacity-weighted average of the packs' reported SoC —
-                // reduces to the identity for a single pack. Falls back to
-                // the plain mean when no pack reports capacity.
+                // Parallel branches contribute energy together, so their
+                // known SoC values are capacity-weighted. Falls back to a
+                // plain mean when none of the measured branches reports
+                // capacity.
                 // Widen BEFORE multiplying: a Float x Float product rounds to
                 // Float precision first, breaking the single-pack identity
                 // (e.g. 19f x 13.6f aggregates to 18.999998f, truncating to
                 // 18% and tripping the low-SoC alert a point early).
-                soc = if (capacity > 0f)
-                    (data.sumOf { it.soc.toDouble() * it.capacity.toDouble() } / capacity).toFloat()
-                else data.map { it.soc }.average().toFloat()
+                val knownCapacity = knownSoc.sumOf { it.capacity.toDouble() }
+                soc = when {
+                    knownSoc.isEmpty() -> 0f
+                    knownCapacity > 0.0 ->
+                        (knownSoc.sumOf { it.soc.toDouble() * it.capacity.toDouble() } / knownCapacity).toFloat()
+                    else -> knownSoc.map { it.soc }.average().toFloat()
+                }
             }
             PackTopology.SERIES -> {
-                // A series string can only deliver as much as its weakest link.
+                // A series string can only deliver as much as its weakest
+                // measured link. An unknown SoC is not evidence of an empty
+                // pack, so it cannot become the minimum.
                 charge = data.minOf { it.charge }
                 capacity = data.minOf { it.capacity }
-                soc = data.minOf { it.soc }
+                soc = knownSoc.minOfOrNull { it.soc } ?: 0f
             }
         }
 
@@ -90,14 +102,9 @@ object PackAggregator {
             current = current,
             power = power,
             soc = soc,
-            // The aggregate SoC is only meaningful if every ONLINE pack's SoC
-            // was: an unknown pack contributes its placeholder 0 to the
-            // parallel weighted average and always wins the series minOf, so
-            // a single unknown pack pollutes the number under both
-            // topologies. In practice this is all-or-nothing — every
-            // existing setup is all-known, a dumb Begode is its lone
-            // unknown pack.
-            socKnown = data.all { it.socKnown },
+            // One measured branch is enough to report SoC; unknown branches
+            // were excluded above. All-unknown remains explicitly unknown.
+            socKnown = knownSoc.isNotEmpty(),
             charge = charge,
             capacity = capacity,
             numCycles = data.maxOf { it.numCycles },

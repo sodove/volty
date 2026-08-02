@@ -158,9 +158,13 @@ class PackAggregatorTest {
         assertEquals(20f, agg.capacity, absoluteTolerance = 0.001f)
     }
 
-    // --- socKnown: the aggregate SoC is only meaningful if every pack's was ---
+    // --- socKnown: only measured SoC values participate in the fold ---
 
-    private fun PackState.withUnknownSoc() = copy(data = data.copy(soc = 0f, socKnown = false))
+    private fun PackState.withUnknownSoc(soc: Float = 37f) = copy(
+        // Deliberately incoherent: no producer emits a non-zero unknown SoC,
+        // but this proves the fold trusts socKnown instead of filtering zeroes.
+        data = data.copy(soc = soc, socKnown = false)
+    )
 
     @Test
     fun allKnownPacksYieldAKnownAggregateSoc() {
@@ -171,24 +175,40 @@ class PackAggregatorTest {
 
     @Test
     fun allUnknownPacksYieldAnUnknownAggregateSoc() {
-        // The dumb-Begode case: the single synthetic pack has no SoC, so
-        // neither does the vehicle.
-        val only = state(0, 50f, 1f).withUnknownSoc()
-        assertFalse(PackAggregator.aggregate(listOf(only), PackTopology.PARALLEL).socKnown)
-        assertFalse(PackAggregator.aggregate(listOf(only), PackTopology.SERIES).socKnown)
+        // The values are deliberately non-zero: unknown is an evidence state,
+        // not the numeric placeholder a producer happened to choose.
+        val packs = listOf(
+            state(0, 50f, 1f).withUnknownSoc(soc = 31f),
+            state(1, 50f, 1f).withUnknownSoc(soc = 67f)
+        )
+        assertFalse(PackAggregator.aggregate(packs, PackTopology.PARALLEL).socKnown)
+        assertFalse(PackAggregator.aggregate(packs, PackTopology.SERIES).socKnown)
     }
 
     @Test
-    fun aSingleUnknownPackMakesTheAggregateSocUnknown() {
-        // Parallel weights the unknown pack's placeholder 0 into the average;
-        // series takes minOf, which the fabricated 0 always wins. Either way
-        // the aggregate number is polluted, so it must not drive SoC alerts.
+    fun parallelFoldsOnlyKnownSocContributors() {
+        // The unknown branch's non-zero value and capacity must not pollute
+        // the reported 80% from the branch that has earned its measurement.
+        val packs = listOf(
+            state(0, 50f, 1f, soc = 80f, charge = 16f, capacity = 20f),
+            state(1, 50f, 1f, charge = 7.4f, capacity = 20f).withUnknownSoc()
+        )
+        val agg = PackAggregator.aggregate(packs, PackTopology.PARALLEL)
+        assertEquals(80f, agg.soc, absoluteTolerance = 0.001f)
+        assertTrue(agg.socKnown)
+    }
+
+    @Test
+    fun seriesFoldsOnlyKnownSocContributors() {
+        // Series takes the weakest measured pack, but an unmeasured branch
+        // cannot masquerade as that weakest link.
         val packs = listOf(
             state(0, 50f, 1f, soc = 80f),
             state(1, 50f, 1f).withUnknownSoc()
         )
-        assertFalse(PackAggregator.aggregate(packs, PackTopology.PARALLEL).socKnown)
-        assertFalse(PackAggregator.aggregate(packs, PackTopology.SERIES).socKnown)
+        val agg = PackAggregator.aggregate(packs, PackTopology.SERIES)
+        assertEquals(80f, agg.soc, absoluteTolerance = 0.001f)
+        assertTrue(agg.socKnown)
     }
 
     @Test

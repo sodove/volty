@@ -12,6 +12,9 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
@@ -19,6 +22,7 @@ import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.stats.MovingAvg
+import ru.sodovaya.volty.domain.stats.PackAggregator
 import ru.sodovaya.volty.notification.LiveSummary
 import ru.sodovaya.volty.notification.Notifier
 import kotlinx.coroutines.flow.Flow
@@ -29,6 +33,7 @@ import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
@@ -96,6 +101,23 @@ class AlertEngineTest {
         isConnected = true,
         timestamp = ts
     )
+
+    private fun aggregateSoc(topology: PackTopology, vararg samples: BmsData): BmsData =
+        PackAggregator.aggregate(
+            samples.mapIndexed { index, sample ->
+                PackState(
+                    pack = Pack(
+                        index = index,
+                        label = "P$index",
+                        bmsType = BmsType.JK_BMS,
+                        bmsAddress = "AA:0$index"
+                    ),
+                    data = sample,
+                    isOnline = true
+                )
+            },
+            topology
+        )
 
     private fun fakeClockProgressing(): () -> Instant {
         var nowEpoch = 1_000_000L
@@ -228,6 +250,41 @@ class AlertEngineTest {
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
         val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
         engine.evaluateForTest(bmsData(soc = 0f).copy(socKnown = false), v)
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `an all-unknown aggregate raises no low-charge alarm`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socCutoffPercent = 5))
+        val aggregate = aggregateSoc(
+            PackTopology.PARALLEL,
+            bmsData(soc = 31f).copy(socKnown = false),
+            bmsData(soc = 67f).copy(socKnown = false)
+        )
+        assertFalse(aggregate.socKnown)
+
+        engine.evaluateForTest(aggregate, v)
+
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `an eighty-percent known aggregate raises no low-charge alarm`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(socLowPercent = 15, socCutoffPercent = 5))
+        val aggregate = aggregateSoc(
+            PackTopology.PARALLEL,
+            bmsData(soc = 80f).copy(charge = 16f, capacity = 20f),
+            bmsData(soc = 37f).copy(charge = 7.4f, capacity = 20f, socKnown = false)
+        )
+        assertEquals(80f, aggregate.soc, absoluteTolerance = 0.001f)
+        assertTrue(aggregate.socKnown)
+
+        engine.evaluateForTest(aggregate, v)
+
         assertEquals(0, notifier.alerts.size)
     }
 
