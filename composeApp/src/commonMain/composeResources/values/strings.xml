@@ -409,6 +409,9 @@
     <string name="wizard_controller_title">Controller</string>
     <string name="wizard_scanning">looking nearby · %1$d</string>
     <string name="wizard_scan_hint">The address is always shown. The type is a guess you can change later.</string>
+    <string name="wizard_add_controller">Controller</string>
+    <string name="wizard_add_battery">Battery</string>
+    <string name="wizard_add_wheel">Wheel</string>
     <string name="wizard_no_controller">No controller</string>
     <string name="wizard_vehicle_name">Name</string>
     <string name="wizard_battery_title">Battery</string>

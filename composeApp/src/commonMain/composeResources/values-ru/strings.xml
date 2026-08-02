@@ -407,6 +407,9 @@
     <string name="wizard_controller_title">Контроллер</string>
     <string name="wizard_scanning">ищу рядом · %1$d</string>
     <string name="wizard_scan_hint">Адрес показан всегда. Тип — догадка, её можно сменить позже.</string>
+    <string name="wizard_add_controller">Контроллер</string>
+    <string name="wizard_add_battery">Батарея</string>
+    <string name="wizard_add_wheel">Колесо</string>
     <string name="wizard_no_controller">Нет контроллера</string>
     <string name="wizard_vehicle_name">Имя</string>
     <string name="wizard_battery_title">Батарея</string>

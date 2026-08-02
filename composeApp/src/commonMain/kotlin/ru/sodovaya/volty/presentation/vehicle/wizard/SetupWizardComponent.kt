@@ -68,6 +68,12 @@ interface SetupWizardComponent : DraftExitComponent {
         val draft: PersistableVehicleDraft
     )
 
+    /** One physical scan card and every draft addition the rider can choose on it. */
+    data class ScanRow(
+        val device: DiscoveredDevice,
+        val additions: List<ScannedAdd>
+    )
+
     data class State(
         val archetype: VehicleArchetype,
         val name: String,
@@ -91,6 +97,9 @@ interface SetupWizardComponent : DraftExitComponent {
 
         val isDirty: Boolean get() = editableValues != savedValues
 
+        /** Save owns its snapshot until persistence returns. */
+        val navigationEnabled: Boolean get() = !saving
+
         val canSave: Boolean
             get() = name.isNotBlank() &&
                 draft.sourceCount > 0 &&
@@ -109,7 +118,7 @@ interface SetupWizardComponent : DraftExitComponent {
     }
 
     interface ControllerStage : Stage {
-        val availableAdds: List<ScannedAdd>
+        val scanRows: List<ScanRow>
         fun onNameChanged(name: String)
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
         fun onNoController()
@@ -119,7 +128,7 @@ interface SetupWizardComponent : DraftExitComponent {
     }
 
     interface BatteryStage : Stage {
-        val availableAdds: List<ScannedAdd>
+        val scanRows: List<ScanRow>
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
         fun onNoBattery()
         fun onNext()
@@ -240,11 +249,15 @@ class DefaultSetupWizardComponent(
     }
 
     override fun onCancel() = requestExit(onCancelled)
-    override fun requestExit(onDiscarded: () -> Unit) = exitCoordinator.requestExit(onDiscarded)
+    override fun requestExit(onDiscarded: () -> Unit) {
+        if (!_state.value.navigationEnabled) return
+        exitCoordinator.requestExit(onDiscarded)
+    }
     override fun onDiscardConfirmed() = exitCoordinator.confirm()
     override fun onDiscardDismissed() = exitCoordinator.dismiss()
 
     private fun selectArchetype(archetype: VehicleArchetype) {
+        if (!_state.value.navigationEnabled) return
         val defaults = defaultsFor(archetype)
         _state.update {
             it.copy(
@@ -257,16 +270,19 @@ class DefaultSetupWizardComponent(
     }
 
     private fun openControllers() {
+        if (!_state.value.navigationEnabled) return
         sourceScanner.start()
         navigation.push(WizardConfig.Controllers)
     }
 
     private fun openBattery() {
+        if (!_state.value.navigationEnabled) return
         _state.update { it.copy(advanceBlocked = false) }
         navigation.push(WizardConfig.Battery)
     }
 
     private fun openReview() {
+        if (!_state.value.navigationEnabled) return
         if (_state.value.draft.sourceCount == 0) {
             _state.update { it.copy(advanceBlocked = true) }
             return
@@ -277,17 +293,20 @@ class DefaultSetupWizardComponent(
     }
 
     private fun backFromReview() {
+        if (!_state.value.navigationEnabled) return
         sourceScanner.start()
         navigation.pop()
     }
 
     private fun backFromControllers() {
+        if (!_state.value.navigationEnabled) return
         sourceScanner.stop()
         _state.update { it.copy(advanceBlocked = false) }
         navigation.pop()
     }
 
     private fun backFromStage() {
+        if (!_state.value.navigationEnabled) return
         _state.update { it.copy(advanceBlocked = false) }
         navigation.pop()
     }
@@ -296,7 +315,13 @@ class DefaultSetupWizardComponent(
         _state.update { it.copy(scanning = scan.scanning, scannedDevices = scan.devices) }
     }
 
+    private fun scanRows(): List<SetupWizardComponent.ScanRow> =
+        _state.value.scannedDevices.map { device ->
+            SetupWizardComponent.ScanRow(device, ScannedAdd.entries)
+        }
+
     private fun addScannedDevice(device: DiscoveredDevice, add: ScannedAdd) {
+        if (!_state.value.navigationEnabled) return
         _state.update { current ->
             val draft = sourceScanner.addTo(current.draft, device, add)
             current.copy(
@@ -310,12 +335,14 @@ class DefaultSetupWizardComponent(
 
     private fun save() {
         val snapshot = _state.value
+        if (snapshot.saving) return
         if (!snapshot.canSave) {
             _state.update { it.copy(saveBlocked = true) }
             return
         }
+        // Close the tap-sized window before the launched coroutine dispatches.
+        _state.update { it.copy(saving = true) }
         scope.launch {
-            _state.update { it.copy(saving = true) }
             val vehicle = newVehicleFromDraft(
                 id = newVehicleId(),
                 name = snapshot.name,
@@ -351,6 +378,7 @@ class DefaultSetupWizardComponent(
     }
 
     private fun onSystemBack() {
+        if (!_state.value.navigationEnabled) return
         when (stack.value.active.instance) {
             is SetupWizardComponent.Child.WhatAreWeBuilding -> onCancel()
             is SetupWizardComponent.Child.Controllers -> backFromControllers()
@@ -373,8 +401,10 @@ class DefaultSetupWizardComponent(
 
     private inner class ControllerStageComponent : SetupWizardComponent.ControllerStage {
         override val state = this@DefaultSetupWizardComponent.state
-        override val availableAdds: List<ScannedAdd> get() = ScannedAdd.entries
+        override val scanRows: List<SetupWizardComponent.ScanRow>
+            get() = this@DefaultSetupWizardComponent.scanRows()
         override fun onNameChanged(name: String) {
+            if (_state.value.saving) return
             _state.update { it.copy(name = name, saveBlocked = false) }
         }
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
@@ -387,7 +417,8 @@ class DefaultSetupWizardComponent(
 
     private inner class BatteryStageComponent : SetupWizardComponent.BatteryStage {
         override val state = this@DefaultSetupWizardComponent.state
-        override val availableAdds: List<ScannedAdd> get() = ScannedAdd.entries
+        override val scanRows: List<SetupWizardComponent.ScanRow>
+            get() = this@DefaultSetupWizardComponent.scanRows()
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
             this@DefaultSetupWizardComponent.addScannedDevice(device, add)
         override fun onNoBattery() = openReview()

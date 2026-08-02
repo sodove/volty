@@ -165,8 +165,7 @@ private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
         )
         ScanHeading(state.scannedDevices.size)
         ScannedDeviceList(
-            devices = state.scannedDevices,
-            add = ScannedAdd.CONTROLLER,
+            rows = component.scanRows,
             onAdd = component::onAddScannedDevice
         )
         Hint(stringResource(Res.string.wizard_scan_hint))
@@ -201,8 +200,7 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
         )
         ScanHeading(state.scannedDevices.size)
         ScannedDeviceList(
-            devices = state.scannedDevices,
-            add = ScannedAdd.BATTERY,
+            rows = component.scanRows,
             onAdd = component::onAddScannedDevice
         )
         if (state.advanceBlocked) {
@@ -219,8 +217,11 @@ private fun ReviewScreen(component: SetupWizardComponent.ReviewStage) {
         title = stringResource(Res.string.wizard_review_title),
         progress = 4,
         onBack = component::onBack,
+        backEnabled = state.navigationEnabled,
         footer = {
-            TextButton(onClick = component::onBack) { Text(stringResource(Res.string.wizard_back)) }
+            TextButton(onClick = component::onBack, enabled = state.navigationEnabled) {
+                Text(stringResource(Res.string.wizard_back))
+            }
             Button(onClick = component::onSave, enabled = state.canSave && !state.saving) {
                 if (state.saving) {
                     CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
@@ -287,6 +288,7 @@ private fun WizardPage(
     footer: @Composable RowScope.() -> Unit,
     modifier: Modifier = Modifier,
     backGlyph: String = "‹",
+    backEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
     Surface(modifier = modifier.fillMaxSize()) {
@@ -295,7 +297,7 @@ private fun WizardPage(
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                TextButton(onClick = onBack, enabled = backGlyph.isNotEmpty()) {
+                TextButton(onClick = onBack, enabled = backEnabled && backGlyph.isNotEmpty()) {
                     Text(backGlyph, fontSize = 24.sp)
                 }
                 Text(title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
@@ -371,26 +373,48 @@ private fun ScanHeading(count: Int) {
 
 @Composable
 private fun ScannedDeviceList(
-    devices: List<DiscoveredDevice>,
-    add: ScannedAdd,
+    rows: List<SetupWizardComponent.ScanRow>,
     onAdd: (DiscoveredDevice, ScannedAdd) -> Unit
 ) {
-    devices.forEach { device ->
-        OutlinedButton(
-            onClick = { onAdd(device, add) },
-            modifier = Modifier.fillMaxWidth()
+    rows.forEach { row ->
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant
         ) {
-            Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-                Text(device.name ?: sourceRoleText(device.sourceRole()), fontWeight = FontWeight.SemiBold)
+            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                 Text(
-                    "${device.address}  ·  ${device.rssi} dBm",
+                    row.device.name ?: sourceRoleText(row.device.sourceRole()),
+                    fontWeight = FontWeight.SemiBold
+                )
+                Text(
+                    "${row.device.address}  ·  ${row.device.rssi} dBm",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                Row(modifier = Modifier.fillMaxWidth()) {
+                    row.additions.forEach { add ->
+                        TextButton(
+                            onClick = { onAdd(row.device, add) },
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(scanAdditionText(add), fontSize = 12.sp)
+                        }
+                    }
+                }
             }
         }
     }
 }
+
+@Composable
+private fun scanAdditionText(add: ScannedAdd): String = stringResource(
+    when (add) {
+        ScannedAdd.CONTROLLER -> Res.string.wizard_add_controller
+        ScannedAdd.BATTERY -> Res.string.wizard_add_battery
+        ScannedAdd.WHEEL -> Res.string.wizard_add_wheel
+    }
+)
 
 @Composable
 private fun sourceRoleText(role: SourceRole): String = stringResource(

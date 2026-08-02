@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.vehicle.wizard
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
@@ -10,6 +11,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
 import ru.sodovaya.volty.domain.model.BmsType
@@ -57,13 +59,14 @@ class SetupWizardComponentTest {
         scan: Flow<DiscoveredDevice> = emptyFlow(),
         initialDraft: VehicleDraft = VehicleDraft(),
         initialName: String = "",
+        persist: suspend (Vehicle) -> Unit = { saved += it },
         cancelled: () -> Unit = {}
     ) = DefaultSetupWizardComponent(
         componentContext = DefaultComponentContext(LifecycleRegistry()),
         initialDraft = initialDraft,
         initialName = initialName,
         scanAll = { scan },
-        saveVehicle = { saved += it },
+        saveVehicle = persist,
         newVehicleId = { "v-new" },
         now = { createdAt },
         onCancelled = cancelled,
@@ -104,7 +107,7 @@ class SetupWizardComponentTest {
     }
 
     @Test
-    fun `archetypes set defaults but no later capability`() = runTest {
+    fun `archetypes set presentation defaults`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val expected = mapOf(
             VehicleArchetype.WHEEL to ("unicycle" to SecondaryGauge.DUTY),
@@ -122,10 +125,41 @@ class SetupWizardComponentTest {
             assertEquals(archetype, c.state.value.archetype)
             assertEquals(defaults.first, c.state.value.iconKey, "$archetype icon")
             assertEquals(defaults.second, c.state.value.secondaryGauge, "$archetype gauge")
-            what.onNext()
-            val stage = (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
-            assertEquals(ScannedAdd.entries.toSet(), stage.availableAdds.toSet(), "$archetype must not lock adds")
         }
+    }
+
+    @Test
+    fun `both scan stages expose every addition as an actionable device row`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val wheel = device(
+            address = "BG:01",
+            name = "Begode",
+            bmsType = BmsType.BEGODE,
+            controllerType = ControllerType.BEGODE
+        )
+        val c = component(scan = flowOf(wheel))
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        advanceUntilIdle()
+
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        assertEquals(listOf(wheel), controllers.scanRows.map { it.device })
+        assertEquals(ScannedAdd.entries, controllers.scanRows.single().additions)
+
+        controllers.onNoController()
+        val batteries =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        assertEquals(listOf(wheel), batteries.scanRows.map { it.device })
+        assertEquals(ScannedAdd.entries, batteries.scanRows.single().additions)
+
+        val row = batteries.scanRows.single()
+        batteries.onAddScannedDevice(
+            row.device,
+            row.additions.single { it == ScannedAdd.WHEEL }
+        )
+        assertEquals(listOf("BG:01"), c.state.value.draft.controllers.map { it.address })
+        assertEquals(listOf("BG:01"), c.state.value.draft.packs.map { it.address })
     }
 
     @Test
@@ -210,7 +244,6 @@ class SetupWizardComponentTest {
 
         assertEquals(VehicleArchetype.SCOOTER, c.state.value.archetype)
         assertEquals(listOf("AN:01", "AN:02"), c.state.value.draft.packs.map { it.address })
-        assertEquals(ScannedAdd.entries.toSet(), battery.availableAdds.toSet())
     }
 
     @Test
@@ -245,6 +278,54 @@ class SetupWizardComponentTest {
         assertEquals(listOf("AN:02"), saved.single().packs.map { it.bmsAddress })
         assertIs<SetupWizardComponent.Child.Done>(c.stack.value.active.instance)
         assertFalse(c.hasUnsavedDraft, "Save establishes the clean baseline before root navigation")
+    }
+
+    @Test
+    fun `a suspended Save freezes navigation and editing until Done owns the saved draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saveStarted = CompletableDeferred<Unit>()
+        val releaseSave = CompletableDeferred<Unit>()
+        val saved = mutableListOf<Vehicle>()
+        val c = component(
+            saved = saved,
+            persist = { vehicle ->
+                saveStarted.complete(Unit)
+                releaseSave.await()
+                saved += vehicle
+            }
+        )
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onNameChanged("Bike A")
+        controllers.onAddScannedDevice(
+            device("VE:01", "VESC", controllerType = ControllerType.VESC),
+            ScannedAdd.CONTROLLER
+        )
+        controllers.onNext()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.Battery)
+            .component.onNoBattery()
+        val review =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component
+
+        review.onSave()
+        runCurrent()
+        assertTrue(saveStarted.isCompleted, "the fake persistence boundary must be suspended")
+        assertTrue(c.state.value.saving)
+        assertFalse(c.state.value.navigationEnabled)
+
+        review.onBack()
+        controllers.onNameChanged("Bike B")
+        assertIs<SetupWizardComponent.Child.Review>(c.stack.value.active.instance)
+        assertEquals("Bike A", c.state.value.name)
+
+        releaseSave.complete(Unit)
+        advanceUntilIdle()
+
+        assertEquals(listOf("Bike A"), saved.map { it.name })
+        assertIs<SetupWizardComponent.Child.Done>(c.stack.value.active.instance)
+        assertFalse(c.state.value.isDirty)
     }
 
     @Test
