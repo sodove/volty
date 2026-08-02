@@ -244,6 +244,44 @@ git commit -m "feat(composer): three ways to have a battery, and they are not th
 
 ---
 
+### Task 4a — ask how the packs are wired, and only when it matters
+
+**Files:**
+- Modify: the wizard's battery stage; `presentation/vehicle/VehicleEditScreen.kt`
+- Test: `SetupWizardComponentTest`, and whatever pins the edit screen's state
+
+**Why.** `PackAggregator` already does this correctly and is tested: parallel averages
+voltage, sums current, sums charge and capacity, and weights SoC **by capacity**; series sums
+voltage, averages current, and takes charge, capacity and SoC as the **minimum**, because a
+string delivers no more than its weakest pack. None of that needs building.
+
+What is missing is the question. `Vehicle.topology` defaults to `PARALLEL` and **the wizard
+never asks**, so a rider who wires two packs in series gets a vehicle that silently reports
+**half the real voltage** — a plausible number, not a blank, which is the exact failure class
+Part I spent eleven tasks removing.
+
+And the mirror defect: `VehicleEditScreen` renders the topology selector **unconditionally**,
+including for a single-pack vehicle where the choice means nothing. So the app asks where
+there is no question and stays silent where there is one.
+
+- [ ] **Step 1: Write the failing tests.** The stage appears when the draft holds two or more
+      packs and does not appear for one; the choice reaches `Vehicle.topology`; a draft that
+      drops back to one pack does not keep a stale `SERIES`; the edit screen's selector is
+      hidden below two packs. **Include the arithmetic consequence as a test at this level**,
+      not only in `PackAggregatorTest`: two 72 V packs marked `SERIES` must aggregate to 144 V
+      through the wizard's own output, so that a future change to the default cannot pass.
+- [ ] **Step 2: Run them and watch them fail.**
+- [ ] **Step 3: Implement.** Strings in both locales. The copy must carry the consequence, not
+      the word: *"напряжение складывается"*, not *"последовательно"* alone — the rider is
+      choosing an arithmetic, and the screen is the only place that can say so.
+- [ ] **Step 4: Sweep, full suite, commit.**
+
+```bash
+git commit -m "fix(composer): two packs in series were silently reported at half their voltage"
+```
+
+---
+
 ### Task 5 — the diagram
 
 **Files:**
