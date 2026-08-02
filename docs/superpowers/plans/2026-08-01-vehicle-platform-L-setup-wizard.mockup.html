@@ -1,0 +1,532 @@
+<title>Volty — конструктор аппарата</title>
+
+<style>
+  :root {
+    --ground: #F2F5F6; --panel: #FFFFFF; --panel-2: #E9EEF0; --panel-3: #DCE4E7;
+    --line: #D2DBDE; --line-soft: #E2E9EB;
+    --ink: #161E22; --ink-2: #4A5A61; --ink-3: #7C8E96;
+    --live: #157F72; --live-soft: #D6EDE9;
+    --derived: #8A6510; --derived-soft: #F5E7C8;
+    --fault: #A83A2C; --fault-soft: #F7DEDA;
+    --shadow: 0 1px 2px rgba(22,30,34,.06), 0 8px 24px rgba(22,30,34,.07);
+    --mono: ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+    --sans: ui-sans-serif, system-ui, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0F1417; --panel: #171F23; --panel-2: #1E282D; --panel-3: #26333A;
+      --line: #2B383E; --line-soft: #222D32;
+      --ink: #E6EDEF; --ink-2: #9FB1B8; --ink-3: #6E828A;
+      --live: #4FBFA8; --live-soft: #12332F;
+      --derived: #C9A227; --derived-soft: #33290D;
+      --fault: #E0705C; --fault-soft: #351A15;
+      --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+    }
+  }
+  :root[data-theme="dark"] {
+    --ground: #0F1417; --panel: #171F23; --panel-2: #1E282D; --panel-3: #26333A;
+    --line: #2B383E; --line-soft: #222D32;
+    --ink: #E6EDEF; --ink-2: #9FB1B8; --ink-3: #6E828A;
+    --live: #4FBFA8; --live-soft: #12332F;
+    --derived: #C9A227; --derived-soft: #33290D;
+    --fault: #E0705C; --fault-soft: #351A15;
+    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 8px 24px rgba(0,0,0,.3);
+  }
+  :root[data-theme="light"] {
+    --ground: #F2F5F6; --panel: #FFFFFF; --panel-2: #E9EEF0; --panel-3: #DCE4E7;
+    --line: #D2DBDE; --line-soft: #E2E9EB;
+    --ink: #161E22; --ink-2: #4A5A61; --ink-3: #7C8E96;
+    --live: #157F72; --live-soft: #D6EDE9;
+    --derived: #8A6510; --derived-soft: #F5E7C8;
+    --fault: #A83A2C; --fault-soft: #F7DEDA;
+    --shadow: 0 1px 2px rgba(22,30,34,.06), 0 8px 24px rgba(22,30,34,.07);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--ground); color:var(--ink); font-family:var(--sans); line-height:1.55; -webkit-font-smoothing:antialiased; }
+  .wrap { max-width:1180px; margin:0 auto; padding:44px 22px 90px; display:flex; flex-direction:column; gap:40px; }
+
+  .eyebrow { font-family:var(--mono); font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--ink-3); margin:0 0 10px; }
+  h1 { font-size:clamp(27px,3.6vw,38px); line-height:1.12; letter-spacing:-.02em; margin:0 0 12px; text-wrap:balance; font-weight:620; }
+  .lede { margin:0; max-width:64ch; color:var(--ink-2); font-size:16.5px; }
+  h2 { font-size:20px; letter-spacing:-.01em; margin:0 0 6px; font-weight:600; }
+  .note { margin:0 0 22px; color:var(--ink-2); max-width:66ch; font-size:14.5px; }
+
+  .callout {
+    border-left:3px solid var(--live); background:var(--panel);
+    border-radius:0 10px 10px 0; padding:14px 18px; box-shadow:var(--shadow);
+    max-width:74ch; font-size:14.5px; color:var(--ink-2);
+  }
+  .callout strong { color:var(--ink); font-weight:600; }
+
+  /* ---------- flow of screens ---------- */
+  .flow { display:grid; grid-template-columns:repeat(auto-fill, minmax(268px,1fr)); gap:26px; }
+  .step { display:flex; flex-direction:column; gap:11px; }
+  .step-cap { display:flex; align-items:baseline; gap:9px; }
+  .step-n { font-family:var(--mono); font-size:11px; letter-spacing:.1em; color:var(--live); font-weight:700; }
+  .step-t { font-size:15px; font-weight:600; letter-spacing:-.005em; }
+  .step-d { margin:0; font-size:13px; color:var(--ink-2); }
+  .step-d em { color:var(--ink-3); font-style:normal; font-family:var(--mono); font-size:11.5px; }
+
+  .phone {
+    background:var(--panel); border:1px solid var(--line); border-radius:18px;
+    box-shadow:var(--shadow); overflow:hidden; display:flex; flex-direction:column;
+    min-height:410px;
+  }
+  .bar {
+    background:var(--panel-2); border-bottom:1px solid var(--line-soft);
+    padding:8px 13px; display:flex; align-items:center; gap:8px;
+    font-family:var(--mono); font-size:10px; letter-spacing:.09em; color:var(--ink-3); text-transform:uppercase;
+  }
+  .bar .back { color:var(--ink-3); }
+  .prog { margin-left:auto; display:flex; gap:3px; }
+  .prog i { width:12px; height:3px; border-radius:2px; background:var(--line); display:block; }
+  .prog i.on { background:var(--live); }
+
+  .scr { padding:15px 14px; display:flex; flex-direction:column; gap:11px; flex:1; }
+  .scr h5 { margin:0; font-size:15.5px; font-weight:600; letter-spacing:-.01em; }
+  .scr p.sub { margin:0; font-size:12.5px; color:var(--ink-2); }
+
+  .tiles { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+  .tile {
+    border:1px solid var(--line); border-radius:10px; padding:11px 10px;
+    display:flex; flex-direction:column; gap:3px; background:var(--panel);
+  }
+  .tile.sel { border-color:var(--live); background:var(--live-soft); }
+  .tile b { font-size:13px; font-weight:600; }
+  .tile span { font-size:11px; color:var(--ink-3); }
+
+  .row {
+    border:1px solid var(--line); border-radius:10px; padding:9px 11px;
+    display:flex; align-items:center; gap:10px; background:var(--panel);
+  }
+  .row.sel { border-color:var(--live); background:var(--live-soft); }
+  .row .rb { flex:1; min-width:0; display:flex; flex-direction:column; gap:1px; }
+  .row .t { font-size:13px; font-weight:560; }
+  .row .m { font-family:var(--mono); font-size:10.5px; color:var(--ink-3); }
+  .chip {
+    font-family:var(--mono); font-size:9px; letter-spacing:.07em; text-transform:uppercase;
+    padding:2px 6px; border-radius:999px; border:1px solid var(--line); color:var(--ink-3); flex:none;
+  }
+  .chip.live { color:var(--live); border-color:color-mix(in srgb,var(--live) 45%,transparent); background:var(--live-soft); }
+  .chip.warn { color:var(--derived); border-color:color-mix(in srgb,var(--derived) 45%,transparent); background:var(--derived-soft); }
+  .rssi { font-family:var(--mono); font-size:10px; color:var(--ink-3); flex:none; }
+
+  .field { display:flex; flex-direction:column; gap:4px; }
+  .field label { font-family:var(--mono); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; color:var(--ink-3); }
+  .input {
+    border:1px solid var(--line); border-radius:8px; padding:8px 10px;
+    font-family:var(--mono); font-size:12px; background:var(--panel-2); color:var(--ink);
+  }
+  .input.empty { color:var(--fault); border-color:color-mix(in srgb,var(--fault) 45%,var(--line)); }
+  .two { display:grid; grid-template-columns:1fr 1fr; gap:8px; }
+
+  .hint { font-size:11.5px; color:var(--ink-3); margin:0; }
+  .hint.warn { color:var(--derived); }
+  .hint.bad { color:var(--fault); }
+
+  .btns { margin-top:auto; display:flex; gap:8px; padding-top:6px; }
+  .btn {
+    flex:1; text-align:center; border-radius:9px; padding:9px;
+    font-size:12.5px; font-weight:560; border:1px solid var(--line); color:var(--ink-2); background:var(--panel);
+  }
+  .btn.pri { background:var(--live); border-color:var(--live); color:var(--ground); }
+  .btn.ghost { flex:0 0 auto; padding:9px 12px; color:var(--ink-3); }
+
+  .spin { display:flex; align-items:center; gap:7px; font-size:11.5px; color:var(--ink-3); font-family:var(--mono); }
+  .dot { width:6px; height:6px; border-radius:50%; background:var(--live); animation:p 1.3s ease-in-out infinite; }
+  @keyframes p { 0%,100%{opacity:.25} 50%{opacity:1} }
+
+  .mini-tree { display:flex; flex-direction:column; gap:5px; }
+  .mt { display:flex; align-items:center; gap:8px; font-size:12px; padding:6px 8px; border-radius:8px; background:var(--panel-2); }
+  .mt.d1 { margin-left:16px; }
+  .mt .g { font-family:var(--mono); font-size:8.5px; font-weight:700; padding:2px 5px; border-radius:5px; border:1px solid; }
+  .g-bt { color:var(--ink-2); border-color:var(--line); }
+  .g-esc { color:var(--live); border-color:color-mix(in srgb,var(--live) 45%,transparent); background:var(--live-soft); }
+  .g-bms { color:var(--live); border-color:color-mix(in srgb,var(--live) 45%,transparent); background:var(--live-soft); }
+  .g-der { color:var(--derived); border-color:color-mix(in srgb,var(--derived) 45%,transparent); background:var(--derived-soft); }
+  .mt .mm { font-family:var(--mono); font-size:10px; color:var(--ink-3); margin-left:auto; }
+
+  /* ---------- interactive tree ---------- */
+  .picker { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:16px; }
+  .pick { font:inherit; font-size:13.5px; padding:8px 14px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--ink-2); cursor:pointer; transition:border-color .14s,color .14s,background .14s; }
+  .pick:hover { color:var(--ink); border-color:var(--ink-3); }
+  .pick[aria-pressed="true"] { background:var(--live-soft); border-color:var(--live); color:var(--live); font-weight:560; }
+  .pick:focus-visible { outline:2px solid var(--live); outline-offset:2px; }
+
+  .board { display:grid; grid-template-columns:minmax(0,1.35fr) minmax(0,1fr); gap:18px; align-items:start; }
+  .tree-panel,.detail { background:var(--panel); border:1px solid var(--line); border-radius:12px; box-shadow:var(--shadow); overflow:hidden; }
+  .panel-head { padding:11px 16px; border-bottom:1px solid var(--line-soft); font-family:var(--mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); display:flex; justify-content:space-between; gap:12px; }
+  .tree { padding:8px 10px 14px; overflow-x:auto; }
+  .node { display:flex; align-items:flex-start; gap:10px; width:100%; text-align:left; font:inherit; background:none; border:0; border-radius:8px; padding:9px 10px; cursor:pointer; color:inherit; transition:background .12s; }
+  .node:hover,.node[aria-pressed="true"] { background:var(--panel-2); }
+  .node:focus-visible { outline:2px solid var(--live); outline-offset:-2px; }
+  .depth-1 { padding-left:26px; }
+  .glyph { flex:none; width:26px; height:26px; border-radius:7px; display:grid; place-items:center; font-family:var(--mono); font-size:10px; font-weight:700; border:1px solid; margin-top:1px; }
+  .g-link { color:var(--ink-2); border-color:var(--line); background:var(--panel-2); }
+  .g-ctrl,.g-batt,.g-both { color:var(--live); border-color:color-mix(in srgb,var(--live) 45%,transparent); background:var(--live-soft); }
+  .g-derived { color:var(--derived); border-color:color-mix(in srgb,var(--derived) 45%,transparent); background:var(--derived-soft); }
+  .node-body { min-width:0; display:flex; flex-direction:column; gap:2px; }
+  .node-title { font-size:14.5px; font-weight:560; }
+  .node-meta { font-family:var(--mono); font-size:11.5px; color:var(--ink-3); white-space:nowrap; }
+  .node-flag { margin-top:4px; font-size:12px; color:var(--fault); background:var(--fault-soft); border-radius:6px; padding:3px 8px; display:inline-block; }
+  .node-flag.warn { color:var(--derived); background:var(--derived-soft); }
+  .role { font-family:var(--mono); font-size:9.5px; letter-spacing:.09em; text-transform:uppercase; padding:2px 6px; border-radius:999px; border:1px solid var(--line); color:var(--ink-3); align-self:flex-start; margin-top:3px; flex:none; }
+  .detail-body { padding:16px; display:flex; flex-direction:column; gap:14px; }
+  .detail h4 { margin:0; font-size:16px; font-weight:600; }
+  .kv { display:grid; grid-template-columns:auto 1fr; gap:6px 14px; }
+  .kv dt { color:var(--ink-3); font-family:var(--mono); font-size:11.5px; letter-spacing:.05em; text-transform:uppercase; padding-top:2px; }
+  .kv dd { margin:0; font-family:var(--mono); font-size:13px; word-break:break-all; }
+  .detail p { margin:0; font-size:13.5px; color:var(--ink-2); }
+
+  .foot { border-top:1px solid var(--line); padding-top:18px; color:var(--ink-3); font-size:13px; max-width:72ch; }
+
+  @media (max-width:860px) { .board { grid-template-columns:1fr; } }
+  @media (prefers-reduced-motion:reduce) { *,.dot { animation:none !important; transition:none !important; } }
+</style>
+
+<div class="wrap">
+
+  <header>
+    <p class="eyebrow">Volty · часть L · макет</p>
+    <h1>Конструктор: экраны по шагам</h1>
+    <p class="lede">
+      Обычный аппарат — <strong>одна связь</strong>. Шлюз с узлами за CAN не предполагается
+      и не спрашивается: он <em>обнаруживается</em>, и только тогда появляется шаг про CAN.
+      Ниже — весь путь, включая ветки, которые большинство не увидит никогда.
+    </p>
+  </header>
+
+  <div class="callout">
+    <strong>Поправка после первого макета.</strong> Я сделал приборку позвоночником схемы,
+    а она — самый редкий случай на свете: мост, написанный под себя, в одном экземпляре.
+    Теперь скелет мастера — «контроллер, потом батарея», а всё, что за шлюзом, живёт в
+    ветке&nbsp;2а, куда попадают только те, у кого шлюз действительно ответил.
+  </div>
+
+  <section>
+    <h2>Поток</h2>
+    <p class="note">
+      Экраны 1–5 проходят все. 2а — только если найденное устройство оказалось шлюзом.
+      3а — только если батарей больше одной. Назад можно с любого, черновик переживает выход.
+    </p>
+
+    <div class="flow">
+
+      <!-- 1 -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">01</span><span class="step-t">Что собираем</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">✕</span><span>Новый аппарат</span>
+            <span class="prog"><i class="on"></i><i></i><i></i><i></i><i></i></span></div>
+          <div class="scr">
+            <h5>Что собираем?</h5>
+            <p class="sub">Влияет только на умолчания. Всё остальное будет доступно в любом случае.</p>
+            <div class="tiles">
+              <div class="tile"><b>Моноколесо</b><span>плата и пачка в одном</span></div>
+              <div class="tile sel"><b>Самокат</b><span>контроллер + батарея</span></div>
+              <div class="tile"><b>Велосипед</b><span>контроллер + батарея</span></div>
+              <div class="tile"><b>Своё</b><span>ничего не подставлять</span></div>
+            </div>
+            <p class="hint">Не уверен — бери «Своё». Ничего не потеряешь.</p>
+            <div class="btns"><span class="btn ghost">Пропустить</span><span class="btn pri">Дальше</span></div>
+          </div>
+        </div>
+        <p class="step-d">Единственное решение экрана — умолчания. <em>hint, not lock</em></p>
+      </div>
+
+      <!-- 2 -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">02</span><span class="step-t">Поиск контроллера</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Контроллер</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+          <div class="scr">
+            <div class="spin"><span class="dot"></span>ищу рядом · 4</div>
+            <div class="row sel">
+              <span class="rb"><span class="t">VESC BLE UART</span><span class="m">E1:22:9A:04:71:C8</span></span>
+              <span class="chip live">VESC</span><span class="rssi">−54</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Без имени</span><span class="m">C3:5E:E2:61:94:AE</span></span>
+              <span class="chip warn">JK?</span><span class="rssi">−67</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Gotway_ETMAX</span><span class="m">D4:36:39:88:01:2F</span></span>
+              <span class="chip live">Begode</span><span class="rssi">−72</span>
+            </div>
+            <p class="hint">Адрес показан всегда. Тип — догадка, её можно сменить на следующем экране.</p>
+            <div class="btns"><span class="btn ghost">Нет контроллера</span><span class="btn pri">Дальше</span></div>
+          </div>
+        </div>
+        <p class="step-d">Живой список. Ближе телефон — выше в списке. <em>RSSI как «теплее»</em></p>
+      </div>
+
+      <!-- 2a -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">02</span><span class="step-t">Настройка контроллера</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Контроллер</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+          <div class="scr">
+            <div class="field"><label>Имя</label><div class="input">Велосипед</div></div>
+            <div class="field"><label>Тип</label><div class="input">VESC ▾</div></div>
+            <div class="two">
+              <div class="field"><label>Диаметр колеса</label><div class="input empty">не задан</div></div>
+              <div class="field"><label>Пар полюсов</label><div class="input">15</div></div>
+            </div>
+            <p class="hint warn">Без диаметра скорость возьмётся только из самого контроллера. Если он её не считает — покажем прочерк, а не ноль.</p>
+            <p class="hint">Можно спросить у контроллера: он часто знает своё колесо сам.</p>
+            <div class="btns"><span class="btn">Спросить</span><span class="btn pri">Дальше</span></div>
+          </div>
+        </div>
+        <p class="step-d">Тип меняется здесь — догадка никогда не запирает. <em>Part K</em></p>
+      </div>
+
+      <!-- 2b gateway branch -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">02а</span><span class="step-t">Ветка: за ним есть шина</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Узлы за шлюзом</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i></i><i></i><i></i></span></div>
+          <div class="scr">
+            <p class="sub">Это устройство ответило как шлюз — за ним может быть ещё техника на шине CAN.</p>
+            <div class="spin"><span class="dot"></span>опрашиваю шину</div>
+            <div class="row sel">
+              <span class="rb"><span class="t">uBox</span><span class="m">CAN 21</span></span>
+              <span class="chip live">VESC</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Узел 47</span><span class="m">CAN 47</span></span>
+              <span class="chip">?</span>
+            </div>
+            <p class="hint">Этот экран появляется, только если шлюз нашёлся. У обычного аппарата его нет.</p>
+            <div class="btns"><span class="btn ghost">Пропустить</span><span class="btn pri">Добавить</span></div>
+          </div>
+        </div>
+        <p class="step-d">Редкая ветка. Обнаруживается, а не спрашивается.</p>
+      </div>
+
+      <!-- 3 -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">03</span><span class="step-t">Батарея</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Батарея</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+          <div class="scr">
+            <h5>Откуда брать батарею?</h5>
+            <div class="row sel">
+              <span class="rb"><span class="t">У неё своя BMS</span><span class="m">отдельная связь</span></span>
+              <span class="chip live">BMS</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Тянуть с контроллера</span><span class="m">вычисляется</span></span>
+              <span class="chip warn">≈</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Это то же устройство</span><span class="m">один адрес, две роли</span></span>
+              <span class="chip live">2×</span>
+            </div>
+            <p class="hint">Вычисленная батарея честнее пустого места, но это не измерение — она будет помечена «≈».</p>
+            <div class="btns"><span class="btn ghost">Без батареи</span><span class="btn pri">Дальше</span></div>
+          </div>
+        </div>
+        <p class="step-d">Три структурно разных черновика, а не переключатель.</p>
+      </div>
+
+      <!-- 3b -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">03а</span><span class="step-t">Ветка: батарей несколько</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Как соединены</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i></span></div>
+          <div class="scr">
+            <p class="sub">Две пачки. Как они соединены между собой?</p>
+            <div class="row sel">
+              <span class="rb"><span class="t">Параллельно</span><span class="m">напряжение то же, ёмкость складывается</span></span>
+              <span class="chip live">∥</span>
+            </div>
+            <div class="row">
+              <span class="rb"><span class="t">Последовательно</span><span class="m">напряжение складывается, ёмкость общая</span></span>
+              <span class="chip">—</span>
+            </div>
+            <p class="hint warn">Ошибиться здесь дорого: у двух пачек последовательно напряжение покажется вдвое меньше настоящего.</p>
+            <p class="hint">У последовательной сборки заряд считается по слабейшей пачке — строка отдаёт не больше, чем её худшее звено.</p>
+            <div class="btns"><span class="btn ghost">Назад</span><span class="btn pri">Дальше</span></div>
+          </div>
+        </div>
+        <p class="step-d">Появляется только со второй батареи. С одной — вопроса нет. <em>сейчас его не задают вовсе</em></p>
+      </div>
+
+      <!-- 4 -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">04</span><span class="step-t">Проверка</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Проверка</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></div>
+          <div class="scr">
+            <h5>Велосипед</h5>
+            <p class="sub">2 связи · 2 источника</p>
+            <div class="mini-tree">
+              <div class="mt"><span class="g g-bt">BT</span>Связь<span class="mm">E1:22…C8</span></div>
+              <div class="mt d1"><span class="g g-esc">ESC</span>VESC<span class="mm">контроллер</span></div>
+              <div class="mt"><span class="g g-bt">BT</span>Связь<span class="mm">C3:5E…AE</span></div>
+              <div class="mt d1"><span class="g g-bms">BMS</span>ANT<span class="mm">батарея</span></div>
+            </div>
+            <p class="hint bad">Тип второго устройства — догадка. Проверь, что это ANT, а не JK.</p>
+            <div class="btns"><span class="btn ghost">Назад</span><span class="btn pri">Сохранить</span></div>
+          </div>
+        </div>
+        <p class="step-d">Замечания стоят у того, к чему относятся.</p>
+      </div>
+
+      <!-- 5 -->
+      <div class="step">
+        <div class="step-cap"><span class="step-n">05</span><span class="step-t">Готово</span></div>
+        <div class="phone">
+          <div class="bar"><span class="back">‹</span><span>Готово</span>
+            <span class="prog"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></div>
+          <div class="scr">
+            <h5>Велосипед собран</h5>
+            <p class="sub">Можно подключаться. Всё, что здесь выбрано, меняется потом в настройках аппарата.</p>
+            <div class="mini-tree">
+              <div class="mt"><span class="g g-esc">ESC</span>VESC<span class="mm">E1:22…C8</span></div>
+              <div class="mt"><span class="g g-bms">BMS</span>ANT<span class="mm">C3:5E…AE</span></div>
+            </div>
+            <p class="hint">Ничего не записывалось до этого момента — выход на любом шаге не терял черновик.</p>
+            <div class="btns"><span class="btn">К списку</span><span class="btn pri">Подключиться</span></div>
+          </div>
+        </div>
+        <p class="step-d">Единственная запись за весь мастер.</p>
+      </div>
+
+    </div>
+  </section>
+
+  <section>
+    <h2>Дерево на шаге 4, вживую</h2>
+    <p class="note">Переключи аппарат, ткни в узел. Собрано на твоих реальных машинах.</p>
+
+    <div class="picker" role="group" aria-label="Выбор аппарата">
+      <button class="pick" data-v="bike" aria-pressed="true">Велосипед</button>
+      <button class="pick" data-v="euc" aria-pressed="false">Моноколесо</button>
+      <button class="pick" data-v="scooter" aria-pressed="false">Самокат со шлюзом</button>
+      <button class="pick" data-v="broken" aria-pressed="false">Спорный черновик</button>
+    </div>
+
+    <div class="board">
+      <div class="tree-panel">
+        <div class="panel-head"><span id="v-name"></span><span id="v-count"></span></div>
+        <div class="tree" id="tree"></div>
+      </div>
+      <aside class="detail">
+        <div class="panel-head"><span>Узел</span></div>
+        <div class="detail-body" id="detail"></div>
+      </aside>
+    </div>
+  </section>
+
+  <p class="foot">
+    Макет, не сборка. Дерево — чистая функция от черновика: что во что вложено и что
+    помечено, решает код, который проверяется тестом, а рисовать остаётся нечему.
+    Экраны выше — то же самое правило, применённое к шагам: какой шаг доступен и что он
+    может, решает компонент, а не разметка.
+  </p>
+</div>
+
+<script>
+  const VEHICLES = {
+    bike: { name:"Велосипед", nodes:[
+      { d:0,k:"link",t:"Связь Bluetooth",m:"E1:22:9A:04:71:C8",role:"",
+        det:{"Имя":"VESC BLE UART","Адрес":"E1:22:9A:04:71:C8","Профиль":"Nordic UART"},
+        note:"Обычный модуль Bluetooth-UART. Никакого шлюза — самый частый случай." },
+      { d:1,k:"ctrl",t:"VESC",m:"один мотор",role:"контроллер",
+        det:{"Тип":"VESC","CAN":"нет","Колесо":"задано в контроллере"},
+        note:"Скорость калибрована по GPS и совпала с приборкой на раскрутке до 105 км/ч.",
+        flag:"fault",flagText:"Спрашиваем один опкод, запасного нет — связь рвётся каждые 12 секунд" },
+      { d:0,k:"link",t:"Связь Bluetooth",m:"C3:5E:E2:61:94:AE",role:"",
+        det:{"Имя":"—","Адрес":"C3:5E:E2:61:94:AE","Профиль":"0xFFE0 / 0xFFE1"},
+        note:"Безымянное устройство. В списке поиска отличить его можно только по адресу." },
+      { d:1,k:"batt",t:"ANT BMS",m:"смарт",role:"батарея",
+        det:{"Тип":"ANT","Знак тока":"инвертируется"},
+        note:"Определитель принимает её за JK: имена префиксом не совпали, служебный идентификатор общий.",
+        flag:"warn",flagText:"Тип угадан неверно — поправить руками" }
+    ]},
+    euc: { name:"Моноколесо", nodes:[
+      { d:0,k:"link",t:"Связь Bluetooth",m:"D4:36:39:88:01:2F",role:"",
+        det:{"Имя":"Gotway_ETMAX","Адрес":"D4:36:39:88:01:2F"},
+        note:"Одна связь, два источника. Писать в неё нельзя — это командный канал колеса." },
+      { d:1,k:"both",t:"Begode ET Max",m:"контроллер и батарея",role:"обе роли",
+        det:{"Тип":"Begode","Ячеек":"из кадра BMS","Знак тока":"инвертируется"},
+        note:"Плата и её собственная пачка за одним адресом — «одно добавление, два источника»." }
+    ]},
+    scooter: { name:"Самокат со шлюзом", nodes:[
+      { d:0,k:"link",t:"Связь Bluetooth",m:"AA:BB:CC:11:22:33",role:"шлюз",
+        det:{"Тип":"VESC Express","Роль":"шлюз + мост к пачке"},
+        note:"Самодельный мост, существующий в одном экземпляре. Мастер не предполагает его — он его находит." },
+      { d:1,k:"ctrl",t:"Приборка (свой контроллер)",m:"—",role:"контроллер",
+        det:{"CAN id":"нет","Колесо":"не задано"},
+        note:"Мотора нет, телеметрию не отдаёт.",
+        flag:"warn",flagText:"Ничего не сообщает — пустая строка в аппарате" },
+      { d:1,k:"ctrl",t:"uBox",m:"CAN 21",role:"контроллер",
+        det:{"CAN id":"21","Колесо":"задано в контроллере"},
+        note:"Найден опросом шины за шлюзом. Скорость считает сам." },
+      { d:1,k:"batt",t:"Пачка ANT",m:"через мост",role:"батарея",
+        det:{"Тип":"VESC BMS","Источник":"мост в шлюзе"},
+        note:"Заработала после того, как её впервые спросили." }
+    ]},
+    broken: { name:"Спорный черновик", nodes:[
+      { d:0,k:"link",t:"Связь Bluetooth",m:"AA:BB:CC:11:22:33",role:"",
+        det:{"Адрес":"AA:BB:CC:11:22:33"},note:"Тот же адрес, что и у связи ниже." },
+      { d:1,k:"ctrl",t:"Контроллер 1",m:"CAN 21",role:"контроллер",det:{"CAN id":"21"},note:"" },
+      { d:0,k:"link",t:"Связь Bluetooth",m:"AA:BB:CC:11:22:33",role:"",
+        det:{"Адрес":"AA:BB:CC:11:22:33"},
+        note:"Один адрес объявлен дважды. Раньше это сохранялось молча.",
+        flag:"fault",flagText:"Тот же адрес, что и у первой связи" },
+      { d:1,k:"derived",t:"Батарея с контроллера",m:"вычисляется",role:"батарея",
+        det:{"Источник":"нет контроллера на этой связи"},
+        note:"Выход «тянуть с контроллера» выбран там, где контроллера нет.",
+        flag:"fault",flagText:"Тянуть не с чего" }
+    ]}
+  };
+
+  const GLYPH = { link:["g-link","BT"], ctrl:["g-ctrl","ESC"], batt:["g-batt","BMS"], derived:["g-derived","≈"], both:["g-both","2×"] };
+  const tree = document.getElementById("tree");
+  const detail = document.getElementById("detail");
+  const vName = document.getElementById("v-name");
+  const vCount = document.getElementById("v-count");
+  let current = "bike", selected = 0;
+
+  function renderDetail(n) {
+    const rows = Object.entries(n.det||{}).map(([k,v])=>`<dt>${k}</dt><dd>${v}</dd>`).join("");
+    detail.innerHTML = `<h4>${n.t}</h4><dl class="kv">${rows}</dl>${n.note?`<p>${n.note}</p>`:""}${n.flag?`<span class="node-flag ${n.flag==="warn"?"warn":""}">${n.flagText}</span>`:""}`;
+  }
+
+  function render() {
+    const v = VEHICLES[current];
+    vName.textContent = v.name;
+    vCount.textContent = `${v.nodes.filter(n=>n.d===0).length} связ. · ${v.nodes.filter(n=>n.d>0).length} источн.`;
+    tree.innerHTML = v.nodes.map((n,i)=>{
+      const [cls,label] = GLYPH[n.k];
+      return `<button class="node depth-${n.d}" data-i="${i}" aria-pressed="${i===selected}">
+        <span class="glyph ${cls}">${label}</span>
+        <span class="node-body"><span class="node-title">${n.t}</span><span class="node-meta">${n.m}</span>
+        ${n.flag?`<span class="node-flag ${n.flag==="warn"?"warn":""}">${n.flagText}</span>`:""}</span>
+        ${n.role?`<span class="role">${n.role}</span>`:""}</button>`;
+    }).join("");
+    tree.querySelectorAll(".node").forEach(b=>b.addEventListener("click",()=>{
+      selected = Number(b.dataset.i);
+      tree.querySelectorAll(".node").forEach(x=>x.setAttribute("aria-pressed",String(Number(x.dataset.i)===selected)));
+      renderDetail(v.nodes[selected]);
+    }));
+    renderDetail(v.nodes[selected]||v.nodes[0]);
+  }
+
+  document.querySelectorAll(".pick").forEach(b=>b.addEventListener("click",()=>{
+    current=b.dataset.v; selected=0;
+    document.querySelectorAll(".pick").forEach(x=>x.setAttribute("aria-pressed",String(x===b)));
+    render();
+  }));
+
+  render();
+</script>

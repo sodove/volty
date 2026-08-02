@@ -20,6 +20,30 @@ words: *"надо нормальный многоэтапная 'первая' �
 отдельно добавляешь бмс (или жмешь что тянуть с контра)"* — and, on the current one,
 *"кнопку я не увидел, заныкано жестко"*.
 
+**Approved mockup — open it before writing any UI:**
+[`2026-08-01-vehicle-platform-L-setup-wizard.mockup.html`](2026-08-01-vehicle-platform-L-setup-wizard.mockup.html),
+beside this file. Self-contained, no build step — open it in a browser.
+
+It is **the reviewed and accepted shape of this feature**, not an illustration: the rider
+signed it off with *"макет прям как надо"*. It carries seven screens with the decision each
+one makes, the two rare branches marked as rare, and a live tree built on the rider's three
+actual vehicles plus one deliberately broken draft. Where this document and the mockup
+disagree about wording, placement or what a screen offers, **the mockup wins and this
+document is stale** — say so rather than reconciling silently.
+
+Three things it fixes about an earlier draft of this plan, worth knowing so they are not
+re-introduced:
+
+- **The gateway is not the spine.** A first version of the mockup built everything around the
+  head unit; it is the rarest device in this project — a bridge the rider wrote for himself,
+  existing in one copy. The skeleton is "controller, then battery", and everything behind a
+  CAN bus lives in branch 2a, reached only when a device *answers* as a gateway. It is
+  discovered, never asked about.
+- **The address is on every row, always**, even when a name exists. That is the direct fix for
+  the trip to nRF Connect.
+- **Signal strength is shown as "warmer / colder"**, because identifying one of three
+  identical unnamed BMS boxes is done by walking closer, and the app already has the number.
+
 ---
 
 ## Why this is mostly wiring, and where the real work is
