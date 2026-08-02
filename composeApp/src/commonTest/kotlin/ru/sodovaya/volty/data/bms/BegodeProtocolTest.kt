@@ -140,8 +140,12 @@ class BegodeProtocolTest {
     @Test
     fun theFullCellSetBecomesTheBranchVoltageAndDrivesPower() {
         val protocol = BegodeProtocol()
-        // 8.8 A on the branch (the field's unit is 0.1 A) — roughly the
-        // per-branch half of the 17.70 A a reference app showed for the wheel.
+        // 8.8 A of DISCHARGE on the branch (the field's unit is 0.1 A) —
+        // roughly the per-branch half of the 17.70 A a reference app showed for
+        // the wheel. The wire field is discharge-positive and `BmsData` is
+        // charge-positive, so a positive raw becomes a negative current; the
+        // 2026-08-01 field test is what established that, and this assertion
+        // carried the old sign until then.
         protocol.onNotification(
             telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, currentRaw = 88, t1 = 28, t2 = 26, sectionVoltageRaw = 741)
         )
@@ -153,9 +157,11 @@ class BegodeProtocolTest {
         val cellSum = data.cellVoltages.sum()
         assertEquals(148.54f, cellSum, 0.01f, "fixture-shaped cells sum to ~148.54 V")
         assertEquals(cellSum, data.voltage, 1e-3f, "voltage is the cell sum once the set is complete")
+        assertEquals(-8.8f, data.current, 1e-3f, "a discharging branch reads as discharging")
         // Power is voltage x current, so correcting the voltage moves it too:
-        // 8.8 A x 148.54 V = 1307.2 W, where the frame field gave 1295.4 W.
-        assertEquals(cellSum * 8.8f, data.power, 0.1f)
+        // 8.8 A x 148.54 V = 1307.2 W, where the frame field gave 1295.4 W —
+        // and negative, because the pack is delivering it rather than taking it.
+        assertEquals(cellSum * -8.8f, data.power, 0.1f)
     }
 
     @Test

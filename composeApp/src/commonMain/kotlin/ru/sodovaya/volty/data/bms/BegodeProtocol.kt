@@ -1408,7 +1408,17 @@ class BegodeProtocol(
 
         branch.sawTelemetry = true
         branch.packVoltageV = frame.u16BE(6) * 0.1f
-        branch.currentA = frame.i16BE(8) * 0.1f
+        // NEGATED, and the negation is the fix from the 2026-08-01 field test:
+        // on a physically charging pack this read as discharge and vice versa.
+        // The wheel's smart-BMS branch frame is discharge-positive, the same
+        // way the MAIN frame's battery current is — `D §4`'s field table says
+        // "negated, then stored" for bytes 2..3, and this branch decode simply
+        // never got the same treatment. One convention, two frames, and only
+        // one of them had been measured.
+        //
+        // Negated HERE rather than in `rebuild`, so that the power computed
+        // from it downstream cannot disagree with the sign of its own current.
+        branch.currentA = -(frame.i16BE(8) * 0.1f)
 
         // Two temperature sensors per section, degrees Celsius directly.
         val t1 = frame.i16BE(10)

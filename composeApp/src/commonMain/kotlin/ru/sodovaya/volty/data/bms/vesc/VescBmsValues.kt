@@ -175,9 +175,31 @@ data class VescBmsFrame(
      * Project the frame onto the shared battery model.
      *
      * Only what `BmsData` can carry honestly makes the trip:
-     * - `voltage` = `v_tot`; `current` = `i_in` **unflipped** — both conventions
-     *   are "+ = charging" (spec §10.4, `ant_bms.c:658`), unlike the *controller*
-     *   current `VescProtocol.synthesiseBattery` has to negate.
+     * - `voltage` = `v_tot`; `current` = **negated `i_in`**, like the
+     *   *controller* current `VescProtocol.synthesiseBattery` negates.
+     *
+     *   **This was unflipped until the 2026-08-01 field test, on the claim that
+     *   both conventions are "+ = charging" (spec §10.4, `ant_bms.c:658`). The
+     *   rider measured the opposite**: on a physically charging pack the app
+     *   showed discharge, and on a discharging one it showed charge. The
+     *   citation was circular — `ant_bms.c:658` is `val->i_in = current`, a
+     *   verbatim copy of ANT's own reading, and ANT's convention is "+ =
+     *   discharge", which is exactly why [ru.sodovaya.volty.data.bms.AntBmsProtocol]
+     *   negates it. So the head unit's bridge publishes a discharge-positive
+     *   current into a field this app read as charge-positive.
+     *
+     *   **Known limit, stated rather than hidden:** `i_in` has no authoritative
+     *   sign anywhere in the VESC tree — `bms.c:210` merely relays whatever a
+     *   CAN BMS put there — so this negation is calibrated against the one
+     *   producer that has been measured, the rider's own ANT bridge. A stock
+     *   VESC BMS is unverified and could need the opposite. If one ever
+     *   disagrees, the fix is a per-producer sign, not flipping this back.
+     *
+     *   **Worth telling the rider, because it is their firmware:** the bridge is
+     *   internally inconsistent — it sets `val->is_charging = (current > 0.05f)`
+     *   at `ant_bms.c:685` while `current` is discharge-positive, so its own
+     *   charging flag is inverted too. Volty never reads that flag, so this
+     *   negation is complete for us, but the bug is upstream as well.
      * - `soc` is a 0..1 fraction on the wire and a percentage in `BmsData`.
      *   `socKnown` follows [soc]'s presence: a VESC BMS coulomb-counts, so a
      *   SoC it reports is real — including a genuine 0 % — but a frame that
@@ -199,8 +221,8 @@ data class VescBmsFrame(
      */
     fun toBmsData(): BmsData = BmsData(
         voltage = vTot,
-        current = iIn,
-        power = vTot * iIn,
+        current = -iIn,
+        power = vTot * -iIn,
         soc = (soc ?: 0f) * 100f,
         socKnown = soc != null,
         cellVoltages = cellVoltages,

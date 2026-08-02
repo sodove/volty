@@ -571,22 +571,32 @@ class VescBmsValuesTest {
     }
 
     /**
-     * Sign: `i_in > 0` means charging in the gateway's own terms
-     * (`ant_bms.c:658,685`, `is_charging = current > 0.05`), which is already
-     * `BmsData`'s convention — so the value passes through unflipped. A decoder
-     * that "reconciles" the sign like `VescProtocol.synthesiseBattery` does for
-     * *controller* current would report a charging pack as discharging.
+     * Sign: `i_in` is **discharge-positive** and `BmsData` is charge-positive,
+     * so the frame's current is NEGATED on the way in.
+     *
+     * These two tests asserted the opposite until the 2026-08-01 field test.
+     * The old rationale cited `ant_bms.c:658,685` for "+ = charging", but
+     * `:658` is `val->i_in = current` — a verbatim copy of ANT's own reading,
+     * whose convention is "+ = discharge", which is precisely why
+     * `AntBmsProtocol` negates it. The citation proved the opposite of what it
+     * was quoted for, and the rider's charger settled it: a physically charging
+     * pack was displayed as discharging.
+     *
+     * The assertions are named for the physical state, not the wire value, so
+     * that a future reader cannot satisfy them by flipping a sign in the test.
      */
-    @Test fun charging_current_stays_positive_in_bms_data() {
-        val d = assertNotNull(VescBmsValues.decode(frame(iInRaw = 2_500_000))).toBmsData()
+    @Test fun a_charging_pack_reads_as_charging() {
+        // Discharge-positive wire: a CHARGING pack sends a NEGATIVE i_in.
+        val d = assertNotNull(VescBmsValues.decode(frame(iInRaw = -2_500_000))).toBmsData()
         assertEquals(2.5f, d.current, 0.001f)
-        assertTrue(d.current > 0f, "BmsData: + = charging, and so is i_in")
-        assertTrue(d.power > 0f)
+        assertTrue(d.current > 0f, "BmsData is charge-positive; i_in is not")
+        assertTrue(d.power > 0f, "power must not disagree with the sign of its own current")
     }
 
-    @Test fun discharging_current_stays_negative_in_bms_data() {
-        val d = assertNotNull(VescBmsValues.decode(frame(iInRaw = -12_500_000))).toBmsData()
+    @Test fun a_discharging_pack_reads_as_discharging() {
+        val d = assertNotNull(VescBmsValues.decode(frame(iInRaw = 12_500_000))).toBmsData()
         assertEquals(-12.5f, d.current, 0.001f)
+        assertTrue(d.current < 0f, "a pack under load is discharging")
         assertEquals(75.5f * -12.5f, d.power, 0.5f)
     }
 
