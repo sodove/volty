@@ -438,4 +438,16 @@
     <string name="wizard_connect">Подключиться</string>
     <string name="wizard_connecting">Подключение…</string>
     <string name="wizard_connect_failed">Подключиться не удалось. Аппарат сохранён — можно повторить из списка.</string>
+    <string name="vehicle_diagram_title">Схема аппарата</string>
+    <string name="diagram_phone">Этот телефон</string>
+    <string name="diagram_bluetooth_link">Связь Bluetooth</string>
+    <string name="diagram_derived_battery">Батарея с контроллера</string>
+    <string name="diagram_role_vehicle">один аппарат</string>
+    <string name="diagram_role_link">связь</string>
+    <string name="diagram_role_controller">контроллер</string>
+    <string name="diagram_role_battery">батарея</string>
+    <string name="diagram_role_both">контроллер и батарея</string>
+    <string name="diagram_type_phone">Volty</string>
+    <string name="diagram_type_bluetooth">Bluetooth</string>
+    <string name="diagram_type_derived">расчётные значения</string>
 </resources>

@@ -49,6 +49,8 @@ import ru.sodovaya.volty.presentation.picker.SourceRole
 import ru.sodovaya.volty.presentation.picker.scanDeviceLabel
 import ru.sodovaya.volty.presentation.picker.signalProximity
 import ru.sodovaya.volty.presentation.picker.sourceRole
+import ru.sodovaya.volty.presentation.vehicle.DraftDiagramView
+import ru.sodovaya.volty.presentation.vehicle.draftDiagram
 import volty.composeapp.generated.resources.*
 
 /** Renderer only: stage access and every draft mutation live in the component. */
@@ -260,6 +262,7 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
 @Composable
 private fun ReviewScreen(component: SetupWizardComponent.ReviewStage) {
     val state by component.state.collectAsStateCompat()
+    val diagram = draftDiagram(state.draft, state.issues)
     WizardPage(
         title = stringResource(Res.string.wizard_review_title),
         progress = 4,
@@ -286,13 +289,13 @@ private fun ReviewScreen(component: SetupWizardComponent.ReviewStage) {
         Text(
             stringResource(
                 Res.string.wizard_summary,
-                state.draft.linkAddresses.size,
+                diagram.children.size,
                 state.draft.sourceCount
             ),
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        DraftSources(state)
+        DraftDiagramView(diagram)
         if (!state.canSave || state.saveBlocked) {
             ErrorHint(stringResource(Res.string.wizard_save_blocked))
         }

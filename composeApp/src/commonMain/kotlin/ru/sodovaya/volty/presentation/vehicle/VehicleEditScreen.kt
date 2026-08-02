@@ -76,6 +76,7 @@ import volty.composeapp.generated.resources.vehicle_discard_confirm
 import volty.composeapp.generated.resources.vehicle_discard_keep
 import volty.composeapp.generated.resources.vehicle_discard_text
 import volty.composeapp.generated.resources.vehicle_discard_title
+import volty.composeapp.generated.resources.vehicle_diagram_title
 import volty.composeapp.generated.resources.vehicle_edit_edit
 import volty.composeapp.generated.resources.vehicle_edit_new
 import volty.composeapp.generated.resources.vehicle_field_averaging_window
@@ -386,6 +387,9 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
  */
 @Composable
 private fun SourcesSection(state: VehicleEditComponent.State, component: VehicleEditComponent) {
+    SectionLabel(stringResource(Res.string.vehicle_diagram_title))
+    DraftDiagramView(draftDiagram(state.draft, state.issues))
+
     SectionLabel(stringResource(Res.string.vehicle_section_sources))
 
     // `onSave` refused. Without this the button looked dead: `onSave` returned
