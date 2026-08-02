@@ -433,10 +433,10 @@ class KableBmsRepository private constructor(
 
     /**
      * Guards the read-modify-write of [yieldedLinks] and of
-     * [lastReRaiseAtMsByGateway]. A plain monitor rather than [sessionLock]
-     * because both mutators run on non-suspending paths — the sample consumer
-     * must never take a suspending mutex (see [launchSampleConsumer]) — and
-     * neither touches the session fields [sessionLock] guards.
+     * [lastReRaiseAtMsByGateway]. These helpers also run from drop/reconnect
+     * coroutines, so the plain monitor keeps their non-suspending contract.
+     * When both locks are needed the order is always [sessionLock] then this
+     * monitor; no helper holding this monitor enters [sessionLock].
      */
     private val yieldedLinksLock = Any()
 
@@ -1332,6 +1332,7 @@ class KableBmsRepository private constructor(
                 // reconnect replaces this orchestrator, those samples belong
                 // to the dead session and must not republish its snapshot.
                 if (!ownsActivePipeline(orchestrator)) return@onVehicleData
+                beforeVehicleDataPublishForTest?.invoke()
                 _activeVehicleData.value = vd
                 // The motion aggregate rides the same snapshot; publish it on
                 // the motion StateFlow beside the vehicle-level one.
@@ -1464,12 +1465,13 @@ class KableBmsRepository private constructor(
      * synchronously inside the session's onSample call, on the same thread,
      * exactly as before the channel existed — behaviour-identical, no added
      * latency, and the single-threaded test seam observes the effects
-     * immediately. This is safe because the body suspends ONLY at the
-     * channel receive and never touches [sessionLock]; and it stays a true
-     * serialisation barrier because a coroutine is sequential regardless of
-     * where it resumes — a second sender's trySend while the consumer is
-     * mid-drain just buffers, with the channel providing the happens-before
-     * edge between the threads.
+     * immediately while the session mutex is uncontended. Each accepted
+     * sample then holds [sessionLock] through submit, publication, handoff and
+     * ring-buffer mutation. That is the ownership boundary with rebuild and
+     * replacement: neither can clear a sample transaction halfway through.
+     * The body launches (rather than awaits) teardown/reconnect work while it
+     * holds the mutex, so there is no recursive acquisition. A second sender
+     * simply buffers while this consumer is suspended or mid-transaction.
      */
     private fun launchSampleConsumer(
         channel: Channel<Sample>,
@@ -1477,11 +1479,14 @@ class KableBmsRepository private constructor(
     ): Job =
         scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
             for (sample in channel) {
-                // Channel.close() deliberately drains buffered work. Bind the
-                // consumer to the pipeline that created it and discard that
-                // work once a rebuild has superseded the owner.
-                if (!ownsActivePipeline(orchestrator)) continue
-                when (sample) {
+                sessionLock.withLock transaction@ {
+                    // Pipeline ownership, every publish, and every handoff
+                    // decision are one transaction with pipeline replacement.
+                    // A consumer accepted here therefore finishes against its
+                    // own orchestrator and link plan before a rebuild can clear
+                    // and replace them.
+                    if (!ownsActivePipeline(orchestrator)) return@transaction
+                    when (sample) {
                     is PackSample -> {
                         // The aggregate is a true identity for a single pack
                         // (cell voltages included), so every vehicle routes
@@ -1491,7 +1496,8 @@ class KableBmsRepository private constructor(
                             .submit(sample.globalPackIndex, sample.data, sample.sections)
                         // The owner can change while submit invokes its
                         // callback; that callback is identity-guarded too.
-                        if (!ownsActivePipeline(orchestrator)) continue
+                        if (!ownsActivePipeline(orchestrator)) return@transaction
+                        beforeHandoffForTest?.invoke()
                         // THE alias-path handoff trigger (C §5 / §9.4). It sits
                         // HERE, after the submit that just put the hosted pack
                         // online, and nowhere else — this is the one place the
@@ -1502,13 +1508,16 @@ class KableBmsRepository private constructor(
                         // Runs on the consumer coroutine, so its mark-offline is
                         // serialised with every other VehicleConnection mutation
                         // exactly like the submit above.
-                        val afterHandoff = releaseDirectLinkIfHostedReported(sample.globalPackIndex)
+                        val afterHandoff = releaseDirectLinkIfHostedReported(
+                            orchestrator,
+                            sample.globalPackIndex
+                        )
                         // The handoff's other half (C §5): a head unit that is
                         // still delivering THIS sample may have stopped
                         // delivering the battery we released our own link for.
                         // Checked on every sample because that is the only
                         // clock either half of the handoff uses.
-                        val afterSilence = reRaiseYieldedLinksWhoseHostedWentSilent()
+                        val afterSilence = reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
                         // This consumer owns a concrete orchestrator, so its
                         // submitted snapshot is always available while the
                         // identity guards above admit the sample.
@@ -1528,7 +1537,7 @@ class KableBmsRepository private constructor(
                         // off the battery submit's snapshot, not a direct write).
                         val motionSnap = orchestrator
                             .submitMotion(sample.globalControllerIndex, sample.data)
-                        if (!ownsActivePipeline(orchestrator)) continue
+                        if (!ownsActivePipeline(orchestrator)) return@transaction
                         // The VEHICLE-LEVEL fold, not this controller's own
                         // sample. (`submitMotion`'s snapshot used to be
                         // discarded here; the "dropped on purpose" note below
@@ -1564,7 +1573,8 @@ class KableBmsRepository private constructor(
                         // value is dropped on purpose — the motion branch never
                         // writes _activeData, and the mark-offline it may
                         // perform publishes itself through onVehicleData.
-                        reRaiseYieldedLinksWhoseHostedWentSilent()
+                        reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
+                    }
                     }
                 }
             }
@@ -1613,7 +1623,10 @@ class KableBmsRepository private constructor(
      * @return the snapshot taken after the handover, or null when nothing
      * happened (then the caller keeps the submit's own snapshot).
      */
-    private fun releaseDirectLinkIfHostedReported(hostedPackIndex: Int): VehicleData? {
+    private fun releaseDirectLinkIfHostedReported(
+        orchestrator: VehicleConnection,
+        hostedPackIndex: Int
+    ): VehicleData? {
         // The fast path for every vehicle that predates this feature: one
         // volatile read, no allocation, no behaviour.
         val handoffs = aliasHandoffs
@@ -1645,17 +1658,17 @@ class KableBmsRepository private constructor(
             "[VOLTY-BLE] alias handoff: hosted pack ${handoff.hostedPackIndex} is reporting — " +
                 "releasing the direct link ${handoff.directAddress} to ${handoff.gatewayAddress}"
         )
-        val orchestrator = vehicleConnection
-        orchestrator?.markOffline(handoff.directPackIndex)
-        // disconnectLink suspends and takes sessionLock; this consumer must
-        // never do either (see [launchSampleConsumer]), so the teardown runs on
-        // the repo scope. The state that matters for the no-gap property — the
-        // mark-offline above — has already been applied synchronously.
+        orchestrator.markOffline(handoff.directPackIndex)
+        // disconnectLinkOwnedBy suspends and takes sessionLock, which this
+        // transaction already holds and the mutex cannot re-enter. Launch the
+        // teardown on the repo scope; it validates this orchestrator again
+        // after the transaction releases the lock.
         scope.launch {
-            disconnectLink(handoff.directAddress)
-            settleReleaseAgainstGatewayDrop(handoff.gatewayAddress)
+            val removed = disconnectLinkOwnedBy(orchestrator, handoff.directAddress)
+            ownedDisconnectResultForTest?.invoke(removed)
+            if (removed) settleReleaseAgainstGatewayDrop(orchestrator, handoff.gatewayAddress)
         }
-        return orchestrator?.snapshot()
+        return orchestrator.snapshot()
     }
 
     /**
@@ -1681,15 +1694,22 @@ class KableBmsRepository private constructor(
      * [raiseYieldedLinksFor], where whichever arrives second finds the debt
      * already claimed.
      */
-    private suspend fun settleReleaseAgainstGatewayDrop(gatewayAddress: String) {
-        if (yieldedLinks.none { it.gatewayAddress == gatewayAddress }) return
-        val gateway = links.firstOrNull { it.spec.address == gatewayAddress }
-        if (gateway != null && gateway.status == LinkStatus.ONLINE) return
+    private suspend fun settleReleaseAgainstGatewayDrop(
+        orchestrator: VehicleConnection,
+        gatewayAddress: String
+    ) {
+        val shouldRaise = sessionLock.withLock {
+            if (!ownsActivePipeline(orchestrator)) return@withLock false
+            if (yieldedLinks.none { it.gatewayAddress == gatewayAddress }) return@withLock false
+            val gateway = links.firstOrNull { it.spec.address == gatewayAddress }
+            gateway == null || gateway.status != LinkStatus.ONLINE
+        }
+        if (!shouldRaise) return
         println(
             "[VOLTY-BLE] alias handoff: $gatewayAddress went down while the direct link was still " +
                 "being released — honouring the re-raise now that it is gone"
         )
-        reRaiseYieldedLinksFor(gatewayAddress)
+        reRaiseYieldedLinksFor(orchestrator, gatewayAddress)
     }
 
     /**
@@ -1702,8 +1722,11 @@ class KableBmsRepository private constructor(
      * through [claimYieldedLinksToRaise], which is what makes them safe to
      * fire concurrently for the same gateway.
      */
-    private suspend fun reRaiseYieldedLinksFor(gatewayAddress: String) {
-        raiseYieldedLinksFor(gatewayAddress, HANDOFF_RERAISE_REASON)
+    private suspend fun reRaiseYieldedLinksFor(
+        orchestrator: VehicleConnection,
+        gatewayAddress: String
+    ) {
+        raiseYieldedLinksFor(orchestrator, gatewayAddress, HANDOFF_RERAISE_REASON)
     }
 
     /**
@@ -1741,11 +1764,12 @@ class KableBmsRepository private constructor(
      * @return the snapshot taken after retiring the silent paths, or null when
      * nothing happened.
      */
-    private fun reRaiseYieldedLinksWhoseHostedWentSilent(): VehicleData? {
+    private fun reRaiseYieldedLinksWhoseHostedWentSilent(
+        orchestrator: VehicleConnection
+    ): VehicleData? {
         // The fast path for every vehicle that never released anything, which
         // is every vehicle that predates this feature: one volatile read.
         if (yieldedLinks.isEmpty()) return null
-        val orchestrator = vehicleConnection ?: return null
         val handoffs = aliasHandoffs
         val silent = yieldedLinks.mapNotNull { yielded ->
             handoffs.firstOrNull {
@@ -1767,7 +1791,9 @@ class KableBmsRepository private constructor(
             // [claimYieldedLinksToRaise]) — so a second sample arriving before
             // this coroutine runs re-enters here, finds the debt still owed and
             // launches a second raise, of which exactly one claims anything.
-            scope.launch { raiseYieldedLinksFor(gatewayAddress, HANDOFF_SILENT_REASON) }
+            scope.launch {
+                raiseYieldedLinksFor(orchestrator, gatewayAddress, HANDOFF_SILENT_REASON)
+            }
         }
         return orchestrator.snapshot()
     }
@@ -1799,38 +1825,39 @@ class KableBmsRepository private constructor(
      * still holds its session, so the orchestrator (and with it every pack's
      * state) survives the re-raise untouched.
      */
-    private suspend fun raiseYieldedLinksFor(gatewayAddress: String, reason: String) {
-        val raised: List<PackLink> = sessionLock.withLock {
+    private suspend fun raiseYieldedLinksFor(
+        orchestrator: VehicleConnection,
+        gatewayAddress: String,
+        reason: String
+    ) {
+        sessionLock.withLock {
+            if (!ownsActivePipeline(orchestrator)) return
             val fresh = claimYieldedLinksToRaise(
                 gatewayAddress = gatewayAddress,
                 installedAddresses = links.map { it.spec.address },
                 userInitiated = userInitiatedDisconnect
             ).map { PackLink(spec = it.spec, vehicle = it.vehicle) }
-            if (fresh.isEmpty()) return@withLock emptyList()
+            if (fresh.isEmpty()) return
             links = links + fresh
-            fresh
-        }
-        if (raised.isEmpty()) return
-        // Arm the flapping damper only when a link genuinely came back: a
-        // no-op claim must not push the hold-down out.
-        noteReRaise(gatewayAddress)
-        for (link in raised) {
-            println("[VOLTY-BLE] alias handoff: re-raising ${link.spec.address} — $reason")
-            // Leave the (default) CONNECTING status before starting the loop,
-            // exactly as onLinkDrop does: the loop's "already online" guard is
-            // the only thing it checks, and RECONNECTING is what the fold
-            // renders as "trying again".
-            setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
-            startLinkReconnectLoop(link, initialReason = reason)
+            // Keep the global hold-down and reconnect-loop installation in
+            // this owner's transaction too: neither may leak into a pipeline
+            // that replaces it immediately after the claim.
+            noteReRaise(gatewayAddress)
+            for (link in fresh) {
+                println("[VOLTY-BLE] alias handoff: re-raising ${link.spec.address} — $reason")
+                setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
+                startLinkReconnectLoop(link, initialReason = reason)
+            }
         }
     }
 
     /**
      * Close the sample funnel and forget it. The consumer drains whatever
      * the channel still buffers and its job then completes on its own —
-     * [Channel.close] does not suspend and the consumer never takes
-     * [sessionLock], so calling this inside a critical section cannot
-     * deadlock teardown.
+     * [Channel.close] does not suspend or wait for the consumer. The consumer
+     * may itself be queued on [sessionLock], but closing here only makes it
+     * finish after this critical section releases the mutex; teardown never
+     * joins it while holding the lock.
      *
      * PRECONDITION: caller holds [sessionLock] — the funnel fields share the
      * [vehicleConnection] locking discipline, including its one unlocked
@@ -2058,7 +2085,7 @@ class KableBmsRepository private constructor(
             // ends when its channel closes) so orchestrator, funnel and links
             // always belong to the same attempt; launching inside the section
             // is fine — the consumer runs undispatched only to its first
-            // channel receive and never takes the lock.
+            // channel receive, before any sample transaction takes the lock.
             sessionLock.withLock {
                 vehicleConnection = orchestrator
                 closeSampleFunnelLocked()
@@ -2338,24 +2365,20 @@ class KableBmsRepository private constructor(
     }
 
     private suspend fun onLinkDrop(link: PackLink, reason: String) {
-        // Suspending check + state mutation under the lock so user disconnect
-        // racing with a watchdog can't both win.
-        sessionLock.withLock {
+        val orchestrator = sessionLock.withLock {
             if (userInitiatedDisconnect) {
                 println("[VOLTY-BLE] onLinkDrop ignored — user disconnected")
                 return
             }
-        }
-        // React only while THIS link is still installed and believed up — the
-        // per-link translation of the old Connected/Connecting guard, which
-        // also dedups a double drop report (state event + watchdog firing for
-        // the same death). A sibling link's state is irrelevant here: its
-        // packs, its loop, its business.
-        val believedUp = synchronized(linkStateLock) {
-            links.any { it === link } &&
-                (link.status == LinkStatus.ONLINE || link.status == LinkStatus.CONNECTING)
-        }
-        if (believedUp) {
+            // React only while THIS link is still installed and believed up —
+            // identity rejects callbacks from a superseded plan. Capture the
+            // owning orchestrator in the same transaction so the deferred
+            // re-raise below can reject a later replacement too.
+            val believedUp = synchronized(linkStateLock) {
+                links.any { it === link } &&
+                    (link.status == LinkStatus.ONLINE || link.status == LinkStatus.CONNECTING)
+            }
+            if (!believedUp) return@withLock null
             // Leave the up state BEFORE starting the loop — its "already
             // online" guard would otherwise short-circuit on the very first
             // iteration and the link would never come back. The dead session
@@ -2381,8 +2404,9 @@ class KableBmsRepository private constructor(
             // so the orchestrator survives. Tear the session down here and the
             // re-raise starts wiping the vehicle's state instead of restoring
             // one link of it.
-            reRaiseYieldedLinksFor(link.spec.address)
-        }
+            vehicleConnection
+        } ?: return
+        reRaiseYieldedLinksFor(orchestrator, link.spec.address)
     }
 
     private fun startLinkReconnectLoop(link: PackLink, initialReason: String) {
@@ -2534,6 +2558,40 @@ class KableBmsRepository private constructor(
             val reconnectJob: Job?,
             val remaining: List<PackLink>
         ) : LinkRemoval
+    }
+
+    /**
+     * Remove a yielded direct link only while [orchestrator] still owns the
+     * complete pipeline plan that requested the removal. Unlike the public
+     * [disconnectLink], an unexpected last-link shape fails closed: a stale
+     * handoff must never escalate into a full disconnect.
+     */
+    private suspend fun disconnectLinkOwnedBy(
+        orchestrator: VehicleConnection,
+        address: String
+    ): Boolean {
+        beforeOwnedDisconnectForTest?.invoke()
+        var sessionToTearDown: ConnectionSession? = null
+        val removed = sessionLock.withLock {
+            if (!ownsActivePipeline(orchestrator)) return@withLock false // handoff owner
+            val link = links.firstOrNull { it.spec.address == address }
+                ?: return@withLock false
+            if (links.size == 1) return@withLock false
+
+            sessionToTearDown = link.session
+            link.reconnectJob?.cancel()
+            link.session = null
+            link.reconnectJob = null
+            val remaining = links.filterNot { it === link }
+            links = remaining
+            synchronized(linkStateLock) {
+                refoldConnectionStateLocked(remaining)
+            }
+            println("[VOLTY-BLE] disconnectLink: dropping $address, ${remaining.size} link(s) remain")
+            true
+        }
+        if (removed) sessionToTearDown?.tearDown()
+        return removed
     }
 
     override suspend fun disconnectLink(address: String) {
@@ -3032,6 +3090,22 @@ class KableBmsRepository private constructor(
     @Volatile
     internal var vehicleDataTapForTest: ((VehicleData) -> Unit)? = null
 
+    /** Test-only pause after callback ownership acceptance, before publication. */
+    @Volatile
+    internal var beforeVehicleDataPublishForTest: (() -> Unit)? = null
+
+    /** Test-only pause after submit ownership acceptance, before alias handoffs. */
+    @Volatile
+    internal var beforeHandoffForTest: (() -> Unit)? = null
+
+    /** Test-only pause before a deferred handoff disconnect validates ownership. */
+    @Volatile
+    internal var beforeOwnedDisconnectForTest: (suspend () -> Unit)? = null
+
+    /** Test-only result of the deferred, owner-validated handoff disconnect. */
+    @Volatile
+    internal var ownedDisconnectResultForTest: ((Boolean) -> Unit)? = null
+
     /**
      * Test-only: install the exact multi-link wiring [doConnect] builds —
      * effective link specs, one orchestrator sized from the full vehicle pack
@@ -3086,13 +3160,22 @@ class KableBmsRepository private constructor(
     /**
      * Test-only: cross the exact reconnect session boundary without touching
      * Android's BLE scanner. Production reaches this choke point from
-     * [connectLinkAttempt] while holding [sessionLock]; repository tests run
-     * single-threaded on their injected dispatcher, so this follows the same
-     * sanctioned unlocked test-seam exception as [installLinksForTest].
+     * [connectLinkAttempt] while holding [sessionLock]; this seam takes the
+     * same lock so concurrent callback/rebuild tests exercise that boundary.
      */
-    internal fun rebuildPipelineForTest(vehicle: Vehicle?, address: String, type: BmsType?) {
-        rebuildPipelineLocked(vehicle, address, type)
+    internal suspend fun rebuildPipelineForTest(vehicle: Vehicle?, address: String, type: BmsType?) {
+        sessionLock.withLock {
+            rebuildPipelineLocked(vehicle, address, type)
+        }
     }
+
+    /** Test-only replacement of the complete link/pipeline plan. */
+    internal suspend fun replaceLinksForTest(
+        vehicle: Vehicle?,
+        address: String,
+        type: BmsType?
+    ): List<(packIndex: Int, sample: BmsData, sections: List<SectionState>) -> Unit> =
+        sessionLock.withLock { installLinksForTest(vehicle, address, type) }
 
     /**
      * Test-only: the MOTION funnels of the installed links, in link order —

@@ -15,10 +15,13 @@ import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runCurrent
 import kotlin.test.Test
@@ -158,6 +161,83 @@ class KableBmsRepositoryAliasHandoffTest {
             ConnectionState.Connected(v),
             repo.connectionState.value,
             "and the vehicle stays Connected on the head unit alone"
+        )
+    }
+
+    @Test
+    fun `an old accepted handoff cannot disconnect the replacement pipeline's direct link`() = repoTest { repo ->
+        val oldVehicle = twoPathScooter()
+        val oldFunnels = repo.rideReady(oldVehicle)
+        repo.markLinkOnlineForTest(HU_ADDR)
+        val accepted = CompletableDeferred<Unit>()
+        val allowHandoff = CompletableDeferred<Unit>()
+        val disconnectAccepted = CompletableDeferred<Unit>()
+        val allowDisconnect = CompletableDeferred<Unit>()
+        val disconnectResult = CompletableDeferred<Boolean>()
+        repo.beforeHandoffForTest = {
+            accepted.complete(Unit)
+            runBlocking { allowHandoff.await() }
+        }
+        repo.beforeOwnedDisconnectForTest = {
+            disconnectAccepted.complete(Unit)
+            allowDisconnect.await()
+        }
+        repo.ownedDisconnectResultForTest = disconnectResult::complete
+
+        val oldSample = launch(Dispatchers.Default) {
+            oldFunnels[1](0, hostedSample(), emptyList())
+        }
+        accepted.await()
+
+        val replacement = oldVehicle.copy(id = "v-alias-replacement", name = "Replacement")
+        lateinit var replacementFunnels: List<(Int, BmsData, List<ru.sodovaya.volty.domain.model.SectionState>) -> Unit>
+        val replace = launch {
+            replacementFunnels = repo.replaceLinksForTest(
+                replacement,
+                replacement.primaryAddress,
+                replacement.packs.first().bmsType
+            )
+        }
+        runCurrent()
+        val replacementCrossedPausedHandoff = replace.isCompleted
+
+        allowHandoff.complete(Unit)
+        oldSample.join()
+        runCurrent()
+        disconnectAccepted.await()
+        val replacementFinishedBeforeDeferredDisconnect = replace.isCompleted
+        allowDisconnect.complete(Unit)
+        runCurrent()
+        val oldDisconnectRemovedReplacementLink = disconnectResult.await()
+        replace.join()
+
+        assertEquals(
+            listOf(ANT_ADDR, HU_ADDR),
+            repo.linkAddressesForTest(),
+            "the old deferred disconnect must fail its ownership check against the replacement plan"
+        )
+        repo.markLinkOnlineForTest(ANT_ADDR)
+        repo.markLinkOnlineForTest(HU_ADDR)
+        replacementFunnels[0](0, parkedSample().copy(voltage = 75.5f), emptyList())
+        runCurrent()
+
+        assertEquals(
+            listOf(ANT_ADDR, HU_ADDR),
+            repo.linkAddressesForTest(),
+            "the old handoff must not issue a disconnect against replacement links with the same addresses"
+        )
+        assertEquals(75.5f, repo.activeVehicleData.value.aggregate.voltage, absoluteTolerance = 0.001f)
+        assertFalse(
+            replacementCrossedPausedHandoff,
+            "the replacement must wait for the accepted handoff's atomic transaction"
+        )
+        assertTrue(
+            replacementFinishedBeforeDeferredDisconnect,
+            "the driver must install the replacement before allowing the old deferred disconnect to validate"
+        )
+        assertFalse(
+            oldDisconnectRemovedReplacementLink,
+            "the old deferred action must report that it refused the replacement owner's direct link"
         )
     }
 

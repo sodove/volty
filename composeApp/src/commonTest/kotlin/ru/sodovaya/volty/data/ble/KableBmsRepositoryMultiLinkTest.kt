@@ -12,10 +12,13 @@ import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
@@ -279,33 +282,45 @@ class KableBmsRepositoryMultiLinkTest {
     }
 
     @Test
-    fun `an old funnel sample queued across rebuild cannot repopulate the cleared snapshot`() = repoTest { repo ->
+    fun `a callback accepted before rebuild cannot publish after the rebuild clear`() = repoTest { repo ->
         val v = singlePackVehicle(
-            id = "v-reconnect-queued", name = "Solo", iconKey = "scooter",
+            id = "v-reconnect-callback", name = "Solo", iconKey = "scooter",
             bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
             chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
         )
-        lateinit var oldFunnel: (Int, BmsData, List<SectionState>) -> Unit
-        var rebuilt = false
-        repo.vehicleDataTapForTest = {
-            if (!rebuilt) {
-                rebuilt = true
-                // The consumer is already executing on Dispatchers.Unconfined,
-                // so this second old-session sample queues instead of re-entering.
-                oldFunnel(0, sample(current = 6.66f), emptyList())
-                repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
-            }
-        }
-        oldFunnel = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType).single()
+        val oldFunnel = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType).single()
         repo.markLinkOnlineForTest(ADDR_A)
+        val accepted = CompletableDeferred<Unit>()
+        val allowPublish = CompletableDeferred<Unit>()
+        repo.beforeVehicleDataPublishForTest = {
+            accepted.complete(Unit)
+            runBlocking { allowPublish.await() }
+        }
 
-        oldFunnel(0, sample(current = 8.85f), emptyList())
+        val oldSample = launch(Dispatchers.Default) {
+            oldFunnel(0, sample(current = 6.66f), emptyList())
+        }
+        accepted.await()
+        // The old consumer is paused inside its first accepted transaction;
+        // this second old-session sample is now definitely buffered behind it.
+        oldFunnel(0, sample(current = 7.77f), emptyList())
+        val rebuild = launch {
+            repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
+        }
         runCurrent()
+        val rebuildCrossedPausedCallback = rebuild.isCompleted
 
-        assertTrue(rebuilt, "the driver must cross the rebuild boundary while the old consumer is active")
+        allowPublish.complete(Unit)
+        oldSample.join()
+        rebuild.join()
+
         val gap = repo.activeVehicleData.value
-        assertTrue(gap.packs.isEmpty(), "a queued old-session sample must be rejected after rebuild")
+        assertTrue(gap.packs.isEmpty(), "the old callback must finish before the atomic rebuild clear")
         assertFalse(gap.aggregate.isConnected)
+        assertFalse(
+            rebuildCrossedPausedCallback,
+            "the rebuild must wait for the accepted callback's atomic publication transaction"
+        )
     }
 
     @Test
