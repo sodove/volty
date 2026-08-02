@@ -36,15 +36,29 @@ one. `PackAggregator` then takes a plain mean of a real branch and a fabricated 
 truth after reconnect   161 V / 40 cells = 4.025 V      → (4.025−3.30)/0.90 = 80.6 %   ✔ matches "~80 % at 161 В"
 
 during the window
-  branch 0  frame-field voltage ≈ 161/1.009 = 159.6 V   → 76.6 %   (the 0.1009-vs-0.1 scale)
-  branch 1  cellCount null, sample untouched            →  0 %
-  aggregate mean                                        → 38.3 %   → renders "38 %"
+  branch 0  cells complete, 80.6 %
+  branch 1  cellCount null, sample untouched   →  0 %
+  aggregate mean = (80.6 + 0) / 2 = 40.3 %     → roundToInt → renders exactly "40 %"
 ```
 
-**38 % predicted, ~40 % reported by eye.** Replayed against the real 13-second ET Max capture,
-the window is **≈5.2 s of halved SoC**, then ~1.8 s of a mildly wrong one — because the BMS
-boots with all-zero cell payloads and cell packets then arrive one per second, five per branch,
-branches alternating.
+**Exactly 40 %, which is exactly what the rider saw** — *"приложение показывало ровно 40%, в
+этом и прикол"*. That precision is the strongest evidence in this document, and it sharpens the
+mechanism in two ways worth stating.
+
+**The halving is exact because one branch is exactly right and the other is exactly zero.** No
+approximation is involved anywhere in the chain: a correct 80.6 % averaged with a fabricated 0
+lands on 40.3, and the display rounds it to the round number the rider read.
+
+**And it means branch 0's cells had already arrived while branch 1's had not** — so the
+frame-field voltage error plays no part in the observed case at all. That is not a coincidence
+to explain away: cell packets arrive one per second, five per branch, **branches alternating**,
+so one branch being complete while the other is still empty is the *normal* intermediate state
+of every connection, not an edge case. An earlier draft of this document predicted 38 % by
+assuming branch 0 was still on its frame-field voltage; the rider's exact reading rules that
+out and makes the prediction cleaner.
+
+Replayed against the real 13-second ET Max capture, the window is **≈5–7 s**, because the BMS
+boots with all-zero cell payloads before any of it starts.
 
 ### Why this is not cosmetic
 
@@ -234,11 +248,15 @@ git commit -m "fix(ble): a rebuilt pipeline kept the dead session's numbers on s
 Power-cycle the wheel, reconnect, and open the **per-pack view within the first ten seconds**.
 The prediction is specific and falsifiable:
 
-- **Pack 2 reads exactly `0 %` with an empty cell grid**, while Pack 1 reads ~76 % with an empty
-  grid;
-- the vehicle tile reads ~38 %;
-- about six seconds in, Pack 2's grid fills eight cells at a time and its SoC jumps to ~80 %;
-  about two seconds later Pack 1's grid fills and the vehicle tile settles at ~80 %.
+- **One pack reads exactly `0 %` with an empty cell grid**, while the other reads its true
+  ~81 % with a full one;
+- the vehicle tile reads **exactly half the true figure** — 40 % against a true 81 %;
+- the zero pack's grid then fills eight cells at a time and its SoC jumps straight to ~81 %,
+  and the vehicle tile settles there with it.
+
+The **exactness** is the signature. A vehicle tile at precisely half the pack figure, with one
+grid empty, is this mechanism and nothing else; a tile that is merely low, or low with both
+grids populated, is something different.
 
 **If Pack 2 shows `—` or a non-zero SoC instead, this diagnosis is wrong** and the tasks above
 are aimed at the wrong thing.
