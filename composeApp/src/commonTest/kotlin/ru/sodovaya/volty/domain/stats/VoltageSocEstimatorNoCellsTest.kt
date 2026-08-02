@@ -3,7 +3,9 @@ package ru.sodovaya.volty.domain.stats
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.singlePackVehicle
+import ru.sodovaya.volty.domain.model.withCellCount
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -42,6 +44,22 @@ class VoltageSocEstimatorNoCellsTest {
         val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
         assertEquals(42.5f, out.soc, 0.05f)
         assertEquals(sample.voltage, out.voltage, 0f, "only soc may change")
+    }
+
+    @Test
+    fun aCellLessSecondWheelBranchEstimatesFromItsOwnConfiguredCount() {
+        val wheel = vehicle(cellCount = null).copy(
+            packs = listOf(
+                Pack(index = 0, label = "Branch 1", bmsType = BmsType.BEGODE, bmsAddress = "AA:BB"),
+                Pack(index = 1, label = "Branch 2", bmsType = BmsType.BEGODE, bmsAddress = "AA:BB")
+            )
+        ).withCellCount(40)
+        val sample = BmsData(voltage = 147.3f, socKnown = false, isConnected = true)
+
+        val out = VoltageSocEstimator.withEstimatedSoc(sample, wheel, packIndex = 1)
+
+        assertEquals(42.5f, out.soc, 0.05f)
+        assertTrue(out.socKnown, "the voltage estimate makes this branch's SoC known")
     }
 
     @Test

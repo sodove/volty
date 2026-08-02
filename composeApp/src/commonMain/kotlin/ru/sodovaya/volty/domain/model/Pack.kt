@@ -66,7 +66,8 @@ fun List<Pack>.expandedTo(count: Int): List<Pack> {
             index = index,
             label = "Pack ${index + 1}",
             bmsType = template.bmsType,
-            bmsAddress = template.bmsAddress
+            bmsAddress = template.bmsAddress,
+            cellCount = template.cellCount
         )
     }
 }

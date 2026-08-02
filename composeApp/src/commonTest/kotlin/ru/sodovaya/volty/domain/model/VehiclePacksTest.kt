@@ -44,13 +44,20 @@ class VehiclePacksTest {
     }
 
     @Test
-    fun withCellCountUpdatesOnlyTheFirstPack() {
+    fun withCellCountUpdatesEveryBranchOfTheSameWheelButNotAnotherPack() {
         val two = single().let { v ->
-            v.copy(packs = v.packs + Pack(1, "P1", BmsType.ANT_BMS, "AA:02", cellCount = 24))
+            v.copy(
+                packs = listOf(
+                    Pack(0, "Wheel branch 1", BmsType.BEGODE, "WH:01"),
+                    Pack(1, "Wheel branch 2", BmsType.BEGODE, "WH:01"),
+                    Pack(2, "Independent wheel", BmsType.BEGODE, "WH:02", cellCount = 24)
+                )
+            )
         }
         val updated = two.withCellCount(20)
         assertEquals(20, updated.packs[0].cellCount)
-        assertEquals(24, updated.packs[1].cellCount)
+        assertEquals(20, updated.packs[1].cellCount, "the other branch is the same physical wheel")
+        assertEquals(24, updated.packs[2].cellCount, "a genuinely different pack keeps its own count")
         assertTrue(updated.isMultiPack)
     }
 
@@ -83,11 +90,14 @@ class VehiclePacksTest {
     }
 
     @Test
-    fun expandedToKeepsContiguousExpansionUnchanged() {
-        val stored = listOf(Pack(index = 0, label = "Battery", bmsType = BmsType.BEGODE, bmsAddress = "AA:01"))
+    fun expandedToCarriesARiderEnteredCellCountToTheSecondWheelBranch() {
+        val stored = listOf(
+            Pack(index = 0, label = "Battery", bmsType = BmsType.BEGODE, bmsAddress = "AA:01", cellCount = 40)
+        )
         val expanded = stored.expandedTo(2)
         assertEquals(listOf(0, 1), expanded.map { it.index })
         assertEquals("Pack 2", expanded[1].label)
+        assertEquals(40, expanded[1].cellCount, "both branches are the same 40S wheel")
     }
 
     @Test

@@ -150,9 +150,25 @@ fun singlePackVehicle(
 
 val Vehicle.isMultiPack: Boolean get() = packs.size > 1
 
-/** Cell count is auto-filled from live telemetry — see KableBmsRepository. */
-fun Vehicle.withCellCount(count: Int): Vehicle =
-    copy(packs = packs.mapIndexed { i, p -> if (i == 0) p.copy(cellCount = count) else p })
+/**
+ * Cell count is auto-filled from live telemetry — see KableBmsRepository.
+ *
+ * A Begode's branches are one physical pack split in two, so a count derived
+ * from one branch is also the count of every branch on that same BLE device.
+ * Packs on another address remain independent batteries with their own count.
+ */
+fun Vehicle.withCellCount(count: Int): Vehicle {
+    val primaryPack = packs.firstOrNull() ?: return this
+    return copy(
+        packs = packs.map { pack ->
+            if (pack.bmsAddress == primaryPack.bmsAddress) {
+                pack.copy(cellCount = count)
+            } else {
+                pack
+            }
+        }
+    )
+}
 
 /**
  * Marker for transient (guest) vehicles synthesized by [BmsRepository.connectGuest].
