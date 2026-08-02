@@ -63,10 +63,11 @@ import kotlin.time.Instant
  * PACK-LESS vehicle, the link's only pack slots are the derived ones
  * `planLinkPacks` synthesises (never persisted, no cell count), and
  * `createProtocol`'s lookup runs against `vehicle.packs`, which is empty. Every
- * repair route was a dead end too — `Vehicle.withCellCount` is
- * `packs.mapIndexed`, a silent no-op on an empty list; the pack auto-fill only
- * appends behind an address the profile already names a pack on; and the edit
- * screen deliberately keeps a controller-only vehicle pack-less.
+ * repair route was a dead end too — `Vehicle.withCellCount` propagates only to
+ * packs sharing the primary pack's BLE address, so a pack-less vehicle has no
+ * primary address to update; the pack auto-fill only appends behind an address
+ * the profile already names a pack on; and the edit screen deliberately keeps
+ * a controller-only vehicle pack-less.
  *
  * **The fix taken, of the two on the table:** the picker's BEGODE branch now
  * builds the `D §4` wheel (`pickedControllerVehicle` → `wheelVehicle`), rather
@@ -279,9 +280,9 @@ class KableBmsRepositoryBegodeWheelPickTest {
         // --- the PROFILE also learns the count, through the production
         // auto-fill, independently of the decoder already having proven one of
         // its own. This is the step the pack-less shape could not take:
-        // `withCellCount` is `packs.mapIndexed`, so on a zero-pack vehicle the
-        // upsert wrote the vehicle back UNCHANGED and the count was lost
-        // forever.
+        // `withCellCount` propagates by the primary pack's BLE address, so on a
+        // zero-pack vehicle there is no address to update; the upsert wrote the
+        // vehicle back UNCHANGED and the count was lost forever.
         val autofilled = assertNotNull(
             store.upserts.lastOrNull { it.id == created.id && it.packs.firstOrNull()?.cellCount != null },
             "the cell-count auto-fill must have written the wheel's 40s back into the profile"
@@ -320,9 +321,10 @@ class KableBmsRepositoryBegodeWheelPickTest {
         repoTest { repo ->
             Dispatchers.setMain(StandardTestDispatcher(testScheduler))
             // Built the old way, a Begode vehicle has nowhere to put a cell
-            // count — `withCellCount` is `packs.mapIndexed`, a silent no-op with
-            // no list to map. That defect is real and unrelated to Task 2, so it
-            // is still pinned here.
+            // count — `withCellCount` needs a primary pack address before it
+            // can propagate the count to co-addressed branches, so a pack-less
+            // vehicle is a no-op. That defect is real and unrelated to Task 2,
+            // so it is still pinned here.
             val packLess = controllerVehicle(
                 id = "v-old-shape",
                 name = "ET Max",
@@ -335,7 +337,7 @@ class KableBmsRepositoryBegodeWheelPickTest {
             assertTrue(packLess.packs.isEmpty())
             assertTrue(
                 packLess.withCellCount(40).packs.isEmpty(),
-                "withCellCount is packs.mapIndexed — a silent no-op with no list to map"
+                "withCellCount has no primary pack address to propagate from"
             )
 
             // …and createProtocol therefore never gets a PROFILE cell count,

@@ -248,12 +248,19 @@ class KableBmsRepositoryMultiLinkTest {
         oldFunnel(0, sample(current = 8.85f), emptyList())
         runCurrent()
         assertEquals(8.85f, repo.activeVehicleData.value.aggregate.current, absoluteTolerance = 0.001f)
+        assertTrue(repo.activeVehicleData.value.aggregate.isConnected)
+        assertEquals(8.85f, repo.activeData.value.current, absoluteTolerance = 0.001f)
+        assertTrue(repo.activeData.value.isConnected)
 
         repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
 
         val gap = repo.activeVehicleData.value
         assertTrue(gap.packs.isEmpty(), "the reconnect gap must expose no packs from the dead session")
         assertFalse(gap.aggregate.isConnected, "the dashboard must take its existing offline path during the gap")
+        val legacyGap = repo.activeData.value
+        assertFalse(legacyGap.isConnected, "the battery dashboard and alerts must also see the reconnect gap")
+        assertEquals(0f, legacyGap.current, "the dead session's current must not survive reconnect")
+        assertEquals(0f, legacyGap.voltage, "the dead session's voltage must not survive reconnect")
     }
 
     @Test
@@ -267,9 +274,14 @@ class KableBmsRepositoryMultiLinkTest {
         repo.markLinkOnlineForTest(ADDR_A)
         oldFunnel(0, sample(current = 8.85f), emptyList())
         runCurrent()
+        assertEquals(8.85f, repo.activeVehicleData.value.aggregate.current, absoluteTolerance = 0.001f)
+        assertEquals(8.85f, repo.activeData.value.current, absoluteTolerance = 0.001f)
+        assertTrue(repo.activeData.value.isConnected)
 
         repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
         assertTrue(repo.activeVehicleData.value.packs.isEmpty(), "the old session must be gone before fresh data arrives")
+        assertFalse(repo.activeVehicleData.value.aggregate.isConnected)
+        assertFalse(repo.activeData.value.isConnected, "both public battery flows must reset before fresh data arrives")
 
         repo.linkSampleFunnelsForTest().single()(0, sample(current = 3.14f, voltage = 83.16f), emptyList())
         runCurrent()
@@ -279,6 +291,10 @@ class KableBmsRepositoryMultiLinkTest {
         assertTrue(fresh.aggregate.isConnected)
         assertEquals(3.14f, fresh.aggregate.current, absoluteTolerance = 0.001f)
         assertEquals(83.16f, fresh.aggregate.voltage, absoluteTolerance = 0.001f)
+        val legacyFresh = repo.activeData.value
+        assertTrue(legacyFresh.isConnected)
+        assertEquals(3.14f, legacyFresh.current, absoluteTolerance = 0.001f)
+        assertEquals(83.16f, legacyFresh.voltage, absoluteTolerance = 0.001f)
     }
 
     @Test

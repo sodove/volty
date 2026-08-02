@@ -339,17 +339,16 @@ class KableBmsRepository private constructor(
      * Every PRODUCTION write goes through [sessionLock], and every
      * check-then-write (the identity-guarded failure cleanup) is performed
      * inside a single critical section, so a failed attempt can never null out
-     * the orchestrator a concurrent attempt installed in between. The writers
-     * are: [doConnect] (install, and clear via [clearOrchestratorLocked]),
-     * [connectDemo] and [disconnect] (clear) — all inside a
-     * `sessionLock.withLock { }` block.
+     * the orchestrator a concurrent attempt installed in between. [doConnect]
+     * installs it, [rebuildPipelineLocked] atomically replaces it during a
+     * reconnect, and [clearOrchestratorLocked], [connectDemo], and [disconnect]
+     * clear it under the same lock.
      *
-     * The one exception is [installSampleFunnelForTest], which writes the field
-     * unlocked. It has no production call site and runs on a single-threaded
-     * test dispatcher, so it cannot race — but it does mean "every write is
-     * locked" holds for production paths only. Keep it that way: a second
-     * unlocked writer that production could reach would silently undo the
-     * guarantee the rest of this doc describes.
+     * The test pipeline installers ([installSampleFunnelForTest] and
+     * [installLinksForTest]) are the only unlocked replacement seam. They have
+     * no production call site and run on a single-threaded test dispatcher;
+     * [rebuildPipelineForTest], by contrast, deliberately takes [sessionLock]
+     * so callback/rebuild races exercise the production boundary.
      *
      * [sessionLock] is a plain non-reentrant [Mutex]. The two cleanup helpers
      * have opposite locking contracts: [clearOrchestratorLocked] ASSUMES the
@@ -358,10 +357,11 @@ class KableBmsRepository private constructor(
      * therefore never be called from inside a critical section — the mutex is
      * not reentrant, so doing so hangs silently instead of throwing.
      *
-     * Reads are unlocked. The session's onSample callback accesses the field
-     * null-safely and tolerates a concurrent swap (a sample routed through a
-     * stale or absent orchestrator is dropped or passed through raw, never
-     * crashed on).
+     * Sample callbacks publish through the single consumer while holding
+     * [sessionLock]: owner validation, submit/callback publication, alias
+     * handoff decisions, ring-buffer mutation, and active-flow publication are
+     * one transaction. A reconnect replacement therefore runs entirely before
+     * or after an accepted old-owner sample, never through its middle.
      */
     private var vehicleConnection: VehicleConnection? = null
 
@@ -664,9 +664,12 @@ class KableBmsRepository private constructor(
      * share that factory ([installLinksForTest], [createProtocolForTest],
      * [linkSampleFunnelsForTest]) alike — and directly by
      * [installProtocolPipelineForTest] for the single-link seam that never
-     * builds a [LinkSpec] at all. Cleared everywhere [_activeVehicleData] is
-     * reset to a fresh [VehicleData], so a stale reference from a torn-down
-     * connection can never answer for a new one.
+     * builds a [LinkSpec] at all. Cleared on terminal teardown, demo takeover,
+     * and failed-pipeline cleanup so a stale reference cannot answer for a new
+     * connection. A reconnect's [rebuildPipelineLocked] reset is the deliberate
+     * exception: [connectLinkAttempt] has just created and captured the fresh
+     * protocol before rebuilding the orchestrator, so that reset must preserve
+     * it.
      *
      * **Why this exists at all (Task 3's post-review redesign).** The first
      * version of this gate tried to recompute a completeness ratio from
@@ -2331,6 +2334,7 @@ class KableBmsRepository private constructor(
         // Clear it before publishing the replacement so the reconnect gap
         // takes the existing offline presentation until fresh samples arrive.
         _activeVehicleData.value = VehicleData() // reconnect boundary
+        _activeData.value = BmsData() // reconnect boundary legacy flow
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
