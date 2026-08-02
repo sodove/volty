@@ -229,18 +229,21 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 }
             }
 
-            // How the packs are wired (`G §4`). Drives both the aggregation
-            // formulas and what a missing pack means, so it belongs to the
-            // vehicle rather than to any one pack card.
-            SectionLabel(stringResource(Res.string.vehicle_field_topology))
-            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
-                val topologies = PackTopology.entries
-                topologies.forEachIndexed { idx, t ->
-                    SegmentedButton(
-                        selected = state.topology == t,
-                        onClick = { component.onTopologyChanged(t) },
-                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = topologies.size)
-                    ) { Text(topologyLabel(t), fontSize = 12.sp) }
+            if (state.showTopologyChoice) {
+                // How the packs are wired (`G §4`). Drives both the aggregation
+                // formulas and what a missing pack means, so it belongs to the
+                // vehicle rather than to any one pack card — and has no meaning
+                // until the draft contains a second pack.
+                SectionLabel(stringResource(Res.string.vehicle_field_topology))
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    val topologies = PackTopology.entries
+                    topologies.forEachIndexed { idx, t ->
+                        SegmentedButton(
+                            selected = state.topology == t,
+                            onClick = { component.onTopologyChanged(t) },
+                            shape = SegmentedButtonDefaults.itemShape(index = idx, count = topologies.size)
+                        ) { Text(topologyLabel(t), fontSize = 12.sp) }
+                    }
                 }
             }
 

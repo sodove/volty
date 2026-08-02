@@ -40,6 +40,7 @@ import com.arkivanov.decompose.extensions.compose.stack.animation.stackAnimation
 import kotlinx.coroutines.flow.StateFlow
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
@@ -234,6 +235,25 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
             ErrorHint(stringResource(Res.string.wizard_empty_draft))
         }
         DraftSources(state)
+        if (state.showTopologyChoice) {
+            Text(
+                stringResource(Res.string.wizard_topology_question),
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+            TopologyChoice(
+                selected = state.topology == PackTopology.PARALLEL,
+                title = Res.string.topology_parallel,
+                caption = Res.string.wizard_topology_parallel_caption,
+                onClick = { component.onTopologyChanged(PackTopology.PARALLEL) }
+            )
+            TopologyChoice(
+                selected = state.topology == PackTopology.SERIES,
+                title = Res.string.topology_series,
+                caption = Res.string.wizard_topology_series_caption,
+                onClick = { component.onTopologyChanged(PackTopology.SERIES) }
+            )
+        }
     }
 }
 
@@ -378,6 +398,33 @@ private fun ArchetypeChoice(
     OutlinedButton(
         onClick = onClick,
         modifier = modifier.heightIn(min = 76.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
+            contentColor = contentColor
+        )
+    ) {
+        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+            Text(stringResource(title), fontWeight = FontWeight.SemiBold)
+            Text(stringResource(caption), style = MaterialTheme.typography.bodySmall, color = contentColor)
+        }
+    }
+}
+
+@Composable
+private fun TopologyChoice(
+    selected: Boolean,
+    title: StringResource,
+    caption: StringResource,
+    onClick: () -> Unit
+) {
+    val contentColor = if (selected) {
+        MaterialTheme.colorScheme.onPrimaryContainer
+    } else {
+        MaterialTheme.colorScheme.onSurface
+    }
+    OutlinedButton(
+        onClick = onClick,
+        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
         colors = ButtonDefaults.outlinedButtonColors(
             containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
             contentColor = contentColor

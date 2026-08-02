@@ -14,11 +14,15 @@ import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.setMain
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.PackState
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.stats.PackAggregator
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.root.Config
 import ru.sodovaya.volty.presentation.root.CreateVehicleEntry
@@ -247,6 +251,65 @@ class SetupWizardComponentTest {
 
         assertEquals(VehicleArchetype.SCOOTER, c.state.value.archetype)
         assertEquals(listOf("AN:01", "AN:02"), c.state.value.draft.packs.map { it.address })
+    }
+
+    @Test
+    fun `battery wiring is asked only after the draft has a second pack`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onAddScannedDevice(
+            device("VE:01", "VESC", controllerType = ControllerType.VESC),
+            ScannedAdd.CONTROLLER
+        )
+        controllers.onNext()
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+
+        assertFalse(c.state.value.showTopologyChoice, "a controller is not a battery pack")
+        battery.onUseSeparateBms(device("AN:01", "Main", bmsType = BmsType.ANT_BMS))
+        assertFalse(c.state.value.showTopologyChoice, "one pack has no wiring choice")
+
+        battery.onUseSeparateBms(device("AN:02", "Second", bmsType = BmsType.ANT_BMS))
+        assertTrue(c.state.value.showTopologyChoice, "two packs must ask how they are wired")
+    }
+
+    @Test
+    fun `two 72 V packs chosen as series leave the wizard as a 144 V vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = mutableListOf<Vehicle>()
+        val c = component(saved = saved)
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onNameChanged("Series bike")
+        controllers.onNoController()
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        battery.onUseSeparateBms(device("AN:01", "Upper", bmsType = BmsType.ANT_BMS))
+        battery.onUseSeparateBms(device("AN:02", "Lower", bmsType = BmsType.ANT_BMS))
+        battery.onTopologyChanged(PackTopology.SERIES)
+        battery.onNext()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.Review).component.onSave()
+        advanceUntilIdle()
+
+        val vehicle = saved.single()
+        val livePacks = vehicle.packs.map { pack ->
+            PackState(
+                pack = pack,
+                data = BmsData(voltage = 72f, isConnected = true),
+                isOnline = true
+            )
+        }
+        assertEquals(
+            144f,
+            PackAggregator.aggregate(livePacks, vehicle.topology).voltage,
+            absoluteTolerance = 0.001f
+        )
     }
 
     @Test

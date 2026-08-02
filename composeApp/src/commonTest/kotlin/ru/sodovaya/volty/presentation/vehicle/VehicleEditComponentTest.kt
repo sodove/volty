@@ -417,7 +417,6 @@ class VehicleEditComponentTest {
         changedAndReverted("SOC low", { c.onSocLowChanged(7) }, { c.onSocLowChanged(original.socLowPercent) })
         changedAndReverted("dashboard", { c.onDashboardStyleChanged(null) }, { c.onDashboardStyleChanged(original.dashboardStyle) })
         changedAndReverted("secondary gauge", { c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY) }, { c.onSecondaryGaugeChanged(original.secondaryGauge) })
-        changedAndReverted("topology", { c.onTopologyChanged(PackTopology.PARALLEL) }, { c.onTopologyChanged(original.topology) })
         changedAndReverted(
             "head-unit handoff",
             { c.onYieldBmsToHeadUnitChanged(!original.yieldsBmsToHeadUnit) },
@@ -434,7 +433,9 @@ class VehicleEditComponentTest {
     @Test
     fun `adding then removing the same source returns to the clean persisted draft`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle().copy(topology = PackTopology.PARALLEL)))
+        )
         advanceUntilIdle()
 
         c.onAddPack(BmsType.ANT_BMS, "TEMP:01", "Temporary")
@@ -2098,7 +2099,7 @@ class VehicleEditComponentTest {
     @Test
     fun `topology is editable and lands on the saved vehicle`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
-        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val repo = FakeVehicleRepo(listOf(wheelWithSecondBranch()))
         val c = component(repo)
         advanceUntilIdle()
 
@@ -2107,6 +2108,29 @@ class VehicleEditComponentTest {
         c.onSave()
         advanceUntilIdle()
 
+        assertEquals(PackTopology.PARALLEL, repo.upserts.single().topology)
+    }
+
+    @Test
+    fun `topology choice is visible only for two packs and removal clears stale series`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertFalse(c.state.value.showTopologyChoice, "one pack has no wiring choice")
+        c.onAddPack(BmsType.ANT_BMS, "AN:02", "Second")
+        assertTrue(c.state.value.showTopologyChoice, "the second pack makes wiring meaningful")
+        c.onTopologyChanged(PackTopology.SERIES)
+        assertEquals(PackTopology.SERIES, c.state.value.topology, "the visible choice must apply")
+
+        val secondKey = c.state.value.draft.packs.last().key
+        c.onRemovePack(secondKey)
+
+        assertFalse(c.state.value.showTopologyChoice)
+        assertEquals(PackTopology.PARALLEL, c.state.value.topology)
+        c.onSave()
+        advanceUntilIdle()
         assertEquals(PackTopology.PARALLEL, repo.upserts.single().topology)
     }
 

@@ -419,6 +419,9 @@ interface VehicleEditComponent : DraftExitComponent {
         /** See [VehicleDraft.canRemoveSource]. False while creating (no draft). */
         val canRemoveSource: Boolean get() = draft.canRemoveSource
 
+        /** Pack wiring affects aggregation only when at least two packs exist. */
+        val showTopologyChoice: Boolean get() = draft.packs.size >= 2
+
         /**
          * [issues] indexed by the source card that must show each one — see
          * [ru.sodovaya.volty.presentation.vehicle.issuesBySource]. A card asks
@@ -755,6 +758,11 @@ class DefaultVehicleEditComponent(
             val d = block(s.draft)
             s.copy(
                 draft = d,
+                topology = if (s.draft.packs.size >= 2 && d.packs.size < 2) {
+                    PackTopology.PARALLEL
+                } else {
+                    s.topology
+                },
                 issues = validate(d, s.telemetry),
                 packsEdited = s.packsEdited || packs,
                 controllersEdited = s.controllersEdited || controllers,
@@ -825,7 +833,11 @@ class DefaultVehicleEditComponent(
         }
 
     override fun onTopologyChanged(topology: PackTopology) {
-        _state.update { it.copy(topology = topology) }
+        _state.update { state ->
+            state.copy(
+                topology = if (state.showTopologyChoice) topology else PackTopology.PARALLEL
+            )
+        }
     }
 
     // ----- Alias groups (G2 Task 4) -----

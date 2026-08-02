@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
@@ -66,6 +67,7 @@ interface SetupWizardComponent : DraftExitComponent {
         val name: String,
         val iconKey: String,
         val secondaryGauge: SecondaryGauge,
+        val topology: PackTopology,
         val draft: PersistableVehicleDraft
     )
 
@@ -80,6 +82,7 @@ interface SetupWizardComponent : DraftExitComponent {
         val name: String,
         val iconKey: String,
         val secondaryGauge: SecondaryGauge,
+        val topology: PackTopology = PackTopology.PARALLEL,
         val draft: VehicleDraft,
         val issues: List<ComposerIssue>,
         val savedValues: EditableValues,
@@ -94,12 +97,22 @@ interface SetupWizardComponent : DraftExitComponent {
         val connectFailed: Boolean = false
     ) {
         val editableValues: EditableValues
-            get() = EditableValues(archetype, name, iconKey, secondaryGauge, draft.persistableValues())
+            get() = EditableValues(
+                archetype,
+                name,
+                iconKey,
+                secondaryGauge,
+                topology,
+                draft.persistableValues()
+            )
 
         val isDirty: Boolean get() = editableValues != savedValues
 
         /** Save owns its snapshot until persistence returns. */
         val navigationEnabled: Boolean get() = !saving
+
+        /** Pack wiring changes aggregation only once a second physical pack exists. */
+        val showTopologyChoice: Boolean get() = draft.packs.size >= 2
 
         val canSave: Boolean
             get() = name.isNotBlank() &&
@@ -135,6 +148,7 @@ interface SetupWizardComponent : DraftExitComponent {
         fun onUseSeparateBms(device: DiscoveredDevice)
         fun onUseControllerBattery()
         fun onUseDeviceAsBoth(device: DiscoveredDevice)
+        fun onTopologyChanged(topology: PackTopology)
         fun onNoBattery()
         fun onNext()
         fun onBack()
@@ -198,6 +212,7 @@ class DefaultSetupWizardComponent(
         name = initialName,
         iconKey = initialDefaults.iconKey,
         secondaryGauge = initialDefaults.secondaryGauge,
+        topology = PackTopology.PARALLEL,
         draft = initialDraft.persistableValues()
     )
     private val _state = MutableStateFlow(
@@ -331,6 +346,7 @@ class DefaultSetupWizardComponent(
             val draft = sourceScanner.addTo(current.draft, device, add)
             current.copy(
                 draft = draft,
+                topology = if (draft.packs.size >= 2) current.topology else PackTopology.PARALLEL,
                 issues = validate(draft),
                 advanceBlocked = false,
                 saveBlocked = false
@@ -356,6 +372,15 @@ class DefaultSetupWizardComponent(
         openReview()
     }
 
+    private fun changeTopology(topology: PackTopology) {
+        if (!_state.value.navigationEnabled) return
+        _state.update { current ->
+            current.copy(
+                topology = if (current.showTopologyChoice) topology else PackTopology.PARALLEL
+            )
+        }
+    }
+
     private fun save() {
         val snapshot = _state.value
         if (snapshot.saving) return
@@ -373,7 +398,12 @@ class DefaultSetupWizardComponent(
                 draft = snapshot.draft,
                 chemistry = Chemistry.LI_ION_NMC,
                 createdAt = now(),
-                secondaryGauge = snapshot.secondaryGauge
+                secondaryGauge = snapshot.secondaryGauge,
+                topology = if (snapshot.showTopologyChoice) {
+                    snapshot.topology
+                } else {
+                    PackTopology.PARALLEL
+                }
             )
             saveVehicle(vehicle)
             _state.update {
@@ -452,6 +482,8 @@ class DefaultSetupWizardComponent(
             this@DefaultSetupWizardComponent.useControllerBattery()
         override fun onUseDeviceAsBoth(device: DiscoveredDevice) =
             this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.WHEEL)
+        override fun onTopologyChanged(topology: PackTopology) =
+            this@DefaultSetupWizardComponent.changeTopology(topology)
         override fun onNoBattery() = openReview()
         override fun onNext() = openReview()
         override fun onBack() = backFromStage()

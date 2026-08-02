@@ -422,6 +422,9 @@
     <string name="wizard_battery_from_controller_caption">Рассчитывается по данным контроллера. После подключения шкала может ненадолго отсутствовать.</string>
     <string name="wizard_battery_device_is_both">Это то же устройство</string>
     <string name="wizard_battery_device_is_both_caption">один адрес с ролями контроллера и батареи</string>
+    <string name="wizard_topology_question">Как соединены батареи?</string>
+    <string name="wizard_topology_parallel_caption">Напряжение остаётся тем же, ёмкость складывается.</string>
+    <string name="wizard_topology_series_caption">Напряжение складывается, ёмкость общая.</string>
     <string name="wizard_no_battery">Без батареи</string>
     <string name="wizard_review_title">Проверка</string>
     <string name="wizard_summary">Связей: %1$d · Источников: %2$d</string>
