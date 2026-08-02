@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.primaryAddress
@@ -230,6 +231,81 @@ class KableBmsRepositoryMultiLinkTest {
         repo.disconnect()
         runCurrent()
         assertEquals(ConnectionState.Disconnected, repo.connectionState.value)
+    }
+
+    @Test
+    fun `rebuilding a reconnect pipeline clears the dead session snapshot`() = repoTest { repo ->
+        val v = singlePackVehicle(
+            id = "v-reconnect-clear", name = "Solo", iconKey = "scooter",
+            bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
+        )
+        val oldFunnel = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType).single()
+        repo.markLinkOnlineForTest(ADDR_A)
+        oldFunnel(0, sample(current = 8.85f), emptyList())
+        runCurrent()
+        assertEquals(8.85f, repo.activeVehicleData.value.aggregate.current, absoluteTolerance = 0.001f)
+
+        repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
+
+        val gap = repo.activeVehicleData.value
+        assertTrue(gap.packs.isEmpty(), "the reconnect gap must expose no packs from the dead session")
+        assertFalse(gap.aggregate.isConnected, "the dashboard must take its existing offline path during the gap")
+    }
+
+    @Test
+    fun `a fresh sample repopulates the pipeline after reconnect`() = repoTest { repo ->
+        val v = singlePackVehicle(
+            id = "v-reconnect-fresh", name = "Solo", iconKey = "scooter",
+            bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
+        )
+        val oldFunnel = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType).single()
+        repo.markLinkOnlineForTest(ADDR_A)
+        oldFunnel(0, sample(current = 8.85f), emptyList())
+        runCurrent()
+
+        repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
+        assertTrue(repo.activeVehicleData.value.packs.isEmpty(), "the old session must be gone before fresh data arrives")
+
+        repo.linkSampleFunnelsForTest().single()(0, sample(current = 3.14f, voltage = 83.16f), emptyList())
+        runCurrent()
+
+        val fresh = repo.activeVehicleData.value
+        assertEquals(1, fresh.packs.size, "the rebuilt pipeline must publish the reconnected pack")
+        assertTrue(fresh.aggregate.isConnected)
+        assertEquals(3.14f, fresh.aggregate.current, absoluteTolerance = 0.001f)
+        assertEquals(83.16f, fresh.aggregate.voltage, absoluteTolerance = 0.001f)
+    }
+
+    @Test
+    fun `an old funnel sample queued across rebuild cannot repopulate the cleared snapshot`() = repoTest { repo ->
+        val v = singlePackVehicle(
+            id = "v-reconnect-queued", name = "Solo", iconKey = "scooter",
+            bmsType = BmsType.JK_BMS, bmsAddress = ADDR_A,
+            chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0L)
+        )
+        lateinit var oldFunnel: (Int, BmsData, List<SectionState>) -> Unit
+        var rebuilt = false
+        repo.vehicleDataTapForTest = {
+            if (!rebuilt) {
+                rebuilt = true
+                // The consumer is already executing on Dispatchers.Unconfined,
+                // so this second old-session sample queues instead of re-entering.
+                oldFunnel(0, sample(current = 6.66f), emptyList())
+                repo.rebuildPipelineForTest(v, v.primaryAddress, v.packs.first().bmsType)
+            }
+        }
+        oldFunnel = repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType).single()
+        repo.markLinkOnlineForTest(ADDR_A)
+
+        oldFunnel(0, sample(current = 8.85f), emptyList())
+        runCurrent()
+
+        assertTrue(rebuilt, "the driver must cross the rebuild boundary while the old consumer is active")
+        val gap = repo.activeVehicleData.value
+        assertTrue(gap.packs.isEmpty(), "a queued old-session sample must be rejected after rebuild")
+        assertFalse(gap.aggregate.isConnected)
     }
 
     @Test

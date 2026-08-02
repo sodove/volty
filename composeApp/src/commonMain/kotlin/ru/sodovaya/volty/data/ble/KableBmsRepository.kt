@@ -1313,7 +1313,8 @@ class KableBmsRepository private constructor(
     private fun buildOrchestrator(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection {
         val stored = storedPacks(vehicle, address, type)
         val expanded = expandedVehiclePacks(vehicle, address, type)
-        return VehicleConnection(
+        lateinit var orchestrator: VehicleConnection
+        orchestrator = VehicleConnection(
             packs = stored,
             // Protocol-synthesised slots stay invisible until they report:
             // a Begode without a smart BMS never fills its second branch,
@@ -1326,7 +1327,11 @@ class KableBmsRepository private constructor(
             // synthesises controller slots beyond the stored profile yet.
             controllers = vehicle?.controllers ?: emptyList(),
             topology = vehicle?.topology ?: PackTopology.PARALLEL,
-            onVehicleData = { vd ->
+            onVehicleData = onVehicleData@ { vd ->
+                // A closed funnel drains its already-buffered samples. Once a
+                // reconnect replaces this orchestrator, those samples belong
+                // to the dead session and must not republish its snapshot.
+                if (!ownsActivePipeline(orchestrator)) return@onVehicleData
                 _activeVehicleData.value = vd
                 // The motion aggregate rides the same snapshot; publish it on
                 // the motion StateFlow beside the vehicle-level one.
@@ -1335,6 +1340,7 @@ class KableBmsRepository private constructor(
             },
             clock = orchestratorClockForTest ?: { Clock.System.now() }
         )
+        return orchestrator
     }
 
     /**
@@ -1465,17 +1471,27 @@ class KableBmsRepository private constructor(
      * mid-drain just buffers, with the channel providing the happens-before
      * edge between the threads.
      */
-    private fun launchSampleConsumer(channel: Channel<Sample>): Job =
+    private fun launchSampleConsumer(
+        channel: Channel<Sample>,
+        orchestrator: VehicleConnection
+    ): Job =
         scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
             for (sample in channel) {
+                // Channel.close() deliberately drains buffered work. Bind the
+                // consumer to the pipeline that created it and discard that
+                // work once a rebuild has superseded the owner.
+                if (!ownsActivePipeline(orchestrator)) continue
                 when (sample) {
                     is PackSample -> {
                         // The aggregate is a true identity for a single pack
                         // (cell voltages included), so every vehicle routes
                         // through it. submit() returns the snapshot it just
                         // emitted, so the aggregate is built once per sample.
-                        val submitted = vehicleConnection
-                            ?.submit(sample.globalPackIndex, sample.data, sample.sections)
+                        val submitted = orchestrator
+                            .submit(sample.globalPackIndex, sample.data, sample.sections)
+                        // The owner can change while submit invokes its
+                        // callback; that callback is identity-guarded too.
+                        if (!ownsActivePipeline(orchestrator)) continue
                         // THE alias-path handoff trigger (C §5 / §9.4). It sits
                         // HERE, after the submit that just put the hosted pack
                         // online, and nowhere else — this is the one place the
@@ -1493,13 +1509,10 @@ class KableBmsRepository private constructor(
                         // Checked on every sample because that is the only
                         // clock either half of the handoff uses.
                         val afterSilence = reRaiseYieldedLinksWhoseHostedWentSilent()
-                        // Fall back to the enriched sample — not the raw one — if
-                        // the orchestrator was swapped out mid-flight, so a Begode
-                        // keeps its estimated SoC even on that path. The section
-                        // breakdown rides beside the sample into the pack state; the
-                        // vehicle-level aggregate has no section field, so nothing of
-                        // it survives the fallback path — dropped, not misattributed.
-                        val forActive = (afterSilence ?: afterHandoff ?: submitted)?.aggregate ?: sample.data
+                        // This consumer owns a concrete orchestrator, so its
+                        // submitted snapshot is always available while the
+                        // identity guards above admit the sample.
+                        val forActive = (afterSilence ?: afterHandoff ?: submitted).aggregate
                         // Ring buffer before activeData: the graph collector maps
                         // over _activeData and reads the buffer, so announcing the
                         // sample first would make every graph emit lag by one.
@@ -1513,8 +1526,9 @@ class KableBmsRepository private constructor(
                         // through onVehicleData, which sets _activeMotion — so
                         // nothing sets it here (mirrors how _activeData rides
                         // off the battery submit's snapshot, not a direct write).
-                        val motionSnap = vehicleConnection
-                            ?.submitMotion(sample.globalControllerIndex, sample.data)
+                        val motionSnap = orchestrator
+                            .submitMotion(sample.globalControllerIndex, sample.data)
+                        if (!ownsActivePipeline(orchestrator)) continue
                         // The VEHICLE-LEVEL fold, not this controller's own
                         // sample. (`submitMotion`'s snapshot used to be
                         // discarded here; the "dropped on purpose" note below
@@ -1541,7 +1555,7 @@ class KableBmsRepository private constructor(
                         // vehicle refused to attribute contributed no distance
                         // either, so it contributes no energy: nothing is
                         // buffered.
-                        motionSnap?.motion?.takeIf { it.isConnected }
+                        motionSnap.motion.takeIf { it.isConnected }
                             ?.let { motionRingBuffer.push(it) }
                         // THE sample kind that matters for the silent-hosted
                         // case: a head unit whose CAN controllers keep
@@ -1828,6 +1842,10 @@ class KableBmsRepository private constructor(
         sampleConsumerJob = null
     }
 
+    /** True only while [orchestrator] owns the currently published pipeline. */
+    private fun ownsActivePipeline(orchestrator: VehicleConnection): Boolean =
+        vehicleConnection === orchestrator
+
     /**
      * Scale the synthetic no-BMS Begode pack's live-frame voltage to real
      * pack volts, when — and only when — the protocol is currently offering
@@ -2045,7 +2063,7 @@ class KableBmsRepository private constructor(
                 vehicleConnection = orchestrator
                 closeSampleFunnelLocked()
                 sampleChannel = channel
-                sampleConsumerJob = launchSampleConsumer(channel)
+                sampleConsumerJob = launchSampleConsumer(channel, orchestrator)
                 links = newLinks
                 // Planned in the SAME critical section as the links they
                 // describe: a handoff naming an address no longer installed is
@@ -2281,10 +2299,14 @@ class KableBmsRepository private constructor(
     private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection {
         val orchestrator = buildOrchestrator(vehicle, address, type)
         val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
+        // The old orchestrator's last snapshot belongs to a dead BLE session.
+        // Clear it before publishing the replacement so the reconnect gap
+        // takes the existing offline presentation until fresh samples arrive.
+        _activeVehicleData.value = VehicleData() // reconnect boundary
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
-        sampleConsumerJob = launchSampleConsumer(channel)
+        sampleConsumerJob = launchSampleConsumer(channel, orchestrator) // replacement consumer
         return orchestrator
     }
 
@@ -2948,7 +2970,7 @@ class KableBmsRepository private constructor(
         vehicleConnection = pipeline.orchestrator
         closeSampleFunnelLocked()
         sampleChannel = pipeline.channel
-        sampleConsumerJob = launchSampleConsumer(pipeline.channel)
+        sampleConsumerJob = launchSampleConsumer(pipeline.channel, pipeline.orchestrator)
         return protocol to pipeline.onSample
     }
 
@@ -3037,7 +3059,7 @@ class KableBmsRepository private constructor(
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
-        sampleConsumerJob = launchSampleConsumer(channel)
+        sampleConsumerJob = launchSampleConsumer(channel, orchestrator)
         links = newLinks
         // The production pairing (see doConnect): the plan and the links it
         // names are installed together, so a test drives the real trigger
@@ -3059,6 +3081,17 @@ class KableBmsRepository private constructor(
                 localToGlobal = link.spec::globalPackIndex
             )
         }
+    }
+
+    /**
+     * Test-only: cross the exact reconnect session boundary without touching
+     * Android's BLE scanner. Production reaches this choke point from
+     * [connectLinkAttempt] while holding [sessionLock]; repository tests run
+     * single-threaded on their injected dispatcher, so this follows the same
+     * sanctioned unlocked test-seam exception as [installLinksForTest].
+     */
+    internal fun rebuildPipelineForTest(vehicle: Vehicle?, address: String, type: BmsType?) {
+        rebuildPipelineLocked(vehicle, address, type)
     }
 
     /**
