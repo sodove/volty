@@ -100,7 +100,7 @@ import volty.composeapp.generated.resources.vehicle_source_add_controller
 import volty.composeapp.generated.resources.vehicle_source_add_pack
 import volty.composeapp.generated.resources.vehicle_source_scan
 
-private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "moto", "solar", "ev", "boat", "rv")
+private val ICON_KEYS = listOf("generic", "skateboard", "ebike", "scooter", "unicycle", "moto", "solar", "ev", "boat", "rv")
 
 /**
  * The vehicle composer (`G §3`–`§4`), and a renderer and nothing more — see

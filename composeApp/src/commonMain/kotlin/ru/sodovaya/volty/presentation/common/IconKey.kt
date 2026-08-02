@@ -5,6 +5,7 @@ fun iconKeyToEmoji(key: String?): String = when (key) {
     "skateboard" -> "🛹"
     "ebike" -> "🚲"
     "scooter" -> "🛵"
+    "unicycle", "wheel" -> "🛞"
     "moto" -> "🏍"
     "solar" -> "☀"
     "ev" -> "🚗"

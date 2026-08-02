@@ -4,23 +4,23 @@
 
     <!-- Welcome -->
     <string name="welcome_title">Welcome to Volty</string>
-    <string name="welcome_subtitle">Monitor your batteries via Bluetooth. Pick one to start.</string>
-    <string name="welcome_add_battery">+ Add my battery</string>
+    <string name="welcome_subtitle">Monitor your vehicles via Bluetooth. Pick one to start.</string>
+    <string name="welcome_add_battery">+ Add my vehicle</string>
     <string name="welcome_quick_connect">⚡ Quick connect (guest)</string>
     <string name="welcome_try_demo">Try demo</string>
     <string name="welcome_try_demo_wheel">Try demo: unicycle</string>
 
     <!-- Permissions -->
     <string name="permissions_title">Permissions needed</string>
-    <string name="permissions_subtitle">Volty needs Bluetooth and notification access to scan for batteries and show alerts.</string>
+    <string name="permissions_subtitle">Volty needs Bluetooth and notification access to scan for vehicles and show alerts.</string>
     <string name="permissions_missing">Missing: %1$d permission(s)</string>
     <string name="permissions_grant">Grant permissions</string>
 
     <!-- Scanning -->
-    <string name="scanning_title">Looking for your batteries</string>
-    <string name="scanning_subtitle">Make sure your BMS is on and in range.</string>
-    <string name="scanning_progress_one">Scanning for %1$d saved battery… %2$ds left</string>
-    <string name="scanning_progress_many">Scanning for %1$d saved batteries… %2$ds left</string>
+    <string name="scanning_title">Looking for your vehicles</string>
+    <string name="scanning_subtitle">Make sure your vehicle is on and in range.</string>
+    <string name="scanning_progress_one">Scanning for %1$d saved vehicle… %2$ds left</string>
+    <string name="scanning_progress_many">Scanning for %1$d saved vehicles… %2$ds left</string>
     <string name="scanning_skip">Skip → device list</string>
 
     <!-- AutoConnect -->
@@ -36,15 +36,15 @@
     <string name="autoconnect_unknown_error">Unknown error</string>
 
     <!-- Picker -->
-    <string name="picker_add_title">Add new battery</string>
+    <string name="picker_add_title">Add new vehicle</string>
     <string name="picker_guest_title">Quick connect</string>
-    <string name="picker_cold_title">Pick a battery</string>
+    <string name="picker_cold_title">Pick a vehicle</string>
     <string name="picker_guest_subtitle">Guest mode — won't save</string>
     <string name="picker_found_nearby">%1$d found nearby</string>
-    <string name="picker_my_in_range">My batteries · in range</string>
+    <string name="picker_my_in_range">My vehicles · in range</string>
     <string name="picker_other_nearby">Other BMS nearby</string>
     <string name="picker_detected">BMS detected</string>
-    <string name="picker_add_new">+ Add new battery</string>
+    <string name="picker_add_new">+ Add new vehicle</string>
     <string name="picker_try_demo">Try demo mode</string>
     <string name="picker_try_demo_wheel">Demo mode: unicycle</string>
     <string name="picker_scanning">Scanning…</string>
@@ -62,7 +62,7 @@
     <string name="status_connecting">Connecting…</string>
     <string name="status_scanning">Scanning…</string>
     <string name="status_idle">Idle</string>
-    <string name="no_battery">No battery</string>
+    <string name="no_battery">No active vehicle</string>
 
     <string name="hero_state_of_charge">STATE OF CHARGE</string>
     <string name="hero_charging_to_full">CHARGING TO FULL</string>
@@ -86,8 +86,8 @@
     <string name="tab_cells">Cells</string>
     <string name="tab_graph">Graph</string>
 
-    <string name="sheet_my_batteries">My batteries</string>
-    <string name="sheet_add_battery">+ Add battery</string>
+    <string name="sheet_my_batteries">My vehicles</string>
+    <string name="sheet_add_battery">+ Add vehicle</string>
     <string name="sheet_disconnect">Disconnect</string>
 
     <!-- Ride dashboard (Clean) -->
@@ -174,8 +174,8 @@
     <string name="settings_units_metric">Metric</string>
     <string name="settings_units_imperial">Imperial</string>
     <string name="settings_dashboard_style">Dashboard style</string>
-    <string name="settings_my_batteries">My batteries</string>
-    <string name="settings_add_new_battery">+ Add new battery</string>
+    <string name="settings_my_batteries">My vehicles</string>
+    <string name="settings_add_new_battery">+ Add new vehicle</string>
     <string name="settings_diagnostics">Diagnostics</string>
     <string name="settings_send_logs">Send app logs</string>
     <string name="settings_send_logs_subtitle">Share the app's logcat for troubleshooting</string>
@@ -185,8 +185,8 @@
     <string name="action_cancel">Cancel</string>
 
     <!-- VehicleEdit -->
-    <string name="vehicle_edit_new">New battery</string>
-    <string name="vehicle_edit_edit">Edit battery</string>
+    <string name="vehicle_edit_new">New vehicle</string>
+    <string name="vehicle_edit_edit">Edit vehicle</string>
     <string name="vehicle_save">Save</string>
     <string name="vehicle_field_name">Name</string>
     <string name="vehicle_field_name_required">Name required</string>
@@ -276,8 +276,8 @@
     <string name="vehicle_field_dashboard_style">Dashboard style</string>
     <string name="vehicle_field_secondary_gauge">Inner gauge</string>
     <string name="vehicle_field_secondary_gauge_caption">Clean style only — Classic shows every gauge at once.</string>
-    <string name="vehicle_delete">Delete battery</string>
-    <string name="vehicle_delete_confirm_title">Delete this battery?</string>
+    <string name="vehicle_delete">Delete vehicle</string>
+    <string name="vehicle_delete_confirm_title">Delete this vehicle?</string>
     <string name="vehicle_delete_confirm_text">This cannot be undone.</string>
     <string name="action_delete">Delete</string>
 

@@ -4,23 +4,23 @@
 
     <!-- Welcome -->
     <string name="welcome_title">Добро пожаловать в Volty</string>
-    <string name="welcome_subtitle">Мониторинг АКБ по Bluetooth. Выберите устройство.</string>
-    <string name="welcome_add_battery">+ Добавить батарею</string>
+    <string name="welcome_subtitle">Мониторинг транспорта по Bluetooth. Выберите транспорт, чтобы начать.</string>
+    <string name="welcome_add_battery">+ Добавить транспорт</string>
     <string name="welcome_quick_connect">⚡ Быстрое подключение (гость)</string>
     <string name="welcome_try_demo">Попробовать демо</string>
     <string name="welcome_try_demo_wheel">Демо: моноколесо</string>
 
     <!-- Permissions -->
     <string name="permissions_title">Нужны разрешения</string>
-    <string name="permissions_subtitle">Volty нужен доступ к Bluetooth и уведомлениям, чтобы сканировать батареи и показывать алерты.</string>
+    <string name="permissions_subtitle">Volty нужен доступ к Bluetooth и уведомлениям, чтобы сканировать транспорт и показывать алерты.</string>
     <string name="permissions_missing">Не выдано: %1$d</string>
     <string name="permissions_grant">Выдать разрешения</string>
 
     <!-- Scanning -->
-    <string name="scanning_title">Ищем ваши батареи</string>
-    <string name="scanning_subtitle">Убедитесь, что BMS включена и рядом.</string>
-    <string name="scanning_progress_one">Ищем %1$d сохранённую батарею… осталось %2$dс</string>
-    <string name="scanning_progress_many">Ищем %1$d сохранённых батарей… осталось %2$dс</string>
+    <string name="scanning_title">Ищем ваш транспорт</string>
+    <string name="scanning_subtitle">Убедитесь, что транспорт включён и рядом.</string>
+    <string name="scanning_progress_one">Ищем %1$d сохранённый транспорт… осталось %2$dс</string>
+    <string name="scanning_progress_many">Ищем %1$d сохранённых транспортов… осталось %2$dс</string>
     <string name="scanning_skip">Пропустить → список устройств</string>
 
     <!-- AutoConnect -->
@@ -36,15 +36,15 @@
     <string name="autoconnect_unknown_error">Неизвестная ошибка</string>
 
     <!-- Picker -->
-    <string name="picker_add_title">Новая батарея</string>
+    <string name="picker_add_title">Новый транспорт</string>
     <string name="picker_guest_title">Быстрое подключение</string>
-    <string name="picker_cold_title">Выбор батареи</string>
+    <string name="picker_cold_title">Выбор транспорта</string>
     <string name="picker_guest_subtitle">Гостевой режим — не сохраняется</string>
     <string name="picker_found_nearby">найдено %1$d рядом</string>
-    <string name="picker_my_in_range">Мои батареи · рядом</string>
+    <string name="picker_my_in_range">Мой транспорт · рядом</string>
     <string name="picker_other_nearby">Другие BMS рядом</string>
     <string name="picker_detected">BMS обнаружено</string>
-    <string name="picker_add_new">+ Добавить новую батарею</string>
+    <string name="picker_add_new">+ Добавить новый транспорт</string>
     <string name="picker_try_demo">Демо-режим</string>
     <string name="picker_try_demo_wheel">Демо-режим: моноколесо</string>
     <string name="picker_scanning">Сканирование…</string>
@@ -62,7 +62,7 @@
     <string name="status_connecting">Подключение…</string>
     <string name="status_scanning">Сканирование…</string>
     <string name="status_idle">Ожидание</string>
-    <string name="no_battery">Нет батареи</string>
+    <string name="no_battery">Нет активного транспорта</string>
 
     <string name="hero_state_of_charge">УРОВЕНЬ ЗАРЯДА</string>
     <string name="hero_charging_to_full">ЗАРЯЖАЕТСЯ ДО ПОЛНОЙ</string>
@@ -86,8 +86,8 @@
     <string name="tab_cells">Ячейки</string>
     <string name="tab_graph">График</string>
 
-    <string name="sheet_my_batteries">Мои батареи</string>
-    <string name="sheet_add_battery">+ Добавить батарею</string>
+    <string name="sheet_my_batteries">Мой транспорт</string>
+    <string name="sheet_add_battery">+ Добавить транспорт</string>
     <string name="sheet_disconnect">Отключить</string>
 
     <!-- Ride dashboard (Clean) -->
@@ -172,8 +172,8 @@
     <string name="settings_units_metric">Метрические</string>
     <string name="settings_units_imperial">Имперские</string>
     <string name="settings_dashboard_style">Стиль приборной панели</string>
-    <string name="settings_my_batteries">Мои батареи</string>
-    <string name="settings_add_new_battery">+ Добавить новую батарею</string>
+    <string name="settings_my_batteries">Мой транспорт</string>
+    <string name="settings_add_new_battery">+ Добавить новый транспорт</string>
     <string name="settings_diagnostics">Диагностика</string>
     <string name="settings_send_logs">Отправить логи приложения</string>
     <string name="settings_send_logs_subtitle">Поделиться logcat приложения для диагностики</string>
@@ -183,8 +183,8 @@
     <string name="action_cancel">Отмена</string>
 
     <!-- VehicleEdit -->
-    <string name="vehicle_edit_new">Новая батарея</string>
-    <string name="vehicle_edit_edit">Редактировать батарею</string>
+    <string name="vehicle_edit_new">Новый транспорт</string>
+    <string name="vehicle_edit_edit">Редактировать транспорт</string>
     <string name="vehicle_save">Сохранить</string>
     <string name="vehicle_field_name">Название</string>
     <string name="vehicle_field_name_required">Введите название</string>
@@ -274,8 +274,8 @@
     <string name="vehicle_field_dashboard_style">Стиль приборной панели</string>
     <string name="vehicle_field_secondary_gauge">Внутренний индикатор</string>
     <string name="vehicle_field_secondary_gauge_caption">Только для стиля Clean — Classic показывает все индикаторы сразу.</string>
-    <string name="vehicle_delete">Удалить батарею</string>
-    <string name="vehicle_delete_confirm_title">Удалить эту батарею?</string>
+    <string name="vehicle_delete">Удалить транспорт</string>
+    <string name="vehicle_delete_confirm_title">Удалить этот транспорт?</string>
     <string name="vehicle_delete_confirm_text">Это нельзя отменить.</string>
     <string name="action_delete">Удалить</string>
 
