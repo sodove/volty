@@ -20,7 +20,7 @@
     <string name="scanning_title">Ищем ваш транспорт</string>
     <string name="scanning_subtitle">Убедитесь, что транспорт включён и рядом.</string>
     <string name="scanning_progress_one">Ищем %1$d сохранённый транспорт… осталось %2$dс</string>
-    <string name="scanning_progress_many">Ищем %1$d сохранённых транспортов… осталось %2$dс</string>
+    <string name="scanning_progress_many">Ищем транспорт — сохранено: %1$d; осталось %2$d с</string>
     <string name="scanning_skip">Пропустить → список устройств</string>
 
     <!-- AutoConnect -->

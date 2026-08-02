@@ -6,8 +6,12 @@ import kotlin.test.assertEquals
 class IconKeyTest {
 
     @Test
-    fun `unicycle and legacy wheel keys use the wheel avatar`() {
+    fun `unicycle key uses the wheel avatar`() {
         assertEquals("🛞", iconKeyToEmoji("unicycle"))
+    }
+
+    @Test
+    fun `legacy wheel key uses the wheel avatar`() {
         assertEquals("🛞", iconKeyToEmoji("wheel"))
     }
 }
