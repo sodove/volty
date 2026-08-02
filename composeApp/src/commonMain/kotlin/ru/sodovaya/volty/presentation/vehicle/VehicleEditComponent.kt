@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
@@ -81,7 +82,24 @@ interface VehicleEditComponent {
      */
     fun onOpenUnits()
     fun onSave()
+
+    /**
+     * The app-bar Cancel slot and the system back gesture. Unsaved work raises
+     * [State.discardPrompt]; a clean form invokes the normal cancel route now.
+     */
     fun onCancel()
+
+    /**
+     * Ask this retained composer to allow a stack-destroying root action.
+     *
+     * Unlike [onCancel], the continuation is supplied by the caller: a
+     * dashboard disconnect lands on Scanning, while another destructive route
+     * may have a different destination. The continuation stays private; state
+     * exposes only the prompt the renderer needs.
+     */
+    fun requestExit(onDiscarded: () -> Unit)
+    fun onDiscardConfirmed()
+    fun onDiscardDismissed()
     fun onDelete()
 
     // ----- The composer (G2 Task 2): a vehicle is N sources -----
@@ -235,6 +253,30 @@ interface VehicleEditComponent {
     /** Dismiss the scan result — the offers, not the sources already added. */
     fun onDismissCanScan()
 
+    /**
+     * Exactly the values this form can persist. Transient scan, telemetry,
+     * validation and progress state are deliberately absent: only rider edits
+     * can make a form dirty.
+     */
+    data class EditableValues(
+        val name: String,
+        val iconKey: String,
+        val chemistry: Chemistry,
+        val bmsType: BmsType,
+        val bmsAddress: String,
+        val averagingWindowMin: Int,
+        val cellHighV: Float?,
+        val cellLowV: Float?,
+        val temperatureWarnC: Float?,
+        val temperatureHighC: Float?,
+        val socLowPercent: Int?,
+        val dashboardStyle: DashboardStyle?,
+        val secondaryGauge: SecondaryGauge,
+        val topology: PackTopology,
+        val yieldBmsToHeadUnit: Boolean?,
+        val draft: VehicleDraft
+    )
+
     data class State(
         val isEditing: Boolean = false,
         val name: String = "",
@@ -330,6 +372,11 @@ interface VehicleEditComponent {
         val saveBlocked: Boolean = false,
         val saving: Boolean = false,
 
+        /** Values as loaded, or as last successfully persisted by [onSave]. */
+        val savedValues: EditableValues? = null,
+        /** True while the established discard dialog is visible. */
+        val discardPrompt: Boolean = false,
+
         // ----- Discovery (G2 Task 5) -----
 
         /** Whether the scan sheet is open. The scan runs only while it is. */
@@ -347,6 +394,29 @@ interface VehicleEditComponent {
         /** Where a `PING_CAN` stands — see [CanScanState]. */
         val canScan: CanScanState = CanScanState.Idle
     ) {
+        val editableValues: EditableValues
+            get() = EditableValues(
+                name = name,
+                iconKey = iconKey,
+                chemistry = chemistry,
+                bmsType = bmsType,
+                bmsAddress = bmsAddress,
+                averagingWindowMin = averagingWindowMin,
+                cellHighV = cellHighV,
+                cellLowV = cellLowV,
+                temperatureWarnC = temperatureWarnC,
+                temperatureHighC = temperatureHighC,
+                socLowPercent = socLowPercent,
+                dashboardStyle = dashboardStyle,
+                secondaryGauge = secondaryGauge,
+                topology = topology,
+                yieldBmsToHeadUnit = yieldBmsToHeadUnit,
+                draft = draft
+            )
+
+        /** Reverting every field to its loaded value is clean again. */
+        val isDirty: Boolean get() = savedValues?.let { editableValues != it } ?: false
+
         /** See [VehicleDraft.canRemoveSource]. False while creating (no draft). */
         val canRemoveSource: Boolean get() = draft.canRemoveSource
 
@@ -483,8 +553,15 @@ class DefaultVehicleEditComponent(
     /** The BLE scan behind the sheet, alive only while the sheet is open. */
     private var scanJob: Job? = null
 
+    /** The root action waiting behind the discard prompt, if any. */
+    private var pendingExit: (() -> Unit)? = null
+
+    /** Same interception as VehicleAlerts: child back outranks stack pop. */
+    private val backCallback = BackCallback(onBack = ::onCancel)
+
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        backHandler.register(backCallback)
         scope.launch { initialize() }
         // A CAN scan needs a live link, and whether there is one changes under
         // the form: the rider can arrive here connected, drop, or reconnect. The
@@ -533,7 +610,7 @@ class DefaultVehicleEditComponent(
         if (vehicleId != null) {
             val v = vehicleRepository.get(vehicleId)
             if (v != null) {
-                _state.value = VehicleEditComponent.State(
+                val loaded = VehicleEditComponent.State(
                     isEditing = true,
                     name = v.name,
                     iconKey = v.iconKey,
@@ -582,10 +659,11 @@ class DefaultVehicleEditComponent(
                     // the next connection event, and there may never be one.
                     canScanTarget = canScanTarget(draftOf(v), liveAddresses)
                 )
+                _state.value = loaded.copy(savedValues = loaded.editableValues)
                 return
             }
         }
-        _state.value = VehicleEditComponent.State(
+        val loaded = VehicleEditComponent.State(
             isEditing = false,
             name = prefilledName ?: "",
             bmsType = prefilledBmsType ?: BmsType.JK_BMS,
@@ -594,6 +672,7 @@ class DefaultVehicleEditComponent(
             // prefilled BMS fields, which is what it always showed here.
             sourceAddress = prefilledBmsAddress ?: ""
         )
+        _state.value = loaded.copy(savedValues = loaded.editableValues)
     }
 
     override fun onNameChanged(name: String) {
@@ -916,11 +995,46 @@ class DefaultVehicleEditComponent(
             ) {
                 bmsRepository.connect(v)
             }
+            // Establish the persisted snapshot before publishing navigation.
+            // If another field changed while this write was in flight, current
+            // values still differ from this snapshot and the root guard asks.
+            _state.update {
+                it.copy(
+                    saving = false,
+                    savedValues = s.editableValues,
+                    discardPrompt = false
+                )
+            }
             onSaved()
         }
     }
 
-    override fun onCancel() { onCancelled() }
+    override fun onCancel() = requestExit(onCancelled)
+
+    override fun requestExit(onDiscarded: () -> Unit) {
+        if (!_state.value.isDirty) {
+            onDiscarded()
+            return
+        }
+        pendingExit = onDiscarded
+        _state.update { it.copy(discardPrompt = true) }
+    }
+
+    override fun onDiscardConfirmed() {
+        val exit = pendingExit
+        pendingExit = null
+        // The rider has explicitly released this draft. Mark it clean before
+        // the continuation runs so a root guard can move on to any older dirty
+        // composer retained in the same stack instead of asking for this one
+        // again.
+        _state.update { it.copy(discardPrompt = false, savedValues = it.editableValues) }
+        exit?.invoke()
+    }
+
+    override fun onDiscardDismissed() {
+        pendingExit = null
+        _state.update { it.copy(discardPrompt = false) }
+    }
 
     override fun onDelete() {
         if (vehicleId == null) { onCancelled(); return }

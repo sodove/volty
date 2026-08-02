@@ -383,4 +383,8 @@
     <string name="alerts_discard_text">Изменённые пороги будут потеряны. Переключатели звука уже сохранены.</string>
     <string name="alerts_discard_confirm">Не сохранять</string>
     <string name="alerts_discard_keep">Продолжить правку</string>
+    <string name="vehicle_discard_title">Выйти без сохранения?</string>
+    <string name="vehicle_discard_text">Изменения транспорта будут потеряны.</string>
+    <string name="vehicle_discard_confirm">Не сохранять</string>
+    <string name="vehicle_discard_keep">Продолжить правку</string>
 </resources>

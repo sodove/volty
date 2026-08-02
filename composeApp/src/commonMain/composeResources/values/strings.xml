@@ -385,4 +385,8 @@
     <string name="alerts_discard_text">The thresholds you edited will be lost. The sound switches are already saved.</string>
     <string name="alerts_discard_confirm">Discard</string>
     <string name="alerts_discard_keep">Keep editing</string>
+    <string name="vehicle_discard_title">Leave without saving?</string>
+    <string name="vehicle_discard_text">The vehicle changes you made will be lost.</string>
+    <string name="vehicle_discard_confirm">Discard</string>
+    <string name="vehicle_discard_keep">Keep editing</string>
 </resources>

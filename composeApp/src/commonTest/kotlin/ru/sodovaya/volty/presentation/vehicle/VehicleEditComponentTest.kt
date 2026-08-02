@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.alert.AlertLevel
@@ -39,6 +40,9 @@ import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
+import ru.sodovaya.volty.presentation.root.Config
+import ru.sodovaya.volty.presentation.root.RootComponent
+import ru.sodovaya.volty.presentation.root.guardComposerDestruction
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -327,16 +331,19 @@ class VehicleEditComponentTest {
         prefilledBmsType: BmsType? = null,
         prefilledBmsAddress: String? = null,
         bmsRepo: FakeBmsRepo = FakeBmsRepo(),
-        canDiscovery: CanDiscovery? = null
+        canDiscovery: CanDiscovery? = null,
+        onSaved: () -> Unit = {},
+        onCancelled: () -> Unit = {},
+        backDispatcher: BackDispatcher? = null
     ): DefaultVehicleEditComponent {
-        val ctx = DefaultComponentContext(LifecycleRegistry())
+        val ctx = DefaultComponentContext(LifecycleRegistry(), backHandler = backDispatcher)
         return DefaultVehicleEditComponent(
             componentContext = ctx,
             vehicleId = vehicleId,
             vehicleRepository = vehicleRepo,
             bmsRepository = bmsRepo,
-            onSaved = {},
-            onCancelled = {},
+            onSaved = onSaved,
+            onCancelled = onCancelled,
             onDeleted = {},
             canDiscovery = canDiscovery,
             prefilledBmsType = prefilledBmsType,
@@ -347,6 +354,246 @@ class VehicleEditComponentTest {
     @AfterTest
     fun tearDown() {
         Dispatchers.resetMain()
+    }
+
+    // ------------------------------------------------------- leaving the form
+
+    /**
+     * Mutation target: removing any editable field from the saved baseline must
+     * fail at that field, while comparing transient state (scan/telemetry/errors)
+     * cannot make an untouched form dirty. Each edit is reverted before the next
+     * one so a previous assertion cannot carry a later one.
+     */
+    @Test
+    fun `every persisted edit arms dirty and reverting it disarms dirty`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        val original = c.state.value
+        assertFalse(original.isDirty, "fixture check: loading the stored vehicle is not an edit")
+
+        fun changedAndReverted(label: String, change: () -> Unit, revert: () -> Unit) {
+            change()
+            assertTrue(c.state.value.isDirty, "$label must count as unsaved")
+            revert()
+            assertFalse(c.state.value.isDirty, "putting $label back must restore the clean baseline")
+        }
+
+        changedAndReverted("name", { c.onNameChanged(original.name + " II") }, { c.onNameChanged(original.name) })
+        changedAndReverted("icon", { c.onIconChanged("generic") }, { c.onIconChanged(original.iconKey) })
+        changedAndReverted("chemistry", { c.onChemistryChanged(Chemistry.LEAD_ACID) }, { c.onChemistryChanged(original.chemistry) })
+        changedAndReverted("averaging", { c.onAveragingWindowChanged(1) }, { c.onAveragingWindowChanged(original.averagingWindowMin) })
+        changedAndReverted("cell high", { c.onCellHighVChanged(4.29f) }, { c.onCellHighVChanged(original.cellHighV) })
+        changedAndReverted("cell low", { c.onCellLowVChanged(2.71f) }, { c.onCellLowVChanged(original.cellLowV) })
+        changedAndReverted("temperature warn", { c.onTemperatureWarnChanged(46f) }, { c.onTemperatureWarnChanged(original.temperatureWarnC) })
+        changedAndReverted("temperature high", { c.onTemperatureHighChanged(74f) }, { c.onTemperatureHighChanged(original.temperatureHighC) })
+        changedAndReverted("SOC low", { c.onSocLowChanged(7) }, { c.onSocLowChanged(original.socLowPercent) })
+        changedAndReverted("dashboard", { c.onDashboardStyleChanged(null) }, { c.onDashboardStyleChanged(original.dashboardStyle) })
+        changedAndReverted("secondary gauge", { c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY) }, { c.onSecondaryGaugeChanged(original.secondaryGauge) })
+        changedAndReverted("topology", { c.onTopologyChanged(PackTopology.PARALLEL) }, { c.onTopologyChanged(original.topology) })
+        changedAndReverted(
+            "head-unit handoff",
+            { c.onYieldBmsToHeadUnitChanged(!original.yieldsBmsToHeadUnit) },
+            { c.onYieldBmsToHeadUnitChanged(original.yieldsBmsToHeadUnit) }
+        )
+        val pack = original.draft.packs.single()
+        changedAndReverted(
+            "source draft",
+            { c.onPackLabelChanged(pack.key, pack.label + " X") },
+            { c.onPackLabelChanged(pack.key, pack.label) }
+        )
+    }
+
+    @Test
+    fun `cancel asks before losing edits and dismiss keeps the exact draft alive`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var cancelled = 0
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())), onCancelled = { cancelled++ })
+        advanceUntilIdle()
+
+        val key = c.state.value.draft.packs.single().key
+        c.onPackAddressChanged(key, "UNSAVED:42")
+        assertTrue(c.state.value.isDirty, "fixture check: the destructive branch must actually be reached")
+        val exactDraft = c.state.value.draft
+
+        c.onCancel()
+        assertTrue(c.state.value.discardPrompt)
+        assertEquals(0, cancelled, "Cancel must not destroy the composer before confirmation")
+
+        c.onDiscardDismissed()
+        assertFalse(c.state.value.discardPrompt)
+        assertEquals(exactDraft, c.state.value.draft, "dismiss keeps the same in-memory composer, not a reconstruction")
+        assertEquals(0, cancelled)
+
+        c.onCancel()
+        c.onDiscardConfirmed()
+        assertFalse(c.state.value.discardPrompt)
+        assertEquals(1, cancelled, "confirm completes the exact pending exit")
+    }
+
+    @Test
+    fun `a prefilled new vehicle starts clean and reverting its first edit is clean again`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        var cancelled = 0
+        val c = component(
+            vehicleRepo = FakeVehicleRepo(emptyList()),
+            vehicleId = null,
+            prefilledBmsType = BmsType.ANT_BMS,
+            prefilledBmsAddress = "NEW:01",
+            onCancelled = { cancelled++ }
+        )
+        advanceUntilIdle()
+        assertFalse(c.state.value.isDirty, "prefill is the starting point, not a rider edit")
+
+        c.onNameChanged("New vehicle")
+        assertTrue(c.state.value.isDirty, "the create path needs the same protection as edit")
+        c.onNameChanged("")
+        assertFalse(c.state.value.isDirty, "reverting to the create baseline removes the prompt")
+
+        c.onCancel()
+        assertEquals(1, cancelled)
+        assertFalse(c.state.value.discardPrompt)
+    }
+
+    @Test
+    fun `a destructive root action reveals a dirty buried composer and waits for its confirmation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        c.onNameChanged("Buried draft")
+        assertTrue(c.state.value.isDirty, "fixture check: otherwise the guard is vacuous")
+        val revealed = mutableListOf<Int>()
+        val destinations = mutableListOf<Config>()
+
+        guardComposerDestruction(
+            children = listOf(RootComponent.Child.VehicleEdit(c), RootComponent.Child.Loading),
+            revealComposerAt = { revealed += it },
+            destroyStack = { destinations += Config.Scanning }
+        )
+
+        assertEquals(listOf(0), revealed, "the buried form must be brought up so its prompt is visible")
+        assertTrue(c.state.value.discardPrompt, "the pending discard is observable by the renderer")
+        assertEquals(emptyList(), destinations, "disconnect/navigation is withheld")
+
+        c.onDiscardDismissed()
+        assertEquals("Buried draft", c.state.value.name)
+        assertEquals(emptyList(), destinations, "dismiss cancels the pending destructive action")
+
+        guardComposerDestruction(
+            children = listOf(RootComponent.Child.VehicleEdit(c), RootComponent.Child.Loading),
+            revealComposerAt = { revealed += it },
+            destroyStack = { destinations += Config.Scanning }
+        )
+        c.onDiscardConfirmed()
+        assertEquals(listOf<Config>(Config.Scanning), destinations, "confirm publishes the requested destination")
+    }
+
+    @Test
+    fun `a destructive root action proceeds immediately when the buried composer is clean`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        val revealed = mutableListOf<Int>()
+        val destinations = mutableListOf<Config>()
+
+        guardComposerDestruction(
+            children = listOf(RootComponent.Child.VehicleEdit(c), RootComponent.Child.Loading),
+            revealComposerAt = { revealed += it },
+            destroyStack = { destinations += Config.Scanning }
+        )
+
+        assertFalse(c.state.value.isDirty, "fixture check: this is the no-edits branch")
+        assertFalse(c.state.value.discardPrompt)
+        assertEquals(emptyList(), revealed, "an untouched form must not be surfaced or nag")
+        assertEquals(listOf<Config>(Config.Scanning), destinations)
+    }
+
+    @Test
+    fun `each dirty composer in the stack gets its own discard decision before destruction`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val older = component(FakeVehicleRepo(listOf(existingVehicle())))
+        val newerVehicle = existingVehicle().copy(id = "v2", name = "Second vehicle")
+        val newer = component(FakeVehicleRepo(listOf(newerVehicle)), vehicleId = "v2")
+        advanceUntilIdle()
+        older.onNameChanged("Older draft")
+        newer.onNameChanged("Newer draft")
+        assertTrue(older.state.value.isDirty && newer.state.value.isDirty, "fixture check: both drafts can be lost")
+
+        val children = listOf(
+            RootComponent.Child.VehicleEdit(older),
+            RootComponent.Child.Loading,
+            RootComponent.Child.VehicleEdit(newer)
+        )
+        val revealed = mutableListOf<Int>()
+        val destinations = mutableListOf<Config>()
+        guardComposerDestruction(
+            children = children,
+            revealComposerAt = { revealed += it },
+            destroyStack = { destinations += Config.Scanning }
+        )
+        assertEquals(listOf(2), revealed, "the topmost dirty editor asks first")
+        newer.onDiscardConfirmed()
+        assertEquals(listOf(2, 0), revealed, "confirming one must reveal the other, not destroy it")
+        assertEquals(emptyList(), destinations)
+
+        older.onDiscardConfirmed()
+        assertEquals(listOf<Config>(Config.Scanning), destinations)
+    }
+
+    @Test
+    fun `system back uses the same dirty discard contract as Cancel`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val back = BackDispatcher()
+        var cancelled = 0
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onCancelled = { cancelled++ },
+            backDispatcher = back
+        )
+        advanceUntilIdle()
+        c.onNameChanged("Gesture draft")
+
+        assertTrue(back.back(), "the child must intercept Decompose's unconditional stack pop")
+        assertTrue(c.state.value.discardPrompt)
+        assertEquals(0, cancelled)
+    }
+
+    @Test
+    fun `system back on an untouched composer leaves immediately without prompting`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val back = BackDispatcher()
+        var cancelled = 0
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onCancelled = { cancelled++ },
+            backDispatcher = back
+        )
+        advanceUntilIdle()
+        assertFalse(c.state.value.isDirty, "fixture check: this is the established no-edits branch")
+
+        assertTrue(back.back())
+        assertEquals(1, cancelled)
+        assertFalse(c.state.value.discardPrompt)
+    }
+
+    @Test
+    fun `saving establishes the new clean baseline before navigation is published`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        lateinit var c: DefaultVehicleEditComponent
+        var dirtyWhenSaved: Boolean? = null
+        c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onSaved = { dirtyWhenSaved = c.state.value.isDirty }
+        )
+        advanceUntilIdle()
+        c.onNameChanged("Persisted name")
+        assertTrue(c.state.value.isDirty)
+
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(false, dirtyWhenSaved, "root must not see a false dirty prompt after Save")
+        assertFalse(c.state.value.isDirty)
     }
 
     @Test

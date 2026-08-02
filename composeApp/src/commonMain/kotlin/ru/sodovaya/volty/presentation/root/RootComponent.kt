@@ -244,6 +244,37 @@ internal fun stackAfterGoTo(stack: List<Config>, config: Config): List<Config> =
 internal fun shouldPopOnBack(current: Any?, stackSize: Int): Boolean =
     (current !is Config.Graph && current !is Config.Settings) || stackSize > 1
 
+/**
+ * Give a retained vehicle composer first refusal over an action that destroys
+ * the root stack.
+ *
+ * The child index, rather than a configuration reconstructed from its fields,
+ * is returned to [revealComposerAt]: the caller uses the matching retained
+ * stack entry, so the exact component holding the draft is brought to the top.
+ * Clean composers do not move and do not prompt.
+ */
+internal fun guardComposerDestruction(
+    children: List<RootComponent.Child>,
+    revealComposerAt: (Int) -> Unit,
+    destroyStack: () -> Unit
+) {
+    val index = children.indexOfLast {
+        it is RootComponent.Child.VehicleEdit && it.component.state.value.isDirty
+    }
+    if (index < 0) {
+        destroyStack()
+        return
+    }
+    val editor = (children[index] as RootComponent.Child.VehicleEdit).component
+    revealComposerAt(index)
+    editor.requestExit {
+        // A stack may retain editors for two different vehicles. Confirmation
+        // cleans the one that just asked; recurse so every older dirty draft
+        // gets its own visible decision before the stack can be destroyed.
+        guardComposerDestruction(children, revealComposerAt, destroyStack)
+    }
+}
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -291,7 +322,7 @@ class DefaultRootComponent(
                 // Switching to a controller-less vehicle must not leave a Ride
                 // entry anywhere in the stack — see [shouldLeaveRide].
                 if (shouldLeaveRide(v, stack.value.items.map { it.configuration })) {
-                    nav.replaceAll(home)
+                    replaceAll(home)
                 }
             }
         }
@@ -311,6 +342,16 @@ class DefaultRootComponent(
         nav.navigate { stack -> stackAfterGoTo(stack, config) }
     }
 
+    /** Every root stack replacement passes through the buried-composer guard. */
+    private fun replaceAll(config: Config) {
+        val entries = stack.value.items
+        guardComposerDestruction(
+            children = entries.map { it.instance },
+            revealComposerAt = { index -> goTo(entries[index].configuration as Config.VehicleEdit) },
+            destroyStack = { nav.replaceAll(config) }
+        )
+    }
+
     /**
      * Where "home" is right now. Every post-connect landing goes through here
      * so a controller vehicle lands on Ride and a pure-BMS one on the battery
@@ -325,7 +366,7 @@ class DefaultRootComponent(
         // (see Config.Graph / Config.Settings in createChild) and keeping live
         // Ride state alive. See [shouldPopOnBack] for why this doesn't need to
         // duplicate [shouldLeaveRide]'s job.
-        if (shouldPopOnBack(current, stack.value.items.size)) nav.pop() else nav.replaceAll(homeConfig())
+        if (shouldPopOnBack(current, stack.value.items.size)) nav.pop() else replaceAll(homeConfig())
     }
 
     override fun onTab(tab: RootComponent.Tab) {
@@ -345,7 +386,7 @@ class DefaultRootComponent(
 
     private suspend fun resolveStartDestination() {
         val savedCount = vehicleRepository.vehicles.first().size
-        nav.replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
+        replaceAll(if (savedCount == 0) Config.Welcome else Config.Scanning)
     }
 
     /**
@@ -357,7 +398,7 @@ class DefaultRootComponent(
     private fun startDemo(profile: DemoProfile) {
         scope.launch {
             bmsRepository.connectDemo(profile)
-            nav.replaceAll(homeConfig())
+            replaceAll(homeConfig())
         }
     }
 
@@ -365,7 +406,7 @@ class DefaultRootComponent(
         // After permissions are granted, recompute the post-permissions route
         // (Welcome vs Scanning) off the UI thread. Show the loading splash in
         // the meantime so the screen isn't blank.
-        nav.replaceAll(Config.Loading)
+        replaceAll(Config.Loading)
         scope.launch { resolveStartDestination() }
     }
 
@@ -384,7 +425,7 @@ class DefaultRootComponent(
                     // the matching fix on Config.Picker's onAddNewBatteryRequested
                     // below, which had the identical dead-end bug.
                     onAddBatteryRequested = { goTo(Config.Picker(mode = "add")) },
-                    onQuickConnectRequested = { nav.replaceAll(Config.Picker(mode = "guest")) },
+                    onQuickConnectRequested = { replaceAll(Config.Picker(mode = "guest")) },
                     onTryDemoRequested = { profile -> startDemo(profile) }
                 )
             )
@@ -401,8 +442,8 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onSingleKnown = { vehicleId -> nav.replaceAll(Config.AutoConnect(vehicleId)) },
-                    onMultipleOrNone = { nav.replaceAll(Config.Picker(mode = "cold")) }
+                    onSingleKnown = { vehicleId -> replaceAll(Config.AutoConnect(vehicleId)) },
+                    onMultipleOrNone = { replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
             is Config.AutoConnect -> RootComponent.Child.AutoConnect(
@@ -412,8 +453,8 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onConnected = { nav.replaceAll(homeConfig()) },
-                    onCancelled = { nav.replaceAll(Config.Picker(mode = "cold")) }
+                    onConnected = { replaceAll(homeConfig()) },
+                    onCancelled = { replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
             is Config.Picker -> RootComponent.Child.Picker(
@@ -422,9 +463,9 @@ class DefaultRootComponent(
                     mode = config.mode,
                     bmsRepository = get(),
                     vehicleRepository = get(),
-                    onConnectedKnown = { nav.replaceAll(homeConfig()) },
-                    onConnectedForEdit = { vehicleId -> nav.replaceAll(Config.VehicleEdit(vehicleId)) },
-                    onConnectedGuestNoSave = { nav.replaceAll(homeConfig()) },
+                    onConnectedKnown = { replaceAll(homeConfig()) },
+                    onConnectedForEdit = { vehicleId -> replaceAll(Config.VehicleEdit(vehicleId)) },
+                    onConnectedGuestNoSave = { replaceAll(homeConfig()) },
                     // push(), not replaceAll(): replaceAll wiped the whole stack
                     // down to this one entry, so onCancelled's nav.pop() below —
                     // and system back, which routes here through the same
@@ -438,7 +479,7 @@ class DefaultRootComponent(
                     // so this can't be used to push an unbounded run of
                     // Picker(mode = "add") entries onto the stack.
                     onAddNewBatteryRequested = { goTo(Config.Picker(mode = "add")) },
-                    onDemoConnected = { nav.replaceAll(homeConfig()) },
+                    onDemoConnected = { replaceAll(homeConfig()) },
                     onCancelled = { nav.pop() }
                 )
             )
@@ -455,7 +496,7 @@ class DefaultRootComponent(
                     onAddVehicleRequested = {
                         goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
-                    onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
+                    onDisconnectRequested = { replaceAll(Config.Scanning) }
                 )
             )
             is Config.Dashboard -> RootComponent.Child.Dashboard(
@@ -469,7 +510,7 @@ class DefaultRootComponent(
                         goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
                     },
                     onOpenPackDetail = { packIndex -> goTo(Config.PackDetail(packIndex)) },
-                    onDisconnectRequested = { nav.replaceAll(Config.Scanning) }
+                    onDisconnectRequested = { replaceAll(Config.Scanning) }
                 )
             )
             is Config.PackDetail -> RootComponent.Child.PackDetail(
@@ -498,7 +539,7 @@ class DefaultRootComponent(
                         vehicleId = config.vehicleId,
                         vehicleRepository = get(),
                         bmsRepository = get(),
-                        onSaved = { nav.replaceAll(homeConfig()) },
+                        onSaved = { replaceAll(homeConfig()) },
                         onCancelled = { nav.pop() },
                         onDeleted = { nav.pop() },
                         // Both prefills are already optional, so a source-less

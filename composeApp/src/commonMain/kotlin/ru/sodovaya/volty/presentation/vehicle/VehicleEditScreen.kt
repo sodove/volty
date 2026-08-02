@@ -72,6 +72,10 @@ import volty.composeapp.generated.resources.units_open_subtitle
 import volty.composeapp.generated.resources.vehicle_delete
 import volty.composeapp.generated.resources.vehicle_delete_confirm_text
 import volty.composeapp.generated.resources.vehicle_delete_confirm_title
+import volty.composeapp.generated.resources.vehicle_discard_confirm
+import volty.composeapp.generated.resources.vehicle_discard_keep
+import volty.composeapp.generated.resources.vehicle_discard_text
+import volty.composeapp.generated.resources.vehicle_discard_title
 import volty.composeapp.generated.resources.vehicle_edit_edit
 import volty.composeapp.generated.resources.vehicle_edit_new
 import volty.composeapp.generated.resources.vehicle_field_averaging_window
@@ -345,6 +349,24 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 dismissButton = { TextButton(onClick = { showDeleteConfirm = false }) { Text(stringResource(Res.string.action_cancel)) } },
                 title = { Text(stringResource(Res.string.vehicle_delete_confirm_title)) },
                 text = { Text(stringResource(Res.string.vehicle_delete_confirm_text)) }
+            )
+        }
+
+        if (state.discardPrompt) {
+            AlertDialog(
+                onDismissRequest = component::onDiscardDismissed,
+                confirmButton = {
+                    TextButton(onClick = component::onDiscardConfirmed) {
+                        Text(stringResource(Res.string.vehicle_discard_confirm))
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = component::onDiscardDismissed) {
+                        Text(stringResource(Res.string.vehicle_discard_keep))
+                    }
+                },
+                title = { Text(stringResource(Res.string.vehicle_discard_title)) },
+                text = { Text(stringResource(Res.string.vehicle_discard_text)) }
             )
         }
     }
