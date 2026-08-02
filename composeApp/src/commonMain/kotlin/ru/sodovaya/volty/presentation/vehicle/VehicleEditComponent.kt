@@ -274,7 +274,7 @@ interface VehicleEditComponent {
         val secondaryGauge: SecondaryGauge,
         val topology: PackTopology,
         val yieldBmsToHeadUnit: Boolean?,
-        val draft: VehicleDraft
+        val draft: PersistableVehicleDraft
     )
 
     data class State(
@@ -411,7 +411,7 @@ interface VehicleEditComponent {
                 secondaryGauge = secondaryGauge,
                 topology = topology,
                 yieldBmsToHeadUnit = yieldBmsToHeadUnit,
-                draft = draft
+                draft = draft.persistableValues()
             )
 
         /** Reverting every field to its loaded value is clean again. */
@@ -1012,6 +1012,10 @@ class DefaultVehicleEditComponent(
     override fun onCancel() = requestExit(onCancelled)
 
     override fun requestExit(onDiscarded: () -> Unit) {
+        // The visible prompt belongs to the request that raised it. A root
+        // event arriving while it is up must not silently substitute a new
+        // destination under the rider's confirmation button.
+        if (pendingExit != null) return
         if (!_state.value.isDirty) {
             onDiscarded()
             return
@@ -1023,11 +1027,10 @@ class DefaultVehicleEditComponent(
     override fun onDiscardConfirmed() {
         val exit = pendingExit
         pendingExit = null
-        // The rider has explicitly released this draft. Mark it clean before
-        // the continuation runs so a root guard can move on to any older dirty
-        // composer retained in the same stack instead of asking for this one
-        // again.
-        _state.update { it.copy(discardPrompt = false, savedValues = it.editableValues) }
+        // Approval belongs to this one root destruction transaction, not to
+        // the persisted form baseline. The continuation carries that approval;
+        // if a later prompt is dismissed, this draft must remain dirty.
+        _state.update { it.copy(discardPrompt = false) }
         exit?.invoke()
     }
 

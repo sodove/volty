@@ -376,6 +376,24 @@ data class VehicleDraft(
 }
 
 /**
+ * The source data a Save can actually write, stripped of editing-session
+ * identity and ownership metadata (`key`, `nextKey`, `origin`, and the touched
+ * flags). Two drafts are the same unsaved work exactly when these projections
+ * are equal.
+ *
+ * Built through the real persistence functions rather than by copying their
+ * field list: `origin` and the touched flags still decide which stored values
+ * [PackDraft.toPack] preserves, but they are not differences by themselves.
+ */
+data class PersistableVehicleDraft(
+    val packs: List<Pack>,
+    val controllers: List<Controller>
+)
+
+fun VehicleDraft.persistableValues(): PersistableVehicleDraft =
+    PersistableVehicleDraft(packs = toPacks(), controllers = toControllers())
+
+/**
  * Re-point every draft's `origin` at the **freshly-read** row, matching by the
  * stored index the draft was seeded from.
  *

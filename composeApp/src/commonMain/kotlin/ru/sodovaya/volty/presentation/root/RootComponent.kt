@@ -256,10 +256,13 @@ internal fun shouldPopOnBack(current: Any?, stackSize: Int): Boolean =
 internal fun guardComposerDestruction(
     children: List<RootComponent.Child>,
     revealComposerAt: (Int) -> Unit,
-    destroyStack: () -> Unit
+    destroyStack: () -> Unit,
+    approved: Set<VehicleEditComponent> = emptySet()
 ) {
     val index = children.indexOfLast {
-        it is RootComponent.Child.VehicleEdit && it.component.state.value.isDirty
+        it is RootComponent.Child.VehicleEdit &&
+            it.component.state.value.isDirty &&
+            it.component !in approved
     }
     if (index < 0) {
         destroyStack()
@@ -269,10 +272,26 @@ internal fun guardComposerDestruction(
     revealComposerAt(index)
     editor.requestExit {
         // A stack may retain editors for two different vehicles. Confirmation
-        // cleans the one that just asked; recurse so every older dirty draft
-        // gets its own visible decision before the stack can be destroyed.
-        guardComposerDestruction(children, revealComposerAt, destroyStack)
+        // approves this instance for THIS requested destruction only. Recurse
+        // so every older dirty draft gets a visible decision; a dismissal ends
+        // the closure chain and a later request starts with no approvals.
+        guardComposerDestruction(children, revealComposerAt, destroyStack, approved + editor)
     }
+}
+
+/**
+ * Leave the active vehicle editor through real Decompose navigation.
+ *
+ * A form pushed over another entry returns to it. Picker connection success,
+ * however, deliberately replaces the stack with a one-entry editor; `pop()` is
+ * inert there, so its actual exit is current home.
+ */
+internal fun leaveVehicleEdit(
+    navigation: StackNavigation<Config>,
+    stackSize: Int,
+    home: Config
+) {
+    if (stackSize > 1) navigation.pop() else navigation.replaceAll(home)
 }
 
 class DefaultRootComponent(
@@ -540,7 +559,9 @@ class DefaultRootComponent(
                         vehicleRepository = get(),
                         bmsRepository = get(),
                         onSaved = { replaceAll(homeConfig()) },
-                        onCancelled = { nav.pop() },
+                        onCancelled = {
+                            leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
+                        },
                         onDeleted = { nav.pop() },
                         // Both prefills are already optional, so a source-less
                         // (controller-only) active connection simply prefills

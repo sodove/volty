@@ -1,6 +1,12 @@
 package ru.sodovaya.volty.presentation.vehicle
 
 import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.decompose.DelicateDecomposeApi
+import com.arkivanov.decompose.router.stack.ChildStack
+import com.arkivanov.decompose.router.stack.StackNavigation
+import com.arkivanov.decompose.router.stack.childStack
+import com.arkivanov.decompose.router.stack.push
+import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.backhandler.BackDispatcher
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
 import ru.sodovaya.volty.domain.model.DemoProfile
@@ -43,6 +49,7 @@ import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.root.Config
 import ru.sodovaya.volty.presentation.root.RootComponent
 import ru.sodovaya.volty.presentation.root.guardComposerDestruction
+import ru.sodovaya.volty.presentation.root.leaveVehicleEdit
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
@@ -351,6 +358,21 @@ class VehicleEditComponentTest {
         )
     }
 
+    /** Real Decompose navigation, with the child instance reduced to Config. */
+    @OptIn(DelicateDecomposeApi::class)
+    private fun rootStack(initial: Config): Pair<StackNavigation<Config>, Value<ChildStack<Config, Config>>> {
+        val context = DefaultComponentContext(LifecycleRegistry())
+        val navigation = StackNavigation<Config>()
+        val stack = context.childStack(
+            source = navigation,
+            serializer = Config.serializer(),
+            initialConfiguration = initial,
+            handleBackButton = true,
+            childFactory = { config, _ -> config }
+        )
+        return navigation to stack
+    }
+
     @AfterTest
     fun tearDown() {
         Dispatchers.resetMain()
@@ -405,6 +427,58 @@ class VehicleEditComponentTest {
     }
 
     @Test
+    fun `adding then removing the same source returns to the clean persisted draft`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+
+        c.onAddPack(BmsType.ANT_BMS, "TEMP:01", "Temporary")
+        assertTrue(c.state.value.isDirty, "fixture check: the added source must be a persisted change")
+        val addedKey = c.state.value.draft.packs.last().key
+        c.onRemovePack(addedKey)
+
+        assertFalse(
+            c.state.value.isDirty,
+            "nextKey is editor bookkeeping; the same persisted source lists are clean"
+        )
+    }
+
+    @Test
+    fun `restoring a pack cell count returns to clean despite its touched flag`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        val pack = c.state.value.draft.packs.single()
+        assertEquals(20, pack.cellCount)
+
+        c.onPackCellCountChanged(pack.key, 24)
+        assertTrue(c.state.value.isDirty)
+        c.onPackCellCountChanged(pack.key, 20)
+
+        assertFalse(
+            c.state.value.isDirty,
+            "cellCountEdited changes how Save preserves data, but the projected Pack is unchanged"
+        )
+    }
+
+    @Test
+    fun `grouping then ungrouping the same packs returns to clean persisted aliases`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(wheelWithSecondBranch())))
+        advanceUntilIdle()
+        val (a, b) = c.state.value.draft.packs.map { it.key }
+
+        c.onGroupPacks(a, b)
+        assertTrue(c.state.value.isDirty)
+        c.onUngroupPack(a)
+
+        assertFalse(
+            c.state.value.isDirty,
+            "aliasEdited and the consumed alias key are metadata when both saved Packs are restored"
+        )
+    }
+
+    @Test
     fun `cancel asks before losing edits and dismiss keeps the exact draft alive`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         var cancelled = 0
@@ -429,6 +503,63 @@ class VehicleEditComponentTest {
         c.onDiscardConfirmed()
         assertFalse(c.state.value.discardPrompt)
         assertEquals(1, cancelled, "confirm completes the exact pending exit")
+    }
+
+    @Test
+    fun `clean Cancel leaves a picker-created one-entry editor for real home navigation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val edit = Config.VehicleEdit(vehicleId = "v1")
+        val (navigation, stack) = rootStack(edit)
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onCancelled = {
+                leaveVehicleEdit(navigation, stack.value.items.size, Config.Dashboard)
+            }
+        )
+        advanceUntilIdle()
+        assertEquals(listOf(edit), stack.value.items.map { it.configuration })
+
+        c.onCancel()
+
+        assertEquals(Config.Dashboard, stack.value.active.configuration)
+        assertEquals(1, stack.value.items.size)
+    }
+
+    @Test
+    fun `dirty confirmation leaves a picker-created one-entry editor for real home navigation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val edit = Config.VehicleEdit(vehicleId = "v1")
+        val (navigation, stack) = rootStack(edit)
+        val c = component(
+            FakeVehicleRepo(listOf(existingVehicle())),
+            onCancelled = {
+                leaveVehicleEdit(navigation, stack.value.items.size, Config.Dashboard)
+            }
+        )
+        advanceUntilIdle()
+        c.onNameChanged("Unsaved")
+
+        c.onCancel()
+        assertTrue(c.state.value.discardPrompt)
+        assertEquals(edit, stack.value.active.configuration, "the dirty form stays until confirmation")
+        c.onDiscardConfirmed()
+
+        assertEquals(Config.Dashboard, stack.value.active.configuration)
+        assertEquals(1, stack.value.items.size)
+    }
+
+    @Test
+    @OptIn(DelicateDecomposeApi::class)
+    fun `leaving a multi-entry editor returns to its actual previous screen`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val (navigation, stack) = rootStack(Config.Settings)
+        navigation.push(Config.VehicleEdit(vehicleId = "v1"))
+        assertEquals(2, stack.value.items.size)
+
+        leaveVehicleEdit(navigation, stack.value.items.size, Config.Dashboard)
+
+        assertEquals(Config.Settings, stack.value.active.configuration)
+        assertEquals(1, stack.value.items.size)
     }
 
     @Test
@@ -538,6 +669,57 @@ class VehicleEditComponentTest {
 
         older.onDiscardConfirmed()
         assertEquals(listOf<Config>(Config.Scanning), destinations)
+    }
+
+    @Test
+    fun `partial multi-composer approval is forgotten when the next rider dismisses`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val older = component(FakeVehicleRepo(listOf(existingVehicle())))
+        val newerVehicle = existingVehicle().copy(id = "v2", name = "Second vehicle")
+        val newer = component(FakeVehicleRepo(listOf(newerVehicle)), vehicleId = "v2")
+        advanceUntilIdle()
+        older.onNameChanged("Older draft")
+        newer.onNameChanged("Newer draft")
+        val children = listOf(
+            RootComponent.Child.VehicleEdit(older),
+            RootComponent.Child.Loading,
+            RootComponent.Child.VehicleEdit(newer)
+        )
+        val revealed = mutableListOf<Int>()
+        val destinations = mutableListOf<Config>()
+
+        guardComposerDestruction(children, { revealed += it }, { destinations += Config.Scanning })
+        newer.onDiscardConfirmed()
+        assertEquals(listOf(2, 0), revealed)
+        older.onDiscardDismissed()
+
+        assertTrue(newer.state.value.isDirty, "approval is not a persisted baseline and must not clean the draft")
+        assertTrue(older.state.value.isDirty)
+        assertEquals(emptyList(), destinations)
+
+        guardComposerDestruction(children, { revealed += it }, { destinations += Config.Dashboard })
+        assertEquals(2, revealed.last(), "a later transaction starts fresh at the newest dirty composer")
+        assertTrue(newer.state.value.discardPrompt)
+    }
+
+    @Test
+    fun `a visible discard prompt keeps the first destructive continuation`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+        c.onNameChanged("Pending draft")
+        val destinations = mutableListOf<Config>()
+
+        c.requestExit { destinations += Config.Dashboard }
+        assertTrue(c.state.value.discardPrompt)
+        c.requestExit { destinations += Config.Scanning }
+        c.onDiscardConfirmed()
+
+        assertEquals(
+            listOf<Config>(Config.Dashboard),
+            destinations,
+            "the prompt the rider saw must confirm the request that raised it"
+        )
     }
 
     @Test
