@@ -264,6 +264,30 @@ class RootNavigationTest {
         )
     }
 
+    @Test
+    fun deleting_a_picker_created_editor_replaces_it_with_home_so_its_save_is_gone() {
+        val (nav, stack) = buildStack(Config.Picker(mode = "cold"))
+        val editor = Config.VehicleEdit(vehicleId = "v1")
+
+        // Picker connection success deliberately replaces its route with the
+        // editor. That leaves exactly one entry, which is the shape deletion
+        // must exit: keeping this editor active leaves its Save control able
+        // to recreate the row which was just deleted.
+        nav.replaceAll(editor)
+        assertEquals(listOf(editor), stack.value.items.map { it.configuration })
+
+        // Mirrors RootComponent's onDeleted callback. Its exit is deliberately
+        // the same total operation as Cancel, rather than a bare `pop()`.
+        leaveVehicleEdit(nav, stack.value.items.size, Config.Dashboard)
+
+        assertEquals(
+            Config.Dashboard,
+            stack.value.active.configuration,
+            "deletion must remove the picker-created editor, not leave its Save control live"
+        )
+        assertEquals(listOf(Config.Dashboard), stack.value.items.map { it.configuration })
+    }
+
     // ----- G2 Task 3: navigating to somewhere already in the stack -----
 
     /**

@@ -378,6 +378,15 @@ class DefaultRootComponent(
      */
     private fun homeConfig(): Config = homeConfigFor(bmsRepository.activeVehicle.value)
 
+    /**
+     * The form has two terminal callbacks: Cancel and deletion of an already
+     * saved vehicle. They must take precisely the same route, especially after
+     * picker connection has collapsed the stack to the editor alone.
+     */
+    private fun leaveActiveVehicleEdit() {
+        leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
+    }
+
     override fun onBack() {
         val current = stack.value.active.configuration
         // Graph and Settings are leaves off a home screen (Ride or Dashboard) —
@@ -559,10 +568,13 @@ class DefaultRootComponent(
                         vehicleRepository = get(),
                         bmsRepository = get(),
                         onSaved = { replaceAll(homeConfig()) },
-                        onCancelled = {
-                            leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
-                        },
-                        onDeleted = { nav.pop() },
+                        onCancelled = ::leaveActiveVehicleEdit,
+                        // A picker-created editor is the sole entry after its
+                        // successful connection. Deleting it must therefore
+                        // use the same total exit as Cancel: `pop()` alone is
+                        // inert there and would leave the now-deleted form's
+                        // Save control able to recreate the vehicle.
+                        onDeleted = ::leaveActiveVehicleEdit,
                         // Both prefills are already optional, so a source-less
                         // (controller-only) active connection simply prefills
                         // nothing instead of throwing.
