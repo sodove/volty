@@ -42,6 +42,40 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
  */
 
 // ---------------------------------------------------------------------------
+// Rider-visible identity
+// ---------------------------------------------------------------------------
+
+/**
+ * The two text fields a scan row needs to identify a physical BLE peripheral.
+ *
+ * A name is only a hint: several BMS boxes can advertise the same name (or no
+ * name), while the address is the fact that distinguishes them. Named rows
+ * therefore retain their address; unnamed rows promote it to the title rather
+ * than inventing a generic label that makes two devices look the same.
+ */
+data class ScanDeviceLabel(
+    val title: String,
+    val address: String?
+)
+
+/** The full, rider-visible identity of this scan hit. */
+fun DiscoveredDevice.scanDeviceLabel(): ScanDeviceLabel =
+    name?.let { ScanDeviceLabel(title = it, address = address) }
+        ?: ScanDeviceLabel(title = address, address = null)
+
+/** Qualitative signal feedback for walking toward one otherwise identical box. */
+enum class SignalProximity { WARMER, COLDER }
+
+private const val WARMER_RSSI_DBM = -70
+
+/**
+ * RSSI is not a distance measurement, so present it only as the direction a
+ * rider can use: cross -70 dBm by walking closer and the row becomes warmer.
+ */
+fun DiscoveredDevice.signalProximity(): SignalProximity =
+    if (rssi >= WARMER_RSSI_DBM) SignalProximity.WARMER else SignalProximity.COLDER
+
+// ---------------------------------------------------------------------------
 // Roles
 // ---------------------------------------------------------------------------
 

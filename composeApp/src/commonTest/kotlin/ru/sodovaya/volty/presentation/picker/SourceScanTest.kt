@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotEquals
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
 
@@ -30,6 +31,45 @@ class SourceScanTest {
         bmsType = bmsType,
         controllerType = controllerType
     )
+
+    // ------------------------------------------------------------------
+    // Rider-visible identity (L Task 3)
+    // ------------------------------------------------------------------
+
+    /**
+     * Deleting the address from a named label recreates the defect: several
+     * nearby BMS boxes can share a name, but their BLE addresses cannot.
+     */
+    @Test
+    fun `a named scan device label keeps its name and full address`() {
+        assertEquals(
+            ScanDeviceLabel(title = "ANT BMS", address = "C3:5E:E2:61:94:AE"),
+            device(name = "ANT BMS", address = "C3:5E:E2:61:94:AE").scanDeviceLabel()
+        )
+    }
+
+    @Test
+    fun `an unnamed scan device label is its full address`() {
+        assertEquals(
+            ScanDeviceLabel(title = "C3:5E:E2:61:94:AE", address = null),
+            device(address = "C3:5E:E2:61:94:AE").scanDeviceLabel()
+        )
+    }
+
+    /** The regression itself: the old last-four-character label made this false. */
+    @Test
+    fun `two otherwise identical scan devices have distinct address labels`() {
+        val first = device(name = "BMS", address = "AA:BB:CC:DD:EE:01")
+        val second = device(name = "BMS", address = "AA:BB:CC:DD:EE:02")
+
+        assertNotEquals(first.scanDeviceLabel(), second.scanDeviceLabel())
+    }
+
+    @Test
+    fun `signal proximity becomes warmer when the device is nearby`() {
+        assertEquals(SignalProximity.WARMER, device(rssi = -70).signalProximity())
+        assertEquals(SignalProximity.COLDER, device(rssi = -71).signalProximity())
+    }
 
     // ------------------------------------------------------------------
     // Roles (G §7)

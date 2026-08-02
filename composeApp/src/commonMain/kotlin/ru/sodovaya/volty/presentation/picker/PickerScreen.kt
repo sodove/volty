@@ -61,6 +61,8 @@ import volty.composeapp.generated.resources.picker_pick_type_title
 import volty.composeapp.generated.resources.picker_scanning
 import volty.composeapp.generated.resources.picker_section_battery
 import volty.composeapp.generated.resources.picker_section_controller
+import volty.composeapp.generated.resources.picker_signal_colder
+import volty.composeapp.generated.resources.picker_signal_warmer
 import volty.composeapp.generated.resources.picker_show_all
 import volty.composeapp.generated.resources.picker_try_demo
 import volty.composeapp.generated.resources.picker_try_demo_wheel
@@ -318,6 +320,7 @@ private fun VehicleRow(vehicle: Vehicle, isConnecting: Boolean, onClick: () -> U
 
 @Composable
 private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: () -> Unit) {
+    val identity = device.scanDeviceLabel()
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -330,17 +333,30 @@ private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: 
     ) {
         Avatar(letter = "?", bg = MaterialTheme.colorScheme.outline)
         Column(modifier = Modifier.weight(1f)) {
-            Text(device.name ?: "BMS ${device.address.takeLast(4)}", fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(identity.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
             val typeLabel = when {
                 device.bmsType != null -> bmsTypeLabel(device.bmsType)
                 device.controllerType != null -> device.controllerType.label
                 else -> stringResource(Res.string.picker_type_unknown)
             }
-            Text("$typeLabel  ·  ${device.rssi} dBm", fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
+            val details = listOfNotNull(
+                identity.address,
+                typeLabel,
+                signalProximityText(device.signalProximity())
+            ).joinToString("  ·  ")
+            Text(details, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f))
         }
         if (isConnecting) CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
     }
 }
+
+@Composable
+private fun signalProximityText(proximity: SignalProximity): String = stringResource(
+    when (proximity) {
+        SignalProximity.WARMER -> Res.string.picker_signal_warmer
+        SignalProximity.COLDER -> Res.string.picker_signal_colder
+    }
+)
 
 @Composable
 private fun Avatar(letter: String, bg: Color) {

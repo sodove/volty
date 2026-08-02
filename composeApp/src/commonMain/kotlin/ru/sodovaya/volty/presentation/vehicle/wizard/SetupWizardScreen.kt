@@ -43,7 +43,10 @@ import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
+import ru.sodovaya.volty.presentation.picker.SignalProximity
 import ru.sodovaya.volty.presentation.picker.SourceRole
+import ru.sodovaya.volty.presentation.picker.scanDeviceLabel
+import ru.sodovaya.volty.presentation.picker.signalProximity
 import ru.sodovaya.volty.presentation.picker.sourceRole
 import volty.composeapp.generated.resources.*
 
@@ -377,6 +380,7 @@ private fun ScannedDeviceList(
     onAdd: (DiscoveredDevice, ScannedAdd) -> Unit
 ) {
     rows.forEach { row ->
+        val identity = row.device.scanDeviceLabel()
         Surface(
             modifier = Modifier.fillMaxWidth(),
             shape = RoundedCornerShape(12.dp),
@@ -384,11 +388,15 @@ private fun ScannedDeviceList(
         ) {
             Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
                 Text(
-                    row.device.name ?: sourceRoleText(row.device.sourceRole()),
+                    identity.title,
                     fontWeight = FontWeight.SemiBold
                 )
                 Text(
-                    "${row.device.address}  ·  ${row.device.rssi} dBm",
+                    listOfNotNull(
+                        identity.address,
+                        sourceRoleText(row.device.sourceRole()),
+                        scanSignalProximityText(row.device.signalProximity())
+                    ).joinToString("  ·  "),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -406,6 +414,14 @@ private fun ScannedDeviceList(
         }
     }
 }
+
+@Composable
+private fun scanSignalProximityText(proximity: SignalProximity): String = stringResource(
+    when (proximity) {
+        SignalProximity.WARMER -> Res.string.picker_signal_warmer
+        SignalProximity.COLDER -> Res.string.picker_signal_colder
+    }
+)
 
 @Composable
 private fun scanAdditionText(add: ScannedAdd): String = stringResource(
