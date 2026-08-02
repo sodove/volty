@@ -378,6 +378,54 @@ class KableBmsRepositoryAliasHandoffTest {
         assertFalse(antLoop.isActive, "disconnect must stop the re-raised link's loop")
     }
 
+    @Test
+    fun `drop re-raise completes before reconnect teardown can wait for that drop`() = repoTest { repo ->
+        val v = twoPathScooter()
+        val funnels = repo.rideReady(v)
+        repo.markLinkOnlineForTest(HU_ADDR)
+        funnels[1](0, hostedSample(), emptyList())
+        runCurrent()
+        assertEquals(listOf(HU_ADDR), repo.linkAddressesForTest(), "the direct link must first be yielded")
+
+        val atReraise = CompletableDeferred<Unit>()
+        val allowReraise = CompletableDeferred<Unit>()
+        val reconnectOwnsSession = CompletableDeferred<Unit>()
+        val allowReconnectTeardown = CompletableDeferred<Unit>()
+        repo.beforeDropReraiseForTest = {
+            atReraise.complete(Unit)
+            allowReraise.await()
+        }
+        repo.beforeReconnectTeardownForTest = {
+            reconnectOwnsSession.complete(Unit)
+            allowReconnectTeardown.await()
+        }
+
+        val drop = repo.simulateLinkDropForTest(HU_ADDR, "Link dropped")
+        runCurrent()
+        atReraise.await()
+        runCurrent()
+        val reconnectOvertookReraise = reconnectOwnsSession.isCompleted
+
+        allowReraise.complete(Unit)
+        runCurrent()
+        val dropFinishedBeforeTeardownEscape = drop.isCompleted
+
+        // Always break the deliberately modelled cancelAndJoin wait before
+        // asserting, so the RED reports instead of leaving an unbounded loop.
+        allowReconnectTeardown.complete(Unit)
+        runCurrent()
+        drop.join()
+
+        assertFalse(
+            reconnectOvertookReraise,
+            "a reserved reconnect must not enter teardown before its drop callback reaches re-raise"
+        )
+        assertTrue(
+            dropFinishedBeforeTeardownEscape,
+            "the drop callback must complete without needing reconnect teardown to release sessionLock"
+        )
+    }
+
     /**
      * **The hole this task's first cut left open, and the harm it costs.**
      *

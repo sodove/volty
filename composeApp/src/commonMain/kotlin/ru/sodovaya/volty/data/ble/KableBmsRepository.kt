@@ -2188,6 +2188,7 @@ class KableBmsRepository private constructor(
             // Tear down this link's previous (dead) session under the lock,
             // as the old doConnect preamble did for the single session.
             sessionLock.withLock {
+                beforeReconnectTeardownForTest?.invoke()
                 link.session?.tearDown()
                 link.session = null
             }
@@ -2365,7 +2366,7 @@ class KableBmsRepository private constructor(
     }
 
     private suspend fun onLinkDrop(link: PackLink, reason: String) {
-        val orchestrator = sessionLock.withLock {
+        val recovery = sessionLock.withLock {
             if (userInitiatedDisconnect) {
                 println("[VOLTY-BLE] onLinkDrop ignored — user disconnected")
                 return
@@ -2388,7 +2389,11 @@ class KableBmsRepository private constructor(
             // attempt in the loop tears it down safely. The fold keeps the
             // vehicle Connected while any sibling is still up.
             setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
-            startLinkReconnectLoop(link, initialReason = reason)
+            val reconnect = startLinkReconnectLoop(
+                link,
+                initialReason = reason,
+                start = CoroutineStart.LAZY
+            )
             // Part C §5: if this is the head unit a direct BMS link was
             // yielded to, that link has to come back NOW — while the gateway
             // is merely reconnecting, not after it gives up. Inside the
@@ -2404,16 +2409,32 @@ class KableBmsRepository private constructor(
             // so the orchestrator survives. Tear the session down here and the
             // re-raise starts wiping the vehicle's state instead of restoring
             // one link of it.
-            vehicleConnection
+            vehicleConnection to reconnect
         } ?: return
-        reRaiseYieldedLinksFor(orchestrator, link.spec.address)
+        try {
+            recovery.first?.let { orchestrator ->
+                beforeDropReraiseForTest?.invoke()
+                reRaiseYieldedLinksFor(orchestrator, link.spec.address)
+            }
+        } finally {
+            // Starting is the callback's final non-suspending action. The job
+            // was installed lazily under sessionLock (so duplicate drops see
+            // one loop), but cannot enter old-session teardown until this drop
+            // has completed every owner-validated re-raise step that may need
+            // the same mutex.
+            recovery.second.start()
+        }
     }
 
-    private fun startLinkReconnectLoop(link: PackLink, initialReason: String) {
+    private fun startLinkReconnectLoop(
+        link: PackLink,
+        initialReason: String,
+        start: CoroutineStart = CoroutineStart.DEFAULT
+    ): Job {
         val address = link.spec.address
         link.reconnectJob?.cancel()
         println("[VOLTY-BLE] reconnect loop[$address]: starting reason=$initialReason")
-        link.reconnectJob = scope.launch {
+        val reconnect = scope.launch(start = start) {
             var attempt = 0
             while (isActive) {
                 // Honour user-initiated disconnect, vehicle clearance,
@@ -2460,6 +2481,8 @@ class KableBmsRepository private constructor(
                 delay(delayMs)
             }
         }
+        link.reconnectJob = reconnect
+        return reconnect
     }
 
     override suspend fun disconnect() {
@@ -3106,6 +3129,14 @@ class KableBmsRepository private constructor(
     @Volatile
     internal var ownedDisconnectResultForTest: ((Boolean) -> Unit)? = null
 
+    /** Test-only pause after drop recovery is reserved, before its re-raise. */
+    @Volatile
+    internal var beforeDropReraiseForTest: (suspend () -> Unit)? = null
+
+    /** Test-only pause after a reconnect attempt owns sessionLock, before old-session teardown. */
+    @Volatile
+    internal var beforeReconnectTeardownForTest: (suspend () -> Unit)? = null
+
     /**
      * Test-only: install the exact multi-link wiring [doConnect] builds —
      * effective link specs, one orchestrator sized from the full vehicle pack
@@ -3278,9 +3309,9 @@ class KableBmsRepository private constructor(
      * watchdog would — the multi-link sibling of
      * [simulateConnectionDropForTest].
      */
-    internal fun simulateLinkDropForTest(address: String, reason: String) {
+    internal fun simulateLinkDropForTest(address: String, reason: String): Job {
         val link = links.first { it.spec.address == address }
-        scope.launch { onLinkDrop(link, reason) }
+        return scope.launch { onLinkDrop(link, reason) }
     }
 }
 
