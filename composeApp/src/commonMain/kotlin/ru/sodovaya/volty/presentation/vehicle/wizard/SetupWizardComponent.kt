@@ -27,6 +27,7 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.vehicle.ComposerIssue
+import ru.sodovaya.volty.presentation.vehicle.DerivedBatteryChoice
 import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
 import ru.sodovaya.volty.presentation.vehicle.DraftExitCoordinator
 import ru.sodovaya.volty.presentation.vehicle.PersistableVehicleDraft
@@ -129,7 +130,11 @@ interface SetupWizardComponent : DraftExitComponent {
 
     interface BatteryStage : Stage {
         val scanRows: List<ScanRow>
+        val canUseControllerBattery: Boolean
         fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd)
+        fun onUseSeparateBms(device: DiscoveredDevice)
+        fun onUseControllerBattery()
+        fun onUseDeviceAsBoth(device: DiscoveredDevice)
         fun onNoBattery()
         fun onNext()
         fun onBack()
@@ -333,6 +338,24 @@ class DefaultSetupWizardComponent(
         }
     }
 
+    private fun useControllerBattery() {
+        if (!_state.value.navigationEnabled || _state.value.draft.controllers.isEmpty()) return
+        _state.update { current ->
+            val draft = current.draft.copy(
+                controllers = current.draft.controllers.map { controller ->
+                    controller.copy(derivedBattery = DerivedBatteryChoice.ON)
+                }
+            )
+            current.copy(
+                draft = draft,
+                issues = validate(draft),
+                advanceBlocked = false,
+                saveBlocked = false
+            )
+        }
+        openReview()
+    }
+
     private fun save() {
         val snapshot = _state.value
         if (snapshot.saving) return
@@ -419,8 +442,16 @@ class DefaultSetupWizardComponent(
         override val state = this@DefaultSetupWizardComponent.state
         override val scanRows: List<SetupWizardComponent.ScanRow>
             get() = this@DefaultSetupWizardComponent.scanRows()
+        override val canUseControllerBattery: Boolean
+            get() = _state.value.draft.controllers.isNotEmpty()
         override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) =
             this@DefaultSetupWizardComponent.addScannedDevice(device, add)
+        override fun onUseSeparateBms(device: DiscoveredDevice) =
+            this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.BATTERY)
+        override fun onUseControllerBattery() =
+            this@DefaultSetupWizardComponent.useControllerBattery()
+        override fun onUseDeviceAsBoth(device: DiscoveredDevice) =
+            this@DefaultSetupWizardComponent.addScannedDevice(device, ScannedAdd.WHEEL)
         override fun onNoBattery() = openReview()
         override fun onNext() = openReview()
         override fun onBack() = backFromStage()

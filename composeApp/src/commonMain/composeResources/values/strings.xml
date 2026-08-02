@@ -420,6 +420,10 @@
     <string name="wizard_battery_question">Where should battery data come from?</string>
     <string name="wizard_battery_own_bms">It has its own BMS</string>
     <string name="wizard_battery_own_bms_caption">a separate connection</string>
+    <string name="wizard_battery_from_controller">Use values from the controller</string>
+    <string name="wizard_battery_from_controller_caption">Computed from controller values. The gauge can be briefly unavailable after connecting.</string>
+    <string name="wizard_battery_device_is_both">This device is both</string>
+    <string name="wizard_battery_device_is_both_caption">one address with controller and battery roles</string>
     <string name="wizard_no_battery">No battery</string>
     <string name="wizard_review_title">Review</string>
     <string name="wizard_summary">Links: %1$d · Sources: %2$d</string>

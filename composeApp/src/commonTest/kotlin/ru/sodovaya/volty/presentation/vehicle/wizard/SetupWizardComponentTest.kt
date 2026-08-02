@@ -25,7 +25,10 @@ import ru.sodovaya.volty.presentation.root.CreateVehicleEntry
 import ru.sodovaya.volty.presentation.root.RootComponent
 import ru.sodovaya.volty.presentation.root.configForCreateVehicle
 import ru.sodovaya.volty.presentation.root.guardComposerDestruction
+import ru.sodovaya.volty.presentation.vehicle.DerivedBatteryChoice
 import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
+import ru.sodovaya.volty.presentation.vehicle.addController
+import ru.sodovaya.volty.presentation.vehicle.updateController
 import ru.sodovaya.volty.presentation.vehicle.validate
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -244,6 +247,123 @@ class SetupWizardComponentTest {
 
         assertEquals(VehicleArchetype.SCOOTER, c.state.value.archetype)
         assertEquals(listOf("AN:01", "AN:02"), c.state.value.draft.packs.map { it.address })
+    }
+
+    @Test
+    fun `a separate BMS exit creates a second BLE link`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onAddScannedDevice(
+            device("VE:01", "VESC", controllerType = ControllerType.VESC),
+            ScannedAdd.CONTROLLER
+        )
+        controllers.onNext()
+
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        battery.onUseSeparateBms(device("AN:02", "ANT", bmsType = BmsType.ANT_BMS))
+
+        assertEquals(listOf("VE:01", "AN:02"), c.state.value.draft.linkAddresses)
+        assertEquals(listOf("VE:01"), c.state.value.draft.controllers.map { it.address })
+        assertEquals(listOf("AN:02"), c.state.value.draft.packs.map { it.address })
+    }
+
+    @Test
+    fun `controller-derived exit keeps one link and persists the derived relationship`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val added = VehicleDraft().addController(ControllerType.VESC, "VE:01", "VESC")
+        val controllerKey = added.controllers.single().key
+        val explicitlyDisabled = added.updateController(controllerKey) {
+            it.copy(derivedBattery = DerivedBatteryChoice.OFF)
+        }
+        val c = component(initialDraft = explicitlyDisabled)
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onNext()
+
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        assertTrue(battery.canUseControllerBattery)
+        battery.onUseControllerBattery()
+
+        assertIs<SetupWizardComponent.Child.Review>(c.stack.value.active.instance)
+        assertEquals(listOf("VE:01"), c.state.value.draft.linkAddresses)
+        assertEquals(emptyList(), c.state.value.draft.packs)
+        assertTrue(c.state.value.draft.toControllers().single().providesDerivedBattery)
+    }
+
+    @Test
+    fun `controller-derived exit is unreachable without a controller`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers)
+            .component.onNoController()
+
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        assertFalse(battery.canUseControllerBattery)
+        battery.onUseControllerBattery()
+
+        assertIs<SetupWizardComponent.Child.Battery>(c.stack.value.active.instance)
+        assertEquals(0, c.state.value.draft.sourceCount)
+        assertFalse(c.state.value.advanceBlocked, "an unavailable action must be a no-op")
+    }
+
+    @Test
+    fun `device-is-both exit creates one address in both roles`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val wheel = device(
+            address = "BG:01",
+            name = "Begode",
+            bmsType = BmsType.BEGODE,
+            controllerType = ControllerType.BEGODE
+        )
+        val c = component()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers)
+            .component.onNoController()
+
+        val battery =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        battery.onUseDeviceAsBoth(wheel)
+
+        assertEquals(listOf("BG:01"), c.state.value.draft.linkAddresses)
+        assertEquals(listOf("BG:01"), c.state.value.draft.controllers.map { it.address })
+        assertEquals(listOf("BG:01"), c.state.value.draft.packs.map { it.address })
+    }
+
+    @Test
+    fun `device-is-both exit fills the missing role when its controller was already chosen`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val wheel = device(
+            address = "BG:01",
+            name = "Begode",
+            bmsType = BmsType.BEGODE,
+            controllerType = ControllerType.BEGODE
+        )
+        val c = component()
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onAddScannedDevice(wheel, ScannedAdd.CONTROLLER)
+        controllers.onNext()
+
+        (c.stack.value.active.instance as SetupWizardComponent.Child.Battery)
+            .component.onUseDeviceAsBoth(wheel)
+
+        assertEquals(listOf("BG:01"), c.state.value.draft.linkAddresses)
+        assertEquals(1, c.state.value.draft.controllers.size)
+        assertEquals(1, c.state.value.draft.packs.size)
     }
 
     @Test

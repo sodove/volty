@@ -56,7 +56,12 @@ internal class VehicleSourceScanner(
             ScannedAdd.BATTERY ->
                 draft.addPack(device.addBmsType(), device.address, label)
             ScannedAdd.WHEEL ->
-                draft.addWheel(device.addControllerType(), device.addBmsType(), device.address, label)
+                draft.addDeviceAsBoth(
+                    device.addControllerType(),
+                    device.addBmsType(),
+                    device.address,
+                    label
+                )
         }
     }
 

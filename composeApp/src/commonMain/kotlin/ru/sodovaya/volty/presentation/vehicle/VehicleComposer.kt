@@ -639,6 +639,33 @@ fun VehicleDraft.addWheel(
     label: String = ""
 ): VehicleDraft = addController(controllerType, address, label).addPack(bmsType, address, label)
 
+/**
+ * Completes the rider's statement that one directly scanned BLE device owns
+ * both roles. Unlike [addWheel], this is safe after the controller stage has
+ * already added one half: an existing direct role is preserved and only the
+ * missing companion is created.
+ *
+ * CAN-forwarded sources do not satisfy the check. They share the gateway's BLE
+ * address but are not the physical device that advertised it.
+ */
+fun VehicleDraft.addDeviceAsBoth(
+    controllerType: ControllerType,
+    bmsType: BmsType,
+    address: String,
+    label: String = ""
+): VehicleDraft {
+    val withController = if (controllers.any { it.address == address && it.canId == null }) {
+        this
+    } else {
+        addController(controllerType, address, label)
+    }
+    return if (withController.packs.any { it.address == address && it.canId == null }) {
+        withController
+    } else {
+        withController.addPack(bmsType, address, label)
+    }
+}
+
 /** Refuses to remove the last source — see [VehicleDraft.canRemoveSource]. */
 fun VehicleDraft.removePack(key: String): VehicleDraft =
     if (!canRemoveSource || packs.none { it.key == key }) this

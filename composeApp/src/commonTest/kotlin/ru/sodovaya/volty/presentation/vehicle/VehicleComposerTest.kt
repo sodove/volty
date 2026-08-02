@@ -1231,6 +1231,24 @@ class VehicleComposerTest {
         assertEquals("Monster", named.packs.single().label)
     }
 
+    @Test
+    fun `device-is-both completes an existing direct controller instead of adding it twice`() {
+        val existing = VehicleDraft()
+            .addController(ControllerType.BEGODE, "WH:01", "Monster")
+
+        val completed = existing.addDeviceAsBoth(
+            controllerType = ControllerType.BEGODE,
+            bmsType = BmsType.BEGODE,
+            address = "WH:01",
+            label = "Monster"
+        )
+
+        val link = planLinks(completed.toPacks(), completed.toControllers()).single()
+        assertEquals(1, link.ownedControllers.size)
+        assertEquals(1, link.ownedPacks.size)
+        assertEquals("WH:01", link.address)
+    }
+
     /**
      * `G §6` through the wheel: the pack the same add created is what turns the
      * controller's derived battery off, and the rule — not a constant — is what

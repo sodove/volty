@@ -201,10 +201,34 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        OutlinedButton(
+            onClick = component::onUseControllerBattery,
+            enabled = component.canUseControllerBattery,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Text(stringResource(Res.string.wizard_battery_from_controller))
+        }
+        Text(
+            stringResource(Res.string.wizard_battery_from_controller_caption),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Text(stringResource(Res.string.wizard_battery_device_is_both), fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(Res.string.wizard_battery_device_is_both_caption),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
         ScanHeading(state.scannedDevices.size)
         ScannedDeviceList(
             rows = component.scanRows,
-            onAdd = component::onAddScannedDevice
+            onAdd = { device, add ->
+                when (add) {
+                    ScannedAdd.CONTROLLER -> component.onAddScannedDevice(device, add)
+                    ScannedAdd.BATTERY -> component.onUseSeparateBms(device)
+                    ScannedAdd.WHEEL -> component.onUseDeviceAsBoth(device)
+                }
+            }
         )
         if (state.advanceBlocked) {
             ErrorHint(stringResource(Res.string.wizard_empty_draft))
