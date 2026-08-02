@@ -195,11 +195,20 @@ data class VescBmsFrame(
      *   VESC BMS is unverified and could need the opposite. If one ever
      *   disagrees, the fix is a per-producer sign, not flipping this back.
      *
-     *   **Worth telling the rider, because it is their firmware:** the bridge is
-     *   internally inconsistent — it sets `val->is_charging = (current > 0.05f)`
-     *   at `ant_bms.c:685` while `current` is discharge-positive, so its own
-     *   charging flag is inverted too. Volty never reads that flag, so this
-     *   negation is complete for us, but the bug is upstream as well.
+     *   **One thing about the bridge that is NOT settled, recorded so nobody
+     *   "fixes" it from the armchair:** `ant_bms.c:685` sets
+     *   `val->is_charging = (current > 0.05f)` from that same discharge-positive
+     *   `current`, and that flag is the only input to the head unit's charging
+     *   screen (CAN `BMS_SOC_SOH_TEMP_STAT` flags bit 0 → `power_event_bms_charging`
+     *   → `POWER_STATE_CHARGING`, the sole path into that state). By the reading
+     *   above the flag would be inverted — yet the rider reports the charging
+     *   screen appears **only** while charging, which is the opposite. Something
+     *   in that chain is not what it looks like from these two files, most
+     *   likely the byte offset one of the two parsers starts from. Volty never
+     *   reads `is_charging`, so nothing here depends on the answer; it is
+     *   written down because the next person to read `ant_bms.c` beside this
+     *   file will hit the same contradiction and should not assume either side
+     *   is wrong without a measurement.
      * - `soc` is a 0..1 fraction on the wire and a percentage in `BmsData`.
      *   `socKnown` follows [soc]'s presence: a VESC BMS coulomb-counts, so a
      *   SoC it reports is real — including a genuine 0 % — but a frame that
