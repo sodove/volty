@@ -64,6 +64,31 @@ class VehicleComposerTest {
         derived: Boolean = false
     ) = Controller(index, label, type, address, canId, motor, derived)
 
+    /**
+     * Creation projects the whole draft, rather than rebuilding just its first
+     * pack. Dropping either source would turn two separately dialled devices
+     * back into the old single-BMS vehicle at Save.
+     */
+    @Test
+    fun `a new vehicle keeps every source from a two-link draft`() {
+        val draft = VehicleDraft()
+            .addController(ControllerType.VESC, "CT:01", "Controller")
+            .addPack(BmsType.ANT_BMS, "PK:02", "Battery")
+
+        val vehicle = newVehicleFromDraft(
+            id = "new",
+            name = "Bike",
+            iconKey = "ebike",
+            draft = draft,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = createdAt
+        )
+
+        assertEquals(listOf("PK:02"), vehicle.packs.map { it.bmsAddress })
+        assertEquals(listOf("CT:01"), vehicle.controllers.map { it.address })
+        assertEquals(listOf("PK:02", "CT:01"), planLinks(vehicle.packs, vehicle.controllers).map { it.address })
+    }
+
     // -----------------------------------------------------------------------
     // Round trip — the draft must not be a lossy view of the vehicle
     // -----------------------------------------------------------------------

@@ -18,7 +18,6 @@ import ru.sodovaya.volty.domain.model.bmsTypeOrNull
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.primaryAddress
 import ru.sodovaya.volty.domain.model.isGuest
-import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.yieldsBms
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
@@ -302,9 +301,9 @@ interface VehicleEditComponent {
          * vehicle's identity address, which for a controller-only vehicle is
          * its controller's.
          *
-         * Separate from [bmsAddress] on purpose: that one feeds the pack
-         * [singlePackVehicle] builds when CREATING, and a controller's address
-         * must never reach it. (Editing never builds a pack — see [onSave].)
+         * Separate from [bmsAddress] on purpose: the create draft is seeded
+         * from it, and a controller's address must never reach that pack.
+         * (Editing never builds a pack — see [onSave].)
          * "" (rendered as an em-dash) when neither exists.
          */
         val sourceAddress: String = "",
@@ -329,8 +328,8 @@ interface VehicleEditComponent {
         val yieldBmsToHeadUnit: Boolean? = null,
         /**
          * The editable source set (G2 Task 2). Seeded from the loaded vehicle
-         * by [draftOf] and round-trips it exactly; empty while CREATING, which
-         * still goes through [singlePackVehicle].
+         * by [draftOf] and round-trips it exactly. Creation is seeded with its
+         * initial BMS source and owns the same draft from then on.
          */
         val draft: VehicleDraft = VehicleDraft(),
         /** Everything wrong with [draft] right now — see [ComposerIssue]. */
@@ -432,16 +431,12 @@ interface VehicleEditComponent {
         /**
          * Whether the source list may be edited at all.
          *
-         * **False while CREATING**, because the create path builds the
-         * single-BMS shape through `singlePackVehicle` and never reads [draft]
-         * — so a composer control offered here would take the rider's work and
-         * discard it at save time with no signal. The mutations are no-ops in
-         * that state as well (belt and braces, exactly like
-         * [canRemoveSource]); a controller-bearing vehicle is created by the
-         * Picker, which then navigates straight to this screen to EDIT it, and
-         * that is where composing happens.
+         * Creation owns a seeded draft too: a scanned controller or battery is
+         * a source the eventual save must keep, not a special case that waits
+         * for a vehicle id. The picker still uses `singlePackVehicle` for its
+         * one-tap-connect path; this is only the composer path.
          */
-        val canComposeSources: Boolean get() = isEditing
+        val canComposeSources: Boolean get() = true
 
         /**
          * Whether [onSave] will do anything. A blocking issue is a
@@ -456,7 +451,7 @@ interface VehicleEditComponent {
          * it concerns ([issuesBySource]). This property is the same fact for
          * anything that wants to ask *before* the tap; nothing does today.
          */
-        val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocking }
+        val canSave: Boolean get() = name.isNotBlank() && issues.none { it.blocksSave(isEditing) }
 
         /**
          * Whether the "yield BMS to head unit while riding" toggle applies at
@@ -663,20 +658,51 @@ class DefaultVehicleEditComponent(
                 return
             }
         }
+        val createName = prefilledName ?: ""
+        val createBmsType = prefilledBmsType ?: BmsType.JK_BMS
+        val createBmsAddress = prefilledBmsAddress ?: ""
+        // A new vehicle starts with the same editable source representation as
+        // an existing one. In particular, the blank address is visible to
+        // validation until a scan or edit earns a real link for it.
+        val createDraft = VehicleDraft().addPack(createBmsType, createBmsAddress, createName)
         val loaded = VehicleEditComponent.State(
             isEditing = false,
-            name = prefilledName ?: "",
-            bmsType = prefilledBmsType ?: BmsType.JK_BMS,
-            bmsAddress = prefilledBmsAddress ?: "",
+            name = createName,
+            bmsType = createBmsType,
+            bmsAddress = createBmsAddress,
             // No vehicle to describe yet — the header falls back to the
             // prefilled BMS fields, which is what it always showed here.
-            sourceAddress = prefilledBmsAddress ?: ""
+            sourceAddress = createBmsAddress,
+            draft = createDraft,
+            issues = validate(createDraft)
         )
         _state.value = loaded.copy(savedValues = loaded.editableValues)
     }
 
     override fun onNameChanged(name: String) {
-        _state.update { it.copy(name = name, nameError = name.isBlank()) }
+        _state.update { s ->
+            // Preserve the old one-pack label rule while the initial source is
+            // still only the form's bootstrap. Once the rider edits the pack
+            // list, its per-source labels are theirs rather than aliases for
+            // the vehicle name.
+            val draft = if (!s.isEditing && !s.packsEdited && s.draft.packs.size == 1) {
+                val baseline = s.savedValues
+                val label = if (name == baseline?.name) {
+                    baseline.draft.packs.singleOrNull()?.label ?: name
+                } else {
+                    name
+                }
+                s.draft.updatePack(s.draft.packs.single().key) { it.copy(label = label) }
+            } else {
+                s.draft
+            }
+            s.copy(
+                name = name,
+                nameError = name.isBlank(),
+                draft = draft,
+                issues = validate(draft, s.telemetry)
+            )
+        }
     }
     override fun onIconChanged(iconKey: String) { _state.update { it.copy(iconKey = iconKey) } }
     override fun onChemistryChanged(c: Chemistry) { _state.update { it.copy(chemistry = c) } }
@@ -714,7 +740,6 @@ class DefaultVehicleEditComponent(
         block: (VehicleDraft) -> VehicleDraft
     ) {
         _state.update { s ->
-            // Nothing to compose onto while creating — see [State.canComposeSources].
             if (!s.canComposeSources) return@update s
             val d = block(s.draft)
             s.copy(
@@ -952,7 +977,10 @@ class DefaultVehicleEditComponent(
         //
         // Reported like [State.nameError] rather than returning silently: a
         // screen that wires only the button would otherwise look dead.
-        if (s.issues.any { it.blocking }) { _state.update { it.copy(saveBlocked = true) }; return }
+        if (s.issues.any { it.blocksSave(s.isEditing) }) {
+            _state.update { it.copy(saveBlocked = true) }
+            return
+        }
         scope.launch {
             _state.update { it.copy(saving = true) }
             // Re-read rather than reuse State.sourceVehicle: the alerts screen
@@ -1166,27 +1194,27 @@ private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = 
     socLowPercent = s.socLowPercent
 )
 
-/**
- * The CREATE path, and the only place this screen still calls a constructor.
- *
- * A vehicle that does not exist yet has nothing to preserve, so a builder is
- * exactly right here — and [singlePackVehicle] is the right one because this
- * form only ever originates the single-BMS shape (a controller vehicle is
- * created by the Picker, `pickedControllerVehicle`, which then navigates
- * straight to this screen to EDIT it).
- */
+/** The CREATE path projects the source draft the rider actually assembled. */
 @OptIn(ExperimentalTime::class)
-private fun newVehicle(s: VehicleEditComponent.State, id: String): Vehicle = singlePackVehicle(
+private fun newVehicle(s: VehicleEditComponent.State, id: String): Vehicle = newVehicleFromDraft(
     id = id,
     name = s.name,
     iconKey = s.iconKey,
-    bmsType = s.bmsType,
-    bmsAddress = s.bmsAddress,
+    draft = s.draft,
     chemistry = s.chemistry,
     averagingWindowMin = s.averagingWindowMin,
     alertConfig = AlertConfig().withEdits(s),
-    createdAt = Clock.System.now()
-).copy(
+    createdAt = Clock.System.now(),
+    topology = s.topology,
     dashboardStyle = s.dashboardStyle,
-    secondaryGauge = s.secondaryGauge
+    secondaryGauge = s.secondaryGauge,
+    yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
 )
+
+/**
+ * A blank address remains advisory while editing old rows, so a rider can
+ * inspect and repair one. Before a vehicle exists, saving that same row would
+ * manufacture an undiallable vehicle, so creation refuses it.
+ */
+private fun ComposerIssue.blocksSave(isEditing: Boolean): Boolean =
+    blocking || (!isEditing && this is ComposerIssue.BlankAddress)

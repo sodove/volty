@@ -3,12 +3,19 @@ package ru.sodovaya.volty.presentation.vehicle
 import ru.sodovaya.volty.data.ble.ProtocolKind
 import ru.sodovaya.volty.data.ble.controllerMotionSupported
 import ru.sodovaya.volty.data.ble.protocolKind
+import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 
 /**
  * # The composer's model (Part G2 Task 2)
@@ -392,6 +399,44 @@ data class PersistableVehicleDraft(
 
 fun VehicleDraft.persistableValues(): PersistableVehicleDraft =
     PersistableVehicleDraft(packs = toPacks(), controllers = toControllers())
+
+/**
+ * Builds a new vehicle from the composer's complete source set.
+ *
+ * [singlePackVehicle] remains the compact builder for the picker's one-tap
+ * connection path. Creation through the composer is different: the rider may
+ * have scanned any number of sources before saving, so rebuilding one pack
+ * here would silently discard the rest.
+ */
+@OptIn(ExperimentalTime::class)
+fun newVehicleFromDraft(
+    id: String,
+    name: String,
+    iconKey: String,
+    draft: VehicleDraft,
+    chemistry: Chemistry,
+    averagingWindowMin: Int = 5,
+    alertConfig: AlertConfig = AlertConfig(),
+    createdAt: Instant,
+    topology: PackTopology = PackTopology.PARALLEL,
+    dashboardStyle: DashboardStyle? = null,
+    secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
+    yieldBmsToHeadUnit: Boolean? = null
+): Vehicle = Vehicle(
+    id = id,
+    name = name,
+    iconKey = iconKey,
+    packs = draft.toPacks(),
+    controllers = draft.toControllers(),
+    topology = topology,
+    chemistry = chemistry,
+    averagingWindowMin = averagingWindowMin,
+    alertConfig = alertConfig,
+    createdAt = createdAt,
+    dashboardStyle = dashboardStyle,
+    secondaryGauge = secondaryGauge,
+    yieldBmsToHeadUnit = yieldBmsToHeadUnit
+)
 
 /**
  * Re-point every draft's `origin` at the **freshly-read** row, matching by the

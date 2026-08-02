@@ -2224,37 +2224,43 @@ class VehicleEditComponentTest {
     }
 
     /**
-     * The create path builds the single-BMS shape through `singlePackVehicle`
-     * and never reads the draft, so a composer control offered while creating
-     * would take the rider's work and discard it at save time with no signal.
-     * The state says so (`canComposeSources`) **and** the mutations are no-ops
-     * — disabled *and* prevented, the same pair as the last-source rule, rather
-     * than trusting the screen to remember.
+     * The creation form owns the same draft as an existing vehicle, so a scan
+     * can contribute a source without the rider ever transcribing its address.
      */
     @Test
-    fun `the source list cannot be composed while creating`() = runTest {
+    fun `a create path can compose a scanned source without typing its address`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeVehicleRepo(emptyList())
-        val c = component(repo, vehicleId = null, prefilledBmsType = BmsType.JK_BMS, prefilledBmsAddress = "CR:01")
+        val bms = FakeBmsRepo(listOf(device("VE:01", "VESC", controllerType = ControllerType.VESC)))
+        val c = component(repo, vehicleId = null, bmsRepo = bms)
         advanceUntilIdle()
-        assertEquals(false, c.state.value.canComposeSources)
+        assertTrue(c.state.value.canComposeSources)
 
         c.onNameChanged("Fresh")
-        c.onAddController(ControllerType.VESC, "VE:01")
-        c.onAddPack(BmsType.ANT_BMS, "AN:01")
-        assertEquals(VehicleDraft(), c.state.value.draft, "nothing may be accepted that the save would discard")
-        assertEquals(false, c.state.value.packsEdited)
-        assertEquals(false, c.state.value.controllersEdited)
+        c.onStartDeviceScan()
+        advanceUntilIdle()
+        c.onAddScannedDevice(c.state.value.scannedDevices.single(), ScannedAdd.CONTROLLER)
+
+        assertEquals("VE:01", c.state.value.draft.controllers.single().address)
+        assertTrue(c.state.value.controllersEdited)
+    }
+
+    /** A vehicle with an undiallable draft source must not be written. */
+    @Test
+    fun `a create with a blank draft address is refused`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(emptyList())
+        val c = component(repo, vehicleId = null)
+        advanceUntilIdle()
+
+        c.onNameChanged("Fresh")
+        assertTrue(c.state.value.issues.any { it is ComposerIssue.BlankAddress })
 
         c.onSave()
         advanceUntilIdle()
 
-        val saved = repo.upserts.single()
-        assertEquals(
-            Pack(index = 0, label = "Fresh", bmsType = BmsType.JK_BMS, bmsAddress = "CR:01"),
-            saved.packs.single()
-        )
-        assertEquals(emptyList(), saved.controllers)
+        assertEquals(emptyList(), repo.upserts)
+        assertTrue(c.state.value.saveBlocked)
     }
 
     /**
