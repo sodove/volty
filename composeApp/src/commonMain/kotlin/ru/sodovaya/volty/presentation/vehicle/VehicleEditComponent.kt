@@ -998,13 +998,19 @@ class DefaultVehicleEditComponent(
             // Establish the persisted snapshot before publishing navigation.
             // If another field changed while this write was in flight, current
             // values still differ from this snapshot and the root guard asks.
-            _state.update {
-                it.copy(
-                    saving = false,
-                    savedValues = s.editableValues,
-                    discardPrompt = false
-                )
-            }
+            val completed = _state.value.copy(
+                saving = false,
+                savedValues = s.editableValues
+            )
+            // A prompt and its private continuation are one state-machine
+            // fact. Save A may finish after the rider has made edit B and
+            // already asked to discard it: in that case the original request
+            // stays visible and keeps ownership. If A made the current draft
+            // clean, that old request is obsolete and must be retired before
+            // onSaved asks the root to leave.
+            val keepPendingExit = completed.isDirty && pendingExit != null
+            if (!keepPendingExit) pendingExit = null
+            _state.value = completed.copy(discardPrompt = keepPendingExit)
             onSaved()
         }
     }

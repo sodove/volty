@@ -175,12 +175,17 @@ class VehicleEditComponentTest {
          * the component launched has already run.
          */
         var loadGate: CompletableDeferred<Unit>? = null
+        /** Holds a write after its exact payload has been recorded. */
+        var upsertGate: CompletableDeferred<Unit>? = null
 
         override suspend fun get(id: String): Vehicle? {
             loadGate?.await() ?: yield()
             return upserts.lastOrNull { it.id == id } ?: saved.firstOrNull { it.id == id }
         }
-        override suspend fun upsert(vehicle: Vehicle) { upserts += vehicle }
+        override suspend fun upsert(vehicle: Vehicle) {
+            upserts += vehicle
+            upsertGate?.await()
+        }
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
 
@@ -776,6 +781,107 @@ class VehicleEditComponentTest {
 
         assertEquals(false, dirtyWhenSaved, "root must not see a false dirty prompt after Save")
         assertFalse(c.state.value.isDirty)
+    }
+
+    @Test
+    fun `an older save keeps a newer pending discard prompt visible and actionable`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        repo.upsertGate = CompletableDeferred()
+        val destinations = mutableListOf<Config>()
+        lateinit var c: DefaultVehicleEditComponent
+        c = component(
+            repo,
+            onSaved = { c.requestExit { destinations += Config.Scanning } },
+            onCancelled = { destinations += Config.Dashboard }
+        )
+        advanceUntilIdle()
+
+        c.onNameChanged("Saved A")
+        c.onSave()
+        advanceUntilIdle()
+        assertEquals("Saved A", repo.upserts.single().name, "save A is suspended after issuing its exact payload")
+        assertTrue(c.state.value.saving)
+
+        c.onNameChanged("Unsaved B")
+        c.onCancel()
+        assertTrue(c.state.value.discardPrompt)
+        repo.upsertGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.isDirty, "B was never part of save A")
+        assertTrue(c.state.value.discardPrompt, "the pending Cancel must remain visible after A completes")
+        assertEquals(emptyList(), destinations, "onSaved cannot replace the request that owns the prompt")
+
+        c.onDiscardConfirmed()
+        assertEquals(listOf<Config>(Config.Dashboard), destinations, "confirmation executes the original Cancel")
+        assertFalse(c.state.value.discardPrompt)
+    }
+
+    @Test
+    fun `dismissing a prompt preserved across save completion allows a later exit`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        repo.upsertGate = CompletableDeferred()
+        val destinations = mutableListOf<Config>()
+        lateinit var c: DefaultVehicleEditComponent
+        c = component(
+            repo,
+            onSaved = { c.requestExit { destinations += Config.Scanning } },
+            onCancelled = { destinations += Config.Dashboard }
+        )
+        advanceUntilIdle()
+
+        c.onNameChanged("Saved A")
+        c.onSave()
+        advanceUntilIdle()
+        c.onNameChanged("Unsaved B")
+        c.onCancel()
+        repo.upsertGate!!.complete(Unit)
+        advanceUntilIdle()
+        assertTrue(c.state.value.discardPrompt)
+
+        c.onDiscardDismissed()
+        assertTrue(c.state.value.isDirty)
+        assertFalse(c.state.value.discardPrompt)
+        assertEquals(emptyList(), destinations)
+
+        c.requestExit { destinations += Config.Settings }
+        assertTrue(c.state.value.discardPrompt, "dismissal clears the old action so a later request can ask")
+        c.onDiscardConfirmed()
+        assertEquals(listOf<Config>(Config.Settings), destinations)
+    }
+
+    @Test
+    fun `save completion retires an obsolete pending discard when the current draft is clean`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(listOf(existingVehicle()))
+        repo.upsertGate = CompletableDeferred()
+        val destinations = mutableListOf<Config>()
+        lateinit var c: DefaultVehicleEditComponent
+        c = component(
+            repo,
+            onSaved = { c.requestExit { destinations += Config.Scanning } },
+            onCancelled = { destinations += Config.Dashboard }
+        )
+        advanceUntilIdle()
+
+        c.onNameChanged("Saved A")
+        c.onSave()
+        advanceUntilIdle()
+        c.onCancel()
+        assertTrue(c.state.value.discardPrompt, "A differs from the old baseline until its write completes")
+
+        repo.upsertGate!!.complete(Unit)
+        advanceUntilIdle()
+
+        assertFalse(c.state.value.isDirty)
+        assertFalse(c.state.value.discardPrompt)
+        assertEquals(
+            listOf<Config>(Config.Scanning),
+            destinations,
+            "the obsolete Cancel is retired and the clean onSaved request proceeds"
+        )
     }
 
     @Test
