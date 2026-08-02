@@ -45,7 +45,12 @@ import ru.sodovaya.volty.presentation.scanning.ScanningComponent
 import ru.sodovaya.volty.presentation.settings.DefaultSettingsComponent
 import ru.sodovaya.volty.presentation.settings.SettingsComponent
 import ru.sodovaya.volty.presentation.vehicle.DefaultVehicleEditComponent
+import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
+import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditComponent
+import ru.sodovaya.volty.presentation.vehicle.draftOf
+import ru.sodovaya.volty.presentation.vehicle.wizard.DefaultSetupWizardComponent
+import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardComponent
 import ru.sodovaya.volty.presentation.welcome.DefaultWelcomeComponent
 import ru.sodovaya.volty.presentation.welcome.WelcomeComponent
 import kotlinx.coroutines.CoroutineScope
@@ -85,6 +90,7 @@ interface RootComponent {
         data class Ride(val component: RideDashboardComponent) : Child
         data class Dashboard(val component: DashboardComponent) : Child
         data class PackDetail(val component: PackDetailComponent) : Child
+        data class SetupWizard(val component: SetupWizardComponent) : Child
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
@@ -105,6 +111,9 @@ sealed class Config {
     /** The battery dashboard — home for a pure-BMS vehicle, Battery tab otherwise. */
     @Serializable data object Dashboard : Config()
     @Serializable data class PackDetail(val packIndex: Int) : Config()
+    @Serializable data class SetupWizard(
+        val prefillFromActiveConnection: Boolean = true
+    ) : Config()
     @Serializable data class VehicleEdit(
         val vehicleId: String?,
         /**
@@ -123,6 +132,16 @@ sealed class Config {
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     @Serializable data object Graph : Config()
     @Serializable data object Settings : Config()
+}
+
+/** The three root surfaces whose create action opens the same retained wizard. */
+internal enum class CreateVehicleEntry { RIDE, DASHBOARD, SETTINGS }
+
+/** A create action always starts the wizard; the full editor is for saved rows. */
+internal fun configForCreateVehicle(entry: CreateVehicleEntry): Config = when (entry) {
+    CreateVehicleEntry.RIDE,
+    CreateVehicleEntry.DASHBOARD,
+    CreateVehicleEntry.SETTINGS -> Config.SetupWizard(prefillFromActiveConnection = true)
 }
 
 /**
@@ -257,18 +276,16 @@ internal fun guardComposerDestruction(
     children: List<RootComponent.Child>,
     revealComposerAt: (Int) -> Unit,
     destroyStack: () -> Unit,
-    approved: Set<VehicleEditComponent> = emptySet()
+    approved: Set<DraftExitComponent> = emptySet()
 ) {
-    val index = children.indexOfLast {
-        it is RootComponent.Child.VehicleEdit &&
-            it.component.state.value.isDirty &&
-            it.component !in approved
+    val index = children.indexOfLast { child ->
+        child.draftExitComponent()?.let { it.hasUnsavedDraft && it !in approved } == true
     }
     if (index < 0) {
         destroyStack()
         return
     }
-    val editor = (children[index] as RootComponent.Child.VehicleEdit).component
+    val editor = children[index].draftExitComponent() ?: return
     revealComposerAt(index)
     editor.requestExit {
         // A stack may retain editors for two different vehicles. Confirmation
@@ -277,6 +294,12 @@ internal fun guardComposerDestruction(
         // the closure chain and a later request starts with no approvals.
         guardComposerDestruction(children, revealComposerAt, destroyStack, approved + editor)
     }
+}
+
+private fun RootComponent.Child.draftExitComponent(): DraftExitComponent? = when (this) {
+    is RootComponent.Child.SetupWizard -> component
+    is RootComponent.Child.VehicleEdit -> component
+    else -> null
 }
 
 /**
@@ -366,7 +389,7 @@ class DefaultRootComponent(
         val entries = stack.value.items
         guardComposerDestruction(
             children = entries.map { it.instance },
-            revealComposerAt = { index -> goTo(entries[index].configuration as Config.VehicleEdit) },
+            revealComposerAt = { index -> goTo(entries[index].configuration as Config) },
             destroyStack = { nav.replaceAll(config) }
         )
     }
@@ -379,11 +402,11 @@ class DefaultRootComponent(
     private fun homeConfig(): Config = homeConfigFor(bmsRepository.activeVehicle.value)
 
     /**
-     * The form has two terminal callbacks: Cancel and deletion of an already
-     * saved vehicle. They must take precisely the same route, especially after
-     * picker connection has collapsed the stack to the editor alone.
+     * Every composer terminal callback takes the same total route. This covers
+     * wizard/editor cancellation and deletion, including the one-entry stack
+     * left after picker connection where a plain `pop()` would be inert.
      */
-    private fun leaveActiveVehicleEdit() {
+    private fun leaveActiveComposer() {
         leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
     }
 
@@ -522,7 +545,7 @@ class DefaultRootComponent(
                     // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
                     // "+ Add" captures the live connection into a new vehicle.
                     onAddVehicleRequested = {
-                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(configForCreateVehicle(CreateVehicleEntry.RIDE))
                     },
                     onDisconnectRequested = { replaceAll(Config.Scanning) }
                 )
@@ -535,7 +558,7 @@ class DefaultRootComponent(
                     onOpenGraphRequested = { goTo(Config.Graph) },
                     onOpenSettings = { goTo(Config.Settings) },
                     onOpenAddBattery = {
-                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(configForCreateVehicle(CreateVehicleEntry.DASHBOARD))
                     },
                     onOpenPackDetail = { packIndex -> goTo(Config.PackDetail(packIndex)) },
                     onDisconnectRequested = { replaceAll(Config.Scanning) }
@@ -549,6 +572,27 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
+            is Config.SetupWizard -> {
+                val prefillVehicle = if (config.prefillFromActiveConnection) {
+                    bmsRepository.activeVehicle.value?.takeUnless { it.isDemo }
+                } else null
+                val initialName = prefillVehicle?.name
+                    ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") "" else it }
+                    .orEmpty()
+                RootComponent.Child.SetupWizard(
+                    DefaultSetupWizardComponent(
+                        componentContext = context,
+                        initialDraft = prefillVehicle?.let(::draftOf) ?: VehicleDraft(),
+                        initialName = initialName,
+                        scanAll = bmsRepository::scanAll,
+                        saveVehicle = vehicleRepository::upsert,
+                        connectVehicle = bmsRepository::connect,
+                        onCancelled = ::leaveActiveComposer,
+                        onShowVehicleList = { replaceAll(Config.Picker(mode = "cold")) },
+                        onConnected = { replaceAll(homeConfig()) }
+                    )
+                )
+            }
             is Config.VehicleEdit -> {
                 // Optionally prefill BMS type / address / name from the currently
                 // active connection. Only applies when creating a new vehicle
@@ -568,13 +612,13 @@ class DefaultRootComponent(
                         vehicleRepository = get(),
                         bmsRepository = get(),
                         onSaved = { replaceAll(homeConfig()) },
-                        onCancelled = ::leaveActiveVehicleEdit,
+                        onCancelled = ::leaveActiveComposer,
                         // A picker-created editor is the sole entry after its
                         // successful connection. Deleting it must therefore
                         // use the same total exit as Cancel: `pop()` alone is
                         // inert there and would leave the now-deleted form's
                         // Save control able to recreate the vehicle.
-                        onDeleted = ::leaveActiveVehicleEdit,
+                        onDeleted = ::leaveActiveComposer,
                         // Both prefills are already optional, so a source-less
                         // (controller-only) active connection simply prefills
                         // nothing instead of throwing.
@@ -631,7 +675,7 @@ class DefaultRootComponent(
                     logExporter = get(),
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {
-                        goTo(Config.VehicleEdit(vehicleId = null, prefillFromActiveConnection = true))
+                        goTo(configForCreateVehicle(CreateVehicleEntry.SETTINGS))
                     },
                     onBackRequested = { nav.pop() }
                 )

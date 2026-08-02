@@ -44,7 +44,7 @@ import kotlin.random.Random
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-interface VehicleEditComponent {
+interface VehicleEditComponent : DraftExitComponent {
     val state: StateFlow<State>
 
     fun onNameChanged(name: String)
@@ -96,7 +96,7 @@ interface VehicleEditComponent {
      * may have a different destination. The continuation stays private; state
      * exposes only the prompt the renderer needs.
      */
-    fun requestExit(onDiscarded: () -> Unit)
+    override fun requestExit(onDiscarded: () -> Unit)
     fun onDiscardConfirmed()
     fun onDiscardDismissed()
     fun onDelete()
@@ -535,6 +535,8 @@ class DefaultVehicleEditComponent(
     private val _state = MutableStateFlow(VehicleEditComponent.State())
     override val state: StateFlow<VehicleEditComponent.State> = _state.asStateFlow()
 
+    override val hasUnsavedDraft: Boolean get() = state.value.isDirty
+
     /**
      * The addresses currently up, refreshed by the collector in `init`.
      *
@@ -545,11 +547,20 @@ class DefaultVehicleEditComponent(
      */
     private var liveAddresses: Set<String> = emptySet()
 
-    /** The BLE scan behind the sheet, alive only while the sheet is open. */
-    private var scanJob: Job? = null
+    private val sourceScanner = VehicleSourceScanner(
+        scope = scope,
+        scanAll = bmsRepository::scanAll,
+        publish = { scan ->
+            _state.update {
+                it.copy(scanning = scan.scanning, scannedDevices = scan.devices)
+            }
+        }
+    )
 
-    /** The root action waiting behind the discard prompt, if any. */
-    private var pendingExit: (() -> Unit)? = null
+    private val exitCoordinator = DraftExitCoordinator(
+        isDirty = { _state.value.isDirty },
+        publishPrompt = { visible -> _state.update { it.copy(discardPrompt = visible) } }
+    )
 
     /** Same interception as VehicleAlerts: child back outranks stack pop. */
     private val backCallback = BackCallback(onBack = ::onCancel)
@@ -833,28 +844,11 @@ class DefaultVehicleEditComponent(
     // ----- Discovery (G2 Task 5) -----
 
     override fun onStartDeviceScan() {
-        // Guarded on the JOB, not on `scanning`: two taps landing before the
-        // first recomposition would otherwise start two collectors on one flow
-        // and every hit would be folded twice.
-        if (scanJob?.isActive == true) return
-        _state.update { it.copy(scanning = true, scannedDevices = emptyList()) }
-        scanJob = scope.launch {
-            // The picker's scanner, unchanged — one BLE scan in this app. What
-            // is shared beyond it is the labelling and the fold, in
-            // `presentation/picker/SourceScan.kt`.
-            bmsRepository.scanAll().collect { dev ->
-                _state.update { it.copy(scannedDevices = it.scannedDevices.withScanHit(dev)) }
-            }
-        }
+        sourceScanner.start()
     }
 
     override fun onStopDeviceScan() {
-        scanJob?.cancel()
-        scanJob = null
-        // The list is dropped with the sheet: a scan is a live view of what is
-        // in range, and rows kept from a previous sheet are stale the moment it
-        // closes.
-        _state.update { it.copy(scanning = false, scannedDevices = emptyList()) }
+        sourceScanner.stop()
     }
 
     /**
@@ -867,20 +861,15 @@ class DefaultVehicleEditComponent(
      * Exhaustive over [ScannedAdd] with no `else`.
      */
     override fun onAddScannedDevice(device: DiscoveredDevice, add: ScannedAdd) {
-        val label = device.name.orEmpty()
         when (add) {
             ScannedAdd.CONTROLLER ->
-                mutateDraft(controllers = true) {
-                    it.addController(device.addControllerType(), device.address, label)
-                }
+                mutateDraft(controllers = true) { sourceScanner.addTo(it, device, add) }
             ScannedAdd.BATTERY ->
-                mutateDraft(packs = true) { it.addPack(device.addBmsType(), device.address, label) }
+                mutateDraft(packs = true) { sourceScanner.addTo(it, device, add) }
             // Both halves, so BOTH edited flags: a wheel add writes a pack and a
             // controller, and `withEdits` must carry both lists.
             ScannedAdd.WHEEL ->
-                mutateDraft(packs = true, controllers = true) {
-                    it.addWheel(device.addControllerType(), device.addBmsType(), device.address, label)
-                }
+                mutateDraft(packs = true, controllers = true) { sourceScanner.addTo(it, device, add) }
         }
     }
 
@@ -1036,41 +1025,22 @@ class DefaultVehicleEditComponent(
             // stays visible and keeps ownership. If A made the current draft
             // clean, that old request is obsolete and must be retired before
             // onSaved asks the root to leave.
-            val keepPendingExit = completed.isDirty && pendingExit != null
-            if (!keepPendingExit) pendingExit = null
-            _state.value = completed.copy(discardPrompt = keepPendingExit)
+            _state.value = completed.copy(discardPrompt = false)
+            exitCoordinator.afterSave()
             onSaved()
         }
     }
 
     override fun onCancel() = requestExit(onCancelled)
 
-    override fun requestExit(onDiscarded: () -> Unit) {
-        // The visible prompt belongs to the request that raised it. A root
-        // event arriving while it is up must not silently substitute a new
-        // destination under the rider's confirmation button.
-        if (pendingExit != null) return
-        if (!_state.value.isDirty) {
-            onDiscarded()
-            return
-        }
-        pendingExit = onDiscarded
-        _state.update { it.copy(discardPrompt = true) }
-    }
+    override fun requestExit(onDiscarded: () -> Unit) = exitCoordinator.requestExit(onDiscarded)
 
     override fun onDiscardConfirmed() {
-        val exit = pendingExit
-        pendingExit = null
-        // Approval belongs to this one root destruction transaction, not to
-        // the persisted form baseline. The continuation carries that approval;
-        // if a later prompt is dismissed, this draft must remain dirty.
-        _state.update { it.copy(discardPrompt = false) }
-        exit?.invoke()
+        exitCoordinator.confirm()
     }
 
     override fun onDiscardDismissed() {
-        pendingExit = null
-        _state.update { it.copy(discardPrompt = false) }
+        exitCoordinator.dismiss()
     }
 
     override fun onDelete() {

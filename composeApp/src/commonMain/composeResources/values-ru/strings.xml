@@ -387,4 +387,43 @@
     <string name="vehicle_discard_text">Изменения транспорта будут потеряны.</string>
     <string name="vehicle_discard_confirm">Не сохранять</string>
     <string name="vehicle_discard_keep">Продолжить правку</string>
+
+    <!-- Мастер первой настройки (часть L) -->
+    <string name="wizard_new_vehicle">Новый аппарат</string>
+    <string name="wizard_what_title">Что собираем?</string>
+    <string name="wizard_what_subtitle">Влияет только на умолчания. Всё остальное будет доступно в любом случае.</string>
+    <string name="wizard_archetype_wheel">Моноколесо</string>
+    <string name="wizard_archetype_wheel_caption">плата и пачка в одном</string>
+    <string name="wizard_archetype_scooter">Самокат</string>
+    <string name="wizard_archetype_scooter_caption">контроллер + батарея</string>
+    <string name="wizard_archetype_bicycle">Велосипед</string>
+    <string name="wizard_archetype_bicycle_caption">контроллер + батарея</string>
+    <string name="wizard_archetype_custom">Своё</string>
+    <string name="wizard_archetype_custom_caption">ничего не подставлять</string>
+    <string name="wizard_custom_hint">Не уверен — бери «Своё». Ничего не потеряешь.</string>
+    <string name="wizard_skip">Пропустить</string>
+    <string name="wizard_back">Назад</string>
+    <string name="wizard_next">Дальше</string>
+    <string name="wizard_controller_title">Контроллер</string>
+    <string name="wizard_scanning">ищу рядом · %1$d</string>
+    <string name="wizard_scan_hint">Адрес показан всегда. Тип — догадка, её можно сменить позже.</string>
+    <string name="wizard_no_controller">Нет контроллера</string>
+    <string name="wizard_vehicle_name">Имя</string>
+    <string name="wizard_battery_title">Батарея</string>
+    <string name="wizard_battery_question">Откуда брать батарею?</string>
+    <string name="wizard_battery_own_bms">У неё своя BMS</string>
+    <string name="wizard_battery_own_bms_caption">отдельная связь</string>
+    <string name="wizard_no_battery">Без батареи</string>
+    <string name="wizard_review_title">Проверка</string>
+    <string name="wizard_summary">Связей: %1$d · Источников: %2$d</string>
+    <string name="wizard_empty_draft">Добавь хотя бы один контроллер или батарею перед проверкой.</string>
+    <string name="wizard_save_blocked">Задай имя аппарата и исправь отмеченные источники перед сохранением.</string>
+    <string name="wizard_save">Сохранить</string>
+    <string name="wizard_done_title">%1$s собран</string>
+    <string name="wizard_done_subtitle">Можно подключаться. Всё, что здесь выбрано, меняется потом в настройках аппарата.</string>
+    <string name="wizard_done_note">Ничего не записывалось до «Сохранить» — выход на любом прошлом шаге не терял черновик.</string>
+    <string name="wizard_to_list">К списку</string>
+    <string name="wizard_connect">Подключиться</string>
+    <string name="wizard_connecting">Подключение…</string>
+    <string name="wizard_connect_failed">Подключиться не удалось. Аппарат сохранён — можно повторить из списка.</string>
 </resources>

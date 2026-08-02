@@ -389,4 +389,43 @@
     <string name="vehicle_discard_text">The vehicle changes you made will be lost.</string>
     <string name="vehicle_discard_confirm">Discard</string>
     <string name="vehicle_discard_keep">Keep editing</string>
+
+    <!-- First setup wizard (Part L) -->
+    <string name="wizard_new_vehicle">New vehicle</string>
+    <string name="wizard_what_title">What are we building?</string>
+    <string name="wizard_what_subtitle">This only affects defaults. Everything else stays available either way.</string>
+    <string name="wizard_archetype_wheel">Electric unicycle</string>
+    <string name="wizard_archetype_wheel_caption">controller and battery in one device</string>
+    <string name="wizard_archetype_scooter">Scooter</string>
+    <string name="wizard_archetype_scooter_caption">controller + battery</string>
+    <string name="wizard_archetype_bicycle">Bicycle</string>
+    <string name="wizard_archetype_bicycle_caption">controller + battery</string>
+    <string name="wizard_archetype_custom">Custom</string>
+    <string name="wizard_archetype_custom_caption">do not assume anything</string>
+    <string name="wizard_custom_hint">Not sure? Pick “Custom”. Nothing will be hidden.</string>
+    <string name="wizard_skip">Skip</string>
+    <string name="wizard_back">Back</string>
+    <string name="wizard_next">Next</string>
+    <string name="wizard_controller_title">Controller</string>
+    <string name="wizard_scanning">looking nearby · %1$d</string>
+    <string name="wizard_scan_hint">The address is always shown. The type is a guess you can change later.</string>
+    <string name="wizard_no_controller">No controller</string>
+    <string name="wizard_vehicle_name">Name</string>
+    <string name="wizard_battery_title">Battery</string>
+    <string name="wizard_battery_question">Where should battery data come from?</string>
+    <string name="wizard_battery_own_bms">It has its own BMS</string>
+    <string name="wizard_battery_own_bms_caption">a separate connection</string>
+    <string name="wizard_no_battery">No battery</string>
+    <string name="wizard_review_title">Review</string>
+    <string name="wizard_summary">Links: %1$d · Sources: %2$d</string>
+    <string name="wizard_empty_draft">Add at least one controller or battery before review.</string>
+    <string name="wizard_save_blocked">Give the vehicle a name and fix the marked sources before saving.</string>
+    <string name="wizard_save">Save</string>
+    <string name="wizard_done_title">%1$s is ready</string>
+    <string name="wizard_done_subtitle">You can connect now. Everything chosen here can be changed later in vehicle settings.</string>
+    <string name="wizard_done_note">Nothing was written before Save. Leaving any earlier step kept the draft intact.</string>
+    <string name="wizard_to_list">To list</string>
+    <string name="wizard_connect">Connect</string>
+    <string name="wizard_connecting">Connecting…</string>
+    <string name="wizard_connect_failed">Could not connect. The vehicle is saved and can be tried again from the list.</string>
 </resources>

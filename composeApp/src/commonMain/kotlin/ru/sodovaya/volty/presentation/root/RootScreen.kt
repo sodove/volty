@@ -39,6 +39,7 @@ import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
 import ru.sodovaya.volty.presentation.scanning.ScanningScreen
 import ru.sodovaya.volty.presentation.settings.SettingsScreen
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
+import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
 import ru.sodovaya.volty.presentation.welcome.WelcomeScreen
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
@@ -69,6 +70,7 @@ fun RootScreen(component: RootComponent) {
                     is RootComponent.Child.Ride -> RideDashboardScreen(instance.component)
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
+                    is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(instance.component)
