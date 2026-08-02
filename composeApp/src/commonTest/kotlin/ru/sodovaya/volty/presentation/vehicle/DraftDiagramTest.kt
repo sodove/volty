@@ -49,6 +49,31 @@ class DraftDiagramTest {
     }
 
     @Test
+    fun `one Begode controller and two matching pack rows remain three visible sources`() {
+        val draft = VehicleDraft(
+            controllers = listOf(
+                controller("controller", "ET Max", "WHEEL", ControllerType.BEGODE)
+            ),
+            packs = listOf(
+                pack("pack-a", "Branch A", "WHEEL", bmsType = BmsType.BEGODE),
+                pack("pack-b", "Branch B", "WHEEL", bmsType = BmsType.BEGODE)
+            )
+        )
+
+        val sources = draftDiagram(draft).children.single().children
+
+        assertEquals(
+            listOf(DiagramNodeKind.CONTROLLER, DiagramNodeKind.BATTERY, DiagramNodeKind.BATTERY),
+            sources.map { it.kind }
+        )
+        assertEquals(
+            listOf(setOf("controller"), setOf("pack-a"), setOf("pack-b")),
+            sources.map { it.sourceKeys.toSet() }
+        )
+        assertTrue(sources.none { it.kind == DiagramNodeKind.BOTH })
+    }
+
+    @Test
     fun `two BLE addresses are sibling links and every source exposes role type and address`() {
         val draft = VehicleDraft(
             controllers = listOf(controller("controller", "VESC", "CTRL")),
@@ -152,10 +177,14 @@ class DraftDiagramTest {
     }
 
     @Test
-    fun `two missing addresses remain visibly separate instead of becoming one fake link`() {
+    fun `blank Begode controller and pack rows remain separate instead of inferring a wheel`() {
         val draft = VehicleDraft(
-            controllers = listOf(controller("controller", "VESC", "")),
-            packs = listOf(pack("pack", "VESC BMS", ""))
+            controllers = listOf(
+                controller("controller", "Incomplete controller", "", ControllerType.BEGODE)
+            ),
+            packs = listOf(
+                pack("pack", "Incomplete pack", "", bmsType = BmsType.BEGODE)
+            )
         )
 
         val links = draftDiagram(draft).children

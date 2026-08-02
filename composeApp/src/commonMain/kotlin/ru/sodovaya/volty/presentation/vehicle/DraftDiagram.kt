@@ -85,7 +85,11 @@ fun draftDiagram(
         val directControllers = draft.controllers.count {
             it.address == controller.address && it.canId == null
         }
-        if (packs.isNotEmpty() && directControllers == 1) controller.key to packs else null
+        if (controller.address.isNotBlank() && packs.size == 1 && directControllers == 1) {
+            controller.key to packs
+        } else {
+            null
+        }
     }.toMap()
     val wheelPackKeys = wheelPacksByController.values.flatten().mapTo(mutableSetOf()) { it.key }
 
