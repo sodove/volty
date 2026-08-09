@@ -3,9 +3,7 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
-import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.MotorConfig
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -67,45 +65,50 @@ class ConnectionSessionPollingTest {
 
     @Test
     fun `an all write failure plain link reports its failure streak instead of quiet`() = runTest {
-        val state = MutableStateFlow<ConnectionState>(ConnectionState.Connected(null))
+        var failures = 0
+        var lastFailure: String? = null
 
         repeat(3) {
             runBurstPollCycle(
                 protocol = VescProtocol(),
                 write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
                 wait = {},
-                connectionState = state
+                onWriteFailure = { failure ->
+                    failures += 1
+                    lastFailure = failure.message
+                }
             )
         }
 
-        val reported = state.value as ConnectionState.Connected
-        assertEquals(3, reported.consecutivePollWriteFailures)
-        assertEquals("WRITE_NO_RESPONSE unavailable", reported.lastPollWriteFailure)
-        assertTrue(
-            reported != ConnectionState.Connected(null),
-            "all failed writes must not be indistinguishable from a quiet link"
-        )
+        assertEquals(3, failures)
+        assertEquals("WRITE_NO_RESPONSE unavailable", lastFailure)
     }
 
     @Test
     fun `successful plain burst writes with no decoded response remain distinguishable from write failure`() = runTest {
-        val state = MutableStateFlow<ConnectionState>(ConnectionState.Connected(null))
+        var failures = 0
+        var lastFailure: String? = null
 
         runBurstPollCycle(
             protocol = VescProtocol(),
             write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
             wait = {},
-            connectionState = state
+            onWriteFailure = { failure ->
+                failures += 1
+                lastFailure = failure.message
+            }
         )
         runBurstPollCycle(
             protocol = VescProtocol(),
             write = {},
             wait = {},
-            connectionState = state
+            onWriteSuccess = {
+                failures = 0
+                lastFailure = null
+            }
         )
 
-        val reported = state.value as ConnectionState.Connected
-        assertEquals(0, reported.consecutivePollWriteFailures)
-        assertNull(reported.lastPollWriteFailure)
+        assertEquals(0, failures)
+        assertNull(lastFailure)
     }
 }

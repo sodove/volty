@@ -21,7 +21,6 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -57,6 +56,9 @@ internal class ConnectionSession(
     /** Live advertisement evidence wins over any remembered type correction. */
     private val liveBegodeAdvertisement: Boolean = false,
     private val connectionState: MutableStateFlow<ConnectionState>,
+    /** Per-link write health: the repository owns folding it into vehicle state. */
+    private val onBurstPollWriteFailure: (Exception) -> Unit = {},
+    private val onBurstPollWriteSuccess: () -> Unit = {},
     /**
      * Called for every parsed sample. The session does not own where samples
      * go: with more than one pack behind a link there is no single
@@ -296,7 +298,8 @@ internal class ConnectionSession(
                                 protocol,
                                 write = { cmd -> writeCommand(writeChar, cmd) },
                                 wait = { delay(it) },
-                                connectionState = connectionState
+                                onWriteFailure = onBurstPollWriteFailure,
+                                onWriteSuccess = onBurstPollWriteSuccess
                             )
                         ) return@launch
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -403,7 +406,8 @@ internal suspend fun runBurstPollCycle(
     protocol: BmsProtocol,
     write: suspend (ByteArray) -> Unit,
     wait: suspend (Long) -> Unit,
-    connectionState: MutableStateFlow<ConnectionState>? = null
+    onWriteFailure: (Exception) -> Unit = {},
+    onWriteSuccess: () -> Unit = {}
 ): Boolean {
     val commands = protocol.pollCommands()
     if (commands.isEmpty()) return false
@@ -413,40 +417,14 @@ internal suspend fun runBurstPollCycle(
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
         } catch (e: Exception) {
-            recordBurstPollWriteFailure(connectionState, e)
+            onWriteFailure(e)
             println("[VOLTY-BLE] burst poll write: ${e::class.simpleName}: ${e.message}")
             return true
         }
-        clearBurstPollWriteFailures(connectionState)
+        onWriteSuccess()
         wait(BleConfig.writeSpacingMs)
     }
     return true
-}
-
-/** Update the rider-visible distinction between a failed write and device silence. */
-internal fun recordBurstPollWriteFailure(
-    connectionState: MutableStateFlow<ConnectionState>?,
-    failure: Exception
-) {
-    connectionState?.update { current ->
-        val connected = current as? ConnectionState.Connected ?: return@update current
-        connected.copy(
-            consecutivePollWriteFailures = connected.consecutivePollWriteFailures + 1,
-            lastPollWriteFailure = failure.message ?: failure::class.simpleName
-        )
-    }
-}
-
-/** A write accepted by BLE ends a failure run even if the device stays silent. */
-internal fun clearBurstPollWriteFailures(connectionState: MutableStateFlow<ConnectionState>?) {
-    connectionState?.update { current ->
-        val connected = current as? ConnectionState.Connected ?: return@update current
-        if (connected.consecutivePollWriteFailures == 0 && connected.lastPollWriteFailure == null) {
-            connected
-        } else {
-            connected.copy(consecutivePollWriteFailures = 0, lastPollWriteFailure = null)
-        }
-    }
 }
 
 /**

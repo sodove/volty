@@ -2020,6 +2020,30 @@ class KableBmsRepository private constructor(
     }
 
     /**
+     * Keep burst write health on its own [PackLink]. A sibling state transition
+     * re-folds from this record instead of erasing the fault into vehicle-wide
+     * state, and an accepted write clears only this link's streak.
+     */
+    private fun recordLinkPollWriteFailure(link: PackLink, failure: Exception) = synchronized(linkStateLock) {
+        val current = links
+        if (current.none { it === link }) return@synchronized
+        link.consecutivePollWriteFailures += 1
+        link.lastPollWriteFailure = failure.message ?: failure::class.simpleName
+        refoldConnectionStateLocked(current)
+    }
+
+    private fun clearLinkPollWriteFailures(link: PackLink) = synchronized(linkStateLock) {
+        val current = links
+        if (current.none { it === link }) return@synchronized
+        if (link.consecutivePollWriteFailures == 0 && link.lastPollWriteFailure == null) {
+            return@synchronized
+        }
+        link.consecutivePollWriteFailures = 0
+        link.lastPollWriteFailure = null
+        refoldConnectionStateLocked(current)
+    }
+
+    /**
      * The fold body itself, factored out of [setLinkState] so a structural
      * change to the link list — [disconnectLink] dropping one link — can
      * recompute [ConnectionState] from the surviving links without
@@ -2038,7 +2062,18 @@ class KableBmsRepository private constructor(
         val vehicle = current.first().vehicle
         _connectionState.value = when {
             current.any { it.status == LinkStatus.ONLINE } ->
-                ConnectionState.Connected(vehicle)
+                ConnectionState.Connected(
+                    vehicle = vehicle,
+                    linkWriteFailures = current.mapNotNull { link ->
+                        val message = link.lastPollWriteFailure ?: return@mapNotNull null
+                        if (link.consecutivePollWriteFailures == 0) return@mapNotNull null
+                        ConnectionState.LinkWriteFailure(
+                            address = link.spec.address,
+                            consecutiveFailures = link.consecutivePollWriteFailures,
+                            lastFailure = message
+                        )
+                    }
+                )
             current.any { it.status == LinkStatus.CONNECTING } ->
                 ConnectionState.Connecting(vehicle)
             current.any { it.status == LinkStatus.RECONNECTING } ->
@@ -2283,6 +2318,8 @@ class KableBmsRepository private constructor(
                 vehicle = vehicle,
                 liveBegodeAdvertisement = liveBegodeAdvertisement,
                 connectionState = _connectionState,
+                onBurstPollWriteFailure = { failure -> recordLinkPollWriteFailure(link, failure) },
+                onBurstPollWriteSuccess = { clearLinkPollWriteFailures(link) },
                 onSample = onSample,
                 onMotionSample = makeLinkOnMotionSample(link.spec, channel),
                 onDropDetected = { reason ->
@@ -3367,6 +3404,16 @@ class KableBmsRepository private constructor(
      */
     internal fun markLinkFailedForTest(address: String, reason: String) {
         setLinkState(links.first { it.spec.address == address }, LinkStatus.FAILED, reason = reason)
+    }
+
+    /** Test-only route through the same per-link write-failure callback a session receives. */
+    internal fun recordPollWriteFailureForTest(address: String, failure: Exception) {
+        recordLinkPollWriteFailure(links.first { it.spec.address == address }, failure)
+    }
+
+    /** Test-only route through the same accepted-write callback a session receives. */
+    internal fun recordPollWriteSuccessForTest(address: String) {
+        clearLinkPollWriteFailures(links.first { it.spec.address == address })
     }
 
     /**

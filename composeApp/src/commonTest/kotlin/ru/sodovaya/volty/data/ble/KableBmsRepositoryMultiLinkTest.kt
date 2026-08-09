@@ -4,6 +4,8 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
@@ -82,8 +84,69 @@ class KableBmsRepositoryMultiLinkTest {
         createdAt = Instant.fromEpochSeconds(0L)
     )
 
+    /** A plain VESC and a separate BMS: distinct links must retain distinct health. */
+    private fun vescAndBmsVehicle(): Vehicle = Vehicle(
+        id = "v-vesc-and-bms",
+        name = "Bike",
+        iconKey = "bike",
+        controllers = listOf(
+            Controller(index = 0, label = "Drive", controllerType = ControllerType.VESC, address = ADDR_A)
+        ),
+        packs = listOf(
+            Pack(index = 0, label = "Battery", bmsType = BmsType.JBD_BMS, bmsAddress = ADDR_B)
+        ),
+        topology = PackTopology.PARALLEL,
+        chemistry = Chemistry.LI_ION_NMC,
+        createdAt = Instant.fromEpochSeconds(0L)
+    )
+
     private fun sample(current: Float, voltage: Float = 74.0f) =
         BmsData(voltage = voltage, current = current, isConnected = true)
+
+    @Test
+    fun `a plain VESC write failure survives a sibling link refold`() = repoTest { repo ->
+        val vehicle = vescAndBmsVehicle()
+        repo.installLinksForTest(vehicle, ADDR_A, null)
+        repo.markLinkOnlineForTest(ADDR_A)
+        repo.markLinkOnlineForTest(ADDR_B)
+
+        repeat(3) {
+            runBurstPollCycle(
+                protocol = ru.sodovaya.volty.data.bms.VescProtocol(),
+                write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
+                wait = {},
+                onWriteFailure = { repo.recordPollWriteFailureForTest(ADDR_A, it) }
+            )
+        }
+
+        repo.markLinkFailedForTest(ADDR_B, "test sibling transition")
+        val afterSiblingFailure = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(
+            listOf(ConnectionState.LinkWriteFailure(ADDR_A, 3, "WRITE_NO_RESPONSE unavailable")),
+            afterSiblingFailure.linkWriteFailures
+        )
+
+        repo.markLinkOnlineForTest(ADDR_B)
+        val afterSiblingRecovery = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(
+            listOf(ConnectionState.LinkWriteFailure(ADDR_A, 3, "WRITE_NO_RESPONSE unavailable")),
+            afterSiblingRecovery.linkWriteFailures,
+            "the sibling is clean; its refold must not erase or inherit the VESC write diagnosis"
+        )
+
+        runBurstPollCycle(
+            protocol = ru.sodovaya.volty.data.bms.VescProtocol(),
+            write = {},
+            wait = {},
+            onWriteSuccess = { repo.recordPollWriteSuccessForTest(ADDR_A) }
+        )
+        val afterAcceptedWrite = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(
+            emptyList(),
+            afterAcceptedWrite.linkWriteFailures,
+            "an accepted VESC write clears only its own failure streak, even without a decoded reply"
+        )
+    }
 
     // ----- Fan-out + the shared funnel -----
 

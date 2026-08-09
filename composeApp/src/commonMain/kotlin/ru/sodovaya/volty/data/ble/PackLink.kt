@@ -34,10 +34,10 @@ internal enum class LinkStatus { CONNECTING, ONLINE, RECONNECTING, FAILED }
  * Locking: [session] and [reconnectJob] follow the repository's `sessionLock`
  * discipline (every production write inside a `sessionLock.withLock` block or
  * the loop that owns the job, exactly as the old single-session fields did).
- * The status triple ([status] / [reconnectAttempt] / [lastReason]) is written
- * only under the repository's fold lock, so a fold never reads a half-updated
- * link. Fields are volatile because links are touched from several coroutines
- * on a multithreaded dispatcher.
+ * The status triple ([status] / [reconnectAttempt] / [lastReason]) and poll
+ * write diagnostic are written only under the repository's fold lock, so a
+ * fold never reads a half-updated link. Fields are volatile because links are
+ * touched from several coroutines on a multithreaded dispatcher.
  */
 internal class PackLink(
     val spec: LinkSpec,
@@ -64,4 +64,12 @@ internal class PackLink(
     /** Last failure / drop reason — what the fold reports for this link. */
     @Volatile
     var lastReason: String = ""
+
+    /** Consecutive burst writes that failed before reaching this link's wire. */
+    @Volatile
+    var consecutivePollWriteFailures: Int = 0
+
+    /** Most recent message for [consecutivePollWriteFailures], if any. */
+    @Volatile
+    var lastPollWriteFailure: String? = null
 }
