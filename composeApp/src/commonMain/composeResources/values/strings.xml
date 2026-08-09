@@ -481,6 +481,8 @@
     <string name="graph_remove">Remove metric</string>
     <string name="graph_compare">Compare</string>
     <string name="graph_selected_time">Selected time</string>
+    <string name="graph_signals">Signals</string>
+    <string name="graph_scale_note">Each signal uses its own scale; time is shared</string>
     <string name="graph_battery_group">Battery</string>
     <string name="graph_motion_group">Motion</string>
     <string name="graph_cells_group">Cells</string>

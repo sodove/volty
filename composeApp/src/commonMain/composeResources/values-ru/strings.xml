@@ -479,6 +479,8 @@
     <string name="graph_remove">Убрать график</string>
     <string name="graph_compare">Сравнить</string>
     <string name="graph_selected_time">Выбранный момент</string>
+    <string name="graph_signals">Сигналы</string>
+    <string name="graph_scale_note">У каждого сигнала свой масштаб, время общее</string>
     <string name="graph_battery_group">Батарея</string>
     <string name="graph_motion_group">Движение</string>
     <string name="graph_cells_group">Ячейки</string>
