@@ -52,6 +52,17 @@ data class GraphPair(
     val y: GraphPoint
 )
 
+@OptIn(ExperimentalTime::class)
+data class ComparisonState(
+    val xMetric: GraphMetric,
+    val yMetric: GraphMetric,
+    val pairs: List<GraphPair>,
+    val selectedPair: GraphPair? = null
+)
+
+fun nearestPair(pairs: List<GraphPair>, xValue: Float): GraphPair? =
+    pairs.minWithOrNull(compareBy<GraphPair> { kotlin.math.abs(it.x.value - xValue) })
+
 /** Returns the nearest point; an equal-distance tie deliberately chooses earlier time. */
 @OptIn(ExperimentalTime::class)
 fun nearestPoint(points: List<GraphPoint>, target: Instant): GraphPoint? {

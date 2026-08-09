@@ -24,6 +24,7 @@ import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
 
 enum class GraphWindow(val label: String, val duration: Duration?) {
     M1("1m", 1.minutes),
@@ -55,6 +56,7 @@ interface GraphComponent {
         val selectedPoints: Map<GraphMetric, GraphPoint> = emptyMap(),
         val history: List<RideSummary> = emptyList(),
         val selectedRideId: String? = null,
+        val comparison: ComparisonState? = null,
         /** Null means no measured sample exists for this metric in the window. */
         val nowValue: Float? = null,
         val avg: Float? = null,
@@ -239,6 +241,33 @@ class DefaultGraphComponent(
                 }.toMap()
             }.orEmpty()
             current.copy(selectedTimestamp = timestamp, selectedPoints = selected)
+        }
+    }
+
+    override fun onComparisonRequested(x: GraphMetric, y: GraphMetric) {
+        _state.update { current ->
+            val metrics = current.visibleMetrics + listOf(x, y).filterNot { it in current.visibleMetrics }
+            val expanded = current.copy(visibleMetrics = metrics)
+            val withSeries = if (current.selectedRideId == null) {
+                computeStats(expanded, latestSamples, latestMotion)
+            } else {
+                computeDerivedStats(expanded, expanded.series)
+            }
+            val xSeries = withSeries.series[x]?.points.orEmpty()
+            val ySeries = withSeries.series[y]?.points.orEmpty()
+            val pairs = pairByNearestTimestamp(
+                xSeries,
+                ySeries,
+                2.seconds
+            )
+            withSeries.copy(
+                comparison = ComparisonState(
+                    xMetric = x,
+                    yMetric = y,
+                    pairs = pairs,
+                    selectedPair = pairs.lastOrNull()
+                )
+            )
         }
     }
 

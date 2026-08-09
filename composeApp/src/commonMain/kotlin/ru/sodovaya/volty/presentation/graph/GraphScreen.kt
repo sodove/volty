@@ -24,13 +24,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -95,6 +95,7 @@ import volty.composeapp.generated.resources.graph_current_ride
 fun GraphScreen(component: GraphComponent) {
     val state by component.state.collectAsState()
     var showHistory by remember { mutableStateOf(false) }
+    var showComparison by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -105,15 +106,26 @@ fun GraphScreen(component: GraphComponent) {
                     }
                 },
                 actions = {
-                    Text(
-                        text = stringResource(Res.string.graph_history),
-                        modifier = Modifier
-                            .clickable { showHistory = true }
-                            .padding(horizontal = 12.dp, vertical = 8.dp),
-                        color = MaterialTheme.colorScheme.primary,
-                        fontWeight = FontWeight.SemiBold,
-                        fontSize = 12.sp
-                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = stringResource(Res.string.graph_compare),
+                            modifier = Modifier
+                                .clickable { showComparison = true }
+                                .padding(horizontal = 6.dp, vertical = 8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp
+                        )
+                        Text(
+                            text = stringResource(Res.string.graph_history),
+                            modifier = Modifier
+                                .clickable { showHistory = true }
+                                .padding(horizontal = 6.dp, vertical = 8.dp),
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             )
         }
@@ -188,6 +200,87 @@ fun GraphScreen(component: GraphComponent) {
             confirmButton = {
                 TextButton(onClick = { showHistory = false }) { Text("OK") }
             }
+        )
+    }
+    if (showComparison) {
+        ComparisonDialog(
+            state = state,
+            onDismiss = { showComparison = false },
+            onCompare = component::onComparisonRequested
+        )
+    }
+}
+
+@Composable
+private fun ComparisonDialog(
+    state: GraphComponent.State,
+    onDismiss: () -> Unit,
+    onCompare: (GraphMetric, GraphMetric) -> Unit
+) {
+    var xMetric by remember(state.comparison) {
+        mutableStateOf(state.comparison?.xMetric ?: state.visibleMetrics.firstOrNull() ?: GraphMetric.VOLTAGE)
+    }
+    var yMetric by remember(state.comparison) {
+        mutableStateOf(state.comparison?.yMetric ?: state.visibleMetrics.getOrNull(1) ?: GraphMetric.CURRENT)
+    }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(Res.string.graph_compare)) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("X: ${graphMetricLabel(xMetric)}", fontWeight = FontWeight.SemiBold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(GraphMetric.values().toList(), key = { it.name }) { metric ->
+                        MetricTab(metric.name, xMetric == metric) { xMetric = metric }
+                    }
+                }
+                Text("Y: ${graphMetricLabel(yMetric)}", fontWeight = FontWeight.SemiBold)
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    items(GraphMetric.values().toList(), key = { it.name }) { metric ->
+                        MetricTab(metric.name, yMetric == metric) { yMetric = metric }
+                    }
+                }
+                TextButton(onClick = { onCompare(xMetric, yMetric) }) {
+                    Text(stringResource(Res.string.graph_compare))
+                }
+                state.comparison?.let { comparison ->
+                    if (comparison.pairs.isEmpty()) {
+                        Text(stringResource(Res.string.graph_no_data))
+                    } else {
+                        XYGraph(comparison)
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("OK") } }
+    )
+}
+
+@Composable
+private fun XYGraph(comparison: ComparisonState) {
+    val pairs = comparison.pairs
+    val xValues = pairs.map { it.x.value }
+    val yValues = pairs.map { it.y.value }
+    val xMin = xValues.minOrNull() ?: 0f
+    val xMax = xValues.maxOrNull() ?: 1f
+    val yMin = yValues.minOrNull() ?: 0f
+    val yMax = yValues.maxOrNull() ?: 1f
+    val xRange = maxOf(xMax - xMin, 0.001f)
+    val yRange = maxOf(yMax - yMin, 0.001f)
+    val lineColor = MaterialTheme.colorScheme.primary
+    Canvas(Modifier.fillMaxWidth().height(180.dp)) {
+        pairs.forEach { pair ->
+            val x = ((pair.x.value - xMin) / xRange) * size.width
+            val y = size.height - ((pair.y.value - yMin) / yRange) * size.height
+            drawCircle(lineColor, radius = 3f, center = Offset(x, y))
+        }
+    }
+    comparison.selectedPair?.let { selected ->
+        Text(
+            "${formatVal(selected.x.value, comparison.xMetric)} ${comparison.xMetric.unit} → " +
+                "${formatVal(selected.y.value, comparison.yMetric)} ${comparison.yMetric.unit}",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
