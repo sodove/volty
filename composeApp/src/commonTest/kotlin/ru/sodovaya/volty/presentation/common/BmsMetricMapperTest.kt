@@ -22,4 +22,11 @@ class BmsMetricMapperTest {
         assertEquals("+0.0", BmsMetricMapper.currentValue(balanced))
         assertEquals("0", BmsMetricMapper.powerValue(balanced))
     }
+
+    @Test
+    fun `disconnected default data is absent even though evidence flags default true`() {
+        val disconnected = BmsData()
+        assertNull(BmsMetricMapper.currentValue(disconnected))
+        assertNull(BmsMetricMapper.powerValue(disconnected))
+    }
 }

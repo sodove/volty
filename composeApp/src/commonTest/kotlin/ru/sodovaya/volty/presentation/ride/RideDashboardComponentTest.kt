@@ -1164,6 +1164,37 @@ class RideDashboardComponentTest {
         assertEquals(0f, vehicleRepo.gaugePeakWrites.last().third)
     }
 
+    @Test
+    fun an_unobserved_battery_current_never_widens_or_persists_the_current_dial() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val vehicleRepo = FakeVehicleRepo(listOf(vehicleWith(null, SecondaryGauge.DUTY)))
+        val c = component(repo, vehicleRepo = vehicleRepo)
+        advanceUntilIdle()
+
+        repeat(PeakTracker.WINDOW) {
+            repo.emitMotion(
+                ControllerData(
+                    batteryCurrentA = 900f,
+                    hasBatteryCurrent = false,
+                    powerW = 0f,
+                    hasPower = true,
+                    tripKm = it.toFloat(),
+                    isConnected = true
+                )
+            )
+            advanceUntilIdle()
+        }
+
+        c.state.test {
+            assertEquals(
+                GaugeScale.CURRENT_RUNGS_A.first(), awaitItem().currentRangeA,
+                "a placeholder 900 A must not widen the current dial"
+            )
+        }
+        assertEquals(emptyList(), vehicleRepo.gaugePeakWrites)
+    }
+
     /**
      * `§9.2` item 7's other half, seen from the dashboard: the composer clears the stored peaks while
      * this component sits in the back stack, and the re-emitted vehicle must be adopted rather than

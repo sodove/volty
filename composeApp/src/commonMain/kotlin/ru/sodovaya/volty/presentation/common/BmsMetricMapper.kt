@@ -7,6 +7,9 @@ import ru.sodovaya.volty.util.formatSigned
 
 /** Pure numeric text for pack current/power; null tells a renderer to show the shared dash. */
 object BmsMetricMapper {
-    fun currentValue(data: BmsData): String? = BmsReadings.current(data)?.let { formatSigned(it, 1) }
-    fun powerValue(data: BmsData): String? = BmsReadings.power(data)?.let { formatFixed(it, 0) }
+    fun currentValue(data: BmsData): String? =
+        BmsReadings.current(data).takeIf { data.isConnected }?.let { formatSigned(it, 1) }
+
+    fun powerValue(data: BmsData): String? =
+        BmsReadings.power(data).takeIf { data.isConnected }?.let { formatFixed(it, 0) }
 }

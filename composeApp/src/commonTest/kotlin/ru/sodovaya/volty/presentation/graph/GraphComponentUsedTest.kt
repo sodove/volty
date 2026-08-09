@@ -251,4 +251,33 @@ class GraphComponentUsedTest {
         assertEquals(0f, zero.min)
         assertEquals(0f, zero.used)
     }
+
+    @Test
+    fun empty_or_unknown_state_metrics_are_not_plotted_as_zero() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onMetricSelected(GraphMetric.SOC)
+        repo.window.value = listOf(
+            BmsData(soc = 76f, socKnown = false, timestamp = at(0)),
+            BmsData(soc = 0f, socKnown = false, timestamp = at(60))
+        )
+        advanceUntilIdle()
+        assertEquals(emptyList(), c.state.value.values)
+        assertNull(c.state.value.nowValue)
+
+        c.onMetricSelected(GraphMetric.TEMPERATURE)
+        repo.window.value = listOf(BmsData(temperatures = emptyList(), timestamp = at(0)))
+        advanceUntilIdle()
+        assertEquals(emptyList(), c.state.value.values)
+        assertNull(c.state.value.nowValue)
+
+        c.onMetricSelected(GraphMetric.VOLTAGE)
+        repo.window.value = listOf(BmsData(voltage = 0f, timestamp = at(0)))
+        advanceUntilIdle()
+        assertEquals(emptyList(), c.state.value.values)
+        assertNull(c.state.value.nowValue)
+    }
 }

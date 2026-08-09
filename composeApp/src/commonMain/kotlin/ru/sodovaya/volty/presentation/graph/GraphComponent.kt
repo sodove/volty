@@ -157,9 +157,9 @@ class DefaultGraphComponent(
 }
 
 private fun extractValueOf(d: BmsData, metric: GraphMetric): Float? = when (metric) {
-    GraphMetric.SOC -> d.soc
+    GraphMetric.SOC -> d.soc.takeIf { d.socKnown }
     GraphMetric.POWER -> BmsReadings.power(d)
     GraphMetric.CURRENT -> BmsReadings.current(d)
-    GraphMetric.VOLTAGE -> d.voltage
-    GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull() ?: 0f
+    GraphMetric.VOLTAGE -> d.voltage.takeIf { it > 0f }
+    GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull()
 }

@@ -492,17 +492,15 @@ class DefaultRideDashboardComponent(
     /**
      * Fold one motion sample into both trackers and answer the two rungs the dials draw.
      *
-     * Power goes through [MotionReadings] and current does not, and that asymmetry is Task 6's
-     * contract rather than an oversight: a `powerW` whose `hasPower` is false is a placeholder — let
-     * it in and every Begode teaches its dial that peak power is 0 W, while the readout above it
-     * correctly dashes. Battery current has no such flag, deliberately, because no producer could
-     * ever set one to false (see [MotionReadings]' own note).
+     * Both power and battery current go through [MotionReadings]. A false flag is a placeholder —
+     * letting it into the tracker would widen a dial from a value nobody observed, while the
+     * readout above correctly dashes.
      *
      * The returned rungs use [GaugeScale.displayRung], so they answer for the LIVE sample even
      * before the median has confirmed it. Nothing is persisted from that number.
      */
     private fun foldPeaks(motion: ControllerData): Pair<Float, Float> {
-        currentPeak = currentPeak.accept(motion.batteryCurrentA)
+        MotionReadings.batteryCurrentA(motion)?.let { currentPeak = currentPeak.accept(it) }
         MotionReadings.powerW(motion)?.let { powerPeak = powerPeak.accept(it) }
         return displayRungs(motion)
     }
@@ -512,9 +510,11 @@ class DefaultRideDashboardComponent(
      * tracker, but does **ratchet** the displayed widths, which only ever grow between adoptions.
      */
     private fun displayRungs(motion: ControllerData): Pair<Float, Float> {
-        displayedCurrentRungA = GaugeScale.currentDisplayRungA(
-            displayedCurrentRungA, currentPeak.learnedPeak, motion.batteryCurrentA
-        )
+        MotionReadings.batteryCurrentA(motion)?.let { current ->
+            displayedCurrentRungA = GaugeScale.currentDisplayRungA(
+                displayedCurrentRungA, currentPeak.learnedPeak, current
+            )
+        }
         displayedPowerRungW = GaugeScale.powerDisplayRungW(
             displayedPowerRungW, powerPeak.learnedPeak, MotionReadings.powerW(motion) ?: 0f
         )
