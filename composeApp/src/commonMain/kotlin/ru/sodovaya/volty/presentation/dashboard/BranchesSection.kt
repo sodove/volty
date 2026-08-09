@@ -26,10 +26,10 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.presentation.common.chemistryFraction
+import ru.sodovaya.volty.presentation.common.BmsMetricMapper
 import ru.sodovaya.volty.presentation.common.groupPackCells
 import ru.sodovaya.volty.presentation.common.packDisplayLabel
 import ru.sodovaya.volty.util.formatFixed
-import ru.sodovaya.volty.util.formatSigned
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.branch_current_a
@@ -126,7 +126,7 @@ private fun BranchCard(
             )
             Spacer(Modifier.height(2.dp))
             Text(
-                stringResource(Res.string.branch_current_a, formatSigned(data.current, 1)) +
+                (BmsMetricMapper.currentValue(data)?.let { stringResource(Res.string.branch_current_a, it) } ?: "—") +
                     " · " + stringResource(Res.string.branch_delta_mv, deltaMv),
                 fontSize = 11.sp,
                 color = MaterialTheme.colorScheme.onSurfaceVariant

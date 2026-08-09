@@ -41,17 +41,18 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellUiModel
+import ru.sodovaya.volty.presentation.common.BmsMetricMapper
 import ru.sodovaya.volty.presentation.common.chemistryFraction
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.PowerRangeBar
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
+import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.util.formatFixed
-import ru.sodovaya.volty.util.formatSigned
 import kotlin.math.abs
 import kotlin.math.roundToInt
 import org.jetbrains.compose.resources.stringResource
@@ -171,7 +172,8 @@ fun DashboardScreen(component: DashboardComponent) {
                     "${seriesCells}s · ${fmt2(perCell)} V/cell"
                 } else null
             )
-            val powerCharging = data.current > 0.05f
+            val powerText = BmsMetricMapper.powerValue(data)
+            val powerCharging = BmsReadings.current(data)?.let { it > 0.05f } ?: false
             // Fixed dark-green palette matches the hero card while charging so the
             // two cards visually agree regardless of dynamic-color wallpaper.
             val powerChargingContainer = Color(0xFF184D24)
@@ -180,12 +182,12 @@ fun DashboardScreen(component: DashboardComponent) {
             else MaterialTheme.colorScheme.onSurfaceVariant
             MetricCard(
                 label = stringResource(Res.string.metric_power),
-                value = "${fmt0(data.power)} W",
+                value = powerText?.let { "$it W" } ?: "—",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 containerColor = if (powerCharging) powerChargingContainer else null,
                 onColor = if (powerCharging) powerChargingOn else null,
                 extra = {
-                    Column {
+                    if (powerText != null) Column {
                         // powerMin/powerPeak are consumption-positive (DashboardComponent
                         // negates the power series: discharge plots upward). The marker
                         // tracks current consumption, so we negate data.power here too.
@@ -505,7 +507,7 @@ private fun HeroCard(state: DashboardComponent.State) {
     val isCharging = when {
         dirAvg > 1f -> true
         dirAvg < -1f -> false
-        else -> data.power > 0.05f  // fallback when truly balanced
+        else -> BmsReadings.power(data)?.let { it > 0.05f } ?: false
     }
     // Fixed darker-green palette for the charging hero so dynamic-color wallpapers
     // can't wash the card out. Other UI keeps the dynamic palette.
@@ -627,7 +629,12 @@ private fun HeroCard(state: DashboardComponent.State) {
                 Text(etaLabel, fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
             }
             Column(horizontalAlignment = Alignment.End) {
-                Text("${fmtSigned1(data.current)} A", fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = onColor)
+                Text(
+                    BmsMetricMapper.currentValue(data)?.let { "$it A" } ?: "—",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = onColor
+                )
                 Text(stringResource(Res.string.hero_now), fontSize = 10.sp, color = onColor.copy(alpha = 0.55f))
             }
         }
@@ -643,5 +650,3 @@ internal fun dashboardSocValue(data: BmsData): String =
 private fun fmt0(v: Float): String = formatFixed(v, 0)
 private fun fmt1(v: Float): String = formatFixed(v, 1)
 private fun fmt2(v: Float): String = formatFixed(v, 2)
-
-private fun fmtSigned1(v: Float): String = formatSigned(v, 1)

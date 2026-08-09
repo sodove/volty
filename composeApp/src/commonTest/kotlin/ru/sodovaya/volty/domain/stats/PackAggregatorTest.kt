@@ -232,6 +232,25 @@ class PackAggregatorTest {
         assertEquals(250f, PackAggregator.aggregate(packs, PackTopology.SERIES).power, absoluteTolerance = 0.01f)
     }
 
+    @Test
+    fun unavailable_current_and_power_are_not_aggregated_as_confident_zeroes() {
+        val measured = state(0, voltage = 50f, current = 2f)
+        val absent = state(1, voltage = 50f, current = 99f).copy(
+            data = BmsData(current = 99f, hasCurrent = false, power = 4_950f, hasPower = false, isConnected = true)
+        )
+
+        val parallel = PackAggregator.aggregate(listOf(measured, absent), PackTopology.PARALLEL)
+        assertEquals(2f, parallel.current)
+        assertFalse(parallel.hasCurrent, "a parallel total missing a branch is unknown")
+        assertEquals(100f, parallel.power)
+        assertFalse(parallel.hasPower, "a pack-power total missing a term is unknown")
+
+        val series = PackAggregator.aggregate(listOf(measured, absent), PackTopology.SERIES)
+        assertEquals(2f, series.current)
+        assertTrue(series.hasCurrent, "one series-current measurement answers the one shared current")
+        assertFalse(series.hasPower)
+    }
+
     // --- Series ---
 
     @Test

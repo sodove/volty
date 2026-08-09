@@ -8,7 +8,11 @@ import kotlin.time.Instant
 data class BmsData(
     val voltage: Float = 0f,
     val current: Float = 0f,
+    /** Whether [current] is a measurement rather than a controller-derived placeholder. */
+    val hasCurrent: Boolean = true,
     val power: Float = 0f,
+    /** Whether [power] is a measurement rather than a controller-derived placeholder. */
+    val hasPower: Boolean = true,
     val soc: Float = 0f,
     /**
      * False when [soc] is a placeholder for a value nobody knows: a Begode

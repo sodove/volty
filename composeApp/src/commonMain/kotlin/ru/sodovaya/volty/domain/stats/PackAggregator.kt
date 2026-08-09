@@ -44,6 +44,8 @@ object PackAggregator {
         // string's weakest link. Charge and capacity have no corresponding
         // knownness flag, so their physical folds still use every online pack.
         val knownSoc = data.filter { it.socKnown }
+        val measuredCurrent = data.measuring { it.hasCurrent }
+        val measuredPower = data.measuring { it.hasPower }
         val labelled = online.size > 1
 
         val voltage = when (topology) {
@@ -51,13 +53,18 @@ object PackAggregator {
             PackTopology.SERIES -> data.sumOf { it.voltage.toDouble() }.toFloat()
         }
         val current = when (topology) {
-            PackTopology.PARALLEL -> data.sumOf { it.current.toDouble() }.toFloat()
-            PackTopology.SERIES -> data.map { it.current }.average().toFloat()
+            PackTopology.PARALLEL -> measuredCurrent.sumOf { it.current.toDouble() }.toFloat()
+            PackTopology.SERIES -> measuredCurrent.map { it.current }.average().toFloat()
+        }
+        val hasCurrent = when (topology) {
+            PackTopology.PARALLEL -> data.all { it.hasCurrent }
+            PackTopology.SERIES -> data.any { it.hasCurrent }
         }
         // Total power is the sum of pack powers under BOTH topologies:
         // parallel  P = V * SUM(I) = SUM(P_i)
         // series    P = SUM(V_i) * I = SUM(P_i)
-        val power = data.sumOf { it.power.toDouble() }.toFloat()
+        val power = measuredPower.sumOf { it.power.toDouble() }.toFloat()
+        val hasPower = data.all { it.hasPower }
 
         val charge: Float
         val capacity: Float
@@ -100,7 +107,9 @@ object PackAggregator {
         return BmsData(
             voltage = voltage,
             current = current,
+            hasCurrent = hasCurrent,
             power = power,
+            hasPower = hasPower,
             soc = soc,
             // One measured branch is enough to report SoC; unknown branches
             // were excluded above. All-unknown remains explicitly unknown.
@@ -154,4 +163,8 @@ object PackAggregator {
         }
         return result.sortedBy { it.pack.index }
     }
+
+    /** Keep the one-pack identity when no contributor carries a measurement. */
+    private fun List<BmsData>.measuring(knows: (BmsData) -> Boolean): List<BmsData> =
+        filter(knows).ifEmpty { this }
 }

@@ -113,10 +113,10 @@ object CleanMetricMapper {
         MotionReadings.powerW(motion).readoutOr { "${formatFixed(it / 1000f, 1)} kW" }
 
     /**
-     * The POWER card's sub-line. **Not** part of the contract: battery current
-     * is reported by every decoder here, including a Begode with no cell count
-     * — the missing scale costs the volts, not the amps — so it has no
-     * known-flag and renders as a plain signed number.
+     * An earlier revision claimed every decoder reported battery current. That
+     * was false: Kelly reports phase current only. This is controller telemetry,
+     * not this class's [BmsData] battery-path contract, and
+     * [ControllerData.hasBatteryCurrent] makes the controller card dash it.
      */
     fun powerSub(motion: ControllerData): String =
         MotionReadings.batteryCurrentA(motion).readoutOr { "${formatSigned(it, 1)} A" }

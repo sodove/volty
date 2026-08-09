@@ -17,10 +17,14 @@ import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.armedRules
 import ru.sodovaya.volty.domain.alert.availabilityFor
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
+import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
@@ -32,6 +36,8 @@ import ru.sodovaya.volty.presentation.ride.SecondaryGaugeMapper
 import ru.sodovaya.volty.presentation.ride.UNKNOWN_READOUT
 import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
 import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.domain.stats.PackAggregator
+import ru.sodovaya.volty.presentation.common.BmsMetricMapper
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -283,7 +289,26 @@ class KellyProtocolTest {
             assertEquals(1, protocol.packCount)
             harness.completeCycle(monitorData())
             assertEquals(72f, protocol.latestData(0)?.voltage)
-            assertFalse(requireNotNull(protocol.latestData(0)).socKnown)
+            val derived = requireNotNull(protocol.latestData(0))
+            assertFalse(derived.socKnown)
+            assertFalse(derived.hasCurrent, "Kelly supplied phase current, not battery current")
+            assertFalse(derived.hasPower, "Kelly supplied no input-power measurement")
+            assertNull(BmsMetricMapper.currentValue(derived))
+            assertNull(BmsMetricMapper.powerValue(derived))
+            val aggregate = PackAggregator.aggregate(
+                listOf(
+                    PackState(
+                        Pack(0, "Kelly", BmsType.VESC_BMS, "AA:BB"),
+                        derived,
+                        isOnline = true
+                    )
+                ),
+                PackTopology.PARALLEL
+            )
+            assertFalse(aggregate.hasCurrent)
+            assertFalse(aggregate.hasPower)
+            assertNull(BmsMetricMapper.currentValue(aggregate))
+            assertNull(BmsMetricMapper.powerValue(aggregate))
 
             protocol.reset()
 

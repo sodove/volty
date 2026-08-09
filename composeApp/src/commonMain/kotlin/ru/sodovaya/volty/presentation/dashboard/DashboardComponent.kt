@@ -8,6 +8,7 @@ import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.stats.BmsReadings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -103,7 +104,7 @@ class DefaultDashboardComponent(
                 cellsMinV = minV,
                 cellsMaxV = maxV,
                 cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
-                isCharging = initialData.current > 0.05f,
+                isCharging = BmsReadings.current(initialData)?.let { it > 0.05f } ?: false,
                 connection = bmsRepository.connectionState.value,
             )
         )
@@ -127,7 +128,7 @@ class DefaultDashboardComponent(
                             cellsMinV = minV,
                             cellsMaxV = maxV,
                             cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
-                            isCharging = data.current > 0.05f
+                            isCharging = BmsReadings.current(data)?.let { it > 0.05f } ?: false
                         )
                     }
                 }

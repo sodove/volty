@@ -21,7 +21,7 @@ import ru.sodovaya.volty.domain.model.SpeedUnknownReason
  * that encoding itself — its fields are non-nullable magnitudes that decoders,
  * the aggregator and the alarm all compare against thresholds — so the
  * distinction lives in a parallel set of known-flags ([ControllerData.hasDuty],
- * [ControllerData.hasInputVoltage], [ControllerData.hasPower],
+ * [ControllerData.hasInputVoltage], [ControllerData.hasPower], [ControllerData.hasBatteryCurrent],
  * [ControllerData.hasEnergyCounters], [ControllerData.hasMotorTemp],
  * [ControllerData.hasEscTemp], [ControllerData.speedKnown]) and this object is
  * the single place that pairs each flag with its number.
@@ -37,10 +37,11 @@ import ru.sodovaya.volty.domain.model.SpeedUnknownReason
  *
  * ## What it deliberately does NOT cover
  *
- *  - **the battery.** [ru.sodovaya.volty.domain.model.BmsData.socKnown] already
- *    says exactly this for state of charge, and the battery path is pinned by
- *    tests that predate this contract. It is the same rule, older, and it stays
- *    where it is;
+ *  - **the battery.** [ru.sodovaya.volty.domain.model.BmsData.socKnown] owns
+ *    state of charge, while [BmsReadings] owns pack current/power. An earlier
+ *    revision said no producer could distinguish absent battery current from a
+ *    genuine zero; Kelly's phase-current-only monitor disproved that claim.
+ *    Those battery-path rules stay separate from motion telemetry;
  *  - **the alarm.** [ru.sodovaya.volty.domain.alert.availabilityFor] reads the
  *    same flags to decide what may be *armed*; that is a different question from
  *    what may be *drawn* (an unknown value is undrawable AND unarmable, but a

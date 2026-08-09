@@ -38,10 +38,10 @@ import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellGroup
 import ru.sodovaya.volty.presentation.common.CellUiModel
 import ru.sodovaya.volty.presentation.common.MetricCard
+import ru.sodovaya.volty.presentation.common.BmsMetricMapper
 import ru.sodovaya.volty.presentation.common.chemistryFraction
 import ru.sodovaya.volty.presentation.common.packDisplayLabel
 import ru.sodovaya.volty.util.formatFixed
-import ru.sodovaya.volty.util.formatSigned
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.branch_current_a
@@ -119,7 +119,9 @@ fun PackDetailScreen(component: PackDetailComponent) {
                     MetricCard(
                         label = stringResource(Res.string.metric_voltage),
                         value = stringResource(Res.string.branch_voltage_v, fmt2(data.voltage)),
-                        sub = stringResource(Res.string.branch_current_a, formatSigned(data.current, 1)),
+                        sub = BmsMetricMapper.currentValue(data)?.let {
+                            stringResource(Res.string.branch_current_a, it)
+                        } ?: "—",
                         modifier = Modifier.weight(1f).fillMaxHeight()
                     )
                     MetricCard(

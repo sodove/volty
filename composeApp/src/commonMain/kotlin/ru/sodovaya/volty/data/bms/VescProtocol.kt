@@ -270,7 +270,9 @@ internal fun derivedBatteryFrom(m: ControllerData): BmsData {
     return BmsData(
         voltage = m.inputVoltageV,
         current = -m.batteryCurrentA,
+        hasCurrent = m.hasBatteryCurrent,
         power = -m.powerW,
+        hasPower = m.hasPower,
         soc = if (known) level * 100f else 0f,
         socKnown = known,
         // No cells and no pack thermistor: a controller measures neither.
