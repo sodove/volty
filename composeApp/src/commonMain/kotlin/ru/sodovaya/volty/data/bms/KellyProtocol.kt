@@ -114,6 +114,13 @@ class KellyProtocol(
      * subsequent complete packet establish the next boundary.
      */
     override fun onNotification(data: ByteArray) {
+        // A response has meaning only while the serial loop has an armed
+        // request. Do not retain a fragment received between cycles: the next
+        // request must not complete it with its own trailing bytes.
+        if (pending == null) {
+            receiveBuffer.reset()
+            return
+        }
         receiveBuffer.append(data)
         while (receiveBuffer.size >= 2) {
             val buffered = receiveBuffer.toByteArray()
@@ -132,7 +139,7 @@ class KellyProtocol(
     }
 
     private fun acceptResponse(raw: ByteArray) {
-        val expected = pending?.command ?: nextMonitorCommand() ?: return
+        val expected = pending?.command ?: return
         val packet = EtsPacketBuilder.parseRxResponse(raw, expected).getOrElse {
             rejectMonitorCycle()
             return
@@ -159,11 +166,11 @@ class KellyProtocol(
 
     private fun nextMonitorIndex(): Int = monitorPackets.indexOfFirst { it == null }
 
-    private fun nextMonitorCommand(): Byte? = nextMonitorIndex()
-        .takeIf { it in MonitorDefinitions.MONITOR_COMMANDS.indices }
-        ?.let { MonitorDefinitions.MONITOR_COMMANDS[it] }
-
     private fun rejectMonitorCycle() {
+        // A mismatch invalidates the response boundary too. Dropping unread
+        // bytes prevents a malformed/stale packet tail reaching the next
+        // request's accumulator.
+        receiveBuffer.reset()
         clearMonitorCycle()
     }
 
