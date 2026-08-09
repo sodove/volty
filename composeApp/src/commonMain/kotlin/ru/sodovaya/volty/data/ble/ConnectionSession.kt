@@ -156,6 +156,10 @@ internal class ConnectionSession(
             peripheral,
             BleConnectionTuning.priorityFor(foreground = true)
         )
+        // MTU negotiation is also best-effort. The accumulator below remains
+        // deliberately unchanged because a peripheral may refuse this
+        // request or still fragment notifications at any negotiated MTU.
+        requestBleMtu(peripheral, BleConnectionTuning.requestedMtu)
 
         val notifyChar = characteristicOf(
             service = Uuid.parse(protocol.uuids.serviceUuid),

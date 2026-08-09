@@ -6,6 +6,11 @@ import kotlin.test.assertEquals
 class BleConnectionTuningTest {
 
     @Test
+    fun `transport requests a reply-sized ATT MTU`() {
+        assertEquals(247, BleConnectionTuning.requestedMtu)
+    }
+
+    @Test
     fun `foreground connection asks for high priority`() {
         assertEquals(
             BleConnectionPriority.HIGH,

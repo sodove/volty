@@ -14,3 +14,10 @@ internal actual fun requestBleConnectionPriority(
         }
     ) ?: false
 }.getOrDefault(false)
+
+internal actual suspend fun requestBleMtu(
+    peripheral: Peripheral,
+    mtu: Int,
+): Int? = runCatching {
+    (peripheral as? AndroidPeripheral)?.requestMtu(mtu)
+}.getOrNull()
