@@ -817,15 +817,23 @@ class KableBmsRepository private constructor(
             val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
             val controllerType = BmsTypeDetector.detectController(name = name, serviceUuids = serviceList)
             val id = ad.identifier.toString()
+            val knownVehicle = knownAddresses[id]
+            val resolved = resolveDeviceTypes(
+                address = id,
+                knownVehicle = knownVehicle,
+                detectedBmsType = type,
+                detectedControllerType = controllerType
+            )
             cacheAdvertisement(id, ad)
             emit(
                 DiscoveredDevice(
                     address = id,
                     name = name,
                     rssi = ad.rssi,
-                    bmsType = type,
-                    controllerType = controllerType,
-                    knownVehicle = knownAddresses[id]
+                    bmsType = resolved.bmsType,
+                    controllerType = resolved.controllerType,
+                    typeProvenance = resolved.provenance,
+                    knownVehicle = knownVehicle
                 )
             )
         }

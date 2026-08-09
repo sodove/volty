@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.picker
 
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
+import ru.sodovaya.volty.domain.repository.DeviceTypeProvenance
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -23,13 +24,15 @@ class SourceScanTest {
         name: String? = null,
         bmsType: BmsType? = null,
         controllerType: ControllerType? = null,
-        rssi: Int = -60
+        rssi: Int = -60,
+        typeProvenance: DeviceTypeProvenance = DeviceTypeProvenance.DETECTED
     ) = DiscoveredDevice(
         address = address,
         name = name,
         rssi = rssi,
         bmsType = bmsType,
-        controllerType = controllerType
+        controllerType = controllerType,
+        typeProvenance = typeProvenance
     )
 
     // ------------------------------------------------------------------
@@ -257,6 +260,22 @@ class SourceScanTest {
         val out = listOf(first).withScanHit(better)
         assertEquals(1, out.size)
         assertEquals(ControllerType.VESC, out.single().controllerType)
+    }
+
+    @Test
+    fun `a remembered controller claim survives a conflicting later detector hit`() {
+        val remembered = device(
+            address = "A",
+            controllerType = ControllerType.BEGODE,
+            typeProvenance = DeviceTypeProvenance.REMEMBERED
+        )
+        val conflicting = device(address = "A", bmsType = BmsType.JK_BMS)
+
+        val out = listOf(remembered).withScanHit(conflicting).single()
+
+        assertEquals(ControllerType.BEGODE, out.controllerType)
+        assertEquals(null, out.bmsType)
+        assertEquals(DeviceTypeProvenance.REMEMBERED, out.typeProvenance)
     }
 
     @Test

@@ -134,7 +134,7 @@ app's `minSdk 26` ships 3.19, so schema removal is a table rebuild.
 **This task needs no new storage.** Everything it uses is already loaded in the function
 that currently ignores it.
 
-- [ ] **Step 1: Write the failing tests.**
+- [x] **Step 1: Write the failing tests.**
       (a) an address belonging to a saved vehicle's controller reports that vehicle's stored
       `ControllerType`, even when the detector would have said something else — build the
       fixture so the two genuinely disagree, or the assertion cannot fail;
@@ -145,21 +145,21 @@ that currently ignores it.
       (e) a vehicle claiming one address must not resolve a *different* address — the
       obvious wrong implementation is "any saved vehicle exists, so trust it".
 
-- [ ] **Step 2: Run them and watch them fail.**
+- [x] **Step 2: Run them and watch them fail.**
 
-- [ ] **Step 3: Implement.** Resolve from `knownAddresses` first, fall back to the detector.
+- [x] **Step 3: Implement.** Resolve from `knownAddresses` first, fall back to the detector.
       Keep the detector call — it is the fallback and its rules do not change.
 
-- [ ] **Step 4: Carry the provenance, do not infer it.** `DiscoveredDevice` gains a field
+- [x] **Step 4: Carry the provenance, do not infer it.** `DiscoveredDevice` gains a field
       saying whether its type was *remembered* or *detected*. Task 3 needs it to decide what
       may be written to a device, and a renderer needs it to stop showing a guess as a fact.
       A consumer must not have to re-derive this by checking `knownVehicle != null`.
 
-- [ ] **Step 5: Follow it through the adds.** `addControllerType` / `addBmsType` currently
+- [x] **Step 5: Follow it through the adds.** `addControllerType` / `addBmsType` currently
       fall back to `ControllerType.VESC` and `BmsType.JK_BMS` for an unrecognised device.
       A resolved type must reach them; the fallbacks stay for genuinely unknown devices.
 
-- [ ] **Step 6: Sweep, full suite, commit.**
+- [x] **Step 6: Sweep, full suite, commit.**
 
 ```bash
 git commit -m "fix(scan): the app already knew what that device was"

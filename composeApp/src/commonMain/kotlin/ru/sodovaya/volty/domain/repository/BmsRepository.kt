@@ -13,6 +13,9 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
 import kotlin.time.Duration
 
+/** Whether a scan type came from a saved address claim or a live detector guess. */
+enum class DeviceTypeProvenance { DETECTED, REMEMBERED }
+
 data class DiscoveredDevice(
     val address: String,
     val name: String?,
@@ -25,6 +28,7 @@ data class DiscoveredDevice(
      * (see [ru.sodovaya.volty.data.bms.BmsTypeDetector.detectController]).
      */
     val controllerType: ControllerType? = null,
+    val typeProvenance: DeviceTypeProvenance = DeviceTypeProvenance.DETECTED,
     val knownVehicle: Vehicle? = null
 )
 
