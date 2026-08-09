@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.vehicle
 import ru.sodovaya.volty.data.ble.ProtocolKind
 import ru.sodovaya.volty.data.ble.controllerMotionSupported
 import ru.sodovaya.volty.data.ble.protocolKind
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -10,12 +11,14 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
+import kotlin.math.abs
 
 /**
  * # The composer's model (Part G2 Task 2)
@@ -238,6 +241,12 @@ data class ControllerDraft(
     val address: String,
     val canId: Int? = null,
     val motor: MotorDraft = MotorDraft(),
+    /** The currently selected geometry's provenance; rider edits are sticky. */
+    val motorProvenance: MotorConfigProvenance = MotorConfigProvenance.RIDER,
+    /** Whether the controller has answered the one-shot setup question. */
+    val controllerConfigReported: Boolean = false,
+    /** Usable geometry reported by the controller, or null for an unconfigured wheel. */
+    val reportedMotor: MotorConfig? = null,
     val derivedBattery: DerivedBatteryChoice = DerivedBatteryChoice.AUTO,
     val origin: Controller? = null
 ) {
@@ -607,6 +616,9 @@ fun VehicleDraft.addCanController(
     label: String = "",
     canId: Int?
 ): VehicleDraft = addController(controllerType, address, label, canId, gatewayMotorAt(address))
+    .updateController("c-new-${nextKey}") {
+        it.copy(motorProvenance = MotorConfigProvenance.INHERITED)
+    }
 
 /**
  * `G §3` flow 3: **one** add producing a controller and a battery on **one
@@ -778,6 +790,29 @@ fun VehicleDraft.updatePack(key: String, edit: (PackDraft) -> PackDraft): Vehicl
 
 fun VehicleDraft.updateController(key: String, edit: (ControllerDraft) -> ControllerDraft): VehicleDraft =
     copy(controllers = controllers.map { if (it.key == key) edit(it) else it })
+
+/**
+ * Apply the controller's one-shot setup answer to a draft row.
+ *
+ * A CAN-discovered row starts with an inherited geometry. A real controller
+ * answer replaces that guess, including with an explicitly unconfigured
+ * (zero-diameter) result. Once the rider edits any geometry field, the rider's
+ * value remains authoritative; the answer is retained only for diagnostics.
+ */
+fun VehicleDraft.applyControllerSetup(key: String, config: VescSetupConfig): VehicleDraft =
+    updateController(key) { current ->
+        val reported = config.motorConfig
+        if (current.motorProvenance == MotorConfigProvenance.RIDER) {
+            current.copy(controllerConfigReported = true, reportedMotor = reported)
+        } else {
+            current.copy(
+                motor = MotorDraft.of(reported ?: MotorConfig(wheelDiameterMm = 0)),
+                motorProvenance = MotorConfigProvenance.CONTROLLER,
+                controllerConfigReported = true,
+                reportedMotor = reported
+            )
+        }
+    }
 
 // ---------------------------------------------------------------------------
 // Validation
@@ -982,7 +1017,23 @@ sealed interface ComposerIssue {
     data class PhantomGatewayController(val sourceKey: String) : ComposerIssue {
         override val blocking: Boolean get() = false
     }
+
+    /** The controller answered its setup question but has no usable wheel diameter. */
+    data class ControllerGeometryUnconfigured(val sourceKey: String) : ComposerIssue {
+        override val blocking: Boolean get() = false
+    }
+
+    /** The rider's explicit diameter differs materially from the controller's answer. */
+    data class ControllerGeometryMismatch(
+        val sourceKey: String,
+        val controllerDiameterMm: Int,
+        val enteredDiameterMm: Int
+    ) : ComposerIssue {
+        override val blocking: Boolean get() = false
+    }
 }
+
+private const val CONTROLLER_DIAMETER_TOLERANCE_MM = 5
 
 /**
  * Mirror of `planLinks`' private `resolveLinkKind`: the one protocol a link
@@ -1032,6 +1083,21 @@ fun validate(draft: VehicleDraft, telemetry: ComposerTelemetry = ComposerTelemet
         if (c.address.isBlank()) issues += ComposerIssue.BlankAddress(c.key)
         if (!controllerMotionSupported(c.controllerType)) {
             issues += ComposerIssue.NoControllerDecoder(c.key, c.controllerType)
+        }
+        if (c.controllerConfigReported) {
+            val reported = c.reportedMotor
+            if (reported == null) {
+                issues += ComposerIssue.ControllerGeometryUnconfigured(c.key)
+            } else if (c.motorProvenance == MotorConfigProvenance.RIDER) {
+                val entered = c.motor.resolve().wheelDiameterMm
+                if (abs(reported.wheelDiameterMm - entered) > CONTROLLER_DIAMETER_TOLERANCE_MM) {
+                    issues += ComposerIssue.ControllerGeometryMismatch(
+                        sourceKey = c.key,
+                        controllerDiameterMm = reported.wheelDiameterMm,
+                        enteredDiameterMm = entered
+                    )
+                }
+            }
         }
     }
 
@@ -1154,6 +1220,8 @@ fun ComposerIssue.affectedKeys(draft: VehicleDraft): List<String> = when (this) 
     is ComposerIssue.NoControllerDecoder -> listOf(sourceKey)
     is ComposerIssue.HostlessVescBms -> listOf(sourceKey)
     is ComposerIssue.PhantomGatewayController -> listOf(sourceKey)
+    is ComposerIssue.ControllerGeometryUnconfigured -> listOf(sourceKey)
+    is ComposerIssue.ControllerGeometryMismatch -> listOf(sourceKey)
     is ComposerIssue.AmbiguousGatewaySource -> sourceKeys
     // Both cards, because the offer is symmetric: either one can be tapped to
     // group the pair, and a rider who only ever opens the second pack's card

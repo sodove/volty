@@ -9,9 +9,11 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
@@ -158,6 +160,9 @@ interface VehicleEditComponent : DraftExitComponent {
     fun onControllerPolePairsChanged(key: String, v: Int?)
     fun onControllerWheelDiameterChanged(key: String, v: Int?)
     fun onControllerGearRatioChanged(key: String, v: Float?)
+
+    /** Feed a one-shot controller setup answer into the editable row. */
+    fun onControllerSetupReported(key: String, config: VescSetupConfig)
 
     /**
      * The rider's word on a controller's derived battery. It is recorded as an
@@ -809,7 +814,11 @@ class DefaultVehicleEditComponent(
     override fun onControllerCanIdChanged(key: String, canId: Int?) =
         mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(canId = canId) } }
     override fun onControllerMotorChanged(key: String, motor: MotorConfig) =
-        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = MotorDraft.of(motor)) } }
+        mutateDraft(controllers = true) { d ->
+            d.updateController(key) {
+                it.copy(motor = MotorDraft.of(motor), motorProvenance = MotorConfigProvenance.RIDER)
+            }
+        }
 
     override fun onControllerPolePairsChanged(key: String, v: Int?) = editMotor(key) { it.copy(polePairs = v) }
     override fun onControllerWheelDiameterChanged(key: String, v: Int?) =
@@ -817,7 +826,18 @@ class DefaultVehicleEditComponent(
     override fun onControllerGearRatioChanged(key: String, v: Float?) = editMotor(key) { it.copy(gearRatio = v) }
 
     private fun editMotor(key: String, edit: (MotorDraft) -> MotorDraft) =
-        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(motor = edit(it.motor)) } }
+        mutateDraft(controllers = true) { d ->
+            d.updateController(key) {
+                it.copy(motor = edit(it.motor), motorProvenance = MotorConfigProvenance.RIDER)
+            }
+        }
+
+    override fun onControllerSetupReported(key: String, config: VescSetupConfig) {
+        _state.update { s ->
+            val draft = s.draft.applyControllerSetup(key, config)
+            s.copy(draft = draft, issues = validate(draft, s.telemetry))
+        }
+    }
 
     override fun onControllerDerivedBatteryChanged(key: String, enabled: Boolean) =
         mutateDraft(controllers = true) { d ->

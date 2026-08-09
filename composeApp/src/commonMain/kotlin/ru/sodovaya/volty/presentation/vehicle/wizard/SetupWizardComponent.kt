@@ -27,6 +27,7 @@ import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
@@ -431,7 +432,9 @@ class DefaultSetupWizardComponent(
         edit: (ru.sodovaya.volty.presentation.vehicle.MotorDraft) ->
             ru.sodovaya.volty.presentation.vehicle.MotorDraft
     ) = mutateDraft { draft ->
-        draft.updateController(key) { it.copy(motor = edit(it.motor)) }
+        draft.updateController(key) {
+            it.copy(motor = edit(it.motor), motorProvenance = MotorConfigProvenance.RIDER)
+        }
     }
 
     private fun chooseNoBattery() {

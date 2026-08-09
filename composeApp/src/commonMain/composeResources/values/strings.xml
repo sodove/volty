@@ -244,6 +244,8 @@
     <string name="composer_issue_unroutable_gateway">Only VESC can carry several sources over one link, so the extra ones will stay offline.</string>
     <string name="composer_issue_duplicate_pack">These two batteries report the same cell count and the same voltage. Are they one pack reached two ways? If so, mark them as one below — otherwise the vehicle counts twice the battery it has. If they are two separate packs, leave them alone: marking them would show HALF the capacity you really have. Only you can tell them apart.</string>
     <string name="composer_issue_phantom_gateway">Does this head unit drive a motor itself? It has never reported one, while the devices on its CAN bus have. If it is only a display, remove this controller — otherwise it either drags the vehicle voltage down or wastes a poll every cycle.</string>
+    <string name="composer_issue_controller_geometry_unconfigured">This controller has no wheel diameter configured. Set it in the controller or enter the measured value here.</string>
+    <string name="composer_issue_controller_geometry_mismatch">The controller believes the wheel is %1$d mm; you entered %2$d mm. That may be intentional.</string>
 
     <!-- Composer discovery (G2 Task 5): the screen learns an address -->
     <string name="vehicle_source_scan">Scan nearby</string>

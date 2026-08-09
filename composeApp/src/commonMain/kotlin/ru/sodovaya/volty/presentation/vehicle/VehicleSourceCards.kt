@@ -37,6 +37,8 @@ import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.composer_issue_ambiguous_gateway
 import volty.composeapp.generated.resources.composer_issue_blank_address
 import volty.composeapp.generated.resources.composer_issue_conflicting_kinds
+import volty.composeapp.generated.resources.composer_issue_controller_geometry_mismatch
+import volty.composeapp.generated.resources.composer_issue_controller_geometry_unconfigured
 import volty.composeapp.generated.resources.composer_issue_duplicate_can_id
 import volty.composeapp.generated.resources.composer_issue_duplicate_pack
 import volty.composeapp.generated.resources.composer_issue_hostless_vesc_bms
@@ -361,6 +363,13 @@ internal fun composerIssueText(issue: ComposerIssue): String = when (issue) {
     // whether it drives a motor and says what to do if it does not, rather than
     // telling them their hardware is wrong.
     is ComposerIssue.PhantomGatewayController -> stringResource(Res.string.composer_issue_phantom_gateway)
+    is ComposerIssue.ControllerGeometryUnconfigured ->
+        stringResource(Res.string.composer_issue_controller_geometry_unconfigured)
+    is ComposerIssue.ControllerGeometryMismatch -> stringResource(
+        Res.string.composer_issue_controller_geometry_mismatch,
+        issue.controllerDiameterMm,
+        issue.enteredDiameterMm
+    )
 }
 
 // ---------------------------------------------------------------------------

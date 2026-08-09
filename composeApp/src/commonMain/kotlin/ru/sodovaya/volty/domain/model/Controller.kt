@@ -13,6 +13,9 @@ data class MotorConfig(
     val gearRatio: Float = 1f
 )
 
+/** Where the editable motor geometry came from. This is session provenance, not a wire value. */
+enum class MotorConfigProvenance { CONTROLLER, INHERITED, RIDER }
+
 data class Controller(
     val index: Int,
     val label: String,

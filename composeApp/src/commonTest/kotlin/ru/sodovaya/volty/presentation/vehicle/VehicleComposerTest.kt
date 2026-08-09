@@ -4,11 +4,13 @@ import ru.sodovaya.volty.data.ble.ProtocolKind
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planLinks
 import ru.sodovaya.volty.data.bms.vesc.VescValues
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.Vehicle
 import kotlin.test.Test
@@ -1116,6 +1118,68 @@ class VehicleComposerTest {
 
         assertEquals(MotorDraft(), d.controllers[1].motor)
         assertEquals(0, d.toControllers()[1].motor.wheelDiameterMm, "unset, so the speed reads as unknown")
+    }
+
+    @Test
+    fun `a controller answer replaces inherited geometry but not a rider edit`() {
+        val gatewayMotor = MotorConfig(polePairs = 21, wheelDiameterMm = 500, gearRatio = 3.5f)
+        val controllerMotor = MotorConfig(polePairs = 15, wheelDiameterMm = 600, gearRatio = 1f)
+        val config = VescSetupConfig(
+            maxErpm = 100_000f,
+            maxWattsOut = 10_000f,
+            maxInputCurrentA = 60f,
+            motorPoles = 30,
+            gearRatio = 1f,
+            wheelDiameterM = .6f
+        )
+        val inherited = VehicleDraft()
+            .addController(ControllerType.VESC, "HU:01", "Head", motor = MotorDraft.of(gatewayMotor))
+            .addCanController(ControllerType.VESC, "HU:01", "Slave", canId = 10)
+        val measured = inherited.applyControllerSetup(inherited.controllers[1].key, config)
+        assertEquals(MotorDraft.of(controllerMotor), measured.controllers[1].motor)
+        assertEquals(MotorConfigProvenance.CONTROLLER, measured.controllers[1].motorProvenance)
+
+        val rider = inherited.updateController(inherited.controllers[1].key) {
+            it.copy(motor = MotorDraft.of(MotorConfig(wheelDiameterMm = 700)), motorProvenance = MotorConfigProvenance.RIDER)
+        }
+        val preserved = rider.applyControllerSetup(rider.controllers[1].key, config)
+        assertEquals(700, preserved.controllers[1].motor.resolve().wheelDiameterMm)
+        assertEquals(MotorConfigProvenance.RIDER, preserved.controllers[1].motorProvenance)
+    }
+
+    @Test
+    fun `controller geometry answer distinguishes unconfigured and mismatched rider values`() {
+        val base = VehicleDraft().addController(ControllerType.VESC, "VESC", "Bike")
+        val key = base.controllers.single().key
+        val unconfigured = base.applyControllerSetup(
+            key,
+            VescSetupConfig(100f, 100f, 10f, 30, 1f, 0f)
+        )
+        assertTrue(validate(unconfigured).any { it is ComposerIssue.ControllerGeometryUnconfigured })
+
+        val typed = base.updateController(key) {
+            it.copy(
+                motor = MotorDraft.of(MotorConfig(wheelDiameterMm = 700)),
+                motorProvenance = MotorConfigProvenance.RIDER
+            )
+        }.applyControllerSetup(
+            key,
+            VescSetupConfig(100f, 100f, 10f, 30, 1f, .6f)
+        )
+        val mismatch = validate(typed).filterIsInstance<ComposerIssue.ControllerGeometryMismatch>().single()
+        assertEquals(600, mismatch.controllerDiameterMm)
+        assertEquals(700, mismatch.enteredDiameterMm)
+
+        val agreeing = base.updateController(key) {
+            it.copy(
+                motor = MotorDraft.of(MotorConfig(wheelDiameterMm = 600)),
+                motorProvenance = MotorConfigProvenance.RIDER
+            )
+        }.applyControllerSetup(
+            key,
+            VescSetupConfig(100f, 100f, 10f, 30, 1f, .6f)
+        )
+        assertTrue(validate(agreeing).none { it is ComposerIssue.ControllerGeometryMismatch })
     }
 
     /**
