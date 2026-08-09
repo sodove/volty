@@ -4,7 +4,6 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.repository.BmsRepository
-import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.domain.stats.RideEnergy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -19,14 +18,6 @@ import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
-
-enum class GraphMetric(val label: String, val unit: String) {
-    SOC("SOC", "%"),
-    POWER("Power", "W"),
-    CURRENT("Current", "A"),
-    VOLTAGE("Volt", "V"),
-    TEMPERATURE("Temp", "°C")
-}
 
 enum class GraphWindow(val label: String, val duration: Duration?) {
     M1("1m", 1.minutes),
@@ -154,13 +145,8 @@ class DefaultGraphComponent(
     override fun onBack() { onBackRequested() }
 }
 
-private fun extractValueOf(d: BmsData, metric: GraphMetric): Float? = when (metric) {
-    GraphMetric.SOC -> d.soc.takeIf { d.socKnown }
-    GraphMetric.POWER -> BmsReadings.power(d)
-    GraphMetric.CURRENT -> BmsReadings.current(d)
-    GraphMetric.VOLTAGE -> d.voltage.takeIf { it > 0f }
-    GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull()
-}
+private fun extractValueOf(d: BmsData, metric: GraphMetric): Float? =
+    GraphTelemetryMapper.battery(d, metric)?.value?.div(metric.displaySign)
 
 /** The repository's default [BmsData] is a disconnected zero-shaped sentinel, not a sample. */
 private fun initialValueOf(d: BmsData, metric: GraphMetric): Float? =

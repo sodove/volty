@@ -275,6 +275,7 @@ private fun minRangeFor(metric: GraphMetric): Float = when (metric) {
     GraphMetric.VOLTAGE -> 1f
     GraphMetric.SOC -> 5f
     GraphMetric.TEMPERATURE -> 5f
+    else -> 1f
 }
 
 @Composable
@@ -285,6 +286,7 @@ private fun graphMetricLabel(metric: GraphMetric): String = stringResource(
         GraphMetric.CURRENT -> Res.string.graph_current
         GraphMetric.VOLTAGE -> Res.string.graph_volt
         GraphMetric.TEMPERATURE -> Res.string.graph_temp
+        else -> Res.string.graph_temp
     }
 )
 
@@ -296,6 +298,7 @@ private fun formatVal(v: Float?, metric: GraphMetric): String {
         GraphMetric.CURRENT -> 1
         GraphMetric.VOLTAGE -> 2
         GraphMetric.TEMPERATURE -> 0
+        else -> 1
     }
     return formatFixed(v, precision)
 }
