@@ -219,7 +219,7 @@ fun PickerScreen(component: PickerComponent) {
                     val controllerSection: @Composable () -> Unit = {
                         SectionHeader(stringResource(Res.string.picker_section_controller))
                         // All four are legal manual choices even where the protocol lands
-                        // later (e.g. FarDriver) — Task 5 decides what connecting does,
+                        // later controller protocols — the connection path decides what connecting does,
                         // this sheet never hides or disables a type.
                         ControllerType.entries.forEach { type ->
                             TypeRow(

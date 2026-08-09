@@ -19,8 +19,8 @@ import kotlin.jvm.JvmInline
  *
  * [ControllerReportsNoDuty] carries the [ControllerType] rather than a
  * pre-rendered name so the sentence names the actual hardware. Hard-coding
- * "Kelly" in the string would be wrong the moment a second protocol turns out
- * not to report duty (`E §9.3` is exactly that open question for FarDriver).
+ * "Kelly" in the string would be wrong when another protocol also does not
+ * report duty.
  */
 sealed interface AlertUnavailableReason {
     /** The vehicle has no motor controller at all, so there is no motion telemetry. */
@@ -163,18 +163,16 @@ val AlertAvailability.isConfigurable: Boolean get() = this !is AlertAvailability
  * - Begode — the 20-byte frames carry PWM/duty, and `D §3` makes a trustworthy
  *   duty the headline requirement of that part.
  * - Kelly KLS — **does not report duty** (`H §7`, `H` table row "no duty").
- * - FarDriver — `E §9.3` is still open ("is a true PWM/duty exposed?"). Left
- *   `true` because no FarDriver motion decoder exists yet, so no FarDriver
- *   sample can exist and every FarDriver kind resolves to
- *   [AlertAvailability.Unknown] regardless. **Part E must flip this to `false`
- *   if the answer is no** — that is the one line to change, and this test file
- *   pins the current answer so the change is deliberate.
+ * - FarDriver — the verified telemetry frames expose line and phase current,
+ *   but no trustworthy PWM/duty field. Keep the alarm unavailable until a
+ *   field capture proves otherwise; an absent duty value must not look like a
+ *   measured zero.
  */
 internal val ControllerType.reportsDuty: Boolean
     get() = when (this) {
         ControllerType.VESC -> true
         ControllerType.BEGODE -> true
-        ControllerType.FARDRIVER -> true
+        ControllerType.FARDRIVER -> false
         ControllerType.KELLY -> false
     }
 

@@ -6,7 +6,7 @@
 | Depends on | A, B, C (AWD reuses C's independent-links path) |
 | Blocks | — |
 | Hardware | a FarDriver controller (ND72/84/96 / SIAECOSYS family) |
-| Confidence | **low** — no official BLE protocol; community reverse-engineering + live capture required |
+| Confidence | **medium for the decoded fields** — the official app's parser is verified statically; live capture is still required for firmware-wide compatibility |
 
 ## 0. Research snapshot — 2026-08-09
 
@@ -35,9 +35,12 @@ controller exposes CAN is still unknown. The AWD design must remain conditional
 on the actual hardware: if the controller has no usable CAN gateway, use the
 independent-BLE-link path; do not infer that from the brand name.
 
-**Conclusion:** no public, verified BLE implementation was found that can be
-ported safely into Volty. The open-source serial/CAN work is a reference, not a
-substitute for the required capture of this controller and its official app.
+**Conclusion:** no public, verified BLE implementation was found that could be
+ported directly into Volty. The open-source serial/CAN work remains a reference,
+not a substitute for a capture of this controller and its official app. Volty's
+decoder below is instead pinned to the static parser in the official APK and is
+deliberately read/notify-only until a live capture proves that the rider's
+firmware follows the same stream.
 
 ### 0.1 Static reverse of the original Android app (2026-08-09)
 
@@ -59,8 +62,9 @@ BLE endpoint and frame parser:
   protocol boundary;
 - current/new controller frames start with `0xAA`, use `0x80 | registerIndex`
   in byte 1, carry payload bytes 2–13 (commonly consumed as six big-endian
-  `u16` slots), and end with a lookup-table CRC16 over bytes 0–13 (initial
-  state `0x3C7F`); the app maps 55 register indexes to controller addresses;
+  `u16` slots), and end with a lookup-table CRC16 over bytes 0–13 (equivalent
+  to CRC-16/MODBUS with polynomial `0xA001`, initial state `0x7F3C`, low byte
+  first); the app maps 55 register indexes to controller addresses;
 - an older frame family also starts with `0xAA`, but uses a command byte and a
   big-endian additive checksum in bytes 14–15.
 
@@ -68,18 +72,18 @@ Concrete live-value mappings present in the app include register `232`
 (battery/line voltage `u16 / 10`, signed line current `i16 / 4`), register `238`
 (phase currents), register `226` (RPM and status), register `214` (global status
   words), and register `244` (motor temperature plus a battery-capacity byte).
-These are reverse-engineered app mappings, not yet a hardware-pinned Volty
-contract; the exact controller firmware variant still needs a capture.
+These are reverse-engineered app mappings. They are now the pinned Volty
+contract for the read-only decoder, while the exact controller firmware variant
+still needs a capture before any write or compatibility claim is made.
 
 The original app is **not read-only overall**. It sends 8-byte command frames
 (`0xAA`, command, complemented command, subcommand, two arguments, sum and
 complement) for login/keepalive, password/time and other control operations;
 larger parameter/flash writes use an address frame and 20-byte BLE chunks. That
 does not mean Volty needs controller configuration writes for telemetry. The
-telemetry decoder can remain read/notify-only, but reproducing the controller's
-post-connect stream may require a minimal, explicitly gated session/keepalive
-write. We must capture that sequence before sending anything to a rider's
-controller; do not guess from the configuration-writing paths.
+Volty's telemetry decoder remains read/notify-only. A live capture is required
+before considering any post-connect session/keepalive write; do not guess from
+the configuration-writing paths.
 
 > Read `00-overview.md`, `A-foundation.md`, `B-vesc-dashboard.md`,
 > `C-multi-controller.md` first. FarDriver is the highest-uncertainty protocol:
@@ -90,24 +94,37 @@ controller; do not guess from the configuration-writing paths.
 
 ## 1. Scope
 **In:** a `FarDriverProtocol` (`BmsProtocol + MotionSource`) decoding the BLE
-telemetry into `ControllerData`; detection; AWD via independent links (`C §7`).
+telemetry into `ControllerData`, optional controller-derived battery evidence,
+and both frame families; detection; AWD via independent links (`C §7`).
 **Out:** controller writes/config (read-only); CAN integration (the family has
 CAN-capable variants, but the rider's exact interface is unverified).
 
 ## 2. Approach — reverse-engineer, then pin
-There is no authoritative field table to cite (unlike VESC). The implementation
-must:
-1. **Capture** live BLE traffic from a real FarDriver + its app (nRF Connect /
-   the app's logs / community dumps). Record advertised service + notify/write
-   UUIDs and raw frames across throttle/idle/brake.
+The static APK parser is now the first pinned source of truth. The implementation
+must still:
+1. **Capture** live BLE traffic from a real FarDriver + its app before enabling
+   any writes. Record the advertised endpoint and raw frames across
+   throttle/idle/brake.
 2. **Cross-reference** community reverse-engineering (FarDriver/Sabvoton
    integrations for ESPHome/Home-Assistant and hobbyist repos exist; treat as
-   hints, verify against capture). FarDriver streams fixed-length register-style
-   frames (commonly a header byte then a register id + payload); the app decodes
-   registers for voltage, line/phase current, RPM, controller & motor
-   temperature, throttle, gear, and a fault/status word.
-3. **Pin** a decoder against the capture with a recorded fixture, exactly like
-   `VescProtocolTest`.
+   hints, verify against capture).
+3. **Pin** new firmware observations with recorded fixtures, exactly like
+   `FarDriverProtocolTest`.
+
+### 2.1 Implemented boundary (2026-08-09)
+
+`FarDriverProtocol` is wired into the controller factory and picker coverage.
+It subscribes to FFE0/FFEC notifications, reassembles arbitrary chunks, accepts
+the new CRC16 frames and legacy additive-checksum frames, and publishes only
+fields with frame evidence. It derives speed from RPM plus configured wheel
+geometry, keeps duty/distance/energy counters unavailable, and creates the
+optional derived pack only after voltage and line-current evidence both exist.
+The controller's VCU SOC byte remains motion metadata; it is not promoted to a
+known BMS SoC.
+
+The protocol emits no handshake, poll, login, keepalive, configuration, time,
+password, flash, or firmware writes. A live capture is still required before
+changing that boundary or claiming support for every FarDriver firmware family.
 
 ## 3. `FarDriverProtocol` → `ControllerData` (expected fields)
 Subject to capture confirmation:
@@ -138,12 +155,14 @@ Subject to capture confirmation:
 - Detection test; AWD aggregation (two FarDriver links fold correctly).
 
 ## 6. Open questions (mostly resolved only by hardware)
-1. **Frame format & register map** — the crux; needs a real capture. Do not ship
-   guesses; gate on a validated fixture.
-2. **Speed provenance** — does the controller report km/h, or only RPM?
-3. **Duty availability** — is a true PWM/duty exposed? If not, gate the ШИМ alarm
-   off for FarDriver vehicles (F §3).
-4. **Current sign & scaling** — confirm regen/discharge sign per capture.
+1. **Frame format & register map** — statically resolved for the official APK;
+   a live capture must confirm that the rider's firmware emits the same map.
+2. **Speed provenance** — the app exposes RPM in these frames; Volty derives
+   km/h from configured wheel geometry.
+3. **Duty availability** — no verified PWM/duty field is exposed; the ШИМ alarm
+   is disabled for FarDriver until a capture proves one.
+4. **Current sign & scaling** — static mapping pins voltage/current scaling;
+   live regen/discharge traffic should confirm the sign on the rider's unit.
 
 ---
 
@@ -158,12 +177,11 @@ across protocols. Leaving `escTempC` at its `0f` default when FarDriver reports
 no ESC temperature claims the sensor exists and arms `ESC_TEMP` against a
 constant zero. Write a sub-−50 value instead, and set `hasMotorTemp` honestly.
 
-**7.2 — `reportsDuty` for `FARDRIVER` is currently `true` and unverified.**
-`MotionAlertAvailability`'s static table says FarDriver reports duty; that is a
-placeholder standing on §6.3, which is open. If the capture shows no true
-PWM/duty, **flip the table entry to `false`** — it is pinned by a test, so the
-change cannot be inherited by accident. Leaving it `true` while writing `0f` into
-`dutyPercent` gives the rider a ШИМ alarm shown as armed and permanently silent.
+**7.2 — `reportsDuty` for `FARDRIVER` is `false`.**
+The static parser exposes no verified PWM/duty field. Volty therefore publishes
+`hasDuty = false` and the availability table keeps the ШИМ alarm unavailable;
+the decision is pinned by `MotionAlertAvailabilityTest` so it cannot silently
+become an armed-but-dead alarm.
 
 ---
 
@@ -176,12 +194,7 @@ and the Ride tab's visibility, and it is **type-agnostic** —
 `vehicle?.hasControllers == true`. Every test of it used a VESC until Part D
 added one for Begode.
 
-The reviewer ran a mutant that returns the battery `Dashboard` for a
-`FARDRIVER` or `KELLY` controller: **1160 tests, 0 failures.** So a vehicle of
-this type can be routed away from the Ride dashboard — with no Ride tab left to
-escape by — and nothing in the suite objects. A green build says everything is
-fine while the rider cannot reach their own instruments.
-
-**This part must add the test for its own controller type**, in the same shape
-Part D used: a mutant that sends this type to the battery dashboard has to fail
-something. One test, and it closes the quarter of the hole this part owns.
+The controller factory and picker coverage now include FarDriver, so a vehicle
+of this type follows the same Ride-dashboard routing as the other motion
+controllers. The full suite after the implementation is **1857 tests, 0
+failures**; live emulator/hardware rendering remains a separate field check.

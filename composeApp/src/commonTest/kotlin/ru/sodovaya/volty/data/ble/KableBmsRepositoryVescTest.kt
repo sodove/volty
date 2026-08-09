@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
+import ru.sodovaya.volty.data.bms.FarDriverProtocol
 import ru.sodovaya.volty.data.bms.KellyProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
@@ -224,12 +225,27 @@ class KableBmsRepositoryVescTest {
 
     /** Guards the test above from passing vacuously with everything refused. */
     @Test
-    fun `exactly three controller kinds decode motion today`() {
+    fun `exactly four controller kinds decode motion today`() {
         assertEquals(
-            listOf(ControllerType.VESC, ControllerType.KELLY, ControllerType.BEGODE),
+            listOf(ControllerType.VESC, ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE),
             ControllerType.entries.filter { controllerMotionSupported(it) },
-            "Part H Task 3 wires Kelly through the same coverage decision as VESC and Begode"
+            "FarDriver joins the same shared coverage decision as VESC, Kelly and Begode"
         )
+    }
+
+    @Test
+    fun `a FarDriver controller-only vehicle builds read-only motion protocol and derived pack`() = repoTest { repo ->
+        val v = controllerOnly(ControllerType.FARDRIVER)
+
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertEquals(ProtocolKind.FARDRIVER, spec.protocolKind)
+        val protocol = assertIs<FarDriverProtocol>(repo.createProtocolForTest(spec, v))
+        assertIs<MotionSource>(protocol)
+        assertEquals(1, protocol.packCount)
+        assertTrue(protocol.handshakeCommands().isEmpty())
+        assertTrue(protocol.pollCommands().isEmpty())
     }
 
     /**

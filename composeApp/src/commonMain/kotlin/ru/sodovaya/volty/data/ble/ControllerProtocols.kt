@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.FarDriverProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
 import ru.sodovaya.volty.data.bms.KellyProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
@@ -137,8 +138,10 @@ fun controllerMotionProtocol(
     // It deliberately receives the same controller-only decisions as VESC:
     // the derived pack is optional and wheel geometry is needed for motion.
     ProtocolKind.KELLY -> KellyProtocol(deriveBattery = deriveBattery, motor = motor)
-    // No motion decoder yet.
-    ProtocolKind.FARDRIVER -> null
+    // FarDriver broadcasts fixed-size telemetry frames on its FFE0/FFEC link.
+    // The decoder is deliberately read-only: poll and handshake command lists
+    // are empty because FFEC is also the controller's configuration channel.
+    ProtocolKind.FARDRIVER -> FarDriverProtocol(deriveBattery = deriveBattery, motor = motor)
     // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
     ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null

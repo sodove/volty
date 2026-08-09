@@ -137,10 +137,10 @@ class MotionAlertAvailabilityTest {
     }
 
     @Test fun the_static_duty_table_answers_every_controller_type() {
-        // Pins today's answers so Part E flipping FarDriver (E §9.3) is deliberate.
+        // Pins today's answers, including FarDriver's verified lack of duty.
         assertTrue(ControllerType.VESC.reportsDuty)
         assertTrue(ControllerType.BEGODE.reportsDuty)
-        assertTrue(ControllerType.FARDRIVER.reportsDuty)
+        assertFalse(ControllerType.FARDRIVER.reportsDuty)
         assertFalse(ControllerType.KELLY.reportsDuty)
     }
 

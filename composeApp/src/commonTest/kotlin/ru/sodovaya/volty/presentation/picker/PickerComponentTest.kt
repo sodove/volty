@@ -309,21 +309,19 @@ class PickerComponentTest {
         assertEquals(null, c.state.value.typePickerFor)
     }
 
-    /**
-     * `createProtocol` has no controller implementation for FarDriver (Part D),
-     * Kelly (Part E) or Begode (Part H) — see [unsupportedControllerReason] for
-     * why the last one is the dangerous case rather than the loud one. The pick
-     * is still offered, so it must land in the ordinary connection-failure
-     * state AND leave the store exactly as it found it.
-     */
+    /** A supported FarDriver that cannot be reached still rolls back cleanly. */
     @Test
-    fun `an unsupported controller pick fails cleanly and leaves no orphan vehicle`() = runTest {
+    fun `a FarDriver controller that fails to connect leaves no orphan vehicle`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val d = device("CTRL:FD", type = null, controllerType = ControllerType.FARDRIVER)
         val vehicleRepo = FakeVehicleRepo(emptyList())
         val edits = mutableListOf<String>()
         val (c, bmsRepo) = component(
-            mode = "add", scan = listOf(d), vehicleRepo = vehicleRepo, editRoutes = edits
+            mode = "add",
+            scan = listOf(d),
+            bmsRepo = FakeBmsRepo(listOf(d), Result.failure(IllegalStateException("out of range"))),
+            vehicleRepo = vehicleRepo,
+            editRoutes = edits
         )
         advanceUntilIdle()
 
@@ -332,13 +330,10 @@ class PickerComponentTest {
 
         val s = c.state.value
         assertEquals(null, s.connecting, "the spinner clears, exactly as on an unreachable device")
-        assertTrue(
-            s.error?.contains("FarDriver") == true,
-            "the error names the type the user picked, was: ${s.error}"
-        )
+        assertEquals("out of range", s.error)
         assertTrue(vehicleRepo.stored.isEmpty(), "the persisted vehicle is rolled back — no orphan row")
         assertTrue(edits.isEmpty(), "and the user is not sent to an edit form for a vehicle that is gone")
-        assertTrue(bmsRepo.vehicleConnects.isEmpty(), "no radio work is attempted for a type with no protocol")
+        assertEquals(1, bmsRepo.vehicleConnects.size, "the supported type reached the repository")
     }
 
     /**
@@ -440,24 +435,11 @@ class PickerComponentTest {
     }
 
     @Test
-    fun `every unsupported controller type is named in its own refusal`() {
-        // A pure check on the gate itself, so the types the picker offers but
-        // cannot connect are all covered without one component test each.
-        //
-        // The gate is DERIVED from `controllerMotionProtocol`, so this list
-        // moves on its own as parts land — Part D Task 4 gave BEGODE a branch
-        // (a wheel is a controller over its battery link) and the refusal went
-        // away with no change in the picker. Part H Task 3 adds Kelly through
-        // the same data-layer coverage function.
-        listOf(ControllerType.VESC, ControllerType.KELLY, ControllerType.BEGODE).forEach { t ->
+    fun `every controller type is offered by the picker`() {
+        // The gate is derived from the same protocol factory used by connect;
+        // all current controller protocols are now decodable.
+        ControllerType.entries.forEach { t ->
             assertEquals(null, unsupportedControllerReason(t), "$t is connectable and must not be refused")
-        }
-        listOf(ControllerType.FARDRIVER).forEach { t ->
-            val reason = unsupportedControllerReason(t)
-            assertTrue(
-                reason != null && reason.contains(t.label),
-                "$t must be refused by name, was: $reason"
-            )
         }
     }
 

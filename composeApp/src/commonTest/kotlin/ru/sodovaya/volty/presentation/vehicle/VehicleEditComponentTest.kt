@@ -1896,7 +1896,7 @@ class VehicleEditComponentTest {
      * before the rider touches anything — an advisory one still saves.
      */
     @Test
-    fun `a stored config volty cannot decode is reported on load without blocking`() = runTest {
+    fun `a stored FarDriver config is clean on load`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val fardriver = controllerOnlyVehicle().copy(
             controllers = listOf(
@@ -1906,11 +1906,8 @@ class VehicleEditComponentTest {
         val c = component(FakeVehicleRepo(listOf(fardriver)))
         advanceUntilIdle()
 
-        assertEquals(
-            listOf(ComposerIssue.NoControllerDecoder("c0", ControllerType.FARDRIVER)),
-            c.state.value.issues
-        )
-        assertEquals(true, c.state.value.canSave, "a missing decoder is Parts E/H's job, not a config error")
+        assertEquals(emptyList(), c.state.value.issues)
+        assertEquals(true, c.state.value.canSave)
     }
 
     /**

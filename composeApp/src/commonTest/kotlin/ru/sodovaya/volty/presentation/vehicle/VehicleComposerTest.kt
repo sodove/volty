@@ -605,13 +605,9 @@ class VehicleComposerTest {
     }
 
     @Test
-    fun `a controller volty cannot decode yet is reported but not blocked`() {
+    fun `a FarDriver controller is decodable and is not reported`() {
         val d = VehicleDraft().addController(ControllerType.FARDRIVER, "FD:01")
-        assertEquals(
-            listOf(ComposerIssue.NoControllerDecoder(d.controllers.single().key, ControllerType.FARDRIVER)),
-            validate(d)
-        )
-        assertTrue(validate(d).none { it.blocking }, "a missing decoder is the FarDriver work's job, not a config error")
+        assertEquals(emptyList(), validate(d))
     }
 
     @Test
@@ -776,7 +772,6 @@ class VehicleComposerTest {
         assertEquals(
             setOf(
                 ComposerIssue.BlankAddress(d.controllers[0].key),
-                ComposerIssue.NoControllerDecoder(d.controllers[0].key, ControllerType.FARDRIVER),
                 ComposerIssue.ConflictingKinds("SHARED", setOf(ProtocolKind.JK, ProtocolKind.VESC))
             ),
             issues.toSet()
@@ -827,9 +822,9 @@ class VehicleComposerTest {
                     )
                 )
             ),
-            // Advisory-only drafts still have to PLAN — that is exactly why
-            // they are advisory rather than blocking.
-            "undecodable controller" to VehicleDraft().addController(ControllerType.FARDRIVER, "FD:01"),
+            // A FarDriver is a normal decodable controller and still has to
+            // PLAN like every other controller-only draft.
+            "FarDriver controller" to VehicleDraft().addController(ControllerType.FARDRIVER, "FD:01"),
             "hostless VESC-BMS" to VehicleDraft().addPack(BmsType.VESC_BMS, "VB:01"),
             "unroutable gateway" to draftOf(
                 vehicle(
@@ -991,10 +986,7 @@ class VehicleComposerTest {
 
         assertEquals(setOf("c-new-0"), index.keys, "the clean pack must not appear at all")
         assertEquals(
-            listOf(
-                ComposerIssue.BlankAddress("c-new-0"),
-                ComposerIssue.NoControllerDecoder("c-new-0", ControllerType.FARDRIVER)
-            ),
+            listOf(ComposerIssue.BlankAddress("c-new-0")),
             index.getValue("c-new-0")
         )
     }
