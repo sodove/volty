@@ -6,7 +6,38 @@
 | Depends on | A, B, C (AWD reuses C's independent-links path) |
 | Blocks | — |
 | Hardware | a FarDriver controller (ND72/84/96 / SIAECOSYS family) |
-| Confidence | **low** — no official protocol; community reverse-engineering + live capture required |
+| Confidence | **low** — no official BLE protocol; community reverse-engineering + live capture required |
+
+## 0. Research snapshot — 2026-08-09
+
+The first web search found one substantial open-source reference, but it is not a
+drop-in BLE decoder:
+
+- [`jackhumbert/fardriver-controllers`](https://github.com/jackhumbert/fardriver-controllers)
+  is MIT-licensed reverse-engineering work for Nanjing FarDriver controllers. It
+  documents a 3.3 V serial connection, little-endian register-style status
+  frames (usually 16 bytes, beginning with `0xAA`), 8-byte command frames with
+  complemented command/CRC fields, and a CRC32 implementation. The same project
+  also documents CAN configuration and controller CAN data/IDs. This is useful
+  for field names, scaling hypotheses, and a possible wired fallback, but it
+  does **not** identify the BLE service/characteristic UUIDs or prove that its
+  serial frames are the payload used by the rider's Bluetooth adapter.
+- [`rasyid-irsyadi/r-speedo.app`](https://github.com/rasyid-irsyadi/r-speedo.app)
+  publicly claims FarDriver telemetry support, but its public repository is a
+  documentation site. Its compatibility page says model, firmware, and adapter
+  compatibility vary; the README describes an independent ESP32 Votol-CAN
+  module for part of the vehicle telemetry path. It does not publish a usable
+  FarDriver BLE register map or raw-frame decoder.
+
+This retracts the earlier blanket wording in this spec that FarDriver “has no
+CAN”. The FarDriver family has CAN-capable variants; whether the rider's exact
+controller exposes CAN is still unknown. The AWD design must remain conditional
+on the actual hardware: if the controller has no usable CAN gateway, use the
+independent-BLE-link path; do not infer that from the brand name.
+
+**Conclusion:** no public, verified BLE implementation was found that can be
+ported safely into Volty. The open-source serial/CAN work is a reference, not a
+substitute for the required capture of this controller and its official app.
 
 > Read `00-overview.md`, `A-foundation.md`, `B-vesc-dashboard.md`,
 > `C-multi-controller.md` first. FarDriver is the highest-uncertainty protocol:
