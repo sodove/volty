@@ -1,24 +1,31 @@
 package ru.sodovaya.volty.presentation.vehicle.wizard
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -30,8 +37,8 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.arkivanov.decompose.extensions.compose.stack.Children
@@ -41,6 +48,8 @@ import kotlinx.coroutines.flow.StateFlow
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.model.PackTopology
+import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
@@ -50,6 +59,7 @@ import ru.sodovaya.volty.presentation.picker.scanDeviceLabel
 import ru.sodovaya.volty.presentation.picker.signalProximity
 import ru.sodovaya.volty.presentation.picker.sourceRole
 import ru.sodovaya.volty.presentation.vehicle.DraftDiagramView
+import ru.sodovaya.volty.presentation.vehicle.CanDiscoveryContent
 import ru.sodovaya.volty.presentation.vehicle.draftDiagram
 import volty.composeapp.generated.resources.*
 
@@ -73,16 +83,16 @@ fun SetupWizardScreen(component: SetupWizardComponent) {
     if (state.discardPrompt) {
         AlertDialog(
             onDismissRequest = component::onDiscardDismissed,
-            title = { Text(stringResource(Res.string.vehicle_discard_title)) },
-            text = { Text(stringResource(Res.string.vehicle_discard_text)) },
+            title = { Text(stringResource(Res.string.wizard_leave_title)) },
+            text = { Text(stringResource(Res.string.wizard_leave_text)) },
             confirmButton = {
                 TextButton(onClick = component::onDiscardConfirmed) {
-                    Text(stringResource(Res.string.vehicle_discard_confirm))
+                    Text(stringResource(Res.string.wizard_leave_confirm))
                 }
             },
             dismissButton = {
                 TextButton(onClick = component::onDiscardDismissed) {
-                    Text(stringResource(Res.string.vehicle_discard_keep))
+                    Text(stringResource(Res.string.wizard_leave_keep))
                 }
             }
         )
@@ -112,7 +122,7 @@ private fun ArchetypeScreen(component: SetupWizardComponent.ArchetypeStage) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ArchetypeChoice(
                 selected = state.archetype == VehicleArchetype.WHEEL,
                 title = Res.string.wizard_archetype_wheel,
@@ -128,7 +138,7 @@ private fun ArchetypeScreen(component: SetupWizardComponent.ArchetypeStage) {
                 modifier = Modifier.weight(1f)
             )
         }
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             ArchetypeChoice(
                 selected = state.archetype == VehicleArchetype.BICYCLE,
                 title = Res.string.wizard_archetype_bicycle,
@@ -162,26 +172,57 @@ private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
             Button(onClick = component::onNext) { Text(stringResource(Res.string.wizard_next)) }
         }
     ) {
-        OutlinedTextField(
-            value = state.name,
-            onValueChange = component::onNameChanged,
-            label = { Text(stringResource(Res.string.wizard_vehicle_name)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth()
-        )
-        ScanHeading(state.scannedDevices.size)
+        ScanHeading(state.scannedDevices.size, state.scanning)
         ScannedDeviceList(
             rows = component.scanRows,
             onAdd = component::onAddScannedDevice
         )
         Hint(stringResource(Res.string.wizard_scan_hint))
-        DraftSources(state)
+        WizardSectionCard {
+            Text(
+                stringResource(Res.string.wizard_vehicle_name),
+                style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            OutlinedTextField(
+                value = state.name,
+                onValueChange = component::onNameChanged,
+                placeholder = { Text(stringResource(Res.string.wizard_new_vehicle)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+        EditableDraftSources(state, component)
+        CanDiscoveryContent(
+            canScanTarget = state.canScanTarget,
+            scan = state.canScan,
+            candidates = state.canCandidates,
+            onDiscover = component::onDiscoverCanDevices,
+            onAddCandidate = component::onAddCanCandidate,
+            onDismiss = component::onDismissCanScan
+        )
     }
 }
 
 @Composable
 private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
     val state by component.state.collectAsStateCompat()
+    val hasBothDevice = state.draft.controllers.any { controller ->
+        controller.controllerType == ControllerType.BEGODE &&
+            state.draft.packs.any { pack ->
+                pack.address == controller.address && pack.bmsType == BmsType.BEGODE
+            }
+    }
+    val hasSeparateBms = state.draft.packs.any { pack ->
+        state.draft.controllers.none { controller ->
+            controller.controllerType == ControllerType.BEGODE &&
+                controller.address == pack.address &&
+                pack.bmsType == BmsType.BEGODE
+        }
+    }
+    val hasDerivedBattery = state.draft.controllers.any {
+        state.draft.resolvedDerivedBattery(it)
+    }
     WizardPage(
         title = stringResource(Res.string.wizard_battery_title),
         progress = 3,
@@ -198,31 +239,29 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
             style = MaterialTheme.typography.titleMedium,
             fontWeight = FontWeight.SemiBold
         )
-        Text(stringResource(Res.string.wizard_battery_own_bms), fontWeight = FontWeight.SemiBold)
-        Text(
-            stringResource(Res.string.wizard_battery_own_bms_caption),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        BatteryChoiceCard(
+            selected = hasSeparateBms,
+            title = Res.string.wizard_battery_own_bms,
+            caption = Res.string.wizard_battery_own_bms_caption,
+            badge = "BMS",
+            onClick = null
         )
-        OutlinedButton(
+        BatteryChoiceCard(
+            selected = hasDerivedBattery,
+            title = Res.string.wizard_battery_from_controller,
+            caption = Res.string.wizard_battery_from_controller_caption,
+            badge = "≈",
             onClick = component::onUseControllerBattery,
-            enabled = component.canUseControllerBattery,
-            modifier = Modifier.fillMaxWidth()
-        ) {
-            Text(stringResource(Res.string.wizard_battery_from_controller))
-        }
-        Text(
-            stringResource(Res.string.wizard_battery_from_controller_caption),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+            enabled = component.canUseControllerBattery
         )
-        Text(stringResource(Res.string.wizard_battery_device_is_both), fontWeight = FontWeight.SemiBold)
-        Text(
-            stringResource(Res.string.wizard_battery_device_is_both_caption),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant
+        BatteryChoiceCard(
+            selected = hasBothDevice,
+            title = Res.string.wizard_battery_device_is_both,
+            caption = Res.string.wizard_battery_device_is_both_caption,
+            badge = "2×",
+            onClick = null
         )
-        ScanHeading(state.scannedDevices.size)
+        ScanHeading(state.scannedDevices.size, state.scanning)
         ScannedDeviceList(
             rows = component.scanRows,
             onAdd = { device, add ->
@@ -233,10 +272,11 @@ private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
                 }
             }
         )
+        Hint(stringResource(Res.string.wizard_scan_hint))
         if (state.advanceBlocked) {
             ErrorHint(stringResource(Res.string.wizard_empty_draft))
         }
-        DraftSources(state)
+        EditableDraftSources(state, component)
         if (state.showTopologyChoice) {
             Text(
                 stringResource(Res.string.wizard_topology_question),
@@ -295,7 +335,22 @@ private fun ReviewScreen(component: SetupWizardComponent.ReviewStage) {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
-        DraftDiagramView(diagram)
+        WizardSectionCard {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(
+                    stringResource(Res.string.vehicle_diagram_title),
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    stringResource(Res.string.diagram_type_phone),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            DraftDiagramView(diagram)
+        }
         if (!state.canSave || state.saveBlocked) {
             ErrorHint(stringResource(Res.string.wizard_save_blocked))
         }
@@ -341,40 +396,80 @@ private fun WizardPage(
     backEnabled: Boolean = true,
     content: @Composable ColumnScope.() -> Unit
 ) {
-    Surface(modifier = modifier.fillMaxSize()) {
+    val panelShape = RoundedCornerShape(18.dp)
+    Surface(
+        modifier = modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
         Column(modifier = Modifier.fillMaxSize()) {
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f))
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 TextButton(onClick = onBack, enabled = backEnabled && backGlyph.isNotEmpty()) {
-                    Text(backGlyph, fontSize = 24.sp)
+                    Text(backGlyph, fontSize = 22.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(title, modifier = Modifier.weight(1f), fontWeight = FontWeight.SemiBold)
+                Text(
+                    title,
+                    modifier = Modifier.weight(1f),
+                    fontWeight = FontWeight.SemiBold,
+                    style = MaterialTheme.typography.titleSmall
+                )
                 ProgressDots(progress)
             }
-            Column(
-                modifier = Modifier.weight(1f).verticalScroll(rememberScrollState()).padding(16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-                content = content
-            )
-            Row(
-                modifier = Modifier.fillMaxWidth().padding(16.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-                content = footer
-            )
+            Column(modifier = Modifier.fillMaxSize()) {
+                Box(
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                    contentAlignment = Alignment.TopCenter
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .widthIn(max = 620.dp)
+                            .fillMaxWidth()
+                            .padding(horizontal = 14.dp, vertical = 14.dp)
+                            .verticalScroll(rememberScrollState()),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                        Surface(
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = panelShape,
+                            color = MaterialTheme.colorScheme.surface,
+                            tonalElevation = 2.dp,
+                            shadowElevation = 3.dp
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                                content = content
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier
+                        .widthIn(max = 620.dp)
+                        .fillMaxWidth()
+                        .align(Alignment.CenterHorizontally)
+                        .padding(horizontal = 14.dp, vertical = 10.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                    content = footer
+                )
+            }
         }
     }
 }
 
 @Composable
 private fun ProgressDots(active: Int) {
-    Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+    Row(horizontalArrangement = Arrangement.spacedBy(3.dp)) {
         repeat(5) { index ->
             Box(
                 modifier = Modifier
-                    .size(7.dp)
+                    .size(width = 16.dp, height = 3.dp)
                     .background(
                         if (index < active) MaterialTheme.colorScheme.primary
                         else MaterialTheme.colorScheme.outlineVariant,
@@ -393,22 +488,32 @@ private fun ArchetypeChoice(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val contentColor = if (selected) {
-        MaterialTheme.colorScheme.onPrimaryContainer
-    } else {
-        MaterialTheme.colorScheme.onSurface
-    }
-    OutlinedButton(
-        onClick = onClick,
-        modifier = modifier.heightIn(min = 76.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            contentColor = contentColor
-        )
+    val shape = RoundedCornerShape(12.dp)
+    val contentColor = if (selected) MaterialTheme.colorScheme.onPrimaryContainer
+    else MaterialTheme.colorScheme.onSurface
+    Surface(
+        modifier = modifier
+            .heightIn(min = 86.dp)
+            .border(
+                width = 1.dp,
+                color = if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape = shape
+            )
+            .clickable(onClick = onClick),
+        shape = shape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
-        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
-            Text(stringResource(title), fontWeight = FontWeight.SemiBold)
-            Text(stringResource(caption), style = MaterialTheme.typography.bodySmall, color = contentColor)
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(11.dp),
+            verticalArrangement = Arrangement.spacedBy(3.dp),
+            horizontalAlignment = Alignment.Start
+        ) {
+            Text(stringResource(title), fontWeight = FontWeight.SemiBold, color = contentColor)
+            Text(
+                stringResource(caption),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
@@ -425,26 +530,46 @@ private fun TopologyChoice(
     } else {
         MaterialTheme.colorScheme.onSurface
     }
-    OutlinedButton(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth().heightIn(min = 64.dp),
-        colors = ButtonDefaults.outlinedButtonColors(
-            containerColor = if (selected) MaterialTheme.colorScheme.primaryContainer else Color.Transparent,
-            contentColor = contentColor
-        )
+    val shape = RoundedCornerShape(10.dp)
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 68.dp)
+            .border(
+                1.dp,
+                if (selected) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+                shape
+            )
+            .clickable(onClick = onClick),
+        shape = shape,
+        color = if (selected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surface
     ) {
-        Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.Start) {
+        Column(modifier = Modifier.fillMaxWidth().padding(11.dp), horizontalAlignment = Alignment.Start) {
             Text(stringResource(title), fontWeight = FontWeight.SemiBold)
-            Text(stringResource(caption), style = MaterialTheme.typography.bodySmall, color = contentColor)
+            Text(
+                stringResource(caption),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (selected) contentColor else MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }
 
 @Composable
-private fun ScanHeading(count: Int) {
+private fun ScanHeading(count: Int, scanning: Boolean) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
-        Text(stringResource(Res.string.wizard_scanning, count), style = MaterialTheme.typography.bodySmall)
+        if (scanning) {
+            CircularProgressIndicator(modifier = Modifier.size(14.dp), strokeWidth = 2.dp)
+        } else {
+            Box(
+                modifier = Modifier.size(8.dp).background(MaterialTheme.colorScheme.primary, RoundedCornerShape(50))
+            )
+        }
+        Text(
+            stringResource(Res.string.wizard_scanning, count),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
     }
 }
 
@@ -455,32 +580,42 @@ private fun ScannedDeviceList(
 ) {
     rows.forEach { row ->
         val identity = row.device.scanDeviceLabel()
+        val shape = RoundedCornerShape(10.dp)
         Surface(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(12.dp),
-            color = MaterialTheme.colorScheme.surfaceVariant
+            modifier = Modifier
+                .fillMaxWidth()
+                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+            shape = shape,
+            color = MaterialTheme.colorScheme.surface
         ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(12.dp)) {
-                Text(
-                    identity.title,
-                    fontWeight = FontWeight.SemiBold
-                )
-                Text(
-                    listOfNotNull(
-                        identity.address,
-                        sourceRoleText(row.device.sourceRole()),
-                        scanSignalProximityText(row.device.signalProximity())
-                    ).joinToString("  ·  "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
-                Row(modifier = Modifier.fillMaxWidth()) {
+            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp)) {
+                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(identity.title, fontWeight = FontWeight.SemiBold)
+                        Text(
+                            identity.address.orEmpty(),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    WizardBadge(sourceRoleText(row.device.sourceRole()), live = row.device.controllerType != null)
+                    Text(
+                        "${row.device.rssi} dBm · ${scanSignalProximityText(row.device.signalProximity())}",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(2.dp)
+                ) {
                     row.additions.forEach { add ->
                         TextButton(
                             onClick = { onAdd(row.device, add) },
-                            modifier = Modifier.weight(1f)
+                            modifier = Modifier.weight(1f),
+                            contentPadding = ButtonDefaults.TextButtonContentPadding
                         ) {
-                            Text(scanAdditionText(add), fontSize = 12.sp)
+                            Text(scanAdditionText(add), fontSize = 11.sp)
                         }
                     }
                 }
@@ -515,6 +650,249 @@ private fun sourceRoleText(role: SourceRole): String = stringResource(
         SourceRole.UNKNOWN -> Res.string.scan_role_unknown
     }
 )
+
+@Composable
+private fun WizardSectionCard(content: @Composable ColumnScope.() -> Unit) {
+    val shape = RoundedCornerShape(12.dp)
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+        shape = shape,
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.28f)
+    ) {
+        Column(
+            modifier = Modifier.padding(11.dp),
+            verticalArrangement = Arrangement.spacedBy(7.dp),
+            content = content
+        )
+    }
+}
+
+@Composable
+private fun BatteryChoiceCard(
+    selected: Boolean,
+    title: StringResource,
+    caption: StringResource,
+    badge: String,
+    onClick: (() -> Unit)?,
+    enabled: Boolean = true
+) {
+    val shape = RoundedCornerShape(10.dp)
+    val borderColor = when {
+        !enabled -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+        selected -> MaterialTheme.colorScheme.primary
+        else -> MaterialTheme.colorScheme.outlineVariant
+    }
+    Surface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, borderColor, shape)
+            .clickable(enabled = enabled && onClick != null) { onClick?.invoke() },
+        shape = shape,
+        color = when {
+            !enabled -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f)
+            selected -> MaterialTheme.colorScheme.primaryContainer
+            else -> MaterialTheme.colorScheme.surface
+        }
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text(
+                    stringResource(title),
+                    fontWeight = FontWeight.SemiBold,
+                    color = if (enabled) MaterialTheme.colorScheme.onSurface
+                    else MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Text(
+                    stringResource(caption),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+            WizardBadge(badge, live = selected)
+        }
+    }
+}
+
+@Composable
+private fun WizardBadge(text: String, live: Boolean) {
+    Surface(
+        shape = RoundedCornerShape(50),
+        color = if (live) MaterialTheme.colorScheme.primaryContainer
+        else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)
+    ) {
+        Text(
+            text,
+            modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = if (live) MaterialTheme.colorScheme.primary
+            else MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+}
+
+/**
+ * Setup's source cards. All mutation stays in [SetupWizardComponent.SourceStage];
+ * these controls only expose the corrections the approved flow requires.
+ */
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun EditableDraftSources(
+    state: SetupWizardComponent.State,
+    component: SetupWizardComponent.SourceStage
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        state.draft.controllers.forEachIndexed { index, controller ->
+            SourceEditCard(
+                title = "${stringResource(Res.string.vehicle_source_controller)} ${index + 1}",
+                subtitle = controller.address,
+                onRemove = { component.onRemoveController(controller.key) }
+            ) {
+                WizardTypeChips(
+                    options = ControllerType.entries,
+                    selected = controller.controllerType,
+                    text = { it.label },
+                    onSelect = { component.onControllerTypeChanged(controller.key, it) }
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WizardIntField(
+                        label = stringResource(Res.string.vehicle_field_wheel_diameter),
+                        value = controller.motor.wheelDiameterMm,
+                        onChange = { component.onControllerWheelDiameterChanged(controller.key, it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WizardIntField(
+                        label = stringResource(Res.string.vehicle_field_pole_pairs),
+                        value = controller.motor.polePairs,
+                        onChange = { component.onControllerPolePairsChanged(controller.key, it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    WizardFloatField(
+                        label = stringResource(Res.string.vehicle_field_gear_ratio),
+                        value = controller.motor.gearRatio,
+                        onChange = { component.onControllerGearRatioChanged(controller.key, it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                    WizardIntField(
+                        label = stringResource(Res.string.vehicle_field_can_id),
+                        value = controller.canId,
+                        onChange = { component.onControllerCanIdChanged(controller.key, it) },
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+        }
+        state.draft.packs.forEachIndexed { index, pack ->
+            SourceEditCard(
+                title = "${stringResource(Res.string.vehicle_source_pack)} ${index + 1}",
+                subtitle = pack.address,
+                onRemove = { component.onRemovePack(pack.key) }
+            ) {
+                WizardTypeChips(
+                    options = BmsType.entries,
+                    selected = pack.bmsType,
+                    text = { bmsTypeLabel(it) },
+                    onSelect = { component.onPackTypeChanged(pack.key, it) }
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SourceEditCard(
+    title: String,
+    subtitle: String,
+    onRemove: () -> Unit,
+    content: @Composable ColumnScope.() -> Unit
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape)
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.22f), shape)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontWeight = FontWeight.SemiBold)
+                Text(subtitle, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = onRemove) {
+                Text(
+                    stringResource(Res.string.vehicle_source_remove),
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+        }
+        content()
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> WizardTypeChips(
+    options: List<T>,
+    selected: T,
+    text: @Composable (T) -> String,
+    onSelect: (T) -> Unit
+) {
+    FlowRow(
+        horizontalArrangement = Arrangement.spacedBy(6.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp)
+    ) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(text(option), fontSize = 11.sp) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun WizardIntField(
+    label: String,
+    value: Int?,
+    onChange: (Int?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = value?.toString().orEmpty(),
+        onValueChange = { onChange(it.toIntOrNull()) },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number),
+        modifier = modifier.fillMaxWidth()
+    )
+}
+
+@Composable
+private fun WizardFloatField(
+    label: String,
+    value: Float?,
+    onChange: (Float?) -> Unit,
+    modifier: Modifier = Modifier
+) {
+    OutlinedTextField(
+        value = value?.toString().orEmpty(),
+        onValueChange = { onChange(it.replace(',', '.').toFloatOrNull()) },
+        label = { Text(label) },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+        modifier = modifier.fillMaxWidth()
+    )
+}
 
 @Composable
 private fun DraftSources(state: SetupWizardComponent.State) {

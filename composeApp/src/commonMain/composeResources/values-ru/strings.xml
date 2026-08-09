@@ -438,6 +438,10 @@
     <string name="wizard_connect">Подключиться</string>
     <string name="wizard_connecting">Подключение…</string>
     <string name="wizard_connect_failed">Подключиться не удалось. Аппарат сохранён — можно повторить из списка.</string>
+    <string name="wizard_leave_title">Выйти из настройки?</string>
+    <string name="wizard_leave_text">Черновик останется здесь. Открой «Новый аппарат», чтобы продолжить с того же места.</string>
+    <string name="wizard_leave_confirm">Выйти</string>
+    <string name="wizard_leave_keep">Продолжить настройку</string>
     <string name="vehicle_diagram_title">Схема аппарата</string>
     <string name="diagram_phone">Этот телефон</string>
     <string name="diagram_bluetooth_link">Связь Bluetooth</string>

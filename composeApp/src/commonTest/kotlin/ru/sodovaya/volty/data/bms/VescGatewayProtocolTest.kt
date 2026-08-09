@@ -526,6 +526,11 @@ class VescGatewayProtocolTest {
 
         val battery = assertNotNull(p.latestData(0))
         assertTrue(abs(battery.voltage - 75.5f) < 0.001f)
+        assertTrue(abs(battery.charge - 18.2f) < 0.001f)
+        assertTrue(
+            abs(battery.capacity - (18.2f / 0.812f)) < 0.01f,
+            "the nyxdash remaining Ah and SoC must expose the pack capacity"
+        )
         loop.cancel(); device.cancel()
     }
 

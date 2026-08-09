@@ -234,15 +234,16 @@ class RootNavigationTest {
     }
 
     @Test
-    fun cancelling_the_add_picker_from_welcome_reveals_welcome() {
+    fun first_add_from_welcome_enters_the_setup_wizard() {
         val (nav, stack) = buildStack(Config.Welcome)
 
-        // Mirrors the fixed onAddBatteryRequested.
-        nav.push(Config.Picker(mode = "add"))
-        assertEquals(Config.Picker(mode = "add"), stack.value.active.configuration)
-
-        nav.pop()
-        assertEquals(Config.Welcome, stack.value.active.configuration, "back from Welcome's add-picker must return to Welcome")
+        // Mirrors Welcome's production callback: first creation is a draft-owned
+        // wizard, not the legacy one-device picker.
+        nav.push(Config.SetupWizard(prefillFromActiveConnection = false))
+        assertEquals(
+            Config.SetupWizard(prefillFromActiveConnection = false),
+            stack.value.active.configuration
+        )
     }
 
     @Test

@@ -440,6 +440,10 @@
     <string name="wizard_connect">Connect</string>
     <string name="wizard_connecting">Connecting…</string>
     <string name="wizard_connect_failed">Could not connect. The vehicle is saved and can be tried again from the list.</string>
+    <string name="wizard_leave_title">Leave setup?</string>
+    <string name="wizard_leave_text">Your draft will stay here. Open New vehicle to continue where you left off.</string>
+    <string name="wizard_leave_confirm">Leave</string>
+    <string name="wizard_leave_keep">Keep setting up</string>
     <string name="vehicle_diagram_title">Vehicle layout</string>
     <string name="diagram_phone">This phone</string>
     <string name="diagram_bluetooth_link">Bluetooth link</string>

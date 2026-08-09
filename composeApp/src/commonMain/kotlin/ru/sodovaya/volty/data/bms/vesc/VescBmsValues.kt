@@ -84,10 +84,10 @@ data class VescBmsFrame(
      *   capacity (`ant_bms.c:663`, `val->ah_cnt = remaining_ah`), which belongs
      *   in [BmsData.charge].
      *
-     * Nothing in the frame says which firmware produced it, and putting a
-     * lifetime total where a remaining charge is expected (or vice versa) is
-     * badly wrong in both directions — so [toBmsData] maps it to **neither**.
-     * A caller that knows which gateway it is talking to can map it itself.
+     * Nothing in the frame says which firmware produced it. The gateway path
+     * uses [toBmsData] only for the measured `nyxdash` producer, where the
+     * counter is remaining charge; a future direct stock-BMS path must choose
+     * an explicit producer policy before reusing that projection.
      */
     val ahCnt: Float,
     /** The BMS watt-hour counter, Wh. Same firmware-dependent meaning as [ahCnt]. */
@@ -217,9 +217,14 @@ data class VescBmsFrame(
      *   die and [tempCellsHighestC] is a maximum of values already in the list;
      *   neither is a pack thermistor and neither may trip an over-temperature
      *   alert (same rule as `VescProtocol.kt:115-118` for the ESC temperature).
-     * - `charge`/`capacity` are left unset: see [ahCnt] — the counter means
-     *   different things on stock VESC and on the user's head unit, and a
-     *   cumulative count rendered as "remaining Ah" would be badly wrong.
+     * - `charge` is the remaining Ah and `capacity` is recovered from that
+     *   remaining charge and the reported SoC. The user's nyxdash head unit
+     *   writes ANT's remaining Ah into `ah_cnt`; with SoC on the same frame,
+     *   `ah_cnt / soc` is the pack's design capacity. A frame without SoC
+     *   leaves capacity unknown rather than inventing it. This mapping is
+     *   intentionally for the VESC BMS gateway path used by nyxdash; stock
+     *   VESC firmware that uses `ah_cnt` as a lifetime counter must not be
+     *   routed through this projection without an explicit producer policy.
      * - `chargeEnabled`/`dischargeEnabled` are true because this frame carries
      *   no MOSFET state at all (`is_charge_allowed` exists in `bms_values` but
      *   is never serialised), and false would render as a fake "output off" —
@@ -228,18 +233,29 @@ data class VescBmsFrame(
      * [balancing], [noBmsDataYet] and the whole optional tail have no home in
      * `BmsData`; a caller that needs them must read them off the frame.
      */
-    fun toBmsData(): BmsData = BmsData(
-        voltage = vTot,
-        current = -iIn,
-        power = vTot * -iIn,
-        soc = (soc ?: 0f) * 100f,
-        socKnown = soc != null,
-        cellVoltages = cellVoltages,
-        temperatures = temperatures,
-        chargeEnabled = true,
-        dischargeEnabled = true,
-        isConnected = true
-    )
+    fun toBmsData(): BmsData {
+        val remainingAh = ahCnt.takeIf { it > 0f }
+        val socFraction = soc?.takeIf { it > 0f }
+        val capacityAh = if (remainingAh != null && socFraction != null) {
+            (remainingAh / socFraction).takeIf { it.isFinite() && it > 0f }
+        } else {
+            null
+        }
+        return BmsData(
+            voltage = vTot,
+            current = -iIn,
+            power = vTot * -iIn,
+            soc = (soc ?: 0f) * 100f,
+            socKnown = soc != null,
+            charge = remainingAh ?: 0f,
+            capacity = capacityAh ?: 0f,
+            cellVoltages = cellVoltages,
+            temperatures = temperatures,
+            chargeEnabled = true,
+            dischargeEnabled = true,
+            isConnected = true
+        )
+    }
 }
 
 /**

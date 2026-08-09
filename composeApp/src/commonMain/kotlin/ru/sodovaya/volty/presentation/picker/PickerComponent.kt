@@ -136,18 +136,24 @@ class DefaultPickerComponent(
                             s.copy(myInRange = myInRange)
                         }
                         dev.bmsType != null -> {
-                            if (s.otherNearby.any { it.address == dev.address }) s
-                            // A device first seen as undetected may later resolve to a type —
-                            // drop it from otherDevices so it can't appear in both lists.
-                            else s.copy(
-                                otherNearby = s.otherNearby + dev,
+                            // A device first seen as undetected may later resolve to a type.
+                            // Merge repeats in place so the row keeps its learned metadata but
+                            // always shows current proximity, and remove the old unknown row.
+                            s.copy(
+                                otherNearby = s.otherNearby.withScanHit(dev),
                                 otherDevices = s.otherDevices.filterNot { it.address == dev.address }
                             )
                         }
                         else -> {
-                            if (s.otherDevices.any { it.address == dev.address } ||
-                                s.otherNearby.any { it.address == dev.address }) s
-                            else s.copy(otherDevices = (s.otherDevices + dev).sortedByDescending { it.rssi })
+                            if (s.otherNearby.any { it.address == dev.address }) {
+                                s.copy(otherNearby = s.otherNearby.withScanHit(dev))
+                            } else {
+                                s.copy(
+                                    otherDevices = s.otherDevices
+                                        .withScanHit(dev)
+                                        .sortedByDescending { it.rssi }
+                                )
+                            }
                         }
                     }
                 }

@@ -676,6 +676,23 @@ fun VehicleDraft.removeController(key: String): VehicleDraft =
     if (!canRemoveSource || controllers.none { it.key == key }) this
     else copy(controllers = controllers.filterNot { it.key == key })
 
+/**
+ * Remove a pack while assembling a brand-new vehicle.
+ *
+ * Unlike the editor's [removePack], setup is allowed to return to an empty
+ * draft: a mistaken scan tap must be reversible before the rider has chosen a
+ * real source. Save/review still refuse that empty draft, so this does not
+ * weaken [Vehicle]'s one-source invariant.
+ */
+fun VehicleDraft.removeSetupPack(key: String): VehicleDraft =
+    if (packs.none { it.key == key }) this
+    else copy(packs = packs.filterNot { it.key == key })
+
+/** The controller counterpart of [removeSetupPack]. */
+fun VehicleDraft.removeSetupController(key: String): VehicleDraft =
+    if (controllers.none { it.key == key }) this
+    else copy(controllers = controllers.filterNot { it.key == key })
+
 fun VehicleDraft.movePack(from: Int, to: Int): VehicleDraft =
     copy(packs = packs.moved(from, to))
 

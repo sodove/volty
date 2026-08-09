@@ -295,21 +295,19 @@ data class GatewaySource(
  * less: two controllers each publishing a CAN-wide current sum would be
  * summed a second time by the fold.
  *
- * ## `ah_cnt` stays unmapped, deliberately
+ * ## `ah_cnt` and the gateway producer
  *
- * The battery frame's amp-hour counter means **remaining** Ah on the user's head
- * unit (`ant_bms.c:663` overwrites it with the pack's remaining capacity) and
- * **cumulative** Ah on stock VESC — the two destinations being
- * `BmsData.charge` and `BmsData.cycleCapacityAh` respectively. Nothing on the
- * wire says which firmware answered: an ANT-backed gateway zeroes every tail
- * field that might have identified it (`data_version`, `status`, the totals
- * block — spec §10.5), so "it looks like nyxdash" is not evidence. Guessing
- * either way produces a number that is plausible and wrong — a lifetime total
- * rendered as remaining range, or a remaining charge rendered as pack wear — so
- * [ru.sodovaya.volty.data.bms.vesc.VescBmsFrame.toBmsData] maps it to neither
- * and this protocol publishes that projection unchanged. The raw value stays on
- * the frame for a caller that knows its gateway; teaching it which one it is
- * belongs to the composer (a per-vehicle setting), not to a decoder guessing.
+ * An earlier revision deliberately left the amp-hour counter unmapped because
+ * stock VESC uses it as a cumulative counter while the rider's `nyxdash`
+ * gateway uses it as remaining Ah (`E:\\sodovaya\\nyxdash\\firmware\\components\\vesc_express\\src\\ant_bms.c`,
+ * where `remaining_ah` is assigned to `ah_cnt`). That retraction was correct
+ * while this protocol also accepted an unclassified direct stock-BMS producer.
+ * `VESC_BMS` is now only a hosted pack on this gateway path, and the only
+ * producer in the deployed vehicle is the measured `nyxdash` path. The frame
+ * projection therefore publishes remaining Ah and recovers design capacity
+ * from `remainingAh / soc`; a frame without SoC still leaves capacity unknown.
+ * If a direct stock-VESC-BMS link is added later, it must get an explicit
+ * producer policy before reusing this projection.
  * The same applies to the per-cell balancing flags: decoded, but with no
  * `BmsData` field to carry them, left unmapped rather than approximated.
  */

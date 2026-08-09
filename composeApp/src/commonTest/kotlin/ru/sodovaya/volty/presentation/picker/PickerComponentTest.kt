@@ -186,6 +186,21 @@ class PickerComponentTest {
     }
 
     @Test
+    fun `repeated picker hits update proximity and keep one row`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val scan = listOf(
+            device("SAME", BmsType.ANT_BMS, rssi = -82),
+            device("SAME", BmsType.ANT_BMS, rssi = -54)
+        )
+        val (c, _) = component(mode = "guest", scan = scan)
+        advanceUntilIdle()
+
+        assertEquals(1, c.state.value.otherNearby.size)
+        assertEquals(-54, c.state.value.otherNearby.single().rssi)
+        assertEquals(SignalProximity.WARMER, c.state.value.otherNearby.single().signalProximity())
+    }
+
+    @Test
     fun `onConnectWithType uses the chosen type, overriding the guess (guest mode)`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val unknown = device("CC:UNKNOWN", null)

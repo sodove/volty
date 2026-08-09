@@ -215,6 +215,26 @@ private fun scannedAddText(add: ScannedAdd): String = stringResource(
  */
 @Composable
 internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: VehicleEditComponent) {
+    CanDiscoveryContent(
+        canScanTarget = state.canScanTarget,
+        scan = state.canScan,
+        candidates = state.canCandidates,
+        onDiscover = component::onDiscoverCanDevices,
+        onAddCandidate = component::onAddCanCandidate,
+        onDismiss = component::onDismissCanScan
+    )
+}
+
+/** Shared renderer for editor and setup; every decision arrives as state/callbacks. */
+@Composable
+internal fun CanDiscoveryContent(
+    canScanTarget: String?,
+    scan: CanScanState,
+    candidates: List<CanCandidate>,
+    onDiscover: () -> Unit,
+    onAddCandidate: (CanCandidate, Boolean) -> Unit,
+    onDismiss: () -> Unit
+) {
     Text(
         text = stringResource(Res.string.can_section),
         fontSize = 11.sp,
@@ -222,7 +242,7 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
         color = MaterialTheme.colorScheme.onSurfaceVariant
     )
 
-    if (state.canScanTarget == null) {
+    if (canScanTarget == null) {
         // Says plainly what the screen does with no live connection: nothing,
         // and here is why. It does NOT render a dead button.
         Text(
@@ -233,7 +253,7 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
         return
     }
 
-    when (val scan = state.canScan) {
+    when (scan) {
         is CanScanState.Running -> Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
@@ -248,7 +268,7 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
         }
 
         else -> {
-            OutlinedButton(onClick = component::onDiscoverCanDevices) {
+            OutlinedButton(onClick = onDiscover) {
                 Text(stringResource(Res.string.can_scan_start), fontSize = 12.sp)
             }
             if (scan is CanScanState.Failed) {
@@ -268,10 +288,10 @@ internal fun CanDiscoverySection(state: VehicleEditComponent.State, component: V
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }
-                state.canCandidates.forEach { candidate ->
-                    CanCandidateRow(candidate, component)
+                candidates.forEach { candidate ->
+                    CanCandidateRow(candidate, onAddCandidate)
                 }
-                TextButton(onClick = component::onDismissCanScan) {
+                TextButton(onClick = onDismiss) {
                     Text(stringResource(Res.string.can_scan_dismiss), fontSize = 11.sp)
                 }
             }
@@ -301,7 +321,10 @@ private fun canScanRefusalText(refusal: CanScanRefusal): String = stringResource
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun CanCandidateRow(candidate: CanCandidate, component: VehicleEditComponent) {
+private fun CanCandidateRow(
+    candidate: CanCandidate,
+    onAddCandidate: (CanCandidate, Boolean) -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -340,11 +363,11 @@ private fun CanCandidateRow(candidate: CanCandidate, component: VehicleEditCompo
             // answers with ids and nothing else — so the rider says. The hosted
             // battery is the one candidate that can only be a battery.
             if (candidate.kind == CanCandidateKind.NODE) {
-                OutlinedButton(onClick = { component.onAddCanCandidate(candidate, asBattery = false) }) {
+                OutlinedButton(onClick = { onAddCandidate(candidate, false) }) {
                     Text(stringResource(Res.string.can_add_as_controller), fontSize = 12.sp)
                 }
             }
-            OutlinedButton(onClick = { component.onAddCanCandidate(candidate, asBattery = true) }) {
+            OutlinedButton(onClick = { onAddCandidate(candidate, true) }) {
                 Text(stringResource(Res.string.can_add_as_battery), fontSize = 12.sp)
             }
         }

@@ -556,6 +556,16 @@ class VescBmsValuesTest {
         assertTrue(d.isConnected)
     }
 
+    @Test fun nyxdash_remaining_ah_and_soc_expose_battery_capacity() {
+        // nyxdash writes ANT's remaining Ah into ah_cnt and carries the same
+        // pack's SoC in the VESC BMS frame.  18.2 Ah at 87.5% means a 20.8 Ah
+        // designed pack; this is the capacity the dashboard currently hides.
+        val d = assertNotNull(VescBmsValues.decode(frame())).toBmsData()
+
+        assertEquals(18.2f, d.charge, 0.001f)
+        assertEquals(20.8f, d.capacity, 0.01f)
+    }
+
     /**
      * `temp_ic` is the BMS chip's own die temperature and `temp_cells_highest`
      * is a derived maximum of temperatures already in the list — neither is a
@@ -605,6 +615,8 @@ class VescBmsValuesTest {
         val d = assertNotNull(VescBmsValues.decode(frame().copyOf(endOfMandatory))).toBmsData()
         assertFalse(d.socKnown)
         assertEquals(0f, d.soc)
+        assertEquals(18.2f, d.charge, 0.001f)
+        assertEquals(0f, d.capacity, 0.001f)
     }
 
     /** A genuinely flat pack reports 0 % WITH `socKnown = true`. */
@@ -612,6 +624,8 @@ class VescBmsValuesTest {
         val d = assertNotNull(VescBmsValues.decode(frame(socRaw = 0))).toBmsData()
         assertTrue(d.socKnown)
         assertEquals(0f, d.soc)
+        assertEquals(18.2f, d.charge, 0.001f)
+        assertEquals(0f, d.capacity, 0.001f)
     }
 
 }

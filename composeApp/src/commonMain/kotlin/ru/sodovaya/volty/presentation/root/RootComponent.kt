@@ -49,6 +49,7 @@ import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
 import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.draftOf
+import ru.sodovaya.volty.presentation.vehicle.liveLinkAddresses
 import ru.sodovaya.volty.presentation.vehicle.wizard.DefaultSetupWizardComponent
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardComponent
 import ru.sodovaya.volty.presentation.welcome.DefaultWelcomeComponent
@@ -58,6 +59,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
@@ -317,6 +319,20 @@ internal fun leaveVehicleEdit(
     if (stackSize > 1) navigation.pop() else navigation.replaceAll(home)
 }
 
+/**
+ * Put home in front of setup without destroying setup itself.
+ *
+ * A confirmed leave is not a second kind of discard: the wizard draft remains
+ * in its retained Decompose child and every create entry relocates that same
+ * configuration back to the front through [stackAfterGoTo].
+ */
+internal fun leaveSetupWizard(
+    navigation: StackNavigation<Config>,
+    home: Config
+) {
+    navigation.navigate { stack -> stackAfterGoTo(stack, home) }
+}
+
 class DefaultRootComponent(
     componentContext: ComponentContext
 ) : RootComponent, ComponentContext by componentContext, KoinComponent {
@@ -410,6 +426,10 @@ class DefaultRootComponent(
         leaveVehicleEdit(nav, stack.value.items.size, homeConfig())
     }
 
+    private fun leaveActiveSetupWizard() {
+        leaveSetupWizard(nav, homeConfig())
+    }
+
     override fun onBack() {
         val current = stack.value.active.configuration
         // Graph and Settings are leaves off a home screen (Ride or Dashboard) —
@@ -468,14 +488,12 @@ class DefaultRootComponent(
             is Config.Welcome -> RootComponent.Child.Welcome(
                 DefaultWelcomeComponent(
                     componentContext = context,
-                    // Welcome is only ever shown when permissions are already granted (gated by computeInitialConfig),
-                    // so these buttons can route directly to the Picker without re-checking.
-                    // push(), not replaceAll(): Welcome stays underneath so the
-                    // add-picker's Cancel / system back (nav.pop()) has
-                    // something to reveal instead of stranding the user — see
-                    // the matching fix on Config.Picker's onAddNewBatteryRequested
-                    // below, which had the identical dead-end bug.
-                    onAddBatteryRequested = { goTo(Config.Picker(mode = "add")) },
+                    // The first saved vehicle must start in the same draft-owned
+                    // setup wizard as every later create entry. The picker is a
+                    // one-tap connection tool, not the vehicle constructor.
+                    onAddBatteryRequested = {
+                        goTo(Config.SetupWizard(prefillFromActiveConnection = false))
+                    },
                     onQuickConnectRequested = { replaceAll(Config.Picker(mode = "guest")) },
                     onTryDemoRequested = { profile -> startDemo(profile) }
                 )
@@ -585,9 +603,15 @@ class DefaultRootComponent(
                         initialDraft = prefillVehicle?.let(::draftOf) ?: VehicleDraft(),
                         initialName = initialName,
                         scanAll = bmsRepository::scanAll,
+                        canDiscovery = get<CanDiscovery>(),
+                        liveAddresses = combine(
+                            bmsRepository.activeVehicle,
+                            bmsRepository.connectionState,
+                            ::liveLinkAddresses
+                        ),
                         saveVehicle = vehicleRepository::upsert,
                         connectVehicle = bmsRepository::connect,
-                        onCancelled = ::leaveActiveComposer,
+                        onCancelled = ::leaveActiveSetupWizard,
                         onShowVehicleList = { replaceAll(Config.Picker(mode = "cold")) },
                         onConnected = { replaceAll(homeConfig()) }
                     )

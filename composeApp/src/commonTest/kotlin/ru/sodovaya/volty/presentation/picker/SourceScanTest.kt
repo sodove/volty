@@ -71,6 +71,31 @@ class SourceScanTest {
         assertEquals(SignalProximity.COLDER, device(rssi = -71).signalProximity())
     }
 
+    /**
+     * Keeping the first RSSI recreates the field defect: walking toward the
+     * same box never changes the qualitative warmer/colder cue. The later hit
+     * may carry less detector metadata, so proximity must refresh without
+     * forgetting facts the scan already earned.
+     */
+    @Test
+    fun `a repeated scan hit refreshes RSSI without duplicating or losing detection`() {
+        val cold = device(
+            address = "AA:BB",
+            name = "ANT",
+            bmsType = BmsType.ANT_BMS,
+            rssi = -82
+        )
+        val warmWithoutMetadata = device(address = "AA:BB", rssi = -54)
+
+        val folded = listOf(cold).withScanHit(warmWithoutMetadata)
+
+        assertEquals(1, folded.size)
+        assertEquals(-54, folded.single().rssi)
+        assertEquals(SignalProximity.WARMER, folded.single().signalProximity())
+        assertEquals("ANT", folded.single().name)
+        assertEquals(BmsType.ANT_BMS, folded.single().bmsType)
+    }
+
     // ------------------------------------------------------------------
     // Roles (G §7)
     // ------------------------------------------------------------------
@@ -241,16 +266,15 @@ class SourceScanTest {
     }
 
     /**
-     * A BLE scan re-reports the same peripheral continuously. A fold that
-     * rewrote the list every time would churn the sheet under the rider's
-     * finger; identity is asserted, not just equality, so a rewrite that
-     * happened to produce an equal list still fails.
+     * An exactly identical advertisement needs no state publication. Identity
+     * is asserted, not just equality, so an unnecessary rewrite still fails;
+     * the separate RSSI test pins the intentional repeat update.
      */
     @Test
     fun `a repeat that adds nothing is not written`() {
         val start = listOf(device(address = "A", name = "uBox", controllerType = ControllerType.VESC))
         val out = start.withScanHit(
-            device(address = "A", name = "uBox", controllerType = ControllerType.VESC, rssi = -90)
+            device(address = "A", name = "uBox", controllerType = ControllerType.VESC)
         )
         assertSame(start, out)
     }

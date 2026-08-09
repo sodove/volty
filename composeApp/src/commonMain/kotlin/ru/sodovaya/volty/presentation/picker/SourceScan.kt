@@ -28,12 +28,11 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
  * `vehicle/` because it is about *devices a scan found*, not about a draft; the
  * composer imports it, the way it imports the repository's scan.
  *
- * **`DefaultPickerComponent`'s own three-list routing is deliberately left
- * alone.** It answers a question this file does not — saved vehicle vs detected
- * device vs unrecognised device, with the connected peripheral seeded in
- * because it stops advertising — and it is the pinned battery path. Rewriting it
- * to run through [withScanHit] would be a change to that path for the sake of
- * sharing eleven lines.
+ * **`DefaultPickerComponent` keeps its own three-list routing**, because it
+ * answers a question this file does not — saved vehicle vs detected device vs
+ * unrecognised device, with the connected peripheral seeded in because it
+ * stops advertising. Each routed list does use [withScanHit], so repeat
+ * advertisements share the same metadata/RSSI merge rule as setup.
  *
  * ## Everything here is pure
  *
@@ -211,12 +210,11 @@ fun DiscoveredDevice.addBmsType(): BmsType =
  * Fold one scan hit into the list a sheet is showing.
  *
  * A BLE scan re-reports the same peripheral continuously, so the list is keyed
- * by address. A repeat **replaces** the stored entry only when the new hit
- * carries detection the old one lacked — a device is often seen first as an
- * unrecognised advertisement and only later with its service UUIDs, and a list
- * that kept the first sighting would offer the wrong adds forever. A repeat that
- * adds nothing is dropped rather than written, so a row does not re-order or
- * flicker its RSSI on every advertisement.
+ * by address. A repeat refreshes its RSSI in place while merging nullable
+ * identity/detection fields: advertisements from one peripheral do not always
+ * carry the same payload, so a sparse later hit must not erase a type learned
+ * earlier, while a stronger current RSSI must reach the rider instead of
+ * freezing at first sight.
  *
  * Order is first-appearance and never re-sorted: rows a rider is reaching for
  * must not move under their finger. (The picker sorts its *unknown* list by
@@ -227,9 +225,12 @@ fun List<DiscoveredDevice>.withScanHit(hit: DiscoveredDevice): List<DiscoveredDe
     val at = indexOfFirst { it.address == hit.address }
     if (at < 0) return this + hit
     val old = this[at]
-    val improved = (old.bmsType == null && hit.bmsType != null) ||
-        (old.controllerType == null && hit.controllerType != null) ||
-        (old.name == null && hit.name != null)
-    if (!improved) return this
-    return toMutableList().also { it[at] = hit }
+    val merged = hit.copy(
+        name = hit.name ?: old.name,
+        bmsType = hit.bmsType ?: old.bmsType,
+        controllerType = hit.controllerType ?: old.controllerType,
+        knownVehicle = hit.knownVehicle ?: old.knownVehicle
+    )
+    if (merged == old) return this
+    return toMutableList().also { it[at] = merged }
 }
