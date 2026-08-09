@@ -219,20 +219,20 @@ handshake and poll command lists, and nothing else spoke FFE0. Tasks 1 and 2 mak
 *type* of an FFE0 device changeable by remembered state, which is exactly the mechanism that
 could point a command-sending protocol at a wheel.
 
-- [ ] **Step 1: Write the failing test.** A remembered or corrected type must never cause a
+- [x] **Step 1: Write the failing test.** A remembered or corrected type must never cause a
       write to FFE1 on a device whose live advertisement says Begode. State the rule where
       the write would happen, not only where the type is chosen — a guard in the chooser is
       a guard the next chooser will not have.
 
-- [ ] **Step 2: Run it and watch it fail.**
+- [x] **Step 2: Run it and watch it fail.**
 
-- [ ] **Step 3: Implement the guard at the write.**
+- [x] **Step 3: Implement the guard at the write.**
 
-- [ ] **Step 4: Sweep it specifically.** This is the one guard in this plan whose absence is
+- [x] **Step 4: Sweep it specifically.** This is the one guard in this plan whose absence is
       not visible in any readout: mutate it out and confirm a test dies. A guard that cannot
       be killed is not a guard.
 
-- [ ] **Step 5: Full suite, commit.**
+- [x] **Step 5: Full suite, commit.**
 
 ```bash
 git commit -m "fix(begode): a remembered type must not become a write to the wheel"

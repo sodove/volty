@@ -5,6 +5,7 @@ import com.juul.kable.State
 import com.juul.kable.WriteType
 import com.juul.kable.characteristicOf
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.CanBusScanner
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.SerialPollSource
@@ -52,6 +53,8 @@ internal class ConnectionSession(
     private val peripheral: Peripheral,
     private val protocol: BmsProtocol,
     private val vehicle: Vehicle?,
+    /** Live advertisement evidence wins over any remembered type correction. */
+    private val liveBegodeAdvertisement: Boolean = false,
     private val connectionState: MutableStateFlow<ConnectionState>,
     /**
      * Called for every parsed sample. The session does not own where samples
@@ -108,7 +111,21 @@ internal class ConnectionSession(
     suspend fun scanCanBus(): List<Int>? {
         val scanner = protocol as? CanBusScanner ?: return null
         val ch = writeChar ?: return null
-        return scanner.scanCanBus { cmd -> peripheral.write(ch, cmd, WriteType.WithoutResponse) }
+        return scanner.scanCanBus { cmd -> writeCommand(ch, cmd) }
+    }
+
+    /**
+     * The last write guard for the one characteristic that can reconfigure a
+     * wheel. A remembered type may select a command-sending protocol for a
+     * device whose fresh advertisement still identifies Begode; the write
+     * path, not the picker, is the safety boundary.
+     */
+    private suspend fun writeCommand(
+        characteristic: com.juul.kable.Characteristic,
+        command: ByteArray
+    ) {
+        if (!shouldWriteProtocolCommand(protocol, liveBegodeAdvertisement)) return
+        peripheral.write(characteristic, command, WriteType.WithoutResponse)
     }
 
     /**
@@ -210,7 +227,7 @@ internal class ConnectionSession(
                     onSubscription = {
                         delay(BleConfig.handshakeWarmupMs)
                         for (cmd in protocol.handshakeCommands()) {
-                            peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
+                            writeCommand(writeChar, cmd)
                             delay(BleConfig.writeSpacingMs.coerceAtLeast(100L))
                         }
                     }
@@ -255,7 +272,7 @@ internal class ConnectionSession(
             pollingJob = parentScope.launch {
                 try {
                     serial.runPollLoop { cmd ->
-                        peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
+                            writeCommand(writeChar, cmd)
                     }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
@@ -273,7 +290,7 @@ internal class ConnectionSession(
                     while (isActive) {
                         try {
                             for (cmd in pollCmds) {
-                                peripheral.write(writeChar, cmd, WriteType.WithoutResponse)
+                                writeCommand(writeChar, cmd)
                                 delay(BleConfig.writeSpacingMs)
                             }
                         } catch (e: kotlinx.coroutines.CancellationException) {
@@ -363,6 +380,12 @@ internal class ConnectionSession(
         }
     }
 }
+
+/** Pure seam for the write boundary; tests can kill either half independently. */
+internal fun shouldWriteProtocolCommand(
+    protocol: BmsProtocol,
+    liveBegodeAdvertisement: Boolean
+): Boolean = !liveBegodeAdvertisement && protocol !is BegodeProtocol
 
 /**
  * Routes one notification's worth of per-pack protocol state to two consumers

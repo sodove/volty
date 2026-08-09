@@ -2247,11 +2247,16 @@ class KableBmsRepository private constructor(
             }
 
             val peripheral = Peripheral(advertisement)
+            val liveBegodeAdvertisement = BmsTypeDetector.detect(
+                name = advertisement.name,
+                serviceUuids = advertisement.uuids.map { it.toString().lowercase() }
+            ) == BmsType.BEGODE
             val session = ConnectionSession(
                 parentScope = scope,
                 peripheral = peripheral,
                 protocol = protocol,
                 vehicle = vehicle,
+                liveBegodeAdvertisement = liveBegodeAdvertisement,
                 connectionState = _connectionState,
                 onSample = onSample,
                 onMotionSample = makeLinkOnMotionSample(link.spec, channel),
