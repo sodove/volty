@@ -134,25 +134,33 @@ class KellyProtocol(
             if (receiveBuffer.size < packetSize) return
             val raw = buffered.copyOfRange(0, packetSize)
             receiveBuffer.trimLeading(packetSize)
-            acceptResponse(raw)
+            if (acceptResponse(raw)) {
+                // A response belongs to exactly one armed request. Any bytes
+                // coalesced after it arrived while that request was still
+                // armed have no request identity once it is resolved, so they
+                // must not survive to the next request.
+                receiveBuffer.reset()
+                return
+            }
         }
     }
 
-    private fun acceptResponse(raw: ByteArray) {
-        val expected = pending?.command ?: return
+    /** True only when [raw] was accepted and resolved the armed request. */
+    private fun acceptResponse(raw: ByteArray): Boolean {
+        val expected = pending?.command ?: return false
         val packet = EtsPacketBuilder.parseRxResponse(raw, expected).getOrElse {
             rejectMonitorCycle()
-            return
+            return false
         }
         if (packet.dataLength != EtsPacketBuilder.MAX_DATA_LENGTH) {
             rejectMonitorCycle()
-            return
+            return false
         }
 
         val index = MonitorDefinitions.MONITOR_COMMANDS.indexOf(expected)
         if (index < 0 || index != nextMonitorIndex()) {
             rejectMonitorCycle()
-            return
+            return false
         }
         monitorPackets[index] = packet.data
 
@@ -162,6 +170,7 @@ class KellyProtocol(
             current.waiter.complete(Unit)
         }
         if (monitorPackets.all { it != null }) publishMonitor()
+        return true
     }
 
     private fun nextMonitorIndex(): Int = monitorPackets.indexOfFirst { it == null }

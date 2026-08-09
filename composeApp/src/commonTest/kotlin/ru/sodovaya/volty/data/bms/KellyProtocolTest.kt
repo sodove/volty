@@ -113,6 +113,34 @@ class KellyProtocolTest {
     }
 
     @Test
+    fun `coalesced stale tail after a valid reply cannot contaminate the next armed response`() = runTest {
+        val protocol = KellyProtocol()
+        val harness = PollHarness(protocol, backgroundScope)
+        try {
+            val staleMonitor = monitorData().also {
+                it[18] = 0
+                it[19] = 1
+                it[20] = 0
+                it[21] = 2
+            }
+            val stale = monitorResponse(EtsCommand.USER_MONITOR2, staleMonitor, 16)
+            harness.expect(EtsCommand.USER_MONITOR1)
+            protocol.onNotification(
+                monitorResponse(EtsCommand.USER_MONITOR1, monitorData(), 0) + stale.copyOfRange(0, 7)
+            )
+
+            val fresh = monitorData()
+            harness.respond(EtsCommand.USER_MONITOR2, fresh, 16)
+            harness.respond(EtsCommand.USER_MONITOR3, fresh, 32)
+
+            assertEquals(1_500f, protocol.latestMotion(0)?.eRpm)
+            assertEquals(300f, protocol.latestMotion(0)?.motorCurrentA)
+        } finally {
+            harness.stop()
+        }
+    }
+
+    @Test
     fun `serial poll waits for the first monitor response before writing the second`() = runTest {
         val protocol = KellyProtocol()
         val harness = PollHarness(protocol, backgroundScope)
