@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
+import ru.sodovaya.volty.data.bms.KellyProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
@@ -131,8 +132,13 @@ fun controllerMotionProtocol(
     //    too. If a later part lets a rider add a second controller, it must
     //    either refuse this pairing in the plan or grow a Begode multiplexer.
     ProtocolKind.BEGODE -> BegodeProtocol(cellCount = cellCount)
-    // No motion decoder yet — Parts E (FarDriver) and H (Kelly).
-    ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
+    // Kelly's monitor packets carry controller telemetry over the same NUS
+    // transport as a VESC, but the ETS wire protocol is its own decoder.
+    // It deliberately receives the same controller-only decisions as VESC:
+    // the derived pack is optional and wheel geometry is needed for motion.
+    ProtocolKind.KELLY -> KellyProtocol(deriveBattery = deriveBattery, motor = motor)
+    // No motion decoder yet.
+    ProtocolKind.FARDRIVER -> null
     // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
     ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null

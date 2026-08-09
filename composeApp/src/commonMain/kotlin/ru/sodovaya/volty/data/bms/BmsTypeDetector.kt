@@ -91,6 +91,13 @@ object BmsTypeDetector {
             name.contains("VESC", ignoreCase = true) ||
                 name.startsWith("uBox", ignoreCase = true) ||
                 name.startsWith("ubox", ignoreCase = true) -> ControllerType.VESC
+            // Kelly's Nordic-UART module is shared with generic NUS devices,
+            // so only its observed product-family names are enough to propose
+            // Kelly. A service UUID alone remains the conservative VESC
+            // candidate handled by detectController.
+            name.startsWith("Kelly", ignoreCase = true) ||
+                name.startsWith("KLS", ignoreCase = true) ||
+                name.startsWith("KBLS", ignoreCase = true) -> ControllerType.KELLY
             else -> null
         }
     }

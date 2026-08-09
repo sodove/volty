@@ -19,6 +19,16 @@ class BmsTypeDetectorVescTest {
         assertEquals(ControllerType.VESC, BmsTypeDetector.detectController("uBox-250", emptyList()))
     }
 
+    @Test fun kelly_kls_style_names_are_kelly_candidates_without_the_service_uuid() {
+        listOf("Kelly Controller", "KLS-7240", "KBLS-8080").forEach { name ->
+            assertEquals(ControllerType.KELLY, BmsTypeDetector.detectController(name, emptyList()), name)
+        }
+    }
+
+    @Test fun generic_nordic_uart_devices_remain_vesc_candidates_not_kelly() {
+        assertEquals(ControllerType.VESC, BmsTypeDetector.detectController("NUS", nus))
+    }
+
     @Test fun a_battery_is_not_reported_as_a_controller() {
         assertNull(BmsTypeDetector.detectController("ANT-BLE24", listOf("0000ffe0-0000-1000-8000-00805f9b34fb")))
     }
@@ -40,5 +50,10 @@ class BmsTypeDetectorVescTest {
         // the known-BMS bail-out in detectController must win first.
         assertEquals(BmsType.BEGODE, BmsTypeDetector.detect("GW-VESC", emptyList()))
         assertNull(BmsTypeDetector.detectController("GW-VESC", emptyList()))
+    }
+
+    @Test fun a_known_battery_name_wins_over_a_kelly_candidate() {
+        assertEquals(BmsType.ANT_BMS, BmsTypeDetector.detect("ANT-Kelly", emptyList()))
+        assertNull(BmsTypeDetector.detectController("ANT-Kelly", emptyList()))
     }
 }

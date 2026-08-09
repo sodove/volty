@@ -606,23 +606,19 @@ class VehicleComposerTest {
 
     @Test
     fun `a controller volty cannot decode yet is reported but not blocked`() {
-        val d = VehicleDraft()
-            .addController(ControllerType.FARDRIVER, "FD:01")
-            .addController(ControllerType.KELLY, "KL:01")
+        val d = VehicleDraft().addController(ControllerType.FARDRIVER, "FD:01")
         assertEquals(
-            listOf(
-                ComposerIssue.NoControllerDecoder(d.controllers[0].key, ControllerType.FARDRIVER),
-                ComposerIssue.NoControllerDecoder(d.controllers[1].key, ControllerType.KELLY)
-            ),
+            listOf(ComposerIssue.NoControllerDecoder(d.controllers.single().key, ControllerType.FARDRIVER)),
             validate(d)
         )
-        assertTrue(validate(d).none { it.blocking }, "a missing decoder is Parts E/H's job, not a config error")
+        assertTrue(validate(d).none { it.blocking }, "a missing decoder is the FarDriver work's job, not a config error")
     }
 
     @Test
     fun `a decodable controller type is not reported`() {
         val d = VehicleDraft()
             .addController(ControllerType.VESC, "VE:01")
+            .addController(ControllerType.KELLY, "KL:01")
             .addController(ControllerType.BEGODE, "WH:01")
         assertEquals(emptyList(), validate(d))
     }

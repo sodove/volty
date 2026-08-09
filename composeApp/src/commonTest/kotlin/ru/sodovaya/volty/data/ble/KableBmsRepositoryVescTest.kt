@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.ble
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
+import ru.sodovaya.volty.data.bms.KellyProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
@@ -223,11 +224,11 @@ class KableBmsRepositoryVescTest {
 
     /** Guards the test above from passing vacuously with everything refused. */
     @Test
-    fun `exactly two controller kinds decode motion today`() {
+    fun `exactly three controller kinds decode motion today`() {
         assertEquals(
-            listOf(ControllerType.VESC, ControllerType.BEGODE),
+            listOf(ControllerType.VESC, ControllerType.KELLY, ControllerType.BEGODE),
             ControllerType.entries.filter { controllerMotionSupported(it) },
-            "Part D Task 4 added BEGODE; FarDriver (E) and Kelly (H) are still to come"
+            "Part H Task 3 wires Kelly through the same coverage decision as VESC and Begode"
         )
     }
 
@@ -278,6 +279,46 @@ class KableBmsRepositoryVescTest {
         // The controller's own motor config must reach the protocol: with no
         // wheel diameter the GET_VALUES fallback could not derive a speed.
         assertEquals(VescProtocol.NUS_SERVICE, protocol.uuids.serviceUuid)
+    }
+
+    @Test
+    fun `a Kelly controller-only vehicle plans a derived pack and builds its motion protocol`() = repoTest { repo ->
+        val v = controllerOnly(ControllerType.KELLY)
+
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val spec = repo.linkSpecsForTest().single()
+        assertEquals(ProtocolKind.KELLY, spec.protocolKind)
+        assertEquals(listOf(OwnedSource(0)), spec.ownedPacks, "a controller-only Kelly has one derived pack slot")
+        val protocol = assertIs<KellyProtocol>(repo.createProtocolForTest(spec, v))
+        assertIs<MotionSource>(protocol)
+        assertEquals(1, protocol.packCount)
+    }
+
+    @Test
+    fun `a Kelly controller beside a smart BMS does not create a duplicate derived pack`() = repoTest { repo ->
+        val v = Vehicle(
+            id = "v-kelly-with-bms",
+            name = "Scooter",
+            iconKey = "scooter",
+            packs = listOf(Pack(index = 0, label = "Main", bmsType = BmsType.JK_BMS, bmsAddress = ADDR)),
+            controllers = listOf(
+                Controller(
+                    index = 0, label = "ESC", controllerType = ControllerType.KELLY,
+                    address = CTRL_ADDR, motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254),
+                    providesDerivedBattery = false
+                )
+            ),
+            topology = PackTopology.PARALLEL,
+            chemistry = Chemistry.LI_ION_NMC,
+            createdAt = Instant.fromEpochSeconds(0L)
+        )
+        repo.installLinksForTest(v, v.primaryAddress, type = null)
+
+        val controllerSpec = repo.linkSpecsForTest().single { it.address == CTRL_ADDR }
+        assertTrue(controllerSpec.ownedPacks.isEmpty(), "the smart BMS already owns the only pack")
+        val protocol = assertIs<KellyProtocol>(repo.createProtocolForTest(controllerSpec, v))
+        assertEquals(0, protocol.packCount, "the Kelly must not publish a second derived copy of the smart BMS")
     }
 
     @Test

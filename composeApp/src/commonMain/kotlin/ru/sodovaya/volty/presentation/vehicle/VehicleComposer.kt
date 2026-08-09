@@ -908,11 +908,11 @@ sealed interface ComposerIssue {
     }
 
     /**
-     * A controller whose type volty has no motion decoder for (FarDriver,
-     * Kelly). `controllerMotionProtocol` returns null, `createProtocol` falls
+     * A controller whose type volty has no motion decoder for (FarDriver).
+     * `controllerMotionProtocol` returns null, `createProtocol` falls
      * through to `ProtocolKind.toBmsType()` and that **throws** — taking down
-     * the whole connect, not just this link. Advisory because Parts E and H are
-     * the fix, and the picker refuses these types for the same reason
+     * the whole connect, not just this link. Advisory because the future
+     * FarDriver decoder is the fix, and the picker refuses the type for the same reason
      * ([controllerMotionSupported] is the single authority both read).
      */
     data class NoControllerDecoder(val sourceKey: String, val controllerType: ControllerType) : ComposerIssue {

@@ -447,12 +447,12 @@ class PickerComponentTest {
         // The gate is DERIVED from `controllerMotionProtocol`, so this list
         // moves on its own as parts land — Part D Task 4 gave BEGODE a branch
         // (a wheel is a controller over its battery link) and the refusal went
-        // away with no change in the picker. FarDriver is Part E's, Kelly is
-        // Part H's.
-        listOf(ControllerType.VESC, ControllerType.BEGODE).forEach { t ->
+        // away with no change in the picker. Part H Task 3 adds Kelly through
+        // the same data-layer coverage function.
+        listOf(ControllerType.VESC, ControllerType.KELLY, ControllerType.BEGODE).forEach { t ->
             assertEquals(null, unsupportedControllerReason(t), "$t is connectable and must not be refused")
         }
-        listOf(ControllerType.FARDRIVER, ControllerType.KELLY).forEach { t ->
+        listOf(ControllerType.FARDRIVER).forEach { t ->
             val reason = unsupportedControllerReason(t)
             assertTrue(
                 reason != null && reason.contains(t.label),
