@@ -119,7 +119,10 @@ fun GraphScreen(component: GraphComponent) {
                         Text(
                             text = stringResource(Res.string.graph_history),
                             modifier = Modifier
-                                .clickable { showHistory = true }
+                                .clickable {
+                                    component.onHistoryRequested()
+                                    showHistory = true
+                                }
                                 .padding(horizontal = 6.dp, vertical = 8.dp),
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold,
@@ -144,7 +147,7 @@ fun GraphScreen(component: GraphComponent) {
             WindowPicker(state.window, component::onWindowSelected)
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 280.dp),
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier.fillMaxWidth().weight(1f),
                 contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp)
@@ -206,7 +209,8 @@ fun GraphScreen(component: GraphComponent) {
         ComparisonDialog(
             state = state,
             onDismiss = { showComparison = false },
-            onCompare = component::onComparisonRequested
+            onCompare = component::onComparisonRequested,
+            onSelectPair = component::onComparisonPointSelected
         )
     }
 }
@@ -215,7 +219,8 @@ fun GraphScreen(component: GraphComponent) {
 private fun ComparisonDialog(
     state: GraphComponent.State,
     onDismiss: () -> Unit,
-    onCompare: (GraphMetric, GraphMetric) -> Unit
+    onCompare: (GraphMetric, GraphMetric) -> Unit,
+    onSelectPair: (Float) -> Unit
 ) {
     var xMetric by remember(state.comparison) {
         mutableStateOf(state.comparison?.xMetric ?: state.visibleMetrics.firstOrNull() ?: GraphMetric.VOLTAGE)
@@ -247,7 +252,7 @@ private fun ComparisonDialog(
                     if (comparison.pairs.isEmpty()) {
                         Text(stringResource(Res.string.graph_no_data))
                     } else {
-                        XYGraph(comparison)
+                        XYGraph(comparison, onSelectPair)
                     }
                 }
             }
@@ -257,7 +262,7 @@ private fun ComparisonDialog(
 }
 
 @Composable
-private fun XYGraph(comparison: ComparisonState) {
+private fun XYGraph(comparison: ComparisonState, onSelectPair: (Float) -> Unit) {
     val pairs = comparison.pairs
     val xValues = pairs.map { it.x.value }
     val yValues = pairs.map { it.y.value }
@@ -268,7 +273,17 @@ private fun XYGraph(comparison: ComparisonState) {
     val xRange = maxOf(xMax - xMin, 0.001f)
     val yRange = maxOf(yMax - yMin, 0.001f)
     val lineColor = MaterialTheme.colorScheme.primary
-    Canvas(Modifier.fillMaxWidth().height(180.dp)) {
+    Canvas(
+        Modifier
+            .fillMaxWidth()
+            .height(180.dp)
+            .pointerInput(comparison) {
+                detectTapGestures { offset ->
+                    val fraction = (offset.x / size.width).coerceIn(0f, 1f)
+                    onSelectPair(xMin + xRange * fraction)
+                }
+            }
+    ) {
         pairs.forEach { pair ->
             val x = ((pair.x.value - xMin) / xRange) * size.width
             val y = size.height - ((pair.y.value - yMin) / yRange) * size.height
@@ -355,7 +370,11 @@ private fun GraphCard(
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(graphMetricLabel(metric), fontWeight = FontWeight.SemiBold)
-                Text(metric.source.name, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(
+                    stringResource(metricGroupResource(metric)),
+                    fontSize = 10.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
             IconButton(onClick = onRemove) {
                 Icon(Icons.Default.Close, contentDescription = stringResource(Res.string.graph_remove))
@@ -373,8 +392,9 @@ private fun GraphCard(
                     fontWeight = FontWeight.Medium
                 )
                 Text(
-                    if (selectedTimestamp == null) stringResource(Res.string.graph_now)
-                    else stringResource(Res.string.graph_selected_time),
+                    selectedTimestamp?.let {
+                        "${stringResource(Res.string.graph_selected_time)}: ${formatTimestamp(it)}"
+                    } ?: stringResource(Res.string.graph_now),
                     fontSize = 10.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -553,6 +573,16 @@ private fun metricResource(metric: GraphMetric): StringResource = when (metric) 
     GraphMetric.ESC_TEMPERATURE -> Res.string.graph_esc_temp
     GraphMetric.MOTOR_TEMPERATURE -> Res.string.graph_motor_temp
 }
+
+private fun metricGroupResource(metric: GraphMetric): StringResource = when (metric) {
+    GraphMetric.CELL_MIN_V, GraphMetric.CELL_MAX_V, GraphMetric.CELL_DELTA_MV -> Res.string.graph_cells_group
+    GraphMetric.SOC, GraphMetric.POWER, GraphMetric.CURRENT, GraphMetric.VOLTAGE, GraphMetric.TEMPERATURE ->
+        Res.string.graph_battery_group
+    else -> Res.string.graph_motion_group
+}
+
+private fun formatTimestamp(timestamp: kotlin.time.Instant): String =
+    timestamp.toString().removeSuffix("Z").replace('T', ' ').take(19)
 
 private fun formatVal(value: Float?, metric: GraphMetric): String {
     if (value == null) return "—"

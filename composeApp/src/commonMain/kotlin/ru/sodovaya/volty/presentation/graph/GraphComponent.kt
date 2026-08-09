@@ -42,7 +42,9 @@ interface GraphComponent {
     fun onWindowSelected(window: GraphWindow)
     fun onTimestampSelected(timestamp: Instant?) {}
     fun onComparisonRequested(x: GraphMetric, y: GraphMetric) {}
+    fun onComparisonPointSelected(xValue: Float) {}
     fun onRideSelected(rideId: String?) {}
+    fun onHistoryRequested() {}
     fun onBack()
 
     data class State(
@@ -271,6 +273,13 @@ class DefaultGraphComponent(
         }
     }
 
+    override fun onComparisonPointSelected(xValue: Float) {
+        _state.update { current ->
+            val comparison = current.comparison ?: return@update current
+            current.copy(comparison = comparison.copy(selectedPair = nearestPair(comparison.pairs, xValue)))
+        }
+    }
+
     override fun onRideSelected(rideId: String?) {
         scope.launch {
             if (rideId == null) {
@@ -297,6 +306,10 @@ class DefaultGraphComponent(
                 )
             }
         }
+    }
+
+    override fun onHistoryRequested() {
+        scope.launch { loadHistory() }
     }
 
     override fun onWindowSelected(window: GraphWindow) {
