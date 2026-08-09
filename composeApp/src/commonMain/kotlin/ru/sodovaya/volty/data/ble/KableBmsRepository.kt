@@ -11,6 +11,7 @@ import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
+import ru.sodovaya.volty.data.history.RideTelemetryRecorder
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
@@ -47,6 +48,8 @@ import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.repository.NoOpRideHistoryRepository
+import ru.sodovaya.volty.domain.repository.RideHistoryRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import ru.sodovaya.volty.domain.stats.MovingAverage
 import ru.sodovaya.volty.domain.stats.PackAggregator
@@ -130,17 +133,20 @@ class KableBmsRepository private constructor(
      * actually drives the reconnect / watchdog loops.
      */
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
+    private val rideHistoryRepository: RideHistoryRepository,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource {
 
     /** Production constructor used by Koin. */
     constructor(
         vehicleRepository: VehicleRepository,
         serviceController: ru.sodovaya.volty.service.ServiceController,
+        rideHistoryRepository: RideHistoryRepository,
     ) : this(
         vehicleRepository = vehicleRepository,
         serviceStart = { serviceController.start() },
         serviceStop = { serviceController.stop() },
         coroutineContext = Dispatchers.Default,
+        rideHistoryRepository = rideHistoryRepository,
     )
 
     internal companion object {
@@ -314,11 +320,13 @@ class KableBmsRepository private constructor(
             serviceStart: () -> Unit,
             serviceStop: () -> Unit,
             coroutineContext: kotlin.coroutines.CoroutineContext,
+            rideHistoryRepository: RideHistoryRepository = NoOpRideHistoryRepository,
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
             serviceStop = serviceStop,
             coroutineContext = coroutineContext,
+            rideHistoryRepository = rideHistoryRepository,
         )
     }
 
@@ -382,6 +390,15 @@ class KableBmsRepository private constructor(
     // sample. Read through [motionSamples]; see the funnel's motion branch for
     // why the aggregate and not the raw contributor.
     private val motionRingBuffer = SampleRingBuffer<ControllerData> { it.timestamp }
+
+    private val rideTelemetryRecorder = RideTelemetryRecorder(
+        activeVehicle = _activeVehicle,
+        connectionState = _connectionState,
+        batterySamples = { window -> samples(window) },
+        motionSamples = { window -> motionSamples(window) },
+        history = rideHistoryRepository,
+        context = coroutineContext
+    ).also { it.start() }
 
     /** Lock guarding session swap + the userInitiatedDisconnect flag. */
     private val sessionLock = Mutex()
