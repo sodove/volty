@@ -535,19 +535,13 @@ class DefaultRootComponent(
                     onConnectedKnown = { replaceAll(homeConfig()) },
                     onConnectedForEdit = { vehicleId -> replaceAll(Config.VehicleEdit(vehicleId)) },
                     onConnectedGuestNoSave = { replaceAll(homeConfig()) },
-                    // push(), not replaceAll(): replaceAll wiped the whole stack
-                    // down to this one entry, so onCancelled's nav.pop() below —
-                    // and system back, which routes here through the same
-                    // pop() (see shouldPopOnBack) — had nothing left to reveal
-                    // and the user was stranded on the add-picker with a dead
-                    // Cancel and a dead back button. Pushing keeps whatever
-                    // picker/screen asked for "add new battery" underneath, so
-                    // cancelling returns to it. The add-picker itself never
-                    // offers this same button again (PickerScreen.kt only
-                    // renders "+ Add new battery" when `state.mode != "add"`),
-                    // so this can't be used to push an unbounded run of
-                    // Picker(mode = "add") entries onto the stack.
-                    onAddNewBatteryRequested = { goTo(Config.Picker(mode = "add")) },
+                    // The picker is a connection chooser, never a vehicle
+                    // constructor. Every "add new" action, including the one
+                    // at the bottom of this picker, enters the same draft-owned
+                    // setup wizard as Welcome, Ride, Dashboard and Settings.
+                    onAddNewBatteryRequested = {
+                        goTo(Config.SetupWizard(prefillFromActiveConnection = false))
+                    },
                     onDemoConnected = { replaceAll(homeConfig()) },
                     onCancelled = { nav.pop() }
                 )
