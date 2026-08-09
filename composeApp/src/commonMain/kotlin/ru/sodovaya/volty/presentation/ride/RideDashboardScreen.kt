@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.ride
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.Row
@@ -51,6 +52,8 @@ import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
+import ru.sodovaya.volty.presentation.common.ResponsiveLayoutMode
+import ru.sodovaya.volty.presentation.common.responsiveLayoutMode
 import ru.sodovaya.volty.presentation.dashboard.VehicleSheet
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
 import ru.sodovaya.volty.util.UnitFormatter
@@ -153,14 +156,19 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
         }
     }
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
+        val layoutMode = responsiveLayoutMode(maxWidth.value.toInt(), maxHeight.value.toInt())
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp)
+        ) {
         // The configured primary controller is not enough evidence for this
         // label: on a mixed connection it can be the one source that never
         // produced a frame. The component supplies types only after their
@@ -221,25 +229,49 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             RideFaultsBanner(state.faults)
         }
 
-        when (state.style) {
-            DashboardStyle.CLEAN -> {
-                RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
-
-                MetricCluster(motion = motion, battery = state.battery)
-
-                ConsumptionCard(
-                    motion = motion,
-                    sessionWhPerKm = state.sessionWhPerKm,
-                    sessionWhPerKmSynthesised = state.sessionWhPerKmSynthesised,
-                    recentSpeeds = recentSpeeds
+            when (state.style) {
+                DashboardStyle.CLEAN -> {
+                    if (layoutMode == ResponsiveLayoutMode.WIDE) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                            verticalAlignment = Alignment.Top
+                        ) {
+                            RideHero(
+                                state = state,
+                                vehicleMaxSpeed = vehicleMaxSpeed,
+                                modifier = Modifier.weight(1f)
+                            )
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                MetricCluster(motion = motion, battery = state.battery)
+                                ConsumptionCard(
+                                    motion = motion,
+                                    sessionWhPerKm = state.sessionWhPerKm,
+                                    sessionWhPerKmSynthesised = state.sessionWhPerKmSynthesised,
+                                    recentSpeeds = recentSpeeds
+                                )
+                            }
+                        }
+                    } else {
+                        RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
+                        MetricCluster(motion = motion, battery = state.battery)
+                        ConsumptionCard(
+                            motion = motion,
+                            sessionWhPerKm = state.sessionWhPerKm,
+                            sessionWhPerKmSynthesised = state.sessionWhPerKmSynthesised,
+                            recentSpeeds = recentSpeeds
+                        )
+                    }
+                }
+                DashboardStyle.CLASSIC -> ClassicRideCluster(
+                    state = state,
+                    maxSpeedKmh = vehicleMaxSpeed,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
-            DashboardStyle.CLASSIC -> ClassicRideCluster(
-                state = state,
-                maxSpeedKmh = vehicleMaxSpeed,
-                modifier = Modifier.fillMaxWidth()
-            )
-        }
 
         // Graph is no longer a bottom tab — this is its entry point from the
         // ride dashboard. It lives here, alongside the odometer strip, rather
@@ -250,8 +282,9 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             GraphLinkButton(onClick = component::onOpenGraph)
         }
 
-        OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
-        TelemetryRateReadout(state)
+            OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
+            TelemetryRateReadout(state)
+        }
     }
 
     if (state.sheetOpen) {
@@ -331,7 +364,11 @@ internal fun severityColor(level: DutyLevel): Color = when (level) {
 }
 
 @Composable
-private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float) {
+private fun RideHero(
+    state: RideDashboardComponent.State,
+    vehicleMaxSpeed: Float,
+    modifier: Modifier = Modifier
+) {
     val motion = state.motion
     // Defect 1 fix: state.secondaryReadout (computed by RideDashboardComponent, which is not
     // Composable) carries SecondaryGaugeMapper's default, unlocalized label — that's how the
@@ -362,7 +399,10 @@ private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float
     val speedFraction = CleanMetricMapper.heroSpeedFraction(motion, vehicleMaxSpeed)
     val secondaryColor = severityColor(secondary.severity)
 
-    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = modifier.fillMaxWidth()
+    ) {
         Box(
             modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             contentAlignment = Alignment.Center
