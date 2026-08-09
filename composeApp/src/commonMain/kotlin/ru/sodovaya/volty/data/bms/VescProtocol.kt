@@ -20,9 +20,11 @@ import ru.sodovaya.volty.domain.model.MotorConfig
  * voltage, so it can back a single DERIVED pack ([deriveBattery]). When a real
  * BMS covers the pack, the composer turns that off and `packCount` is 0.
  *
- * Polling asks for COMM_GET_VALUES_SETUP: it is the only frame carrying a
- * controller-computed ground speed and battery level. [useSetupFrame] = false
- * falls back to plain COMM_GET_VALUES, whose speed is derived from eRPM + [motor].
+ * Polling probes both values opcodes at connection start, then stays with the
+ * first valid reply. SETUP wins if both reply because it carries controller-
+ * computed ground speed and battery level. [useSetupFrame] = false preserves
+ * the explicit legacy mode that polls only plain COMM_GET_VALUES, whose speed
+ * is derived from eRPM + [motor].
  */
 class VescProtocol(
     private val deriveBattery: Boolean = true,
@@ -34,6 +36,9 @@ class VescProtocol(
         const val NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
         const val NUS_WRITE   = "6e400002-b5a3-f393-e0a9-e50e24dcca9e"
         const val NUS_NOTIFY  = "6e400003-b5a3-f393-e0a9-e50e24dcca9e"
+
+        /** A silent endpoint gets a short compatibility probe, then the historic SETUP request. */
+        private const val VALUE_OPCODE_PROBE_POLLS = 3
     }
 
     override val uuids = BmsUuids(
@@ -46,6 +51,9 @@ class VescProtocol(
     @Volatile private var battery: BmsData? = null
     @Volatile private var setupConfig: VescSetupConfig? = null
     @Volatile private var configHandshakeSent = false
+    @Volatile private var selectedValuesOpcode: Int? =
+        if (useSetupFrame) null else VescValues.OPCODE_GET_VALUES
+    @Volatile private var valueOpcodeProbePolls = 0
 
     /**
      * Session baseline for [ControllerData.tripKm]: the absolute odometer reading
@@ -73,11 +81,19 @@ class VescProtocol(
         return listOf(VescPacket.frame(byteArrayOf(VescSetupConfig.OPCODE_GET_MCCONF_TEMP.toByte())))
     }
 
-    override fun pollCommands(): List<ByteArray> = listOf(
-        VescPacket.frame(byteArrayOf(
-            (if (useSetupFrame) VescValues.OPCODE_GET_VALUES_SETUP else VescValues.OPCODE_GET_VALUES).toByte()
-        ))
-    )
+    override fun pollCommands(): List<ByteArray> {
+        val opcodes = when (val selected = selectedValuesOpcode) {
+            null -> if (valueOpcodeProbePolls++ < VALUE_OPCODE_PROBE_POLLS) {
+                listOf(VescValues.OPCODE_GET_VALUES_SETUP, VescValues.OPCODE_GET_VALUES)
+            } else {
+                // Silence supplies no evidence for either opcode. Resume the
+                // historic request rather than permanently halving poll rate.
+                listOf(VescValues.OPCODE_GET_VALUES_SETUP)
+            }
+            else -> listOf(selected)
+        }
+        return opcodes.map { opcode -> VescPacket.frame(byteArrayOf(opcode.toByte())) }
+    }
 
     /** ~6.7 Hz: fast enough for a live speedo, gentle enough on a BLE link. */
     override val pollIntervalMs: Long = 150L
@@ -172,8 +188,19 @@ class VescProtocol(
                 setupConfig = it
                 continue
             }
-            val decoded = if (useSetupFrame) VescValues.decodeSetupValues(payload)
-                          else VescValues.decodeValues(payload, motor)
+            val decoded = when (payload.firstOrNull()?.toInt()) {
+                VescValues.OPCODE_GET_VALUES_SETUP -> VescValues.decodeSetupValues(payload)?.also {
+                    // SETUP carries the richer telemetry, so a late SETUP reply
+                    // upgrades an opcode-4 selection but never the reverse.
+                    selectedValuesOpcode = VescValues.OPCODE_GET_VALUES_SETUP
+                }
+                VescValues.OPCODE_GET_VALUES -> VescValues.decodeValues(payload, motor)?.also {
+                    if (selectedValuesOpcode != VescValues.OPCODE_GET_VALUES_SETUP) {
+                        selectedValuesOpcode = VescValues.OPCODE_GET_VALUES
+                    }
+                }
+                else -> null
+            }
             if (decoded != null) {
                 val baseline = tripBaselineKm ?: decoded.odometerKm.also { tripBaselineKm = it }
                 val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
@@ -200,6 +227,8 @@ class VescProtocol(
         battery = null
         setupConfig = null
         configHandshakeSent = false
+        selectedValuesOpcode = if (useSetupFrame) null else VescValues.OPCODE_GET_VALUES
+        valueOpcodeProbePolls = 0
         tripBaselineKm = null
         // Answered with null — silence — rather than dropped: a scan on a
         // session being torn down can never be answered, and

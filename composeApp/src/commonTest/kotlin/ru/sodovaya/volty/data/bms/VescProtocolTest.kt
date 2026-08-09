@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
+import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.math.abs
@@ -56,14 +57,62 @@ class VescProtocolTest {
         return VescPacket.frame(o.toByteArray())
     }
 
+    private fun valuesFrame(): ByteArray = VescPacket.frame(VescTestFrames.valuesPayload())
+
+    private fun VescProtocol.issuedOpcodes(): List<Int> =
+        pollCommands().map { it[2].toInt() }
+
     @Test fun poll_asks_for_the_setup_frame() {
         val p = VescProtocol()
         val handshake = p.handshakeCommands()
         assertEquals(1, handshake.size)
         assertEquals(VescSetupConfig.OPCODE_GET_MCCONF_TEMP, handshake[0][2].toInt())
         val poll = p.pollCommands()
-        assertEquals(1, poll.size)
-        assertEquals(47, poll[0][2].toInt())          // start, len, opcode
+        assertEquals(listOf(47, 4), poll.map { it[2].toInt() }) // start, len, opcode
+    }
+
+    @Test fun `a plain VESC answering only GET_VALUES produces motion and settles on opcode 4`() {
+        val p = VescProtocol(motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254))
+
+        assertEquals(listOf(47, 4), p.issuedOpcodes())
+        p.onNotification(valuesFrame())
+
+        assertNotNull(p.latestMotion(0), "the opcode-4 reply must become a motion sample")
+        assertEquals(listOf(4), p.issuedOpcodes())
+    }
+
+    @Test fun `a plain VESC answering only SETUP keeps opcode 47 telemetry`() {
+        val p = VescProtocol()
+
+        assertEquals(listOf(47, 4), p.issuedOpcodes())
+        p.onNotification(setupFrame())
+
+        assertEquals(SpeedSource.REPORTED, p.latestMotion(0)?.speedSource)
+        assertEquals(listOf(47), p.issuedOpcodes())
+    }
+
+    @Test fun `a VESC answering both values opcodes settles on richer SETUP and stops asking opcode 4`() {
+        val p = VescProtocol(motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254))
+
+        assertEquals(listOf(47, 4), p.issuedOpcodes())
+        p.onNotification(valuesFrame())
+        p.onNotification(setupFrame())
+
+        assertEquals(SpeedSource.REPORTED, p.latestMotion(0)?.speedSource)
+        assertEquals(listOf(47), p.issuedOpcodes())
+        assertEquals(listOf(47), p.issuedOpcodes(), "opcode 4 must stay gone after SETUP proves available")
+    }
+
+    @Test fun `a silent VESC receives a bounded probe instead of permanently alternating opcodes`() {
+        val p = VescProtocol()
+
+        val issued = List(5) { p.issuedOpcodes() }
+
+        assertEquals(listOf(47, 4), issued[0])
+        assertEquals(listOf(47, 4), issued[1])
+        assertEquals(listOf(47, 4), issued[2])
+        assertEquals(listOf(47), issued[3])
+        assertEquals(listOf(47), issued[4])
     }
 
     @Test fun configuration_reply_is_available_once_decoded() {
