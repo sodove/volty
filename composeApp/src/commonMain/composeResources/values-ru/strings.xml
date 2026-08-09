@@ -493,4 +493,7 @@
     <string name="graph_erpm">eRPM</string>
     <string name="graph_esc_temp">Темп. ESC</string>
     <string name="graph_motor_temp">Темп. мотора</string>
+    <string name="graph_history">История</string>
+    <string name="graph_current_ride">Текущая поездка</string>
+    <string name="graph_no_history">Завершённых поездок пока нет</string>
 </resources>

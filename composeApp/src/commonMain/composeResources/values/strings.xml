@@ -495,4 +495,7 @@
     <string name="graph_erpm">eRPM</string>
     <string name="graph_esc_temp">ESC temp</string>
     <string name="graph_motor_temp">Motor temp</string>
+    <string name="graph_history">History</string>
+    <string name="graph_current_ride">Current ride</string>
+    <string name="graph_no_history">No completed rides yet</string>
 </resources>

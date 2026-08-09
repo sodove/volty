@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.repository.RideHistoryRepository
 import ru.sodovaya.volty.permissions.PermissionsChecker
 import ru.sodovaya.volty.presentation.alerts.DefaultVehicleAlertsComponent
 import ru.sodovaya.volty.presentation.alerts.VehicleAlertsComponent
@@ -685,6 +686,7 @@ class DefaultRootComponent(
                 DefaultGraphComponent(
                     componentContext = context,
                     bmsRepository = get(),
+                    rideHistoryRepository = get<RideHistoryRepository>(),
                     onBackRequested = { nav.pop() }
                 )
             )

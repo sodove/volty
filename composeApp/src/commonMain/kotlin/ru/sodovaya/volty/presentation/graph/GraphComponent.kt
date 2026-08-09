@@ -5,6 +5,9 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.NoOpRideHistoryRepository
+import ru.sodovaya.volty.domain.repository.RideHistoryRepository
+import ru.sodovaya.volty.domain.repository.RideSummary
 import ru.sodovaya.volty.domain.stats.RideEnergy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -38,6 +41,7 @@ interface GraphComponent {
     fun onWindowSelected(window: GraphWindow)
     fun onTimestampSelected(timestamp: Instant?) {}
     fun onComparisonRequested(x: GraphMetric, y: GraphMetric) {}
+    fun onRideSelected(rideId: String?) {}
     fun onBack()
 
     data class State(
@@ -49,6 +53,8 @@ interface GraphComponent {
         val visibleMetrics: List<GraphMetric> = listOf(GraphMetric.POWER),
         val selectedTimestamp: Instant? = null,
         val selectedPoints: Map<GraphMetric, GraphPoint> = emptyMap(),
+        val history: List<RideSummary> = emptyList(),
+        val selectedRideId: String? = null,
         /** Null means no measured sample exists for this metric in the window. */
         val nowValue: Float? = null,
         val avg: Float? = null,
@@ -63,7 +69,8 @@ interface GraphComponent {
 class DefaultGraphComponent(
     componentContext: ComponentContext,
     private val bmsRepository: BmsRepository,
-    private val onBackRequested: () -> Unit
+    private val onBackRequested: () -> Unit,
+    private val rideHistoryRepository: RideHistoryRepository = NoOpRideHistoryRepository
 ) : GraphComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -78,7 +85,13 @@ class DefaultGraphComponent(
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        scope.launch { loadHistory() }
         restartCollection()
+    }
+
+    private suspend fun loadHistory() {
+        val vehicleId = bmsRepository.activeVehicle.value?.id
+        _state.update { it.copy(history = rideHistoryRepository.listRides(vehicleId)) }
     }
 
     private fun restartCollection() {
@@ -91,7 +104,9 @@ class DefaultGraphComponent(
             ) { samples, motion -> samples to motion }.collect { (samples, motion) ->
                 latestSamples = samples
                 latestMotion = motion
-                _state.update { computeStats(it, samples, motion) }
+                _state.update {
+                    if (it.selectedRideId == null) computeStats(it, samples, motion) else it
+                }
             }
         }
     }
@@ -114,12 +129,20 @@ class DefaultGraphComponent(
                 GraphTelemetryMapper.motionSeries(motion, selected)
             }
         }
+        return computeDerivedStats(prev, series, computeUsed(samples, metric))
+    }
+
+    private fun computeDerivedStats(
+        prev: GraphComponent.State,
+        series: Map<GraphMetric, GraphSeries>,
+        used: Float? = null
+    ): GraphComponent.State {
+        val metric = prev.metric
         val activeSeries = series[metric]?.points.orEmpty()
         val values = activeSeries.map { it.value }
         val avg = values.takeIf { it.isNotEmpty() }?.average()?.toFloat()
         val peak = values.maxOrNull()
         val min = values.minOrNull()
-        val used = computeUsed(samples, metric)
         val selectedPoints = prev.selectedTimestamp?.let { timestamp ->
             series.mapNotNull { (selected, current) ->
                 nearestPoint(current.points, timestamp)?.let { selected to it }
@@ -172,11 +195,12 @@ class DefaultGraphComponent(
             } else {
                 listOf(metric) + current.visibleMetrics.drop(1)
             }
-            computeStats(
-                current.copy(metric = metric, visibleMetrics = metrics),
-                latestSamples,
-                latestMotion
-            )
+            val updated = current.copy(metric = metric, visibleMetrics = metrics)
+            if (current.selectedRideId == null) {
+                computeStats(updated, latestSamples, latestMotion)
+            } else {
+                computeDerivedStats(updated, updated.series, used = null)
+            }
         }
         // The repository flows are hot and continue to emit; this merely keeps
         // the legacy method's contract of refreshing immediately after a tab tap.
@@ -186,11 +210,11 @@ class DefaultGraphComponent(
     override fun onMetricAdded(metric: GraphMetric) {
         _state.update { current ->
             if (metric in current.visibleMetrics) current
-            else computeStats(
-                current.copy(visibleMetrics = current.visibleMetrics + metric),
-                latestSamples,
-                latestMotion
-            )
+            else {
+                val updated = current.copy(visibleMetrics = current.visibleMetrics + metric)
+                if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion)
+                else computeDerivedStats(updated, updated.series + (metric to GraphSeries(metric, emptyList())))
+            }
         }
     }
 
@@ -198,14 +222,12 @@ class DefaultGraphComponent(
         _state.update { current ->
             if (current.visibleMetrics.size <= 1 || metric !in current.visibleMetrics) return@update current
             val remaining = current.visibleMetrics - metric
-            computeStats(
-                current.copy(
+            val updated = current.copy(
                     visibleMetrics = remaining,
                     metric = if (current.metric == metric) remaining.first() else current.metric
-                ),
-                latestSamples,
-                latestMotion
-            )
+                )
+            if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion)
+            else computeDerivedStats(updated, updated.series - metric)
         }
     }
 
@@ -217,6 +239,34 @@ class DefaultGraphComponent(
                 }.toMap()
             }.orEmpty()
             current.copy(selectedTimestamp = timestamp, selectedPoints = selected)
+        }
+    }
+
+    override fun onRideSelected(rideId: String?) {
+        scope.launch {
+            if (rideId == null) {
+                _state.update { current ->
+                    current.copy(selectedRideId = null, selectedTimestamp = null, selectedPoints = emptyMap())
+                }
+                restartCollection()
+                return@launch
+            }
+            val stored = rideHistoryRepository.loadRide(rideId) ?: return@launch
+            val loaded = stored.points.mapNotNull { point ->
+                val metric = runCatching { GraphMetric.valueOf(point.metricKey) }.getOrNull() ?: return@mapNotNull null
+                if (!point.isKnown) return@mapNotNull null
+                metric to GraphPoint(point.timestamp, point.value)
+            }.groupBy({ it.first }, { it.second })
+                .mapValues { (metric, points) -> GraphSeries(metric, points.sortedBy { it.timestamp }) }
+            sampleJob?.cancel()
+            _state.update { current ->
+                val series = current.visibleMetrics.associateWith { metric -> loaded[metric] ?: GraphSeries(metric, emptyList()) }
+                computeDerivedStats(
+                    current.copy(selectedRideId = rideId, series = series, selectedTimestamp = null),
+                    series,
+                    used = null
+                )
+            }
         }
     }
 

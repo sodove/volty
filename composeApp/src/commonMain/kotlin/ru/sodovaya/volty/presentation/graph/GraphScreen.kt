@@ -23,16 +23,21 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -63,12 +68,14 @@ import volty.composeapp.generated.resources.graph_duty
 import volty.composeapp.generated.resources.graph_esc_temp
 import volty.composeapp.generated.resources.graph_erpm
 import volty.composeapp.generated.resources.graph_input_voltage
+import volty.composeapp.generated.resources.graph_history
 import volty.composeapp.generated.resources.graph_min
 import volty.composeapp.generated.resources.graph_motor_current
 import volty.composeapp.generated.resources.graph_motor_power
 import volty.composeapp.generated.resources.graph_motor_temp
 import volty.composeapp.generated.resources.graph_motion_group
 import volty.composeapp.generated.resources.graph_no_data
+import volty.composeapp.generated.resources.graph_no_history
 import volty.composeapp.generated.resources.graph_now
 import volty.composeapp.generated.resources.graph_peak
 import volty.composeapp.generated.resources.graph_power
@@ -81,11 +88,13 @@ import volty.composeapp.generated.resources.graph_title
 import volty.composeapp.generated.resources.graph_used
 import volty.composeapp.generated.resources.graph_volt
 import volty.composeapp.generated.resources.graph_cells_group
+import volty.composeapp.generated.resources.graph_current_ride
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun GraphScreen(component: GraphComponent) {
     val state by component.state.collectAsState()
+    var showHistory by remember { mutableStateOf(false) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -97,8 +106,10 @@ fun GraphScreen(component: GraphComponent) {
                 },
                 actions = {
                     Text(
-                        text = stringResource(Res.string.graph_compare),
-                        modifier = Modifier.padding(horizontal = 12.dp),
+                        text = stringResource(Res.string.graph_history),
+                        modifier = Modifier
+                            .clickable { showHistory = true }
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
                         color = MaterialTheme.colorScheme.primary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 12.sp
@@ -138,6 +149,46 @@ fun GraphScreen(component: GraphComponent) {
                 }
             }
         }
+    }
+    if (showHistory) {
+        AlertDialog(
+            onDismissRequest = { showHistory = false },
+            title = { Text(stringResource(Res.string.graph_history)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        stringResource(Res.string.graph_current_ride),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                component.onRideSelected(null)
+                                showHistory = false
+                            }
+                            .padding(vertical = 8.dp),
+                        fontWeight = FontWeight.SemiBold
+                    )
+                    if (state.history.isEmpty()) {
+                        Text(stringResource(Res.string.graph_no_history))
+                    } else {
+                        state.history.forEach { ride ->
+                            Text(
+                                text = ride.startedAt.toString(),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        component.onRideSelected(ride.id)
+                                        showHistory = false
+                                    }
+                                    .padding(vertical = 8.dp)
+                            )
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = { showHistory = false }) { Text("OK") }
+            }
+        )
     }
 }
 

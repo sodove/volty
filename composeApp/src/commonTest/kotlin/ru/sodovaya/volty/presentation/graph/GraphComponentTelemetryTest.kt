@@ -22,6 +22,10 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.RideHistoryRepository
+import ru.sodovaya.volty.domain.repository.RidePoint
+import ru.sodovaya.volty.domain.repository.RideSummary
+import ru.sodovaya.volty.domain.repository.StoredRide
 import ru.sodovaya.volty.domain.stats.MovingAvg
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -29,6 +33,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.seconds
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -53,6 +58,18 @@ class GraphComponentTelemetryTest {
         override fun motionSamples(window: Duration): Flow<List<ControllerData>> = motion
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() = Unit
+    }
+
+    private class FakeHistory(
+        private val stored: StoredRide
+    ) : RideHistoryRepository {
+        override suspend fun startRide(summary: RideSummary) = Unit
+        override suspend fun appendPoint(rideId: String, point: RidePoint) = Unit
+        override suspend fun finishRide(rideId: String, endedAt: Instant) = Unit
+        override suspend fun listRides(vehicleId: String?): List<RideSummary> = listOf(stored.summary)
+        override suspend fun loadRide(rideId: String): StoredRide? = stored.takeIf { it.summary.id == rideId }
+        override suspend fun deleteRide(rideId: String) = Unit
+        override suspend fun pruneOldest(keep: Int) = Unit
     }
 
     private fun component(repo: FakeRepo) = DefaultGraphComponent(
@@ -96,5 +113,29 @@ class GraphComponentTelemetryTest {
         assertNotNull(selected)
         assertEquals(Instant.fromEpochSeconds(0), selected.timestamp)
         assertTrue(component.state.value.selectedTimestamp != null)
+    }
+
+    @Test
+    fun `completed ride replaces live series with stored points`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeRepo()
+        val started = Instant.fromEpochSeconds(100)
+        val summary = RideSummary("ride-1", "vehicle-1", started, started + 30.seconds)
+        val history = FakeHistory(
+            StoredRide(summary, listOf(RidePoint(GraphMetric.SPEED.name, started, 24f)))
+        )
+        val component = DefaultGraphComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            bmsRepository = repo,
+            onBackRequested = {},
+            rideHistoryRepository = history
+        )
+        component.onMetricSelected(GraphMetric.SPEED)
+        component.onRideSelected("ride-1")
+        advanceUntilIdle()
+
+        assertEquals("ride-1", component.state.value.selectedRideId)
+        assertEquals(listOf(24f), component.state.value.values)
+        assertEquals(1, component.state.value.history.size)
     }
 }
