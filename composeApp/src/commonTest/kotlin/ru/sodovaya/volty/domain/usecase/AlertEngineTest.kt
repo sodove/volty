@@ -336,6 +336,23 @@ class AlertEngineTest {
     }
 
     @Test
+    fun `charge complete requires a measured current rather than a zero placeholder`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith()
+        // A voltage-estimated pack can look full while its missing current field
+        // is still the default zero. The non-zero raw value makes this fixture
+        // deliberately incoherent and catches consumers that read the number
+        // without its evidence flag.
+        engine.evaluateForTest(
+            bmsData(soc = 100f, current = 42f).copy(hasCurrent = false),
+            v
+        )
+
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
     fun `disconnected data produces no alerts`() {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())

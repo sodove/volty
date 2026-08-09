@@ -48,4 +48,19 @@ class MovingAverageTest {
         assertClose(200f, avg.avgPowerW)
         assertClose(-4f, avg.avgCurrentA)
     }
+
+    @Test
+    fun `unknown current and power do not dilute measured values or erase a genuine zero`() {
+        val base = Instant.fromEpochSeconds(1_000_000)
+        val samples = listOf(
+            BmsData(power = 900f, hasPower = false, current = 99f, hasCurrent = false, timestamp = base),
+            BmsData(power = 0f, hasPower = true, current = 0f, hasCurrent = true, timestamp = base.plus(1.seconds)),
+            BmsData(power = 200f, hasPower = true, current = -4f, hasCurrent = true, timestamp = base.plus(2.seconds))
+        )
+
+        val avg = MovingAverage.over(samples, 5.minutes)
+
+        assertClose(100f, avg.avgPowerW)
+        assertClose(-2f, avg.avgCurrentA)
+    }
 }

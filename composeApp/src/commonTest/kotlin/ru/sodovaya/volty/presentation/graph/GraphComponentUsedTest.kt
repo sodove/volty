@@ -171,4 +171,47 @@ class GraphComponentUsedTest {
         advanceUntilIdle()
         assertEquals(0f, c.state.value.used, 0f, "a state of charge has no watt-hours to accumulate")
     }
+
+    @Test
+    fun unavailable_power_is_omitted_from_the_trace_and_every_derived_stat() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.window.value = listOf(
+            // Deliberately incoherent: no producer emits 900 W while denying that
+            // power, which makes this a contract test rather than a decoder test.
+            BmsData(power = -900f, hasPower = false, timestamp = at(0)),
+            BmsData(power = 0f, hasPower = true, timestamp = at(60)),
+            BmsData(power = -600f, hasPower = true, timestamp = at(120))
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf(0f, 600f), c.state.value.values, "unknown power must make no zero-valued trace point")
+        assertEquals(300f, c.state.value.avg, 0.001f)
+        assertEquals(600f, c.state.value.peak, 0.001f)
+        assertEquals(5f, c.state.value.used, 0.001f)
+    }
+
+    @Test
+    fun unavailable_current_is_omitted_while_a_measured_zero_remains_a_graph_sample() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        c.onMetricSelected(GraphMetric.CURRENT)
+
+        repo.window.value = listOf(
+            BmsData(current = -99f, hasCurrent = false, timestamp = at(0)),
+            BmsData(current = 0f, hasCurrent = true, timestamp = at(60)),
+            BmsData(current = -6f, hasCurrent = true, timestamp = at(3660))
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf(0f, 6f), c.state.value.values)
+        assertEquals(3f, c.state.value.avg, 0.001f)
+        assertEquals(6f, c.state.value.peak, 0.001f)
+        assertEquals(3f, c.state.value.used, 0.001f)
+    }
 }

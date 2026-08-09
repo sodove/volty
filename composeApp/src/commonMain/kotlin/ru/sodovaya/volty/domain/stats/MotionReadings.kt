@@ -23,7 +23,8 @@ import ru.sodovaya.volty.domain.model.SpeedUnknownReason
  * distinction lives in a parallel set of known-flags ([ControllerData.hasDuty],
  * [ControllerData.hasInputVoltage], [ControllerData.hasPower], [ControllerData.hasBatteryCurrent],
  * [ControllerData.hasEnergyCounters], [ControllerData.hasMotorTemp],
- * [ControllerData.hasEscTemp], [ControllerData.speedKnown]) and this object is
+ * [ControllerData.hasEscTemp], [ControllerData.hasDistance],
+ * [ControllerData.speedKnown]) and this object is
  * the single place that pairs each flag with its number.
  *
  * Renderers must read motion through here rather than off [ControllerData]

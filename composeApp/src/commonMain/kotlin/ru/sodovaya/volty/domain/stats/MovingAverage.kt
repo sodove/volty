@@ -19,10 +19,20 @@ object MovingAverage {
     fun over(samples: List<BmsData>, window: Duration): MovingAvg {
         if (samples.isEmpty()) return MovingAvg(0f, 0f, window)
         var p = 0f; var c = 0f
-        for (s in samples) { p += s.power; c += s.current }
+        var powerCount = 0; var currentCount = 0
+        for (s in samples) {
+            if (s.hasPower) {
+                p += s.power
+                powerCount++
+            }
+            if (s.hasCurrent) {
+                c += s.current
+                currentCount++
+            }
+        }
         return MovingAvg(
-            avgPowerW = p / samples.size,
-            avgCurrentA = c / samples.size,
+            avgPowerW = if (powerCount == 0) 0f else p / powerCount,
+            avgCurrentA = if (currentCount == 0) 0f else c / currentCount,
             window = window
         )
     }

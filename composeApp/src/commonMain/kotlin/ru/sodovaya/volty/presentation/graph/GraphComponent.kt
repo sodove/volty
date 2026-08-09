@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.domain.stats.RideEnergy
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -63,7 +64,7 @@ class DefaultGraphComponent(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val _state = MutableStateFlow(
         GraphComponent.State(
-            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER)
+            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER) ?: 0f
         )
     )
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
@@ -93,7 +94,11 @@ class DefaultGraphComponent(
         // from the negated values so "Peak" = peak consumption and "Used" is the
         // net Wh/Ah consumed over the window. SOC/VOLTAGE/TEMPERATURE are unchanged.
         val displaySign = if (metric == GraphMetric.POWER || metric == GraphMetric.CURRENT) -1f else 1f
-        val values = samples.map { displaySign * extractValue(it, metric) }
+        val values = samples.mapNotNull { sample ->
+            extractValue(sample, metric)?.let { value ->
+                (displaySign * value).takeUnless { it == 0f } ?: 0f
+            }
+        }
         val avg = if (values.isEmpty()) 0f else values.average().toFloat()
         val peak = if (values.isEmpty()) 0f else values.max()
         val min = if (values.isEmpty()) 0f else values.min()
@@ -108,7 +113,7 @@ class DefaultGraphComponent(
         )
     }
 
-    private fun extractValue(d: BmsData, metric: GraphMetric): Float = extractValueOf(d, metric)
+    private fun extractValue(d: BmsData, metric: GraphMetric): Float? = extractValueOf(d, metric)
 
     /**
      * Wh (POWER) or Ah (CURRENT) over the window; 0 for the metrics that are not
@@ -128,10 +133,11 @@ class DefaultGraphComponent(
      */
     private fun computeUsed(samples: List<BmsData>, metric: GraphMetric): Float {
         if (metric != GraphMetric.POWER && metric != GraphMetric.CURRENT) return 0f
+        val measured = samples.filter { extractValue(it, metric) != null }
         val integral = RideEnergy.integrateHours(
-            samples,
+            measured,
             timestampOf = { it.timestamp }
-        ) { extractValue(it, metric) } ?: return 0f
+        ) { requireNotNull(extractValue(it, metric)) } ?: return 0f
         return -integral.toFloat()
     }
 
@@ -148,10 +154,10 @@ class DefaultGraphComponent(
     override fun onBack() { onBackRequested() }
 }
 
-private fun extractValueOf(d: BmsData, metric: GraphMetric): Float = when (metric) {
+private fun extractValueOf(d: BmsData, metric: GraphMetric): Float? = when (metric) {
     GraphMetric.SOC -> d.soc
-    GraphMetric.POWER -> d.power
-    GraphMetric.CURRENT -> d.current
+    GraphMetric.POWER -> BmsReadings.power(d)
+    GraphMetric.CURRENT -> BmsReadings.current(d)
     GraphMetric.VOLTAGE -> d.voltage
     GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull() ?: 0f
 }

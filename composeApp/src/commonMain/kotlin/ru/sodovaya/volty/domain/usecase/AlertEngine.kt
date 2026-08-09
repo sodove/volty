@@ -214,7 +214,7 @@ class AlertEngine(
         }
 
         if (cfg.chargeCompleteNotify) {
-            val isFull = data.soc >= 99.9f && abs(data.current) < 0.1f
+            val isFull = data.soc >= 99.9f && data.hasCurrent && abs(data.current) < 0.1f
             fire(AlertKind.CHARGE_COMPLETE, vehicle, now,
                 triggered = isFull,
                 recovered = data.soc < 98f,
