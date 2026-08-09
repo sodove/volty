@@ -483,6 +483,12 @@
     <string name="graph_selected_time">Selected time</string>
     <string name="graph_signals">Signals</string>
     <string name="graph_scale_note">Each signal uses its own scale; time is shared</string>
+    <string name="graph_current_header">Now</string>
+    <string name="graph_min_header">Min</string>
+    <string name="graph_max_header">Max</string>
+    <string name="graph_plot">Plot</string>
+    <string name="graph_point_time">Point time</string>
+    <string name="graph_time_range">Time range</string>
     <string name="graph_battery_group">Battery</string>
     <string name="graph_motion_group">Motion</string>
     <string name="graph_cells_group">Cells</string>

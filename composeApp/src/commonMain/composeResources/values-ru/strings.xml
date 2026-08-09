@@ -481,6 +481,12 @@
     <string name="graph_selected_time">Выбранный момент</string>
     <string name="graph_signals">Сигналы</string>
     <string name="graph_scale_note">У каждого сигнала свой масштаб, время общее</string>
+    <string name="graph_current_header">Сейчас</string>
+    <string name="graph_min_header">Мин</string>
+    <string name="graph_max_header">Макс</string>
+    <string name="graph_plot">График</string>
+    <string name="graph_point_time">Время точки</string>
+    <string name="graph_time_range">Диапазон времени</string>
     <string name="graph_battery_group">Батарея</string>
     <string name="graph_motion_group">Движение</string>
     <string name="graph_cells_group">Ячейки</string>

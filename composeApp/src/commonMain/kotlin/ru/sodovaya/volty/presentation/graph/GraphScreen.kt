@@ -40,6 +40,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -52,6 +53,7 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.StringResource
@@ -66,6 +68,7 @@ import volty.composeapp.generated.resources.graph_cells_group
 import volty.composeapp.generated.resources.graph_compare
 import volty.composeapp.generated.resources.graph_current
 import volty.composeapp.generated.resources.graph_current_ride
+import volty.composeapp.generated.resources.graph_current_header
 import volty.composeapp.generated.resources.graph_duty
 import volty.composeapp.generated.resources.graph_esc_temp
 import volty.composeapp.generated.resources.graph_erpm
@@ -75,18 +78,22 @@ import volty.composeapp.generated.resources.graph_motor_current
 import volty.composeapp.generated.resources.graph_motor_power
 import volty.composeapp.generated.resources.graph_motor_temp
 import volty.composeapp.generated.resources.graph_motion_group
+import volty.composeapp.generated.resources.graph_max_header
+import volty.composeapp.generated.resources.graph_min_header
 import volty.composeapp.generated.resources.graph_no_data
 import volty.composeapp.generated.resources.graph_no_history
 import volty.composeapp.generated.resources.graph_now
 import volty.composeapp.generated.resources.graph_power
+import volty.composeapp.generated.resources.graph_plot
+import volty.composeapp.generated.resources.graph_point_time
 import volty.composeapp.generated.resources.graph_remove
 import volty.composeapp.generated.resources.graph_scale_note
-import volty.composeapp.generated.resources.graph_selected_time
 import volty.composeapp.generated.resources.graph_signals
 import volty.composeapp.generated.resources.graph_soc
 import volty.composeapp.generated.resources.graph_speed
 import volty.composeapp.generated.resources.graph_temp
 import volty.composeapp.generated.resources.graph_title
+import volty.composeapp.generated.resources.graph_time_range
 import volty.composeapp.generated.resources.graph_volt
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -233,6 +240,9 @@ private fun PlotPane(
     onTimestampSelected: (Instant?) -> Unit,
     modifier: Modifier
 ) {
+    val timeline = remember(state.series, state.visibleMetrics) {
+        mergedPlotTimeline(state.visibleMetrics.mapNotNull { state.series[it] })
+    }
     Column(modifier = modifier) {
         WindowPicker(state.window, onWindowSelected)
         Spacer(Modifier.height(8.dp))
@@ -247,10 +257,13 @@ private fun PlotPane(
                 .clip(RoundedCornerShape(20.dp))
                 .background(MaterialTheme.colorScheme.surfaceContainer)
         )
+        if (timeline.isNotEmpty()) {
+            PlotTimeAxis(timeline)
+        }
         Spacer(Modifier.height(6.dp))
         Text(
             text = state.selectedTimestamp?.let {
-                "${stringResource(Res.string.graph_selected_time)}: ${formatTimestamp(it)}"
+                "${stringResource(Res.string.graph_point_time)}: ${formatTimestamp(it)}"
             } ?: stringResource(Res.string.graph_now),
             modifier = Modifier.padding(horizontal = 8.dp),
             fontSize = 11.sp,
@@ -262,6 +275,53 @@ private fun PlotPane(
             fontSize = 10.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        if (timeline.isNotEmpty()) {
+            Text(
+                text = "${stringResource(Res.string.graph_time_range)}: " +
+                    "${formatTimestamp(timeline.first())} — ${formatTimestamp(timeline.last())}",
+                modifier = Modifier.padding(horizontal = 8.dp),
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+    }
+}
+
+@OptIn(ExperimentalTime::class)
+@Composable
+private fun PlotTimeAxis(timeline: List<Instant>) {
+    val ticks = timelineTicks(timeline)
+    if (ticks.size == 1) {
+        Text(
+            text = formatAxisTimestamp(ticks.single()),
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp),
+            textAlign = TextAlign.Center,
+            fontSize = 9.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        return
+    }
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        ticks.forEachIndexed { index, timestamp ->
+            Text(
+                text = formatAxisTimestamp(timestamp),
+                modifier = Modifier.weight(1f),
+                textAlign = when {
+                    index == 0 -> TextAlign.Start
+                    index == ticks.lastIndex -> TextAlign.End
+                    else -> TextAlign.Center
+                },
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
     }
 }
 
@@ -279,6 +339,8 @@ private fun TelemetryPlot(
     }
     val timeline = remember(traces) { mergedPlotTimeline(traces) }
     val timelinePoints = remember(timeline) { timeline.map { GraphPoint(it, 0f) } }
+    val latestTimeline = rememberUpdatedState(timeline)
+    val latestOnTimestampSelected = rememberUpdatedState(onTimestampSelected)
     if (traces.isEmpty() || timeline.size < 2) {
         Box(modifier, contentAlignment = Alignment.Center) {
             Text(stringResource(Res.string.graph_no_data), color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -289,10 +351,12 @@ private fun TelemetryPlot(
     val gridColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.10f)
     val cursorColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.65f)
     Canvas(
-        modifier = modifier.pointerInput(timeline) {
+        modifier = modifier.pointerInput(Unit) {
             detectTapGestures { offset ->
+                val currentTimeline = latestTimeline.value
+                if (currentTimeline.isEmpty()) return@detectTapGestures
                 val fraction = (offset.x / size.width).coerceIn(0f, 1f)
-                onTimestampSelected(timestampAtFraction(timelinePoints, fraction))
+                latestOnTimestampSelected.value(nearestTimelineTimestamp(currentTimeline, fraction))
             }
         }
     ) {
@@ -366,6 +430,7 @@ private fun MetricTable(
                 fontWeight = FontWeight.SemiBold
             )
         }
+        item { MetricStatsHeader() }
         items(metrics, key = { it.name }) { metric ->
             if (metric == metrics.first() || metricGroupResource(metric) != metricGroupResource(metrics[metrics.indexOf(metric) - 1])) {
                 Text(
@@ -380,8 +445,54 @@ private fun MetricTable(
                 metric = metric,
                 active = metric in state.visibleMetrics,
                 point = state.selectedPoints[metric] ?: state.series[metric]?.points?.lastOrNull(),
+                extrema = plotExtrema(state.series[metric]?.points.orEmpty()),
                 canRemove = state.visibleMetrics.size > 1,
                 onToggle = { enabled -> if (enabled) onMetricAdded(metric) else onMetricRemoved(metric) }
+            )
+        }
+    }
+}
+
+@Composable
+private fun MetricStatsHeader() {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Spacer(Modifier.weight(1f))
+        Row(
+            modifier = Modifier.weight(1.55f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                stringResource(Res.string.graph_current_header),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(Res.string.graph_min_header),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(Res.string.graph_max_header),
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                stringResource(Res.string.graph_plot),
+                modifier = Modifier.widthIn(min = 42.dp),
+                textAlign = TextAlign.Center,
+                fontSize = 9.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -392,6 +503,7 @@ private fun MetricRow(
     metric: GraphMetric,
     active: Boolean,
     point: GraphPoint?,
+    extrema: PlotExtrema?,
     canRemove: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
@@ -415,16 +527,37 @@ private fun MetricRow(
             Text(graphMetricLabel(metric), fontSize = 13.sp, fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal)
             Text(metric.unit, fontSize = 10.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        Text(
-            text = point?.let { "${formatVal(it.value, metric)} ${metric.unit}" } ?: "—",
-            fontSize = 13.sp,
-            color = if (point == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
-        )
-        Checkbox(
-            checked = active,
-            onCheckedChange = onToggle,
-            enabled = !active || canRemove
-        )
+        Row(
+            modifier = Modifier.weight(1.55f),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = point?.let { formatVal(it.value, metric) } ?: "—",
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 12.sp,
+                color = if (point == null) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface
+            )
+            Text(
+                text = extrema?.let { formatVal(it.min, metric) } ?: "—",
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Text(
+                text = extrema?.let { formatVal(it.max, metric) } ?: "—",
+                modifier = Modifier.weight(1f),
+                textAlign = TextAlign.End,
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Checkbox(
+                checked = active,
+                onCheckedChange = onToggle,
+                enabled = !active || canRemove
+            )
+        }
     }
 }
 
@@ -596,3 +729,7 @@ private fun formatVal(value: Float?, metric: GraphMetric): String {
 
 private fun formatTimestamp(timestamp: Instant): String =
     timestamp.toString().removeSuffix("Z").replace('T', ' ').take(19)
+
+@OptIn(ExperimentalTime::class)
+private fun formatAxisTimestamp(timestamp: Instant): String =
+    timestamp.toString().substringAfter('T').removeSuffix("Z").take(8)
