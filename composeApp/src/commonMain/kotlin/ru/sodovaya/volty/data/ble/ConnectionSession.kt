@@ -250,8 +250,7 @@ internal class ConnectionSession(
                     // decoding. A VESC can notify a valid transport frame that
                     // answers neither opcode we know; redialling that healthy
                     // GATT link cannot make the frame understandable.
-                    noSampleEverActivity.recordNotificationArrival()
-                    protocol.onNotification(data)
+                    processObservedSessionNotification(protocol, data, noSampleEverActivity)
                     val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms, sections ->
                         onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
                     }
@@ -314,18 +313,13 @@ internal class ConnectionSession(
                         // with a short two-opcode probe and a reply changes
                         // its next request. Keeping this list outside the
                         // loop would make that selection unreachable.
-                        if (!runBurstPollCycle(
+                        if (!runSessionBurstPollCycle(
                                 protocol,
+                                activity = noSampleEverActivity,
                                 write = { cmd -> writeCommand(writeChar, cmd) },
                                 wait = { delay(it) },
-                                onWriteFailure = { failure ->
-                                    noSampleEverActivity.recordPollWriteFailure()
-                                    onBurstPollWriteFailure(failure)
-                                },
-                                onWriteSuccess = {
-                                    noSampleEverActivity.recordPollWriteSuccess()
-                                    onBurstPollWriteSuccess()
-                                }
+                                onWriteFailure = onBurstPollWriteFailure,
+                                onWriteSuccess = onBurstPollWriteSuccess
                             )
                         ) return@launch
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -480,6 +474,45 @@ internal class NoSampleEverWatchdogActivity(private val protocol: BmsProtocol) {
         }
     }
 }
+
+/**
+ * The exact observer boundary used by [ConnectionSession]: account arrival
+ * before the protocol has an opportunity to discard an undecodable frame.
+ */
+internal fun processObservedSessionNotification(
+    protocol: BmsProtocol,
+    data: ByteArray,
+    activity: NoSampleEverWatchdogActivity
+) {
+    activity.recordNotificationArrival()
+    protocol.onNotification(data)
+}
+
+/**
+ * The exact non-serial poll boundary used by [ConnectionSession]. Write
+ * outcomes update the watchdog's view before the per-link state callbacks
+ * publish their existing Task 2 diagnostic.
+ */
+internal suspend fun runSessionBurstPollCycle(
+    protocol: BmsProtocol,
+    activity: NoSampleEverWatchdogActivity,
+    write: suspend (ByteArray) -> Unit,
+    wait: suspend (Long) -> Unit,
+    onWriteFailure: (Exception) -> Unit = {},
+    onWriteSuccess: () -> Unit = {}
+): Boolean = runBurstPollCycle(
+    protocol = protocol,
+    write = write,
+    wait = wait,
+    onWriteFailure = { failure ->
+        activity.recordPollWriteFailure()
+        onWriteFailure(failure)
+    },
+    onWriteSuccess = {
+        activity.recordPollWriteSuccess()
+        onWriteSuccess()
+    }
+)
 
 /**
  * One non-serial poll burst. The command list belongs inside this function so

@@ -116,8 +116,9 @@ class ConnectionSessionPollingTest {
 
     @Test
     fun `plain VESC notifications no decoder understands are diagnosed instead of redialled`() {
-        val activity = NoSampleEverWatchdogActivity(VescProtocol())
-        activity.recordNotificationArrival()
+        val protocol = VescProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
 
         assertEquals(
             NoSampleEverWatchdogDecision.NOT_UNDERSTOOD,
@@ -134,10 +135,16 @@ class ConnectionSessionPollingTest {
     }
 
     @Test
-    fun `plain VESC poll write failure is neither redialled nor called quiet`() {
-        val activity = NoSampleEverWatchdogActivity(VescProtocol())
-        activity.recordNotificationArrival()
-        activity.recordPollWriteFailure()
+    fun `plain VESC production burst write failure is neither redialled nor called quiet`() = runTest {
+        val protocol = VescProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
+        runSessionBurstPollCycle(
+            protocol = protocol,
+            activity = activity,
+            write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
+            wait = {}
+        )
 
         assertEquals(
             NoSampleEverWatchdogDecision.WRITE_FAILED,
@@ -154,11 +161,9 @@ class ConnectionSessionPollingTest {
 
     @Test
     fun `serial gateway keeps its existing no-decode watchdog redial`() {
-        val activity = NoSampleEverWatchdogActivity(
-            VescGatewayProtocol(controllers = emptyList(), packs = emptyList())
-        )
-        activity.recordNotificationArrival()
-        activity.recordPollWriteFailure()
+        val protocol = VescGatewayProtocol(controllers = emptyList(), packs = emptyList())
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
 
         assertEquals(
             NoSampleEverWatchdogDecision.REDIAL,
@@ -168,8 +173,9 @@ class ConnectionSessionPollingTest {
 
     @Test
     fun `battery protocol keeps its existing no-decode watchdog redial`() {
-        val activity = NoSampleEverWatchdogActivity(BegodeProtocol())
-        activity.recordNotificationArrival()
+        val protocol = BegodeProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
 
         assertEquals(NoSampleEverWatchdogDecision.REDIAL, activity.decision())
     }
