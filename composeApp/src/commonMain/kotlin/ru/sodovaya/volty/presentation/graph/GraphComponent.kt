@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.graph
 import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.stats.RideEnergy
 import kotlinx.coroutines.CoroutineScope
@@ -12,10 +13,12 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
+import kotlin.time.Instant
 import kotlin.time.Duration.Companion.hours
 import kotlin.time.Duration.Companion.minutes
 
@@ -30,13 +33,22 @@ enum class GraphWindow(val label: String, val duration: Duration?) {
 interface GraphComponent {
     val state: StateFlow<State>
     fun onMetricSelected(metric: GraphMetric)
+    fun onMetricAdded(metric: GraphMetric) {}
+    fun onMetricRemoved(metric: GraphMetric) {}
     fun onWindowSelected(window: GraphWindow)
+    fun onTimestampSelected(timestamp: Instant?) {}
+    fun onComparisonRequested(x: GraphMetric, y: GraphMetric) {}
     fun onBack()
 
     data class State(
         val metric: GraphMetric = GraphMetric.POWER,
         val window: GraphWindow = GraphWindow.M5,
         val values: List<Float> = emptyList(),
+        /** Timestamped series for every visible card. */
+        val series: Map<GraphMetric, GraphSeries> = emptyMap(),
+        val visibleMetrics: List<GraphMetric> = listOf(GraphMetric.POWER),
+        val selectedTimestamp: Instant? = null,
+        val selectedPoints: Map<GraphMetric, GraphPoint> = emptyMap(),
         /** Null means no measured sample exists for this metric in the window. */
         val nowValue: Float? = null,
         val avg: Float? = null,
@@ -61,6 +73,8 @@ class DefaultGraphComponent(
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
 
     private var sampleJob: Job? = null
+    private var latestSamples: List<BmsData> = emptyList()
+    private var latestMotion: List<ControllerData> = emptyList()
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
@@ -71,36 +85,55 @@ class DefaultGraphComponent(
         sampleJob?.cancel()
         val window = _state.value.window.duration ?: 6.hours  // ALL uses a large window
         sampleJob = scope.launch {
-            bmsRepository.samples(window).collect { samples ->
-                _state.update { computeStats(it, samples) }
+            combine(
+                bmsRepository.samples(window),
+                bmsRepository.motionSamples(window)
+            ) { samples, motion -> samples to motion }.collect { (samples, motion) ->
+                latestSamples = samples
+                latestMotion = motion
+                _state.update { computeStats(it, samples, motion) }
             }
         }
     }
 
-    private fun computeStats(prev: GraphComponent.State, samples: List<BmsData>): GraphComponent.State {
+    private fun computeStats(
+        prev: GraphComponent.State,
+        samples: List<BmsData>,
+        motion: List<ControllerData>
+    ): GraphComponent.State {
         val metric = prev.metric
         // Graphs are consumption-positive: discharge plots upward. The domain
         // convention is "+ = charging", so for POWER/CURRENT we negate the series
         // for display. Every derived stat (now/avg/peak/min/used) is then computed
         // from the negated values so "Peak" = peak consumption and "Used" is the
         // net Wh/Ah consumed over the window. SOC/VOLTAGE/TEMPERATURE are unchanged.
-        val displaySign = if (metric == GraphMetric.POWER || metric == GraphMetric.CURRENT) -1f else 1f
-        val values = samples.mapNotNull { sample ->
-            extractValue(sample, metric)?.let { value ->
-                (displaySign * value).takeUnless { it == 0f } ?: 0f
+        val series = prev.visibleMetrics.associateWith { selected ->
+            if (selected.source == GraphSource.BATTERY) {
+                GraphTelemetryMapper.batterySeries(samples, selected)
+            } else {
+                GraphTelemetryMapper.motionSeries(motion, selected)
             }
         }
+        val activeSeries = series[metric]?.points.orEmpty()
+        val values = activeSeries.map { it.value }
         val avg = values.takeIf { it.isNotEmpty() }?.average()?.toFloat()
         val peak = values.maxOrNull()
         val min = values.minOrNull()
         val used = computeUsed(samples, metric)
+        val selectedPoints = prev.selectedTimestamp?.let { timestamp ->
+            series.mapNotNull { (selected, current) ->
+                nearestPoint(current.points, timestamp)?.let { selected to it }
+            }.toMap()
+        }.orEmpty()
         return prev.copy(
+            series = series,
             values = values,
             nowValue = values.lastOrNull(),
             avg = avg,
             peak = peak,
             min = min,
-            used = used
+            used = used,
+            selectedPoints = selectedPoints
         )
     }
 
@@ -133,8 +166,58 @@ class DefaultGraphComponent(
     }
 
     override fun onMetricSelected(metric: GraphMetric) {
-        _state.update { it.copy(metric = metric) }
+        _state.update { current ->
+            val metrics = if (metric in current.visibleMetrics) {
+                current.visibleMetrics
+            } else {
+                listOf(metric) + current.visibleMetrics.drop(1)
+            }
+            computeStats(
+                current.copy(metric = metric, visibleMetrics = metrics),
+                latestSamples,
+                latestMotion
+            )
+        }
+        // The repository flows are hot and continue to emit; this merely keeps
+        // the legacy method's contract of refreshing immediately after a tab tap.
         restartCollection()
+    }
+
+    override fun onMetricAdded(metric: GraphMetric) {
+        _state.update { current ->
+            if (metric in current.visibleMetrics) current
+            else computeStats(
+                current.copy(visibleMetrics = current.visibleMetrics + metric),
+                latestSamples,
+                latestMotion
+            )
+        }
+    }
+
+    override fun onMetricRemoved(metric: GraphMetric) {
+        _state.update { current ->
+            if (current.visibleMetrics.size <= 1 || metric !in current.visibleMetrics) return@update current
+            val remaining = current.visibleMetrics - metric
+            computeStats(
+                current.copy(
+                    visibleMetrics = remaining,
+                    metric = if (current.metric == metric) remaining.first() else current.metric
+                ),
+                latestSamples,
+                latestMotion
+            )
+        }
+    }
+
+    override fun onTimestampSelected(timestamp: Instant?) {
+        _state.update { current ->
+            val selected = timestamp?.let { target ->
+                current.series.mapNotNull { (metric, series) ->
+                    nearestPoint(series.points, target)?.let { metric to it }
+                }.toMap()
+            }.orEmpty()
+            current.copy(selectedTimestamp = timestamp, selectedPoints = selected)
+        }
     }
 
     override fun onWindowSelected(window: GraphWindow) {
