@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.CancellationException
@@ -218,6 +219,9 @@ class DefaultPickerComponent(
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
+            vehicleRepository.rememberDeviceType(
+                DeviceTypeMemory(address = device.address, controllerType = type)
+            )
             // The SHAPE is the model layer's decision, not this screen's: a
             // Begode is a controller and its own battery over one link and gets
             // a stored pack, everything else is controller-only. See
@@ -285,6 +289,9 @@ class DefaultPickerComponent(
         scope.launch {
             _state.update { it.copy(typePickerFor = null, connecting = device.address, error = null) }
             scanJob?.cancel()
+            vehicleRepository.rememberDeviceType(
+                DeviceTypeMemory(address = device.address, bmsType = type)
+            )
             if (mode == "add") {
                 val v = singlePackVehicle(
                     id = newVehicleId(),

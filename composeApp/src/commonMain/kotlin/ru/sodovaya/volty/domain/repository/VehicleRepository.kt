@@ -1,7 +1,10 @@
 package ru.sodovaya.volty.domain.repository
 
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.BmsType
+import ru.sodovaya.volty.domain.model.ControllerType
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 
 /**
  * The learned widths of one vehicle's CURRENT and POWER dials (`G §9.2`), in
@@ -29,6 +32,25 @@ data class GaugePeaks(val currentA: Float = 0f, val powerW: Float = 0f) {
     }
 }
 
+/**
+ * A type the rider explicitly assigned to one BLE address.
+ *
+ * The two nullable fields are deliberately exclusive: one peripheral is one
+ * remembered source role. A saved vehicle remains a stronger claim than this
+ * free-standing memory (the scan resolver applies that precedence).
+ */
+data class DeviceTypeMemory(
+    val address: String,
+    val bmsType: BmsType? = null,
+    val controllerType: ControllerType? = null
+) {
+    init {
+        require((bmsType != null) xor (controllerType != null)) {
+            "a device type memory must describe exactly one source role"
+        }
+    }
+}
+
 interface VehicleRepository {
     val vehicles: Flow<List<Vehicle>>
     suspend fun get(id: String): Vehicle?
@@ -51,6 +73,13 @@ interface VehicleRepository {
      * to carry a stale copy of the latter back into storage.
      */
     val gaugePeaks: Flow<Map<String, GaugePeaks>>
+
+    /** Explicit source types keyed by BLE address; absent means no correction. */
+    val deviceTypeMemories: Flow<Map<String, DeviceTypeMemory>>
+        get() = flowOf(emptyMap())
+
+    /** Record one explicit type choice. Defaults keep existing fakes source-compatible. */
+    suspend fun rememberDeviceType(memory: DeviceTypeMemory) {}
 
     /**
      * **The only writer of the learned dial widths** (`G §9.2`) — the ride

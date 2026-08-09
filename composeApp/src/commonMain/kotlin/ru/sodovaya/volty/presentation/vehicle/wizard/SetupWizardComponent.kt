@@ -31,6 +31,7 @@ import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.vehicle.CanCandidate
@@ -240,6 +241,7 @@ class DefaultSetupWizardComponent(
     private val canDiscovery: CanDiscovery? = null,
     liveAddresses: Flow<Set<String>> = kotlinx.coroutines.flow.flowOf(emptySet()),
     private val saveVehicle: suspend (Vehicle) -> Unit,
+    private val rememberDeviceType: suspend (DeviceTypeMemory) -> Unit = {},
     private val connectVehicle: suspend (Vehicle) -> Result<Unit> = { Result.success(Unit) },
     private val newVehicleId: () -> String = { "v-${Random.nextLong()}" },
     private val now: () -> Instant = { Clock.System.now() },
@@ -414,10 +416,22 @@ class DefaultSetupWizardComponent(
 
     private fun removePack(key: String) = mutateDraft { it.removeSetupPack(key) }
     private fun removeController(key: String) = mutateDraft { it.removeSetupController(key) }
-    private fun changePackType(key: String, type: BmsType) =
+    private fun changePackType(key: String, type: BmsType) {
+        val address = _state.value.draft.packs.firstOrNull { it.key == key }?.address.orEmpty()
         mutateDraft { draft -> draft.updatePack(key) { it.copy(bmsType = type) } }
-    private fun changeControllerType(key: String, type: ControllerType) =
+        rememberType(address, DeviceTypeMemory(address = address, bmsType = type))
+    }
+
+    private fun changeControllerType(key: String, type: ControllerType) {
+        val address = _state.value.draft.controllers.firstOrNull { it.key == key }?.address.orEmpty()
         mutateDraft { draft -> draft.updateController(key) { it.copy(controllerType = type) } }
+        rememberType(address, DeviceTypeMemory(address = address, controllerType = type))
+    }
+
+    private fun rememberType(address: String, memory: DeviceTypeMemory) {
+        if (address.isBlank()) return
+        scope.launch { rememberDeviceType(memory) }
+    }
     private fun changeControllerCanId(key: String, canId: Int?) =
         mutateDraft { draft -> draft.updateController(key) { it.copy(canId = canId) } }
     private fun changeControllerPolePairs(key: String, value: Int?) =

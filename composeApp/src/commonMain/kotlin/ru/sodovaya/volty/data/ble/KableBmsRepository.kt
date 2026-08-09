@@ -797,6 +797,7 @@ class KableBmsRepository private constructor(
         // advertising.
         val knownAddresses: Map<String, Vehicle> =
             vehiclesByAddress(vehicleRepository.vehicles.first())
+        val rememberedTypes = vehicleRepository.deviceTypeMemories.first()
         // A scan can run WHILE a connection is live (the Picker seeds itself
         // with the connected device and keeps scanning for others). Don't let
         // it clobber the Connected / Connecting / Reconnecting state machine —
@@ -821,6 +822,7 @@ class KableBmsRepository private constructor(
             val resolved = resolveDeviceTypes(
                 address = id,
                 knownVehicle = knownVehicle,
+                rememberedType = rememberedTypes[id],
                 detectedBmsType = type,
                 detectedControllerType = controllerType
             )

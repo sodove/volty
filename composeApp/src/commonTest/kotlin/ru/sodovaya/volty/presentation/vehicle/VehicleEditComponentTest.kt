@@ -42,6 +42,7 @@ import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.MovingAvg
@@ -160,6 +161,7 @@ class VehicleEditComponentTest {
         savedPeaks: Map<String, GaugePeaks> = emptyMap()
     ) : VehicleRepository {
         val upserts = mutableListOf<Vehicle>()
+        val rememberedTypes = mutableListOf<DeviceTypeMemory>()
         override val vehicles: Flow<List<Vehicle>> = flowOf(saved)
         /**
          * Yields before answering, because the real one does: it is a
@@ -210,6 +212,9 @@ class VehicleEditComponentTest {
         override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {
             gaugePeakWrites += Triple(id, currentA, powerW)
             peaks.value = peaks.value + (id to GaugePeaks(currentA, powerW))
+        }
+        override suspend fun rememberDeviceType(memory: DeviceTypeMemory) {
+            rememberedTypes += memory
         }
     }
 
@@ -2207,6 +2212,7 @@ class VehicleEditComponentTest {
         c.onControllerAddressChanged(ck, "WH:01")
         c.onControllerCanIdChanged(ck, null)
         c.onControllerMotorChanged(ck, MotorConfig(polePairs = 3, wheelDiameterMm = 100, gearRatio = 1.5f))
+        advanceUntilIdle()
         c.onSave()
         advanceUntilIdle()
 
@@ -2227,6 +2233,13 @@ class VehicleEditComponentTest {
                 )
             ),
             saved.packs
+        )
+        assertEquals(
+            listOf(
+                DeviceTypeMemory(address = "AA:BB", bmsType = BmsType.ANT_BMS),
+                DeviceTypeMemory(address = "AA:BB", controllerType = ControllerType.BEGODE)
+            ),
+            repo.rememberedTypes
         )
         assertEquals(
             listOf(

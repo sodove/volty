@@ -26,6 +26,7 @@ import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
@@ -795,7 +796,7 @@ class DefaultVehicleEditComponent(
     override fun onPackLabelChanged(key: String, label: String) =
         mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(label = label) } }
     override fun onPackTypeChanged(key: String, bmsType: BmsType) =
-        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(bmsType = bmsType) } }
+        changePackTypeAndRemember(key, bmsType)
     override fun onPackAddressChanged(key: String, address: String) =
         mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(address = address) } }
     override fun onPackCanIdChanged(key: String, canId: Int?) =
@@ -808,7 +809,7 @@ class DefaultVehicleEditComponent(
     override fun onControllerLabelChanged(key: String, label: String) =
         mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(label = label) } }
     override fun onControllerTypeChanged(key: String, controllerType: ControllerType) =
-        mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(controllerType = controllerType) } }
+        changeControllerTypeAndRemember(key, controllerType)
     override fun onControllerAddressChanged(key: String, address: String) =
         mutateDraft(controllers = true) { d -> d.updateController(key) { it.copy(address = address) } }
     override fun onControllerCanIdChanged(key: String, canId: Int?) =
@@ -831,6 +832,32 @@ class DefaultVehicleEditComponent(
                 it.copy(motor = edit(it.motor), motorProvenance = MotorConfigProvenance.RIDER)
             }
         }
+
+    private fun changePackTypeAndRemember(key: String, bmsType: BmsType) {
+        val address = _state.value.draft.packs.firstOrNull { it.key == key }?.address.orEmpty()
+        mutateDraft(packs = true) { d -> d.updatePack(key) { it.copy(bmsType = bmsType) } }
+        if (address.isNotBlank()) {
+            scope.launch {
+                vehicleRepository.rememberDeviceType(
+                    DeviceTypeMemory(address = address, bmsType = bmsType)
+                )
+            }
+        }
+    }
+
+    private fun changeControllerTypeAndRemember(key: String, controllerType: ControllerType) {
+        val address = _state.value.draft.controllers.firstOrNull { it.key == key }?.address.orEmpty()
+        mutateDraft(controllers = true) { d ->
+            d.updateController(key) { it.copy(controllerType = controllerType) }
+        }
+        if (address.isNotBlank()) {
+            scope.launch {
+                vehicleRepository.rememberDeviceType(
+                    DeviceTypeMemory(address = address, controllerType = controllerType)
+                )
+            }
+        }
+    }
 
     override fun onControllerSetupReported(key: String, config: VescSetupConfig) {
         _state.update { s ->

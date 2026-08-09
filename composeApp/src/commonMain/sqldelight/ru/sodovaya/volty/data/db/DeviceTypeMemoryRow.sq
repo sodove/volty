@@ -1,0 +1,22 @@
+-- A rider's explicit source-type correction, keyed by the BLE address rather
+-- than by a vehicle or its advertised name. Exactly one role is remembered for
+-- an address; a saved vehicle claim remains the stronger scan-time source.
+CREATE TABLE DeviceTypeMemoryRow (
+    address        TEXT NOT NULL PRIMARY KEY,
+    bmsType        TEXT,
+    controllerType TEXT,
+    CHECK ((bmsType IS NOT NULL) != (controllerType IS NOT NULL))
+);
+
+selectAll:
+SELECT * FROM DeviceTypeMemoryRow;
+
+selectByAddress:
+SELECT * FROM DeviceTypeMemoryRow WHERE address = :address;
+
+upsert:
+INSERT OR REPLACE INTO DeviceTypeMemoryRow(address, bmsType, controllerType)
+VALUES (:address, :bmsType, :controllerType);
+
+deleteByAddress:
+DELETE FROM DeviceTypeMemoryRow WHERE address = :address;

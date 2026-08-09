@@ -1,0 +1,12 @@
+-- v9 -> v10: remember an explicit source type by BLE address (Part K Task 2).
+--
+-- This table intentionally has no vehicle foreign key. The correction belongs
+-- to the physical peripheral and must survive removing it from a vehicle, or
+-- choosing it before a vehicle exists. The app's stock SQLite drivers leave
+-- foreign_keys off anyway; no cascade is relied upon here.
+CREATE TABLE DeviceTypeMemoryRow (
+    address        TEXT NOT NULL PRIMARY KEY,
+    bmsType        TEXT,
+    controllerType TEXT,
+    CHECK ((bmsType IS NOT NULL) != (controllerType IS NOT NULL))
+);

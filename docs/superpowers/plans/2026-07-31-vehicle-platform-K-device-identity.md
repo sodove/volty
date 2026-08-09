@@ -181,23 +181,23 @@ memory has to survive a device being removed from a vehicle, or never having bee
 Part I Task 9 moved learned dial ranges out of the vehicle row for the same reason and is
 the local precedent for shape, migration and accessor.
 
-- [ ] **Step 1: Write the failing tests.** A rider's explicit choice for an address is
+- [x] **Step 1: Write the failing tests.** A rider's explicit choice for an address is
       returned on the next scan; it outranks the detector; it is **outranked by** a saved
       vehicle's own row (Task 1's source), because a composed vehicle is a stronger statement
       than a sheet selection; removing the device from every vehicle leaves the memory
       intact; and the memory is per address, not per name.
 
-- [ ] **Step 2: Run them and watch them fail.**
+- [x] **Step 2: Run them and watch them fail.**
 
-- [ ] **Step 3: Migrate.** New table keyed by address. **Check whether
+- [x] **Step 3: Migrate.** New table keyed by address. **Check whether
       `PRAGMA foreign_keys` is enabled before relying on any cascade** — Part I Task 9 found
       it provably off, with stock `AndroidSqliteDriver`/`JdbcSqliteDriver` and no executable
       `PRAGMA` anywhere in the repository. If that is still true, there is nothing to cascade
       from here anyway: this table is deliberately not owned by a vehicle.
 
-- [ ] **Step 4: Record the choice where the rider makes it**, not where it is consumed.
+- [x] **Step 4: Record the choice where the rider makes it**, not where it is consumed.
 
-- [ ] **Step 5: Sweep, full suite, commit.**
+- [x] **Step 5: Sweep, full suite, commit.**
 
 ```bash
 git commit -m "feat(scan): remember what the rider told us about this address"

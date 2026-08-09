@@ -604,6 +604,7 @@ class DefaultRootComponent(
                             ::liveLinkAddresses
                         ),
                         saveVehicle = vehicleRepository::upsert,
+                        rememberDeviceType = vehicleRepository::rememberDeviceType,
                         connectVehicle = bmsRepository::connect,
                         onCancelled = ::leaveActiveSetupWizard,
                         onShowVehicleList = { replaceAll(Config.Picker(mode = "cold")) },

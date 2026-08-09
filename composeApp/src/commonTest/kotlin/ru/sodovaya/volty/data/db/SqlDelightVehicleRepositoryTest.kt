@@ -5,11 +5,13 @@ import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
 import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
@@ -73,6 +75,39 @@ class SqlDelightVehicleRepositoryTest {
         repo.upsert(v("id-1"))
         repo.delete("id-1")
         assertNull(repo.get("id-1"))
+    }
+
+    @Test
+    fun `explicit device type memory round trips by address`() = runTest {
+        val repo = newRepo()
+
+        repo.rememberDeviceType(
+            DeviceTypeMemory(address = "AA:BB", bmsType = BmsType.ANT_BMS)
+        )
+        repo.rememberDeviceType(
+            DeviceTypeMemory(address = "CC:DD", controllerType = ControllerType.VESC)
+        )
+
+        val memories = repo.deviceTypeMemories.first()
+        assertEquals(BmsType.ANT_BMS, memories["AA:BB"]?.bmsType)
+        assertEquals(ControllerType.VESC, memories["CC:DD"]?.controllerType)
+        assertEquals(null, memories["AA:BB"]?.controllerType)
+    }
+
+    @Test
+    fun `deleting a vehicle does not delete its address type memory`() = runTest {
+        val repo = newRepo()
+        repo.upsert(v("id-1"))
+        repo.rememberDeviceType(
+            DeviceTypeMemory(address = "AA:BB:CC:DD:EE:FF", bmsType = BmsType.ANT_BMS)
+        )
+
+        repo.delete("id-1")
+
+        assertEquals(
+            BmsType.ANT_BMS,
+            repo.deviceTypeMemories.first()["AA:BB:CC:DD:EE:FF"]?.bmsType
+        )
     }
 
     @Test

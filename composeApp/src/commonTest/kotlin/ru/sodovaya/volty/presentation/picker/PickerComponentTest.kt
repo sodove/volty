@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.singlePackVehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.GaugePeaks
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -77,6 +78,7 @@ class PickerComponentTest {
         private val store = saved.associateBy { it.id }.toMutableMap()
         val upserts = mutableListOf<Vehicle>()
         val deletes = mutableListOf<String>()
+        val rememberedTypes = mutableListOf<DeviceTypeMemory>()
 
         /** Everything the store holds right now — an orphan row shows up here. */
         val stored: List<Vehicle> get() = store.values.toList()
@@ -92,6 +94,9 @@ class PickerComponentTest {
         // absence in that map means "has learned nothing", which is exactly the case here.
         override val gaugePeaks: Flow<Map<String, GaugePeaks>> = flowOf(emptyMap())
         override suspend fun updateGaugePeaks(id: String, currentA: Float, powerW: Float) {}
+        override suspend fun rememberDeviceType(memory: DeviceTypeMemory) {
+            rememberedTypes += memory
+        }
     }
 
     private fun vehicle(id: String, address: String) = singlePackVehicle(
@@ -204,13 +209,22 @@ class PickerComponentTest {
     fun `onConnectWithType uses the chosen type, overriding the guess (guest mode)`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val unknown = device("CC:UNKNOWN", null)
-        val (c, repo) = component(mode = "guest", scan = listOf(unknown))
+        val vehicleRepo = FakeVehicleRepo(emptyList())
+        val (c, repo) = component(
+            mode = "guest",
+            scan = listOf(unknown),
+            vehicleRepo = vehicleRepo
+        )
         advanceUntilIdle()
 
         c.onConnectWithType(unknown, SourceChoice.Battery(BmsType.JBD_BMS))
         advanceUntilIdle()
 
         assertEquals(listOf("CC:UNKNOWN" to BmsType.JBD_BMS), repo.guestConnects)
+        assertEquals(
+            listOf(DeviceTypeMemory(address = "CC:UNKNOWN", bmsType = BmsType.JBD_BMS)),
+            vehicleRepo.rememberedTypes
+        )
     }
 
     // ----- G1 Task 3: the type sheet learns controllers -----

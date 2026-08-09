@@ -6,6 +6,7 @@ import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.DeviceTypeProvenance
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -88,6 +89,50 @@ class DeviceTypeResolutionTest {
 
         assertEquals(ControllerType.KELLY, resolved.controllerType)
         assertNull(resolved.bmsType)
+        assertEquals(DeviceTypeProvenance.DETECTED, resolved.provenance)
+    }
+
+    @Test
+    fun `an explicit address correction outranks a conflicting detector`() {
+        val resolved = resolveDeviceTypes(
+            address = "AA:BB",
+            knownVehicle = null,
+            rememberedType = DeviceTypeMemory(address = "AA:BB", bmsType = BmsType.ANT_BMS),
+            detectedBmsType = BmsType.JK_BMS,
+            detectedControllerType = null
+        )
+
+        assertEquals(BmsType.ANT_BMS, resolved.bmsType)
+        assertNull(resolved.controllerType)
+        assertEquals(DeviceTypeProvenance.REMEMBERED, resolved.provenance)
+    }
+
+    @Test
+    fun `saved vehicle type outranks an explicit correction for the same address`() {
+        val resolved = resolveDeviceTypes(
+            address = "AA:BB",
+            knownVehicle = controllerVehicle("AA:BB", ControllerType.VESC),
+            rememberedType = DeviceTypeMemory(address = "AA:BB", bmsType = BmsType.JK_BMS),
+            detectedBmsType = BmsType.JK_BMS,
+            detectedControllerType = ControllerType.KELLY
+        )
+
+        assertEquals(ControllerType.VESC, resolved.controllerType)
+        assertNull(resolved.bmsType)
+        assertEquals(DeviceTypeProvenance.REMEMBERED, resolved.provenance)
+    }
+
+    @Test
+    fun `an explicit correction is scoped to its address rather than its name`() {
+        val resolved = resolveDeviceTypes(
+            address = "DIFFERENT",
+            knownVehicle = null,
+            rememberedType = DeviceTypeMemory(address = "AA:BB", bmsType = BmsType.ANT_BMS),
+            detectedBmsType = BmsType.JK_BMS,
+            detectedControllerType = null
+        )
+
+        assertEquals(BmsType.JK_BMS, resolved.bmsType)
         assertEquals(DeviceTypeProvenance.DETECTED, resolved.provenance)
     }
 }

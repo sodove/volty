@@ -18,6 +18,7 @@ import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.GaugePeaks
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -36,6 +37,7 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
     private val controllerQueries = provider.database.controllerRowQueries
     private val alertLevelQueries = provider.database.alertLevelRowQueries
     private val gaugePeakQueries = provider.database.gaugePeakRowQueries
+    private val deviceTypeMemoryQueries = provider.database.deviceTypeMemoryRowQueries
 
     private val vehicleRows: Flow<List<VehicleRow>> = queries.selectAll()
         .asFlow()
@@ -66,6 +68,20 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
         .map { rows ->
             rows.associate { it.vehicleId to GaugePeaks(it.currentA.toFloat(), it.powerW.toFloat()) }
         }
+
+    override val deviceTypeMemories: Flow<Map<String, DeviceTypeMemory>> =
+        deviceTypeMemoryQueries.selectAll()
+            .asFlow()
+            .mapToList(Dispatchers.Default)
+            .map { rows ->
+                rows.associate { row ->
+                    row.address to DeviceTypeMemory(
+                        address = row.address,
+                        bmsType = row.bmsType?.let(BmsType::valueOf),
+                        controllerType = row.controllerType?.let(ControllerType::valueOf)
+                    )
+                }
+            }
 
     override val vehicles: Flow<List<Vehicle>> =
         combine(vehicleRows, packRows, controllerRows, alertLevelRows) { rows, packs, ctrls, levels ->
@@ -265,6 +281,14 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
             vehicleId = id,
             currentA = currentA.toDouble(),
             powerW = powerW.toDouble()
+        )
+    }
+
+    override suspend fun rememberDeviceType(memory: DeviceTypeMemory) {
+        deviceTypeMemoryQueries.upsert(
+            address = memory.address,
+            bmsType = memory.bmsType?.name,
+            controllerType = memory.controllerType?.name
         )
     }
 }

@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.DeviceTypeProvenance
+import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 
 internal data class ResolvedDeviceTypes(
     val bmsType: BmsType?,
@@ -20,6 +21,7 @@ internal data class ResolvedDeviceTypes(
 internal fun resolveDeviceTypes(
     address: String,
     knownVehicle: Vehicle?,
+    rememberedType: DeviceTypeMemory? = null,
     detectedBmsType: BmsType?,
     detectedControllerType: ControllerType?,
 ): ResolvedDeviceTypes {
@@ -43,6 +45,23 @@ internal fun resolveDeviceTypes(
             controllerType = null,
             provenance = DeviceTypeProvenance.REMEMBERED
         )
+    }
+    rememberedType?.let { memory ->
+        if (memory.address == address) {
+            return if (memory.controllerType != null) {
+                ResolvedDeviceTypes(
+                    bmsType = null,
+                    controllerType = memory.controllerType,
+                    provenance = DeviceTypeProvenance.REMEMBERED
+                )
+            } else {
+                ResolvedDeviceTypes(
+                    bmsType = memory.bmsType,
+                    controllerType = null,
+                    provenance = DeviceTypeProvenance.REMEMBERED
+                )
+            }
+        }
     }
 
     return if (detectedControllerType != null) {
