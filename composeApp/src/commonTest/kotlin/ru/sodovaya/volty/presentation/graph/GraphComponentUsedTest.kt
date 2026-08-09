@@ -26,6 +26,7 @@ import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -104,7 +105,7 @@ class GraphComponentUsedTest {
         advanceUntilIdle()
 
         assertEquals(GraphMetric.POWER, c.state.value.metric, "precondition: POWER is the default")
-        assertEquals(10f, c.state.value.used, 0.001f)
+        assertEquals(10f, requireNotNull(c.state.value.used), 0.001f)
     }
 
     /**
@@ -124,7 +125,7 @@ class GraphComponentUsedTest {
         )
         advanceUntilIdle()
 
-        assertEquals(-10f, c.state.value.used, 0.001f)
+        assertEquals(-10f, requireNotNull(c.state.value.used), 0.001f)
     }
 
     /**
@@ -145,7 +146,7 @@ class GraphComponentUsedTest {
         )
         advanceUntilIdle()
 
-        assertEquals(600f, c.state.value.used, 0.001f)
+        assertEquals(600f, requireNotNull(c.state.value.used), 0.001f)
     }
 
     /**
@@ -161,7 +162,7 @@ class GraphComponentUsedTest {
 
         repo.window.value = listOf(BmsData(power = -600f, timestamp = at(0)))
         advanceUntilIdle()
-        assertEquals(0f, c.state.value.used, 0f, "one sample spans no time")
+        assertNull(c.state.value.used, "one sample spans no measurable interval")
 
         c.onMetricSelected(GraphMetric.SOC)
         repo.window.value = listOf(
@@ -169,7 +170,7 @@ class GraphComponentUsedTest {
             BmsData(soc = 70f, power = -600f, timestamp = at(3600))
         )
         advanceUntilIdle()
-        assertEquals(0f, c.state.value.used, 0f, "a state of charge has no watt-hours to accumulate")
+        assertNull(c.state.value.used, "a state of charge has no watt-hours to accumulate")
     }
 
     @Test
@@ -189,9 +190,9 @@ class GraphComponentUsedTest {
         advanceUntilIdle()
 
         assertEquals(listOf(0f, 600f), c.state.value.values, "unknown power must make no zero-valued trace point")
-        assertEquals(300f, c.state.value.avg, 0.001f)
-        assertEquals(600f, c.state.value.peak, 0.001f)
-        assertEquals(5f, c.state.value.used, 0.001f)
+        assertEquals(300f, requireNotNull(c.state.value.avg), 0.001f)
+        assertEquals(600f, requireNotNull(c.state.value.peak), 0.001f)
+        assertEquals(5f, requireNotNull(c.state.value.used), 0.001f)
     }
 
     @Test
@@ -210,8 +211,44 @@ class GraphComponentUsedTest {
         advanceUntilIdle()
 
         assertEquals(listOf(0f, 6f), c.state.value.values)
-        assertEquals(3f, c.state.value.avg, 0.001f)
-        assertEquals(6f, c.state.value.peak, 0.001f)
-        assertEquals(3f, c.state.value.used, 0.001f)
+        assertEquals(3f, requireNotNull(c.state.value.avg), 0.001f)
+        assertEquals(6f, requireNotNull(c.state.value.peak), 0.001f)
+        assertEquals(3f, requireNotNull(c.state.value.used), 0.001f)
+    }
+
+    @Test
+    fun all_unavailable_power_is_an_explicit_unknown_graph_state_not_a_zero_reading() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.window.value = listOf(
+            BmsData(power = -900f, hasPower = false, timestamp = at(0)),
+            BmsData(power = -700f, hasPower = false, timestamp = at(60))
+        )
+        advanceUntilIdle()
+
+        val unknown = c.state.value
+        assertEquals(emptyList(), unknown.values)
+        assertNull(unknown.nowValue)
+        assertNull(unknown.avg)
+        assertNull(unknown.peak)
+        assertNull(unknown.min)
+        assertNull(unknown.used)
+
+        repo.window.value = listOf(
+            BmsData(power = 0f, hasPower = true, timestamp = at(0)),
+            BmsData(power = 0f, hasPower = true, timestamp = at(60))
+        )
+        advanceUntilIdle()
+
+        val zero = c.state.value
+        assertEquals(listOf(0f, 0f), zero.values)
+        assertEquals(0f, zero.nowValue)
+        assertEquals(0f, zero.avg)
+        assertEquals(0f, zero.peak)
+        assertEquals(0f, zero.min)
+        assertEquals(0f, zero.used)
     }
 }

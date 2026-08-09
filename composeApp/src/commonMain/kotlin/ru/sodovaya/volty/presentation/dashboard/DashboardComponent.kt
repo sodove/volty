@@ -41,14 +41,16 @@ interface DashboardComponent {
     data class State(
         val vehicle: Vehicle? = null,
         val data: BmsData = BmsData(),
-        val avgPowerW: Float = 0f,
-        val avgCurrentA: Float = 0f,
+        /** Null means this averaging window has no measured power. */
+        val avgPowerW: Float? = null,
+        /** Null means this averaging window has no measured current. */
+        val avgCurrentA: Float? = null,
         // 30 s window — used only for the charge/discharge direction decision so
         // brief regen bursts during a long discharge don't flip the label, but
         // plugging in a charger flips it within ~30 s.
-        val recentAvgPowerW: Float = 0f,
-        val powerMin: Float = 0f,
-        val powerPeak: Float = 0f,
+        val recentAvgPowerW: Float? = null,
+        val powerMin: Float? = null,
+        val powerPeak: Float? = null,
         val sparkline: List<Float> = emptyList(),
         val cellsMinV: Float = 0f,
         val cellsMaxV: Float = 0f,
@@ -93,10 +95,9 @@ class DefaultDashboardComponent(
         val cells = initialData.cellVoltages
         val minV = if (cells.isEmpty()) 0f else cells.min()
         val maxV = if (cells.isEmpty()) 0f else cells.max()
-        // movingAverage is now a cold Flow — its initial seed comes from the
-        // collector launched in `init`. Until then we display 0, which is what
-        // the previous code effectively rendered anyway (the StateFlow seed
-        // was MovingAvg(0f, 0f, window)).
+        // movingAverage is a cold Flow — its initial seed comes from the
+        // collector launched in `init`. Until then (and when every sample is
+        // unavailable) the state remains explicitly unknown, never zero.
         MutableStateFlow(
             DashboardComponent.State(
                 data = initialData,
@@ -183,12 +184,14 @@ class DefaultDashboardComponent(
                 // and its range. powerMin/powerPeak are derived from the negated
                 // series, so powerPeak = peak consumption and the PowerRangeBar
                 // marker (data.power negated at the call site) reads as consumption.
-                val powers = samples.map { -it.power }
+                val powers = samples.mapNotNull { sample ->
+                    BmsReadings.power(sample)?.let { power -> (-power).takeUnless { it == 0f } ?: 0f }
+                }
                 _state.update {
                     it.copy(
                         sparkline = powers,
-                        powerMin = if (powers.isEmpty()) 0f else powers.min(),
-                        powerPeak = if (powers.isEmpty()) 0f else powers.max()
+                        powerMin = powers.minOrNull(),
+                        powerPeak = powers.maxOrNull()
                     )
                 }
             }
@@ -225,10 +228,10 @@ fun timeRemainingDescription(
     isCharging: Boolean,
     remainingAh: Float,
     capacityAh: Float,
-    avgPowerW: Float,
+    avgPowerW: Float?,
     nominalV: Float
 ): String {
-    val power = kotlin.math.abs(avgPowerW)
+    val power = avgPowerW?.let { kotlin.math.abs(it) } ?: return "—"
     if (power < 1f || nominalV <= 0f) return "—"
     val avgCurrentA = power / nominalV
     val targetAh = if (isCharging) (capacityAh - remainingAh) else remainingAh

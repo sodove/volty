@@ -4,6 +4,8 @@ import ru.sodovaya.volty.domain.model.BmsData
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
@@ -16,15 +18,16 @@ class MovingAverageTest {
     private fun sample(t: Instant, power: Float, current: Float) =
         BmsData(power = power, current = current, timestamp = t)
 
-    private fun assertClose(expected: Float, actual: Float, delta: Float = 0.01f) {
-        assertTrue(abs(expected - actual) <= delta, "expected $expected ± $delta, got $actual")
+    private fun assertClose(expected: Float, actual: Float?, delta: Float = 0.01f) {
+        val measured = assertNotNull(actual)
+        assertTrue(abs(expected - measured) <= delta, "expected $expected ± $delta, got $measured")
     }
 
     @Test
-    fun `empty list returns zero average`() {
+    fun `empty list retains that neither average was measured`() {
         val avg = MovingAverage.over(emptyList(), 5.minutes)
-        assertEquals(0f, avg.avgPowerW)
-        assertEquals(0f, avg.avgCurrentA)
+        assertNull(avg.avgPowerW)
+        assertNull(avg.avgCurrentA)
         assertEquals(5.minutes, avg.window)
     }
 
@@ -62,5 +65,26 @@ class MovingAverageTest {
 
         assertClose(100f, avg.avgPowerW)
         assertClose(-2f, avg.avgCurrentA)
+    }
+
+    @Test
+    fun `all unavailable samples remain unknown while measured zero stays zero`() {
+        val base = Instant.fromEpochSeconds(1_000_000)
+        val unavailable = MovingAverage.over(
+            listOf(
+                BmsData(power = 900f, hasPower = false, current = 99f, hasCurrent = false, timestamp = base),
+                BmsData(power = 700f, hasPower = false, current = 88f, hasCurrent = false, timestamp = base.plus(1.seconds))
+            ),
+            5.minutes
+        )
+        assertNull(unavailable.avgPowerW)
+        assertNull(unavailable.avgCurrentA)
+
+        val measuredZero = MovingAverage.over(
+            listOf(BmsData(power = 0f, hasPower = true, current = 0f, hasCurrent = true, timestamp = base)),
+            5.minutes
+        )
+        assertClose(0f, measuredZero.avgPowerW)
+        assertClose(0f, measuredZero.avgCurrentA)
     }
 }

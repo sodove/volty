@@ -46,11 +46,13 @@ interface GraphComponent {
         val metric: GraphMetric = GraphMetric.POWER,
         val window: GraphWindow = GraphWindow.M5,
         val values: List<Float> = emptyList(),
-        val nowValue: Float = 0f,
-        val avg: Float = 0f,
-        val peak: Float = 0f,
-        val min: Float = 0f,
-        val used: Float = 0f
+        /** Null means no measured sample exists for this metric in the window. */
+        val nowValue: Float? = null,
+        val avg: Float? = null,
+        val peak: Float? = null,
+        val min: Float? = null,
+        /** Null means no measured rate interval exists to integrate. */
+        val used: Float? = null
     )
 }
 
@@ -64,7 +66,7 @@ class DefaultGraphComponent(
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val _state = MutableStateFlow(
         GraphComponent.State(
-            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER) ?: 0f
+            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER)
         )
     )
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
@@ -99,13 +101,13 @@ class DefaultGraphComponent(
                 (displaySign * value).takeUnless { it == 0f } ?: 0f
             }
         }
-        val avg = if (values.isEmpty()) 0f else values.average().toFloat()
-        val peak = if (values.isEmpty()) 0f else values.max()
-        val min = if (values.isEmpty()) 0f else values.min()
+        val avg = values.takeIf { it.isNotEmpty() }?.average()?.toFloat()
+        val peak = values.maxOrNull()
+        val min = values.minOrNull()
         val used = computeUsed(samples, metric)
         return prev.copy(
             values = values,
-            nowValue = values.lastOrNull() ?: 0f,
+            nowValue = values.lastOrNull(),
             avg = avg,
             peak = peak,
             min = min,
@@ -131,14 +133,14 @@ class DefaultGraphComponent(
      * VESC's *opposite* convention and therefore does not get flipped — see
      * [RideEnergy]'s KDoc.
      */
-    private fun computeUsed(samples: List<BmsData>, metric: GraphMetric): Float {
-        if (metric != GraphMetric.POWER && metric != GraphMetric.CURRENT) return 0f
+    private fun computeUsed(samples: List<BmsData>, metric: GraphMetric): Float? {
+        if (metric != GraphMetric.POWER && metric != GraphMetric.CURRENT) return null
         val measured = samples.filter { extractValue(it, metric) != null }
         val integral = RideEnergy.integrateHours(
             measured,
             timestampOf = { it.timestamp }
-        ) { requireNotNull(extractValue(it, metric)) } ?: return 0f
-        return -integral.toFloat()
+        ) { requireNotNull(extractValue(it, metric)) } ?: return null
+        return (-integral.toFloat()).takeUnless { it == 0f } ?: 0f
     }
 
     override fun onMetricSelected(metric: GraphMetric) {

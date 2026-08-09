@@ -288,7 +288,8 @@ private fun graphMetricLabel(metric: GraphMetric): String = stringResource(
     }
 )
 
-private fun formatVal(v: Float, metric: GraphMetric): String {
+private fun formatVal(v: Float?, metric: GraphMetric): String {
+    if (v == null) return "—"
     val precision = when (metric) {
         GraphMetric.SOC -> 0
         GraphMetric.POWER -> 0

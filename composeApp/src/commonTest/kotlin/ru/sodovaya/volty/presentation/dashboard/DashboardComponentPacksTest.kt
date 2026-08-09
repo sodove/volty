@@ -33,8 +33,10 @@ import kotlin.test.AfterTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.ExperimentalTime
 
 @OptIn(ExperimentalCoroutinesApi::class, ExperimentalTime::class)
@@ -46,6 +48,7 @@ class DashboardComponentPacksTest {
         override val activeMotion = MutableStateFlow(ControllerData())
         override val activeVehicle = MutableStateFlow<Vehicle?>(null)
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
+        val averages = MutableStateFlow(MovingAvg(null, null, 5.minutes))
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
         override suspend fun connectGuest(address: String, type: BmsType): Result<Unit> = Result.success(Unit)
@@ -54,7 +57,7 @@ class DashboardComponentPacksTest {
         override suspend fun disconnectLink(address: String) {}
         override fun samples(window: Duration): Flow<List<BmsData>> = flowOf(emptyList())
         override fun motionSamples(window: Duration): Flow<List<ControllerData>> = flowOf(emptyList())
-        override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
+        override fun movingAverage(window: Duration): Flow<MovingAvg> = averages
         override suspend fun onAppResumed() {}
     }
 
@@ -140,5 +143,28 @@ class DashboardComponentPacksTest {
 
         assertTrue(c.state.value.packs.isEmpty())
         assertFalse(c.state.value.isPartial)
+    }
+
+    @Test
+    fun `unknown moving average reaches dashboard and ETA as unknown while a measured zero stays zero`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        assertNull(c.state.value.avgPowerW)
+        assertNull(c.state.value.avgCurrentA)
+        assertNull(c.state.value.recentAvgPowerW)
+        assertEquals(
+            "—",
+            timeRemainingDescription(false, remainingAh = 10f, capacityAh = 20f, avgPowerW = null, nominalV = 50f)
+        )
+
+        repo.averages.value = MovingAvg(0f, 0f, 5.minutes)
+        advanceUntilIdle()
+
+        assertEquals(0f, c.state.value.avgPowerW)
+        assertEquals(0f, c.state.value.avgCurrentA)
+        assertEquals(0f, c.state.value.recentAvgPowerW)
     }
 }
