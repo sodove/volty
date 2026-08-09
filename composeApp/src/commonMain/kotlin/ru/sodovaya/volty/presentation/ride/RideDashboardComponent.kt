@@ -4,11 +4,14 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -54,6 +57,12 @@ interface RideDashboardComponent {
         val battery: BmsData = BmsData(),
         /** true when some controller is offline and [motion] covers only the rest. */
         val motionPartial: Boolean = false,
+        /**
+         * The connection state a renderer can describe without guessing from a
+         * vehicle's configured sources.  In particular, a controller name is
+         * present only after that controller has actually reported telemetry.
+         */
+        val connectionSummary: RideConnectionSummary = RideConnectionSummary(),
         val connection: ConnectionState = ConnectionState.Idle,
         val units: UnitSystem = UnitSystem.METRIC,
         val style: DashboardStyle = DashboardStyle.CLEAN,
@@ -100,6 +109,71 @@ interface RideDashboardComponent {
         val savedVehicles: List<Vehicle> = emptyList(),
         val sheetOpen: Boolean = false
     )
+}
+
+/**
+ * The rider-facing meaning of a vehicle-level connection fold.
+ *
+ * A [ConnectionState.Connected] only means that *some* link is up.  This
+ * summary keeps that true while making an unhealthy controller independently
+ * visible, and records only source types backed by live telemetry for the
+ * vehicle pill.  It is pure so the Compose renderer cannot acquire a second
+ * interpretation of Task M's per-link diagnostics.
+ */
+data class RideConnectionSummary(
+    val kind: Kind = Kind.CONNECTED,
+    val controllerIssue: ControllerIssue? = null,
+    val motionPartial: Boolean = false,
+    val pillSource: PillSource = PillSource.NEUTRAL,
+    val reportedControllerType: ControllerType? = null,
+    val reportedBatteryType: BmsType? = null
+) {
+    enum class Kind { CONNECTED, MIXED, CONTROLLER_UNAVAILABLE }
+    enum class ControllerIssue { WRITE_FAILED, NOT_UNDERSTOOD, PARTIAL, NOT_REPORTED }
+    enum class PillSource { CONTROLLER, BATTERY, NEUTRAL }
+
+    companion object {
+        fun from(
+            vehicle: Vehicle?,
+            vehicleData: VehicleData,
+            connection: ConnectionState
+        ): RideConnectionSummary {
+            val controllers = vehicleData.controllers.filter { it.isOnline }
+            val packs = vehicleData.packs.filter { it.isOnline }
+            val reportedController = controllers.minByOrNull { it.controller.index }?.controller
+            val reportedPack = packs.minByOrNull { it.pack.index }?.pack
+            val controllerAddresses = vehicle?.controllers?.map { it.address }?.toSet().orEmpty()
+            val connected = connection as? ConnectionState.Connected
+            val controllerIssue = when {
+                connected?.linkWriteFailures?.any { it.address in controllerAddresses } == true ->
+                    ControllerIssue.WRITE_FAILED
+                connected?.linkNotUnderstood?.any { it.address in controllerAddresses } == true ->
+                    ControllerIssue.NOT_UNDERSTOOD
+                vehicleData.motionPartial -> ControllerIssue.PARTIAL
+                vehicle?.controllers?.isNotEmpty() == true && reportedController == null ->
+                    ControllerIssue.NOT_REPORTED
+                else -> null
+            }
+            val kind = when {
+                controllerIssue == null -> Kind.CONNECTED
+                reportedPack != null -> Kind.MIXED
+                else -> Kind.CONTROLLER_UNAVAILABLE
+            }
+            val pillSource = when {
+                reportedController != null -> PillSource.CONTROLLER
+                reportedPack != null -> PillSource.BATTERY
+                else -> PillSource.NEUTRAL
+            }
+            return RideConnectionSummary(
+                kind = kind,
+                controllerIssue = controllerIssue,
+                motionPartial = vehicleData.motionPartial,
+                pillSource = pillSource,
+                reportedControllerType = reportedController?.controllerType,
+                reportedBatteryType = reportedPack?.bmsType
+            )
+        }
+    }
 }
 
 @OptIn(ExperimentalTime::class)
@@ -560,6 +634,9 @@ class DefaultRideDashboardComponent(
                 motion = initialMotion,
                 battery = initialVehicleData.aggregate,
                 motionPartial = initialVehicleData.motionPartial,
+                connectionSummary = RideConnectionSummary.from(
+                    initialVehicle, initialVehicleData, bmsRepository.connectionState.value
+                ),
                 connection = bmsRepository.connectionState.value,
                 units = initialUnits,
                 style = initialStyle,
@@ -666,6 +743,7 @@ class DefaultRideDashboardComponent(
                     current.copy(
                         battery = vd.aggregate,
                         motionPartial = vd.motionPartial,
+                        connectionSummary = RideConnectionSummary.from(current.vehicle, vd, current.connection),
                         faults = faults,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, current.motion, vd.aggregate, current.units,
@@ -700,6 +778,9 @@ class DefaultRideDashboardComponent(
                         secondary = secondary,
                         currentRangeA = currentRange,
                         powerRangeW = powerRange,
+                        connectionSummary = RideConnectionSummary.from(
+                            vehicle, bmsRepository.activeVehicleData.value, current.connection
+                        ),
                         faults = if (vehicleChanged) emptyList() else current.faults,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             secondary, current.motion, current.battery, current.units,
@@ -721,6 +802,9 @@ class DefaultRideDashboardComponent(
                 _state.update {
                     it.copy(
                         connection = c,
+                        connectionSummary = RideConnectionSummary.from(
+                            it.vehicle, bmsRepository.activeVehicleData.value, c
+                        ),
                         faults = if (c is ConnectionState.Connected) it.faults else emptyList(),
                         sampleRateHz = if (c is ConnectionState.Connected) it.sampleRateHz else null,
                         sampleRatePhase = if (c is ConnectionState.Connected) {

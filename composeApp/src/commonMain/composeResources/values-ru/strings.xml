@@ -59,6 +59,13 @@
 
     <!-- Dashboard -->
     <string name="status_connected">Подключено · %1$s</string>
+    <string name="status_mixed">Подключено не полностью · %1$s · контроллер: %2$s</string>
+    <string name="status_controller_unavailable">Контроллер недоступен · %1$s</string>
+    <string name="controller_issue_write_failed">запрос не удалось отправить</string>
+    <string name="controller_issue_not_understood">ответ не распознан</string>
+    <string name="controller_issue_partial">не все данные контроллера доступны</string>
+    <string name="controller_issue_not_reported">ещё не сообщил данные</string>
+    <string name="status_source_neutral">источник телеметрии</string>
     <string name="status_disconnected">Отключено</string>
     <string name="status_reconnecting">%1$s</string>
     <string name="status_connecting">Подключение…</string>

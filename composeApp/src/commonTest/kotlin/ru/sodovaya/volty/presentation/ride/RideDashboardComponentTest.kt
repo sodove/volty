@@ -17,12 +17,14 @@ import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DEMO_VEHICLE_ID
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.Pack
+import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.withCellCount
@@ -275,6 +277,102 @@ class RideDashboardComponentTest {
             onOpenSettingsRequested = onOpenSettingsRequested,
             onAddVehicleRequested = onAddVehicleRequested,
             onDisconnectRequested = onDisconnectRequested
+        )
+    }
+
+    /**
+     * A pack can keep the vehicle-level connection fold alive while its VESC
+     * link is notifying replies we cannot decode.  The dashboard must preserve
+     * that controller-specific fact instead of calling the whole vehicle
+     * simply connected.
+     */
+    @Test
+    fun `online pack plus unrecognised silent controller is exposed as mixed`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val controller = Controller(0, "Drive", ControllerType.VESC, "CTRL")
+        val pack = Pack(0, "Battery", BmsType.JK_BMS, "PACK")
+        val vehicle = vehicleWith(null, SecondaryGauge.DUTY).copy(
+            packs = listOf(pack),
+            controllers = listOf(controller)
+        )
+        repo.activeVehicle.value = vehicle
+        repo.activeVehicleData.value = VehicleData(
+            packs = listOf(PackState(pack, BmsData(isConnected = true), isOnline = true)),
+            controllers = listOf(ControllerState(controller, ControllerData(), isOnline = false)),
+            motionPartial = true
+        )
+        repo.connectionState.value = ConnectionState.Connected(
+            vehicle,
+            linkNotUnderstood = listOf(ConnectionState.LinkNotUnderstood("CTRL"))
+        )
+
+        val component = component(repo)
+        advanceUntilIdle()
+
+        val summary = component.state.value.connectionSummary
+        assertEquals(RideConnectionSummary.Kind.MIXED, summary.kind)
+        assertEquals(RideConnectionSummary.ControllerIssue.NOT_UNDERSTOOD, summary.controllerIssue)
+        assertTrue(summary.motionPartial, "the renderer must receive the aggregate's partial flag")
+        assertEquals(RideConnectionSummary.PillSource.BATTERY, summary.pillSource)
+    }
+
+    @Test
+    fun `healthy reported controller keeps the controller connected pill`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val controller = Controller(0, "Drive", ControllerType.VESC, "CTRL")
+        val pack = Pack(0, "Battery", BmsType.JK_BMS, "PACK")
+        val vehicle = vehicleWith(null, SecondaryGauge.DUTY).copy(
+            packs = listOf(pack),
+            controllers = listOf(controller)
+        )
+        repo.activeVehicle.value = vehicle
+        repo.activeVehicleData.value = VehicleData(
+            packs = listOf(PackState(pack, BmsData(isConnected = true), isOnline = true)),
+            controllers = listOf(
+                ControllerState(controller, ControllerData(isConnected = true), isOnline = true)
+            )
+        )
+        repo.connectionState.value = ConnectionState.Connected(vehicle)
+
+        val component = component(repo)
+        advanceUntilIdle()
+
+        val summary = component.state.value.connectionSummary
+        assertEquals(RideConnectionSummary.Kind.CONNECTED, summary.kind)
+        assertEquals(null, summary.controllerIssue)
+        assertFalse(summary.motionPartial)
+        assertEquals(RideConnectionSummary.PillSource.CONTROLLER, summary.pillSource)
+    }
+
+    @Test
+    fun `controller poll write failure remains a controller-side mixed reason`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val controller = Controller(0, "Drive", ControllerType.VESC, "CTRL")
+        val pack = Pack(0, "Battery", BmsType.JK_BMS, "PACK")
+        val vehicle = vehicleWith(null, SecondaryGauge.DUTY).copy(
+            packs = listOf(pack),
+            controllers = listOf(controller)
+        )
+        repo.activeVehicle.value = vehicle
+        repo.activeVehicleData.value = VehicleData(
+            packs = listOf(PackState(pack, BmsData(isConnected = true), isOnline = true)),
+            controllers = listOf(ControllerState(controller, ControllerData(), isOnline = false)),
+            motionPartial = true
+        )
+        repo.connectionState.value = ConnectionState.Connected(
+            vehicle,
+            linkWriteFailures = listOf(ConnectionState.LinkWriteFailure("CTRL", 3, "no write property"))
+        )
+
+        val component = component(repo)
+        advanceUntilIdle()
+
+        assertEquals(
+            RideConnectionSummary.ControllerIssue.WRITE_FAILED,
+            component.state.value.connectionSummary.controllerIssue
         )
     }
 

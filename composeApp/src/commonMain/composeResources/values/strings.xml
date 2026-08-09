@@ -59,6 +59,13 @@
 
     <!-- Dashboard -->
     <string name="status_connected">Connected · %1$s</string>
+    <string name="status_mixed">Partially connected · %1$s · controller: %2$s</string>
+    <string name="status_controller_unavailable">Controller unavailable · %1$s</string>
+    <string name="controller_issue_write_failed">request could not be sent</string>
+    <string name="controller_issue_not_understood">reply is not understood</string>
+    <string name="controller_issue_partial">some controller data is missing</string>
+    <string name="controller_issue_not_reported">has not reported yet</string>
+    <string name="status_source_neutral">telemetry source</string>
     <string name="status_disconnected">Disconnected</string>
     <string name="status_reconnecting">%1$s</string>
     <string name="status_connecting">Connecting…</string>

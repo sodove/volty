@@ -49,7 +49,7 @@ import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
-import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
+import ru.sodovaya.volty.presentation.common.bmsTypeLabel
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.dashboard.VehicleSheet
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
@@ -89,11 +89,18 @@ import volty.composeapp.generated.resources.secondary_gauge_esc_temp
 import volty.composeapp.generated.resources.secondary_gauge_motor_temp
 import volty.composeapp.generated.resources.secondary_gauge_power
 import volty.composeapp.generated.resources.status_connected
+import volty.composeapp.generated.resources.status_mixed
+import volty.composeapp.generated.resources.status_controller_unavailable
+import volty.composeapp.generated.resources.status_source_neutral
 import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
 import volty.composeapp.generated.resources.status_idle
 import volty.composeapp.generated.resources.status_reconnecting
 import volty.composeapp.generated.resources.status_scanning
+import volty.composeapp.generated.resources.controller_issue_not_reported
+import volty.composeapp.generated.resources.controller_issue_not_understood
+import volty.composeapp.generated.resources.controller_issue_partial
+import volty.composeapp.generated.resources.controller_issue_write_failed
 
 /**
  * The Ride dashboard — the app's home screen for a vehicle with a motor
@@ -153,15 +160,36 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Controller type (VESC/FarDriver/…) when present, falling back to the
-        // BMS label for a vehicle whose packs happen to be primary. This used
-        // to be spelled out here; it now lives in [vehicleSourceLabel] and is
-        // shared verbatim with DashboardScreen's status line and every vehicle
-        // row, so the three can no longer drift apart.
-        val controllerLabel = vehicleSourceLabel(vehicle) ?: "—"
+        // The configured primary controller is not enough evidence for this
+        // label: on a mixed connection it can be the one source that never
+        // produced a frame. The component supplies types only after their
+        // source reported successfully.
+        val connectionSummary = state.connectionSummary
+        val sourceLabel = when (connectionSummary.pillSource) {
+            RideConnectionSummary.PillSource.CONTROLLER -> connectionSummary.reportedControllerType?.label
+            RideConnectionSummary.PillSource.BATTERY -> connectionSummary.reportedBatteryType?.let { bmsTypeLabel(it) }
+            RideConnectionSummary.PillSource.NEUTRAL -> null
+        } ?: stringResource(Res.string.status_source_neutral)
+        val controllerIssueLabel = when (connectionSummary.controllerIssue) {
+            RideConnectionSummary.ControllerIssue.WRITE_FAILED ->
+                stringResource(Res.string.controller_issue_write_failed)
+            RideConnectionSummary.ControllerIssue.NOT_UNDERSTOOD ->
+                stringResource(Res.string.controller_issue_not_understood)
+            RideConnectionSummary.ControllerIssue.PARTIAL ->
+                stringResource(Res.string.controller_issue_partial)
+            RideConnectionSummary.ControllerIssue.NOT_REPORTED ->
+                stringResource(Res.string.controller_issue_not_reported)
+            null -> ""
+        }
         val (statusLabel, statusColor) = when (val c = state.connection) {
-            is ConnectionState.Connected ->
-                ("● " + stringResource(Res.string.status_connected, controllerLabel)) to MaterialTheme.colorScheme.tertiary
+            is ConnectionState.Connected -> when (connectionSummary.kind) {
+                RideConnectionSummary.Kind.CONNECTED ->
+                    ("● " + stringResource(Res.string.status_connected, sourceLabel)) to MaterialTheme.colorScheme.tertiary
+                RideConnectionSummary.Kind.MIXED ->
+                    ("● " + stringResource(Res.string.status_mixed, sourceLabel, controllerIssueLabel)) to MaterialTheme.colorScheme.secondary
+                RideConnectionSummary.Kind.CONTROLLER_UNAVAILABLE ->
+                    ("● " + stringResource(Res.string.status_controller_unavailable, controllerIssueLabel)) to MaterialTheme.colorScheme.error
+            }
             is ConnectionState.Connecting ->
                 ("● " + stringResource(Res.string.status_connecting)) to MaterialTheme.colorScheme.secondary
             is ConnectionState.Reconnecting ->
