@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.controller.kelly
 
+import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
@@ -44,6 +45,18 @@ class EtsProtocolTest {
     }
 
     @Test
+    fun packetParser_returnsCommandLengthPayloadAndChecksumFromValidResponse() {
+        val raw = byteArrayOf(0x11, 0x02, 0x01, 0x09, 0x1D)
+
+        val packet = EtsPacketBuilder.parseRxResponse(raw, EtsCommand.CODE_VERSION).getOrThrow()
+
+        assertEquals(EtsCommand.CODE_VERSION, packet.command)
+        assertEquals(2, packet.dataLength)
+        assertContentEquals(byteArrayOf(0x01, 0x09), packet.data)
+        assertEquals(0x1D, packet.checksum)
+    }
+
+    @Test
     fun checksum_usesSignedBytesAndTruncatesToByte() {
         assertEquals(
             0xFD.toByte(),
@@ -66,5 +79,32 @@ class EtsProtocolTest {
         monitorData[19] = 0x2C
 
         assertEquals("300", MonitorDefinitions.readMonitorValues(monitorData).getValue("Motor Speed"))
+    }
+
+    @Test
+    fun readMonitor_sendsThreeCommandsInOrderAndConcatenatesTheirPayloads() = runTest {
+        val requests = mutableListOf<ByteArray>()
+        val protocol = EtsProtocol(sendAndReceive = { request ->
+            requests += request.copyOf()
+            val data = ByteArray(16) { (requests.size * 16 - 16 + it).toByte() }
+            ByteArray(19).also { response ->
+                response[0] = request[0]
+                response[1] = data.size.toByte()
+                data.copyInto(response, 2)
+                response[18] = EtsChecksum.calculate(response, 0, 18)
+            }
+        })
+
+        val monitorData = protocol.readMonitor().getOrThrow()
+
+        assertEquals(
+            listOf(
+                byteArrayOf(0x3A, 0x00, 0x3A).toList(),
+                byteArrayOf(0x3B, 0x00, 0x3B).toList(),
+                byteArrayOf(0x3C, 0x00, 0x3C).toList()
+            ),
+            requests.map(ByteArray::toList)
+        )
+        assertContentEquals(IntArray(48) { it }, monitorData)
     }
 }
