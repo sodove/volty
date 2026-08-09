@@ -47,10 +47,10 @@ import ru.sodovaya.volty.domain.model.SpeedUnknownReason
  *    known value can be drawable and still unarmable — see
  *    [ru.sodovaya.volty.domain.alert.AlertAvailability.Unknown]). Nothing here
  *    changes what the alarm sees;
- *  - **current, eRPM, odometer and trip.** No producer can distinguish an
- *    unreported one from a genuine zero (`D`'s "absent distances" note on
- *    [ru.sodovaya.volty.data.bms.BegodeProtocol]), so a flag for them would be a
- *    field nothing could ever set to false.
+ *  - **motor current and eRPM.** No producer can distinguish either from a
+ *    genuine zero. Input-side battery current and distance counters DO carry
+ *    flags now: Kelly's ETS monitor identifies its phase current but has no
+ *    battery current, odometer or trip at all.
  */
 object MotionReadings {
 
@@ -65,6 +65,10 @@ object MotionReadings {
     /** Duty/ШИМ, or null when this firmware has never reported a PWM (`D §7.2`). */
     fun dutyPercent(motion: ControllerData): Float? =
         if (motion.hasDuty) motion.dutyPercent else null
+
+    /** Input-side battery current, or null when the controller only reports phase current. */
+    fun batteryCurrentA(motion: ControllerData): Float? =
+        if (motion.hasBatteryCurrent) motion.batteryCurrentA else null
 
     /** Rail voltage, or null when no scale is available to turn the reading into volts. */
     fun inputVoltageV(motion: ControllerData): Float? =
@@ -81,6 +85,14 @@ object MotionReadings {
     /** ESC/MOSFET temperature, or null when VESC's "no sensor" sentinel is present. */
     fun escTempC(motion: ControllerData): Float? =
         if (motion.hasEscTemp) motion.escTempC else null
+
+    /** Lifetime distance, or null when the controller does not keep an odometer. */
+    fun odometerKm(motion: ControllerData): Float? =
+        if (motion.hasDistance) motion.odometerKm else null
+
+    /** Connection-session distance, or null when the controller does not keep an odometer. */
+    fun tripKm(motion: ControllerData): Float? =
+        if (motion.hasDistance) motion.tripKm else null
 
     /**
      * Live consumption from power and speed, or null when either is unobserved

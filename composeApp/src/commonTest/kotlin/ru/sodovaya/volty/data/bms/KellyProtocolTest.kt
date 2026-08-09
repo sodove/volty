@@ -9,15 +9,37 @@ import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
 import ru.sodovaya.volty.data.controller.kelly.EtsChecksum
 import ru.sodovaya.volty.data.controller.kelly.EtsCommand
+import ru.sodovaya.volty.domain.alert.AlertAvailability
+import ru.sodovaya.volty.domain.alert.AlertLevel
+import ru.sodovaya.volty.domain.alert.AlertRule
+import ru.sodovaya.volty.domain.alert.AlertUnavailableReason
+import ru.sodovaya.volty.domain.alert.MotionAlertKind
+import ru.sodovaya.volty.domain.alert.armedRules
+import ru.sodovaya.volty.domain.alert.availabilityFor
+import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.SecondaryGauge
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
+import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.presentation.ride.CleanMetricMapper
+import ru.sodovaya.volty.presentation.ride.ClassicDialSpecs
+import ru.sodovaya.volty.presentation.ride.RideDistanceMapper
+import ru.sodovaya.volty.presentation.ride.SecondaryGaugeMapper
+import ru.sodovaya.volty.presentation.ride.UNKNOWN_READOUT
+import ru.sodovaya.volty.presentation.ride.gauge.VescClusterSlot
+import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Clock
 
 class KellyProtocolTest {
 
@@ -268,6 +290,68 @@ class KellyProtocolTest {
             assertNull(protocol.latestMotion(0))
             assertNull(protocol.latestData(0))
             assertContentEquals(byteArrayOf(0x11, 0x00, 0x11), protocol.handshakeCommands().single())
+        } finally {
+            harness.stop()
+        }
+    }
+
+    @Test
+    fun `Kelly monitor output arms only measured alerts and never renders missing battery current as zero`() = runTest {
+        val protocol = KellyProtocol(motor = MotorConfig(wheelDiameterMm = 500, gearRatio = 2f))
+        val harness = PollHarness(protocol, backgroundScope)
+        try {
+            harness.completeCycle(monitorData())
+            val motion = requireNotNull(protocol.latestMotion(0))
+            val kelly = Vehicle(
+                id = "kelly", name = "KLS", iconKey = "scooter", packs = emptyList(),
+                controllers = listOf(Controller(0, "KLS", ControllerType.KELLY, "AA:BB")),
+                chemistry = Chemistry.LI_ION_NMC,
+                createdAt = Clock.System.now()
+            )
+
+            val availability = availabilityFor(kelly, motion)
+            assertEquals(
+                AlertAvailability.Unavailable(
+                    AlertUnavailableReason.ControllerReportsNoDuty(ControllerType.KELLY)
+                ),
+                availability[MotionAlertKind.DUTY]
+            )
+            assertEquals(AlertAvailability.Available, availability[MotionAlertKind.SPEED])
+            assertEquals(AlertAvailability.Available, availability[MotionAlertKind.MOTOR_TEMP])
+            assertEquals(AlertAvailability.Available, availability[MotionAlertKind.ESC_TEMP])
+            assertEquals(
+                listOf(MotionAlertKind.SPEED, MotionAlertKind.MOTOR_TEMP, MotionAlertKind.ESC_TEMP),
+                armedRules(
+                    kelly,
+                    motion,
+                    MotionAlertKind.entries.map { AlertRule(it, listOf(AlertLevel(1f))) }
+                ).rules.map { it.kind }
+            )
+
+            // The phase-current measurement survives. Battery current is absent on the wire,
+            // so it must not become the confident 0 A that the old mapper rendered.
+            assertEquals(300f, motion.motorCurrentA)
+            assertFalse(motion.hasBatteryCurrent)
+            assertFalse(motion.hasDistance)
+            assertEquals(UNKNOWN_READOUT, CleanMetricMapper.powerValue(motion))
+            assertEquals(UNKNOWN_READOUT, CleanMetricMapper.powerSub(motion))
+            assertEquals(
+                UNKNOWN_READOUT,
+                SecondaryGaugeMapper.map(
+                    SecondaryGauge.CURRENT, motion, BmsData(), UnitSystem.METRIC
+                ).value
+            )
+            assertEquals(
+                UNKNOWN_READOUT,
+                ClassicDialSpecs.build(motion, BmsData(), UnitSystem.METRIC, maxSpeedKmh = 70f)
+                    .single { it.slot == VescClusterSlot.CURRENT }
+                    .valueTextOverride
+            )
+            assertNull(MotionReadings.batteryCurrentA(motion))
+            assertNull(MotionReadings.odometerKm(motion))
+            assertNull(MotionReadings.tripKm(motion))
+            assertEquals(UNKNOWN_READOUT, RideDistanceMapper.odometerValue(motion, UnitSystem.METRIC))
+            assertEquals(UNKNOWN_READOUT, RideDistanceMapper.tripValue(motion, UnitSystem.METRIC))
         } finally {
             harness.stop()
         }

@@ -118,7 +118,8 @@ object CleanMetricMapper {
      * — the missing scale costs the volts, not the amps — so it has no
      * known-flag and renders as a plain signed number.
      */
-    fun powerSub(motion: ControllerData): String = "${formatSigned(motion.batteryCurrentA, 1)} A"
+    fun powerSub(motion: ControllerData): String =
+        MotionReadings.batteryCurrentA(motion).readoutOr { "${formatSigned(it, 1)} A" }
 
     /**
      * The consumption card's headline: live Wh/km, or [UNKNOWN_READOUT] while

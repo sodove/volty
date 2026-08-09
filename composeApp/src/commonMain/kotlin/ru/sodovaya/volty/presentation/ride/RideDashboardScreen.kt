@@ -586,13 +586,13 @@ private fun OdometerStrip(motion: ControllerData, units: UnitSystem, uptimeSecon
     ) {
         StripCell(
             label = stringResource(Res.string.ride_odometer),
-            value = "${UnitFormatter.distance(motion.odometerKm, units)} ${UnitFormatter.distanceUnit(units)}",
+            value = RideDistanceMapper.odometerValue(motion, units),
             modifier = Modifier.weight(1f)
         )
         StripDivider()
         StripCell(
             label = stringResource(Res.string.ride_trip),
-            value = "${UnitFormatter.distance(motion.tripKm, units)} ${UnitFormatter.distanceUnit(units)}",
+            value = RideDistanceMapper.tripValue(motion, units),
             modifier = Modifier.weight(1f)
         )
         StripDivider()

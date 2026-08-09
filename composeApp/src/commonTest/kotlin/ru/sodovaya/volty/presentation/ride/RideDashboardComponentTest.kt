@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import ru.sodovaya.volty.data.controller.kelly.ErrorCodes
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.BmsData
@@ -534,6 +535,48 @@ class RideDashboardComponentTest {
         advanceUntilIdle()
 
         assertTrue(c.state.value.faults.isEmpty(), "faults from the previous vehicle must not leak")
+    }
+
+    @Test
+    fun Kelly_faults_reach_the_ride_history_and_clear_on_disconnect_or_vehicle_change() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val kelly = vehicleWith(null, SecondaryGauge.CURRENT).copy(
+            controllers = listOf(Controller(0, "KLS", ControllerType.KELLY, "KLS:01"))
+        )
+        repo.activeVehicle.value = kelly
+        repo.connectionState.value = ConnectionState.Connected(kelly)
+        val c = component(repo)
+        advanceUntilIdle()
+
+        // The decoder's real public fault mapping, not a dashboard-local list.
+        val kellyFaults = ErrorCodes.decode(0x05)
+        assertEquals(listOf("Identify Err", "Low Volt"), kellyFaults)
+        repo.emitMotion(
+            ControllerData(faults = kellyFaults, isConnected = true, timestamp = Instant.fromEpochSeconds(40))
+        )
+        advanceUntilIdle()
+        assertEquals(
+            listOf(
+                RideDashboardComponent.FaultEntry("Low Volt"),
+                RideDashboardComponent.FaultEntry("Identify Err")
+            ),
+            c.state.value.faults
+        )
+
+        repo.connectionState.value = ConnectionState.Disconnected
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "a disconnected Kelly must not retain active faults")
+
+        repo.connectionState.value = ConnectionState.Connected(kelly)
+        repo.emitMotion(
+            ControllerData(faults = kellyFaults, isConnected = true, timestamp = Instant.fromEpochSeconds(41))
+        )
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isNotEmpty())
+        repo.activeVehicle.value = kelly.copy(id = "other-kelly")
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "a Kelly fault must not leak into the next vehicle")
     }
 
     @AfterTest

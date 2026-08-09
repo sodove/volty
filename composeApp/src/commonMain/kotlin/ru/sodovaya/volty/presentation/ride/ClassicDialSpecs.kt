@@ -465,6 +465,7 @@ object ClassicDialSpecs {
         // used to be spelled out here and returned a well-formed 0.0 on every Begode (G §9.1).
         val whPerKm = MotionReadings.whPerKm(motion)
         val duty = MotionReadings.dutyPercent(motion)
+        val batteryCurrent = MotionReadings.batteryCurrentA(motion)
         val power = MotionReadings.powerW(motion)
         val speed = MotionReadings.speedKmh(motion)
         val escTemp = MotionReadings.escTempC(motion)
@@ -488,9 +489,10 @@ object ClassicDialSpecs {
                     maximumValue = currentMax,
                     labelStep = currentStep          // QML :80, then a divisor that works
                 ),
-                value = motion.batteryCurrentA,
+                value = batteryCurrent ?: 0f,
                 caption = labels.current,
-                unit = "A"                            // QML :82
+                unit = "A",                           // QML :82
+                valueTextOverride = if (batteryCurrent == null) UNKNOWN else null
             ),
             // QML :86-100. The one dial whose scale runs counter-clockwise on purpose.
             VescDialSpec(

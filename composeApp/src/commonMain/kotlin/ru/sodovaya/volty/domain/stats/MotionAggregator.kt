@@ -108,7 +108,11 @@ object MotionAggregator {
             // a worse bug than the unmeasured-duty one the flag exists for.
             hasDuty = d.any { it.hasDuty },
             motorCurrentA = d.sumOf { it.motorCurrentA.toDouble() }.toFloat(),
-            batteryCurrentA = d.sumOf { it.batteryCurrentA.toDouble() }.toFloat(),
+            batteryCurrentA = d.measuring { it.hasBatteryCurrent }
+                .sumOf { it.batteryCurrentA.toDouble() }.toFloat(),
+            // Battery current is summed, so an absent contributor makes the
+            // vehicle total unavailable rather than a misleading partial.
+            hasBatteryCurrent = d.all { it.hasBatteryCurrent },
             // `G §9.3`: averaged over the controllers that MEASURE a voltage,
             // not over all of them. Begode is the first decoder that publishes
             // `0` meaning unknown (no cell count ⇒ no scale ⇒ no honest
@@ -252,8 +256,11 @@ object MotionAggregator {
             // Pinned by `MotionAggregatorTest.one vehicle odometer reported by
             // two controllers is not doubled`. See `VescGatewayProtocol`'s
             // "Why the SETUP frame is an OVERLAY" section for the wire detail.
-            odometerKm = d.maxOf { it.odometerKm },
-            tripKm = d.maxOf { it.tripKm },
+            odometerKm = d.measuring { it.hasDistance }.maxOf { it.odometerKm },
+            tripKm = d.measuring { it.hasDistance }.maxOf { it.tripKm },
+            // Distance is a vehicle-level maximum: one controller with the
+            // counter answers it, unlike an incomplete summed total.
+            hasDistance = d.any { it.hasDistance },
             // Summed over the contributors that KEEP counters, for the same
             // reason as powerW above — one filtered list ([counting]) because
             // one flag answers for all four.
@@ -341,8 +348,9 @@ object MotionAggregator {
      * one layer down.
      *
      * Not applied to [ControllerData.escTempC] — see the argument at that fold —
-     * nor to the currents, eRPM, odometer or trip, which have no flag because no
-     * producer can tell an unreported one from a genuine zero.
+     * nor to motor current or eRPM, which have no flag because no producer can
+     * tell an unreported one from a genuine zero. Battery current and distance
+     * counters do have flags because Kelly can identify their absence.
      */
     private fun List<ControllerData>.measuring(
         knows: (ControllerData) -> Boolean

@@ -367,6 +367,32 @@ class MotionAggregatorTest {
         assertFalse(lone.speedKnown)
     }
 
+    @Test fun unavailable_battery_current_and_distance_never_become_vehicle_zeroes() {
+        val measured = ControllerData(
+            batteryCurrentA = 12f, odometerKm = 420f, tripKm = 7f, isConnected = true
+        )
+        // Deliberately incoherent: a false flag beside a large value proves the
+        // fold filters the measurement, rather than merely benefiting from Kelly's 0 placeholders.
+        val kelly = ControllerData(
+            batteryCurrentA = 99f, hasBatteryCurrent = false,
+            odometerKm = 900f, tripKm = 99f, hasDistance = false,
+            isConnected = true
+        )
+
+        val mixed = MotionAggregator.aggregate(listOf(state(0, measured), state(1, kelly)))
+        assertEquals(12f, mixed.batteryCurrentA)
+        assertFalse(mixed.hasBatteryCurrent, "a current total missing a term is unavailable")
+        assertEquals(420f, mixed.odometerKm)
+        assertEquals(7f, mixed.tripKm)
+        assertTrue(mixed.hasDistance, "one measured vehicle distance is enough")
+
+        val kellyOnly = MotionAggregator.aggregate(listOf(state(0, kelly)))
+        assertFalse(kellyOnly.hasBatteryCurrent)
+        assertFalse(kellyOnly.hasDistance)
+        assertEquals(99f, kellyOnly.batteryCurrentA, "the identity is preserved behind the false flag")
+        assertEquals(900f, kellyOnly.odometerKm)
+    }
+
     @Test fun different_unknown_speed_reasons_become_a_renderable_mixed_reason() {
         val geometry = ControllerData(
             speedSource = SpeedSource.NONE,

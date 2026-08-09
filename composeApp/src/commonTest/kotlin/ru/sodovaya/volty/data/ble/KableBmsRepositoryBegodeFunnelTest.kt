@@ -664,6 +664,7 @@ class KableBmsRepositoryBegodeFunnelTest {
         hasDuty = false,
         motorCurrentA = 61.25f,
         batteryCurrentA = 33.75f,
+        hasBatteryCurrent = false,
         inputVoltageV = 147.2f,
         // FALSE for the same reason `hasDuty` is, and paired with a real
         // voltage for the same reason: a fold moves every field whether or
@@ -680,6 +681,7 @@ class KableBmsRepositoryBegodeFunnelTest {
         hasMotorTemp = true,
         odometerKm = 8565.341f,
         tripKm = 12.75f,
+        hasDistance = false,
         consumedAh = 4.5f,
         consumedWh = 640.5f,
         regenAh = 0.25f,

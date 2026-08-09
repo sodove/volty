@@ -89,6 +89,14 @@ data class ControllerData(
     val hasDuty: Boolean = true,
     val motorCurrentA: Float = 0f,
     val batteryCurrentA: Float = 0f,
+    /**
+     * Whether [batteryCurrentA] is a measurement rather than a placeholder.
+     *
+     * Battery current is an input-side value, not interchangeable with the
+     * phase current a controller such as Kelly KLS reports. The two can both
+     * honestly be zero, so absence needs its own flag for Ride metrics.
+     */
+    val hasBatteryCurrent: Boolean = true,
     val inputVoltageV: Float = 0f,
     /**
      * Whether [inputVoltageV] is a MEASUREMENT rather than a placeholder — the
@@ -167,6 +175,12 @@ data class ControllerData(
      * source has been connected longest.
      */
     val tripKm: Float = 0f,
+    /**
+     * Whether [odometerKm] and [tripKm] came from a distance counter. Kelly's
+     * monitor supplies neither, so its forced zeroes must not read as a new
+     * vehicle with a 0 km odometer and trip.
+     */
+    val hasDistance: Boolean = true,
     val consumedAh: Float = 0f,
     val consumedWh: Float = 0f,
     val regenAh: Float = 0f,

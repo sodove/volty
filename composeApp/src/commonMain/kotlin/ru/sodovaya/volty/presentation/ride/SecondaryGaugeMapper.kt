@@ -106,10 +106,13 @@ object SecondaryGaugeMapper {
                 power?.let { frac(abs(it), powerRangeW) } ?: 0f, DutyLevel.NORMAL
             )
         }
-        SecondaryGauge.CURRENT -> SecondaryReadout(
-            labels.current, motion.batteryCurrentA.roundToInt().toString(), "A",
-            frac(abs(motion.batteryCurrentA), currentRangeA), DutyLevel.NORMAL
-        )
+        SecondaryGauge.CURRENT -> {
+            val current = MotionReadings.batteryCurrentA(motion)
+            SecondaryReadout(
+                labels.current, current.readoutOr { it.roundToInt().toString() }, "A",
+                current?.let { frac(abs(it), currentRangeA) } ?: 0f, DutyLevel.NORMAL
+            )
+        }
         SecondaryGauge.MOTOR_TEMP -> {
             val temp = MotionReadings.motorTempC(motion)
             SecondaryReadout(
