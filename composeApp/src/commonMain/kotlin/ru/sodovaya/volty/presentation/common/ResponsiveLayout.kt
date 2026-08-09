@@ -13,5 +13,5 @@ enum class ResponsiveLayoutMode {
     WIDE
 }
 
-fun responsiveLayoutMode(widthPx: Int, heightPx: Int): ResponsiveLayoutMode =
-    if (widthPx > heightPx) ResponsiveLayoutMode.WIDE else ResponsiveLayoutMode.PORTRAIT
+fun responsiveLayoutMode(width: Float, height: Float): ResponsiveLayoutMode =
+    if (width > height) ResponsiveLayoutMode.WIDE else ResponsiveLayoutMode.PORTRAIT

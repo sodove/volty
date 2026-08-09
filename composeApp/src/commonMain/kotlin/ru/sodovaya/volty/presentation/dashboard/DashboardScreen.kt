@@ -101,7 +101,7 @@ fun DashboardScreen(component: DashboardComponent) {
             .fillMaxSize()
             .statusBarsPadding()
     ) {
-        val layoutMode = responsiveLayoutMode(maxWidth.value.toInt(), maxHeight.value.toInt())
+        val layoutMode = responsiveLayoutMode(maxWidth.value, maxHeight.value)
         Column(
             modifier = Modifier
                 .fillMaxSize()
