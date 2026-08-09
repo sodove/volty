@@ -24,13 +24,13 @@
 - Test: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/common/ResponsiveLayoutTest.kt`
 
 **Interfaces:**
-- Produces `ResponsiveLayoutMode` and `responsiveLayoutMode(widthPx: Int, heightPx: Int): ResponsiveLayoutMode` for dashboard composables.
+- Produces `ResponsiveLayoutMode` and `responsiveLayoutMode(widthPx: Float, heightPx: Float): ResponsiveLayoutMode` for dashboard composables.
 
-- [ ] **Step 1: Write failing tests** for portrait, square, and landscape bounds; assert that only width strictly greater than height selects `WIDE`.
-- [ ] **Step 2: Run the focused test and confirm it fails** because the classifier does not exist.
-- [ ] **Step 3: Implement the enum and pure classifier** with no Android or Compose dependency.
-- [ ] **Step 4: Run the focused test** and confirm all cases pass.
-- [ ] **Step 5: Commit** with `test/ui: add responsive layout classifier`.
+- [x] **Step 1: Write failing tests** for portrait, square, and landscape bounds; assert that only width strictly greater than height selects `WIDE`.
+- [x] **Step 2: Run the focused test and confirm it fails** because the classifier does not exist.
+- [x] **Step 3: Implement the enum and pure classifier** with no Android or Compose dependency.
+- [x] **Step 4: Run the focused test** and confirm all cases pass.
+- [x] **Step 5: Commit** with `test/ui: add responsive layout classifier`.
 
 ### Task 2: Responsive ride dashboard
 
@@ -42,12 +42,12 @@
 - Consumes `responsiveLayoutMode` from Task 1.
 - Produces the same `RideDashboardComponent` callbacks/state rendering as portrait, with a wide-pane arrangement when constraints are landscape.
 
-- [ ] **Step 1: Extract the existing ride body into small composables** so header/fault banner, hero, metrics, and trailing telemetry can be placed without duplicating state or callbacks.
-- [ ] **Step 2: Add `BoxWithConstraints` around the screen content** and select the pure mode from `constraints.maxWidth/maxHeight`; keep `statusBarsPadding`, scrolling, and current portrait order unchanged.
-- [ ] **Step 3: Implement the wide arrangement**: full-width vehicle/fault header, then a weighted row with `RideHero` in the first pane and `MetricCluster` plus `ConsumptionCard` in the second; keep Graph, odometer, and sample-rate details below the panes in the same scroll surface.
-- [ ] **Step 4: Compile and run the existing ride/common tests**; add no Compose UI tests.
-- [ ] **Step 5: Install the debug APK and capture portrait and landscape emulator screenshots**. Confirm the gauge, power/current/battery cards, and bottom navigation are all visible in landscape without inset constants or clipped content.
-- [ ] **Step 6: Commit** with `feat(ui): adapt ride dashboard to landscape`.
+- [x] **Step 1: Extract the existing ride body into small composables** so header/fault banner, hero, metrics, and trailing telemetry can be placed without duplicating state or callbacks.
+- [x] **Step 2: Add `BoxWithConstraints` around the screen content** and select the pure mode from `constraints.maxWidth/maxHeight`; keep `statusBarsPadding`, scrolling, and current portrait order unchanged.
+- [x] **Step 3: Implement the wide arrangement**: full-width vehicle/fault header, then a weighted row with `RideHero` in the first pane and `MetricCluster` plus `ConsumptionCard` in the second; keep Graph, odometer, and sample-rate details below the panes in the same scroll surface.
+- [x] **Step 4: Compile and run the existing ride/common tests**; add no Compose UI tests.
+- [x] **Step 5: Install the debug APK and capture portrait and landscape emulator screenshots**. Confirm the gauge, power/current/battery cards, and bottom navigation are all visible in landscape without inset constants or clipped content.
+- [x] **Step 6: Commit** with `feat(ui): adapt ride dashboard to landscape`.
 
 ### Task 3: Responsive battery dashboard and verification
 
@@ -59,14 +59,15 @@
 - Consumes the same `ResponsiveLayoutMode` classifier and existing `DashboardComponent.State`.
 - Produces identical telemetry values and callbacks in portrait and wide layouts.
 
-- [ ] **Step 1: Extract battery header/hero/metric sections** without changing metric mapping or unknown-value semantics.
-- [ ] **Step 2: Apply the wide two-pane layout**: header/fault/MOSFET row spans the width; hero and primary cards share the row; sparkline, cells, and secondary details remain scrollable and visible below.
-- [ ] **Step 3: Run the focused dashboard tests and then the fresh full suite** with `--no-build-cache --rerun-tasks`; parse XML and assert exact test/failure/error counts.
-- [ ] **Step 4: Capture emulator portrait and landscape screenshots and inspect the resulting layout.
-- [ ] **Step 5: Commit** with `feat(ui): adapt battery dashboard to landscape`.
+- [x] **Step 1: Extract battery header/hero/metric sections** without changing metric mapping or unknown-value semantics.
+- [x] **Step 2: Apply the wide two-pane layout**: header/fault/MOSFET row spans the width; hero and primary cards share the row; sparkline, cells, and secondary details remain scrollable and visible below.
+- [x] **Step 3: Run the focused dashboard tests and then the fresh full suite** with `--no-build-cache --rerun-tasks`; parse XML and assert exact test/failure/error counts.
+- [x] **Step 4: Capture emulator portrait and landscape screenshots and inspect the resulting layout.
+- [x] **Step 5: Commit** with `feat(ui): adapt battery dashboard to landscape`.
 
 ## Final review
 
 Review the combined diff for duplicated state, hardcoded insets/dimensions, and
 portrait regressions. Verify `git diff --check` and the full suite before
-claiming completion.
+claiming completion. Completed in the final branch review; the follow-up telemetry
+consumer fixes are in `eca64b8` and `fff8fd1`.
