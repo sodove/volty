@@ -34,7 +34,7 @@
 - Consumes: `BmsData`, `ControllerData`, and the existing `GraphMetric` names (`SOC`, `POWER`, `CURRENT`, `VOLTAGE`, `TEMPERATURE`).
 - Produces: `GraphMetric`, `GraphPoint`, `GraphSeries`, `nearestPoint`, `pairByNearestTimestamp`, and metric mappers used by later component/UI tasks.
 
-- [ ] **Step 1: Write failing pure tests**
+- [x] **Step 1: Write failing pure tests**
 
 ```kotlin
 @Test
@@ -63,13 +63,13 @@ fun `xy pairing drops samples beyond maximum gap`() {
 }
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run: `.\gradlew.bat :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.graph.GraphTelemetryTest" --no-build-cache --rerun-tasks --console=plain`
 
 Expected: compilation/test failure because the new metric/model functions do not exist.
 
-- [ ] **Step 3: Implement the metric catalogue and immutable point types**
+- [x] **Step 3: Implement the metric catalogue and immutable point types**
 
 Keep the existing enum entries as aliases for the current BMS graph and add stable entries for `CELL_MIN_V`, `CELL_MAX_V`, `CELL_DELTA_MV`, `SPEED`, `DUTY`, `MOTOR_CURRENT`, `INPUT_VOLTAGE`, `MOTOR_POWER`, `ERPM`, `ESC_TEMPERATURE`, and `MOTOR_TEMPERATURE`. Add source/group metadata without importing Compose resources:
 
@@ -83,11 +83,11 @@ data class GraphPair(val x: GraphPoint, val y: GraphPoint)
 
 Implement evidence-gated extraction in `GraphTelemetryMapper`: `socKnown`, BMS `hasPower`/`hasCurrent`, non-empty cell/temperature lists, motion `speedKnown`, `hasDuty`, `hasBatteryCurrent`, `hasInputVoltage`, `hasPower`, `hasEscTemp`, and `hasMotorTemp`. Preserve the current battery power/current display transform as a metric-level transform, not in the repository.
 
-- [ ] **Step 4: Implement deterministic timestamp helpers**
+- [x] **Step 4: Implement deterministic timestamp helpers**
 
 `nearestPoint(points, target)` sorts/assumes timestamp order, returns the closest point, and resolves equal distances to the earlier sample. `pairByNearestTimestamp(x, y, maxGap)` emits one pair per X point, chooses the same tie rule, and drops a pair when the absolute gap exceeds `maxGap`.
 
-- [ ] **Step 5: Run the focused test and commit**
+- [x] **Step 5: Run the focused test and commit**
 
 Run the command from Step 2; expected: all focused tests pass. Commit:
 
@@ -107,7 +107,7 @@ git commit -m "feat(graph): add timestamped telemetry model"
 - Consumes: `BmsRepository.samples`, `BmsRepository.motionSamples`, and Task 1 mappers.
 - Produces: `GraphComponent.State.series`, `visibleMetrics`, `selectedTimestamp`, `selectedPoints`, and intents `onMetricAdded`, `onMetricRemoved`, `onTimestampSelected`, `onComparisonRequested`.
 
-- [ ] **Step 1: Extend the component contract and write failing tests**
+- [x] **Step 1: Extend the component contract and write failing tests**
 
 Add state fields without exposing raw repository models to Compose:
 
@@ -120,21 +120,21 @@ val selectedPoints: Map<GraphMetric, GraphPoint> = emptyMap()
 
 Add tests proving that motion metrics use `motionSamples`, battery metrics use `samples`, streams with different timestamps remain intact, and selecting one timestamp resolves nearest honest points per metric. Keep `values`, `nowValue`, `avg`, `peak`, `min`, and `used` as derived compatibility fields until the screen migration is complete.
 
-- [ ] **Step 2: Run the focused tests and verify failure**
+- [x] **Step 2: Run the focused tests and verify failure**
 
 Run: `.\gradlew.bat :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.graph.GraphComponentTelemetryTest" --tests "ru.sodovaya.volty.presentation.graph.GraphComponentUsedTest" --no-build-cache --rerun-tasks --console=plain`
 
 Expected: compilation failures for the new state/intents and failing motion-series assertions.
 
-- [ ] **Step 3: Collect both repository flows for the selected window**
+- [x] **Step 3: Collect both repository flows for the selected window**
 
 Use one coroutine and `combine` over `samples(duration)` and `motionSamples(duration)`. Map each list into `GraphSeries`, retain timestamp order, and rebuild all visible series on every emission. For `GraphWindow.ALL`, use the history-backed window supplied by the later ride task; until then retain the existing six-hour request and the ring buffer’s actual four-hour cap without inventing points.
 
-- [ ] **Step 4: Implement metric-card and selection intents**
+- [x] **Step 4: Implement metric-card and selection intents**
 
 `onMetricAdded` is idempotent, `onMetricRemoved` never removes the final card, and `onTimestampSelected(null)` clears selection. Recompute `selectedPoints` with `nearestPoint` for every visible series; a metric with no point remains absent. Preserve legacy `onMetricSelected` by replacing the first visible card so existing navigation/tests remain source-compatible.
 
-- [ ] **Step 5: Run focused tests and commit**
+- [x] **Step 5: Run focused tests and commit**
 
 Run the command from Step 2; expected: all graph component tests pass. Commit:
 
@@ -154,23 +154,23 @@ git commit -m "feat(graph): merge battery and motion series"
 - Consumes: Task 2 `GraphComponent.State` and callbacks; Task 1 geometry/selection helpers.
 - Produces: portrait/landscape adaptive cards, synchronized selection marker, metric picker, and accessible value labels.
 
-- [ ] **Step 1: Keep rendering code pure at the boundary**
+- [x] **Step 1: Keep rendering code pure at the boundary**
 
 Refactor the private chart to accept `GraphSeries` and `selectedTimestamp`, while keeping range calculation and timestamp-to-X mapping in common pure helpers. The Canvas only draws paths, grid, “now” marker, and selected marker.
 
-- [ ] **Step 2: Add pointer selection**
+- [x] **Step 2: Add pointer selection**
 
 Use `pointerInput(series)` with tap/drag gesture handling. Convert the local X coordinate to the nearest timestamp using chart geometry, then call `component.onTimestampSelected(timestamp)`. Do not select by list index or wall-clock delay.
 
-- [ ] **Step 3: Implement adaptive cards**
+- [x] **Step 3: Implement adaptive cards**
 
 Use `LazyVerticalGrid(columns = GridCells.Adaptive(minSize = 280.dp))` inside the scaffold content, with `WindowInsets` supplied by `Scaffold` and measured available width. Keep the metric picker in a `LazyRow` grouped by Battery/Motion/Cells; landscape naturally gets multiple columns and portrait remains one column. Add remove/add actions without fixed device offsets.
 
-- [ ] **Step 4: Render shared selection details**
+- [x] **Step 4: Render shared selection details**
 
 Show the selected local time and each card’s nearest honest point. Show the Russian/English “нет данных”/“No data” string when a metric has no sample near the selected time. Preserve current/average/peak/min/used summaries for the active card.
 
-- [ ] **Step 5: Add all strings in both locales and run compilation**
+- [x] **Step 5: Add all strings in both locales and run compilation**
 
 Add labels for speed, duty, RPM, ESC/motor temperature, cell min/max/spread, selected time, add/remove chart, and comparison. Run:
 
@@ -180,7 +180,7 @@ Add labels for speed, duty, RPM, ESC/motor temperature, cell min/max/spread, sel
 
 Expected: compile success. Device screenshot QA is intentionally separate because this repository has no Compose UI test source set.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```text
 git add composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/graph/GraphScreen.kt composeApp/src/commonMain/composeResources/values/strings.xml composeApp/src/commonMain/composeResources/values-ru/strings.xml
@@ -203,23 +203,23 @@ git commit -m "feat(graph): add adaptive multi-card charts"
 - Consumes: `GraphMetric`, `GraphPoint`, vehicle id, and SQLDelight’s generated `VoltyDatabase`.
 - Produces: `RideSummary`, `StoredRide`, `RidePoint`, `startRide`, `appendPoint`, `finishRide`, `listRides`, `loadRide`, `deleteRide`, and `pruneOldest`.
 
-- [ ] **Step 1: Write repository tests against `JdbcSqliteDriver.IN_MEMORY`**
+- [x] **Step 1: Write repository tests against `JdbcSqliteDriver.IN_MEMORY`**
 
 Cover start/finish round-trip, point ordering, evidence/known bit, optional cell index, deleting one ride, and pruning the oldest ride while leaving newer rows. Use `VoltyDatabase.Schema.create(driver)` and assert that no unknown point is returned as a numeric zero.
 
-- [ ] **Step 2: Add schema definitions at the current version boundary**
+- [x] **Step 2: Add schema definitions at the current version boundary**
 
 `RideRow` stores `id`, `vehicleId`, `startedAt`, nullable `endedAt`, and summary fields needed by the history list. `RidePointRow` stores `(rideId, metric, timestamp, cellIndex)` as a composite primary key plus `value` and `isKnown`. Index by `(rideId, timestamp)` and `(vehicleId, startedAt DESC)`.
 
-- [ ] **Step 3: Add the v10 → v11 migration**
+- [x] **Step 3: Add the v10 → v11 migration**
 
 Confirm `10.db` is the current snapshot, create `10.sqm` with only the two new tables/indexes, then run `generateCommonMainVoltyDatabaseSchema` to produce `11.db`. Do not edit old migrations and do not use `DROP COLUMN`.
 
-- [ ] **Step 4: Implement the repository with transactions**
+- [x] **Step 4: Implement the repository with transactions**
 
 Serialize a ride start/finish and point inserts in SQLDelight transactions. Store timestamps as ISO-8601 strings, parse them back to `Instant`, and map metric enum names defensively so an unknown future metric is skipped rather than crashing history loading.
 
-- [ ] **Step 5: Run focused repository and migration checks and commit**
+- [x] **Step 5: Run focused repository and migration checks and commit**
 
 Run:
 
@@ -247,19 +247,19 @@ git commit -m "feat(history): persist downsampled ride telemetry"
 - Consumes: accepted `BmsData`/`ControllerData` samples at the existing funnel, `activeVehicle`, connection transitions, and `RideHistoryRepository`.
 - Produces: one downsampled completed ride per connection session, with deterministic bucket writes and bounded retention.
 
-- [ ] **Step 1: Write failing recorder tests**
+- [x] **Step 1: Write failing recorder tests**
 
 Use a fake history repository and fake clock to prove: a session starts once for an active vehicle, repeated frames in one bucket collapse to the latest known value, different metrics may be emitted in the same bucket, disconnect finishes the ride, reconnect starts a new ride, and oldest rides are pruned after the configured cap.
 
-- [ ] **Step 2: Implement bucketed recording**
+- [x] **Step 2: Implement bucketed recording**
 
 Define a five-second default bucket in one constant. Map each accepted aggregate sample through `GraphTelemetryMapper`, keep the latest point per `(metric, cellIndex, bucket)`, flush completed buckets to the history repository, and never insert absent metrics. Keep recorder writes off the sample callback’s critical section by sending immutable batches to its own coroutine channel.
 
-- [ ] **Step 3: Integrate without changing BLE wire behaviour**
+- [x] **Step 3: Integrate without changing BLE wire behaviour**
 
 Invoke the recorder only after the existing accepted-sample transaction has updated the ring buffers/active flows. Give production `KableBmsRepository` a `RideHistoryRepository` dependency through Koin; make the test factory default to a no-op implementation so existing repository tests do not need database setup. Finish/flush on disconnect and lifecycle destruction.
 
-- [ ] **Step 4: Run recorder and existing motion tests and commit**
+- [x] **Step 4: Run recorder and existing motion tests and commit**
 
 Run:
 
@@ -285,19 +285,19 @@ git commit -m "feat(history): record bounded telemetry rides"
 - Consumes: `RideHistoryRepository` and Task 2 graph state.
 - Produces: `history: List<RideSummary>`, `selectedRideId`, `onRideSelected`, `onLiveRideSelected`, and series loaded from persisted points.
 
-- [ ] **Step 1: Write failing history-state tests**
+- [x] **Step 1: Write failing history-state tests**
 
 Assert that opening the graph defaults to live data, selecting a completed ride replaces live series with stored points, the same timestamp selection works on stored series, deleting a ride refreshes the list, and an empty history is represented as an empty list rather than an error.
 
-- [ ] **Step 2: Add history dependency to graph construction**
+- [x] **Step 2: Add history dependency to graph construction**
 
 Pass the Koin `RideHistoryRepository` into `DefaultGraphComponent` from the graph child factory. Keep the repository interface injectable so component tests use a fake.
 
-- [ ] **Step 3: Implement live/history mode switching**
+- [x] **Step 3: Implement live/history mode switching**
 
 When `selectedRideId == null`, keep collecting the two live flows. When a ride is selected, cancel only the live collection job, load stored points, and expose the ride’s start/end summary. Selecting “current ride” restarts live collection and clears timestamp selection.
 
-- [ ] **Step 4: Run focused tests and commit**
+- [x] **Step 4: Run focused tests and commit**
 
 Run: `.\gradlew.bat :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.graph.GraphHistoryComponentTest" --no-build-cache --rerun-tasks --console=plain`
 
@@ -322,19 +322,19 @@ git commit -m "feat(graph): browse persisted ride history"
 - Consumes: two `GraphSeries` values and Task 1 `pairByNearestTimestamp`.
 - Produces: `ComparisonState(xMetric, yMetric, pairs, selectedPair)` and `onComparisonRequested(x, y)`.
 
-- [ ] **Step 1: Add failing comparison tests**
+- [x] **Step 1: Add failing comparison tests**
 
 Cover voltage-vs-current pairing, tie-breaking, unknown point omission, selection returning the source timestamp, and rejection of a comparison where either metric has no series.
 
-- [ ] **Step 2: Implement comparison state**
+- [x] **Step 2: Implement comparison state**
 
 Use a fixed two-second maximum pairing gap for the first version, store the chosen metrics in state, and derive pairs from the currently displayed live/history series. Do not introduce a second timebase or arbitrary formulas.
 
-- [ ] **Step 3: Render the XY plot and chooser**
+- [x] **Step 3: Render the XY plot and chooser**
 
 Add a comparison action to the graph screen, two metric pickers, axis labels with units, and a tappable scatter/line plot. Show X/Y values and source time for the selected pair. Use the same evidence and no-fabricated-value rules as time-series cards.
 
-- [ ] **Step 4: Add strings, run focused tests, and commit**
+- [x] **Step 4: Add strings, run focused tests, and commit**
 
 Run: `.\gradlew.bat :composeApp:testDebugUnitTest --tests "ru.sodovaya.volty.presentation.graph.GraphComparisonTest" --no-build-cache --rerun-tasks --console=plain`
 
@@ -356,11 +356,11 @@ git commit -m "feat(graph): add timestamp-paired XY comparisons"
 - Consumes: all previous tasks and the existing release signing configuration.
 - Produces: a verified debug suite, migration check, release APK, and checksum.
 
-- [ ] **Step 1: Run formatting/static checks**
+- [x] **Step 1: Run formatting/static checks**
 
 Run `git diff --check` and inspect for hardcoded insets, fabricated zeroes, unbounded `runTest` loops, and writes to BLE characteristics.
 
-- [ ] **Step 2: Run the fresh full suite**
+- [x] **Step 2: Run the fresh full suite**
 
 Run:
 
@@ -371,7 +371,7 @@ Run:
 
 Expected: exact test count is reported with 0 failures/errors/skips, and migration verification succeeds.
 
-- [ ] **Step 3: Bump version and build release**
+- [x] **Step 3: Bump version and build release**
 
 Change only the app version fields after tests pass, then run:
 
@@ -381,7 +381,7 @@ Change only the app version fields after tests pass, then run:
 
 Verify the APK at `composeApp/build/outputs/apk/release/composeApp-release.apk` and record its SHA-256. If an emulator is available, capture portrait and landscape graph screenshots; otherwise report visual QA as unverified instead of claiming it.
 
-- [ ] **Step 4: Commit the release metadata and final verification**
+- [x] **Step 4: Commit the release metadata and final verification**
 
 ```text
 git add composeApp/build.gradle.kts
