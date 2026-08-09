@@ -39,16 +39,60 @@ independent-BLE-link path; do not infer that from the brand name.
 ported safely into Volty. The open-source serial/CAN work is a reference, not a
 substitute for the required capture of this controller and its official app.
 
+### 0.1 Static reverse of the original Android app (2026-08-09)
+
+The original Android package was obtained as `com.FarDriver.MotorNet`, version
+`2.8.8`/build `288`, label `远驱电控`. Its APK is signed by a certificate whose
+subject is `CN=GenzhongLiao, OU=Development, O=NanjingFarDriver`. Static analysis
+only was used; the APK was not installed or executed.
+
+The app is a Xamarin.Forms application. The protocol code is in the bundled
+`MotorNet6.dll` assembly (inside Xamarin's `assemblies.blob`), not in the small
+Java wrapper produced by the Android build. The decompiled C# gives us a real
+BLE endpoint and frame parser:
+
+- service `0000ffe0-0000-1000-8000-00805f9b34fb`;
+- characteristic `0000ffec-0000-1000-8000-00805f9b34fb`, used for notifications
+  and writes;
+- notifications are subscribed with `StartUpdatesAsync()` and reassembled as
+  fixed 16-byte frames, so a BLE notification boundary is not treated as a
+  protocol boundary;
+- current/new controller frames start with `0xAA`, use `0x80 | registerIndex`
+  in byte 1, carry payload bytes 2–13 (commonly consumed as six big-endian
+  `u16` slots), and end with a lookup-table CRC16 over bytes 0–13 (initial
+  state `0x3C7F`); the app maps 55 register indexes to controller addresses;
+- an older frame family also starts with `0xAA`, but uses a command byte and a
+  big-endian additive checksum in bytes 14–15.
+
+Concrete live-value mappings present in the app include register `232`
+(battery/line voltage `u16 / 10`, signed line current `i16 / 4`), register `238`
+(phase currents), register `226` (RPM and status), register `214` (global status
+  words), and register `244` (motor temperature plus a battery-capacity byte).
+These are reverse-engineered app mappings, not yet a hardware-pinned Volty
+contract; the exact controller firmware variant still needs a capture.
+
+The original app is **not read-only overall**. It sends 8-byte command frames
+(`0xAA`, command, complemented command, subcommand, two arguments, sum and
+complement) for login/keepalive, password/time and other control operations;
+larger parameter/flash writes use an address frame and 20-byte BLE chunks. That
+does not mean Volty needs controller configuration writes for telemetry. The
+telemetry decoder can remain read/notify-only, but reproducing the controller's
+post-connect stream may require a minimal, explicitly gated session/keepalive
+write. We must capture that sequence before sending anything to a rider's
+controller; do not guess from the configuration-writing paths.
+
 > Read `00-overview.md`, `A-foundation.md`, `B-vesc-dashboard.md`,
 > `C-multi-controller.md` first. FarDriver is the highest-uncertainty protocol:
-> it has no public spec and **no CAN** (so AWD is independent BLE links). It is
+> it has no public spec and CAN availability is controller-dependent (so AWD
+> remains independent BLE links until the rider's hardware proves otherwise). It is
 > deliberately last, but scheduled immediately after the rest so the "supports
 > FarDriver" claim is real.
 
 ## 1. Scope
 **In:** a `FarDriverProtocol` (`BmsProtocol + MotionSource`) decoding the BLE
 telemetry into `ControllerData`; detection; AWD via independent links (`C §7`).
-**Out:** controller writes/config (read-only); CAN (FarDriver has none).
+**Out:** controller writes/config (read-only); CAN integration (the family has
+CAN-capable variants, but the rider's exact interface is unverified).
 
 ## 2. Approach — reverse-engineer, then pin
 There is no authoritative field table to cite (unlike VESC). The implementation
