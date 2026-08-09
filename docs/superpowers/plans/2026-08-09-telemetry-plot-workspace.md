@@ -46,4 +46,4 @@
 
 - [x] **Step 1: Run focused graph tests, full unit tests, and migration verification.**
 - [x] **Step 2: Install the debug APK on the emulator and capture portrait/landscape screenshots; assemble the signed release APK.**
-- [ ] **Step 3: Run `git diff --check`, commit any final fix, and push `feat/vehicle-composer`.**
+- [x] **Step 3: Run `git diff --check`, commit any final fix, and push `feat/vehicle-composer`.**
