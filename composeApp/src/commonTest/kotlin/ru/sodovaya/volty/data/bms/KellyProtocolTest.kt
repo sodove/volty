@@ -79,7 +79,7 @@ class KellyProtocolTest {
             assertEquals(300f, motion.motorCurrentA)
             assertEquals(SpeedSource.DERIVED, motion.speedSource)
             assertEquals(null, motion.speedUnknownReason)
-            assertEquals(282.74335f, motion.speedKmh, 0.01f)
+            assertEquals(70.68584f, motion.speedKmh, 0.01f)
             assertEquals(listOf("Over Volt", "Motor OverTemp Err"), motion.faults)
             assertFalse(motion.hasDuty)
             assertEquals(0f, motion.dutyPercent)

@@ -267,7 +267,10 @@ class KellyProtocol(
     private fun derivedSpeedKmh(mechanicalRpm: Float): Float? {
         if (motor.wheelDiameterMm <= 0 || motor.gearRatio <= 0f) return null
         val circumferenceKm = (PI * motor.wheelDiameterMm / 1_000_000.0).toFloat()
-        return mechanicalRpm * circumferenceKm * 60f * motor.gearRatio
+        // ETS reports motor RPM. Convert it to wheel RPM before applying the
+        // wheel circumference; a reduction ratio greater than one means the
+        // wheel turns slower than the motor.
+        return mechanicalRpm * circumferenceKm * 60f / motor.gearRatio
     }
 
     override fun latestMotion(controllerIndex: Int): ControllerData? =
