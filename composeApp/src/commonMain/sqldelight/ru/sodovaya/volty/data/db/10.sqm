@@ -1,0 +1,22 @@
+-- v10 -> v11: completed ride metadata and bounded telemetry points.
+CREATE TABLE RideRow (
+    id        TEXT NOT NULL PRIMARY KEY,
+    vehicleId TEXT NOT NULL,
+    startedAt TEXT NOT NULL,
+    endedAt   TEXT
+);
+
+CREATE INDEX RideRow_vehicle_started ON RideRow(vehicleId, startedAt DESC);
+
+CREATE TABLE RidePointRow (
+    rideId    TEXT NOT NULL,
+    metricKey TEXT NOT NULL,
+    timestamp TEXT NOT NULL,
+    cellIndex INTEGER NOT NULL DEFAULT -1,
+    value     REAL NOT NULL,
+    isKnown   INTEGER NOT NULL DEFAULT 1,
+    PRIMARY KEY (rideId, metricKey, timestamp, cellIndex),
+    FOREIGN KEY (rideId) REFERENCES RideRow(id) ON DELETE CASCADE
+);
+
+CREATE INDEX RidePointRow_ride_time ON RidePointRow(rideId, timestamp, metricKey);

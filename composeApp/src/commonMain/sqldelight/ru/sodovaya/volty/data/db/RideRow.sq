@@ -1,0 +1,35 @@
+-- One completed telemetry session. Points live in RidePointRow so the ride
+-- list remains cheap to load and deleting a ride can be explicit on old SQLite.
+CREATE TABLE RideRow (
+    id        TEXT NOT NULL PRIMARY KEY,
+    vehicleId TEXT NOT NULL,
+    startedAt TEXT NOT NULL,
+    endedAt   TEXT
+);
+
+CREATE INDEX RideRow_vehicle_started ON RideRow(vehicleId, startedAt DESC);
+
+selectAll:
+SELECT * FROM RideRow ORDER BY startedAt DESC;
+
+selectByVehicle:
+SELECT * FROM RideRow WHERE vehicleId = :vehicleId ORDER BY startedAt DESC;
+
+selectById:
+SELECT * FROM RideRow WHERE id = :id;
+
+insert:
+INSERT OR REPLACE INTO RideRow(id, vehicleId, startedAt, endedAt)
+VALUES (:id, :vehicleId, :startedAt, :endedAt);
+
+finish:
+UPDATE RideRow SET endedAt = :endedAt WHERE id = :id;
+
+delete:
+DELETE FROM RideRow WHERE id = :id;
+
+deleteOldest:
+DELETE FROM RideRow
+WHERE id IN (
+    SELECT id FROM RideRow ORDER BY startedAt ASC LIMIT :count
+);
