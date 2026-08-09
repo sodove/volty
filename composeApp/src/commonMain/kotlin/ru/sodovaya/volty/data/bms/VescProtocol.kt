@@ -6,6 +6,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescFrameAccumulator
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -27,7 +28,7 @@ class VescProtocol(
     private val deriveBattery: Boolean = true,
     private val motor: MotorConfig = MotorConfig(),
     private val useSetupFrame: Boolean = true
-) : BmsProtocol(), MotionSource, CanBusScanner {
+) : BmsProtocol(), MotionSource, ControllerConfigSource, CanBusScanner {
 
     companion object {
         const val NUS_SERVICE = "6e400001-b5a3-f393-e0a9-e50e24dcca9e"
@@ -43,6 +44,8 @@ class VescProtocol(
 
     @Volatile private var motion: ControllerData? = null
     @Volatile private var battery: BmsData? = null
+    @Volatile private var setupConfig: VescSetupConfig? = null
+    @Volatile private var configHandshakeSent = false
 
     /**
      * Session baseline for [ControllerData.tripKm]: the absolute odometer reading
@@ -64,7 +67,11 @@ class VescProtocol(
      */
     @Volatile private var canScan: CompletableDeferred<List<Int>?>? = null
 
-    override fun handshakeCommands(): List<ByteArray> = emptyList()
+    override fun handshakeCommands(): List<ByteArray> {
+        if (configHandshakeSent) return emptyList()
+        configHandshakeSent = true
+        return listOf(VescPacket.frame(byteArrayOf(VescSetupConfig.OPCODE_GET_MCCONF_TEMP.toByte())))
+    }
 
     override fun pollCommands(): List<ByteArray> = listOf(
         VescPacket.frame(byteArrayOf(
@@ -161,6 +168,10 @@ class VescProtocol(
                     continue
                 }
             }
+            VescSetupConfig.decode(payload)?.let {
+                setupConfig = it
+                continue
+            }
             val decoded = if (useSetupFrame) VescValues.decodeSetupValues(payload)
                           else VescValues.decodeValues(payload, motor)
             if (decoded != null) {
@@ -175,6 +186,11 @@ class VescProtocol(
     override fun latestMotion(controllerIndex: Int): ControllerData? =
         if (controllerIndex == 0) motion else null
 
+    override val controllerConfigCount: Int get() = 1
+
+    override fun latestControllerConfig(controllerIndex: Int): VescSetupConfig? =
+        if (controllerIndex == 0) setupConfig else null
+
     override fun latestData(packIndex: Int): BmsData? =
         if (packIndex == 0) battery else null
 
@@ -182,6 +198,8 @@ class VescProtocol(
         accumulator.reset()
         motion = null
         battery = null
+        setupConfig = null
+        configHandshakeSent = false
         tripBaselineKm = null
         // Answered with null — silence — rather than dropped: a scan on a
         // session being torn down can never be answered, and

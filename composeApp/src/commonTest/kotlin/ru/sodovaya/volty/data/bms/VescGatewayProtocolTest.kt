@@ -23,6 +23,7 @@ import ru.sodovaya.volty.data.ble.routePackSamples
 import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsType
@@ -117,6 +118,30 @@ class VescGatewayProtocolTest {
             tachAbsMRaw = tachAbsMRaw
         )
     )
+
+    private fun setupConfigFrame(
+        poles: Int = 30,
+        gear: Float = 1f,
+        diameterM: Float = .6f
+    ): ByteArray {
+        val o = mutableListOf<Byte>()
+        fun f32(v: Float) {
+            val bits = v.toBits()
+            o += (bits ushr 24).toByte(); o += (bits ushr 16).toByte()
+            o += (bits ushr 8).toByte(); o += bits.toByte()
+        }
+        o += VescSetupConfig.OPCODE_GET_MCCONF_TEMP.toByte()
+        repeat(3) { f32(0f) }
+        f32(100_000f)
+        repeat(3) { f32(0f) }
+        f32(10_000f)
+        f32(0f)
+        f32(60f)
+        o += poles.toByte()
+        f32(gear)
+        f32(diameterM)
+        return VescPacket.frame(o.toByteArray())
+    }
 
     /** `COMM_BMS_GET_VALUES` (96) — 2 cells, 1 sensor, tail through `can_id`. */
     private fun bmsFrame(
@@ -366,6 +391,39 @@ class VescGatewayProtocolTest {
     // ------------------------------------------------------------------
     // 1. The shape of one cycle
     // ------------------------------------------------------------------
+
+    @Test
+    fun `controller geometry is requested once per controller after the subscription handshake`() = runTest {
+        val p = protocol(packs = emptyList())
+        val link = FakeGateway(p) { _, opcode ->
+            if (opcode == VescSetupConfig.OPCODE_GET_MCCONF_TEMP) {
+                ScriptedReply(LATENCY_MS, setupConfigFrame())
+            } else {
+                healthyScript()(null, opcode)
+            }
+        }
+        // Gateway config probes need the serial loop, but must be armed only
+        // after notifications are live, just like ConnectionSession does.
+        assertTrue(p.handshakeCommands().isEmpty())
+        val device = link.runDevice(this)
+        val loop = launch { p.runPollLoop(link.send) }
+
+        advanceTimeBy(2 * LATENCY_MS + 1)
+        runCurrent()
+
+        assertEquals(
+            listOf(CAN_A, CAN_B),
+            link.sent.filter { it.second == VescSetupConfig.OPCODE_GET_MCCONF_TEMP }.map { it.first }
+        )
+        assertEquals(15, p.latestControllerConfig(0)?.motorConfig?.polePairs)
+        assertEquals(15, p.latestControllerConfig(1)?.motorConfig?.polePairs)
+
+        // The probe is not part of the recurring telemetry plan.
+        advanceTimeBy(4 * LATENCY_MS + CYCLE_GAP_MS + 1)
+        runCurrent()
+        assertEquals(2, link.sent.count { it.second == VescSetupConfig.OPCODE_GET_MCCONF_TEMP })
+        loop.cancel(); device.cancel()
+    }
 
     @Test
     fun `one cycle asks every owned source exactly once`() = runTest {

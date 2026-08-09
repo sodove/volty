@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
 import kotlin.math.abs
@@ -31,12 +32,58 @@ class VescProtocolTest {
         return VescPacket.frame(o.toByteArray())
     }
 
+    private fun setupConfigFrame(
+        poles: Int = 30,
+        gear: Float = 1f,
+        diameterM: Float = .6f
+    ): ByteArray {
+        val o = mutableListOf<Byte>()
+        fun f32(v: Float) {
+            val bits = v.toBits()
+            o += (bits ushr 24).toByte(); o += (bits ushr 16).toByte()
+            o += (bits ushr 8).toByte(); o += bits.toByte()
+        }
+        o += VescSetupConfig.OPCODE_GET_MCCONF_TEMP.toByte()
+        repeat(3) { f32(0f) }
+        f32(100_000f)
+        repeat(3) { f32(0f) }
+        f32(10_000f)
+        f32(0f)
+        f32(60f)
+        o += poles.toByte()
+        f32(gear)
+        f32(diameterM)
+        return VescPacket.frame(o.toByteArray())
+    }
+
     @Test fun poll_asks_for_the_setup_frame() {
         val p = VescProtocol()
-        assertTrue(p.handshakeCommands().isEmpty())
+        val handshake = p.handshakeCommands()
+        assertEquals(1, handshake.size)
+        assertEquals(VescSetupConfig.OPCODE_GET_MCCONF_TEMP, handshake[0][2].toInt())
         val poll = p.pollCommands()
         assertEquals(1, poll.size)
         assertEquals(47, poll[0][2].toInt())          // start, len, opcode
+    }
+
+    @Test fun configuration_reply_is_available_once_decoded() {
+        val p = VescProtocol()
+        assertNull(p.latestControllerConfig(0))
+        p.onNotification(setupConfigFrame())
+        val config = assertNotNull(p.latestControllerConfig(0))
+        assertEquals(15, config.motorConfig?.polePairs)
+        assertEquals(600, config.motorConfig?.wheelDiameterMm)
+        assertEquals(1f, config.motorConfig?.gearRatio)
+    }
+
+    @Test fun configuration_is_cleared_on_reset_and_requested_again_after_reconnect() {
+        val p = VescProtocol()
+        assertEquals(1, p.handshakeCommands().size)
+        p.onNotification(setupConfigFrame())
+        assertNotNull(p.latestControllerConfig(0))
+        p.reset()
+        assertNull(p.latestControllerConfig(0))
+        assertEquals(1, p.handshakeCommands().size)
     }
 
     @Test fun notification_produces_motion() {

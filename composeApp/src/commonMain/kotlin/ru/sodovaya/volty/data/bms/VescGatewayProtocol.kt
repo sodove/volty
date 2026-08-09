@@ -12,6 +12,7 @@ import ru.sodovaya.volty.data.bms.vesc.VescBmsValues
 import ru.sodovaya.volty.data.bms.vesc.VescCan
 import ru.sodovaya.volty.data.bms.vesc.VescFrameAccumulator
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -367,7 +368,7 @@ class VescGatewayProtocol(
      * In production they are the same clock, microseconds apart.
      */
     private val nowMs: () -> Long = { Clock.System.now().toEpochMilliseconds() }
-) : BmsProtocol(), MotionSource, SerialPollSource, CanBusScanner {
+) : BmsProtocol(), MotionSource, ControllerConfigSource, SerialPollSource, CanBusScanner {
 
     companion object {
         const val DEFAULT_POLL_INTERVAL_MS: Long = 50L
@@ -720,6 +721,13 @@ class VescGatewayProtocol(
 
     @Volatile private var packData: Map<Int, BmsData> = emptyMap()
 
+    /** One-shot setup replies, keyed by the vehicle-global controller index. */
+    @Volatile private var controllerConfigs: Map<Int, VescSetupConfig> = emptyMap()
+
+    /** Armed after notifications are subscribed, then consumed once by the serial loop. */
+    @Volatile private var configRequestsArmed = false
+    @Volatile private var configRequests: List<Request> = emptyList()
+
     /**
      * When each pack slot last produced a REAL `COMM_BMS_GET_VALUES` reading,
      * on [nowMs]' clock — **precedence, not permanence**.
@@ -936,6 +944,12 @@ class VescGatewayProtocol(
         packs.forEach { add(bmsRequest(it)) }
     }
 
+    private fun armControllerConfigRequests() {
+        if (configRequestsArmed) return
+        configRequestsArmed = true
+        configRequests = controllers.map(::setupConfigRequest)
+    }
+
     init {
         checkSilenceBudget(plan.size, replyTimeoutMs, lateReplyGuardMs, pollIntervalMs)
     }
@@ -962,6 +976,20 @@ class VescGatewayProtocol(
         // The rider's head unit's permanent state: `commands.c` falls through
         // to `default: break;` on opcode 47 and never builds a reply.
         suppression = SilentPair(c.globalIndex, VescValues.OPCODE_GET_VALUES_SETUP)
+    )
+
+    private fun setupConfigRequest(c: GatewaySource) = Request(
+        frame = frameFor(c.canId, byteArrayOf(VescSetupConfig.OPCODE_GET_MCCONF_TEMP.toByte())),
+        expectedOpcode = VescSetupConfig.OPCODE_GET_MCCONF_TEMP,
+        consume = { payload ->
+            VescSetupConfig.decode(payload)?.let {
+                controllerConfigs = controllerConfigs + (c.globalIndex to it)
+            }
+        },
+        // This is deliberately a one-shot request. A head unit that does not
+        // implement opcode 91 must not be held behind a retrying configuration
+        // probe on every telemetry cycle.
+        onSilence = {}
     )
 
     private fun valuesRequest(c: GatewaySource) = Request(
@@ -1196,6 +1224,11 @@ class VescGatewayProtocol(
         // misconfiguration path, not a real one.
         if (plan.isEmpty()) return
         while (currentCoroutineContext().isActive) {
+            val oneShot = configRequests
+            if (oneShot.isNotEmpty()) {
+                for (request in oneShot) exchange(request, send)
+                configRequests = emptyList()
+            }
             serviceCanScan(send)
             // At most ONE suppressed pair is re-probed per cycle. Without this
             // every pair suppressed within the same cycle comes due within the
@@ -1450,7 +1483,13 @@ class VescGatewayProtocol(
         return if (linkFailed) Outcome.LINK_FAILED else Outcome.SILENT
     }
 
-    override fun handshakeCommands(): List<ByteArray> = emptyList()
+    override fun handshakeCommands(): List<ByteArray> = emptyList<ByteArray>().also {
+        // A gateway reply is bare and therefore needs the serial loop's
+        // pending expectation; it cannot be sent as a fire-and-forget write.
+        // The post-subscription handshake is nevertheless the right moment to
+        // arm this one-shot, so a controller is asked once per connection.
+        armControllerConfigRequests()
+    }
 
     /**
      * Empty: this protocol drives itself through [runPollLoop]. `ConnectionSession`
@@ -1461,6 +1500,10 @@ class VescGatewayProtocol(
 
     override val controllerCount: Int get() = controllers.size
     override val packCount: Int get() = packs.size
+    override val controllerConfigCount: Int get() = controllers.size
+
+    override fun latestControllerConfig(controllerIndex: Int): VescSetupConfig? =
+        controllers.getOrNull(controllerIndex)?.let { controllerConfigs[it.globalIndex] }
 
     /**
      * Feed a notification. A reassembled payload is consumed only when it
@@ -1569,6 +1612,9 @@ class VescGatewayProtocol(
         perUnit = emptyMap()
         motion = emptyMap()
         packData = emptyMap()
+        controllerConfigs = emptyMap()
+        configRequests = emptyList()
+        configRequestsArmed = false
         // Every "how long since" this protocol holds is about THIS connection.
         // The next one may be a different vehicle: carried over,
         // [hostedBmsAtMs] would hold a substitute off a gateway that hosts
