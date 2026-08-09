@@ -115,6 +115,17 @@ class VescProtocolTest {
         assertEquals(listOf(47), issued[4])
     }
 
+    @Test fun `reset restores the bounded values-opcode probe for the next connection`() {
+        val p = VescProtocol()
+        p.pollCommands()
+        p.onNotification(setupFrame())
+        assertEquals(listOf(47), p.issuedOpcodes(), "premise: SETUP was selected")
+
+        p.reset()
+
+        assertEquals(listOf(47, 4), p.issuedOpcodes())
+    }
+
     @Test fun configuration_reply_is_available_once_decoded() {
         val p = VescProtocol()
         assertNull(p.latestControllerConfig(0))

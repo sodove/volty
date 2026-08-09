@@ -284,22 +284,25 @@ internal class ConnectionSession(
                 }
             }
         } else {
-            val pollCmds = protocol.pollCommands()
-            if (pollCmds.isNotEmpty()) {
-                pollingJob = parentScope.launch {
-                    while (isActive) {
-                        try {
-                            for (cmd in pollCmds) {
-                                writeCommand(writeChar, cmd)
-                                delay(BleConfig.writeSpacingMs)
-                            }
-                        } catch (e: kotlinx.coroutines.CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            // retry next cycle
-                        }
-                        delay(protocol.pollIntervalMs)
+            pollingJob = parentScope.launch {
+                while (isActive) {
+                    try {
+                        // Read commands inside the cycle: plain VESC begins
+                        // with a short two-opcode probe and a reply changes
+                        // its next request. Keeping this list outside the
+                        // loop would make that selection unreachable.
+                        if (!runBurstPollCycle(
+                                protocol,
+                                write = { cmd -> writeCommand(writeChar, cmd) },
+                                wait = { delay(it) }
+                            )
+                        ) return@launch
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // retry next cycle
                     }
+                    delay(protocol.pollIntervalMs)
                 }
             }
         }
@@ -386,6 +389,27 @@ internal fun shouldWriteProtocolCommand(
     protocol: BmsProtocol,
     liveBegodeAdvertisement: Boolean
 ): Boolean = !liveBegodeAdvertisement && protocol !is BegodeProtocol
+
+/**
+ * One non-serial poll burst. The command list belongs inside this function so
+ * stateful plain protocols can change what the next live cycle writes.
+ *
+ * The serial gateway path deliberately does not use this: its request/reply
+ * accounting is owned by [SerialPollSource.runPollLoop].
+ */
+internal suspend fun runBurstPollCycle(
+    protocol: BmsProtocol,
+    write: suspend (ByteArray) -> Unit,
+    wait: suspend (Long) -> Unit
+): Boolean {
+    val commands = protocol.pollCommands()
+    if (commands.isEmpty()) return false
+    for (command in commands) {
+        write(command)
+        wait(BleConfig.writeSpacingMs)
+    }
+    return true
+}
 
 /**
  * Routes one notification's worth of per-pack protocol state to two consumers
