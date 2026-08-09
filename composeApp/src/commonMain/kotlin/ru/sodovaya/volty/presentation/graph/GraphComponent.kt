@@ -65,9 +65,7 @@ class DefaultGraphComponent(
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private val _state = MutableStateFlow(
-        GraphComponent.State(
-            nowValue = extractValueOf(bmsRepository.activeData.value, GraphMetric.POWER)
-        )
+        GraphComponent.State(nowValue = initialValueOf(bmsRepository.activeData.value, GraphMetric.POWER))
     )
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
 
@@ -163,3 +161,7 @@ private fun extractValueOf(d: BmsData, metric: GraphMetric): Float? = when (metr
     GraphMetric.VOLTAGE -> d.voltage.takeIf { it > 0f }
     GraphMetric.TEMPERATURE -> d.temperatures.maxOrNull()
 }
+
+/** The repository's default [BmsData] is a disconnected zero-shaped sentinel, not a sample. */
+private fun initialValueOf(d: BmsData, metric: GraphMetric): Float? =
+    extractValueOf(d, metric).takeIf { d.isConnected }

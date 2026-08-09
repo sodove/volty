@@ -280,4 +280,16 @@ class GraphComponentUsedTest {
         assertEquals(emptyList(), c.state.value.values)
         assertNull(c.state.value.nowValue)
     }
+
+    @Test
+    fun disconnected_initial_state_has_no_power_or_current_sample() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        assertEquals(emptyList(), c.state.value.values)
+        assertNull(c.state.value.nowValue)
+
+        c.onMetricSelected(GraphMetric.CURRENT)
+        assertNull(c.state.value.nowValue)
+    }
 }
