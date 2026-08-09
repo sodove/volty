@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.util.UnitSystem
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -102,6 +103,28 @@ class CleanMetricMapperTest {
             CleanMetricMapper.heroSpeedValue(vesc.copy(speedKmh = 0f), UnitSystem.METRIC),
             "a reported standstill still prints a number"
         )
+    }
+
+    @Test fun every_unknown_speed_reason_has_its_own_rendering_key() {
+        assertEquals(
+            CleanMetricMapper.SpeedUnknownReasonKey.NO_WHEEL_GEOMETRY,
+            CleanMetricMapper.speedUnknownReasonKey(
+                vesc.copy(speedSource = SpeedSource.NONE, speedUnknownReason = SpeedUnknownReason.NO_WHEEL_GEOMETRY)
+            )
+        )
+        assertEquals(
+            CleanMetricMapper.SpeedUnknownReasonKey.FIRMWARE_DID_NOT_REPORT,
+            CleanMetricMapper.speedUnknownReasonKey(
+                vesc.copy(speedSource = SpeedSource.NONE, speedUnknownReason = SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT)
+            )
+        )
+        assertEquals(
+            CleanMetricMapper.SpeedUnknownReasonKey.MIXED,
+            CleanMetricMapper.speedUnknownReasonKey(
+                vesc.copy(speedSource = SpeedSource.NONE, speedUnknownReason = SpeedUnknownReason.MIXED)
+            )
+        )
+        assertNull(CleanMetricMapper.speedUnknownReasonKey(vesc))
     }
 
     @Test fun the_session_average_chip_is_hidden_rather_than_dashed() {

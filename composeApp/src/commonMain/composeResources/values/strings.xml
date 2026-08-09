@@ -94,6 +94,10 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">SPEED UNKNOWN</string>
+    <string name="ride_speed_reason_no_geometry">No wheel geometry configured</string>
+    <string name="ride_speed_reason_no_firmware_speed">The firmware did not report speed</string>
+    <string name="ride_speed_reason_mixed">Speed sources disagree</string>
+    <string name="ride_speed_reason_unknown">Speed source is unavailable</string>
     <string name="ride_faults_title">VEHICLE FAULTS</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Speed</string>

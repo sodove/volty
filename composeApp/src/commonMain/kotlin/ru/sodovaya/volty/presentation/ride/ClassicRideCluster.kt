@@ -5,6 +5,8 @@ import androidx.compose.animation.core.CubicBezierEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.offset
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -93,8 +95,9 @@ fun ClassicRideCluster(
         powerRangeW = state.powerRangeW
     )
 
-    VescClusterLayout(modifier = modifier) {
-        specs.forEach { spec ->
+    Column(modifier = modifier) {
+        VescClusterLayout(modifier = Modifier.fillMaxWidth()) {
+            specs.forEach { spec ->
             // Keyed so each dial keeps its own animation state across recompositions; without it
             // the animateColorAsState calls below would be positional and could swap dials.
             key(spec.slot) {
@@ -126,6 +129,8 @@ fun ClassicRideCluster(
                 }
             }
         }
+        }
+        SpeedUnknownReasonLine(state.motion)
     }
 }
 

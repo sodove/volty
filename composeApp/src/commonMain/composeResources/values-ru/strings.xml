@@ -94,6 +94,10 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <string name="ride_speed_reason_no_geometry">Не настроена геометрия колеса</string>
+    <string name="ride_speed_reason_no_firmware_speed">Прошивка не передаёт скорость</string>
+    <string name="ride_speed_reason_mixed">Источники скорости расходятся</string>
+    <string name="ride_speed_reason_unknown">Источник скорости недоступен</string>
     <string name="ride_faults_title">ОШИБКИ ТРАНСПОРТА</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Скорость</string>

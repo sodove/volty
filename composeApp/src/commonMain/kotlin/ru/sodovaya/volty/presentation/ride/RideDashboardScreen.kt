@@ -74,6 +74,10 @@ import volty.composeapp.generated.resources.ride_sample_rate_no_data
 import volty.composeapp.generated.resources.ride_sample_rate_steady
 import volty.composeapp.generated.resources.ride_sample_rate_warmup
 import volty.composeapp.generated.resources.ride_speed_unknown
+import volty.composeapp.generated.resources.ride_speed_reason_mixed
+import volty.composeapp.generated.resources.ride_speed_reason_no_firmware_speed
+import volty.composeapp.generated.resources.ride_speed_reason_no_geometry
+import volty.composeapp.generated.resources.ride_speed_reason_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
 import volty.composeapp.generated.resources.ride_faults_title
@@ -324,60 +328,80 @@ private fun RideHero(state: RideDashboardComponent.State, vehicleMaxSpeed: Float
     val speedFraction = CleanMetricMapper.heroSpeedFraction(motion, vehicleMaxSpeed)
     val secondaryColor = severityColor(secondary.severity)
 
-    Box(
-        modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
-        contentAlignment = Alignment.Center
-    ) {
-        RadialGauge(
-            speedFraction = speedFraction,
-            secondaryFraction = secondary.fraction,
-            speedColor = MaterialTheme.colorScheme.primary,
-            secondaryColor = secondaryColor,
-            trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
-            modifier = Modifier.size(250.dp)
+    Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth()) {
+        Box(
+            modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Text(
-                    text = if (motion.speedKnown) UnitFormatter.speedUnit(state.units).uppercase()
-                    else stringResource(Res.string.ride_speed_unknown),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 2.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                )
-                Text(
-                    text = CleanMetricMapper.heroSpeedValue(motion, state.units),
-                    style = MaterialTheme.typography.displayLarge.copy(
-                        fontFamily = FontFamily.Monospace,
-                        fontWeight = FontWeight.Bold
-                    ),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = secondary.label,
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    letterSpacing = 1.5.sp,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-                Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+            RadialGauge(
+                speedFraction = speedFraction,
+                secondaryFraction = secondary.fraction,
+                speedColor = MaterialTheme.colorScheme.primary,
+                secondaryColor = secondaryColor,
+                trackColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+                modifier = Modifier.size(250.dp)
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(
-                        text = secondary.value,
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        fontFamily = FontFamily.Monospace,
-                        color = secondaryColor
-                    )
-                    Text(
-                        text = secondary.unit,
+                        text = if (motion.speedKnown) UnitFormatter.speedUnit(state.units).uppercase()
+                        else stringResource(Res.string.ride_speed_unknown),
                         fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 2.sp,
                         color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
                     )
+                    Text(
+                        text = CleanMetricMapper.heroSpeedValue(motion, state.units),
+                        style = MaterialTheme.typography.displayLarge.copy(
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Bold
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = secondary.label,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 1.5.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                    )
+                    Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            text = secondary.value,
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace,
+                            color = secondaryColor
+                        )
+                        Text(
+                            text = secondary.unit,
+                            fontSize = 11.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                        )
+                    }
                 }
             }
         }
+        SpeedUnknownReasonLine(motion)
     }
+}
+
+@Composable
+internal fun SpeedUnknownReasonLine(motion: ControllerData) {
+    val key = CleanMetricMapper.speedUnknownReasonKey(motion) ?: return
+    val text = when (key) {
+        CleanMetricMapper.SpeedUnknownReasonKey.NO_WHEEL_GEOMETRY -> stringResource(Res.string.ride_speed_reason_no_geometry)
+        CleanMetricMapper.SpeedUnknownReasonKey.FIRMWARE_DID_NOT_REPORT -> stringResource(Res.string.ride_speed_reason_no_firmware_speed)
+        CleanMetricMapper.SpeedUnknownReasonKey.MIXED -> stringResource(Res.string.ride_speed_reason_mixed)
+        CleanMetricMapper.SpeedUnknownReasonKey.UNKNOWN -> stringResource(Res.string.ride_speed_reason_unknown)
+    }
+    Text(
+        text = text,
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp
+    )
 }
 
 @Composable

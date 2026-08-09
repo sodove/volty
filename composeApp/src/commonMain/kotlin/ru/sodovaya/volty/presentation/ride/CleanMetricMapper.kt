@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
@@ -25,6 +26,25 @@ import ru.sodovaya.volty.util.formatSigned
  * see `UnknownMotionRenderingTest`, which spans them.
  */
 object CleanMetricMapper {
+
+    /** Resource choice for the explanatory line below an unknown speed readout. */
+    enum class SpeedUnknownReasonKey(val resourceName: String) {
+        NO_WHEEL_GEOMETRY("ride_speed_reason_no_geometry"),
+        FIRMWARE_DID_NOT_REPORT("ride_speed_reason_no_firmware_speed"),
+        MIXED("ride_speed_reason_mixed"),
+        UNKNOWN("ride_speed_reason_unknown")
+    }
+
+    /** Known speed has no explanatory line; an untyped legacy absence stays generic. */
+    fun speedUnknownReasonKey(motion: ControllerData): SpeedUnknownReasonKey? {
+        if (motion.speedKnown) return null
+        return when (MotionReadings.speedUnknownReason(motion)) {
+            SpeedUnknownReason.NO_WHEEL_GEOMETRY -> SpeedUnknownReasonKey.NO_WHEEL_GEOMETRY
+            SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT -> SpeedUnknownReasonKey.FIRMWARE_DID_NOT_REPORT
+            SpeedUnknownReason.MIXED -> SpeedUnknownReasonKey.MIXED
+            null -> SpeedUnknownReasonKey.UNKNOWN
+        }
+    }
 
     /**
      * **How full the hero's outer speed ring is drawn** — 0..1, and **0 for a
