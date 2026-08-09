@@ -7,6 +7,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
@@ -46,11 +47,13 @@ import ru.sodovaya.volty.presentation.common.chemistryFraction
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.PowerRangeBar
+import ru.sodovaya.volty.presentation.common.ResponsiveLayoutMode
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
 import ru.sodovaya.volty.domain.stats.BmsReadings
 import ru.sodovaya.volty.presentation.common.SourcePreference
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
+import ru.sodovaya.volty.presentation.common.responsiveLayoutMode
 import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.util.formatFixed
 import kotlin.math.abs
@@ -93,14 +96,19 @@ fun DashboardScreen(component: DashboardComponent) {
     val vehicle = state.vehicle
     val chemistry = vehicle?.chemistry ?: Chemistry.LI_ION_NMC
 
-    Column(
+    BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
             .statusBarsPadding()
-            .verticalScroll(rememberScrollState())
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp)
     ) {
+        val layoutMode = responsiveLayoutMode(maxWidth.value.toInt(), maxHeight.value.toInt())
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
         // BMS-first on THIS screen specifically: everything below renders cell
         // voltages, BMS faults and chemistry, so naming the battery is what
         // tells the user something. Ride leads with the controller for the
@@ -138,76 +146,24 @@ fun DashboardScreen(component: DashboardComponent) {
             dischargeOn = data.dischargeEnabled
         )
 
-        HeroCard(state)
-
-        // 2-col metric grid
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(IntrinsicSize.Min)
-                .animateContentSize()
-        ) {
-            MetricCard(
-                label = stringResource(Res.string.metric_voltage),
-                // Zero is never a real pack voltage — it means "unknown": a
-                // Begode without a smart BMS whose profile has no cell count
-                // yet (the live-frame reading cannot be scaled honestly), or
-                // no sample at all. Show a dash rather than "0.00 V".
-                value = if (data.isConnected && data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                sub = if (data.cellVoltages.isNotEmpty()) {
-                    // Cells in SERIES behind the aggregate voltage — not the raw
-                    // cell count. For a parallel multi-branch pack the cell list
-                    // is every branch's cells unioned (80 on a two-branch 40S
-                    // wheel) while the voltage is one branch's, so the raw count
-                    // would read "80s · 2.08 V/cell". Derive the series count
-                    // from the mean cell voltage instead, so count × per-cell
-                    // reconciles with the tile's own voltage. For a single pack
-                    // this equals cellVoltages.size exactly — unchanged.
-                    val perCell = data.cellVoltages.average().toFloat()
-                    val seriesCells =
-                        if (perCell > 0f) (data.voltage / perCell).roundToInt()
-                        else data.cellVoltages.size
-                    "${seriesCells}s · ${fmt2(perCell)} V/cell"
-                } else null
-            )
-            val powerText = BmsMetricMapper.powerValue(data)
-            val powerMin = state.powerMin
-            val powerPeak = state.powerPeak
-            val powerCharging = BmsReadings.current(data)?.let { it > 0.05f } ?: false
-            // Fixed dark-green palette matches the hero card while charging so the
-            // two cards visually agree regardless of dynamic-color wallpaper.
-            val powerChargingContainer = Color(0xFF184D24)
-            val powerChargingOn = Color(0xFFE8F5EA)
-            val powerSubColor = if (powerCharging) powerChargingOn.copy(alpha = 0.7f)
-            else MaterialTheme.colorScheme.onSurfaceVariant
-            MetricCard(
-                label = stringResource(Res.string.metric_power),
-                value = powerText?.let { "$it W" } ?: "—",
-                modifier = Modifier.weight(1f).fillMaxHeight(),
-                containerColor = if (powerCharging) powerChargingContainer else null,
-                onColor = if (powerCharging) powerChargingOn else null,
-                extra = {
-                    if (powerText != null && powerMin != null && powerPeak != null) Column {
-                        // powerMin/powerPeak are consumption-positive (DashboardComponent
-                        // negates the power series: discharge plots upward). The marker
-                        // tracks current consumption, so we negate data.power here too.
-                        // The big number above keeps the domain sign (+ = charging).
-                        PowerRangeBar(
-                            min = powerMin, peak = powerPeak, now = -data.power,
-                            modifier = Modifier.fillMaxWidth().height(12.dp),
-                            marker = if (powerCharging) powerChargingOn else Color.White
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                            Text("${fmt0(powerMin)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
-                            Text("peak ${fmt0(powerPeak)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
-                        }
-                    }
-                }
-            )
+        if (layoutMode == ResponsiveLayoutMode.WIDE) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.Top
+            ) {
+                HeroCard(state, modifier = Modifier.weight(1f))
+                PrimaryMetrics(state = state, data = data, modifier = Modifier.weight(1f))
+            }
+        } else {
+            HeroCard(state)
+            PrimaryMetrics(state = state, data = data)
         }
+
+        // The primary metric cards stay together above so the wide branch can
+        // place them beside the hero without changing their mapping. Secondary
+        // telemetry remains below in the same scroll surface for both modes.
+
 
         // Wide sparkline
         Box(
@@ -345,6 +301,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 cellsMaxV = state.cellsMaxV
             )
         }
+        }
     }
 
     if (state.sheetOpen) {
@@ -355,6 +312,81 @@ fun DashboardScreen(component: DashboardComponent) {
             onAdd = component::onAddBattery,
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
+        )
+    }
+}
+
+@Composable
+private fun PrimaryMetrics(
+    state: DashboardComponent.State,
+    data: BmsData,
+    modifier: Modifier = Modifier
+) {
+    Row(
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = modifier
+            .fillMaxWidth()
+            .height(IntrinsicSize.Min)
+            .animateContentSize()
+    ) {
+        MetricCard(
+            label = stringResource(Res.string.metric_voltage),
+            // Zero is never a real pack voltage — it means "unknown": a
+            // Begode without a smart BMS whose profile has no cell count
+            // yet (the live-frame reading cannot be scaled honestly), or
+            // no sample at all. Show a dash rather than "0.00 V".
+            value = if (data.isConnected && data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            sub = if (data.cellVoltages.isNotEmpty()) {
+                // Cells in SERIES behind the aggregate voltage — not the raw
+                // cell count. For a parallel multi-branch pack the cell list
+                // is every branch's cells unioned (80 on a two-branch 40S
+                // wheel) while the voltage is one branch's, so the raw count
+                // would read "80s · 2.08 V/cell". Derive the series count
+                // from the mean cell voltage instead, so count × per-cell
+                // reconciles with the tile's own voltage. For a single pack
+                // this equals cellVoltages.size exactly — unchanged.
+                val perCell = data.cellVoltages.average().toFloat()
+                val seriesCells =
+                    if (perCell > 0f) (data.voltage / perCell).roundToInt()
+                    else data.cellVoltages.size
+                "${seriesCells}s · ${fmt2(perCell)} V/cell"
+            } else null
+        )
+        val powerText = BmsMetricMapper.powerValue(data)
+        val powerMin = state.powerMin
+        val powerPeak = state.powerPeak
+        val powerCharging = BmsReadings.current(data)?.let { it > 0.05f } ?: false
+        // Fixed dark-green palette matches the hero card while charging so the
+        // two cards visually agree regardless of dynamic-color wallpaper.
+        val powerChargingContainer = Color(0xFF184D24)
+        val powerChargingOn = Color(0xFFE8F5EA)
+        val powerSubColor = if (powerCharging) powerChargingOn.copy(alpha = 0.7f)
+        else MaterialTheme.colorScheme.onSurfaceVariant
+        MetricCard(
+            label = stringResource(Res.string.metric_power),
+            value = powerText?.let { "$it W" } ?: "—",
+            modifier = Modifier.weight(1f).fillMaxHeight(),
+            containerColor = if (powerCharging) powerChargingContainer else null,
+            onColor = if (powerCharging) powerChargingOn else null,
+            extra = {
+                if (powerText != null && powerMin != null && powerPeak != null) Column {
+                    // powerMin/powerPeak are consumption-positive (DashboardComponent
+                    // negates the power series: discharge plots upward). The marker
+                    // tracks current consumption, so we negate data.power here too.
+                    // The big number above keeps the domain sign (+ = charging).
+                    PowerRangeBar(
+                        min = powerMin, peak = powerPeak, now = -data.power,
+                        modifier = Modifier.fillMaxWidth().height(12.dp),
+                        marker = if (powerCharging) powerChargingOn else Color.White
+                    )
+                    Spacer(Modifier.height(2.dp))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        Text("${fmt0(powerMin)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
+                        Text("peak ${fmt0(powerPeak)} W", fontSize = 10.sp, color = powerSubColor, maxLines = 1, softWrap = false)
+                    }
+                }
+            }
         )
     }
 }
@@ -498,7 +530,10 @@ private fun FaultsBanner(faults: List<String>) {
 }
 
 @Composable
-private fun HeroCard(state: DashboardComponent.State) {
+private fun HeroCard(
+    state: DashboardComponent.State,
+    modifier: Modifier = Modifier
+) {
     val data = state.data
     val socKnown = data.isConnected && data.socKnown
     val v = state.vehicle
@@ -557,7 +592,7 @@ private fun HeroCard(state: DashboardComponent.State) {
     )
 
     Column(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(28.dp, 36.dp, 28.dp, 36.dp))
             .background(animatedContainer)
