@@ -22,12 +22,17 @@ internal data class SampleCadence(
 internal fun sampleCadence(
     timestamps: List<Instant>,
     warmup: Duration = WARMUP_DURATION,
+    warmupStartedAt: Instant? = null,
 ): SampleCadence {
     if (timestamps.isEmpty()) {
         return SampleCadence(rateHz = null, phase = SampleCadencePhase.NO_SAMPLES)
     }
 
-    val elapsed = timestamps.last() - timestamps.first()
+    // The rate uses only the bounded history, but the phase must use the
+    // connection's full observation window. At a fast cadence the last eight
+    // arrivals span less than six seconds forever, which would leave a live
+    // link labelled WARMUP indefinitely.
+    val elapsed = timestamps.last() - (warmupStartedAt ?: timestamps.first())
     val intervals = timestamps.zipWithNext()
         .map { (previous, next) -> next - previous }
         .filter { it > Duration.ZERO }

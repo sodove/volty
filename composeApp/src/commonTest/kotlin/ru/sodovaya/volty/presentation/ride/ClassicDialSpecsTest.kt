@@ -488,6 +488,13 @@ class ClassicDialSpecsTest {
         assertEquals("84%", spec(VescClusterSlot.BATTERY).valueTextOverride)
     }
 
+    @Test fun battery_dashes_before_a_connected_sample_has_earned_zero_percent() {
+        val disconnected = battery.copy(isConnected = false, soc = 0f, socKnown = true)
+        val dial = specs(b = disconnected).getValue(VescClusterSlot.BATTERY)
+        assertEquals("—", dial.valueTextOverride)
+        assertEquals(0f, dial.value)
+    }
+
     @Test fun consumption_converts_to_watt_hours_per_mile_for_an_imperial_rider() {
         val metric = spec(VescClusterSlot.CONSUMPTION).value
         val imperial = spec(VescClusterSlot.CONSUMPTION, UnitSystem.IMPERIAL).value

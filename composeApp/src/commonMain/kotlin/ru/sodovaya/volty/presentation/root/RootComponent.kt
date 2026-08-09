@@ -22,6 +22,7 @@ import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
+import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.permissions.PermissionsChecker
 import ru.sodovaya.volty.presentation.alerts.DefaultVehicleAlertsComponent
@@ -663,7 +664,8 @@ class DefaultRootComponent(
                         // The SAME instance the connection runs on — `appModule`
                         // binds KableBmsRepository to both interfaces, because a
                         // second one would have no live links to scan (G2 Task 5).
-                        canDiscovery = get<CanDiscovery>()
+                        canDiscovery = get<CanDiscovery>(),
+                        controllerConfigSource = get<ControllerConfigSource>()
                     )
                 )
             }

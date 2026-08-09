@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.presentation.common.CellGrid
@@ -152,7 +153,7 @@ fun DashboardScreen(component: DashboardComponent) {
                 // Begode without a smart BMS whose profile has no cell count
                 // yet (the live-frame reading cannot be scaled honestly), or
                 // no sample at all. Show a dash rather than "0.00 V".
-                value = if (data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
+                value = if (data.isConnected && data.voltage > 0f) "${fmt2(data.voltage)} V" else "—",
                 modifier = Modifier.weight(1f).fillMaxHeight(),
                 sub = if (data.cellVoltages.isNotEmpty()) {
                     // Cells in SERIES behind the aggregate voltage — not the raw
@@ -495,6 +496,7 @@ private fun FaultsBanner(faults: List<String>) {
 @Composable
 private fun HeroCard(state: DashboardComponent.State) {
     val data = state.data
+    val socKnown = data.isConnected && data.socKnown
     val v = state.vehicle
     // Direction from short window (30 s) — switches fast on real flips, ignores
     // brief regen blips during a long discharge. We keep the per-vehicle long
@@ -533,9 +535,9 @@ private fun HeroCard(state: DashboardComponent.State) {
         stringResource(Res.string.hero_to_full, abs(state.avgPowerW).toInt())
     else
         stringResource(Res.string.hero_to_empty, abs(state.avgPowerW).toInt())
-    val socFraction = (data.soc / 100f).coerceIn(0f, 1f)
+    val socFraction = if (socKnown) (data.soc / 100f).coerceIn(0f, 1f) else 0f
     val animatedSoc by animateFloatAsState(
-        targetValue = data.soc,
+        targetValue = if (socKnown) data.soc else 0f,
         animationSpec = tween(durationMillis = 600),
         label = "soc"
     )
@@ -566,8 +568,10 @@ private fun HeroCard(state: DashboardComponent.State) {
         )
         Row(verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(verticalAlignment = Alignment.Bottom) {
-                Text(fmt0(animatedSoc), fontSize = 80.sp, fontWeight = FontWeight.Medium, color = onColor)
-                Text("%", fontSize = 24.sp, color = onColor.copy(alpha = 0.65f))
+                Text(if (socKnown) fmt0(animatedSoc) else "—", fontSize = 80.sp, fontWeight = FontWeight.Medium, color = onColor)
+                if (socKnown) {
+                    Text("%", fontSize = 24.sp, color = onColor.copy(alpha = 0.65f))
+                }
             }
             Spacer(Modifier.weight(1f))
             Column(horizontalAlignment = Alignment.End, modifier = Modifier.padding(bottom = 6.dp)) {
@@ -629,6 +633,10 @@ private fun HeroCard(state: DashboardComponent.State) {
         }
     }
 }
+
+/** Pure counterpart of the dashboard hero's SoC contract; Compose itself is not unit-testable. */
+internal fun dashboardSocValue(data: BmsData): String =
+    if (data.isConnected && data.socKnown) fmt0(data.soc) else "—"
 
 // --- Number formatting delegates to util.NumberFormat (KMP-safe, negative-correct) ---
 

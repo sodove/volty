@@ -44,4 +44,14 @@ class SampleCadenceTest {
         assertEquals(0.5f, cadence.rateHz!!, absoluteTolerance = 0.001f)
         assertEquals(SampleCadencePhase.STEADY, cadence.phase)
     }
+
+    @Test
+    fun `a bounded fast history still becomes steady from the original start`() {
+        val start = Instant.fromEpochSeconds(10)
+        val recent = (0L..6100L step 100L).map { start + it.milliseconds }.takeLast(8)
+
+        val cadence = sampleCadence(recent, warmupStartedAt = start)
+
+        assertEquals(SampleCadencePhase.STEADY, cadence.phase)
+    }
 }

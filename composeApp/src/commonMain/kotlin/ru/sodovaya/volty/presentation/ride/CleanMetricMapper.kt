@@ -1,12 +1,14 @@
 package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.util.formatFixed
 import ru.sodovaya.volty.util.formatSigned
+import kotlin.math.roundToInt
 
 /**
  * The Clean renderer's third of `G §9`'s contract: the readout strings its
@@ -26,6 +28,12 @@ import ru.sodovaya.volty.util.formatSigned
  * see `UnknownMotionRenderingTest`, which spans them.
  */
 object CleanMetricMapper {
+
+    fun batterySocValue(battery: BmsData): String =
+        if (battery.isConnected && battery.socKnown) "${battery.soc.roundToInt()}%" else UNKNOWN_READOUT
+
+    fun batteryVoltageValue(battery: BmsData): String =
+        if (battery.isConnected && battery.voltage > 0f) "${formatFixed(battery.voltage, 1)} V" else UNKNOWN_READOUT
 
     /** Resource choice for the explanatory line below an unknown speed readout. */
     enum class SpeedUnknownReasonKey(val resourceName: String) {

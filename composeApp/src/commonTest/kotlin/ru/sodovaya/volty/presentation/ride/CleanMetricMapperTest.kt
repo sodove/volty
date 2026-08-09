@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.ride
 
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.util.UnitSystem
@@ -27,6 +28,21 @@ class CleanMetricMapperTest {
         tripKm = 58f,
         isConnected = true
     )
+
+    @Test fun disconnected_or_unearned_battery_numbers_are_dashed() {
+        assertEquals(UNKNOWN_READOUT, CleanMetricMapper.batterySocValue(BmsData()))
+        assertEquals(UNKNOWN_READOUT, CleanMetricMapper.batteryVoltageValue(BmsData()))
+        assertEquals(
+            UNKNOWN_READOUT,
+            CleanMetricMapper.batteryVoltageValue(BmsData(isConnected = true, voltage = 0f))
+        )
+    }
+
+    @Test fun connected_battery_zero_soc_is_real_but_zero_voltage_is_not() {
+        val empty = BmsData(isConnected = true, soc = 0f, socKnown = true, voltage = 78f)
+        assertEquals("0%", CleanMetricMapper.batterySocValue(empty))
+        assertEquals("78.0 V", CleanMetricMapper.batteryVoltageValue(empty))
+    }
 
     @Test fun power_is_kilowatts_to_one_decimal() {
         assertEquals("4.2 kW", CleanMetricMapper.powerValue(vesc))

@@ -122,40 +122,67 @@ class DefaultRideDashboardComponent(
     private var appDefaultStyle: DashboardStyle = appPrefs.defaultDashboardStyle.value
     private var faultDisplayDurationSec: Int = appPrefs.faultDisplayDurationSec.value
 
+    private enum class FaultSource { CONTROLLER, BATTERY }
+
     private data class FaultRecord(
         val message: String,
         val occurrences: Int,
-        val active: Boolean,
+        val activeSources: Set<FaultSource>,
         val clearedAt: Instant?,
         val order: Long
-    )
+    ) {
+        val active: Boolean get() = activeSources.isNotEmpty()
+    }
 
     private val faultHistory = LinkedHashMap<String, FaultRecord>()
+    private val sourceFaults = mutableMapOf<FaultSource, Set<String>>()
     private var nextFaultOrder = 0L
+    private var faultVehicleId: String? = bmsRepository.activeVehicle.value?.id
 
     /**
-     * Fold one motion sample into the dashboard fault stack. The sample timestamp is the clock:
-     * there is deliberately no delayed job here, so tests and a stopped stream cannot be wedged by
-     * a timer. A fault remains active indefinitely; the preference only starts counting at clear.
+     * Fold one source sample into the dashboard fault stack. Controller and battery streams are
+     * independent, so their active identities are tracked separately: a battery update must not
+     * count a controller fault twice, and clearing one source must not clear a same-named fault
+     * still reported by the other. The sample timestamp is the clock; there is deliberately no
+     * delayed job here, so tests and a stopped stream cannot be wedged by a timer.
      */
-    private fun observeFaults(motion: ControllerData): List<RideDashboardComponent.FaultEntry> {
-        val now = motion.timestamp
-        val present = motion.faults.toSet()
-        faultHistory.keys.toList().forEach { message ->
-            val previous = faultHistory[message] ?: return@forEach
-            if (message !in present && previous.active) {
-                faultHistory[message] = previous.copy(active = false, clearedAt = now)
+    private fun observeFaults(
+        source: FaultSource,
+        messages: List<String>,
+        now: Instant
+    ): List<RideDashboardComponent.FaultEntry> {
+        val present = messages.toSet()
+        val previousSource = sourceFaults[source].orEmpty()
+        previousSource.forEach { message ->
+            if (message !in present) {
+                val previous = faultHistory[message] ?: return@forEach
+                val remainingSources = previous.activeSources - source
+                faultHistory[message] = previous.copy(
+                    activeSources = remainingSources,
+                    clearedAt = if (remainingSources.isEmpty()) now else previous.clearedAt
+                )
             }
         }
-        motion.faults.forEach { message ->
+        present.forEach { message ->
             val previous = faultHistory[message]
             faultHistory[message] = when {
-                previous == null -> FaultRecord(message, 1, true, null, nextFaultOrder++)
-                previous.active -> previous.copy(occurrences = previous.occurrences + 1)
-                else -> FaultRecord(message, 1, true, null, nextFaultOrder++)
+                previous == null || !previous.active ->
+                    FaultRecord(message, 1, setOf(source), null, nextFaultOrder++)
+                else -> previous.copy(
+                    occurrences = previous.occurrences + 1,
+                    activeSources = previous.activeSources + source,
+                    clearedAt = null
+                )
             }
         }
+        sourceFaults[source] = present
         return renderFaults(now)
+    }
+
+    private fun clearFaultHistory() {
+        faultHistory.clear()
+        sourceFaults.clear()
+        nextFaultOrder = 0L
     }
 
     /** Re-render/prune against a new duration without counting the current sample twice. */
@@ -480,13 +507,16 @@ class DefaultRideDashboardComponent(
 
     /** Arrival timestamps only; configured poll intervals never enter this list. */
     private val cadenceTimestamps = ArrayDeque<Instant>()
+    /** Start of the current observed connection window, independent of the bounded rate history. */
+    private var cadenceStartedAt: Instant? = null
 
     private fun observeCadence(timestamp: Instant): SampleCadence {
+        if (cadenceStartedAt == null) cadenceStartedAt = timestamp
         if (cadenceTimestamps.lastOrNull() != timestamp) {
             cadenceTimestamps.addLast(timestamp)
             while (cadenceTimestamps.size > SAMPLE_CADENCE_HISTORY) cadenceTimestamps.removeFirst()
         }
-        return sampleCadence(cadenceTimestamps.toList())
+        return sampleCadence(cadenceTimestamps.toList(), warmupStartedAt = cadenceStartedAt)
     }
 
     /**
@@ -573,6 +603,7 @@ class DefaultRideDashboardComponent(
                 // derivation that the sweep showed nothing could tell from its
                 // absence — whichever collector ran second decided the state, and
                 // that was always the other one.
+                val faults = observeFaults(FaultSource.CONTROLLER, motion.faults, motion.timestamp)
                 _state.update { current ->
                     current.copy(
                         motion = motion,
@@ -581,7 +612,7 @@ class DefaultRideDashboardComponent(
                         powerRangeW = powerRange,
                         sampleRateHz = cadence.rateHz,
                         sampleRatePhase = cadence.phase,
-                        faults = observeFaults(motion),
+                        faults = faults,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, motion, current.battery, current.units,
                             currentRangeA = currentRange, powerRangeW = powerRange
@@ -630,10 +661,12 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicleData.collect { vd ->
+                val faults = observeFaults(FaultSource.BATTERY, vd.aggregate.bmsFaults, vd.aggregate.timestamp)
                 _state.update { current ->
                     current.copy(
                         battery = vd.aggregate,
                         motionPartial = vd.motionPartial,
+                        faults = faults,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, current.motion, vd.aggregate, current.units,
                             currentRangeA = current.currentRangeA, powerRangeW = current.powerRangeW
@@ -645,6 +678,11 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicle.collect { vehicle ->
+                val vehicleChanged = vehicle?.id != faultVehicleId
+                if (vehicleChanged) {
+                    faultVehicleId = vehicle?.id
+                    clearFaultHistory()
+                }
                 // IDENTITY only. This flow is a snapshot, and since `8.sqm` it carries no learned
                 // range at all — so a vehicle CHANGE adopts by looking the new id up in
                 // [storedPeaks], the database's own answer. That is [adoptStoredPeaks]' rule;
@@ -662,6 +700,7 @@ class DefaultRideDashboardComponent(
                         secondary = secondary,
                         currentRangeA = currentRange,
                         powerRangeW = powerRange,
+                        faults = if (vehicleChanged) emptyList() else current.faults,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             secondary, current.motion, current.battery, current.units,
                             currentRangeA = currentRange, powerRangeW = powerRange
@@ -676,10 +715,13 @@ class DefaultRideDashboardComponent(
                 if (c !is ConnectionState.Connected) {
                     sessionStartedAt = null
                     cadenceTimestamps.clear()
+                    cadenceStartedAt = null
+                    clearFaultHistory()
                 }
                 _state.update {
                     it.copy(
                         connection = c,
+                        faults = if (c is ConnectionState.Connected) it.faults else emptyList(),
                         sampleRateHz = if (c is ConnectionState.Connected) it.sampleRateHz else null,
                         sampleRatePhase = if (c is ConnectionState.Connected) {
                             it.sampleRatePhase

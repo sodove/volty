@@ -37,6 +37,17 @@ class SecondaryGaugeMapperTest {
         assertEquals(DutyLevel.NORMAL, r.severity)
     }
 
+    @Test fun disconnected_battery_does_not_reuse_a_stale_state_of_charge() {
+        val r = SecondaryGaugeMapper.map(
+            SecondaryGauge.BATTERY,
+            motion,
+            battery.copy(isConnected = false, soc = 0f, socKnown = true),
+            UnitSystem.METRIC
+        )
+        assertEquals("—", r.value)
+        assertEquals(0f, r.fraction)
+    }
+
     @Test fun power_is_shown_in_kilowatts() {
         val r = SecondaryGaugeMapper.map(SecondaryGauge.POWER, motion, battery, UnitSystem.METRIC)
         assertEquals("POWER", r.label)

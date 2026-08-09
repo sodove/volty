@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.di
 
 import ru.sodovaya.volty.data.ble.KableBmsRepository
+import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.db.SqlDelightVehicleRepository
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
@@ -23,6 +24,10 @@ val appModule = module {
     // links the connection does — a second KableBmsRepository would have none.
     // `binds` rather than a second `single { get<BmsRepository>() as … }` so the
     // cast cannot go stale if the implementation ever moves.
-    singleOf(::KableBmsRepository) binds arrayOf(BmsRepository::class, CanDiscovery::class)
+    singleOf(::KableBmsRepository) binds arrayOf(
+        BmsRepository::class,
+        CanDiscovery::class,
+        ControllerConfigSource::class
+    )
     single { AlertEngine(get(), get()) }
 }

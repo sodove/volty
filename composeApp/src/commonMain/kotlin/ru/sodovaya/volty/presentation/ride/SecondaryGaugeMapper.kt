@@ -95,8 +95,8 @@ object SecondaryGaugeMapper {
         }
         SecondaryGauge.BATTERY -> SecondaryReadout(
             labels.battery,
-            if (battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
-            if (battery.socKnown) frac(battery.soc, 100f) else 0f,
+            if (battery.isConnected && battery.socKnown) battery.soc.roundToInt().toString() else "—", "%",
+            if (battery.isConnected && battery.socKnown) frac(battery.soc, 100f) else 0f,
             DutyLevel.NORMAL
         )
         SecondaryGauge.POWER -> {

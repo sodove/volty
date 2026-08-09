@@ -5,6 +5,7 @@ import com.juul.kable.Scanner
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
@@ -129,7 +130,7 @@ class KableBmsRepository private constructor(
      * actually drives the reconnect / watchdog loops.
      */
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
-) : BmsRepository, CanDiscovery {
+) : BmsRepository, CanDiscovery, ControllerConfigSource {
 
     /** Production constructor used by Koin. */
     constructor(
@@ -687,6 +688,26 @@ class KableBmsRepository private constructor(
      */
     private var primaryPackProtocol: BmsProtocol? = null
 
+    /** Current connection's controller-indexed setup accessors. */
+    private val controllerConfigLock = Any()
+    private var controllerConfigSources: Map<Int, Pair<ControllerConfigSource, Int>> = emptyMap()
+
+    override val controllerConfigCount: Int
+        get() = synchronized(controllerConfigLock) {
+            controllerConfigSources.keys.maxOrNull()?.plus(1) ?: 0
+        }
+
+    override fun latestControllerConfig(controllerIndex: Int): ru.sodovaya.volty.data.bms.vesc.VescSetupConfig? {
+        val (source, localIndex) = synchronized(controllerConfigLock) {
+            controllerConfigSources[controllerIndex]
+        } ?: return null
+        return source.latestControllerConfig(localIndex)
+    }
+
+    private fun clearControllerConfigSources() = synchronized(controllerConfigLock) {
+        controllerConfigSources = emptyMap()
+    }
+
     /**
      * The profile's cell count is an auto-filled cache of live telemetry, not
      * user input: once a candidate is CONFIRMED, write it back to the saved
@@ -913,6 +934,7 @@ class KableBmsRepository private constructor(
                 vehicleConnection = null
                 _activeVehicleData.value = VehicleData()
                 primaryPackProtocol = null // see disconnect()'s note on this line
+                clearControllerConfigSources()
                 // Reset the motion flow alongside the vehicle-level one so a
                 // prior connection's motion does not linger before the demo's
                 // own ride curve (Task 12) starts publishing its own.
@@ -1939,6 +1961,7 @@ class KableBmsRepository private constructor(
             vehicleConnection = null
             _activeVehicleData.value = VehicleData()
             primaryPackProtocol = null // see disconnect()'s note on this line
+            clearControllerConfigSources()
             // The funnel was installed in the same critical section as the
             // orchestrator, so it belongs to the same failed attempt — the
             // identity guard above covers both.
@@ -2049,6 +2072,7 @@ class KableBmsRepository private constructor(
                     l.session?.tearDown()
                     l.session = null
                 }
+                clearControllerConfigSources()
                 // Connecting to a real BMS kills any running demo simulation.
                 demoJob?.cancel()
                 demoJob = null
@@ -2077,6 +2101,7 @@ class KableBmsRepository private constructor(
                 // connects without disconnecting first.
                 _activeVehicleData.value = VehicleData()
                 primaryPackProtocol = null // see disconnect()'s note on this line
+                clearControllerConfigSources()
             }
             // Initial state, written directly: the links are not installed yet,
             // so the fold cannot own this first transition. From installation
@@ -2555,6 +2580,7 @@ class KableBmsRepository private constructor(
         // seams this file already uses (installProtocolPipelineForTest,
         // disconnect, primeConnectedForTest) reach it directly.
         primaryPackProtocol = null
+        clearControllerConfigSources()
         _activeMotion.value = ControllerData()
         // Fresh acquisition: the block above has already released the lock,
         // and tearDown() must not run while holding it. The funnel closes
@@ -2875,6 +2901,16 @@ class KableBmsRepository private constructor(
     private fun createProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
         val protocol = buildProtocol(spec, vehicle)
         if (spec.ownedPacks.any { it.globalIndex == 0 }) primaryPackProtocol = protocol
+        val configSource = protocol as? ControllerConfigSource
+        if (configSource != null) {
+            synchronized(controllerConfigLock) {
+                val updated = controllerConfigSources.toMutableMap()
+                spec.ownedControllers.forEachIndexed { localIndex, controller ->
+                    updated[controller.globalIndex] = configSource to localIndex
+                }
+                controllerConfigSources = updated
+            }
+        }
         return protocol
     }
 

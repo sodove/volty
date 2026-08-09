@@ -29,6 +29,7 @@ import ru.sodovaya.volty.domain.repository.DiscoveredDevice
 import ru.sodovaya.volty.domain.repository.DeviceTypeMemory
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.stats.GaugeScale
+import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.presentation.picker.ScannedAdd
 import ru.sodovaya.volty.presentation.picker.addBmsType
 import ru.sodovaya.volty.presentation.picker.addControllerType
@@ -534,6 +535,8 @@ class DefaultVehicleEditComponent(
      * the eleven existing `BmsRepository` fakes get for free.
      */
     private val canDiscovery: CanDiscovery? = null,
+    /** Live opcode-91 answers, when the active connection speaks VESC setup. */
+    private val controllerConfigSource: ControllerConfigSource? = null,
     // Optional prefilled BMS info when creating from Picker
     private val prefilledBmsType: BmsType? = null,
     private val prefilledBmsAddress: String? = null,
@@ -595,7 +598,14 @@ class DefaultVehicleEditComponent(
         // multi-sample rule from being the unbounded loop that wedges `runTest`
         // instead of failing it.
         scope.launch {
-            combine(bmsRepository.activeVehicle, bmsRepository.activeVehicleData) { v, d -> v to d }
+            // The controller's setup answer arrives on its motion link. A vehicle
+            // can have a separate BMS link that is silent or offline, so waiting
+            // only for activeVehicleData would leave opcode 91 stranded in the
+            // protocol snapshot forever. Any motion emission is a safe retry
+            // boundary and still folds the same vehicle-level telemetry.
+            combine(bmsRepository.activeVehicle, bmsRepository.activeVehicleData, bmsRepository.activeMotion) { v, d, _ ->
+                v to d
+            }
                 .collect { (active, data) -> observe(active, data) }
         }
     }
@@ -615,9 +625,26 @@ class DefaultVehicleEditComponent(
         _state.update { s ->
             if (!s.isEditing) return@update s
             val t = s.telemetry.observing(s.draft, data)
+            val draft = applyLiveControllerSetups(s.draft)
             // Re-validating on every emission would rebuild the issue list at
             // the poll rate; nothing observable changed unless the window did.
-            if (t == s.telemetry) s else s.copy(telemetry = t, issues = validate(s.draft, t))
+            if (t == s.telemetry && draft == s.draft) s
+            else s.copy(draft = draft, telemetry = t, issues = validate(draft, t))
+        }
+    }
+
+    /**
+     * Consume one-shot setup answers after the form has loaded. The protocol accessor is a
+     * snapshot rather than a flow, so live vehicle-data emissions are the retry boundary; the
+     * pure draft operation keeps rider-entered geometry authoritative and retains the answer for
+     * mismatch/unconfigured diagnostics.
+     */
+    private fun applyLiveControllerSetups(draft: VehicleDraft): VehicleDraft {
+        val source = controllerConfigSource ?: return draft
+        return draft.controllers.foldIndexed(draft) { index, current, controller ->
+            val controllerIndex = controller.origin?.index ?: index
+            val config = source.latestControllerConfig(controllerIndex) ?: return@foldIndexed current
+            current.applyControllerSetup(controller.key, config)
         }
     }
 

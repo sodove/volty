@@ -564,12 +564,12 @@ object ClassicDialSpecs {
                     maximumValue = 100.0,             // QML :310
                     labelStep = DEFAULT_LABEL_STEP
                 ),
-                value = if (battery.socKnown) battery.soc else 0f,
+                value = if (battery.isConnected && battery.socKnown) battery.soc else 0f,
                 caption = labels.battery,
                 unit = "%",
-                valueTextOverride = if (battery.socKnown) "${battery.soc.roundToInt()}%" else UNKNOWN,
+                valueTextOverride = if (battery.isConnected && battery.socKnown) "${battery.soc.roundToInt()}%" else UNKNOWN,
                 centerTextVisible = false,            // QML :312
-                severity = batteryLevel(battery.soc, battery.socKnown)
+                severity = batteryLevel(battery.soc, battery.isConnected && battery.socKnown)
             ),
             // QML :434-460.
             VescDialSpec(

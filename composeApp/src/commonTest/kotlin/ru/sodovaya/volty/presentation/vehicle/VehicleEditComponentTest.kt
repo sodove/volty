@@ -23,6 +23,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.MotorConfigProvenance
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.PackTopology
@@ -34,6 +35,8 @@ import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.motionAlertRules
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.data.bms.vesc.VescValues
+import ru.sodovaya.volty.data.bms.ControllerConfigSource
+import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.data.ble.isGatewayLink
 import ru.sodovaya.volty.data.ble.planAliasHandoffs
 import ru.sodovaya.volty.data.ble.planLinks
@@ -154,6 +157,13 @@ class VehicleEditComponentTest {
         }
 
         fun answerWith(r: Result<List<Int>>) { result = r }
+    }
+
+    private class FakeControllerConfigSource(
+        private val configs: Map<Int, VescSetupConfig>
+    ) : ControllerConfigSource {
+        override val controllerConfigCount: Int get() = configs.size
+        override fun latestControllerConfig(controllerIndex: Int): VescSetupConfig? = configs[controllerIndex]
     }
 
     private class FakeVehicleRepo(
@@ -349,6 +359,7 @@ class VehicleEditComponentTest {
         prefilledBmsAddress: String? = null,
         bmsRepo: FakeBmsRepo = FakeBmsRepo(),
         canDiscovery: CanDiscovery? = null,
+        controllerConfigSource: ControllerConfigSource? = null,
         onSaved: () -> Unit = {},
         onCancelled: () -> Unit = {},
         backDispatcher: BackDispatcher? = null
@@ -363,9 +374,48 @@ class VehicleEditComponentTest {
             onCancelled = onCancelled,
             onDeleted = {},
             canDiscovery = canDiscovery,
+            controllerConfigSource = controllerConfigSource,
             prefilledBmsType = prefilledBmsType,
             prefilledBmsAddress = prefilledBmsAddress
         )
+    }
+
+    @Test
+    fun `a live controller setup answer reaches the editor and pre-fills its geometry`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val vehicle = headUnitVehicle()
+        val bmsRepo = FakeBmsRepo()
+        bmsRepo.goLive(vehicle)
+        val config = VescSetupConfig(
+            maxErpm = 12_000f,
+            maxWattsOut = 4_000f,
+            maxInputCurrentA = 80f,
+            motorPoles = 30,
+            gearRatio = 2f,
+            wheelDiameterM = 0.6f
+        )
+        val c = component(
+            vehicleRepo = FakeVehicleRepo(listOf(vehicle)),
+            bmsRepo = bmsRepo,
+            canDiscovery = FakeCanDiscovery(),
+            controllerConfigSource = FakeControllerConfigSource(mapOf(1 to config))
+        )
+        advanceUntilIdle()
+
+        c.onDiscoverCanDevices()
+        advanceUntilIdle()
+        c.onAddCanCandidate(c.state.value.canCandidates.first { it.kind == CanCandidateKind.NODE }, asBattery = false)
+
+        // The config is a one-shot protocol accessor, not a flow. A later live
+        // controller-motion emission is the boundary that lets the editor consume
+        // it even when the vehicle's separate BMS link has no data to publish.
+        bmsRepo.activeMotion.value = ControllerData(timestamp = Instant.fromEpochSeconds(2))
+        advanceUntilIdle()
+
+        val controller = c.state.value.draft.controllers.last()
+        assertEquals(MotorConfig(polePairs = 15, wheelDiameterMm = 600, gearRatio = 2f), controller.motor.resolve())
+        assertEquals(MotorConfigProvenance.CONTROLLER, controller.motorProvenance)
+        assertTrue(controller.controllerConfigReported)
     }
 
     /** Real Decompose navigation, with the child instance reduced to Config. */

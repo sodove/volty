@@ -419,8 +419,8 @@ private fun MetricCluster(motion: ControllerData, battery: BmsData) {
             )
             MetricCard(
                 label = stringResource(Res.string.ride_battery),
-                value = if (battery.socKnown) "${battery.soc.roundToInt()}%" else "—",
-                sub = "${formatFixed(battery.voltage, 1)} V",
+                value = CleanMetricMapper.batterySocValue(battery),
+                sub = CleanMetricMapper.batteryVoltageValue(battery),
                 modifier = Modifier.weight(1f).fillMaxHeight()
             )
         }

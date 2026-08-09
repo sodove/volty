@@ -347,6 +347,66 @@ class RideDashboardComponentTest {
         assertTrue(c.state.value.faults.isEmpty(), "zero is not never-show; it means active-only")
     }
 
+    @Test
+    fun battery_faults_are_visible_and_linger_like_controller_faults() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+
+        val start = Instant.fromEpochSeconds(10)
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(
+                bmsFaults = listOf("cell-overvoltage"),
+                isConnected = true,
+                timestamp = start
+            )
+        )
+        advanceUntilIdle()
+        assertEquals(
+            listOf(RideDashboardComponent.FaultEntry("cell-overvoltage", 1, true)),
+            c.state.value.faults
+        )
+
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(isConnected = true, timestamp = start + 1.seconds)
+        )
+        advanceUntilIdle()
+        assertEquals(
+            listOf(RideDashboardComponent.FaultEntry("cell-overvoltage", 1, false)),
+            c.state.value.faults
+        )
+
+        repo.activeVehicleData.value = VehicleData(
+            aggregate = BmsData(isConnected = true, timestamp = start + 61.seconds)
+        )
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "a cleared BMS fault expires after the configured minute")
+    }
+
+    @Test
+    fun changing_vehicle_clears_fault_history_before_the_new_ride() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        repo.emitMotion(
+            ControllerData(
+                faults = listOf("over-voltage"),
+                isConnected = true,
+                timestamp = Instant.fromEpochSeconds(10)
+            )
+        )
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.single().active)
+
+        repo.activeVehicle.value = vehicleWith(null, SecondaryGauge.DUTY).copy(id = "v2")
+        advanceUntilIdle()
+
+        assertTrue(c.state.value.faults.isEmpty(), "faults from the previous vehicle must not leak")
+    }
+
     @AfterTest
     fun tearDown() {
         Dispatchers.resetMain()
@@ -387,6 +447,27 @@ class RideDashboardComponentTest {
 
         assertEquals(10f, c.state.value.sampleRateHz!!, absoluteTolerance = 0.001f)
         assertEquals(SampleCadencePhase.WARMUP, c.state.value.sampleRatePhase)
+    }
+
+    @Test
+    fun actual_fast_motion_stream_leaves_warmup_after_six_seconds() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val start = Instant.fromEpochSeconds(10)
+        (0L..6100L step 100L).forEach { offsetMs ->
+            repo.emitMotion(
+                ControllerData(
+                    isConnected = true,
+                    timestamp = start + offsetMs.milliseconds
+                )
+            )
+            advanceUntilIdle()
+        }
+
+        assertEquals(SampleCadencePhase.STEADY, c.state.value.sampleRatePhase)
     }
 
     @Test

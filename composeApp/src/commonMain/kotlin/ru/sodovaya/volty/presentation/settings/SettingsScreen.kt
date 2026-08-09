@@ -139,24 +139,6 @@ fun SettingsScreen(component: SettingsComponent) {
                 Switch(checked = state.dynamicColor, onCheckedChange = component::onDynamicColorChanged)
             }
 
-            // FAULT DISPLAY DURATION
-            SectionLabel(stringResource(Res.string.settings_fault_display_duration))
-            Text(
-                if (state.faultDisplayDurationSec == 0) {
-                    stringResource(Res.string.settings_fault_display_duration_active)
-                } else {
-                    stringResource(Res.string.settings_minutes, state.faultDisplayDurationSec / 60)
-                },
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Slider(
-                value = state.faultDisplayDurationSec.toFloat(),
-                onValueChange = { component.onFaultDisplayDurationChanged(it.toInt()) },
-                valueRange = 0f..300f,
-                steps = 9
-            )
-
             HorizontalDivider()
 
             // SCAN TIMEOUT
