@@ -32,4 +32,11 @@ class MainActivity : ComponentActivity() {
             runCatching { bmsRepository.onAppResumed() }
         }
     }
+
+    override fun onStop() {
+        lifecycleScope.launch {
+            runCatching { bmsRepository.onAppPaused() }
+        }
+        super.onStop()
+    }
 }

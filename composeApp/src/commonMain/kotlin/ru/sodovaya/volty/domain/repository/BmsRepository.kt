@@ -127,4 +127,11 @@ interface BmsRepository {
      * Idempotent — safe to call on every lifecycle ON_START.
      */
     suspend fun onAppResumed()
+
+    /**
+     * Called when the dashboard leaves the foreground. Implementations may
+     * lower transport costs while retaining the live link; the default keeps
+     * older test and platform implementations source-compatible.
+     */
+    suspend fun onAppPaused() {}
 }

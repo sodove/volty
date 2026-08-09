@@ -148,6 +148,15 @@ internal class ConnectionSession(
             return Result.failure(IllegalStateException("Connect timeout"))
         }
 
+        // Best effort: Android may reject this hint, and some peripherals do
+        // not expose the Android transport controls at all. The request is
+        // deliberately outside the protocol path so either outcome leaves
+        // the exact same handshake and poll dialogue running.
+        requestBleConnectionPriority(
+            peripheral,
+            BleConnectionTuning.priorityFor(foreground = true)
+        )
+
         val notifyChar = characteristicOf(
             service = Uuid.parse(protocol.uuids.serviceUuid),
             characteristic = Uuid.parse(protocol.uuids.notifyCharUuid)
@@ -313,6 +322,17 @@ internal class ConnectionSession(
         }
 
         return Result.success(Unit)
+    }
+
+    /**
+     * Update the radio hint without touching protocol state. Called by the
+     * repository's app lifecycle bridge; a refusal is intentionally ignored.
+     */
+    internal fun setForeground(foreground: Boolean) {
+        requestBleConnectionPriority(
+            peripheral,
+            BleConnectionTuning.priorityFor(foreground)
+        )
     }
 
     /**

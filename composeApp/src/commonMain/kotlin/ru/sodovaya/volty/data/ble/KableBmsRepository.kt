@@ -2722,6 +2722,13 @@ class KableBmsRepository private constructor(
         val nowMs = Clock.System.now().toEpochMilliseconds()
         val currentLinks = links
 
+        // Restore the foreground radio hint for links that survived the
+        // background transition. This does not rebuild or otherwise alter a
+        // healthy protocol session.
+        currentLinks
+            .filter { it.status == LinkStatus.ONLINE }
+            .forEach { it.session?.setForeground(foreground = true) }
+
         if (currentLinks.isEmpty()) {
             // Paper-trail Connected with no link structure behind it (a state
             // restored without sessions). One freshness verdict for the whole
@@ -2787,6 +2794,18 @@ class KableBmsRepository private constructor(
             setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
             startLinkReconnectLoop(link, initialReason = reason)
         }
+    }
+
+    override suspend fun onAppPaused() {
+        // Lower the connection interval hint while no dashboard is visible.
+        // Snapshotting avoids holding sessionLock across the platform call and
+        // lets a concurrent disconnect tear down normally.
+        val sessions = sessionLock.withLock {
+            links
+                .filter { it.status == LinkStatus.ONLINE }
+                .mapNotNull { it.session }
+        }
+        sessions.forEach { it.setForeground(foreground = false) }
     }
 
     /**
