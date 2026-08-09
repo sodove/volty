@@ -88,6 +88,10 @@ interface RideDashboardComponent {
          * connection — no ticker involved. See [DefaultRideDashboardComponent].
          */
         val uptimeSeconds: Long = 0L,
+        /** Observed motion-arrival rate; null until two timestamps earn one. */
+        val sampleRateHz: Float? = null,
+        /** Whether the observed stream is still in its connection warm-up window. */
+        val sampleRatePhase: SampleCadencePhase = SampleCadencePhase.NO_SAMPLES,
         val savedVehicles: List<Vehicle> = emptyList(),
         val sheetOpen: Boolean = false
     )
@@ -421,6 +425,17 @@ class DefaultRideDashboardComponent(
         }
     }
 
+    /** Arrival timestamps only; configured poll intervals never enter this list. */
+    private val cadenceTimestamps = ArrayDeque<Instant>()
+
+    private fun observeCadence(timestamp: Instant): SampleCadence {
+        if (cadenceTimestamps.lastOrNull() != timestamp) {
+            cadenceTimestamps.addLast(timestamp)
+            while (cadenceTimestamps.size > SAMPLE_CADENCE_HISTORY) cadenceTimestamps.removeFirst()
+        }
+        return sampleCadence(cadenceTimestamps.toList())
+    }
+
     /**
      * Push the two dial widths onto the state after an **adoption** has moved them.
      *
@@ -488,6 +503,11 @@ class DefaultRideDashboardComponent(
             bmsRepository.activeMotion.collect { motion ->
                 if (sessionStartedAt == null) sessionStartedAt = motion.timestamp
                 val uptime = (motion.timestamp - sessionStartedAt!!).inWholeSeconds.coerceAtLeast(0)
+                val cadence = if (motion.isConnected) {
+                    observeCadence(motion.timestamp)
+                } else {
+                    sampleCadence(cadenceTimestamps.toList())
+                }
                 // Folded once per sample, OUTSIDE `_state.update` — that block can be re-run when
                 // another collector wins the compare-and-set, and a tracker folded inside it would
                 // count the same sample twice towards a median (`§9.2` item 2).
@@ -506,6 +526,8 @@ class DefaultRideDashboardComponent(
                         uptimeSeconds = uptime,
                         currentRangeA = currentRange,
                         powerRangeW = powerRange,
+                        sampleRateHz = cadence.rateHz,
+                        sampleRatePhase = cadence.phase,
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, motion, current.battery, current.units,
                             currentRangeA = currentRange, powerRangeW = powerRange
@@ -597,8 +619,21 @@ class DefaultRideDashboardComponent(
 
         scope.launch {
             bmsRepository.connectionState.collect { c ->
-                if (c !is ConnectionState.Connected) sessionStartedAt = null
-                _state.update { it.copy(connection = c) }
+                if (c !is ConnectionState.Connected) {
+                    sessionStartedAt = null
+                    cadenceTimestamps.clear()
+                }
+                _state.update {
+                    it.copy(
+                        connection = c,
+                        sampleRateHz = if (c is ConnectionState.Connected) it.sampleRateHz else null,
+                        sampleRatePhase = if (c is ConnectionState.Connected) {
+                            it.sampleRatePhase
+                        } else {
+                            SampleCadencePhase.NO_SAMPLES
+                        }
+                    )
+                }
             }
         }
 

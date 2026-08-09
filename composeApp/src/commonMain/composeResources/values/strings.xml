@@ -99,6 +99,9 @@
     <string name="ride_odometer">Odometer</string>
     <string name="ride_trip">Trip</string>
     <string name="ride_uptime">Uptime</string>
+    <string name="ride_sample_rate_no_data">Sample rate —</string>
+    <string name="ride_sample_rate_warmup">Sample rate %1$s Hz · warming up</string>
+    <string name="ride_sample_rate_steady">Sample rate %1$s Hz · steady</string>
     <string name="ride_consumption">Consumption</string>
     <string name="ride_consumption_avg">avg %1$s Wh/km</string>
     <!-- Energy per distance, spelled out: the one unit on the Classic cluster that is a word

@@ -94,13 +94,13 @@ actively-watched* state — the app already tracks app resume/pause and has some
 that. A rider whose phone is in a pocket on a two-hour ride must not pay 15 ms intervals for a
 dashboard nobody is reading.
 
-- [ ] **Step 1: Write the failing tests.** The request is issued on connect; a refusal or an
+- [x] **Step 1: Write the failing tests.** The request is issued on connect; a refusal or an
       exception leaves the link fully working; the priority is lowered when the app backgrounds
       and restored on resume; **no protocol behaviour changes** — the same requests in the same
       order (constraint 6).
-- [ ] **Step 2: Run them and watch them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Sweep, full suite, commit.** Report that the throughput effect itself is
+- [x] **Step 2: Run them and watch them fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Sweep, full suite, commit.** Report that the throughput effect itself is
       unmeasured until a device says otherwise.
 
 ```bash
@@ -123,13 +123,13 @@ may be refused and a Begode's frames straddle notifications regardless.**
 task must not become "now that frames are whole, simplify the accumulator": that would trade a
 tested, field-proven path for an assumption about every peripheral we will ever meet.
 
-- [ ] **Step 1: Write the failing tests.** The request is issued; a refusal leaves the link
+- [x] **Step 1: Write the failing tests.** The request is issued; a refusal leaves the link
       working at the old size; **the accumulator still reassembles a fragmented reply** after
       the change, because a granted MTU is not a guarantee about any particular device; a
       single-notification reply also decodes.
-- [ ] **Step 2: Run them and watch them fail.**
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Sweep, full suite, commit.**
+- [x] **Step 2: Run them and watch them fail.**
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Sweep, full suite, commit.**
 
 ```bash
 git commit -m "feat(ble): one reply, one packet — when the peripheral agrees"
@@ -159,18 +159,28 @@ because two replies to one opcode are byte-identical and only arrival order tell
 **If it turns out not to be reachable, say so and stop.** A correct 6.6 s is better than a fast
 wrong answer, and this part has two other tasks that help every link unconditionally.
 
-- [ ] **Step 1: Establish reachability before writing code.** Report whether the serial
+- [x] **Step 1: Establish reachability before writing code.** Report whether the serial
       guarantee permits any reordering at all, with the late-reply-pair analysis that Part I
       Tasks 4 and 5 established. This step's deliverable is an answer, not a change.
-- [ ] **Step 2: If reachable, write the failing tests** — the answering requests keep their
-      cadence during the warm-up; the three byte-identical adjacent-request pairs stay guarded;
-      suppression still engages at the same moment.
-- [ ] **Step 3: Implement, or record the refusal with its reasoning.**
-- [ ] **Step 4: Sweep, full suite, commit.**
+- [x] **Step 2: Not applicable — the serial guarantee makes the proposed reordering unreachable.**
+- [x] **Step 3: Record the refusal with its reasoning.**
+- [x] **Step 4: Sweep, full suite, commit.**
 
 ```bash
 git commit -m "perf(vesc): the slowest cadence of the session was its first six seconds"
 ```
+
+### Task 3 decision (2026-08-09)
+
+The answering requests cannot keep their cadence while a slow request is in
+flight. `runPollLoop` is deliberately one exchange at a time, and `exchange`
+holds the sole `pending` expectation until the reply timeout and the late-reply
+guard have both elapsed. Advancing the loop early would either put a second
+`COMM_FORWARD_CAN` request in the gateway's single forwarding slot or let a late
+byte-identical reply be consumed by the next controller/battery request. Both
+would violate the serial guarantee that identifies bare gateway replies by
+arrival order. The warm-up therefore remains unchanged; Tasks 1 and 2 are the
+safe cadence levers for every link.
 
 ---
 
@@ -189,14 +199,14 @@ dashboard gauge; it is diagnostics. It should say the sample rate, and — becau
 bimodal by design — **whether suppression has engaged**, since that is the difference between
 "still proving your head unit" and "this is as fast as it gets".
 
-- [ ] **Step 1: Write the failing tests.** The component exposes a sample rate derived from
+- [x] **Step 1: Write the failing tests.** The component exposes a sample rate derived from
       actual arrivals, not from the configured interval — a configured rate the link is not
       achieving is exactly the thing worth showing; it reports the warm-up state distinctly
       from steady state; a link with no samples reports **no rate rather than zero** (the same
       contract Part I spent itself on).
-- [ ] **Step 2: Run them and watch them fail.**
-- [ ] **Step 3: Implement**, decision in the component per constraint 8, strings in both locales.
-- [ ] **Step 4: Sweep, full suite, commit.**
+- [x] **Step 2: Run them and watch them fail.**
+- [x] **Step 3: Implement**, decision in the component per constraint 8, strings in both locales.
+- [x] **Step 4: Sweep, full suite, commit.**
 
 ```bash
 git commit -m "feat(diag): the app knew its own sample rate and never said it"

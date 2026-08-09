@@ -70,6 +70,9 @@ import volty.composeapp.generated.resources.ride_esc_temp
 import volty.composeapp.generated.resources.ride_motor_temp
 import volty.composeapp.generated.resources.ride_odometer
 import volty.composeapp.generated.resources.ride_power
+import volty.composeapp.generated.resources.ride_sample_rate_no_data
+import volty.composeapp.generated.resources.ride_sample_rate_steady
+import volty.composeapp.generated.resources.ride_sample_rate_warmup
 import volty.composeapp.generated.resources.ride_speed_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
@@ -205,6 +208,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
         }
 
         OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
+        TelemetryRateReadout(state)
     }
 
     if (state.sheetOpen) {
@@ -217,6 +221,28 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             onDismiss = component::onSheetDismiss
         )
     }
+}
+
+@Composable
+private fun TelemetryRateReadout(state: RideDashboardComponent.State) {
+    val text = when (state.sampleRatePhase) {
+        SampleCadencePhase.NO_SAMPLES -> stringResource(Res.string.ride_sample_rate_no_data)
+        SampleCadencePhase.WARMUP -> stringResource(
+            Res.string.ride_sample_rate_warmup,
+            state.sampleRateHz?.let { formatFixed(it, 1) } ?: "—"
+        )
+        SampleCadencePhase.STEADY -> stringResource(
+            Res.string.ride_sample_rate_steady,
+            state.sampleRateHz?.let { formatFixed(it, 1) } ?: "—"
+        )
+    }
+    Text(
+        text = text,
+        modifier = Modifier.fillMaxWidth(),
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        fontSize = 11.sp,
+        fontFamily = FontFamily.Monospace
+    )
 }
 
 private const val SPARKLINE_MAX_POINTS = 40

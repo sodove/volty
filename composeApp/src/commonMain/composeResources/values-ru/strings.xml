@@ -99,6 +99,9 @@
     <string name="ride_odometer">Одометр</string>
     <string name="ride_trip">Поездка</string>
     <string name="ride_uptime">В пути</string>
+    <string name="ride_sample_rate_no_data">Частота семплов —</string>
+    <string name="ride_sample_rate_warmup">Частота семплов %1$s Гц · разгон</string>
+    <string name="ride_sample_rate_steady">Частота семплов %1$s Гц · стабильно</string>
     <string name="ride_consumption">Расход</string>
     <string name="ride_consumption_avg">средн. %1$s Вт·ч/км</string>
     <string name="unit_wh_per_km">Вт·ч/км</string>

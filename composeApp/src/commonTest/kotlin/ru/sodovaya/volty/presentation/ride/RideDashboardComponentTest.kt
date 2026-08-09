@@ -58,6 +58,7 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.Instant
 import kotlin.time.ExperimentalTime
@@ -288,6 +289,28 @@ class RideDashboardComponentTest {
             assertEquals(47f, s.motion.speedKmh)
             assertTrue(s.motion.speedKnown)
         }
+    }
+
+    @Test
+    fun actual_motion_arrivals_expose_rate_and_warmup_phase() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val start = Instant.fromEpochSeconds(10)
+        listOf(0L, 100L, 200L).forEach { offsetMs ->
+            repo.emitMotion(
+                ControllerData(
+                    isConnected = true,
+                    timestamp = start + offsetMs.milliseconds
+                )
+            )
+            advanceUntilIdle()
+        }
+
+        assertEquals(10f, c.state.value.sampleRateHz!!, absoluteTolerance = 0.001f)
+        assertEquals(SampleCadencePhase.WARMUP, c.state.value.sampleRatePhase)
     }
 
     @Test
