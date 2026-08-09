@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -364,6 +365,22 @@ class MotionAggregatorTest {
         val lone = MotionAggregator.aggregate(listOf(state(0, phantom)))
         assertEquals(99f, lone.speedKmh, "with nothing to prefer, the fold keeps what it has")
         assertFalse(lone.speedKnown)
+    }
+
+    @Test fun different_unknown_speed_reasons_become_a_renderable_mixed_reason() {
+        val geometry = ControllerData(
+            speedSource = SpeedSource.NONE,
+            speedUnknownReason = SpeedUnknownReason.NO_WHEEL_GEOMETRY,
+            isConnected = true
+        )
+        val firmware = ControllerData(
+            speedSource = SpeedSource.NONE,
+            speedUnknownReason = SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT,
+            isConnected = true
+        )
+        val aggregate = MotionAggregator.aggregate(listOf(state(0, geometry), state(1, firmware)))
+        assertEquals(SpeedSource.NONE, aggregate.speedSource)
+        assertEquals(SpeedUnknownReason.MIXED, aggregate.speedUnknownReason)
     }
 
     /**

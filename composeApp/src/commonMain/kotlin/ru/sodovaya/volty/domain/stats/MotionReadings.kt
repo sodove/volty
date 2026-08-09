@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.domain.model.ControllerData
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 
 /**
  * **The unknown-vs-zero contract for motion telemetry** (`G §9`, `§9.1`, `§9.3`).
@@ -56,6 +57,10 @@ object MotionReadings {
     /** The wheel's ground speed, or null when [ControllerData.speedKnown] is false. */
     fun speedKmh(motion: ControllerData): Float? =
         if (motion.speedKnown) motion.speedKmh else null
+
+    /** The typed reason for an unknown speed, or null for a known value/legacy unknown. */
+    fun speedUnknownReason(motion: ControllerData): SpeedUnknownReason? =
+        if (motion.speedKnown) null else motion.speedUnknownReason
 
     /** Duty/ШИМ, or null when this firmware has never reported a PWM (`D §7.2`). */
     fun dutyPercent(motion: ControllerData): Float? =

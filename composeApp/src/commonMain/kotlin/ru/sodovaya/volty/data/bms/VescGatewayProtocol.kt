@@ -773,6 +773,7 @@ class VescGatewayProtocol(
     private data class SetupOverlay(
         val speedKmh: Float,
         val speedSource: SpeedSource,
+        val speedUnknownReason: ru.sodovaya.volty.domain.model.SpeedUnknownReason?,
         val odometerKm: Float,
         val tripKm: Float,
         val batteryLevelFraction: Float?
@@ -1536,6 +1537,7 @@ class VescGatewayProtocol(
         val overlay = SetupOverlay(
             speedKmh = decoded.speedKmh,
             speedSource = decoded.speedSource,
+            speedUnknownReason = decoded.speedUnknownReason,
             odometerKm = odometerKm,
             tripKm = (odometerKm - baseline).coerceAtLeast(0f),
             batteryLevelFraction = decoded.batteryLevelFraction
@@ -1583,6 +1585,7 @@ class VescGatewayProtocol(
             base.copy(
                 speedKmh = o.speedKmh,
                 speedSource = o.speedSource,
+                speedUnknownReason = o.speedUnknownReason,
                 odometerKm = o.odometerKm,
                 tripKm = o.tripKm,
                 batteryLevelFraction = o.batteryLevelFraction

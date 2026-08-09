@@ -6,6 +6,16 @@ import kotlin.time.Instant
 
 enum class SpeedSource { REPORTED, DERIVED, NONE }
 
+/** Why a controller could not provide speed. Null is kept for legacy/unknown causes. */
+enum class SpeedUnknownReason {
+    /** The decoder has eRPM but no positive wheel diameter/pole/gear geometry. */
+    NO_WHEEL_GEOMETRY,
+    /** The firmware path supplied no usable speed field. */
+    FIRMWARE_DID_NOT_REPORT,
+    /** Different controllers supplied different explicit causes. */
+    MIXED
+}
+
 @OptIn(ExperimentalTime::class)
 data class ControllerData(
     /**
@@ -46,6 +56,8 @@ data class ControllerData(
      */
     val speedKmh: Float = 0f,
     val speedSource: SpeedSource = SpeedSource.NONE,
+    /** Populated only when [speedSource] is [SpeedSource.NONE]. */
+    val speedUnknownReason: SpeedUnknownReason? = null,
     val dutyPercent: Float = 0f,
     /**
      * Whether [dutyPercent] is a MEASUREMENT rather than a placeholder — the

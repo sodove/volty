@@ -21,6 +21,7 @@ import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.VehicleData
 import ru.sodovaya.volty.domain.model.primaryAddress
@@ -649,7 +650,8 @@ class KableBmsRepositoryBegodeFunnelTest {
      */
     private fun everyFieldNonDefault(): ControllerData = ControllerData(
         speedKmh = 43.5f,
-        speedSource = SpeedSource.REPORTED,
+        speedSource = SpeedSource.DERIVED,
+        speedUnknownReason = SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT,
         dutyPercent = 78f,
         // FALSE, against the model's own default of `true`, and that is the
         // whole point: a fixture that leaves a field at its default cannot

@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.stats
 
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -66,6 +67,15 @@ class MotionReadingsTest {
         assertNull(MotionReadings.powerW(begode))
         assertNull(MotionReadings.motorTempC(begode))
         assertNull(MotionReadings.escTempC(begode))
+    }
+
+    @Test fun speed_unknown_exposes_the_decoder_reason_but_known_zero_has_none() {
+        val noGeometry = vesc.copy(
+            speedSource = SpeedSource.NONE,
+            speedUnknownReason = SpeedUnknownReason.NO_WHEEL_GEOMETRY
+        )
+        assertEquals(SpeedUnknownReason.NO_WHEEL_GEOMETRY, MotionReadings.speedUnknownReason(noGeometry))
+        assertNull(MotionReadings.speedUnknownReason(vesc.copy(speedKmh = 0f, speedSource = SpeedSource.REPORTED)))
     }
 
     /**

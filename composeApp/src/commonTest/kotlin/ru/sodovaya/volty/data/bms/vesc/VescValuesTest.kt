@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.bms.vesc
 
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.math.abs
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -170,12 +171,14 @@ class VescValuesTest {
     @Test fun a_setup_reply_whose_speed_field_is_empty_beside_a_turning_motor_is_not_reported() {
         val unconfigured = VescValues.decodeSetupValues(setupPayload(rpm = 12000, speedRaw = 0))!!
         assertEquals(SpeedSource.NONE, unconfigured.speedSource)
+        assertEquals(SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT, unconfigured.speedUnknownReason)
         assertTrue(!unconfigured.speedKnown, "a 0 the geometry produced is not a measurement of 0 km/h")
 
         // A vehicle that is genuinely standing still keeps its speed gauge: 0 rpm and
         // 0 speed agree, so the field is a reading.
         val stationary = VescValues.decodeSetupValues(setupPayload(rpm = 0, speedRaw = 0))!!
         assertEquals(SpeedSource.REPORTED, stationary.speedSource)
+        assertNull(stationary.speedUnknownReason)
         assertEquals(0f, stationary.speedKmh)
 
         // Any non-zero speed is a measurement whatever the rpm — including a reversing
@@ -291,6 +294,7 @@ class VescValuesTest {
         )
         val d = VescValues.decodeValues(payload, MotorConfig(wheelDiameterMm = 0))!!
         assertEquals(SpeedSource.NONE, d.speedSource)
+        assertEquals(SpeedUnknownReason.NO_WHEEL_GEOMETRY, d.speedUnknownReason)
         assertTrue(!d.speedKnown)
     }
 }

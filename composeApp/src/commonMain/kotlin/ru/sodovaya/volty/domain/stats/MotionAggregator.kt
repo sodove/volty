@@ -3,6 +3,7 @@ package ru.sodovaya.volty.domain.stats
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerState
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -43,6 +44,19 @@ object MotionAggregator {
             d.any { it.speedSource == SpeedSource.DERIVED } -> SpeedSource.DERIVED
             else -> SpeedSource.NONE
         }
+        val speedUnknownReason = if (speedSource != SpeedSource.NONE) {
+            // Preserve a single contributor's complete value object even for an
+            // deliberately incoherent fixture that carries a reason beside a
+            // known source; MotionReadings ignores it while speed is known.
+            d.singleOrNull()?.speedUnknownReason
+        } else {
+            val reasons = d.map { it.speedUnknownReason }.toSet()
+            when {
+                reasons.size == 1 -> reasons.single()
+                reasons.all { it == null } -> null
+                else -> SpeedUnknownReason.MIXED
+            }
+        }
 
         // The four energy counters share one flag and one filtered contributor
         // list, because they answer one question — see [ControllerData.hasEnergyCounters].
@@ -76,6 +90,7 @@ object MotionAggregator {
             // identity even on a sample whose flag and value disagree.
             speedKmh = d.measuring { it.speedKnown }.maxOf { it.speedKmh },
             speedSource = speedSource,
+            speedUnknownReason = speedUnknownReason,
             // Filtered by the same rule, and this one is named as a HAZARD in
             // `MotionAlertAvailability`'s DUTY branch: on a mixed vehicle DUTY is
             // Available because ONE controller supplies it, while the maxOf ran

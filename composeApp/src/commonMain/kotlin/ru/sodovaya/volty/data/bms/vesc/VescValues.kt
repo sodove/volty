@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.bms.vesc
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.SpeedUnknownReason
 import kotlin.math.PI
 import kotlin.math.abs
 
@@ -254,7 +255,8 @@ object VescValues {
             // the election sits on is inert, and the raw value is what
             // [reportedSpeedSource]'s witness rule is written about.
             speedKmh = abs(speedMs) * 3.6f,
-            speedSource = reportedSpeedSource(speedMs, rpm),
+            speedSource = reportedSpeedSource(speedMs, rpm).first,
+            speedUnknownReason = reportedSpeedSource(speedMs, rpm).second,
             dutyPercent = abs(duty) * 100f,
             motorCurrentA = currentMotor,
             batteryCurrentA = currentIn,
@@ -309,6 +311,7 @@ object VescValues {
             // [decodeSetupValues] and in `BegodeProtocol.parseLiveFrame`.
             speedKmh = derived?.let { abs(it) } ?: 0f,
             speedSource = if (derived != null) SpeedSource.DERIVED else SpeedSource.NONE,
+            speedUnknownReason = if (derived != null) null else SpeedUnknownReason.NO_WHEEL_GEOMETRY,
             dutyPercent = abs(duty) * 100f,
             motorCurrentA = currentMotor,
             batteryCurrentA = currentIn,
@@ -361,8 +364,12 @@ object VescValues {
      * passes the RAW field so this stays true by construction rather than by the
      * caller remembering to.
      */
-    private fun reportedSpeedSource(speedMs: Float, rpm: Float): SpeedSource =
-        if (speedMs != 0f || rpm == 0f) SpeedSource.REPORTED else SpeedSource.NONE
+    private fun reportedSpeedSource(speedMs: Float, rpm: Float): Pair<SpeedSource, SpeedUnknownReason?> =
+        if (speedMs != 0f || rpm == 0f) {
+            SpeedSource.REPORTED to null
+        } else {
+            SpeedSource.NONE to SpeedUnknownReason.FIRMWARE_DID_NOT_REPORT
+        }
 
     /**
      * eRPM → ground speed. Mechanical RPM = eRPM / polePairs; wheel RPM =
