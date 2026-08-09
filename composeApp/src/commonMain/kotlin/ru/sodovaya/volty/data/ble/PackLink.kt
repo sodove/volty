@@ -72,4 +72,8 @@ internal class PackLink(
     /** Most recent message for [consecutivePollWriteFailures], if any. */
     @Volatile
     var lastPollWriteFailure: String? = null
+
+    /** Plain VESC notifications are arriving, but none has decoded into a sample. */
+    @Volatile
+    var notificationsNotUnderstood: Boolean = false
 }

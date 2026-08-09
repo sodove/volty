@@ -2029,6 +2029,9 @@ class KableBmsRepository private constructor(
         if (current.none { it === link }) return@synchronized
         link.consecutivePollWriteFailures += 1
         link.lastPollWriteFailure = failure.message ?: failure::class.simpleName
+        // A poll that cannot reach the wire is a more specific diagnosis than
+        // a prior no-decode report. It must not leave the rider with both.
+        link.notificationsNotUnderstood = false
         refoldConnectionStateLocked(current)
     }
 
@@ -2040,6 +2043,22 @@ class KableBmsRepository private constructor(
         }
         link.consecutivePollWriteFailures = 0
         link.lastPollWriteFailure = null
+        refoldConnectionStateLocked(current)
+    }
+
+    /** Keep the "wrong question" diagnosis on its owning plain-VESC link. */
+    private fun recordLinkNotUnderstood(link: PackLink) = synchronized(linkStateLock) {
+        val current = links
+        if (current.none { it === link } || link.notificationsNotUnderstood) return@synchronized
+        link.notificationsNotUnderstood = true
+        refoldConnectionStateLocked(current)
+    }
+
+    /** A real decode supersedes the earlier no-decode diagnosis on this link only. */
+    private fun clearLinkNotUnderstood(link: PackLink) = synchronized(linkStateLock) {
+        val current = links
+        if (current.none { it === link } || !link.notificationsNotUnderstood) return@synchronized
+        link.notificationsNotUnderstood = false
         refoldConnectionStateLocked(current)
     }
 
@@ -2072,6 +2091,10 @@ class KableBmsRepository private constructor(
                             consecutiveFailures = link.consecutivePollWriteFailures,
                             lastFailure = message
                         )
+                    },
+                    linkNotUnderstood = current.mapNotNull { link ->
+                        link.spec.address.takeIf { link.notificationsNotUnderstood }
+                            ?.let(ConnectionState::LinkNotUnderstood)
                     }
                 )
             current.any { it.status == LinkStatus.CONNECTING } ->
@@ -2320,6 +2343,8 @@ class KableBmsRepository private constructor(
                 connectionState = _connectionState,
                 onBurstPollWriteFailure = { failure -> recordLinkPollWriteFailure(link, failure) },
                 onBurstPollWriteSuccess = { clearLinkPollWriteFailures(link) },
+                onPlainVescNotificationsNotUnderstood = { recordLinkNotUnderstood(link) },
+                onPlainVescDecode = { clearLinkNotUnderstood(link) },
                 onSample = onSample,
                 onMotionSample = makeLinkOnMotionSample(link.spec, channel),
                 onDropDetected = { reason ->
@@ -3414,6 +3439,16 @@ class KableBmsRepository private constructor(
     /** Test-only route through the same accepted-write callback a session receives. */
     internal fun recordPollWriteSuccessForTest(address: String) {
         clearLinkPollWriteFailures(links.first { it.spec.address == address })
+    }
+
+    /** Test-only route through the session's plain-VESC no-decode callback. */
+    internal fun recordLinkNotUnderstoodForTest(address: String) {
+        recordLinkNotUnderstood(links.first { it.spec.address == address })
+    }
+
+    /** Test-only route through the session's later-decoded-sample callback. */
+    internal fun clearLinkNotUnderstoodForTest(address: String) {
+        clearLinkNotUnderstood(links.first { it.spec.address == address })
     }
 
     /**

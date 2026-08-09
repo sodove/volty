@@ -9,6 +9,7 @@ import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.CanBusScanner
 import ru.sodovaya.volty.data.bms.MotionSource
 import ru.sodovaya.volty.data.bms.SerialPollSource
+import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.ControllerData
@@ -59,6 +60,10 @@ internal class ConnectionSession(
     /** Per-link write health: the repository owns folding it into vehicle state. */
     private val onBurstPollWriteFailure: (Exception) -> Unit = {},
     private val onBurstPollWriteSuccess: () -> Unit = {},
+    /** Per-link plain-VESC diagnostic: notifications arrive but no reply decodes. */
+    private val onPlainVescNotificationsNotUnderstood: () -> Unit = {},
+    /** A later plain-VESC decode clears [onPlainVescNotificationsNotUnderstood]'s state. */
+    private val onPlainVescDecode: () -> Unit = {},
     /**
      * Called for every parsed sample. The session does not own where samples
      * go: with more than one pack behind a link there is no single
@@ -86,6 +91,12 @@ internal class ConnectionSession(
 
     @Volatile
     private var lastSampleAtMs: Long = 0L
+
+    /** The observer, poller and watchdog share one accounted view of a plain VESC link. */
+    private val noSampleEverActivity = NoSampleEverWatchdogActivity(protocol)
+
+    @Volatile
+    private var notUnderstoodReported: Boolean = false
 
     /**
      * The write characteristic, hoisted out of [doConnect] so [scanCanBus] can
@@ -235,6 +246,11 @@ internal class ConnectionSession(
                         }
                     }
                 ).collect { data ->
+                    // This is deliberately at the accumulator boundary, before
+                    // decoding. A VESC can notify a valid transport frame that
+                    // answers neither opcode we know; redialling that healthy
+                    // GATT link cannot make the frame understandable.
+                    noSampleEverActivity.recordNotificationArrival()
                     protocol.onNotification(data)
                     val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms, sections ->
                         onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
@@ -246,6 +262,10 @@ internal class ConnectionSession(
                     } ?: false
                     if (linkAlive || motionAlive) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
+                        if (protocol is VescProtocol) {
+                            notUnderstoodReported = false
+                            onPlainVescDecode()
+                        }
                         sampleCount++
                         if (sampleCount % 50 == 0) {
                             println("[VOLTY-BLE] sample #$sampleCount lastSampleAtMs=$lastSampleAtMs")
@@ -298,8 +318,14 @@ internal class ConnectionSession(
                                 protocol,
                                 write = { cmd -> writeCommand(writeChar, cmd) },
                                 wait = { delay(it) },
-                                onWriteFailure = onBurstPollWriteFailure,
-                                onWriteSuccess = onBurstPollWriteSuccess
+                                onWriteFailure = { failure ->
+                                    noSampleEverActivity.recordPollWriteFailure()
+                                    onBurstPollWriteFailure(failure)
+                                },
+                                onWriteSuccess = {
+                                    noSampleEverActivity.recordPollWriteSuccess()
+                                    onBurstPollWriteSuccess()
+                                }
                             )
                         ) return@launch
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -339,12 +365,30 @@ internal class ConnectionSession(
                 val timeSinceSample = nowMs - lastSampleAtMs
                 val timeSinceConnect = nowMs - connectedAtMs
                 if (state is ConnectionState.Connected) {
-                    val stale = (lastSampleAtMs > 0 && timeSinceSample > BleConfig.staleSampleMs) ||
-                                (lastSampleAtMs == 0L && timeSinceConnect > BleConfig.noSampleEverMs)
-                    if (stale) {
+                    val staleAfterSample = lastSampleAtMs > 0 && timeSinceSample > BleConfig.staleSampleMs
+                    val noSampleEver = lastSampleAtMs == 0L && timeSinceConnect > BleConfig.noSampleEverMs
+                    if (staleAfterSample) {
                         println("[VOLTY-BLE] watchdog: STALE — sample age=${timeSinceSample}ms — triggering reconnect")
                         if (!torn) onDropDetected("No samples")
                         return@launch
+                    }
+                    if (noSampleEver) {
+                        when (
+                            noSampleEverActivity.decision()
+                        ) {
+                            NoSampleEverWatchdogDecision.REDIAL -> {
+                                println("[VOLTY-BLE] watchdog: STALE — no samples ever — triggering reconnect")
+                                if (!torn) onDropDetected("No samples")
+                                return@launch
+                            }
+                            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD -> if (!notUnderstoodReported) {
+                                notUnderstoodReported = true
+                                println("[VOLTY-BLE] watchdog: VESC notifications are not understood; keeping link up")
+                                onPlainVescNotificationsNotUnderstood()
+                            }
+                            NoSampleEverWatchdogDecision.WRITE_FAILED ->
+                                println("[VOLTY-BLE] watchdog: VESC poll writes are failing; keeping link up")
+                        }
                     }
                 }
             }
@@ -394,6 +438,48 @@ internal fun shouldWriteProtocolCommand(
     protocol: BmsProtocol,
     liveBegodeAdvertisement: Boolean
 ): Boolean = !liveBegodeAdvertisement && protocol !is BegodeProtocol
+
+/**
+ * The no-decode watchdog has a special case only for the direct VESC UART
+ * protocol. Gateway links implement [SerialPollSource] and all battery
+ * protocols retain their exact historic redial path.
+ */
+internal enum class NoSampleEverWatchdogDecision { REDIAL, NOT_UNDERSTOOD, WRITE_FAILED }
+
+/**
+ * The small concurrent accumulator behind the no-sample-ever watchdog branch.
+ * It intentionally counts all direct-VESC notifications before decoding, then
+ * lets the watchdog classify the absence of a sample without touching serial
+ * gateways or battery protocols.
+ */
+internal class NoSampleEverWatchdogActivity(private val protocol: BmsProtocol) {
+    @Volatile
+    private var notificationArrived: Boolean = false
+
+    @Volatile
+    private var hasPollWriteFailure: Boolean = false
+
+    fun recordNotificationArrival() {
+        if (protocol is VescProtocol) notificationArrived = true
+    }
+
+    fun recordPollWriteFailure() {
+        if (protocol is VescProtocol) hasPollWriteFailure = true
+    }
+
+    fun recordPollWriteSuccess() {
+        if (protocol is VescProtocol) hasPollWriteFailure = false
+    }
+
+    fun decision(): NoSampleEverWatchdogDecision {
+        if (protocol !is VescProtocol) return NoSampleEverWatchdogDecision.REDIAL
+        return when {
+            hasPollWriteFailure -> NoSampleEverWatchdogDecision.WRITE_FAILED
+            notificationArrived -> NoSampleEverWatchdogDecision.NOT_UNDERSTOOD
+            else -> NoSampleEverWatchdogDecision.REDIAL
+        }
+    }
+}
 
 /**
  * One non-serial poll burst. The command list belongs inside this function so

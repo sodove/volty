@@ -8,17 +8,23 @@ sealed class ConnectionState {
         val lastFailure: String
     )
 
+    /** A link is notifying, but its plain VESC decoder has not recognised a reply. */
+    data class LinkNotUnderstood(val address: String)
+
     data object Idle : ConnectionState()
     data object Scanning : ConnectionState()
     data class Connecting(val vehicle: Vehicle?) : ConnectionState()
     /**
      * A live BLE connection. [linkWriteFailures] reports only links whose poll
      * command is not reaching the wire; it is deliberately distinct from a
-     * quiet device, which accepted writes but has not replied yet.
+     * quiet device, which accepted writes but has not replied yet. [linkNotUnderstood]
+     * names plain VESC links that are notifying but have not produced any
+     * recognisable reply, so reconnecting them would only churn a healthy GATT link.
      */
     data class Connected(
         val vehicle: Vehicle?,
-        val linkWriteFailures: List<LinkWriteFailure> = emptyList()
+        val linkWriteFailures: List<LinkWriteFailure> = emptyList(),
+        val linkNotUnderstood: List<LinkNotUnderstood> = emptyList()
     ) : ConnectionState()
     data object Disconnected : ConnectionState()
 

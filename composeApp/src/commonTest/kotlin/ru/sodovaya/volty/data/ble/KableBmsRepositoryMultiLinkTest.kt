@@ -148,6 +148,53 @@ class KableBmsRepositoryMultiLinkTest {
         )
     }
 
+    @Test
+    fun `a plain VESC that notifies undecodable data keeps its own link diagnosis through a sibling refold`() = repoTest { repo ->
+        val vehicle = vescAndBmsVehicle()
+        repo.installLinksForTest(vehicle, ADDR_A, null)
+        repo.markLinkOnlineForTest(ADDR_A)
+        repo.markLinkOnlineForTest(ADDR_B)
+
+        repo.recordLinkNotUnderstoodForTest(ADDR_A)
+        repo.markLinkFailedForTest(ADDR_B, "test sibling transition")
+
+        val state = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(
+            listOf(ConnectionState.LinkNotUnderstood(ADDR_A)),
+            state.linkNotUnderstood,
+            "a sibling fold must not erase the VESC link that is notifying data Volty cannot decode"
+        )
+
+        repo.clearLinkNotUnderstoodForTest(ADDR_A)
+        assertEquals(
+            emptyList(),
+            (repo.connectionState.value as ConnectionState.Connected).linkNotUnderstood,
+            "a later decoded VESC sample clears the stale not-understood diagnosis"
+        )
+    }
+
+    @Test
+    fun `a poll write failure replaces rather than combines with the not-understood diagnosis`() = repoTest { repo ->
+        val vehicle = vescAndBmsVehicle()
+        repo.installLinksForTest(vehicle, ADDR_A, null)
+        repo.markLinkOnlineForTest(ADDR_A)
+        repo.markLinkOnlineForTest(ADDR_B)
+
+        repo.recordLinkNotUnderstoodForTest(ADDR_A)
+        repo.recordPollWriteFailureForTest(ADDR_A, IllegalStateException("WRITE_NO_RESPONSE unavailable"))
+
+        val state = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(
+            listOf(ConnectionState.LinkWriteFailure(ADDR_A, 1, "WRITE_NO_RESPONSE unavailable")),
+            state.linkWriteFailures
+        )
+        assertEquals(
+            emptyList(),
+            state.linkNotUnderstood,
+            "a write that never reached the wire is not an undecodable notification"
+        )
+    }
+
     // ----- Fan-out + the shared funnel -----
 
     @Test

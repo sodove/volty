@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.ble
 
 import ru.sodovaya.volty.data.bms.VescProtocol
+import ru.sodovaya.volty.data.bms.VescGatewayProtocol
+import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.vesc.VescPacket
 import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
 import ru.sodovaya.volty.domain.model.MotorConfig
@@ -110,5 +112,65 @@ class ConnectionSessionPollingTest {
 
         assertEquals(0, failures)
         assertNull(lastFailure)
+    }
+
+    @Test
+    fun `plain VESC notifications no decoder understands are diagnosed instead of redialled`() {
+        val activity = NoSampleEverWatchdogActivity(VescProtocol())
+        activity.recordNotificationArrival()
+
+        assertEquals(
+            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD,
+            activity.decision()
+        )
+    }
+
+    @Test
+    fun `plain VESC with no notifications still takes the existing redial path`() {
+        assertEquals(
+            NoSampleEverWatchdogDecision.REDIAL,
+            NoSampleEverWatchdogActivity(VescProtocol()).decision()
+        )
+    }
+
+    @Test
+    fun `plain VESC poll write failure is neither redialled nor called quiet`() {
+        val activity = NoSampleEverWatchdogActivity(VescProtocol())
+        activity.recordNotificationArrival()
+        activity.recordPollWriteFailure()
+
+        assertEquals(
+            NoSampleEverWatchdogDecision.WRITE_FAILED,
+            activity.decision()
+        )
+
+        activity.recordPollWriteSuccess()
+        assertEquals(
+            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD,
+            activity.decision(),
+            "the accepted write clears only the write-failure diagnosis; the notification is still real"
+        )
+    }
+
+    @Test
+    fun `serial gateway keeps its existing no-decode watchdog redial`() {
+        val activity = NoSampleEverWatchdogActivity(
+            VescGatewayProtocol(controllers = emptyList(), packs = emptyList())
+        )
+        activity.recordNotificationArrival()
+        activity.recordPollWriteFailure()
+
+        assertEquals(
+            NoSampleEverWatchdogDecision.REDIAL,
+            activity.decision()
+        )
+    }
+
+    @Test
+    fun `battery protocol keeps its existing no-decode watchdog redial`() {
+        val activity = NoSampleEverWatchdogActivity(BegodeProtocol())
+        activity.recordNotificationArrival()
+
+        assertEquals(NoSampleEverWatchdogDecision.REDIAL, activity.decision())
     }
 }
