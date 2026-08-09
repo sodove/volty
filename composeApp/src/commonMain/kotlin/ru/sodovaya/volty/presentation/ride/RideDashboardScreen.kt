@@ -76,6 +76,7 @@ import volty.composeapp.generated.resources.ride_sample_rate_warmup
 import volty.composeapp.generated.resources.ride_speed_unknown
 import volty.composeapp.generated.resources.ride_trip
 import volty.composeapp.generated.resources.ride_uptime
+import volty.composeapp.generated.resources.ride_faults_title
 import volty.composeapp.generated.resources.secondary_gauge_battery
 import volty.composeapp.generated.resources.secondary_gauge_consumption
 import volty.composeapp.generated.resources.secondary_gauge_current
@@ -178,6 +179,10 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             onClick = component::onPillClicked
         )
 
+        if (state.faults.isNotEmpty()) {
+            RideFaultsBanner(state.faults)
+        }
+
         when (state.style) {
             DashboardStyle.CLEAN -> {
                 RideHero(state = state, vehicleMaxSpeed = vehicleMaxSpeed)
@@ -220,6 +225,38 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             onDisconnect = component::onDisconnect,
             onDismiss = component::onSheetDismiss
         )
+    }
+}
+
+@Composable
+private fun RideFaultsBanner(faults: List<RideDashboardComponent.FaultEntry>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.errorContainer)
+            .padding(horizontal = 12.dp, vertical = 8.dp)
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("!", fontSize = 18.sp, fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.onErrorContainer)
+            Text(
+                stringResource(Res.string.ride_faults_title),
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onErrorContainer.copy(alpha = 0.85f)
+            )
+        }
+        Spacer(Modifier.height(4.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            faults.forEach { fault ->
+                Text(
+                    text = if (fault.occurrences > 1) "${fault.message} ×${fault.occurrences}" else fault.message,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = MaterialTheme.colorScheme.onErrorContainer
+                )
+            }
+        }
     }
 }
 

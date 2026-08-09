@@ -27,6 +27,7 @@ interface SettingsComponent {
     fun onAutoConnectCountdownChanged(sec: Int)
     fun onUnitSystemChanged(system: UnitSystem)
     fun onDefaultDashboardStyleChanged(style: DashboardStyle)
+    fun onFaultDisplayDurationChanged(seconds: Int)
     fun onEditVehicle(id: String)
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
@@ -40,6 +41,7 @@ interface SettingsComponent {
         val autoConnectCountdownSec: Int = 3,
         val unitSystem: UnitSystem = UnitSystem.METRIC,
         val defaultDashboardStyle: DashboardStyle = DashboardStyle.CLEAN,
+        val faultDisplayDurationSec: Int = 60,
         val vehicles: List<Vehicle> = emptyList()
     )
 }
@@ -62,7 +64,8 @@ class DefaultSettingsComponent(
             scanTimeoutSec = appPrefs.scanTimeoutSec.value,
             autoConnectCountdownSec = appPrefs.autoConnectCountdownSec.value,
             unitSystem = appPrefs.unitSystem.value,
-            defaultDashboardStyle = appPrefs.defaultDashboardStyle.value
+            defaultDashboardStyle = appPrefs.defaultDashboardStyle.value,
+            faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value
         )
     )
     override val state: StateFlow<SettingsComponent.State> = _state.asStateFlow()
@@ -81,6 +84,7 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.autoConnectCountdownSec.collect { v -> _state.update { it.copy(autoConnectCountdownSec = v) } } }
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
+        scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
     }
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
@@ -89,6 +93,7 @@ class DefaultSettingsComponent(
     override fun onAutoConnectCountdownChanged(sec: Int) { scope.launch { appPrefs.setAutoConnectCountdownSec(sec) } }
     override fun onUnitSystemChanged(system: UnitSystem) { scope.launch { appPrefs.setUnitSystem(system) } }
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
+    override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
     override fun onEditVehicle(id: String) { onEditVehicleRequested(id) }
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }

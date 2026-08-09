@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.MutablePreferences
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.mutablePreferencesOf
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import app.cash.turbine.test
 import com.arkivanov.decompose.DefaultComponentContext
@@ -220,10 +221,15 @@ class RideDashboardComponentTest {
      * DefaultDashboardComponent's `.value`-seeded MutableStateFlow) reads the
      * right value deterministically.
      */
-    private suspend fun appPrefsWith(units: UnitSystem, style: DashboardStyle): AppPrefs {
+    private suspend fun appPrefsWith(
+        units: UnitSystem,
+        style: DashboardStyle,
+        faultLingerSeconds: Int = 60
+    ): AppPrefs {
         val prefs = mutablePreferencesOf(
             stringPreferencesKey("unit_system") to units.name,
-            stringPreferencesKey("dashboard_style") to style.name
+            stringPreferencesKey("dashboard_style") to style.name,
+            intPreferencesKey("fault_display_duration_sec") to faultLingerSeconds
         )
         val appPrefs = AppPrefs(FakePreferencesDataStore(prefs))
         appPrefs.unitSystem.first { it == units }
@@ -249,6 +255,7 @@ class RideDashboardComponentTest {
         vehicleStyle: DashboardStyle? = null,
         appDefault: DashboardStyle = DashboardStyle.CLEAN,
         units: UnitSystem = UnitSystem.METRIC,
+        faultLingerSeconds: Int = 60,
         vehicleRepo: FakeVehicleRepo = FakeVehicleRepo(),
         onOpenGraphRequested: () -> Unit = {},
         onOpenSettingsRequested: () -> Unit = {},
@@ -258,7 +265,7 @@ class RideDashboardComponentTest {
         if (repo.activeVehicle.value == null) {
             repo.activeVehicle.value = vehicleWith(vehicleStyle, secondary)
         }
-        val appPrefs = appPrefsWith(units, appDefault)
+        val appPrefs = appPrefsWith(units, appDefault, faultLingerSeconds)
         return DefaultRideDashboardComponent(
             componentContext = DefaultComponentContext(LifecycleRegistry()),
             bmsRepository = repo,
@@ -269,6 +276,75 @@ class RideDashboardComponentTest {
             onAddVehicleRequested = onAddVehicleRequested,
             onDisconnectRequested = onDisconnectRequested
         )
+    }
+
+    @Test
+    fun controller_faults_are_visible_while_active_then_linger_and_expire() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo, faultLingerSeconds = 60)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(10_000)
+        fun emit(at: Long, faults: List<String>) = repo.emitMotion(
+            ControllerData(faults = faults, isConnected = true, timestamp = start + at.seconds)
+        )
+
+        emit(0, listOf("over-voltage"))
+        advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 1, true)), c.state.value.faults)
+
+        emit(1, listOf("over-voltage"))
+        advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 2, true)), c.state.value.faults)
+
+        emit(2, emptyList())
+        advanceUntilIdle()
+        assertEquals(listOf(RideDashboardComponent.FaultEntry("over-voltage", 2, false)), c.state.value.faults)
+
+        emit(62, emptyList())
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "a cleared fault expires after the configured minute")
+    }
+
+    @Test
+    fun distinct_faults_form_a_newest_first_stack() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(20_000)
+        repo.emitMotion(ControllerData(faults = listOf("over-voltage"), isConnected = true, timestamp = start))
+        advanceUntilIdle()
+        repo.emitMotion(
+            ControllerData(
+                faults = listOf("over-voltage", "over-temperature"),
+                isConnected = true,
+                timestamp = start + 1.seconds
+            )
+        )
+        advanceUntilIdle()
+        assertEquals(
+            listOf(
+                RideDashboardComponent.FaultEntry("over-temperature", 1, true),
+                RideDashboardComponent.FaultEntry("over-voltage", 2, true)
+            ),
+            c.state.value.faults
+        )
+    }
+
+    @Test
+    fun zero_fault_linger_keeps_only_active_faults() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo, faultLingerSeconds = 0)
+        advanceUntilIdle()
+        val start = Instant.fromEpochSeconds(30_000)
+        repo.emitMotion(ControllerData(faults = listOf("over-voltage"), isConnected = true, timestamp = start))
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.single().active)
+        repo.emitMotion(ControllerData(isConnected = true, timestamp = start + 1.seconds))
+        advanceUntilIdle()
+        assertTrue(c.state.value.faults.isEmpty(), "zero is not never-show; it means active-only")
     }
 
     @AfterTest

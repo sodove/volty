@@ -58,6 +58,11 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .map { runCatching { DashboardStyle.valueOf(it[Keys.DASHBOARD_STYLE] ?: "CLEAN") }.getOrDefault(DashboardStyle.CLEAN) }
         .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.CLEAN)
 
+    /** How long a cleared controller/BMS fault remains readable on the ride dashboard. */
+    val faultDisplayDurationSec: StateFlow<Int> = store.data
+        .map { (it[Keys.FAULT_DISPLAY_DURATION_SEC] ?: DEFAULT_FAULT_DISPLAY_DURATION_SEC).coerceAtLeast(0) }
+        .stateIn(scope, SharingStarted.Eagerly, DEFAULT_FAULT_DISPLAY_DURATION_SEC)
+
     // --- The audible alarm's three switches (F §4). All default **true**: the
     // alarm is the feature a rider depends on when they are not looking at the
     // screen, so a fresh install must warn them without being configured first.
@@ -102,6 +107,9 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setGuestModeShowSaved(show: Boolean) = store.edit { it[Keys.GUEST_MODE_SHOW_SAVED] = show }
     suspend fun setUnitSystem(system: UnitSystem) = store.edit { it[Keys.UNIT_SYSTEM] = system.name }
     suspend fun setDefaultDashboardStyle(style: DashboardStyle) = store.edit { it[Keys.DASHBOARD_STYLE] = style.name }
+    suspend fun setFaultDisplayDurationSec(seconds: Int) = store.edit {
+        it[Keys.FAULT_DISPLAY_DURATION_SEC] = seconds.coerceAtLeast(0)
+    }
     suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
     suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
@@ -116,8 +124,11 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val GUEST_MODE_SHOW_SAVED = booleanPreferencesKey("guest_mode_show_saved")
         val UNIT_SYSTEM = stringPreferencesKey("unit_system")
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
+        val FAULT_DISPLAY_DURATION_SEC = intPreferencesKey("fault_display_duration_sec")
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")
     }
 }
+
+private const val DEFAULT_FAULT_DISPLAY_DURATION_SEC = 60

@@ -31,6 +31,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
+import kotlin.time.Duration.Companion.seconds
 
 interface RideDashboardComponent {
     val state: StateFlow<State>
@@ -42,6 +43,9 @@ interface RideDashboardComponent {
     fun onOpenGraph()
     fun onOpenSettings()
     fun onDisconnect()
+
+    /** One controller/BMS fault in the dashboard's newest-first stack. */
+    data class FaultEntry(val message: String, val occurrences: Int = 1, val active: Boolean = true)
 
     @OptIn(ExperimentalTime::class)
     data class State(
@@ -92,6 +96,7 @@ interface RideDashboardComponent {
         val sampleRateHz: Float? = null,
         /** Whether the observed stream is still in its connection warm-up window. */
         val sampleRatePhase: SampleCadencePhase = SampleCadencePhase.NO_SAMPLES,
+        val faults: List<FaultEntry> = emptyList(),
         val savedVehicles: List<Vehicle> = emptyList(),
         val sheetOpen: Boolean = false
     )
@@ -115,6 +120,54 @@ class DefaultRideDashboardComponent(
      * the vehicle collector or the app-prefs collector can recompute the winning style without
      * waiting on the other. */
     private var appDefaultStyle: DashboardStyle = appPrefs.defaultDashboardStyle.value
+    private var faultDisplayDurationSec: Int = appPrefs.faultDisplayDurationSec.value
+
+    private data class FaultRecord(
+        val message: String,
+        val occurrences: Int,
+        val active: Boolean,
+        val clearedAt: Instant?,
+        val order: Long
+    )
+
+    private val faultHistory = LinkedHashMap<String, FaultRecord>()
+    private var nextFaultOrder = 0L
+
+    /**
+     * Fold one motion sample into the dashboard fault stack. The sample timestamp is the clock:
+     * there is deliberately no delayed job here, so tests and a stopped stream cannot be wedged by
+     * a timer. A fault remains active indefinitely; the preference only starts counting at clear.
+     */
+    private fun observeFaults(motion: ControllerData): List<RideDashboardComponent.FaultEntry> {
+        val now = motion.timestamp
+        val present = motion.faults.toSet()
+        faultHistory.keys.toList().forEach { message ->
+            val previous = faultHistory[message] ?: return@forEach
+            if (message !in present && previous.active) {
+                faultHistory[message] = previous.copy(active = false, clearedAt = now)
+            }
+        }
+        motion.faults.forEach { message ->
+            val previous = faultHistory[message]
+            faultHistory[message] = when {
+                previous == null -> FaultRecord(message, 1, true, null, nextFaultOrder++)
+                previous.active -> previous.copy(occurrences = previous.occurrences + 1)
+                else -> FaultRecord(message, 1, true, null, nextFaultOrder++)
+            }
+        }
+        return renderFaults(now)
+    }
+
+    /** Re-render/prune against a new duration without counting the current sample twice. */
+    private fun renderFaults(now: Instant): List<RideDashboardComponent.FaultEntry> {
+        val linger = faultDisplayDurationSec.seconds
+        faultHistory.entries.removeIf { (_, record) ->
+            !record.active && (linger == 0.seconds || record.clearedAt?.let { now - it >= linger } == true)
+        }
+        return faultHistory.values
+            .sortedByDescending { it.order }
+            .map { RideDashboardComponent.FaultEntry(it.message, it.occurrences, it.active) }
+    }
 
     /**
      * Instant of the first motion sample seen since the vehicle was last
@@ -528,6 +581,7 @@ class DefaultRideDashboardComponent(
                         powerRangeW = powerRange,
                         sampleRateHz = cadence.rateHz,
                         sampleRatePhase = cadence.phase,
+                        faults = observeFaults(motion),
                         secondaryReadout = SecondaryGaugeMapper.map(
                             current.secondary, motion, current.battery, current.units,
                             currentRangeA = currentRange, powerRangeW = powerRange
@@ -682,6 +736,15 @@ class DefaultRideDashboardComponent(
             appPrefs.defaultDashboardStyle.collect { appDefault ->
                 appDefaultStyle = appDefault
                 _state.update { current -> current.copy(style = current.vehicle?.dashboardStyle ?: appDefault) }
+            }
+        }
+
+        scope.launch {
+            appPrefs.faultDisplayDurationSec.collect { seconds ->
+                faultDisplayDurationSec = seconds.coerceAtLeast(0)
+                _state.update { current ->
+                    current.copy(faults = renderFaults(current.motion.timestamp))
+                }
             }
         }
     }

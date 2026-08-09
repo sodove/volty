@@ -94,6 +94,7 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">СКОРОСТЬ НЕИЗВЕСТНА</string>
+    <string name="ride_faults_title">ОШИБКИ ТРАНСПОРТА</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Скорость</string>
     <string name="ride_odometer">Одометр</string>
@@ -177,6 +178,9 @@
     <string name="settings_units_metric">Метрические</string>
     <string name="settings_units_imperial">Имперские</string>
     <string name="settings_dashboard_style">Стиль приборной панели</string>
+    <string name="settings_fault_display_duration">Время показа ошибок</string>
+    <string name="settings_fault_display_duration_active">Пока ошибка активна</string>
+    <string name="settings_minutes">%1$d мин</string>
     <string name="settings_my_batteries">Мой транспорт</string>
     <string name="settings_add_new_battery">+ Добавить новый транспорт</string>
     <string name="settings_diagnostics">Диагностика</string>

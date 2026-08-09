@@ -94,6 +94,7 @@
 
     <!-- Ride dashboard (Clean) -->
     <string name="ride_speed_unknown">SPEED UNKNOWN</string>
+    <string name="ride_faults_title">VEHICLE FAULTS</string>
     <!-- Classic dial face label only (Clean shows no standalone "Speed" label) -->
     <string name="ride_dial_speed">Speed</string>
     <string name="ride_odometer">Odometer</string>
@@ -179,6 +180,9 @@
     <string name="settings_units_metric">Metric</string>
     <string name="settings_units_imperial">Imperial</string>
     <string name="settings_dashboard_style">Dashboard style</string>
+    <string name="settings_fault_display_duration">Fault display duration</string>
+    <string name="settings_fault_display_duration_active">While the fault is active</string>
+    <string name="settings_minutes">%1$d min</string>
     <string name="settings_my_batteries">My vehicles</string>
     <string name="settings_add_new_battery">+ Add new vehicle</string>
     <string name="settings_diagnostics">Diagnostics</string>
