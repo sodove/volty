@@ -21,6 +21,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -294,7 +295,8 @@ internal class ConnectionSession(
                         if (!runBurstPollCycle(
                                 protocol,
                                 write = { cmd -> writeCommand(writeChar, cmd) },
-                                wait = { delay(it) }
+                                wait = { delay(it) },
+                                connectionState = connectionState
                             )
                         ) return@launch
                     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -400,15 +402,51 @@ internal fun shouldWriteProtocolCommand(
 internal suspend fun runBurstPollCycle(
     protocol: BmsProtocol,
     write: suspend (ByteArray) -> Unit,
-    wait: suspend (Long) -> Unit
+    wait: suspend (Long) -> Unit,
+    connectionState: MutableStateFlow<ConnectionState>? = null
 ): Boolean {
     val commands = protocol.pollCommands()
     if (commands.isEmpty()) return false
     for (command in commands) {
-        write(command)
+        try {
+            write(command)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            recordBurstPollWriteFailure(connectionState, e)
+            println("[VOLTY-BLE] burst poll write: ${e::class.simpleName}: ${e.message}")
+            return true
+        }
+        clearBurstPollWriteFailures(connectionState)
         wait(BleConfig.writeSpacingMs)
     }
     return true
+}
+
+/** Update the rider-visible distinction between a failed write and device silence. */
+internal fun recordBurstPollWriteFailure(
+    connectionState: MutableStateFlow<ConnectionState>?,
+    failure: Exception
+) {
+    connectionState?.update { current ->
+        val connected = current as? ConnectionState.Connected ?: return@update current
+        connected.copy(
+            consecutivePollWriteFailures = connected.consecutivePollWriteFailures + 1,
+            lastPollWriteFailure = failure.message ?: failure::class.simpleName
+        )
+    }
+}
+
+/** A write accepted by BLE ends a failure run even if the device stays silent. */
+internal fun clearBurstPollWriteFailures(connectionState: MutableStateFlow<ConnectionState>?) {
+    connectionState?.update { current ->
+        val connected = current as? ConnectionState.Connected ?: return@update current
+        if (connected.consecutivePollWriteFailures == 0 && connected.lastPollWriteFailure == null) {
+            connected
+        } else {
+            connected.copy(consecutivePollWriteFailures = 0, lastPollWriteFailure = null)
+        }
+    }
 }
 
 /**

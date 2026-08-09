@@ -4,7 +4,16 @@ sealed class ConnectionState {
     data object Idle : ConnectionState()
     data object Scanning : ConnectionState()
     data class Connecting(val vehicle: Vehicle?) : ConnectionState()
-    data class Connected(val vehicle: Vehicle?) : ConnectionState()
+    /**
+     * A live BLE connection. [consecutivePollWriteFailures] says the poll
+     * command itself is not reaching the wire; it is deliberately distinct
+     * from a quiet device, which accepted writes but has not replied yet.
+     */
+    data class Connected(
+        val vehicle: Vehicle?,
+        val consecutivePollWriteFailures: Int = 0,
+        val lastPollWriteFailure: String? = null
+    ) : ConnectionState()
     data object Disconnected : ConnectionState()
 
     /**
