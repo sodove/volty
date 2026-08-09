@@ -477,4 +477,22 @@
     <string name="diagram_type_phone">Volty</string>
     <string name="diagram_type_bluetooth">Bluetooth</string>
     <string name="diagram_type_derived">derived values</string>
+    <string name="graph_add">Add metric</string>
+    <string name="graph_remove">Remove metric</string>
+    <string name="graph_compare">Compare</string>
+    <string name="graph_selected_time">Selected time</string>
+    <string name="graph_battery_group">Battery</string>
+    <string name="graph_motion_group">Motion</string>
+    <string name="graph_cells_group">Cells</string>
+    <string name="graph_cell_min">Cell min</string>
+    <string name="graph_cell_max">Cell max</string>
+    <string name="graph_cell_delta">Cell spread</string>
+    <string name="graph_speed">Speed</string>
+    <string name="graph_duty">Duty</string>
+    <string name="graph_motor_current">Motor current</string>
+    <string name="graph_input_voltage">Input voltage</string>
+    <string name="graph_motor_power">Motor power</string>
+    <string name="graph_erpm">eRPM</string>
+    <string name="graph_esc_temp">ESC temp</string>
+    <string name="graph_motor_temp">Motor temp</string>
 </resources>

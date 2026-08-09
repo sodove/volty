@@ -64,4 +64,11 @@ class GraphTelemetryTest {
         )
         assertEquals(listOf(t0, t2), series.points.map { it.timestamp })
     }
+
+    @Test
+    fun `chart fraction maps to the time axis rather than list position`() {
+        val points = listOf(GraphPoint(t0, 1f), GraphPoint(t2, 2f))
+        assertEquals(t1, timestampAtFraction(points, 0.5f))
+        assertEquals(0.5f, timestampFraction(points, t1), 0.001f)
+    }
 }

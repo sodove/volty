@@ -2,6 +2,7 @@ package ru.sodovaya.volty.presentation.graph
 
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
+import kotlin.time.Duration.Companion.ZERO
 
 /** The stream that owns a metric. Repository samples are already vehicle-level. */
 enum class GraphSource { BATTERY, MOTION }
@@ -76,6 +77,27 @@ fun pairByNearestTimestamp(
             null
         }
     }
+}
+
+/** Converts a chart x fraction to a timestamp on the series' time axis. */
+@OptIn(ExperimentalTime::class)
+fun timestampAtFraction(points: List<GraphPoint>, fraction: Float): Instant? {
+    if (points.isEmpty()) return null
+    val first = points.first().timestamp
+    val last = points.last().timestamp
+    if (first == last) return first
+    val clamped = fraction.coerceIn(0f, 1f).toDouble()
+    return first + (last - first) * clamped
+}
+
+/** Converts a timestamp back to the chart x fraction for a marker. */
+@OptIn(ExperimentalTime::class)
+fun timestampFraction(points: List<GraphPoint>, timestamp: Instant): Float {
+    if (points.size < 2) return 0f
+    val first = points.first().timestamp
+    val span = points.last().timestamp - first
+    if (span == ZERO) return 0f
+    return ((timestamp - first) / span).toFloat().coerceIn(0f, 1f)
 }
 
 @OptIn(ExperimentalTime::class)
