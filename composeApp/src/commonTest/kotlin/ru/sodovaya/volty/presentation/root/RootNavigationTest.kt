@@ -76,6 +76,15 @@ class RootNavigationTest {
     }
 
     @Test
+    fun home_is_ride_for_a_Kelly_controller_only_vehicle() {
+        // Task H's controller-only picker shape has no persisted battery. Keep
+        // Kelly explicit: a branch that accidentally routes this controller to
+        // Dashboard would still satisfy the generic VESC test above.
+        val kelly = vesc.copy(controllerType = ControllerType.KELLY)
+        assertEquals(Config.Ride, homeConfigFor(vehicle(controllers = listOf(kelly), packs = emptyList())))
+    }
+
+    @Test
     fun home_is_battery_for_a_pure_bms_vehicle() {
         assertEquals(Config.Dashboard, homeConfigFor(vehicle()))
     }
