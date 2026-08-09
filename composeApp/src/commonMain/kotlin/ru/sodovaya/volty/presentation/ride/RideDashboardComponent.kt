@@ -123,13 +123,14 @@ interface RideDashboardComponent {
 data class RideConnectionSummary(
     val kind: Kind = Kind.CONNECTED,
     val controllerIssue: ControllerIssue? = null,
+    val controllerIssueReason: String? = null,
     val motionPartial: Boolean = false,
     val pillSource: PillSource = PillSource.NEUTRAL,
     val reportedControllerType: ControllerType? = null,
     val reportedBatteryType: BmsType? = null
 ) {
     enum class Kind { CONNECTED, MIXED, CONTROLLER_UNAVAILABLE }
-    enum class ControllerIssue { WRITE_FAILED, NOT_UNDERSTOOD, PARTIAL, NOT_REPORTED }
+    enum class ControllerIssue { RECONNECTING, WRITE_FAILED, NOT_UNDERSTOOD, PARTIAL, NOT_REPORTED }
     enum class PillSource { CONTROLLER, BATTERY, NEUTRAL }
 
     companion object {
@@ -144,7 +145,10 @@ data class RideConnectionSummary(
             val reportedPack = packs.minByOrNull { it.pack.index }?.pack
             val controllerAddresses = vehicle?.controllers?.map { it.address }?.toSet().orEmpty()
             val connected = connection as? ConnectionState.Connected
+            val controllerReconnect = connected?.linkReconnecting
+                ?.firstOrNull { it.address in controllerAddresses }
             val controllerIssue = when {
+                controllerReconnect != null -> ControllerIssue.RECONNECTING
                 connected?.linkWriteFailures?.any { it.address in controllerAddresses } == true ->
                     ControllerIssue.WRITE_FAILED
                 connected?.linkNotUnderstood?.any { it.address in controllerAddresses } == true ->
@@ -167,6 +171,7 @@ data class RideConnectionSummary(
             return RideConnectionSummary(
                 kind = kind,
                 controllerIssue = controllerIssue,
+                controllerIssueReason = controllerReconnect?.reason,
                 motionPartial = vehicleData.motionPartial,
                 pillSource = pillSource,
                 reportedControllerType = reportedController?.controllerType,

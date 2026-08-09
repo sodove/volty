@@ -192,7 +192,10 @@ class VescProtocol(
                 VescValues.OPCODE_GET_VALUES_SETUP -> VescValues.decodeSetupValues(payload)?.also {
                     // SETUP carries the richer telemetry, so a late SETUP reply
                     // upgrades an opcode-4 selection but never the reverse.
-                    selectedValuesOpcode = VescValues.OPCODE_GET_VALUES_SETUP
+                    // Explicit legacy mode is the exception: callers that set
+                    // useSetupFrame=false asked for opcode 4 only, even if an
+                    // old or unsolicited SETUP reply later crosses the link.
+                    if (useSetupFrame) selectedValuesOpcode = VescValues.OPCODE_GET_VALUES_SETUP
                 }
                 VescValues.OPCODE_GET_VALUES -> VescValues.decodeValues(payload, motor)?.also {
                     if (selectedValuesOpcode != VescValues.OPCODE_GET_VALUES_SETUP) {

@@ -202,8 +202,6 @@ class KableBmsRepositoryIndependentControllersTest {
 
     @Test
     fun `one link dropping leaves the other controller reporting and the vehicle stays online`() = repoTest { repo ->
-        var nowMs = 1_000_000L
-        repo.orchestratorClockForTest = { Instant.fromEpochMilliseconds(nowMs) }
         val v = dualVescVehicle()
         repo.installLinksForTest(v, v.primaryAddress, type = null)
         repo.markLinkOnlineForTest(ADDR_A)
@@ -217,21 +215,26 @@ class KableBmsRepositoryIndependentControllersTest {
         repo.simulateLinkDropForTest(ADDR_B, "Link dropped")
         runCurrent()
 
-        // The vehicle stays Connected on the surviving link; only the dropped
-        // link's own reconnect loop runs. Mirrors
+        // The vehicle stays Connected on the surviving link while preserving
+        // the dropped controller's reconnect reason. Mirrors
         // KableBmsRepositoryMultiLinkTest's battery-side sibling, but for a
-        // link that owns a CONTROLLER rather than a pack — the connection
-        // fold does not know or care which kind of source a link carries.
-        assertEquals(ConnectionState.Connected(v), repo.connectionState.value)
+        // link that owns a CONTROLLER rather than a pack.
+        val connected = repo.connectionState.value as ConnectionState.Connected
+        val retrying = connected.linkReconnecting.single()
+        assertEquals(ADDR_B, retrying.address)
+        assertEquals("Link dropped", retrying.reason)
         assertNull(repo.linkReconnectJobForTest(ADDR_A), "the healthy link must not be disturbed")
         val jobB = assertNotNull(repo.linkReconnectJobForTest(ADDR_B))
         assertTrue(jobB.isActive)
 
-        // Front keeps sampling; past the staleness threshold the sweep takes
-        // the rear controller offline and the aggregate reflects only the
-        // survivor — the sum degrades to one term, the max degrades to that
-        // same term — while the vehicle itself stays online throughout.
-        nowMs += BleConfig.packOfflineAfterMs + 1_000L
+        // The drop path retires the rear immediately; no sibling sample or
+        // staleness wait is required before its cached current disappears.
+        val afterDrop = repo.activeVehicleData.value
+        assertTrue(afterDrop.motionPartial)
+        assertFalse(afterDrop.controllers[1].isOnline)
+        assertEquals(10f, afterDrop.motion.batteryCurrentA, absoluteTolerance = 0.001f)
+
+        // Front keeps sampling and remains the complete live aggregate.
         funnels[0](0, motion(speed = 30f, duty = 50f, motorA = 20f, battA = 10f, power = 700f))
 
         val snap = repo.activeVehicleData.value

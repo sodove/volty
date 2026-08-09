@@ -103,6 +103,19 @@ class VescProtocolTest {
         assertEquals(listOf(47), p.issuedOpcodes(), "opcode 4 must stay gone after SETUP proves available")
     }
 
+    @Test fun `legacy opcode 4 mode ignores a stray SETUP reply`() {
+        val p = VescProtocol(useSetupFrame = false)
+
+        assertEquals(listOf(4), p.issuedOpcodes())
+        p.onNotification(setupFrame())
+
+        assertEquals(
+            listOf(4),
+            p.issuedOpcodes(),
+            "useSetupFrame=false is an explicit compatibility contract, not a probe preference"
+        )
+    }
+
     @Test fun `a silent VESC receives a bounded probe instead of permanently alternating opcodes`() {
         val p = VescProtocol()
 

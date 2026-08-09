@@ -95,9 +95,6 @@ internal class ConnectionSession(
     /** The observer, poller and watchdog share one accounted view of a plain VESC link. */
     private val noSampleEverActivity = NoSampleEverWatchdogActivity(protocol)
 
-    @Volatile
-    private var notUnderstoodReported: Boolean = false
-
     /**
      * The write characteristic, hoisted out of [doConnect] so [scanCanBus] can
      * reach it — the one place anything outside the poll loop needs to put
@@ -251,24 +248,33 @@ internal class ConnectionSession(
                     // answers neither opcode we know; redialling that healthy
                     // GATT link cannot make the frame understandable.
                     processObservedSessionNotification(protocol, data, noSampleEverActivity)
-                    val linkAlive = routePackSamples(protocol, sampleGate) { packIndex, bms, sections ->
-                        onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
-                    }
-                    val motionAlive = (protocol as? MotionSource)?.let { ms ->
-                        routeControllerSamples(ms, motionGate) { controllerIndex, motion ->
+                    val routed = routeObservedSessionSamples(
+                        protocol = protocol,
+                        packGate = sampleGate,
+                        motionGate = motionGate,
+                        activity = noSampleEverActivity,
+                        onNewSample = { packIndex, bms, sections ->
+                            onSample(packIndex, bms.copy(timestamp = Clock.System.now()), sections)
+                        },
+                        onNewMotion = { controllerIndex, motion ->
                             onMotionSample(controllerIndex, motion.copy(timestamp = Clock.System.now()))
                         }
-                    } ?: false
-                    if (linkAlive || motionAlive) {
+                    )
+                    // Battery protocols retain their historic cached-decode
+                    // liveness rule. A plain VESC is different: an unknown
+                    // notification after one valid reply still leaves the old
+                    // ControllerData cached, and must not mint a fresh decode.
+                    if (routed.producedNewDecode ||
+                        (protocol !is VescProtocol && routed.hasCachedDecode)
+                    ) {
                         lastSampleAtMs = Clock.System.now().toEpochMilliseconds()
-                        if (protocol is VescProtocol) {
-                            notUnderstoodReported = false
-                            onPlainVescDecode()
-                        }
                         sampleCount++
                         if (sampleCount % 50 == 0) {
                             println("[VOLTY-BLE] sample #$sampleCount lastSampleAtMs=$lastSampleAtMs")
                         }
+                    }
+                    if (protocol is VescProtocol && routed.producedNewDecode) {
+                        onPlainVescDecode()
                     }
                 }
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -361,24 +367,18 @@ internal class ConnectionSession(
                 if (state is ConnectionState.Connected) {
                     val staleAfterSample = lastSampleAtMs > 0 && timeSinceSample > BleConfig.staleSampleMs
                     val noSampleEver = lastSampleAtMs == 0L && timeSinceConnect > BleConfig.noSampleEverMs
-                    if (staleAfterSample) {
-                        println("[VOLTY-BLE] watchdog: STALE — sample age=${timeSinceSample}ms — triggering reconnect")
-                        if (!torn) onDropDetected("No samples")
-                        return@launch
-                    }
-                    if (noSampleEver) {
-                        when (
-                            noSampleEverActivity.decision()
-                        ) {
+                    if (staleAfterSample || noSampleEver) {
+                        when (evaluateStaleSessionActivity(
+                            noSampleEverActivity,
+                            onPlainVescNotificationsNotUnderstood
+                        )) {
                             NoSampleEverWatchdogDecision.REDIAL -> {
-                                println("[VOLTY-BLE] watchdog: STALE — no samples ever — triggering reconnect")
+                                println("[VOLTY-BLE] watchdog: STALE — no fresh samples — triggering reconnect")
                                 if (!torn) onDropDetected("No samples")
                                 return@launch
                             }
-                            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD -> if (!notUnderstoodReported) {
-                                notUnderstoodReported = true
+                            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD -> {
                                 println("[VOLTY-BLE] watchdog: VESC notifications are not understood; keeping link up")
-                                onPlainVescNotificationsNotUnderstood()
                             }
                             NoSampleEverWatchdogDecision.WRITE_FAILED ->
                                 println("[VOLTY-BLE] watchdog: VESC poll writes are failing; keeping link up")
@@ -465,6 +465,11 @@ internal class NoSampleEverWatchdogActivity(private val protocol: BmsProtocol) {
         if (protocol is VescProtocol) hasPollWriteFailure = false
     }
 
+    /** A genuinely new decode starts a fresh notification-classification window. */
+    fun recordDecodedSample() {
+        if (protocol is VescProtocol) notificationArrived = false
+    }
+
     fun decision(): NoSampleEverWatchdogDecision {
         if (protocol !is VescProtocol) return NoSampleEverWatchdogDecision.REDIAL
         return when {
@@ -473,6 +478,18 @@ internal class NoSampleEverWatchdogActivity(private val protocol: BmsProtocol) {
             else -> NoSampleEverWatchdogDecision.REDIAL
         }
     }
+}
+
+/**
+ * Level-trigger the reason publication: repository state can temporarily
+ * replace NOT_UNDERSTOOD with WRITE_FAILED, so the session must be able to
+ * publish the former again once writes recover and it remains current.
+ */
+internal fun evaluateStaleSessionActivity(
+    activity: NoSampleEverWatchdogActivity,
+    onNotUnderstood: () -> Unit
+): NoSampleEverWatchdogDecision = activity.decision().also { decision ->
+    if (decision == NoSampleEverWatchdogDecision.NOT_UNDERSTOOD) onNotUnderstood()
 }
 
 /**
@@ -486,6 +503,43 @@ internal fun processObservedSessionNotification(
 ) {
     activity.recordNotificationArrival()
     protocol.onNotification(data)
+}
+
+/** What the current notification proved independently of protocol caches. */
+internal data class ObservedSessionSamples(
+    val hasCachedDecode: Boolean,
+    val producedNewDecode: Boolean
+)
+
+/**
+ * The exact post-decoder routing seam used by [ConnectionSession]. The gates,
+ * rather than non-null cached values, decide whether this notification
+ * produced a new decode. That distinction drives the plain-VESC watchdog.
+ */
+internal fun routeObservedSessionSamples(
+    protocol: BmsProtocol,
+    packGate: PackSampleGate,
+    motionGate: MotionSampleGate,
+    activity: NoSampleEverWatchdogActivity,
+    onNewSample: (packIndex: Int, data: BmsData, sections: List<SectionState>) -> Unit,
+    onNewMotion: (controllerIndex: Int, data: ControllerData) -> Unit
+): ObservedSessionSamples {
+    var producedNewDecode = false
+    val packCached = routePackSamples(protocol, packGate) { packIndex, data, sections ->
+        producedNewDecode = true
+        onNewSample(packIndex, data, sections)
+    }
+    val motionCached = (protocol as? MotionSource)?.let { motion ->
+        routeControllerSamples(motion, motionGate) { controllerIndex, data ->
+            producedNewDecode = true
+            onNewMotion(controllerIndex, data)
+        }
+    } ?: false
+    if (producedNewDecode) activity.recordDecodedSample()
+    return ObservedSessionSamples(
+        hasCachedDecode = packCached || motionCached,
+        producedNewDecode = producedNewDecode
+    )
 }
 
 /**

@@ -179,4 +179,77 @@ class ConnectionSessionPollingTest {
 
         assertEquals(NoSampleEverWatchdogDecision.REDIAL, activity.decision())
     }
+
+    @Test
+    fun `post-decode write failure keeps a plain VESC link up`() = runTest {
+        val protocol = VescProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        val packGate = PackSampleGate(protocol.packCount)
+        val motionGate = MotionSampleGate(protocol.controllerCount)
+
+        processObservedSessionNotification(
+            protocol,
+            VescPacket.frame(VescTestFrames.setupPayload()),
+            activity
+        )
+        val decoded = routeObservedSessionSamples(
+            protocol,
+            packGate,
+            motionGate,
+            activity,
+            onNewSample = { _, _, _ -> },
+            onNewMotion = { _, _ -> }
+        )
+        assertTrue(decoded.producedNewDecode, "premise: the session has already decoded telemetry")
+
+        runSessionBurstPollCycle(
+            protocol = protocol,
+            activity = activity,
+            write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
+            wait = {}
+        )
+
+        assertEquals(
+            NoSampleEverWatchdogDecision.WRITE_FAILED,
+            evaluateStaleSessionActivity(activity) {},
+            "staleness after a real sample must retain the write-failure precedence"
+        )
+    }
+
+    @Test
+    fun `post-decode undecodable notification is not a fresh cached decode`() {
+        val protocol = VescProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+        val packGate = PackSampleGate(protocol.packCount)
+        val motionGate = MotionSampleGate(protocol.controllerCount)
+
+        processObservedSessionNotification(
+            protocol,
+            VescPacket.frame(VescTestFrames.setupPayload()),
+            activity
+        )
+        assertTrue(
+            routeObservedSessionSamples(
+                protocol, packGate, motionGate, activity,
+                onNewSample = { _, _, _ -> },
+                onNewMotion = { _, _ -> }
+            ).producedNewDecode
+        )
+
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
+        val undecodable = routeObservedSessionSamples(
+            protocol, packGate, motionGate, activity,
+            onNewSample = { _, _, _ -> },
+            onNewMotion = { _, _ -> }
+        )
+        var published = 0
+
+        assertTrue(undecodable.hasCachedDecode, "premise: the protocol still caches its prior sample")
+        assertEquals(false, undecodable.producedNewDecode)
+        assertEquals(
+            NoSampleEverWatchdogDecision.NOT_UNDERSTOOD,
+            evaluateStaleSessionActivity(activity) { published++ }
+        )
+        assertEquals(1, published, "the stale watchdog must publish the current level-triggered reason")
+    }
 }

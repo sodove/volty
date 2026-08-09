@@ -2095,6 +2095,19 @@ class KableBmsRepository private constructor(
                     linkNotUnderstood = current.mapNotNull { link ->
                         link.spec.address.takeIf { link.notificationsNotUnderstood }
                             ?.let(ConnectionState::LinkNotUnderstood)
+                    },
+                    linkReconnecting = current.mapNotNull { link ->
+                        if (link.spec.ownedControllers.isEmpty()) return@mapNotNull null
+                        val reconnecting = link.status == LinkStatus.RECONNECTING ||
+                            (link.status != LinkStatus.ONLINE &&
+                                link.reconnectJob != null &&
+                                link.lastReason.isNotEmpty())
+                        if (!reconnecting) return@mapNotNull null
+                        ConnectionState.LinkReconnecting(
+                            address = link.spec.address,
+                            attempt = link.reconnectAttempt,
+                            reason = link.lastReason
+                        )
                     }
                 )
             current.any { it.status == LinkStatus.CONNECTING } ->
@@ -2288,7 +2301,11 @@ class KableBmsRepository private constructor(
                 link.session?.tearDown()
                 link.session = null
             }
-            setLinkState(link, LinkStatus.CONNECTING)
+            setLinkState(
+                link,
+                status = if (isReconnectAttempt) LinkStatus.RECONNECTING else LinkStatus.CONNECTING,
+                attempt = if (isReconnectAttempt) link.reconnectAttempt else 0
+            )
             // The protocol instance is shared by the enrichment funnel and
             // the session — both must read the same decode state. Plain
             // object, no I/O; constructing it this early cannot fail. Built
@@ -2494,6 +2511,9 @@ class KableBmsRepository private constructor(
             // cancelAndJoin-ing the calling job would deadlock. The next
             // attempt in the loop tears it down safely. The fold keeps the
             // vehicle Connected while any sibling is still up.
+            vehicleConnection?.markControllersOffline(
+                link.spec.ownedControllers.map { it.globalIndex }
+            )
             setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
             val reconnect = startLinkReconnectLoop(
                 link,

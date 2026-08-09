@@ -101,6 +101,7 @@ import volty.composeapp.generated.resources.controller_issue_not_reported
 import volty.composeapp.generated.resources.controller_issue_not_understood
 import volty.composeapp.generated.resources.controller_issue_partial
 import volty.composeapp.generated.resources.controller_issue_write_failed
+import volty.composeapp.generated.resources.controller_issue_reconnecting
 
 /**
  * The Ride dashboard — the app's home screen for a vehicle with a motor
@@ -171,6 +172,11 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             RideConnectionSummary.PillSource.NEUTRAL -> null
         } ?: stringResource(Res.string.status_source_neutral)
         val controllerIssueLabel = when (connectionSummary.controllerIssue) {
+            RideConnectionSummary.ControllerIssue.RECONNECTING ->
+                stringResource(
+                    Res.string.controller_issue_reconnecting,
+                    connectionSummary.controllerIssueReason.orEmpty()
+                )
             RideConnectionSummary.ControllerIssue.WRITE_FAILED ->
                 stringResource(Res.string.controller_issue_write_failed)
             RideConnectionSummary.ControllerIssue.NOT_UNDERSTOOD ->

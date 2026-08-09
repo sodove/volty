@@ -11,6 +11,13 @@ sealed class ConnectionState {
     /** A link is notifying, but its plain VESC decoder has not recognised a reply. */
     data class LinkNotUnderstood(val address: String)
 
+    /** One sibling is still live while this address is being re-established. */
+    data class LinkReconnecting(
+        val address: String,
+        val attempt: Int,
+        val reason: String
+    )
+
     data object Idle : ConnectionState()
     data object Scanning : ConnectionState()
     data class Connecting(val vehicle: Vehicle?) : ConnectionState()
@@ -20,11 +27,14 @@ sealed class ConnectionState {
      * quiet device, which accepted writes but has not replied yet. [linkNotUnderstood]
      * names plain VESC links that are notifying but have not produced any
      * recognisable reply, so reconnecting them would only churn a healthy GATT link.
+     * [linkReconnecting] keeps a controller sibling's retry status and reason
+     * visible even though another online link keeps the vehicle-level fold Connected.
      */
     data class Connected(
         val vehicle: Vehicle?,
         val linkWriteFailures: List<LinkWriteFailure> = emptyList(),
-        val linkNotUnderstood: List<LinkNotUnderstood> = emptyList()
+        val linkNotUnderstood: List<LinkNotUnderstood> = emptyList(),
+        val linkReconnecting: List<LinkReconnecting> = emptyList()
     ) : ConnectionState()
     data object Disconnected : ConnectionState()
 

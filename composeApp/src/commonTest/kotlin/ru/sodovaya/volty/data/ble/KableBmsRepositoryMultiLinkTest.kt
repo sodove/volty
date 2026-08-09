@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.model.Controller
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.ControllerType
 import ru.sodovaya.volty.domain.model.Pack
 import ru.sodovaya.volty.domain.model.PackTopology
@@ -195,6 +196,54 @@ class KableBmsRepositoryMultiLinkTest {
         )
     }
 
+    @Test
+    fun `not-understood is republished after write failure recovers while notifications stay undecodable`() = repoTest { repo ->
+        val vehicle = vescAndBmsVehicle()
+        repo.installLinksForTest(vehicle, ADDR_A, null)
+        repo.markLinkOnlineForTest(ADDR_A)
+        repo.markLinkOnlineForTest(ADDR_B)
+        val protocol = ru.sodovaya.volty.data.bms.VescProtocol()
+        val activity = NoSampleEverWatchdogActivity(protocol)
+
+        processObservedSessionNotification(protocol, byteArrayOf(0x01, 0x02, 0x03), activity)
+        evaluateStaleSessionActivity(activity) { repo.recordLinkNotUnderstoodForTest(ADDR_A) }
+        assertEquals(
+            listOf(ConnectionState.LinkNotUnderstood(ADDR_A)),
+            (repo.connectionState.value as ConnectionState.Connected).linkNotUnderstood
+        )
+
+        runSessionBurstPollCycle(
+            protocol,
+            activity,
+            write = { throw IllegalStateException("WRITE_NO_RESPONSE unavailable") },
+            wait = {},
+            onWriteFailure = { repo.recordPollWriteFailureForTest(ADDR_A, it) }
+        )
+        assertEquals(
+            emptyList(),
+            (repo.connectionState.value as ConnectionState.Connected).linkNotUnderstood,
+            "the more specific write failure temporarily replaces the decode diagnosis"
+        )
+
+        runSessionBurstPollCycle(
+            protocol,
+            activity,
+            write = {},
+            wait = {},
+            onWriteSuccess = { repo.recordPollWriteSuccessForTest(ADDR_A) }
+        )
+        processObservedSessionNotification(protocol, byteArrayOf(0x04, 0x05, 0x06), activity)
+        evaluateStaleSessionActivity(activity) { repo.recordLinkNotUnderstoodForTest(ADDR_A) }
+
+        val recovered = repo.connectionState.value as ConnectionState.Connected
+        assertEquals(emptyList(), recovered.linkWriteFailures)
+        assertEquals(
+            listOf(ConnectionState.LinkNotUnderstood(ADDR_A)),
+            recovered.linkNotUnderstood,
+            "continued undecodable traffic must restore the reason after the accepted write"
+        )
+    }
+
     // ----- Fan-out + the shared funnel -----
 
     @Test
@@ -322,6 +371,41 @@ class KableBmsRepositoryMultiLinkTest {
         repo.disconnect()
         runCurrent()
         assertFalse(jobB.isActive, "disconnect must stop the dropped link's loop")
+    }
+
+    @Test
+    fun `a dropped controller link stays renderer-visible and retires its reported motion while battery remains online`() = repoTest { repo ->
+        val vehicle = vescAndBmsVehicle()
+        val packFunnels = repo.installLinksForTest(vehicle, ADDR_A, null)
+        repo.markLinkOnlineForTest(ADDR_A)
+        repo.markLinkOnlineForTest(ADDR_B)
+        val specs = repo.linkSpecsForTest()
+        val motionFunnels = repo.linkMotionFunnelsForTest()
+        val controllerLink = specs.indexOfFirst { it.address == ADDR_A }
+        val batteryLink = specs.indexOfFirst { it.address == ADDR_B }
+
+        motionFunnels[controllerLink](
+            0,
+            ControllerData(speedKmh = 31f, isConnected = true)
+        )
+        packFunnels[batteryLink](0, sample(current = 4.2f), emptyList())
+        runCurrent()
+        assertTrue(repo.activeVehicleData.value.controllers.single().isOnline)
+
+        repo.simulateLinkDropForTest(ADDR_A, "Link dropped").join()
+        runCurrent()
+
+        val state = repo.connectionState.value as ConnectionState.Connected
+        val reconnecting = state.linkReconnecting.single()
+        assertEquals(ADDR_A, reconnecting.address)
+        assertEquals("Link dropped", reconnecting.reason)
+        assertTrue(reconnecting.attempt >= 0, "the renderer receives the live reconnect attempt")
+        val snap = repo.activeVehicleData.value
+        assertFalse(snap.controllers.single().isOnline, "motion from the dead controller session is unavailable now")
+        assertFalse(snap.motion.isConnected)
+        assertTrue(snap.packs.single().isOnline, "the independent battery link remains usable")
+
+        repo.disconnect()
     }
 
     @Test

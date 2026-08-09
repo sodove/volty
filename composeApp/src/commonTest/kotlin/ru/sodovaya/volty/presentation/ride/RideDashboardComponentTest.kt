@@ -377,6 +377,37 @@ class RideDashboardComponentTest {
     }
 
     @Test
+    fun `controller reconnect reason remains renderer-bindable beside an online battery`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val controller = Controller(0, "Drive", ControllerType.VESC, "CTRL")
+        val pack = Pack(0, "Battery", BmsType.JK_BMS, "PACK")
+        val vehicle = vehicleWith(null, SecondaryGauge.DUTY).copy(
+            packs = listOf(pack),
+            controllers = listOf(controller)
+        )
+        repo.activeVehicle.value = vehicle
+        repo.activeVehicleData.value = VehicleData(
+            packs = listOf(PackState(pack, BmsData(isConnected = true), isOnline = true)),
+            controllers = listOf(ControllerState(controller, ControllerData(), isOnline = false)),
+            motionPartial = true
+        )
+        repo.connectionState.value = ConnectionState.Connected(
+            vehicle,
+            linkReconnecting = listOf(ConnectionState.LinkReconnecting("CTRL", 2, "Link dropped"))
+        )
+
+        val component = component(repo)
+        advanceUntilIdle()
+
+        val summary = component.state.value.connectionSummary
+        assertEquals(RideConnectionSummary.Kind.MIXED, summary.kind)
+        assertEquals(RideConnectionSummary.ControllerIssue.RECONNECTING, summary.controllerIssue)
+        assertEquals("Link dropped", summary.controllerIssueReason)
+        assertEquals(RideConnectionSummary.PillSource.BATTERY, summary.pillSource)
+    }
+
+    @Test
     fun controller_faults_are_visible_while_active_then_linger_and_expire() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val repo = FakeBmsRepo()

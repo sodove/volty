@@ -239,6 +239,22 @@ internal class VehicleConnection(
     }
 
     /**
+     * Retire every controller owned by a link as one vehicle-data emission.
+     * The last values remain on their cards, but neither the motion aggregate
+     * nor the dashboard may treat them as current while that link reconnects.
+     */
+    fun markControllersOffline(controllerIndices: Collection<Int>) {
+        var changed = false
+        for (controllerIndex in controllerIndices) {
+            val slot = ctrlStates.indexOfFirst { it.controller.index == controllerIndex }
+            if (slot < 0 || !ctrlStates[slot].isOnline) continue
+            ctrlStates[slot] = ctrlStates[slot].copy(isOnline = false)
+            changed = true
+        }
+        if (changed) emit()
+    }
+
+    /**
      * Has [packIndex] stopped reporting? **The same staleness rule [submit]'s
      * own sweep applies** — the same [BleConfig.packOfflineAfterMs] threshold
      * measured against the same injected [clock] — asked on demand instead of
