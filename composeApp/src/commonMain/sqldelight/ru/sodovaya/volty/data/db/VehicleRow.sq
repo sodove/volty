@@ -28,7 +28,13 @@ CREATE TABLE VehicleRow (
     -- AlarmDefaults apply; 1 = yes, so AlertLevelRow is the whole truth even
     -- when it holds no rows for this vehicle (= every kind switched off).
     -- Not inferable from AlertLevelRow being empty — see 6.sqm.
-    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0
+    motionAlertsConfigured   INTEGER NOT NULL DEFAULT 0,
+    autoVolumeEnabled        INTEGER NOT NULL DEFAULT 0,
+    autoVolumeMinPercent     INTEGER NOT NULL DEFAULT 30,
+    autoVolumeMaxPercent     INTEGER NOT NULL DEFAULT 80,
+    autoVolumeMinSpeedKmh    INTEGER NOT NULL DEFAULT 5,
+    autoVolumeMaxSpeedKmh    INTEGER NOT NULL DEFAULT 30,
+    autoVolumeDeadbandKmh    INTEGER NOT NULL DEFAULT 2
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -44,12 +50,16 @@ INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
-    yieldBmsToHeadUnit, motionAlertsConfigured
+    yieldBmsToHeadUnit, motionAlertsConfigured,
+    autoVolumeEnabled, autoVolumeMinPercent, autoVolumeMaxPercent,
+    autoVolumeMinSpeedKmh, autoVolumeMaxSpeedKmh, autoVolumeDeadbandKmh
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
-    :yieldBmsToHeadUnit, :motionAlertsConfigured
+    :yieldBmsToHeadUnit, :motionAlertsConfigured,
+    :autoVolumeEnabled, :autoVolumeMinPercent, :autoVolumeMaxPercent,
+    :autoVolumeMinSpeedKmh, :autoVolumeMaxSpeedKmh, :autoVolumeDeadbandKmh
 );
 
 delete:

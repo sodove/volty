@@ -29,6 +29,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
+import androidx.compose.material3.Slider
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -97,6 +98,14 @@ import volty.composeapp.generated.resources.vehicle_field_temp_warn
 import volty.composeapp.generated.resources.vehicle_field_topology
 import volty.composeapp.generated.resources.vehicle_field_yield_bms
 import volty.composeapp.generated.resources.vehicle_field_yield_bms_caption
+import volty.composeapp.generated.resources.vehicle_auto_volume_caption
+import volty.composeapp.generated.resources.vehicle_auto_volume_deadband
+import volty.composeapp.generated.resources.vehicle_auto_volume_enabled
+import volty.composeapp.generated.resources.vehicle_auto_volume_max_speed
+import volty.composeapp.generated.resources.vehicle_auto_volume_max_volume
+import volty.composeapp.generated.resources.vehicle_auto_volume_min_speed
+import volty.composeapp.generated.resources.vehicle_auto_volume_min_volume
+import volty.composeapp.generated.resources.vehicle_section_auto_volume
 import volty.composeapp.generated.resources.vehicle_save
 import volty.composeapp.generated.resources.vehicle_save_blocked
 import volty.composeapp.generated.resources.vehicle_section_alerts
@@ -260,6 +269,50 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
             }
 
             HorizontalDivider()
+            SectionLabel(stringResource(Res.string.vehicle_section_auto_volume))
+            SwitchRow(
+                label = stringResource(Res.string.vehicle_auto_volume_enabled),
+                subtitle = stringResource(Res.string.vehicle_auto_volume_caption),
+                checked = state.autoVolume.enabled,
+                onChange = component::onAutoVolumeEnabledChanged
+            )
+            SliderSetting(
+                label = stringResource(Res.string.vehicle_auto_volume_min_volume),
+                value = state.autoVolume.minVolumePercent,
+                range = 0..state.autoVolume.maxVolumePercent,
+                onChange = { component.onAutoVolumeVolumeRangeChanged(it, state.autoVolume.maxVolumePercent) },
+                suffix = "%"
+            )
+            SliderSetting(
+                label = stringResource(Res.string.vehicle_auto_volume_max_volume),
+                value = state.autoVolume.maxVolumePercent,
+                range = state.autoVolume.minVolumePercent..100,
+                onChange = { component.onAutoVolumeVolumeRangeChanged(state.autoVolume.minVolumePercent, it) },
+                suffix = "%"
+            )
+            SliderSetting(
+                label = stringResource(Res.string.vehicle_auto_volume_min_speed),
+                value = state.autoVolume.minSpeedKmh,
+                range = 0..(state.autoVolume.maxSpeedKmh - 1).coerceAtLeast(0),
+                onChange = { component.onAutoVolumeSpeedRangeChanged(it, state.autoVolume.maxSpeedKmh) },
+                suffix = " km/h"
+            )
+            SliderSetting(
+                label = stringResource(Res.string.vehicle_auto_volume_max_speed),
+                value = state.autoVolume.maxSpeedKmh,
+                range = (state.autoVolume.minSpeedKmh + 1)..60,
+                onChange = { component.onAutoVolumeSpeedRangeChanged(state.autoVolume.minSpeedKmh, it) },
+                suffix = " km/h"
+            )
+            SliderSetting(
+                label = stringResource(Res.string.vehicle_auto_volume_deadband),
+                value = state.autoVolume.deadbandKmh,
+                range = 0..10,
+                onChange = component::onAutoVolumeDeadbandChanged,
+                suffix = " km/h"
+            )
+
+            HorizontalDivider()
             SectionLabel(stringResource(Res.string.vehicle_section_alerts))
             FloatField(stringResource(Res.string.vehicle_field_cell_high), state.cellHighV, component::onCellHighVChanged)
             FloatField(stringResource(Res.string.vehicle_field_cell_low), state.cellLowV, component::onCellLowVChanged)
@@ -373,6 +426,30 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 text = { Text(stringResource(Res.string.vehicle_discard_text)) }
             )
         }
+    }
+}
+
+@Composable
+private fun SliderSetting(
+    label: String,
+    value: Int,
+    range: IntRange,
+    onChange: (Int) -> Unit,
+    suffix: String
+) {
+    val safeStart = range.first.coerceAtMost(range.last)
+    val safeEnd = range.last.coerceAtLeast(safeStart)
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(label, fontSize = 13.sp)
+            Text("${value.coerceIn(safeStart, safeEnd)}$suffix", fontSize = 13.sp)
+        }
+        Slider(
+            value = value.coerceIn(safeStart, safeEnd).toFloat(),
+            onValueChange = { onChange(it.toInt()) },
+            valueRange = safeStart.toFloat()..safeEnd.toFloat(),
+            steps = (safeEnd - safeStart - 1).coerceAtLeast(0)
+        )
     }
 }
 

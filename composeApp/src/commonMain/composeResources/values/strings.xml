@@ -218,6 +218,14 @@
     <string name="vehicle_field_chemistry">Chemistry</string>
     <string name="vehicle_field_cell_count">Cell count (series)</string>
     <string name="vehicle_field_averaging_window">Averaging window</string>
+    <string name="vehicle_section_auto_volume">Automatic volume</string>
+    <string name="vehicle_auto_volume_enabled">Adjust volume with speed</string>
+    <string name="vehicle_auto_volume_caption">Media volume follows the vehicle speed while music is playing.</string>
+    <string name="vehicle_auto_volume_min_volume">Volume at minimum speed</string>
+    <string name="vehicle_auto_volume_max_volume">Volume at maximum speed</string>
+    <string name="vehicle_auto_volume_min_speed">Start speed</string>
+    <string name="vehicle_auto_volume_max_speed">Full-volume speed</string>
+    <string name="vehicle_auto_volume_deadband">Speed deadband</string>
     <string name="vehicle_section_alerts">Alert thresholds</string>
     <string name="vehicle_field_cell_high">Cell V high</string>
     <string name="vehicle_field_cell_low">Cell V low</string>

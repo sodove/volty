@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.sortedLevels
 import ru.sodovaya.volty.domain.model.AlertConfig
+import ru.sodovaya.volty.domain.model.AutoVolumeSettings
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
@@ -146,7 +147,13 @@ class SqlDelightVehicleRepository(provider: VoltyDatabaseProvider) : VehicleRepo
                 // off writes zero level rows, exactly like a rider who has never
                 // opened the screen — and the two must not read back the same.
                 // See AlertLevelRow.sq / Vehicle.motionAlerts.
-                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L
+                motionAlertsConfigured = if (vehicle.motionAlerts != null) 1L else 0L,
+                autoVolumeEnabled = if (vehicle.autoVolume.enabled) 1L else 0L,
+                autoVolumeMinPercent = vehicle.autoVolume.minVolumePercent.toLong(),
+                autoVolumeMaxPercent = vehicle.autoVolume.maxVolumePercent.toLong(),
+                autoVolumeMinSpeedKmh = vehicle.autoVolume.minSpeedKmh.toLong(),
+                autoVolumeMaxSpeedKmh = vehicle.autoVolume.maxSpeedKmh.toLong(),
+                autoVolumeDeadbandKmh = vehicle.autoVolume.deadbandKmh.toLong()
             )
             // GaugePeakRow is deliberately NOT touched here — not written, and
             // not deleted either. It is not part of a vehicle's description; a
@@ -354,7 +361,15 @@ private fun VehicleRow.toDomain(
     // Null — "never configured, use AlarmDefaults" — comes from the column, NOT
     // from the row list being empty. `motionAlertsConfigured = 1` with no rows
     // is a rider who switched everything off, and stays off.
-    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null
+    motionAlerts = if (motionAlertsConfigured == 1L) alertLevelRows.toRules() else null,
+    autoVolume = AutoVolumeSettings(
+        enabled = autoVolumeEnabled == 1L,
+        minVolumePercent = autoVolumeMinPercent.toInt(),
+        maxVolumePercent = autoVolumeMaxPercent.toInt(),
+        minSpeedKmh = autoVolumeMinSpeedKmh.toInt(),
+        maxSpeedKmh = autoVolumeMaxSpeedKmh.toInt(),
+        deadbandKmh = autoVolumeDeadbandKmh.toInt()
+    )
 )
 
 /**

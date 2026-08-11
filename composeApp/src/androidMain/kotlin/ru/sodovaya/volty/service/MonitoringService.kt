@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
@@ -12,6 +13,7 @@ import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.alert.AlarmDriver
 import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.notification.AudibleAlarmHolder
 import ru.sodovaya.volty.notification.LiveSummary
 import ru.sodovaya.volty.notification.NotificationChannels
@@ -47,6 +49,7 @@ class MonitoringService : Service() {
     }
 
     private val bmsRepository: BmsRepository by inject()
+    private val vehicleRepository: VehicleRepository by inject()
     private val notifier: Notifier by inject()
     private val appPrefs: AppPrefs by inject()
     private val alarms: AudibleAlarmHolder by inject()
@@ -64,6 +67,7 @@ class MonitoringService : Service() {
      * Written in `onCreate` and read in `onReceive`, both on the main thread.
      */
     private var alarmDriver: AlarmDriver? = null
+    private var autoVolumeController: AutoVolumeController? = null
 
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
@@ -134,6 +138,13 @@ class MonitoringService : Service() {
         ).also { it.start(scope) }
         alarmDriver = driver
 
+        autoVolumeController = AutoVolumeController(
+            repository = bmsRepository,
+            vehicleRepository = vehicleRepository,
+            audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+            scope = scope
+        ).also { it.start() }
+
         scope.launch {
             bmsRepository.activeData
                 .combine(bmsRepository.activeVehicle) { d, v -> d to v }
@@ -188,6 +199,8 @@ class MonitoringService : Service() {
      */
     override fun onDestroy() {
         scope.cancel()
+        autoVolumeController?.stop()
+        autoVolumeController = null
         alarmDriver = null
         try { unregisterReceiver(disconnectReceiver) } catch (_: Exception) {}
         try { unregisterReceiver(silenceReceiver) } catch (_: Exception) {}

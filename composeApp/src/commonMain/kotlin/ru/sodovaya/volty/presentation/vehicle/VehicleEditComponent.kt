@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.backhandler.BackCallback
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.AlertConfig
+import ru.sodovaya.volty.domain.model.AutoVolumeSettings
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ControllerType
@@ -62,6 +63,10 @@ interface VehicleEditComponent : DraftExitComponent {
     fun onSocLowChanged(v: Int?)
     fun onDashboardStyleChanged(style: DashboardStyle?)
     fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
+    fun onAutoVolumeEnabledChanged(enabled: Boolean)
+    fun onAutoVolumeVolumeRangeChanged(minPercent: Int, maxPercent: Int)
+    fun onAutoVolumeSpeedRangeChanged(minKmh: Int, maxKmh: Int)
+    fun onAutoVolumeDeadbandChanged(kmh: Int)
     /**
      * Open the per-vehicle alert settings screen (F Task 9).
      *
@@ -278,6 +283,7 @@ interface VehicleEditComponent : DraftExitComponent {
         val socLowPercent: Int?,
         val dashboardStyle: DashboardStyle?,
         val secondaryGauge: SecondaryGauge,
+        val autoVolume: AutoVolumeSettings,
         val topology: PackTopology,
         val yieldBmsToHeadUnit: Boolean?,
         val draft: PersistableVehicleDraft
@@ -323,6 +329,7 @@ interface VehicleEditComponent : DraftExitComponent {
         /** Null = follow the app-level default. */
         val dashboardStyle: DashboardStyle? = null,
         val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
+        val autoVolume: AutoVolumeSettings = AutoVolumeSettings(),
         /** How this vehicle's packs are wired. Editable since G2. */
         val topology: PackTopology = PackTopology.PARALLEL,
         /**
@@ -415,6 +422,7 @@ interface VehicleEditComponent : DraftExitComponent {
                 socLowPercent = socLowPercent,
                 dashboardStyle = dashboardStyle,
                 secondaryGauge = secondaryGauge,
+                autoVolume = autoVolume,
                 topology = topology,
                 yieldBmsToHeadUnit = yieldBmsToHeadUnit,
                 draft = draft.persistableValues()
@@ -680,6 +688,7 @@ class DefaultVehicleEditComponent(
                     socLowPercent = v.alertConfig.socLowPercent,
                     dashboardStyle = v.dashboardStyle,
                     secondaryGauge = v.secondaryGauge,
+                    autoVolume = v.autoVolume,
                     topology = v.topology,
                     // Three-valued, and seeded rather than resolved: an unset
                     // column is not the same statement as an explicit `true`,
@@ -761,6 +770,26 @@ class DefaultVehicleEditComponent(
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
+
+    override fun onAutoVolumeEnabledChanged(enabled: Boolean) {
+        _state.update { it.copy(autoVolume = it.autoVolume.copy(enabled = enabled)) }
+    }
+
+    override fun onAutoVolumeVolumeRangeChanged(minPercent: Int, maxPercent: Int) {
+        val min = minPercent.coerceIn(0, 100)
+        val max = maxPercent.coerceIn(min, 100)
+        _state.update { it.copy(autoVolume = it.autoVolume.copy(minVolumePercent = min, maxVolumePercent = max)) }
+    }
+
+    override fun onAutoVolumeSpeedRangeChanged(minKmh: Int, maxKmh: Int) {
+        val min = minKmh.coerceAtLeast(0)
+        val max = maxKmh.coerceAtLeast(min + 1)
+        _state.update { it.copy(autoVolume = it.autoVolume.copy(minSpeedKmh = min, maxSpeedKmh = max)) }
+    }
+
+    override fun onAutoVolumeDeadbandChanged(kmh: Int) {
+        _state.update { it.copy(autoVolume = it.autoVolume.copy(deadbandKmh = kmh.coerceIn(0, 10))) }
+    }
     override fun onOpenAlerts() { onOpenAlertsRequested() }
     override fun onOpenUnits() { onOpenUnitsRequested() }
 
@@ -1237,7 +1266,8 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
         controllers = nextControllers,
         dashboardStyle = s.dashboardStyle,
         secondaryGauge = s.secondaryGauge,
-        yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
+        yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
+        autoVolume = s.autoVolume
     )
 }
 
@@ -1264,7 +1294,8 @@ private fun newVehicle(s: VehicleEditComponent.State, id: String): Vehicle = new
     topology = s.topology,
     dashboardStyle = s.dashboardStyle,
     secondaryGauge = s.secondaryGauge,
-    yieldBmsToHeadUnit = s.yieldBmsToHeadUnit
+    yieldBmsToHeadUnit = s.yieldBmsToHeadUnit,
+    autoVolume = s.autoVolume
 )
 
 /**

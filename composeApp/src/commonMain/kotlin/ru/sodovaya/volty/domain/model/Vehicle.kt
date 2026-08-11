@@ -59,7 +59,9 @@ data class Vehicle(
      * the storage layer can make; nothing inside
      * [AlertRule][ru.sodovaya.volty.domain.alert.AlertRule] knows about it.
      */
-    val motionAlerts: List<AlertRule>? = null
+    val motionAlerts: List<AlertRule>? = null,
+    /** Speed-based media-volume curve, disabled by default. */
+    val autoVolume: AutoVolumeSettings = AutoVolumeSettings()
 ) {
     init {
         require(packs.isNotEmpty() || controllers.isNotEmpty()) { "Vehicle needs a source" }

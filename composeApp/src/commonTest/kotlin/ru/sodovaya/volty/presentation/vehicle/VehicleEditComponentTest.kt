@@ -14,6 +14,7 @@ import ru.sodovaya.volty.domain.alert.AlertLevel
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.model.AlertConfig
+import ru.sodovaya.volty.domain.model.AutoVolumeSettings
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
@@ -297,7 +298,15 @@ class VehicleEditComponentTest {
         // Every kind deliberately silenced (F §10.2: an empty level list is the
         // only way to say "off"). Non-null, so it is an ANSWER — and a
         // non-default one, which is what makes a dropped field visible below.
-        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) }
+        motionAlerts = MotionAlertKind.entries.map { AlertRule(it, emptyList()) },
+        autoVolume = AutoVolumeSettings(
+            enabled = true,
+            minVolumePercent = 20,
+            maxVolumePercent = 75,
+            minSpeedKmh = 3,
+            maxSpeedKmh = 42,
+            deadbandKmh = 4
+        )
         // G §9.2's learned dial widths are NOT here, and cannot be: since `8.sqm`
         // they are not fields of a Vehicle at all. Tests that need a vehicle
         // which has been ridden seed [learnedRanges] into the fake instead.
@@ -955,12 +964,27 @@ class VehicleEditComponentTest {
         // this screen actually exposes — then saves.
         c.onDashboardStyleChanged(DashboardStyle.CLEAN)
         c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY)
+        c.onAutoVolumeEnabledChanged(false)
+        c.onAutoVolumeVolumeRangeChanged(25, 65)
+        c.onAutoVolumeSpeedRangeChanged(6, 36)
+        c.onAutoVolumeDeadbandChanged(2)
         c.onSave()
         advanceUntilIdle()
 
         val saved = repo.upserts.single()
         assertEquals(DashboardStyle.CLEAN, saved.dashboardStyle)
         assertEquals(SecondaryGauge.BATTERY, saved.secondaryGauge)
+        assertEquals(
+            AutoVolumeSettings(
+                enabled = false,
+                minVolumePercent = 25,
+                maxVolumePercent = 65,
+                minSpeedKmh = 6,
+                maxSpeedKmh = 36,
+                deadbandKmh = 2
+            ),
+            saved.autoVolume
+        )
         // controllers/topology are not exposed by this screen at all — they
         // must survive the save unchanged.
         assertEquals(originalControllers, saved.controllers)

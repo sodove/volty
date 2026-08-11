@@ -5,6 +5,7 @@ import ru.sodovaya.volty.data.ble.controllerMotionSupported
 import ru.sodovaya.volty.data.ble.protocolKind
 import ru.sodovaya.volty.data.bms.vesc.VescSetupConfig
 import ru.sodovaya.volty.domain.model.AlertConfig
+import ru.sodovaya.volty.domain.model.AutoVolumeSettings
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
@@ -430,7 +431,8 @@ fun newVehicleFromDraft(
     topology: PackTopology = PackTopology.PARALLEL,
     dashboardStyle: DashboardStyle? = null,
     secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
-    yieldBmsToHeadUnit: Boolean? = null
+    yieldBmsToHeadUnit: Boolean? = null,
+    autoVolume: AutoVolumeSettings = AutoVolumeSettings()
 ): Vehicle = Vehicle(
     id = id,
     name = name,
@@ -444,7 +446,8 @@ fun newVehicleFromDraft(
     createdAt = createdAt,
     dashboardStyle = dashboardStyle,
     secondaryGauge = secondaryGauge,
-    yieldBmsToHeadUnit = yieldBmsToHeadUnit
+    yieldBmsToHeadUnit = yieldBmsToHeadUnit,
+    autoVolume = autoVolume
 )
 
 /**

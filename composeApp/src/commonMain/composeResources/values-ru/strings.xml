@@ -216,6 +216,14 @@
     <string name="vehicle_field_chemistry">Химия</string>
     <string name="vehicle_field_cell_count">Кол-во ячеек (посл.)</string>
     <string name="vehicle_field_averaging_window">Окно усреднения</string>
+    <string name="vehicle_section_auto_volume">Автогромкость</string>
+    <string name="vehicle_auto_volume_enabled">Менять громкость со скоростью</string>
+    <string name="vehicle_auto_volume_caption">Громкость мультимедиа следует скорости транспорта во время музыки.</string>
+    <string name="vehicle_auto_volume_min_volume">Громкость на минимальной скорости</string>
+    <string name="vehicle_auto_volume_max_volume">Громкость на максимальной скорости</string>
+    <string name="vehicle_auto_volume_min_speed">Начальная скорость</string>
+    <string name="vehicle_auto_volume_max_speed">Скорость полной громкости</string>
+    <string name="vehicle_auto_volume_deadband">Мёртвая зона скорости</string>
     <string name="vehicle_section_alerts">Пороги алертов</string>
     <string name="vehicle_field_cell_high">Макс. напряжение ячейки</string>
     <string name="vehicle_field_cell_low">Мин. напряжение ячейки</string>

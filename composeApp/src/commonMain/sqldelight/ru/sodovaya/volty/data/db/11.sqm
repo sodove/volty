@@ -1,0 +1,7 @@
+-- v11 -> v12: per-vehicle speed-based media volume curve.
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeEnabled INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeMinPercent INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeMaxPercent INTEGER NOT NULL DEFAULT 80;
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeMinSpeedKmh INTEGER NOT NULL DEFAULT 5;
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeMaxSpeedKmh INTEGER NOT NULL DEFAULT 30;
+ALTER TABLE VehicleRow ADD COLUMN autoVolumeDeadbandKmh INTEGER NOT NULL DEFAULT 2;
