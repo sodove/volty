@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -253,6 +254,23 @@ class RootNavigationTest {
             Config.SetupWizard(prefillFromActiveConnection = false),
             stack.value.active.configuration
         )
+    }
+
+    @Test
+    fun create_prefill_ignores_a_saved_active_vehicle_but_keeps_a_guest_connection() {
+        val saved = vehicle()
+        val guest = saved.copy(id = "guest:AA:BB", name = "Guest BMS")
+
+        assertNull(
+            activeVehicleForCreatePrefill(saved, enabled = true),
+            "adding a vehicle must not clone the saved vehicle that is currently active"
+        )
+        assertEquals(
+            guest,
+            activeVehicleForCreatePrefill(guest, enabled = true),
+            "an unsaved guest connection is still a valid starting point for the wizard"
+        )
+        assertNull(activeVehicleForCreatePrefill(guest, enabled = false))
     }
 
     @Test

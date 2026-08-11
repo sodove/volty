@@ -153,6 +153,16 @@ internal fun configForCreateVehicle(entry: CreateVehicleEntry): Config = when (e
 }
 
 /**
+ * Only a transient guest connection is safe to use as the starting point for
+ * a new vehicle. A saved active vehicle must never be copied into the create
+ * flow: that turns "add" into an accidental duplicate of the vehicle in use.
+ */
+internal fun activeVehicleForCreatePrefill(
+    activeVehicle: Vehicle?,
+    enabled: Boolean
+): Vehicle? = activeVehicle?.takeIf { enabled && it.isGuest }
+
+/**
  * The app's home destination for [vehicle] — the single routing rule behind
  * every post-connect landing, the back-out target of Graph/Settings, and the
  * Ride tab's visibility.
@@ -594,9 +604,10 @@ class DefaultRootComponent(
                 )
             )
             is Config.SetupWizard -> {
-                val prefillVehicle = if (config.prefillFromActiveConnection) {
-                    bmsRepository.activeVehicle.value?.takeUnless { it.isDemo }
-                } else null
+                val prefillVehicle = activeVehicleForCreatePrefill(
+                    activeVehicle = bmsRepository.activeVehicle.value,
+                    enabled = config.prefillFromActiveConnection
+                )
                 val initialName = prefillVehicle?.name
                     ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") "" else it }
                     .orEmpty()
@@ -626,11 +637,10 @@ class DefaultRootComponent(
                 // active connection. Only applies when creating a new vehicle
                 // (vehicleId == null) and the caller asked for it. Guest names
                 // get the synthetic "Guest " prefix stripped (see KableBmsRepository).
-                val prefillVehicle = if (config.vehicleId == null && config.prefillFromActiveConnection) {
-                    // Never prefill from the demo connection — the synthetic
-                    // "demo" device/address must not leak into a saved vehicle.
-                    bmsRepository.activeVehicle.value?.takeUnless { it.isDemo }
-                } else null
+                val prefillVehicle = activeVehicleForCreatePrefill(
+                    activeVehicle = bmsRepository.activeVehicle.value,
+                    enabled = config.vehicleId == null && config.prefillFromActiveConnection
+                )
                 val prefilledName = prefillVehicle?.name
                     ?.let { if (prefillVehicle.isGuest && it == "Guest BMS") null else it }
                 RootComponent.Child.VehicleEdit(
