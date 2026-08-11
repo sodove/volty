@@ -35,6 +35,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.setMain
 import kotlin.test.AfterTest
 import kotlin.test.Test
@@ -173,6 +174,28 @@ class ScanningComponentTest {
         // The user-visible consequence: cold start routes straight to the one
         // known vehicle in range instead of dumping the user in the picker.
         assertEquals(listOf("v-vesc"), navigated)
+    }
+
+    @Test
+    fun `one known vehicle navigates before the scan timeout expires`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val saved = packOnlyVehicle()
+        val navigated = mutableListOf<String>()
+        DefaultScanningComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            bmsRepository = FakeBmsRepo(listOf(device(PACK_ADDR))),
+            vehicleRepository = FakeVehicleRepo(listOf(saved)),
+            appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf())),
+            onSingleKnown = { navigated += it },
+            onMultipleOrNone = {}
+        )
+
+        runCurrent()
+        assertEquals(
+            listOf(saved.id),
+            navigated,
+            "one saved vehicle must not wait for the rest of the scan timeout"
+        )
     }
 
     @Test
