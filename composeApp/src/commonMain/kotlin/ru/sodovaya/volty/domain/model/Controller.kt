@@ -4,7 +4,12 @@ enum class ControllerType(val label: String) {
     VESC("VESC"),
     FARDRIVER("FarDriver"),
     KELLY("Kelly KLS"),
-    BEGODE("Begode")
+    BEGODE("Begode"),
+    NINEBOT("Ninebot Z"),
+    NINEBOT_LEGACY("Ninebot legacy"),
+    KINGSONG("KingSong"),
+    INMOTION("InMotion"),
+    VETERAN("Veteran / Leaperkim")
 }
 
 data class MotorConfig(

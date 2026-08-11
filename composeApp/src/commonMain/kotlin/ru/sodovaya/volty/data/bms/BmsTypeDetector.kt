@@ -74,23 +74,50 @@ object BmsTypeDetector {
      */
     fun detectController(name: String?, serviceUuids: List<String>): ControllerType? {
         // A device that already looks like a known BMS is never a controller.
-        // Must run BEFORE controllerNameMatch: a VESC retrofit renamed into a
-        // Begode wheel (e.g. "GW-VESC" — this app's actual audience) matches
-        // both the "GW" BMS name prefix AND the "VESC" controller substring, so
-        // checking the name match first would hand it back both a bmsType and
-        // a controllerType.
+        // This guard must win over controller-family substrings: a VESC retrofit
+        // renamed into a Begode wheel (e.g. "GW-VESC") matches both the BMS
+        // prefix and the controller substring.
+        // A wheel's FFE0 service is shared with JK/ANT fallbacks.  A strong
+        // controller-family name must therefore be evaluated before the
+        // service-only BMS fallback; otherwise "Ninebot One" is silently
+        // handed to JK merely because it exposes FFE0.
+        controllerNameMatch(name, serviceUuids)?.let {
+            if (nameMatch(name) == null) return it
+        }
         if (detect(name, serviceUuids) != null) return null
-        controllerNameMatch(name)?.let { return it }
+        controllerNameMatch(name, serviceUuids)?.let { return it }
         val hasNus = serviceUuids.any { it.equals(VescProtocol.NUS_SERVICE, ignoreCase = true) }
         return if (hasNus) ControllerType.VESC else null
     }
 
-    private fun controllerNameMatch(name: String?): ControllerType? {
+    private fun controllerNameMatch(name: String?, serviceUuids: List<String>): ControllerType? {
         if (name.isNullOrEmpty()) return null
         return when {
             name.contains("VESC", ignoreCase = true) ||
                 name.startsWith("uBox", ignoreCase = true) ||
                 name.startsWith("ubox", ignoreCase = true) -> ControllerType.VESC
+            name.contains("Ninebot", ignoreCase = true) ||
+                name.contains("Segway", ignoreCase = true) -> {
+                if (serviceUuids.any { it.contains("6e400001", ignoreCase = true) }) {
+                    ControllerType.NINEBOT
+                } else {
+                    ControllerType.NINEBOT_LEGACY
+                }
+            }
+            name.contains("KingSong", ignoreCase = true) ||
+                name.startsWith("KS-", ignoreCase = true) ||
+                name.startsWith("KS_", ignoreCase = true) -> ControllerType.KINGSONG
+            name.contains("InMotion", ignoreCase = true) ||
+                name.startsWith("V8", ignoreCase = true) ||
+                name.startsWith("V10", ignoreCase = true) ||
+                name.startsWith("V11", ignoreCase = true) ||
+                name.startsWith("V12", ignoreCase = true) ||
+                name.startsWith("V13", ignoreCase = true) -> ControllerType.INMOTION
+            name.contains("Veteran", ignoreCase = true) ||
+                name.contains("Sherman", ignoreCase = true) ||
+                name.contains("Abrams", ignoreCase = true) ||
+                name.contains("Lynx", ignoreCase = true) ||
+                name.contains("Patton", ignoreCase = true) -> ControllerType.VETERAN
             // Kelly's Nordic-UART module is shared with generic NUS devices,
             // so only its observed product-family names are enough to propose
             // Kelly. A service UUID alone remains the conservative VESC

@@ -29,6 +29,17 @@ class BmsTypeDetectorVescTest {
         assertEquals(ControllerType.VESC, BmsTypeDetector.detectController("NUS", nus))
     }
 
+    @Test fun wheel_family_names_select_the_matching_read_only_protocol() {
+        assertEquals(ControllerType.NINEBOT, BmsTypeDetector.detectController("Ninebot Z10", nus))
+        assertEquals(
+            ControllerType.NINEBOT_LEGACY,
+            BmsTypeDetector.detectController("Ninebot One", listOf("0000ffe0-0000-1000-8000-00805f9b34fb"))
+        )
+        assertEquals(ControllerType.KINGSONG, BmsTypeDetector.detectController("KS-16X", emptyList()))
+        assertEquals(ControllerType.INMOTION, BmsTypeDetector.detectController("InMotion V12", emptyList()))
+        assertEquals(ControllerType.VETERAN, BmsTypeDetector.detectController("Veteran Lynx", emptyList()))
+    }
+
     @Test fun a_battery_is_not_reported_as_a_controller() {
         assertNull(BmsTypeDetector.detectController("ANT-BLE24", listOf("0000ffe0-0000-1000-8000-00805f9b34fb")))
     }

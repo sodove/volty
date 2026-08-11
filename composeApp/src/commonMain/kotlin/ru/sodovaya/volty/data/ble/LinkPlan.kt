@@ -11,7 +11,10 @@ import ru.sodovaya.volty.domain.model.Pack
  * a motherboard stream over ONE address, so pack sources and controller sources
  * can resolve to the same kind — hence a single unified enum rather than two.
  */
-enum class ProtocolKind { JK, JBD, ANT, DALY, BEGODE, VESC, VESC_BMS, FARDRIVER, KELLY }
+enum class ProtocolKind {
+    JK, JBD, ANT, DALY, BEGODE, VESC, VESC_BMS, FARDRIVER, KELLY,
+    NINEBOT, NINEBOT_LEGACY, KINGSONG, INMOTION, VETERAN
+}
 
 fun BmsType.protocolKind(): ProtocolKind = when (this) {
     BmsType.JK_BMS -> ProtocolKind.JK
@@ -27,6 +30,11 @@ fun ControllerType.protocolKind(): ProtocolKind = when (this) {
     ControllerType.FARDRIVER -> ProtocolKind.FARDRIVER
     ControllerType.KELLY -> ProtocolKind.KELLY
     ControllerType.BEGODE -> ProtocolKind.BEGODE
+    ControllerType.NINEBOT -> ProtocolKind.NINEBOT
+    ControllerType.NINEBOT_LEGACY -> ProtocolKind.NINEBOT_LEGACY
+    ControllerType.KINGSONG -> ProtocolKind.KINGSONG
+    ControllerType.INMOTION -> ProtocolKind.INMOTION
+    ControllerType.VETERAN -> ProtocolKind.VETERAN
 }
 
 /**
@@ -54,6 +62,8 @@ val ProtocolKind.hasCanBus: Boolean
     get() = when (this) {
         ProtocolKind.VESC -> true
         ProtocolKind.VESC_BMS, ProtocolKind.BEGODE, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
+        ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
+        ProtocolKind.INMOTION, ProtocolKind.VETERAN,
         ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT, ProtocolKind.DALY -> false
     }
 
@@ -72,7 +82,9 @@ fun ProtocolKind.toBmsType(): BmsType = when (this) {
     ProtocolKind.DALY -> BmsType.DALY_BMS
     ProtocolKind.BEGODE -> BmsType.BEGODE
     ProtocolKind.VESC_BMS -> BmsType.VESC_BMS
-    ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY ->
+    ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
+    ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
+    ProtocolKind.INMOTION, ProtocolKind.VETERAN ->
         error("$this is a controller kind — no BMS protocol (built in a later part)")
 }
 

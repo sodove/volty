@@ -225,11 +225,21 @@ class KableBmsRepositoryVescTest {
 
     /** Guards the test above from passing vacuously with everything refused. */
     @Test
-    fun `exactly four controller kinds decode motion today`() {
+    fun `all implemented controller kinds decode motion today`() {
         assertEquals(
-            listOf(ControllerType.VESC, ControllerType.FARDRIVER, ControllerType.KELLY, ControllerType.BEGODE),
+            listOf(
+                ControllerType.VESC,
+                ControllerType.FARDRIVER,
+                ControllerType.KELLY,
+                ControllerType.BEGODE,
+                ControllerType.NINEBOT,
+                ControllerType.NINEBOT_LEGACY,
+                ControllerType.KINGSONG,
+                ControllerType.INMOTION,
+                ControllerType.VETERAN
+            ),
             ControllerType.entries.filter { controllerMotionSupported(it) },
-            "FarDriver joins the same shared coverage decision as VESC, Kelly and Begode"
+            "Every ported wheel must be wired through the same shared coverage decision"
         )
     }
 

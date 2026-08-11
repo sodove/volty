@@ -5,7 +5,12 @@ import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.FarDriverProtocol
 import ru.sodovaya.volty.data.bms.GatewaySource
 import ru.sodovaya.volty.data.bms.KellyProtocol
+import ru.sodovaya.volty.data.bms.InMotionProtocol
+import ru.sodovaya.volty.data.bms.KingSongProtocol
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.data.bms.NinebotLegacyProtocol
+import ru.sodovaya.volty.data.bms.NinebotProtocol
+import ru.sodovaya.volty.data.bms.VeteranProtocol
 import ru.sodovaya.volty.data.bms.VescGatewayProtocol
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.domain.model.ControllerType
@@ -142,6 +147,11 @@ fun controllerMotionProtocol(
     // The decoder is deliberately read-only: poll and handshake command lists
     // are empty because FFEC is also the controller's configuration channel.
     ProtocolKind.FARDRIVER -> FarDriverProtocol(deriveBattery = deriveBattery, motor = motor)
+    ProtocolKind.NINEBOT -> NinebotProtocol()
+    ProtocolKind.NINEBOT_LEGACY -> NinebotLegacyProtocol()
+    ProtocolKind.KINGSONG -> KingSongProtocol()
+    ProtocolKind.INMOTION -> InMotionProtocol()
+    ProtocolKind.VETERAN -> VeteranProtocol()
     // Battery kinds: not a controller protocol at all.
     ProtocolKind.JK, ProtocolKind.JBD, ProtocolKind.ANT,
     ProtocolKind.DALY, ProtocolKind.VESC_BMS -> null

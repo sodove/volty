@@ -174,6 +174,11 @@ internal val ControllerType.reportsDuty: Boolean
         ControllerType.BEGODE -> true
         ControllerType.FARDRIVER -> false
         ControllerType.KELLY -> false
+        ControllerType.NINEBOT -> false
+        ControllerType.NINEBOT_LEGACY -> false
+        ControllerType.KINGSONG -> false
+        ControllerType.INMOTION -> true
+        ControllerType.VETERAN -> true
     }
 
 /**

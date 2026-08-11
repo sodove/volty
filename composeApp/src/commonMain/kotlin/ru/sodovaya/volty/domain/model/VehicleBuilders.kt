@@ -54,7 +54,9 @@ fun pickedControllerVehicle(
         createdAt = createdAt,
         motor = motor
     )
-    ControllerType.VESC, ControllerType.FARDRIVER, ControllerType.KELLY -> controllerVehicle(
+    ControllerType.VESC, ControllerType.FARDRIVER, ControllerType.KELLY,
+    ControllerType.NINEBOT, ControllerType.NINEBOT_LEGACY,
+    ControllerType.KINGSONG, ControllerType.INMOTION, ControllerType.VETERAN -> controllerVehicle(
         id = id,
         name = name,
         iconKey = iconKey,

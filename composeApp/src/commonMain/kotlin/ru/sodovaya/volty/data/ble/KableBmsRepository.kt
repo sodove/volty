@@ -3105,7 +3105,9 @@ class KableBmsRepository private constructor(
      * at compile time, not a runtime `error()` inside [connectLinkAttempt].
      */
     private fun ProtocolKind.batteryBmsTypeOrNull(): BmsType? = when (this) {
-        ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY -> null
+        ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
+        ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY,
+        ProtocolKind.KINGSONG, ProtocolKind.INMOTION, ProtocolKind.VETERAN -> null
         ProtocolKind.JK -> BmsType.JK_BMS
         ProtocolKind.JBD -> BmsType.JBD_BMS
         ProtocolKind.ANT -> BmsType.ANT_BMS
