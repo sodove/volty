@@ -147,8 +147,8 @@ fun SettingsScreen(component: SettingsComponent) {
             Slider(
                 value = state.scanTimeoutSec.toFloat(),
                 onValueChange = { component.onScanTimeoutChanged(it.toInt()) },
-                valueRange = 3f..15f,
-                steps = 11
+                valueRange = 1f..15f,
+                steps = 13
             )
 
             // AUTO CONNECT COUNTDOWN

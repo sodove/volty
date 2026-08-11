@@ -39,8 +39,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .stateIn(scope, SharingStarted.Eagerly, false)
 
     val scanTimeoutSec: StateFlow<Int> = store.data
-        .map { it[Keys.SCAN_TIMEOUT_SEC] ?: 5 }
-        .stateIn(scope, SharingStarted.Eagerly, 5)
+        .map { (it[Keys.SCAN_TIMEOUT_SEC] ?: 3).coerceIn(1, 15) }
+        .stateIn(scope, SharingStarted.Eagerly, 3)
 
     val autoConnectCountdownSec: StateFlow<Int> = store.data
         .map { it[Keys.AUTO_CONNECT_COUNTDOWN_SEC] ?: 3 }
@@ -102,7 +102,7 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setThemeMode(mode: String) = store.edit { it[Keys.THEME_MODE] = mode }
     suspend fun setDynamicColorEnabled(enabled: Boolean) = store.edit { it[Keys.DYNAMIC_COLOR] = enabled }
     suspend fun setFirstLaunchDone() = store.edit { it[Keys.FIRST_LAUNCH_DONE] = true }
-    suspend fun setScanTimeoutSec(sec: Int) = store.edit { it[Keys.SCAN_TIMEOUT_SEC] = sec }
+    suspend fun setScanTimeoutSec(sec: Int) = store.edit { it[Keys.SCAN_TIMEOUT_SEC] = sec.coerceIn(1, 15) }
     suspend fun setAutoConnectCountdownSec(sec: Int) = store.edit { it[Keys.AUTO_CONNECT_COUNTDOWN_SEC] = sec }
     suspend fun setGuestModeShowSaved(show: Boolean) = store.edit { it[Keys.GUEST_MODE_SHOW_SAVED] = show }
     suspend fun setUnitSystem(system: UnitSystem) = store.edit { it[Keys.UNIT_SYSTEM] = system.name }

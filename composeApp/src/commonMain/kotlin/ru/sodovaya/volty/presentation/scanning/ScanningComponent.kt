@@ -83,11 +83,18 @@ class DefaultScanningComponent(
                     if (s.knownInRange.any { it.id == matched.id }) s
                     else s.copy(knownInRange = s.knownInRange + matched)
                 }
-                if (_state.value.knownInRange.size >= 2) {
+                // With exactly one saved vehicle there is no ambiguity to
+                // resolve. The advertisement is already cached by the
+                // repository, so hand it to AutoConnect immediately instead
+                // of waiting out the rest of the scan just to prove that a
+                // second vehicle is absent. If it goes offline, AutoConnect's
+                // normal failure/retry path remains the fallback.
+                if (saved.size == 1 || _state.value.knownInRange.size >= 2) {
                     navigateOnce {
                         timerJob?.cancel()
                         scanJob?.cancel()
-                        onMultipleOrNone()
+                        if (saved.size == 1) onSingleKnown(matched.id)
+                        else onMultipleOrNone()
                     }
                 }
             }

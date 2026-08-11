@@ -108,7 +108,11 @@ sealed class Config {
     @Serializable data object Welcome : Config()
     @Serializable data object Permissions : Config()
     @Serializable data object Scanning : Config()
-    @Serializable data class AutoConnect(val vehicleId: String) : Config()
+    @Serializable data class AutoConnect(
+        val vehicleId: String,
+        /** Cold start already proved this is the only saved vehicle in range. */
+        val startImmediately: Boolean = false
+    ) : Config()
     @Serializable data class Picker(val mode: String) : Config()
     /** The Ride dashboard — home for any vehicle that has a motor controller. */
     @Serializable data object Ride : Config()
@@ -513,7 +517,9 @@ class DefaultRootComponent(
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),
-                    onSingleKnown = { vehicleId -> replaceAll(Config.AutoConnect(vehicleId)) },
+                    onSingleKnown = { vehicleId ->
+                        replaceAll(Config.AutoConnect(vehicleId, startImmediately = true))
+                    },
                     onMultipleOrNone = { replaceAll(Config.Picker(mode = "cold")) }
                 )
             )
@@ -521,6 +527,7 @@ class DefaultRootComponent(
                 DefaultAutoConnectComponent(
                     componentContext = context,
                     vehicleId = config.vehicleId,
+                    startImmediately = config.startImmediately,
                     bmsRepository = get(),
                     vehicleRepository = get(),
                     appPrefs = get<AppPrefs>(),

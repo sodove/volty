@@ -40,6 +40,7 @@ class DefaultAutoConnectComponent(
     private val bmsRepository: BmsRepository,
     private val vehicleRepository: VehicleRepository,
     private val appPrefs: AppPrefs,
+    private val startImmediately: Boolean = false,
     private val onConnected: () -> Unit,
     private val onCancelled: () -> Unit
 ) : AutoConnectComponent, ComponentContext by componentContext {
@@ -69,7 +70,7 @@ class DefaultAutoConnectComponent(
         val countdown = appPrefs.autoConnectCountdownSec.first()
         configuredCountdownSec = countdown
         _state.update { it.copy(vehicle = vehicle, countdownSec = countdown) }
-        startCountdown(countdown)
+        if (startImmediately) performConnect() else startCountdown(countdown)
     }
 
     private fun startCountdown(seconds: Int) {
