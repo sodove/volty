@@ -10,6 +10,7 @@ import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import ru.sodovaya.volty.data.bms.JkBmsProtocol
+import ru.sodovaya.volty.data.bms.VeteranProtocol
 import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.history.RideTelemetryRecorder
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
@@ -3107,7 +3108,8 @@ class KableBmsRepository private constructor(
     private fun ProtocolKind.batteryBmsTypeOrNull(): BmsType? = when (this) {
         ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
         ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY,
-        ProtocolKind.KINGSONG, ProtocolKind.INMOTION, ProtocolKind.VETERAN -> null
+        ProtocolKind.KINGSONG, ProtocolKind.INMOTION -> null
+        ProtocolKind.VETERAN -> BmsType.LEAPERKIM
         ProtocolKind.JK -> BmsType.JK_BMS
         ProtocolKind.JBD -> BmsType.JBD_BMS
         ProtocolKind.ANT -> BmsType.ANT_BMS
@@ -3122,6 +3124,7 @@ class KableBmsRepository private constructor(
         BmsType.ANT_BMS -> AntBmsProtocol()
         BmsType.DALY_BMS -> DalyBmsProtocol()
         BmsType.BEGODE -> BegodeProtocol()
+        BmsType.LEAPERKIM -> VeteranProtocol()
         // VESC BMS decode is out of scope for the Part A foundation work that
         // introduced this enum entry (see the vehicle-platform-A-foundation
         // plan) — a later part wires the real protocol in.

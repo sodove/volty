@@ -71,6 +71,7 @@ import ru.sodovaya.volty.presentation.picker.sourceRole
 import ru.sodovaya.volty.presentation.vehicle.DraftDiagramView
 import ru.sodovaya.volty.presentation.vehicle.CanDiscoveryContent
 import ru.sodovaya.volty.presentation.vehicle.draftDiagram
+import ru.sodovaya.volty.presentation.vehicle.isWheelPair
 import volty.composeapp.generated.resources.*
 
 /** Renderer only: stage access and every draft mutation live in the component. */
@@ -218,16 +219,19 @@ private fun ControllerScreen(component: SetupWizardComponent.ControllerStage) {
 private fun BatteryScreen(component: SetupWizardComponent.BatteryStage) {
     val state by component.state.collectAsStateCompat()
     val hasBothDevice = state.draft.controllers.any { controller ->
-        controller.controllerType == ControllerType.BEGODE &&
-            state.draft.packs.any { pack ->
-                pack.address == controller.address && pack.bmsType == BmsType.BEGODE
+        state.draft.packs.any { pack ->
+            controller.canId == null &&
+                pack.canId == null &&
+                pack.address == controller.address &&
+                isWheelPair(controller.controllerType, pack.bmsType)
             }
     }
     val hasSeparateBms = state.draft.packs.any { pack ->
         state.draft.controllers.none { controller ->
-            controller.controllerType == ControllerType.BEGODE &&
+            controller.canId == null &&
                 controller.address == pack.address &&
-                pack.bmsType == BmsType.BEGODE
+                pack.canId == null &&
+                isWheelPair(controller.controllerType, pack.bmsType)
         }
     }
     val hasDerivedBattery = state.draft.controllers.any {

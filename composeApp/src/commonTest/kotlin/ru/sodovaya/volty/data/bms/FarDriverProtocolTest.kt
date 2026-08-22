@@ -91,6 +91,21 @@ class FarDriverProtocolTest {
     }
 
     @Test
+    fun new_f4_register_publishes_negative_motor_temperature_as_little_endian_signed_value() {
+        val protocol = FarDriverProtocol()
+        val motorTemperature = newFrame(53) { i16(2, -50) }
+
+        assertEquals(0xCE.toByte(), motorTemperature[2])
+        assertEquals(0xFF.toByte(), motorTemperature[3])
+
+        protocol.onNotification(motorTemperature)
+
+        val motion = requireNotNull(protocol.latestMotion(0))
+        assertEquals(-50f, motion.motorTempC)
+        assertTrue(motion.hasMotorTemp)
+    }
+
+    @Test
     fun missing_register_evidence_stays_unavailable_and_does_not_create_pack() {
         val protocol = FarDriverProtocol(deriveBattery = true)
 
@@ -122,6 +137,26 @@ class FarDriverProtocolTest {
         assertEquals(900f, motion.eRpm)
         assertEquals(84.823f, motion.speedKmh, 0.001f)
         assertEquals(SpeedSource.DERIVED, motion.speedSource)
+    }
+
+    @Test
+    fun legacy_command_15_decodes_little_endian_fault_bytes_and_publishes_labels() {
+        val protocol = FarDriverProtocol()
+
+        protocol.onNotification(legacyFrame(15) {
+            u16(4, 0x8100)
+            u16(8, 0x0001)
+        })
+
+        val motion = requireNotNull(protocol.latestMotion(0))
+        assertEquals(
+            listOf(
+                "Motor Hall Error",
+                "Controller Temperature Protect",
+                "Phase Current Overflow Protect"
+            ),
+            motion.faults
+        )
     }
 
     @Test
@@ -166,8 +201,10 @@ class FarDriverProtocolTest {
 
         fun u16(offset: Int, value: Int) {
             val payloadOffset = offset - 2
-            bytes[payloadOffset] = (value ushr 8).toByte()
-            bytes[payloadOffset + 1] = value.toByte()
+            // FarDriver's ordinary 16-bit telemetry fields are little-endian.
+            // The phase-current 24-bit fields below are a deliberate exception.
+            bytes[payloadOffset] = value.toByte()
+            bytes[payloadOffset + 1] = (value ushr 8).toByte()
         }
 
         fun i16(offset: Int, value: Int) = u16(offset, value and 0xffff)

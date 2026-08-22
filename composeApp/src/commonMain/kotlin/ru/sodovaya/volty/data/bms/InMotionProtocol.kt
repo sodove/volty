@@ -40,6 +40,8 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
     override val pollIntervalMs: Long = 0L
 
     private val buffer = ByteArrayAccumulator()
+    private var wireEscapePending = false
+    private var modelId: Int? = null
     private var data: BmsData? = null
     private var motion: ControllerData? = null
     private var tripBaselineMeters: Long? = null
@@ -54,7 +56,7 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
 
     override fun onNotification(data: ByteArray) {
         if (data.isEmpty()) return
-        buffer.append(data)
+        appendUnescaped(data)
         parseAvailable()
     }
 
@@ -67,6 +69,8 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
 
     override fun reset() {
         buffer.reset()
+        wireEscapePending = false
+        modelId = null
         data = null
         motion = null
         tripBaselineMeters = null
@@ -131,6 +135,9 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
             0x01 -> if (payload.size >= 4) {
                 val series = payload[2].toInt() and 0xFF
                 val type = payload[3].toInt() and 0xFF
+                val nextModelId = series * 10 + type
+                if (modelId != nextModelId) tripBaselineMeters = null
+                modelId = nextModelId
                 modelValue = modelName(series, type)
             }
 
@@ -158,23 +165,23 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
     }
 
     private fun parseRealtime(payload: ByteArray) {
-        // WheelLog's V2 decoder requires 78 bytes before reading fields through
-        // offset 74. A shorter frame is valid framing but not valid telemetry.
-        if (payload.size < MIN_REALTIME_PAYLOAD) return
+        val values = when (modelId) {
+            MODEL_V11 -> when {
+                payload.size < MIN_V11_SHORT_PAYLOAD -> null
+                payload.size < V11_LONG_LAYOUT_MIN_PAYLOAD -> payload.toV11ShortValues()
+                payload.size >= MIN_V11_LONG_PAYLOAD -> payload.toV11LongValues()
+                else -> null
+            }
 
-        val voltage = payload.u16LE(0) / 100f
-        val current = payload.i16LE(2) / 100f
-        val speed = abs(payload.i16LE(8) / 100f)
-        val duty = abs(payload.i16LE(14) / 100f).coerceIn(0f, 100f)
-        val distanceMeters = payload.u16LE(28).toLong() * 10L
-        val battery1 = payload.u16LE(34)
-        val battery2 = payload.u16LE(36)
-        // WheelLog reports each battery as hundredths of a percent and then
-        // averages the two packs: `(b1 + b2) / 200` is percent, therefore
-        // divide by 100 once more for BmsData's 0..1 SoC contract.
-        val soc = ((battery1 + battery2) / 20_000f).coerceIn(0f, 1f)
-        val mosTemperature = decodeTemperature(payload[58])
-        val boardTemperature = decodeTemperature(payload[59])
+            in V12_MODELS -> payload.takeIf { it.size >= MIN_V12_PAYLOAD }?.toV12Values()
+            in V13_MODELS -> payload.takeIf { it.size >= MIN_V13_PAYLOAD }?.toV14FamilyValues()
+            in V14_MODELS -> payload.takeIf { it.size >= MIN_V14_PAYLOAD }?.toV14FamilyValues()
+            MODEL_P6 -> payload.takeIf { it.size >= MIN_P6_PAYLOAD }?.toV14FamilyValues()
+            null -> payload.takeIf { it.size >= MIN_LEGACY_PAYLOAD }?.toLegacyValues()
+            else -> null
+        } ?: return
+
+        val distanceMeters = values.distanceMeters
         val baseline = tripBaselineMeters ?: distanceMeters.also { tripBaselineMeters = it }
         val tripKm = if (distanceMeters >= baseline) {
             (distanceMeters - baseline) / 1000f
@@ -184,44 +191,147 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
             tripBaselineMeters = distanceMeters
             0f
         }
+        val power = values.powerW
+        val current = values.currentA
 
         data = BmsData(
-            voltage = voltage,
-            current = current,
-            hasCurrent = true,
-            power = voltage * current,
-            hasPower = true,
-            soc = soc,
-            socKnown = true,
-            temperatures = listOf(mosTemperature.toFloat(), boardTemperature.toFloat()),
-            // V2's state bit only identifies the charging mode; it is not the
-            // BMS MOS enable/status enum. Leave both capability flags at their
-            // unknown defaults rather than inferring one from the other.
-            isConnected = true
+            voltage = values.voltageV,
+            current = current ?: 0f,
+            hasCurrent = current != null,
+            power = power ?: 0f,
+            hasPower = power != null,
+            soc = values.soc ?: 0f,
+            socKnown = values.soc != null,
+            temperatures = values.batteryTemperatures,
+            isConnected = true,
         )
 
         motion = ControllerData(
-            speedKmh = speed,
+            speedKmh = values.speedKmh,
             speedSource = SpeedSource.REPORTED,
-            dutyPercent = duty,
-            hasDuty = true,
-            batteryCurrentA = current,
-            hasBatteryCurrent = true,
-            inputVoltageV = voltage,
+            dutyPercent = values.dutyPercent ?: 0f,
+            hasDuty = values.dutyPercent != null,
+            batteryCurrentA = current ?: 0f,
+            hasBatteryCurrent = current != null,
+            inputVoltageV = values.voltageV,
             hasInputVoltage = true,
-            powerW = voltage * current,
-            hasPower = true,
-            escTempC = mosTemperature.toFloat(),
-            // The V2 source labels this second channel board temperature, not
-            // a motor thermistor. Keep motor telemetry explicitly unavailable.
-            motorTempC = 0f,
-            hasMotorTemp = false,
+            powerW = power ?: 0f,
+            hasPower = power != null,
+            escTempC = values.escTemperatureC ?: NO_TEMP_SENSOR_C,
+            motorTempC = values.motorTemperatureC ?: NO_TEMP_SENSOR_C,
+            hasMotorTemp = values.motorTemperatureC != null,
             tripKm = tripKm,
             hasDistance = true,
             hasEnergyCounters = false,
-            isConnected = true
+            isConnected = true,
         )
     }
+
+    private fun appendUnescaped(chunk: ByteArray) {
+        var index = 0
+        while (index < chunk.size) {
+            val value = chunk[index].toInt() and 0xFF
+            if (wireEscapePending) {
+                if (value == ESCAPE_MARKER || value == HEADER_0) {
+                    buffer.append(byteArrayOf(value.toByte()))
+                    wireEscapePending = false
+                    index += 1
+                } else {
+                    // A5 is also legal noise. Preserve it and process the
+                    // current byte normally rather than swallowing either one.
+                    buffer.append(byteArrayOf(ESCAPE_MARKER.toByte()))
+                    wireEscapePending = false
+                }
+            } else if (value == ESCAPE_MARKER) {
+                wireEscapePending = true
+                index += 1
+            } else {
+                buffer.append(byteArrayOf(value.toByte()))
+                index += 1
+            }
+        }
+    }
+
+    private data class RealtimeValues(
+        val voltageV: Float,
+        val currentA: Float?,
+        val speedKmh: Float,
+        val dutyPercent: Float?,
+        val powerW: Float?,
+        val soc: Float?,
+        val distanceMeters: Long,
+        val escTemperatureC: Float?,
+        val motorTemperatureC: Float?,
+        val batteryTemperatures: List<Float>,
+    )
+
+    private fun ByteArray.toV11ShortValues() = RealtimeValues(
+        voltageV = u16LE(0) / 100f,
+        currentA = i16LE(2) / 100f,
+        speedKmh = abs(i16LE(4) / 100f),
+        dutyPercent = pwmPercent(36),
+        powerW = i16LE(8).toFloat(),
+        soc = (u8(16) and 0x7F) / 100f,
+        distanceMeters = u16LE(12).toLong() * 10L,
+        escTemperatureC = presentTemperature(17),
+        motorTemperatureC = null,
+        batteryTemperatures = emptyList(),
+    )
+
+    private fun ByteArray.toV11LongValues() = RealtimeValues(
+        voltageV = u16LE(0) / 100f,
+        currentA = i16LE(2) / 100f,
+        speedKmh = abs(i16LE(4) / 100f),
+        dutyPercent = pwmPercent(8),
+        powerW = i16LE(10).toFloat(),
+        soc = u16LE(28) / 10_000f,
+        distanceMeters = u16LE(26).toLong() * 10L,
+        escTemperatureC = presentTemperature(42),
+        motorTemperatureC = presentV11MotorTemperature(43),
+        batteryTemperatures = listOfNotNull(presentTemperature(44)),
+    )
+
+    private fun ByteArray.toV12Values() = RealtimeValues(
+        voltageV = u16LE(0) / 100f,
+        currentA = i16LE(2) / 100f,
+        speedKmh = abs(i16LE(4) / 100f),
+        dutyPercent = pwmPercent(8),
+        powerW = i16LE(10).toFloat(),
+        soc = u16LE(24) / 10_000f,
+        distanceMeters = u16LE(22).toLong() * 10L,
+        escTemperatureC = presentTemperature(40),
+        motorTemperatureC = null,
+        batteryTemperatures = emptyList(),
+    )
+
+    private fun ByteArray.toV14FamilyValues() = RealtimeValues(
+        voltageV = u16LE(0) / 100f,
+        currentA = i16LE(2) / 100f,
+        speedKmh = abs(i16LE(8) / 100f),
+        dutyPercent = pwmPercent(14),
+        powerW = i16LE(16).toFloat(),
+        soc = u16LE(34) / 10_000f,
+        distanceMeters = u16LE(28).toLong() * 10L,
+        escTemperatureC = presentTemperature(58),
+        motorTemperatureC = presentTemperature(59),
+        batteryTemperatures = listOfNotNull(presentTemperature(60)),
+    )
+
+    private fun ByteArray.toLegacyValues() = RealtimeValues(
+        voltageV = u16LE(0) / 100f,
+        currentA = i16LE(2) / 100f,
+        speedKmh = abs(i16LE(8) / 100f),
+        dutyPercent = pwmPercent(14),
+        powerW = null,
+        // WheelLog reports each battery as hundredths of a percent and then
+        // averages the two packs: `(b1 + b2) / 200` is percent, therefore
+        // divide by 100 once more for BmsData's 0..1 SoC contract.
+        soc = ((u16LE(34) + u16LE(36)) / 20_000f).coerceIn(0f, 1f),
+        distanceMeters = u16LE(28).toLong() * 10L,
+        escTemperatureC = presentTemperature(58),
+        motorTemperatureC = null,
+        batteryTemperatures = listOfNotNull(presentTemperature(58), presentTemperature(59)),
+    )
 
     private fun findHeader(bytes: ByteArray): Int {
         for (index in 0 until bytes.size - 1) {
@@ -256,8 +366,22 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
         else -> "InMotion $series.$type"
     }
 
-    private fun decodeTemperature(raw: Byte): Int =
-        (raw.toInt() and 0xFF) + 80 - 256
+    private fun ByteArray.u8(offset: Int): Int = this[offset].toInt() and 0xFF
+
+    private fun ByteArray.pwmPercent(offset: Int): Float? =
+        (abs(i16LE(offset) / 100f)).takeIf { it <= 200f }?.coerceIn(0f, 100f)
+
+    private fun ByteArray.presentTemperature(offset: Int): Float? {
+        if (offset !in indices) return null
+        val raw = u8(offset)
+        return if (raw == 0) null else raw + 80 - 256f
+    }
+
+    private fun ByteArray.presentV11MotorTemperature(offset: Int): Float? {
+        if (offset !in indices) return null
+        val raw = u8(offset)
+        return if (raw == 0 || raw == V11_NO_MOTOR_SENSOR) null else raw + 80 - 256f
+    }
 
     private companion object {
         const val HEADER_0 = 0xAA
@@ -265,8 +389,23 @@ class InMotionProtocol : BmsProtocol(), MotionSource {
         const val FRAME_OVERHEAD = 5 // two-byte header + flags/len/command + checksum
         const val MIN_FRAME_SIZE = 6 // header + flags + len + command + checksum
         const val MAX_LENGTH = 240
-        const val MIN_REALTIME_PAYLOAD = 78
+        const val MIN_LEGACY_PAYLOAD = 78
+        const val MIN_V11_SHORT_PAYLOAD = 38
+        const val V11_LONG_LAYOUT_MIN_PAYLOAD = 51
+        const val MIN_V11_LONG_PAYLOAD = 58
+        const val MIN_V12_PAYLOAD = 47
+        const val MIN_V13_PAYLOAD = 55
+        const val MIN_V14_PAYLOAD = 55
+        const val MIN_P6_PAYLOAD = 54
+        const val NO_TEMP_SENSOR_C = -100f
+        const val V11_NO_MOTOR_SENSOR = 0xB0
+        const val ESCAPE_MARKER = 0xA5
         val VALID_FLAGS = setOf(0x11, 0x14, 0x16)
+        const val MODEL_V11 = 61
+        const val MODEL_P6 = 131
+        val V14_MODELS = setOf(91, 92)
+        val V13_MODELS = setOf(81, 82)
+        val V12_MODELS = setOf(71, 72, 73, 111)
         const val COMMAND_MAIN_INFO = 0x02
         const val COMMAND_REAL_TIME_INFO = 0x04
     }

@@ -1,0 +1,82 @@
+# Install as /etc/nginx/conf.d/volty.conf, or merge the two HTTPS server
+# blocks into the existing vhosts for these names.
+#
+# This file assumes one Let's Encrypt certificate containing both names. If
+# your certificate lives elsewhere, change the two ssl_* paths.
+
+map $http_upgrade $volty_connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+upstream volty_app {
+    server 127.0.0.1:18080;
+    keepalive 32;
+}
+
+upstream volty_livekit {
+    server 127.0.0.1:17880;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name volty.sodove.ru voice.sodove.ru;
+
+    location /.well-known/acme-challenge/ {
+        root /var/www/html;
+    }
+
+    location / {
+        return 301 https://$host$request_uri;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name volty.sodove.ru;
+
+    ssl_certificate /etc/letsencrypt/live/volty.sodove.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/volty.sodove.ru/privkey.pem;
+
+    client_max_body_size 1m;
+
+    location / {
+        proxy_pass http://volty_app;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $volty_connection_upgrade;
+        # Nearby group WebSockets may be quiet while riders are stationary.
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_buffering off;
+    }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name voice.sodove.ru;
+
+    ssl_certificate /etc/letsencrypt/live/volty.sodove.ru/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/volty.sodove.ru/privkey.pem;
+
+    location / {
+        proxy_pass http://volty_livekit;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $volty_connection_upgrade;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+        proxy_buffering off;
+    }
+}

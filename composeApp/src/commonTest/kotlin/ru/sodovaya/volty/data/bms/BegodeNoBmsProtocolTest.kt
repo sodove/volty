@@ -28,7 +28,7 @@ class BegodeNoBmsProtocolTest {
     // --- The synthetic pack of a live-only stream ---
 
     @Test
-    fun aLiveOnlyStreamSynthesisesOnePackWithCurrentAndBoardTemperature() {
+    fun aLiveOnlyStreamSynthesisesOnePackWithBoardTemperatureButUnknownBatteryCurrent() {
         val protocol = BegodeProtocol()
         // A dumb wheel's whole vocabulary: live frames and the odometer.
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
@@ -37,8 +37,9 @@ class BegodeNoBmsProtocolTest {
 
         val data = assertNotNull(protocol.latestData(0), "a live-only wheel must produce pack 0")
         assertTrue(data.isConnected, "the synthetic pack is a live connection")
-        // Phase current, 0.01 A units: raw -350 = -3.5 A.
-        assertEquals(-3.5f, data.current, 0.001f)
+        // The live frame's -3.5 A is phase current, not battery current.
+        assertEquals(0f, data.current, 0.001f)
+        assertFalse(data.hasCurrent, "phase current must not be published as battery current")
         // MPU temperature: raw / 340 + 36.53 = 27.5035 C for raw -3069.
         assertEquals(1, data.temperatures.size, "exactly the board temperature")
         assertEquals(27.5035f, data.temperatures[0], 0.01f)
@@ -200,7 +201,8 @@ class BegodeNoBmsProtocolTest {
 
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
         val data = assertNotNull(protocol.latestData(0), "the synthetic path must work after reset")
-        assertEquals(-3.5f, data.current, 0.001f)
+        assertEquals(0f, data.current, 0.001f)
+        assertFalse(data.hasCurrent, "the live frame has no battery-current field")
         assertEquals(58.92f, assertNotNull(protocol.liveVoltageOn672ScaleV()), 0.005f)
     }
 

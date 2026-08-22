@@ -5,10 +5,14 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.material3.MotionScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import org.koin.compose.koinInject
+
+val LocalVoltyDarkTheme = staticCompositionLocalOf { false }
 
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
@@ -28,9 +32,11 @@ fun VoltyTheme(content: @Composable () -> Unit) {
         else -> voltyLightColors
     }
     SyncSystemBarsAppearance(darkTheme = darkTheme)
-    MaterialExpressiveTheme(
-        colorScheme = colors,
-        motionScheme = MotionScheme.expressive(),
-        content = content
-    )
+    CompositionLocalProvider(LocalVoltyDarkTheme provides darkTheme) {
+        MaterialExpressiveTheme(
+            colorScheme = colors,
+            motionScheme = MotionScheme.expressive(),
+            content = content
+        )
+    }
 }

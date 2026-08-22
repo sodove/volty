@@ -138,6 +138,7 @@ class AlertEngine(
         val maxTemp = data.temperatures.maxOrNull() ?: 0f
 
         fire(AlertKind.CELL_HIGH, vehicle, now,
+            enabled = cfg.cellHighEnabled,
             triggered = maxCell > cfg.cellHighV,
             recovered = maxCell < cfg.cellHighV - 0.05f,
             severity = AlertSeverity.CRITICAL,
@@ -147,6 +148,7 @@ class AlertEngine(
 
         if (minCell > 0.1f) {
             fire(AlertKind.CELL_LOW, vehicle, now,
+                enabled = cfg.cellLowEnabled,
                 triggered = minCell < cfg.cellLowV,
                 recovered = minCell > cfg.cellLowV + 0.05f,
                 severity = AlertSeverity.CRITICAL,
@@ -157,6 +159,7 @@ class AlertEngine(
 
         if (cells.isNotEmpty()) {
             fire(AlertKind.CELL_DELTA, vehicle, now,
+                enabled = cfg.cellDeltaEnabled,
                 triggered = deltaMv > cfg.cellDeltaMv,
                 recovered = deltaMv < cfg.cellDeltaMv - 30,
                 severity = AlertSeverity.WARNING,
@@ -172,6 +175,7 @@ class AlertEngine(
             // critical threshold (which is also where the BMS trips its own
             // protection, so WARN is the user's lead time before that).
             fire(AlertKind.TEMPERATURE_WARN, vehicle, now,
+                enabled = cfg.temperatureWarnEnabled,
                 triggered = maxTemp > cfg.temperatureWarnC && maxTemp < cfg.temperatureHighC,
                 recovered = maxTemp < cfg.temperatureWarnC - 3f,
                 severity = AlertSeverity.WARNING,
@@ -179,6 +183,7 @@ class AlertEngine(
                 text = "${maxTemp.toInt()}°C on ${vehicle.name}"
             )
             fire(AlertKind.TEMPERATURE_HIGH, vehicle, now,
+                enabled = cfg.temperatureHighEnabled,
                 triggered = maxTemp > cfg.temperatureHighC,
                 recovered = maxTemp < cfg.temperatureHighC - 3f,
                 severity = AlertSeverity.CRITICAL,
@@ -195,6 +200,7 @@ class AlertEngine(
         // and is untouched by an unknown SoC.
         if (data.socKnown) {
             fire(AlertKind.SOC_LOW, vehicle, now,
+                enabled = cfg.socLowEnabled,
                 triggered = data.soc.toInt() < cfg.socLowPercent,
                 recovered = data.soc.toInt() > cfg.socLowPercent + 3,
                 severity = AlertSeverity.WARNING,
@@ -202,7 +208,7 @@ class AlertEngine(
                 text = "${data.soc.toInt()}% on ${vehicle.name}"
             )
 
-            cfg.socCutoffPercent?.let { cutoff ->
+            cfg.socCutoffPercent?.takeIf { cfg.socCutoffEnabled }?.let { cutoff ->
                 fire(AlertKind.SOC_CUTOFF, vehicle, now,
                     triggered = data.soc.toInt() < cutoff,
                     recovered = data.soc.toInt() > cutoff + 2,
@@ -329,9 +335,18 @@ class AlertEngine(
 
     private fun fire(
         kind: AlertKind, vehicle: Vehicle, now: Instant,
+        enabled: Boolean = true,
         triggered: Boolean, recovered: Boolean,
         severity: AlertSeverity, title: String, text: String
     ) {
+        if (!enabled) {
+            // An alert that was disabled while engaged must be forgotten as an
+            // active episode. Re-enabling it should require a fresh crossing,
+            // not immediately replay the old condition.
+            armed.remove(vehicle.id to kind)
+            peakLevel.remove(vehicle.id to kind)
+            return
+        }
         val key = vehicle.id to kind
         val isArmed = armed.getOrPut(key) { true }
         if (recovered && !isArmed) armed[key] = true

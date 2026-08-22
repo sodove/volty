@@ -20,20 +20,25 @@ import kotlin.math.abs
  * and the independent parser/tests in
  * [EUC-Dash-ESP32](https://github.com/Pickelhaupt/EUC-Dash-ESP32) and
  * [euc_ble_library](https://github.com/Tritbool/euc_ble_library).  The
- * sources agree on the frame header/tail, little-endian scales and BMS page
- * numbers.  No command is sent: some of the same bytes are KingSong's light,
- * calibration and power-off channel, and a write would not be read-only.
+ * sources agree on the frame header/tail, scales and BMS page numbers; the
+ * A9 distance field is the deliberate non-standard byte order documented in
+ * [kingSongDistance].  No command is sent: some of the same bytes are
+ * KingSong's light, calibration and power-off channel, and a write would not
+ * be read-only.
  *
  * Frame `A9` is wheel-level live telemetry: voltage (bytes 2..3, 0.01 V),
- * signed current (10..11, 0.01 A), and board temperature (12..13, 0.01 °C).
- * Its byte 15 is normally the `E0` pedal-mode marker rather than a reliable
- * fuel gauge; therefore this protocol leaves SoC unknown for an A9-only
- * wheel.  Smart BMS frames `F1` and `F2` carry one battery each.  Page `00`
- * supplies voltage/current and remaining/factory capacity (the latter is
- * used only to prove SoC), page `01` has seven temperatures in deci-kelvin,
- * and pages `02..06` contain seven millivolt cell readings each.  Cell and
- * temperature pages are accumulated until a page-00 voltage exists; this
- * prevents publishing a cell-only sample with an unearned zero pack voltage.
+ * signed current (10..11, 0.01 A), board temperature (12..13, 0.01 °C), and
+ * the lifetime distance at bytes 6..9.  `B9` supplies the latched controller
+ * temperature and `F5` byte 15 supplies a reported duty percentage.  A9 byte
+ * 15 is normally the `E0` pedal-mode marker rather than a reliable fuel
+ * gauge; therefore this protocol leaves SoC unknown for an A9-only wheel.
+ * Smart BMS frames `F1` and `F2` carry one battery each.  Page `00` supplies
+ * voltage/current, remaining/factory capacity and cycle count (the latter
+ * is byte 10), page `01` has seven temperatures in deci-kelvin, and pages
+ * `02..06` contain cell readings, with page `06` offset 10 carrying the
+ * eighth temperature.  Cell and temperature pages are accumulated until a
+ * page-00 voltage exists; this prevents publishing a cell-only sample with an
+ * unearned zero pack voltage.
  *
  * This class implements [MotionSource] because A9 also reports ground speed
  * and the lifetime distance.  Those values stay out of [BmsData] and are
@@ -66,21 +71,27 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
     private var liveData: BmsData? = null
     private var motion: ControllerData? = null
     private var distanceBaselineMeters: Long? = null
+    private var rideStatsTemperatureC: Float? = null
+    private var dutyPercentValue: Float? = null
 
     private data class BmsState(
         var voltageV: Float? = null,
         var currentA: Float? = null,
         var socPercent: Float? = null,
+        var cycleCount: Int? = null,
         val cellsMv: Array<Int?> = arrayOfNulls(MAX_CELLS),
         val temperaturesC: MutableList<Float> = mutableListOf(),
+        var eighthTemperatureC: Float? = null,
         var seen: Boolean = false
     ) {
         fun reset() {
             voltageV = null
             currentA = null
             socPercent = null
+            cycleCount = null
             cellsMv.fill(null)
             temperaturesC.clear()
+            eighthTemperatureC = null
             seen = false
         }
 
@@ -101,8 +112,9 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
                 hasPower = false,
                 soc = socPercent ?: 0f,
                 socKnown = socPercent != null,
+                numCycles = cycleCount ?: 0,
                 cellVoltages = cellsMv.mapNotNull { it?.let { mv -> mv / 1000f } },
-                temperatures = temperaturesC.toList(),
+                temperatures = temperaturesC + listOfNotNull(eighthTemperatureC),
                 isConnected = true
             )
         }
@@ -134,6 +146,8 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         liveData = null
         motion = null
         distanceBaselineMeters = null
+        rideStatsTemperatureC = null
+        dutyPercentValue = null
     }
 
     private fun parseBufferedFrames() {
@@ -173,6 +187,8 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
     private fun parseFrame(frame: ByteArray) {
         when (frame[MESSAGE_TYPE_OFFSET].u8()) {
             TYPE_LIVE -> parseLive(frame)
+            TYPE_RIDE_STATS -> parseRideStats(frame)
+            TYPE_OUTPUT -> parseOutput(frame)
             TYPE_BMS_1, TYPE_BMS_2 -> parseBms(frame)
             // Name, serial, speed-limit, alarm and fan records carry no
             // BmsData fields this read-only adapter promises.
@@ -202,13 +218,13 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         )
 
         val speedKmh = abs(frame.i16Le(4) / 100f)
-        val distanceMeters = frame.u32Le(6)
+        val distanceMeters = frame.kingSongDistance(6)
         val baseline = distanceBaselineMeters ?: distanceMeters.also { distanceBaselineMeters = it }
         motion = ControllerData(
             speedKmh = speedKmh,
             speedSource = SpeedSource.REPORTED,
-            dutyPercent = 0f,
-            hasDuty = false,
+            dutyPercent = dutyPercentValue ?: 0f,
+            hasDuty = dutyPercentValue != null,
             // BmsData uses + = charging; ControllerData uses + = drawing.
             batteryCurrentA = -current,
             hasBatteryCurrent = true,
@@ -216,7 +232,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             hasInputVoltage = true,
             powerW = voltage * -current,
             hasPower = true,
-            escTempC = temperature,
+            escTempC = rideStatsTemperatureC ?: temperature,
             hasMotorTemp = false,
             odometerKm = distanceMeters / 1000f,
             tripKm = (distanceMeters - baseline).coerceAtLeast(0L) / 1000f,
@@ -224,6 +240,20 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             hasEnergyCounters = false,
             isConnected = true
         )
+    }
+
+    private fun parseRideStats(frame: ByteArray) {
+        val temperature = frame.i16Le(14) / 100f
+        if (temperature !in -40f..150f) return
+        rideStatsTemperatureC = temperature
+        motion = motion?.copy(escTempC = temperature)
+    }
+
+    private fun parseOutput(frame: ByteArray) {
+        val duty = frame[15].u8().toFloat()
+        if (duty !in 0f..100f) return
+        dutyPercentValue = duty
+        motion = motion?.copy(dutyPercent = duty, hasDuty = true)
     }
 
     private fun parseBms(frame: ByteArray) {
@@ -240,6 +270,7 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
                 val factoryRaw = frame.u16Le(8)
                 state.voltageV = voltage
                 state.currentA = current
+                state.cycleCount = frame.u16Le(10)
                 state.socPercent = if (factoryRaw > 0) {
                     (remainingRaw.toFloat() * 100f / factoryRaw).coerceIn(0f, 100f)
                 } else {
@@ -269,6 +300,14 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
             in PAGE_CELLS_START..PAGE_CELLS_END -> {
                 val page = frame[PAGE_OFFSET].u8() - PAGE_CELLS_START
                 var accepted = false
+                if (frame[PAGE_OFFSET].u8() == PAGE_CELLS_END) {
+                    val raw = frame.u16Le(PAGE_SIX_TEMPERATURE_OFFSET)
+                    if (raw in BMS_TEMPERATURE_MIN_RAW..BMS_TEMPERATURE_MAX_RAW) {
+                        val celsius = (raw - KELVIN_OFFSET_DECI).toFloat() / 10f
+                        state.eighthTemperatureC = celsius
+                        accepted = true
+                    }
+                }
                 repeat(CELLS_PER_PAGE) { i ->
                     val cellIndex = page * CELLS_PER_PAGE + i
                     if (cellIndex >= MAX_CELLS) return@repeat
@@ -297,11 +336,11 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         return if (unsigned and 0x8000 != 0) unsigned - 0x10000 else unsigned
     }
 
-    private fun ByteArray.u32Le(offset: Int): Long =
-        (this[offset].u8().toLong()) or
-            (this[offset + 1].u8().toLong() shl 8) or
-            (this[offset + 2].u8().toLong() shl 16) or
-            (this[offset + 3].u8().toLong() shl 24)
+    private fun ByteArray.kingSongDistance(offset: Int): Long =
+        (this[offset].u8().toLong() shl 16) or
+            (this[offset + 1].u8().toLong() shl 24) or
+            this[offset + 2].u8().toLong() or
+            (this[offset + 3].u8().toLong() shl 8)
 
     private fun Byte.u8(): Int = toInt() and 0xFF
 
@@ -316,6 +355,8 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         const val PAGE_OFFSET = 17
 
         const val TYPE_LIVE = 0xA9
+        const val TYPE_RIDE_STATS = 0xB9
+        const val TYPE_OUTPUT = 0xF5
         const val TYPE_BMS_1 = 0xF1
         const val TYPE_BMS_2 = 0xF2
 
@@ -323,10 +364,13 @@ class KingSongProtocol : BmsProtocol(), MotionSource {
         const val PAGE_TEMPERATURES = 0x01
         const val PAGE_CELLS_START = 0x02
         const val PAGE_CELLS_END = 0x06
+        const val PAGE_SIX_TEMPERATURE_OFFSET = 10
         const val CELLS_PER_PAGE = 7
         const val MAX_CELLS = 30
         const val TEMPERATURE_COUNT = 7
         const val KELVIN_OFFSET_DECI = 2730
+        const val BMS_TEMPERATURE_MIN_RAW = 2530
+        const val BMS_TEMPERATURE_MAX_RAW = 3930
         const val MIN_CELL_MV = 1500
         const val MAX_CELL_MV = 5000
     }

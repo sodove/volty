@@ -22,6 +22,7 @@ import kotlinx.coroutines.test.setMain
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.alert.AlertAvailability
 import ru.sodovaya.volty.domain.alert.AlertLevel
@@ -765,6 +766,22 @@ class VehicleAlertsComponentTest {
 
         assertFalse(c.state.value.toneEnabled, "fixture check: tones really are off")
         assertTrue(c.state.value.canPreview)
+    }
+
+    @Test
+    fun `music mode is shown and changes immediately`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val prefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf()))
+        prefs.alarmMusicMode.first { it == AlarmMusicMode.DUCK_MEDIA }
+        val c = component(FakeVehicleRepo(vehicle()), prefs = prefs)
+        advanceUntilIdle()
+
+        assertEquals(AlarmMusicMode.DUCK_MEDIA, c.state.value.musicMode)
+        c.onAlarmMusicModeChanged(AlarmMusicMode.PLAY_OVER_MEDIA)
+        prefs.alarmMusicMode.first { it == AlarmMusicMode.PLAY_OVER_MEDIA }
+        advanceUntilIdle()
+
+        assertEquals(AlarmMusicMode.PLAY_OVER_MEDIA, c.state.value.musicMode)
     }
 
     /** And the master switch still wins over both, exactly as it does for a live alarm. */

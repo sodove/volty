@@ -113,6 +113,7 @@ object BmsTypeDetector {
                 name.startsWith("V11", ignoreCase = true) ||
                 name.startsWith("V12", ignoreCase = true) ||
                 name.startsWith("V13", ignoreCase = true) -> ControllerType.INMOTION
+            name.contains("Nosfet", ignoreCase = true) -> ControllerType.NOSFET
             name.contains("Veteran", ignoreCase = true) ||
                 name.contains("Sherman", ignoreCase = true) ||
                 name.contains("Abrams", ignoreCase = true) ||

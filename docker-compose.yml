@@ -1,0 +1,93 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-volty}
+      POSTGRES_USER: ${POSTGRES_USER:-volty}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    volumes:
+      - volty-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
+  app:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      VOLTY_DATABASE_URL: jdbc:postgresql://db:5432/${POSTGRES_DB:-volty}
+      VOLTY_DATABASE_USER: ${POSTGRES_USER:-volty}
+      VOLTY_DATABASE_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      VOLTY_JWT_SECRET: ${VOLTY_JWT_SECRET:?set VOLTY_JWT_SECRET in .env}
+      VOLTY_CORS_ORIGINS: https://volty.sodove.ru
+      VOLTY_VOICE_PROVIDER: ${VOLTY_VOICE_PROVIDER:-unconfigured}
+      LIVEKIT_URL: ${LIVEKIT_URL:-wss://voice.sodove.ru}
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
+      VOLTY_VOICE_TOKEN_TTL_SECONDS: ${VOLTY_VOICE_TOKEN_TTL_SECONDS:-300}
+      VOLTY_PUBLIC_IP: ${VOLTY_PUBLIC_IP:-}
+      PORT: 8080
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${VOLTY_APP_HOST_PORT:-18080}:8080"
+    healthcheck:
+      test: ["CMD", "/bin/busybox", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/health"]
+      interval: 15s
+      timeout: 5s
+      retries: 6
+
+  livekit:
+    image: livekit/livekit-server:v1.13.5
+    restart: unless-stopped
+    environment:
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:?set LIVEKIT_API_KEY in .env}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+      VOLTY_PUBLIC_IP: ${VOLTY_PUBLIC_IP:?set VOLTY_PUBLIC_IP in .env}
+    entrypoint:
+      - /bin/sh
+      - -ec
+    command:
+      - |
+        # Keep sed replacements limited to base64url credentials and an IPv4
+        # literal. This rejects sed metacharacters before they can corrupt YAML.
+        case "$LIVEKIT_API_KEY" in
+          ''|*[!A-Za-z0-9_=-]*)
+            printf '%s\n' 'LIVEKIT_API_KEY must use only base64url characters (A-Z, a-z, 0-9, -, _, optional = padding)' >&2
+            exit 1
+            ;;
+        esac
+        case "$LIVEKIT_API_SECRET" in
+          ''|*[!A-Za-z0-9_=-]*)
+            printf '%s\n' 'LIVEKIT_API_SECRET must use only base64url characters (A-Z, a-z, 0-9, -, _, optional = padding)' >&2
+            exit 1
+            ;;
+        esac
+        case "$VOLTY_PUBLIC_IP" in
+          ''|*[!0-9.]*)
+            printf '%s\n' 'VOLTY_PUBLIC_IP must use only digits and dots (a public IPv4 address is expected)' >&2
+            exit 1
+            ;;
+        esac
+        sed \
+          -e "s/__LIVEKIT_API_KEY__/$LIVEKIT_API_KEY/g" \
+          -e "s/__LIVEKIT_API_SECRET__/$LIVEKIT_API_SECRET/g" \
+          -e "s/__VOLTY_PUBLIC_IP__/$VOLTY_PUBLIC_IP/g" \
+          /etc/livekit/livekit.yaml > /tmp/livekit.yaml
+        exec /livekit-server --config /tmp/livekit.yaml --bind 0.0.0.0
+    volumes:
+      - ./livekit.yaml:/etc/livekit/livekit.yaml:ro
+    ports:
+      - "127.0.0.1:${VOLTY_LIVEKIT_HTTP_HOST_PORT:-17880}:7880/tcp"
+      - "7881:7881/tcp"
+      - "3478:3478/udp"
+      - "50000-50019:50000-50019/udp"
+
+volumes:
+  volty-postgres:

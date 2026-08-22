@@ -105,6 +105,7 @@ class RootNavigationTest {
     @Test
     fun the_ride_and_settings_tabs_reach_their_own_destinations() {
         assertEquals(Config.Ride, configForTab(RootComponent.Tab.Ride))
+        assertEquals(Config.Nearby, configForTab(RootComponent.Tab.Nearby))
         assertEquals(Config.Settings, configForTab(RootComponent.Tab.Settings))
     }
 

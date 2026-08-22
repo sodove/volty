@@ -122,6 +122,30 @@ class VoltageSocEstimatorNoCellsTest {
     }
 
     @Test
+    fun aPartialCellPageWithNonZeroVoltageAndPowerIsNotEstimatedAsAFullPack() {
+        // Deliberately incoherent: a partial page carries non-zero voltage,
+        // current and power-like fields, but the producer explicitly says its
+        // SoC is not known. The estimator must not turn that page into a full
+        // pack estimate just because some cells are present.
+        val sample = BmsData(
+            voltage = 147.2f,
+            current = -8.8f,
+            hasCurrent = true,
+            power = -1295.36f,
+            hasPower = true,
+            soc = 0f,
+            socKnown = false,
+            cellVoltages = List(8) { 3.71f },
+            isConnected = true
+        )
+
+        val out = VoltageSocEstimator.withEstimatedSoc(sample, vehicle(cellCount = 40), packIndex = 0)
+
+        assertSame(sample, out, "a partial page is not a complete pack estimate")
+        assertFalse(out.socKnown)
+    }
+
+    @Test
     fun presentCellsStillWinOverTheVoltageDerivedPath() {
         // Cells are the better evidence and must keep driving the estimate
         // exactly as before this fallback existed: 40 cells at 4.09 V give

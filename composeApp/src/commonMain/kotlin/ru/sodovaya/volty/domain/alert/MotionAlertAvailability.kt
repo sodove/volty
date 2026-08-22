@@ -179,6 +179,7 @@ internal val ControllerType.reportsDuty: Boolean
         ControllerType.KINGSONG -> false
         ControllerType.INMOTION -> true
         ControllerType.VETERAN -> true
+        ControllerType.NOSFET -> true
     }
 
 /**

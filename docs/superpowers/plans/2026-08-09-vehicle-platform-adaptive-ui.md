@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make ride and battery dashboards responsive to landscape constraints while preserving the approved portrait layout.
+**Goal:** Make ride and battery dashboards responsive to landscape constraints while preserving the approved portrait layout, then add the Vescape-inspired HUD as the default renderer for vehicles without an explicit override.
 
 **Architecture:** A pure `ResponsiveLayoutMode` function classifies the measured content bounds. Dashboard composables branch only at that boundary: portrait keeps the existing scroll column, wide windows use a full-width header plus two content panes. Insets remain Compose-provided padding, and no screen-size constants are introduced.
 
@@ -13,7 +13,21 @@
 - Compose UI is not unit-testable in this repository; test layout decisions and component state as pure/common code.
 - `minSdk 26`; do not use APIs newer than the project's existing Compose/Android compatibility.
 - Do not hardcode status/navigation insets or device dimensions.
-- Russian UI strings remain in both `values/` and `values-ru/` when copy changes; this pass should not add copy.
+- Russian UI strings remain in both `values/` and `values-ru/`; the Vescape follow-up adds translated style/HUD labels in both.
+
+## Vescape HUD follow-up — completed
+
+The third `DashboardStyle.VESCAPE` renderer is implemented in its own renderer
+and mapper. It uses the existing `RadialGauge`, `MetricCard`,
+`SparklineGraph`, `VehiclePill`, Graph link, and VehicleSheet/navigation flow.
+`VESCAPE` is the app fallback/default; `Vehicle.dashboardStyle != null` still
+wins, so saved `CLEAN` and `CLASSIC` overrides are not migrated.
+
+The renderer adapts through pure `COMPACT`, `MEDIUM`, and `WIDE` modes and keeps
+unknown telemetry as `—`. It intentionally does not add MapLibre/Mapbox/RN,
+location permissions, or a fake map: the Vescape map layer waits for a Volty
+location/map data contract. Compose layout balance and contrast require a
+device-only visual check; no Compose UI tests are available in this repository.
 
 ---
 

@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.util.UnitSystem
@@ -55,8 +56,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .stateIn(scope, SharingStarted.Eagerly, UnitSystem.METRIC)
 
     val defaultDashboardStyle: StateFlow<DashboardStyle> = store.data
-        .map { runCatching { DashboardStyle.valueOf(it[Keys.DASHBOARD_STYLE] ?: "CLEAN") }.getOrDefault(DashboardStyle.CLEAN) }
-        .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.CLEAN)
+        .map { DashboardStyle.fromPersistedName(it[Keys.DASHBOARD_STYLE]) ?: DashboardStyle.LIGHT }
+        .stateIn(scope, SharingStarted.Eagerly, DashboardStyle.LIGHT)
 
     /** How long a cleared controller/BMS fault remains readable on the ride dashboard. */
     val faultDisplayDurationSec: StateFlow<Int> = store.data
@@ -81,6 +82,15 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .map { it[Keys.ALARM_VIBRATION_ENABLED] ?: true }
         .stateIn(scope, SharingStarted.Eagerly, true)
 
+    /** Whether an alarm ducks media or plays over it without requesting focus. */
+    val alarmMusicMode: StateFlow<AlarmMusicMode> = store.data
+        .map {
+            runCatching {
+                AlarmMusicMode.valueOf(it[Keys.ALARM_MUSIC_MODE] ?: AlarmMusicMode.DUCK_MEDIA.name)
+            }.getOrDefault(AlarmMusicMode.DUCK_MEDIA)
+        }
+        .stateIn(scope, SharingStarted.Eagerly, AlarmMusicMode.DUCK_MEDIA)
+
     /**
      * The three switches as the one value `AudibleAlarm.setModalities` takes.
      *
@@ -92,8 +102,13 @@ class AppPrefs(private val store: DataStore<Preferences>) {
      * briefly muted at start-up by prefs that simply have not loaded yet.
      */
     val alarmModalities: StateFlow<AlarmModalities> =
-        combine(alarmEnabled, alarmToneEnabled, alarmVibrationEnabled) { master, tone, vibration ->
-            AlarmModalities(alarmEnabled = master, toneEnabled = tone, vibrationEnabled = vibration)
+        combine(alarmEnabled, alarmToneEnabled, alarmVibrationEnabled, alarmMusicMode) { master, tone, vibration, musicMode ->
+            AlarmModalities(
+                alarmEnabled = master,
+                toneEnabled = tone,
+                vibrationEnabled = vibration,
+                musicMode = musicMode
+            )
         }.stateIn(scope, SharingStarted.Eagerly, AlarmModalities.DEFAULT)
 
     suspend fun setLastVehicleId(id: String?) = store.edit { p ->
@@ -113,6 +128,7 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
     suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
+    suspend fun setAlarmMusicMode(mode: AlarmMusicMode) = store.edit { it[Keys.ALARM_MUSIC_MODE] = mode.name }
 
     private object Keys {
         val LAST_VEHICLE_ID = stringPreferencesKey("last_vehicle_id")
@@ -128,6 +144,7 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")
+        val ALARM_MUSIC_MODE = stringPreferencesKey("alarm_music_mode")
     }
 }
 

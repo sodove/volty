@@ -45,6 +45,7 @@ interface RideDashboardComponent {
     /** Graph is no longer a top-level tab — every dashboard carries a button to it. */
     fun onOpenGraph()
     fun onOpenSettings()
+    fun onEditVehicle()
     fun onDisconnect()
 
     /** One controller/BMS fault in the dashboard's newest-first stack. */
@@ -65,7 +66,7 @@ interface RideDashboardComponent {
         val connectionSummary: RideConnectionSummary = RideConnectionSummary(),
         val connection: ConnectionState = ConnectionState.Idle,
         val units: UnitSystem = UnitSystem.METRIC,
-        val style: DashboardStyle = DashboardStyle.CLEAN,
+        val style: DashboardStyle = DashboardStyle.LIGHT,
         val secondary: SecondaryGauge = SecondaryGauge.DUTY,
         val secondaryReadout: SecondaryReadout = SecondaryGaugeMapper.map(
             SecondaryGauge.DUTY, ControllerData(), BmsData(), UnitSystem.METRIC
@@ -190,7 +191,8 @@ class DefaultRideDashboardComponent(
     private val onOpenGraphRequested: () -> Unit,
     private val onOpenSettingsRequested: () -> Unit,
     private val onAddVehicleRequested: () -> Unit,
-    private val onDisconnectRequested: () -> Unit
+    private val onDisconnectRequested: () -> Unit,
+    private val onEditVehicleRequested: (String) -> Unit = {},
 ) : RideDashboardComponent, ComponentContext by componentContext {
 
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
@@ -911,6 +913,13 @@ class DefaultRideDashboardComponent(
         _state.update { it.copy(sheetOpen = false) }
         onOpenSettingsRequested()
     }
+
+    override fun onEditVehicle() {
+        val id = state.value.vehicle?.id ?: return
+        _state.update { it.copy(sheetOpen = false) }
+        onEditVehicleRequested(id)
+    }
+
 
     override fun onDisconnect() {
         scope.launch {

@@ -568,6 +568,28 @@ fun VehicleDraft.addController(
     nextKey = nextKey + 1
 )
 
+/** The battery type that shares a physical BLE device with a wheel controller. */
+internal fun wheelBmsType(controllerType: ControllerType): BmsType? = when (controllerType) {
+    ControllerType.BEGODE -> BmsType.BEGODE
+    ControllerType.VETERAN, ControllerType.NOSFET -> BmsType.LEAPERKIM
+    else -> null
+}
+
+/** Whether the two draft rows describe the same supported wheel device. */
+internal fun isWheelPair(controllerType: ControllerType, bmsType: BmsType): Boolean =
+    wheelBmsType(controllerType) == bmsType
+
+/** Number of direct pack rows required by the composer for this wheel family. */
+internal fun wheelPackCount(controllerType: ControllerType, bmsType: BmsType): Int = when {
+    controllerType == ControllerType.BEGODE && bmsType == BmsType.BEGODE -> 1
+    (controllerType == ControllerType.VETERAN || controllerType == ControllerType.NOSFET) &&
+        bmsType == BmsType.LEAPERKIM -> 2
+    else -> 0
+}
+
+private fun wheelPackLabel(label: String, branch: Int, count: Int): String =
+    if (count == 1 || label.isBlank()) label else "$label ${branch + 1}"
+
 /**
  * **Which controller on [address] is the gateway** — the one a device discovered
  * on that link's CAN bus should copy its wheel from.
@@ -652,7 +674,17 @@ fun VehicleDraft.addWheel(
     bmsType: BmsType,
     address: String,
     label: String = ""
-): VehicleDraft = addController(controllerType, address, label).addPack(bmsType, address, label)
+): VehicleDraft {
+    val withController = addController(controllerType, address, label)
+    val count = wheelPackCount(controllerType, bmsType).coerceAtLeast(1)
+    return (0 until count).fold(withController) { draft, branch ->
+        draft.addPack(
+            bmsType = bmsType,
+            address = address,
+            label = wheelPackLabel(label, branch, count)
+        )
+    }
+}
 
 /**
  * Completes the rider's statement that one directly scanned BLE device owns
@@ -674,10 +706,15 @@ fun VehicleDraft.addDeviceAsBoth(
     } else {
         addController(controllerType, address, label)
     }
-    return if (withController.packs.any { it.address == address && it.canId == null }) {
-        withController
-    } else {
-        withController.addPack(bmsType, address, label)
+    val count = wheelPackCount(controllerType, bmsType).coerceAtLeast(1)
+    val existing = withController.packs.count { it.address == address && it.canId == null }
+    if (existing >= count) return withController
+    return (existing until count).fold(withController) { draft, branch ->
+        draft.addPack(
+            bmsType = bmsType,
+            address = address,
+            label = wheelPackLabel(label, branch, count)
+        )
     }
 }
 

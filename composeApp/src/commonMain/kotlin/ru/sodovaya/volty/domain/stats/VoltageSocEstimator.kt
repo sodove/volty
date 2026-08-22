@@ -85,6 +85,17 @@ object VoltageSocEstimator {
         val pack = vehicle.packs.firstOrNull { it.index == packIndex } ?: return sample
         if (pack.bmsType.reportsStateOfCharge) return sample
         if (sample.cellVoltages.isNotEmpty()) {
+            // Begode can publish a non-empty contiguous prefix while its cell
+            // pages are still arriving. Its producer marks that sample
+            // `socKnown = false`; without the expected count, estimating from
+            // the prefix would turn a partial pack into a confident SoC. Keep
+            // the legacy path for samples already marked known, and for an
+            // explicitly complete set whose profile count matches.
+            val expectedCellCount = pack.cellCount
+            val cellsComplete = sample.socKnown ||
+                (expectedCellCount != null && expectedCellCount > 0 &&
+                    sample.cellVoltages.size == expectedCellCount)
+            if (!cellsComplete) return sample
             return sample.copy(
                 soc = estimateSocPercent(sample.cellVoltages, vehicle.chemistry, vehicle.alertConfig),
                 // An estimate IS the device's fuel gauge — mark the SoC known

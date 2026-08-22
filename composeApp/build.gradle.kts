@@ -33,6 +33,8 @@ kotlin {
             implementation(libs.coroutines.core)
             implementation(libs.serialization.json)
             implementation(libs.kable.core)
+            implementation(libs.ktor.client.core)
+            implementation(libs.ktor.client.websockets)
             implementation(libs.datetime)
             implementation(libs.sqldelight.runtime)
             implementation(libs.sqldelight.coroutines)
@@ -43,6 +45,7 @@ kotlin {
             implementation(libs.coroutines.test)
             implementation(libs.turbine)
             implementation(libs.sqldelight.jvm)
+            implementation(libs.ktor.client.mock)
         }
 
         androidMain.dependencies {
@@ -52,6 +55,13 @@ kotlin {
             implementation(libs.sqldelight.android)
             implementation(libs.datastore.preferences)
             implementation(libs.graphics.shapes)
+            implementation(libs.haze)
+            implementation(libs.ktor.client.cio)
+            implementation("org.maplibre.gl:android-sdk:13.0.2")
+            implementation("io.livekit:livekit-android:2.25.3") {
+                exclude(group = "com.github.davidliu", module = "audioswitch")
+            }
+            implementation(files("libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar"))
         }
     }
 }

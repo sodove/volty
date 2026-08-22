@@ -8,11 +8,20 @@ import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
+import ru.sodovaya.volty.data.social.DefaultSocialRepository
+import ru.sodovaya.volty.data.social.HttpSocialTransport
+import ru.sodovaya.volty.data.social.LiveKitVoiceRoomRepository
+import ru.sodovaya.volty.data.social.BmsSocialTelemetrySource
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.repository.RideHistoryRepository
 import ru.sodovaya.volty.domain.usecase.AlertEngine
+import ru.sodovaya.volty.domain.social.SocialRepository
+import ru.sodovaya.volty.domain.social.SocialTransport
+import ru.sodovaya.volty.domain.social.VoiceRoomRepository
+import ru.sodovaya.volty.domain.social.SocialTelemetrySource
+import ru.sodovaya.volty.domain.social.SocialShareSessionCoordinator
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.bind
 import org.koin.dsl.binds
@@ -33,4 +42,9 @@ val appModule = module {
         ControllerConfigSource::class
     )
     single { AlertEngine(get(), get()) }
+    single<SocialTransport> { HttpSocialTransport() }
+    singleOf(::DefaultSocialRepository) bind SocialRepository::class
+    single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }
+    single<SocialTelemetrySource> { BmsSocialTelemetrySource(get()) }
+    single { SocialShareSessionCoordinator(get(), get()) }
 }

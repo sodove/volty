@@ -85,6 +85,7 @@ import volty.composeapp.generated.resources.vehicle_field_bms_address
 import volty.composeapp.generated.resources.vehicle_field_bms_type
 import volty.composeapp.generated.resources.vehicle_field_cell_high
 import volty.composeapp.generated.resources.vehicle_field_cell_low
+import volty.composeapp.generated.resources.vehicle_field_cell_delta
 import volty.composeapp.generated.resources.vehicle_field_chemistry
 import volty.composeapp.generated.resources.vehicle_field_dashboard_style
 import volty.composeapp.generated.resources.vehicle_field_icon
@@ -93,11 +94,16 @@ import volty.composeapp.generated.resources.vehicle_field_name_required
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge
 import volty.composeapp.generated.resources.vehicle_field_secondary_gauge_caption
 import volty.composeapp.generated.resources.vehicle_field_soc_low
+import volty.composeapp.generated.resources.vehicle_field_soc_cutoff
 import volty.composeapp.generated.resources.vehicle_field_temp_high
 import volty.composeapp.generated.resources.vehicle_field_temp_warn
 import volty.composeapp.generated.resources.vehicle_field_topology
 import volty.composeapp.generated.resources.vehicle_field_yield_bms
 import volty.composeapp.generated.resources.vehicle_field_yield_bms_caption
+import volty.composeapp.generated.resources.vehicle_notify_charge_complete
+import volty.composeapp.generated.resources.vehicle_notify_charge_complete_caption
+import volty.composeapp.generated.resources.vehicle_notify_disconnect
+import volty.composeapp.generated.resources.vehicle_notify_disconnect_caption
 import volty.composeapp.generated.resources.vehicle_auto_volume_caption
 import volty.composeapp.generated.resources.vehicle_auto_volume_deadband
 import volty.composeapp.generated.resources.vehicle_auto_volume_enabled
@@ -312,14 +318,6 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
                 suffix = " km/h"
             )
 
-            HorizontalDivider()
-            SectionLabel(stringResource(Res.string.vehicle_section_alerts))
-            FloatField(stringResource(Res.string.vehicle_field_cell_high), state.cellHighV, component::onCellHighVChanged)
-            FloatField(stringResource(Res.string.vehicle_field_cell_low), state.cellLowV, component::onCellLowVChanged)
-            FloatField(stringResource(Res.string.vehicle_field_temp_warn), state.temperatureWarnC, component::onTemperatureWarnChanged)
-            FloatField(stringResource(Res.string.vehicle_field_temp_high), state.temperatureHighC, component::onTemperatureHighChanged)
-            IntField(stringResource(Res.string.vehicle_field_soc_low), state.socLowPercent, component::onSocLowChanged)
-
             // Motion alerts live on their own screen (F Task 9): they are
             // list-shaped — up to three rider-defined levels per kind — and every
             // kind is shown even when the hardware cannot supply it, which does
@@ -345,7 +343,9 @@ fun VehicleEditScreen(component: VehicleEditComponent) {
 
             HorizontalDivider()
 
-            // DASHBOARD STYLE — Default (null, follows the app-level setting), Clean, Classic.
+            // DASHBOARD STYLE — Default (null, follows the app-level setting), Clean, Classic,
+            // and Light. The enum/resource list is the single source for the labels here and
+            // in Settings, so an explicit old vehicle override remains untouched.
             SectionLabel(stringResource(Res.string.vehicle_field_dashboard_style))
             val dashboardOptions: List<DashboardStyle?> = listOf(null) + DashboardStyle.entries
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {

@@ -72,20 +72,23 @@ fun draftDiagram(
     fun issuesFor(sourceKeys: List<String>): List<ComposerIssue> =
         issues.filter { issue -> issue.affectedKeys(draft).any(sourceKeys::contains) }
 
-    // A Begode's direct controller and direct pack rows are two roles of one advertised device.
-    // Requiring exactly one direct controller avoids hiding an already-ambiguous duplicate row.
+    // A supported wheel's direct controller and direct pack rows are two roles of one advertised
+    // device. Requiring the family-specific pack count avoids hiding an already-ambiguous draft:
+    // Begode is one composer row, while Leaperkim/Veteran has two physical battery branches.
     val wheelPacksByController = draft.controllers.mapNotNull { controller ->
         val packs = draft.packs.filter {
-            controller.controllerType == ControllerType.BEGODE &&
+            isWheelPair(controller.controllerType, it.bmsType) &&
                 controller.canId == null &&
-                it.bmsType == BmsType.BEGODE &&
                 it.canId == null &&
                 it.address == controller.address
         }
+        val expectedPacks = wheelBmsType(controller.controllerType)?.let { bmsType ->
+            wheelPackCount(controller.controllerType, bmsType)
+        } ?: 0
         val directControllers = draft.controllers.count {
             it.address == controller.address && it.canId == null
         }
-        if (controller.address.isNotBlank() && packs.size == 1 && directControllers == 1) {
+        if (controller.address.isNotBlank() && packs.size == expectedPacks && expectedPacks > 0 && directControllers == 1) {
             controller.key to packs
         } else {
             null
@@ -108,7 +111,7 @@ fun draftDiagram(
                             address = controller.address,
                             sourceKeys = keys,
                             controllerType = controller.controllerType,
-                            bmsType = BmsType.BEGODE,
+                             bmsType = wheelPacks.firstOrNull()?.bmsType,
                             issues = issuesFor(keys)
                         )
                     )

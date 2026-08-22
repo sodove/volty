@@ -9,7 +9,8 @@ enum class ControllerType(val label: String) {
     NINEBOT_LEGACY("Ninebot legacy"),
     KINGSONG("KingSong"),
     INMOTION("InMotion"),
-    VETERAN("Veteran / Leaperkim")
+    VETERAN("Veteran / Leaperkim"),
+    NOSFET("Nosfet")
 }
 
 data class MotorConfig(

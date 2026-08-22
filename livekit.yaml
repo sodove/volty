@@ -1,0 +1,22 @@
+port: 7880
+log_level: info
+
+rtc:
+  port_range_start: 50000
+  port_range_end: 50019
+  tcp_port: 7881
+  use_external_ip: false
+  node_ip: __VOLTY_PUBLIC_IP__
+
+keys:
+  __LIVEKIT_API_KEY__: __LIVEKIT_API_SECRET__
+
+turn:
+  enabled: true
+  udp_port: 3478
+  domain: voice.sodove.ru
+
+room:
+  auto_create: true
+  empty_timeout: 300
+  departure_timeout: 20

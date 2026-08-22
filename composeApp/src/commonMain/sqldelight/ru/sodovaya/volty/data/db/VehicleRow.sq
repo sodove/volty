@@ -21,7 +21,7 @@ CREATE TABLE VehicleRow (
     createdAt                TEXT NOT NULL,    -- ISO-8601
     lastConnectedAt          TEXT,             -- ISO-8601 or NULL
     isPinned                 INTEGER NOT NULL DEFAULT 0,
-    dashboardStyle           TEXT,             -- enum name: CLEAN | CLASSIC, NULL = follow app default
+    dashboardStyle           TEXT,             -- enum name: CLEAN | CLASSIC | LIGHT, old VESCAPE is read as LIGHT
     secondaryGauge           TEXT,             -- enum name: DUTY | BATTERY | POWER | CURRENT | MOTOR_TEMP | ESC_TEMP | CONSUMPTION
     yieldBmsToHeadUnit       INTEGER,          -- 1 = yes, 0 = no, NULL = follow the default (yes). See Vehicle.yieldBmsToHeadUnit.
     -- Has the rider ever configured motion alerts on this vehicle? 0 = no, so
@@ -34,7 +34,14 @@ CREATE TABLE VehicleRow (
     autoVolumeMaxPercent     INTEGER NOT NULL DEFAULT 80,
     autoVolumeMinSpeedKmh    INTEGER NOT NULL DEFAULT 5,
     autoVolumeMaxSpeedKmh    INTEGER NOT NULL DEFAULT 30,
-    autoVolumeDeadbandKmh    INTEGER NOT NULL DEFAULT 2
+    autoVolumeDeadbandKmh    INTEGER NOT NULL DEFAULT 2,
+    cellHighEnabled          INTEGER NOT NULL DEFAULT 1,
+    cellLowEnabled           INTEGER NOT NULL DEFAULT 1,
+    cellDeltaEnabled         INTEGER NOT NULL DEFAULT 1,
+    temperatureWarnEnabled   INTEGER NOT NULL DEFAULT 1,
+    temperatureHighEnabled   INTEGER NOT NULL DEFAULT 1,
+    socLowEnabled             INTEGER NOT NULL DEFAULT 1,
+    socCutoffEnabled          INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX VehicleRow_pinned_recent ON VehicleRow(isPinned DESC, lastConnectedAt DESC, createdAt DESC);
@@ -49,6 +56,8 @@ upsert:
 INSERT OR REPLACE INTO VehicleRow(
     id, name, iconKey, topology, chemistry, averagingWindowMin,
     cellHighV, cellLowV, cellDeltaMv, temperatureWarnC, temperatureHighC, socLowPercent, socCutoffPercent,
+    cellHighEnabled, cellLowEnabled, cellDeltaEnabled, temperatureWarnEnabled, temperatureHighEnabled,
+    socLowEnabled, socCutoffEnabled,
     disconnectNotify, chargeCompleteNotify, createdAt, lastConnectedAt, isPinned, dashboardStyle, secondaryGauge,
     yieldBmsToHeadUnit, motionAlertsConfigured,
     autoVolumeEnabled, autoVolumeMinPercent, autoVolumeMaxPercent,
@@ -56,6 +65,8 @@ INSERT OR REPLACE INTO VehicleRow(
 ) VALUES (
     :id, :name, :iconKey, :topology, :chemistry, :averagingWindowMin,
     :cellHighV, :cellLowV, :cellDeltaMv, :temperatureWarnC, :temperatureHighC, :socLowPercent, :socCutoffPercent,
+    :cellHighEnabled, :cellLowEnabled, :cellDeltaEnabled, :temperatureWarnEnabled, :temperatureHighEnabled,
+    :socLowEnabled, :socCutoffEnabled,
     :disconnectNotify, :chargeCompleteNotify, :createdAt, :lastConnectedAt, :isPinned, :dashboardStyle, :secondaryGauge,
     :yieldBmsToHeadUnit, :motionAlertsConfigured,
     :autoVolumeEnabled, :autoVolumeMinPercent, :autoVolumeMaxPercent,

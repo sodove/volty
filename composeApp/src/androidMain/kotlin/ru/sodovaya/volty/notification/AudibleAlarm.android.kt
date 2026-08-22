@@ -14,6 +14,7 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.util.Log
 import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.alert.AlarmSignalPlanner
 import ru.sodovaya.volty.domain.alert.AlarmState
@@ -54,10 +55,12 @@ import ru.sodovaya.volty.domain.alert.alarmPreviewDurationMs
  *
  * ### Focus policy (F §11, §5)
  *
- * `USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION`, focus requested as
- * `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK` so music ducks and keeps playing. **Losing
- * focus never stops the alarm** — see [onFocusChange]. Safety beats politeness;
- * the request is a courtesy to the music app, not a permission slip.
+ * `USAGE_ALARM` + `CONTENT_TYPE_SONIFICATION`. In [AlarmMusicMode.DUCK_MEDIA]
+ * mode focus is requested as `AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK`; in
+ * [AlarmMusicMode.PLAY_OVER_MEDIA] mode no focus is requested, so media keeps
+ * playing at its current volume. **Losing focus never stops the alarm** — see
+ * [onFocusChange]. Safety beats politeness; focus is a courtesy to the media
+ * app, not a permission slip.
  *
  * Thread-safe: every entry point serialises on [lock].
  */
@@ -98,6 +101,8 @@ actual class AudibleAlarm(context: Context) {
             // nothing. A player whose thread has died counts as not sounding —
             // holding focus for it would duck music for silence.
             if (released || !isTonePlaying()) return@synchronized
+            val command = planner.command as? AlarmCommand.Play ?: return@synchronized
+            if (command.tone == null || command.musicMode != AlarmMusicMode.DUCK_MEDIA) return@synchronized
             val request = focusRequest ?: return@synchronized
             runCatching { audioManager?.requestAudioFocus(request) }
         }
@@ -202,7 +207,7 @@ actual class AudibleAlarm(context: Context) {
                 AlarmTransition.RESTART -> {
                     // Focus is about the speaker only: a vibration-only alarm has
                     // no reason to duck anybody's music.
-                    if (command.tone != null) requestFocus() else abandonFocus()
+                    if (command.tone != null) requestFocus(command.musicMode) else abandonFocus()
                     startTone(command.tone)
                     // An unchanged waveform is left running. Toggling the *tone*
                     // switch mid-alarm is a RESTART, and re-issuing an identical
@@ -239,7 +244,7 @@ actual class AudibleAlarm(context: Context) {
         val now = SystemClock.uptimeMillis()
         if (now - lastToneStartMs < TONE_REVIVE_MIN_INTERVAL_MS) return false
         Log.w(TAG, "alarm tone thread ended while level ${command.level} was still sounding; restarting it")
-        requestFocus()
+        requestFocus(command.musicMode)
         startTone(tone)
         return true
     }
@@ -285,7 +290,11 @@ actual class AudibleAlarm(context: Context) {
         runCatching { vibrator?.cancel() }
     }
 
-    private fun requestFocus() {
+    private fun requestFocus(mode: AlarmMusicMode) {
+        if (mode == AlarmMusicMode.PLAY_OVER_MEDIA) {
+            abandonFocus()
+            return
+        }
         if (focusRequest != null) return
         val manager = audioManager ?: return
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK)

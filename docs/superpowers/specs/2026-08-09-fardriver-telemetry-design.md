@@ -30,6 +30,24 @@ This is an app-derived protocol description, not a firmware guarantee. Unknown
 registers, malformed frames, and incomplete state remain absent rather than
 becoming zero readings.
 
+## Correction: scalar byte order (2026-08-20)
+
+The first implementation and its fixtures incorrectly treated ordinary FarDriver
+16-bit scalar fields as big-endian. That assumption came from the initial static
+APK reading and was disproved by the public reverse-engineering work in
+`jackhumbert/fardriver-controllers` and the independent
+`bobecek79/ESP32-Fardriver-BLE-Reader`. Register addresses E2, E8, D6 and F4
+encode their ordinary 16-bit values little-endian. The symptom was not a
+calibration problem: for example, a little-endian 26 °C value was displayed as
+6656 °C, and an 83.2 V value was displayed as 1638.7 V when decoded in the old
+order.
+
+The decoder and fixtures now use little-endian for those 16-bit fields. The
+24-bit phase-current values in EE remain big-endian because the public register
+description explicitly specifies that exception. This is a recorded correction
+to the earlier BE assumption, not a change to the read-only boundary: the
+protocol still emits no writes or commands to FFE1/FFEC.
+
 ## Architecture
 
 Create `FarDriverProtocol.kt` beside the other `BmsProtocol` implementations.

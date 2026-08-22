@@ -14,6 +14,7 @@
 *.jks
 *.keystore
 keystore.properties
+.env
 /build_output.log
 /composeApp/release/
 /composeApp/build

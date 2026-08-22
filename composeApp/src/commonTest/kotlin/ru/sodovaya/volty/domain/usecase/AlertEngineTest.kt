@@ -336,6 +336,78 @@ class AlertEngineTest {
     }
 
     @Test
+    fun `charge complete respects the battery notification setting`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(alertConfig = AlertConfig(chargeCompleteNotify = false))
+
+        engine.evaluateForTest(bmsData(soc = 100f, current = 0.05f), v)
+
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `each battery alert can be disabled independently`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(
+            alertConfig = AlertConfig(
+                cellDeltaMv = 100,
+                cellDeltaEnabled = false,
+                temperatureHighC = 50f,
+                temperatureHighEnabled = false,
+                socLowPercent = 15,
+                socLowEnabled = false,
+                chargeCompleteNotify = false,
+            )
+        )
+
+        engine.evaluateForTest(
+            bmsData(
+                cells = listOf(3.7f, 4.0f),
+                temps = listOf(65f),
+                soc = 5f,
+            ),
+            v,
+        )
+
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
+    fun `battery conditions stay quiet when their measurements are unknown`() {
+        val notifier = TestNotifier()
+        val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())
+        val v = vehicleWith(
+            alertConfig = AlertConfig(
+                cellHighV = 4.1f,
+                cellLowV = 3.1f,
+                cellDeltaMv = 100,
+                temperatureWarnC = 40f,
+                temperatureHighC = 50f,
+                socLowPercent = 20,
+                socCutoffPercent = 5,
+                chargeCompleteNotify = false
+            )
+        )
+        val unknown = BmsData(
+            voltage = 84f,
+            current = 42f,
+            power = 4200f,
+            hasPower = false,
+            soc = 0f,
+            socKnown = false,
+            cellVoltages = emptyList(),
+            temperatures = emptyList(),
+            isConnected = true
+        )
+
+        engine.evaluateForTest(unknown, v)
+
+        assertEquals(0, notifier.alerts.size)
+    }
+
+    @Test
     fun `charge complete requires a measured current rather than a zero placeholder`() {
         val notifier = TestNotifier()
         val engine = AlertEngine(StubBmsRepository(), notifier, clock = fakeClockProgressing())

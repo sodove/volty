@@ -479,6 +479,10 @@ class VehicleEditComponentTest {
         changedAndReverted("temperature warn", { c.onTemperatureWarnChanged(46f) }, { c.onTemperatureWarnChanged(original.temperatureWarnC) })
         changedAndReverted("temperature high", { c.onTemperatureHighChanged(74f) }, { c.onTemperatureHighChanged(original.temperatureHighC) })
         changedAndReverted("SOC low", { c.onSocLowChanged(7) }, { c.onSocLowChanged(original.socLowPercent) })
+        changedAndReverted("cell delta", { c.onCellDeltaMvChanged(420) }, { c.onCellDeltaMvChanged(original.cellDeltaMv) })
+        changedAndReverted("SOC cutoff", { c.onSocCutoffChanged(4) }, { c.onSocCutoffChanged(original.socCutoffPercent) })
+        changedAndReverted("disconnect notification", { c.onDisconnectNotifyChanged(!original.disconnectNotify) }, { c.onDisconnectNotifyChanged(original.disconnectNotify) })
+        changedAndReverted("charge complete notification", { c.onChargeCompleteNotifyChanged(!original.chargeCompleteNotify) }, { c.onChargeCompleteNotifyChanged(original.chargeCompleteNotify) })
         changedAndReverted("dashboard", { c.onDashboardStyleChanged(null) }, { c.onDashboardStyleChanged(original.dashboardStyle) })
         changedAndReverted("secondary gauge", { c.onSecondaryGaugeChanged(SecondaryGauge.BATTERY) }, { c.onSecondaryGaugeChanged(original.secondaryGauge) })
         changedAndReverted(
@@ -492,6 +496,24 @@ class VehicleEditComponentTest {
             { c.onPackLabelChanged(pack.key, pack.label + " X") },
             { c.onPackLabelChanged(pack.key, pack.label) }
         )
+    }
+
+    @Test
+    fun `loads every battery alert setting into state`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val c = component(FakeVehicleRepo(listOf(existingVehicle())))
+        advanceUntilIdle()
+
+        val state = c.state.value
+        assertEquals(4.1f, state.cellHighV)
+        assertEquals(3.1f, state.cellLowV)
+        assertEquals(350, state.cellDeltaMv)
+        assertEquals(44f, state.temperatureWarnC)
+        assertEquals(55f, state.temperatureHighC)
+        assertEquals(22, state.socLowPercent)
+        assertEquals(8, state.socCutoffPercent)
+        assertFalse(state.disconnectNotify)
+        assertFalse(state.chargeCompleteNotify)
     }
 
     @Test
@@ -1127,6 +1149,10 @@ class VehicleEditComponentTest {
         c.onTemperatureWarnChanged(41f)
         c.onTemperatureHighChanged(61f)
         c.onSocLowChanged(9)
+        c.onCellDeltaMvChanged(420)
+        c.onSocCutoffChanged(3)
+        c.onDisconnectNotifyChanged(true)
+        c.onChargeCompleteNotifyChanged(true)
         val motorKey = c.state.value.draft.controllers.single().key
         c.onControllerPolePairsChanged(motorKey, 7)
         c.onControllerWheelDiameterChanged(motorKey, 200)
@@ -1147,13 +1173,13 @@ class VehicleEditComponentTest {
             AlertConfig(
                 cellHighV = 4.25f,
                 cellLowV = 2.9f,
-                cellDeltaMv = 350,
+                cellDeltaMv = 420,
                 temperatureWarnC = 41f,
                 temperatureHighC = 61f,
                 socLowPercent = 9,
-                socCutoffPercent = 8,
-                disconnectNotify = false,
-                chargeCompleteNotify = false
+                socCutoffPercent = 3,
+                disconnectNotify = true,
+                chargeCompleteNotify = true
             ),
             saved.alertConfig
         )

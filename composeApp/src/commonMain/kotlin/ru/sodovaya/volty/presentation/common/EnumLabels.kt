@@ -25,12 +25,14 @@ import volty.composeapp.generated.resources.bms_begode
 import volty.composeapp.generated.resources.bms_daly
 import volty.composeapp.generated.resources.bms_jbd
 import volty.composeapp.generated.resources.bms_jk
+import volty.composeapp.generated.resources.bms_leaperkim
 import volty.composeapp.generated.resources.bms_vesc
 import volty.composeapp.generated.resources.chemistry_lead_acid
 import volty.composeapp.generated.resources.chemistry_lifepo4
 import volty.composeapp.generated.resources.chemistry_li_ion_nmc
 import volty.composeapp.generated.resources.dashboard_style_classic
 import volty.composeapp.generated.resources.dashboard_style_clean
+import volty.composeapp.generated.resources.dashboard_style_light
 import volty.composeapp.generated.resources.motion_alert_duty
 import volty.composeapp.generated.resources.motion_alert_esc_temp
 import volty.composeapp.generated.resources.motion_alert_motor_temp
@@ -55,6 +57,7 @@ fun bmsTypeLabel(type: BmsType): String = stringResource(
         BmsType.DALY_BMS -> Res.string.bms_daly
         BmsType.BEGODE -> Res.string.bms_begode
         BmsType.VESC_BMS -> Res.string.bms_vesc
+        BmsType.LEAPERKIM -> Res.string.bms_leaperkim
     }
 )
 
@@ -110,6 +113,7 @@ fun dashboardStyleLabel(style: DashboardStyle): String = stringResource(
     when (style) {
         DashboardStyle.CLEAN -> Res.string.dashboard_style_clean
         DashboardStyle.CLASSIC -> Res.string.dashboard_style_classic
+        DashboardStyle.LIGHT -> Res.string.dashboard_style_light
     }
 )
 

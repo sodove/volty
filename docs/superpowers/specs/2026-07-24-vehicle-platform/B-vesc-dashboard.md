@@ -135,7 +135,7 @@ New `RideDashboardComponent` + `RideDashboardScreen`, reading
 component lays out ticks / numbers / center readout with exact, collision-free
 spacing the hand-authored SVG mockup could not).
 
-**Two renderers, both Material You** (dynamic color on Android 12+, Volty fallback
+**Three renderers; the existing two are Material You** (dynamic color on Android 12+, Volty fallback
 palette otherwise). The renderer is chosen **per vehicle** (§7.3):
 - **Clean** — Material 3 Expressive. Hero: a concentric radial gauge — **SPEED**
   on the outer arc (brand accent) + a **configurable inner ring** (§7.2). Below:
@@ -146,6 +146,12 @@ palette otherwise). The renderer is chosen **per vehicle** (§7.3):
   a BATTERY dial overlapping lower-right, bottom fan (ESC · Consumption · Motor),
   then the strip. Dials are **Material-You-tinted** (tinted faces, accent/semantic
   needles + swept arcs, red danger segments) — not the original grey/white.
+- **Vescape HUD** — a dark full-width telemetry composition inspired by
+  Vescape's live screen: compact dual speed/duty gauge, large live metrics,
+  lower motor/controller/current telemetry cells with sparklines, and a battery
+  line. This ports the visual HUD only. Vescape's real map layer is intentionally
+  out of scope until Volty has a location/map data contract, so no route or
+  position is drawn.
 
 ### 7.1 Reusable gauge composables (`presentation/ride/gauge/`)
 **Superseded by B3 (2026-07-25) — see §15.1.** This section originally specced `DialGauge` (a
@@ -183,7 +189,7 @@ hidden (a rider who switches a vehicle **to** Clean should not find their earlie
 gone); it is simply inert until they do.
 
 ### 7.3 Per-vehicle dashboard config + persistence
-`enum DashboardStyle { CLEAN, CLASSIC }`. Persist `dashboardStyle` + `secondaryGauge`
+`enum DashboardStyle { CLEAN, CLASSIC, VESCAPE }`. Persist `dashboardStyle` + `secondaryGauge`
 **per vehicle** — add both as columns on `VehicleRow` with a **v4→v5 SQLDelight
 migration** (`4.sqm`: `ALTER TABLE VehicleRow ADD COLUMN dashboardStyle TEXT`,
 `... secondaryGauge TEXT`). The app-level default style lives in `AppPrefs`; a new
@@ -232,13 +238,12 @@ canonical (km/h, km, °C). Settings gets a toggle.
 - Demo — the demo vehicle (from A) drives the Ride dashboard end to end.
 
 ## 11. Decisions — RESOLVED (2026-07-25, user sign-off on the mockup)
-1. **Two dashboard styles**, both Material You: **Clean** (M3 Expressive) +
-   **Classic VESC** (skeuomorphic overlapping cluster). Selectable **per vehicle**
-   (app default + per-vehicle override). Both ship in Part B; sequence Clean first
-   (simpler, approved), Classic second (`DialGauge`/`ClusterLayout` — the component
-   names as planned here; B3 replaced both with a faithful port under new names,
-   see §15.1, after B2 shipped this plan literally and the product owner rejected
-   the result on a device).
+1. **Three dashboard styles**: **Clean** (M3 Expressive), **Classic VESC**
+   (skeuomorphic overlapping cluster), and **Vescape HUD** (dark telemetry composition).
+   Selectable **per vehicle** (app default + per-vehicle override). Clean and Classic
+   shipped in Part B; Vescape was added later as the primary app default. The Vescape
+   renderer ports the HUD composition only; its map/location layer remains out of scope
+   until Volty has an earned GPS/map data contract.
 2. **Secondary/inner gauge is configurable, per vehicle** — menu
    Duty · Battery · Power · Current · Motor °C · ESC °C · Consumption.
 3. **Duty color bands**: green <75 / amber 75–90 / red >90 — the SAME thresholds

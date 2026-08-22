@@ -200,10 +200,10 @@ class BegodeProtocol(
 
     /**
      * The synthetic pack of a wheel without a smart BMS, rebuilt from every
-     * genuine live frame: phase current, board temperature, no cells — and
-     * `voltage = 0`, because the live-frame voltage is on the 67.2 V scale
-     * and the scale factor needs a cell count this protocol must not invent.
-     * Callers that know the cell count scale [liveVoltageOn672ScaleV].
+     * genuine live frame: board temperature, battery current only after 0x07,
+     * no cells — and `voltage = 0`, because the live-frame voltage is on the
+     * 67.2 V scale and the scale factor needs a cell count this protocol must
+     * not invent. Callers that know the cell count scale [liveVoltageOn672ScaleV].
      * A fresh instance per decode, same identity contract PackSampleGate
      * relies on for real branches.
      */
@@ -1254,26 +1254,40 @@ class BegodeProtocol(
         // voltage — a boot-zero live frame would synthesise a 0.00 V pack
         // with the temperature formula's raw-zero artefact (36.53 C).
         if (!smartBmsSeen && liveVoltageRaw > 0) {
-            liveData = BmsData(
-                // Unscaled on purpose — see [liveVoltageOn672ScaleV]. Power
-                // is voltage-derived and equally unknowable here.
-                voltage = 0f,
-                current = phaseCurrentA,
-                power = 0f,
-                // No fuel gauge and no cells: soc = 0 here means "unknown",
-                // not "empty", and downstream must not alarm on it. The
-                // estimator flips this back to true the moment the vehicle
-                // profile's cell count makes a voltage estimate possible.
-                socKnown = false,
-                cellVoltages = emptyList(),
-                temperatures = listOf(boardTempC),
-                // Same rationale as [rebuild]: a streaming wheel is not cut
-                // off, and false renders alarming red OFF badges.
-                chargeEnabled = true,
-                dischargeEnabled = true,
-                isConnected = true
-            )
+            rebuildLiveData()
         }
+    }
+
+    /**
+     * Rebuild the synthetic no-BMS pack without confusing phase current for
+     * battery current. The live 0x00 field is a controller-only phase reading;
+     * only 0x07's battery-current field may populate the battery sample.
+     * Pack power stays unknown here because the live voltage still needs the
+     * profile-aware scaling performed downstream.
+     */
+    private fun rebuildLiveData() {
+        if (smartBmsSeen || liveVoltageRaw <= 0) return
+        val batteryCurrent = batteryCurrentA()
+        liveData = BmsData(
+            // Unscaled on purpose — see [liveVoltageOn672ScaleV]. Power is
+            // voltage-derived and equally unknowable here.
+            voltage = 0f,
+            current = batteryCurrent ?: 0f,
+            hasCurrent = batteryCurrent != null,
+            power = 0f,
+            hasPower = false,
+            // No fuel gauge and no cells: soc = 0 here means "unknown", not
+            // "empty", and downstream must not alarm on it. The estimator
+            // flips this back to true the moment a voltage estimate is honest.
+            socKnown = false,
+            cellVoltages = emptyList(),
+            temperatures = listOf(boardTempC),
+            // Same rationale as [rebuild]: a streaming wheel is not cut off,
+            // and false renders alarming red OFF badges.
+            chargeEnabled = true,
+            dischargeEnabled = true,
+            isConnected = true
+        )
     }
 
     /**
@@ -1391,6 +1405,7 @@ class BegodeProtocol(
         // reads them right here, so a leak would now be observable, and it is
         // pinned by a test.
         rebuildMotion()
+        rebuildLiveData()
     }
 
     /**
@@ -1509,8 +1524,12 @@ class BegodeProtocol(
             current = current,
             power = voltage * current,
             // The 0x01 frame has voltage but no fuel gauge. Cells are the
-            // first evidence from which a branch's charge can be estimated.
-            socKnown = cells.isNotEmpty(),
+            // first evidence from which a branch's charge can be estimated,
+            // but a partial page is not enough. The strict count gate is the
+            // same evidence used for derived cell count; the profile count is
+            // preferred when available, and the frame-voltage ratio is the
+            // fallback before this connection has proved its own count.
+            socKnown = isCellSetComplete(branch, cells),
             cellVoltages = cells,
             temperatures = branch.sectionTemps.filterNotNull(),
             // A Begode reports no charge/discharge MOSFET state at all, and a
@@ -1522,6 +1541,17 @@ class BegodeProtocol(
             dischargeEnabled = true,
             isConnected = true
         )
+    }
+
+    /** True only when the branch has supplied its expected full cell set. */
+    private fun isCellSetComplete(branch: BranchState, cells: List<Float>): Boolean {
+        if (cells.isEmpty()) return false
+        val expectedCount = derivedCellCountValue ?: cellCount
+        return if (expectedCount != null) {
+            expectedCount > 0 && cells.size == expectedCount
+        } else {
+            branch.packVoltageV > 0f && isCellCountConfirmed(cells.sum(), branch.packVoltageV)
+        }
     }
 
     /**

@@ -22,6 +22,7 @@ fun BmsType.protocolKind(): ProtocolKind = when (this) {
     BmsType.ANT_BMS -> ProtocolKind.ANT
     BmsType.DALY_BMS -> ProtocolKind.DALY
     BmsType.BEGODE -> ProtocolKind.BEGODE
+    BmsType.LEAPERKIM -> ProtocolKind.VETERAN
     BmsType.VESC_BMS -> ProtocolKind.VESC_BMS
 }
 
@@ -35,6 +36,7 @@ fun ControllerType.protocolKind(): ProtocolKind = when (this) {
     ControllerType.KINGSONG -> ProtocolKind.KINGSONG
     ControllerType.INMOTION -> ProtocolKind.INMOTION
     ControllerType.VETERAN -> ProtocolKind.VETERAN
+    ControllerType.NOSFET -> ProtocolKind.VETERAN
 }
 
 /**
@@ -84,8 +86,9 @@ fun ProtocolKind.toBmsType(): BmsType = when (this) {
     ProtocolKind.VESC_BMS -> BmsType.VESC_BMS
     ProtocolKind.VESC, ProtocolKind.FARDRIVER, ProtocolKind.KELLY,
     ProtocolKind.NINEBOT, ProtocolKind.NINEBOT_LEGACY, ProtocolKind.KINGSONG,
-    ProtocolKind.INMOTION, ProtocolKind.VETERAN ->
+    ProtocolKind.INMOTION ->
         error("$this is a controller kind — no BMS protocol (built in a later part)")
+    ProtocolKind.VETERAN -> BmsType.LEAPERKIM
 }
 
 /**

@@ -23,5 +23,6 @@ enum class BmsType(
      * Begode / Gotway electric unicycle: the wheel streams motherboard and
      * smart-BMS telemetry for two battery branches over a single BLE link.
      */
-    BEGODE("Begode", reportsStateOfCharge = false)
+    BEGODE("Begode", reportsStateOfCharge = false),
+    LEAPERKIM("Leaperkim", reportsStateOfCharge = true)
 }

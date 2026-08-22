@@ -137,20 +137,32 @@ class SourceScanTest {
     }
 
     /**
-     * Every non-Begode controller kind is a controller and nothing else, and
-     * every non-Begode battery kind is a battery and nothing else — asserted
+     * Every controller kind that has a matching battery protocol is BOTH, and
+     * every remaining kind is one-sided — asserted
      * over the WHOLE of both enums rather than one example each, because
      * `sourceRole` derives from `ProtocolKind` and a new type joins that
      * derivation silently.
      */
     @Test
-    fun `every controller and battery type classifies, and only Begode is BOTH`() {
+    fun `every controller and battery type classifies`() {
         for (t in ControllerType.entries) {
-            val expected = if (t == ControllerType.BEGODE) SourceRole.BOTH else SourceRole.CONTROLLER
+            val expected = if (
+                t == ControllerType.BEGODE ||
+                t == ControllerType.VETERAN ||
+                t == ControllerType.NOSFET
+            ) {
+                SourceRole.BOTH
+            } else {
+                SourceRole.CONTROLLER
+            }
             assertEquals(expected, device(controllerType = t).sourceRole(), "controller $t")
         }
         for (t in BmsType.entries) {
-            val expected = if (t == BmsType.BEGODE) SourceRole.BOTH else SourceRole.BATTERY
+            val expected = if (t == BmsType.BEGODE || t == BmsType.LEAPERKIM) {
+                SourceRole.BOTH
+            } else {
+                SourceRole.BATTERY
+            }
             assertEquals(expected, device(bmsType = t).sourceRole(), "battery $t")
         }
     }
@@ -224,21 +236,29 @@ class SourceScanTest {
 
     /**
      * Exhaustive rather than by example: for EVERY battery kind, the controller
-     * half is either that kind's own controller (Begode) or the VESC fallback —
-     * never some third type — and the battery half is always the detected one.
+     * half is either that kind's own controller (Begode/Leaperkim) or the VESC
+     * fallback, and the battery half is always the detected one.
      */
     @Test
     fun `seeding is total over both enums`() {
         for (t in BmsType.entries) {
             val d = device(bmsType = t)
             assertEquals(t, d.addBmsType(), "battery half of $t")
-            val expected = if (t == BmsType.BEGODE) ControllerType.BEGODE else ControllerType.VESC
+            val expected = when (t) {
+                BmsType.BEGODE -> ControllerType.BEGODE
+                BmsType.LEAPERKIM -> ControllerType.VETERAN
+                else -> ControllerType.VESC
+            }
             assertEquals(expected, d.addControllerType(), "controller half of $t")
         }
         for (t in ControllerType.entries) {
             val d = device(controllerType = t)
             assertEquals(t, d.addControllerType(), "controller half of $t")
-            val expected = if (t == ControllerType.BEGODE) BmsType.BEGODE else BmsType.JK_BMS
+            val expected = when (t) {
+                ControllerType.BEGODE -> BmsType.BEGODE
+                ControllerType.VETERAN, ControllerType.NOSFET -> BmsType.LEAPERKIM
+                else -> BmsType.JK_BMS
+            }
             assertEquals(expected, d.addBmsType(), "battery half of $t")
         }
     }

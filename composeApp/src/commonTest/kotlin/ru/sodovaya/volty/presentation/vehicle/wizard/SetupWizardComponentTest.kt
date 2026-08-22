@@ -199,6 +199,31 @@ class SetupWizardComponentTest {
     }
 
     @Test
+    fun `a Leaperkim wheel scan creates both battery branches`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val wheel = device(
+            address = "LK:01",
+            name = "Veteran",
+            bmsType = BmsType.LEAPERKIM
+        )
+        val c = component(scan = flowOf(wheel))
+        (c.stack.value.active.instance as SetupWizardComponent.Child.WhatAreWeBuilding)
+            .component.onNext()
+        advanceUntilIdle()
+
+        val controllers =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Controllers).component
+        controllers.onNoController()
+        val batteries =
+            (c.stack.value.active.instance as SetupWizardComponent.Child.Battery).component
+        batteries.onAddScannedDevice(wheel, ScannedAdd.WHEEL)
+
+        assertEquals(listOf(ControllerType.VETERAN), c.state.value.draft.controllers.map { it.controllerType })
+        assertEquals(2, c.state.value.draft.packs.size)
+        assertTrue(c.state.value.draft.packs.all { it.bmsType == BmsType.LEAPERKIM })
+    }
+
+    @Test
     fun `back and forward keep the exact parent owned draft`() = runTest {
         Dispatchers.setMain(StandardTestDispatcher(testScheduler))
         val c = component()

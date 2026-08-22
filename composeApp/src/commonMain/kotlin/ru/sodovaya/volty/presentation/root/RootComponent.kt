@@ -45,6 +45,11 @@ import ru.sodovaya.volty.presentation.scanning.DefaultScanningComponent
 import ru.sodovaya.volty.presentation.scanning.ScanningComponent
 import ru.sodovaya.volty.presentation.settings.DefaultSettingsComponent
 import ru.sodovaya.volty.presentation.settings.SettingsComponent
+import ru.sodovaya.volty.presentation.nearby.DefaultNearbyComponent
+import ru.sodovaya.volty.presentation.nearby.NearbyComponent
+import ru.sodovaya.volty.presentation.nearby.DefaultSocialLiveSession
+import ru.sodovaya.volty.presentation.nearby.SocialLiveSession
+import ru.sodovaya.volty.presentation.nearby.SocialLiveState
 import ru.sodovaya.volty.presentation.vehicle.DefaultVehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
 import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
@@ -61,6 +66,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
@@ -73,10 +79,13 @@ interface RootComponent {
     /** True when an active vehicle can show the Ride dashboard. */
     val rideAvailable: Value<Boolean>
 
+    /** Live friends are shared by Nearby controls and the Ride map. */
+    val socialLiveState: StateFlow<SocialLiveState>
+
     fun onBack()
     fun onTab(tab: Tab)
 
-    enum class Tab { Ride, Battery, Settings }
+    enum class Tab { Ride, Battery, Nearby, Settings }
 
     sealed interface Child {
         /** Transient cold-start state while we read the saved-vehicle DB. */
@@ -93,6 +102,7 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
+        data class Nearby(val component: NearbyComponent) : Child
         data class Settings(val component: SettingsComponent) : Child
     }
 }
@@ -134,6 +144,7 @@ sealed class Config {
      */
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     @Serializable data object Graph : Config()
+    @Serializable data object Nearby : Config()
     @Serializable data object Settings : Config()
 }
 
@@ -181,6 +192,7 @@ internal fun homeConfigFor(vehicle: Vehicle?): Config =
 internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
     RootComponent.Tab.Ride -> Config.Ride
     RootComponent.Tab.Battery -> Config.Dashboard
+    RootComponent.Tab.Nearby -> Config.Nearby
     RootComponent.Tab.Settings -> Config.Settings
 }
 
@@ -354,6 +366,8 @@ class DefaultRootComponent(
     private val vehicleRepository: VehicleRepository by inject()
     private val bmsRepository: BmsRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
+    private val socialLiveSession: SocialLiveSession = DefaultSocialLiveSession(get())
+    override val socialLiveState: StateFlow<SocialLiveState> = socialLiveSession.state
 
     // Lightweight scope for cold-start async work (DB reads). Previously these
     // ran via runBlocking on the UI thread — risky on slow devices.
@@ -364,7 +378,10 @@ class DefaultRootComponent(
     override val rideAvailable: Value<Boolean> = _rideAvailable
 
     init {
-        lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
+        lifecycle.doOnDestroy {
+            scope.coroutineContext[Job]?.cancel()
+            socialLiveSession.close()
+        }
     }
 
     override val stack: Value<ChildStack<*, RootComponent.Child>> = childStack(
@@ -569,6 +586,7 @@ class DefaultRootComponent(
                     appPrefs = get<AppPrefs>(),
                     onOpenGraphRequested = { goTo(Config.Graph) },
                     onOpenSettingsRequested = { goTo(Config.Settings) },
+                    onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     // Mirrors Config.Dashboard's onOpenAddBattery: the sheet's
                     // "+ Add" captures the live connection into a new vehicle.
                     onAddVehicleRequested = {
@@ -700,6 +718,17 @@ class DefaultRootComponent(
                     componentContext = context,
                     bmsRepository = get(),
                     rideHistoryRepository = get<RideHistoryRepository>(),
+                    onBackRequested = { nav.pop() }
+                )
+            )
+            is Config.Nearby -> RootComponent.Child.Nearby(
+                DefaultNearbyComponent(
+                    componentContext = context,
+                    socialRepository = get(),
+                    voiceRepository = get(),
+                    locationProvider = get(),
+                    sharingCoordinator = get(),
+                    liveSession = socialLiveSession,
                     onBackRequested = { nav.pop() }
                 )
             )

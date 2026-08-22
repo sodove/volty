@@ -56,7 +56,17 @@ fun pickedControllerVehicle(
     )
     ControllerType.VESC, ControllerType.FARDRIVER, ControllerType.KELLY,
     ControllerType.NINEBOT, ControllerType.NINEBOT_LEGACY,
-    ControllerType.KINGSONG, ControllerType.INMOTION, ControllerType.VETERAN -> controllerVehicle(
+    ControllerType.KINGSONG, ControllerType.INMOTION -> controllerVehicle(
+        id = id,
+        name = name,
+        iconKey = iconKey,
+        controllerType = controllerType,
+        address = address,
+        chemistry = chemistry,
+        createdAt = createdAt,
+        motor = motor
+    )
+    ControllerType.VETERAN, ControllerType.NOSFET -> leaperkimWheelVehicle(
         id = id,
         name = name,
         iconKey = iconKey,
@@ -124,6 +134,42 @@ fun wheelVehicle(
     ),
     // Two parallel branches, which is what BegodeProtocol reports and what the
     // battery picker's own Begode vehicles have always been.
+    topology = PackTopology.PARALLEL,
+    chemistry = chemistry,
+    createdAt = createdAt,
+    dashboardStyle = null,
+    secondaryGauge = SecondaryGauge.DUTY
+)
+
+/** One Veteran/Leaperkim controller and its two real battery branches. */
+@OptIn(ExperimentalTime::class)
+fun leaperkimWheelVehicle(
+    id: String,
+    name: String,
+    iconKey: String,
+    controllerType: ControllerType,
+    address: String,
+    chemistry: Chemistry,
+    createdAt: Instant,
+    motor: MotorConfig = MotorConfig(),
+): Vehicle = Vehicle(
+    id = id,
+    name = name,
+    iconKey = iconKey,
+    packs = listOf(
+        Pack(index = 0, label = "$name 1", bmsType = BmsType.LEAPERKIM, bmsAddress = address),
+        Pack(index = 1, label = "$name 2", bmsType = BmsType.LEAPERKIM, bmsAddress = address)
+    ),
+    controllers = listOf(
+        Controller(
+            index = 0,
+            label = name,
+            controllerType = controllerType,
+            address = address,
+            motor = motor,
+            providesDerivedBattery = false
+        )
+    ),
     topology = PackTopology.PARALLEL,
     chemistry = chemistry,
     createdAt = createdAt,

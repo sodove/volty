@@ -49,6 +49,26 @@ class DraftDiagramTest {
     }
 
     @Test
+    fun `a Leaperkim wheel with two branches is one source node carrying both roles`() {
+        val draft = VehicleDraft(
+            controllers = listOf(
+                controller("controller", "Veteran", "WHEEL", ControllerType.VETERAN)
+            ),
+            packs = listOf(
+                pack("pack-a", "Veteran 1", "WHEEL", bmsType = BmsType.LEAPERKIM),
+                pack("pack-b", "Veteran 2", "WHEEL", bmsType = BmsType.LEAPERKIM)
+            )
+        )
+
+        val wheel = draftDiagram(draft).children.single().children.single()
+
+        assertEquals(DiagramNodeKind.BOTH, wheel.kind)
+        assertEquals(setOf("controller", "pack-a", "pack-b"), wheel.sourceKeys.toSet())
+        assertEquals(ControllerType.VETERAN, wheel.controllerType)
+        assertEquals(BmsType.LEAPERKIM, wheel.bmsType)
+    }
+
+    @Test
     fun `one Begode controller and two matching pack rows remain three visible sources`() {
         val draft = VehicleDraft(
             controllers = listOf(

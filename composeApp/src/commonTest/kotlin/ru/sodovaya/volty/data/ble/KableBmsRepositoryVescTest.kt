@@ -236,7 +236,8 @@ class KableBmsRepositoryVescTest {
                 ControllerType.NINEBOT_LEGACY,
                 ControllerType.KINGSONG,
                 ControllerType.INMOTION,
-                ControllerType.VETERAN
+                ControllerType.VETERAN,
+                ControllerType.NOSFET
             ),
             ControllerType.entries.filter { controllerMotionSupported(it) },
             "Every ported wheel must be wired through the same shared coverage decision"

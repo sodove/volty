@@ -256,14 +256,15 @@ class RideDashboardComponentTest {
         repo: FakeBmsRepo,
         secondary: SecondaryGauge = SecondaryGauge.DUTY,
         vehicleStyle: DashboardStyle? = null,
-        appDefault: DashboardStyle = DashboardStyle.CLEAN,
+        appDefault: DashboardStyle = DashboardStyle.LIGHT,
         units: UnitSystem = UnitSystem.METRIC,
         faultLingerSeconds: Int = 60,
         vehicleRepo: FakeVehicleRepo = FakeVehicleRepo(),
         onOpenGraphRequested: () -> Unit = {},
         onOpenSettingsRequested: () -> Unit = {},
         onAddVehicleRequested: () -> Unit = {},
-        onDisconnectRequested: () -> Unit = {}
+        onDisconnectRequested: () -> Unit = {},
+        onEditVehicleRequested: (String) -> Unit = {},
     ): DefaultRideDashboardComponent {
         if (repo.activeVehicle.value == null) {
             repo.activeVehicle.value = vehicleWith(vehicleStyle, secondary)
@@ -277,7 +278,8 @@ class RideDashboardComponentTest {
             onOpenGraphRequested = onOpenGraphRequested,
             onOpenSettingsRequested = onOpenSettingsRequested,
             onAddVehicleRequested = onAddVehicleRequested,
-            onDisconnectRequested = onDisconnectRequested
+            onDisconnectRequested = onDisconnectRequested,
+            onEditVehicleRequested = onEditVehicleRequested,
         )
     }
 
@@ -672,6 +674,22 @@ class RideDashboardComponentTest {
         val c = component(repo, vehicleStyle = null, appDefault = DashboardStyle.CLASSIC)
         advanceUntilIdle()
         c.state.test { assertEquals(DashboardStyle.CLASSIC, awaitItem().style) }
+    }
+
+    @Test
+    fun an_unconfigured_vehicle_uses_light_as_the_new_app_default() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        val c = component(repo)
+        advanceUntilIdle()
+        c.state.test { assertEquals(DashboardStyle.LIGHT, awaitItem().style) }
+    }
+
+    @Test
+    fun app_prefs_fall_back_to_light_when_no_dashboard_style_has_been_saved() = runTest {
+        val appPrefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf()))
+        appPrefs.defaultDashboardStyle.first { it == DashboardStyle.LIGHT }
+        assertEquals(DashboardStyle.LIGHT, appPrefs.defaultDashboardStyle.value)
     }
 
     @Test
@@ -1782,6 +1800,22 @@ class RideDashboardComponentTest {
         c.onOpenSettings()
         advanceUntilIdle()
         assertTrue(settingsRequested)
+        c.state.test { assertEquals(false, awaitItem().sheetOpen) }
+    }
+
+    @Test
+    fun edit_action_requests_the_active_vehicle_and_closes_the_sheet() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeBmsRepo()
+        var editedId: String? = null
+        val c = component(repo, onEditVehicleRequested = { editedId = it })
+        advanceUntilIdle()
+
+        c.onPillClicked()
+        c.onEditVehicle()
+        advanceUntilIdle()
+
+        assertEquals(repo.activeVehicle.value?.id, editedId)
         c.state.test { assertEquals(false, awaitItem().sheetOpen) }
     }
 }

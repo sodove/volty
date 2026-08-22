@@ -210,7 +210,9 @@ class BegodeMotionProtocolTest {
         assertEquals(36.0f, assertNotNull(protocol.speedKmh()), 1e-3f)
         // ...while the battery decode of the same frame is untouched.
         assertEquals(58.92f, assertNotNull(protocol.liveVoltageOn672ScaleV()), 0.005f)
-        assertEquals(-3.30f, assertNotNull(protocol.latestData(0)).current, 1e-4f)
+        val battery = assertNotNull(protocol.latestData(0))
+        assertEquals(0f, battery.current, 1e-4f)
+        assertFalse(battery.hasCurrent, "the live frame's phase current is not battery current")
     }
 
     @Test
@@ -435,11 +437,10 @@ class BegodeMotionProtocolTest {
 
     @Test
     fun theMotionFrameNeverLeaksIntoTheBatterySample() {
-        // The synthetic no-BMS pack must keep reporting the PHASE current and
-        // the MAINBOARD temperature. The 0x07 frame carries a battery current
-        // and a motor temperature for the same instant, and both are wrong
-        // answers for a battery sample: -0.67 A instead of -3.50 A, 20 °C
-        // instead of 27.5 °C, each of them plausible enough to go unnoticed.
+        // The synthetic no-BMS pack must keep reporting the MAINBOARD
+        // temperature, and may use the 0x07 battery-current field. It must
+        // not substitute phase current or use the 0x07 motor temperature as a
+        // pack temperature.
         //
         // The frames INTERLEAVE the way the wheel really sends them — live,
         // motion, live — because the pack sample is only rebuilt on a live
@@ -452,7 +453,8 @@ class BegodeMotionProtocolTest {
         protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350, tempRaw = -3069))
 
         val data = assertNotNull(protocol.latestData(0))
-        assertEquals(-3.5f, data.current, 1e-3f, "the pack sample carries the phase current")
+        assertEquals(-0.67f, data.current, 1e-3f, "0x07 is the battery-current source")
+        assertTrue(data.hasCurrent, "0x07 earns the battery-current reading")
         assertEquals(1, data.temperatures.size, "the motor temperature is not a pack temperature")
         assertEquals(27.5035f, data.temperatures[0], 0.01f, "the board temperature")
         // And the motion side is unharmed by the same interleaving.

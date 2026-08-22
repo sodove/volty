@@ -105,8 +105,10 @@ class KableBmsRepositoryDumbBegodeTest {
         assertTrue(data.isConnected, "the wheel must be connected")
         // 58.92 V on the 67.2 V scale x (40 x 4.2 / 67.2) = x2.5 = 147.30 V.
         assertEquals(147.30f, data.voltage, 0.01f)
-        assertEquals(-3.5f, data.current, 0.001f)
-        assertEquals(147.30f * -3.5f, data.power, 0.5f)
+        assertEquals(0f, data.current, 0.001f)
+        assertFalse(data.hasCurrent, "the live frame exposes phase current only")
+        assertEquals(0f, data.power, 0.5f)
+        assertFalse(data.hasPower, "battery power is unknown without battery current")
         // SoC from the scaled voltage: 147.3 / 40 = 3.6825 V/cell -> 42.5 %.
         assertEquals(42.5f, data.soc, 0.1f)
         assertEquals(1, data.temperatures.size)
@@ -128,7 +130,8 @@ class KableBmsRepositoryDumbBegodeTest {
 
         val data = repo.activeData.value
         assertTrue(data.isConnected)
-        assertEquals(-3.5f, data.current, 0.001f)
+        assertEquals(0f, data.current, 0.001f)
+        assertFalse(data.hasCurrent, "the live frame exposes phase current only")
         assertEquals(27.5035f, data.temperatures.single(), 0.01f)
         // The 58.92 V raw reading would render as 59 V on what may be a
         // 168 V pack. Without a cell count there is no honest scale factor:
@@ -244,10 +247,9 @@ class KableBmsRepositoryDumbBegodeTest {
         )
         // …and the same notification's BATTERY half decoded normally, so what
         // was dropped is the motion sample and not the frame.
-        assertEquals(
-            -3.5f, assertNotNull(protocol.latestData(0)).current, 1e-3f,
-            "the wheel's battery decode is untouched by any of this"
-        )
+        val battery = assertNotNull(protocol.latestData(0))
+        assertEquals(0f, battery.current, 1e-3f, "phase current is not battery current")
+        assertFalse(battery.hasCurrent, "the live frame has no battery-current field")
     }
 
     // --- Synthetic frame builders (24 bytes, layout as BegodeNoBmsProtocolTest) ---

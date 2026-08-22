@@ -1,0 +1,192 @@
+package ru.sodovaya.volty.presentation.nearby
+
+import com.arkivanov.decompose.DefaultComponentContext
+import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import ru.sodovaya.volty.domain.social.FriendRequest
+import ru.sodovaya.volty.domain.social.FriendSummary
+import ru.sodovaya.volty.domain.social.GroupMemberRole
+import ru.sodovaya.volty.domain.social.GroupMemberSummary
+import ru.sodovaya.volty.domain.social.LocationProvider
+import ru.sodovaya.volty.domain.social.LocationSnapshot
+import ru.sodovaya.volty.domain.social.LoginRequest
+import ru.sodovaya.volty.domain.social.ParticipantShareUpdate
+import ru.sodovaya.volty.domain.social.ProfileUpdate
+import ru.sodovaya.volty.domain.social.RegistrationRequest
+import ru.sodovaya.volty.domain.social.RideGroup
+import ru.sodovaya.volty.domain.social.RideGroupId
+import ru.sodovaya.volty.domain.social.SessionTokenState
+import ru.sodovaya.volty.domain.social.ShareSessionRequest
+import ru.sodovaya.volty.domain.social.SharingSession
+import ru.sodovaya.volty.domain.social.SocialLiveEvent
+import ru.sodovaya.volty.domain.social.SocialRepository
+import ru.sodovaya.volty.domain.social.SocialResult
+import ru.sodovaya.volty.domain.social.SocialSession
+import ru.sodovaya.volty.domain.social.SocialShareSessionCoordinator
+import ru.sodovaya.volty.domain.social.SocialTelemetrySource
+import ru.sodovaya.volty.domain.social.SocialUserId
+import ru.sodovaya.volty.domain.social.VoiceRoomFailureReason
+import ru.sodovaya.volty.domain.social.VoiceRoomRepository
+import ru.sodovaya.volty.domain.social.VoiceRoomState
+import kotlin.test.AfterTest
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertFalse
+import kotlin.test.assertTrue
+
+class NearbyComponentVoicePermissionTest {
+    @AfterTest
+    fun tearDown() {
+        Dispatchers.resetMain()
+    }
+
+    @Test
+    fun joinRequestsMicrophonePermissionBeforeCallingVoiceRepository() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val voiceRepository = FakeNearbyVoiceRoomRepository(
+            requiredPermissions = listOf("android.permission.RECORD_AUDIO"),
+        )
+        val component = component(voiceRepository)
+
+        component.onSelectGroup(nearbyTestGroup())
+        advanceUntilIdle()
+
+        component.onJoinVoice()
+        assertTrue(component.state.value.pendingVoicePermissionRequest)
+        assertEquals(emptyList(), voiceRepository.joinCalls)
+
+        component.onVoicePermissionResult(granted = true)
+        advanceUntilIdle()
+
+        assertFalse(component.state.value.pendingVoicePermissionRequest)
+        assertEquals(listOf(RideGroupId("group-1")), voiceRepository.joinCalls)
+    }
+
+    @Test
+    fun deniedMicrophonePermissionDoesNotCallVoiceRepositoryAndShowsVoiceFailure() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val voiceRepository = FakeNearbyVoiceRoomRepository(
+            requiredPermissions = listOf("android.permission.RECORD_AUDIO"),
+        )
+        val component = component(voiceRepository)
+
+        component.onSelectGroup(nearbyTestGroup())
+        advanceUntilIdle()
+
+        component.onJoinVoice()
+        component.onVoicePermissionResult(granted = false)
+        advanceUntilIdle()
+
+        assertEquals(emptyList(), voiceRepository.joinCalls)
+        assertEquals(
+            VoiceRoomState.Failed(VoiceRoomFailureReason.MICROPHONE_PERMISSION_DENIED),
+            component.state.value.voice,
+        )
+    }
+
+    private fun component(voiceRepository: FakeNearbyVoiceRoomRepository): DefaultNearbyComponent {
+        val socialRepository = FakeNearbySocialRepository()
+        return DefaultNearbyComponent(
+            componentContext = DefaultComponentContext(LifecycleRegistry()),
+            socialRepository = socialRepository,
+            voiceRepository = voiceRepository,
+            locationProvider = FakeLocationProvider(),
+            sharingCoordinator = SocialShareSessionCoordinator(
+                FakeNearbySocialRepository(),
+                FakeTelemetrySource(),
+            ),
+            liveSession = DefaultSocialLiveSession(socialRepository),
+            onBackRequested = {},
+        )
+    }
+}
+
+private class FakeNearbyVoiceRoomRepository(
+    override val requiredPermissions: List<String>,
+) : VoiceRoomRepository {
+    override val state = MutableStateFlow<VoiceRoomState>(VoiceRoomState.Available)
+    val joinCalls = mutableListOf<RideGroupId>()
+
+    override suspend fun join(groupId: RideGroupId): SocialResult<Unit> {
+        joinCalls += groupId
+        state.value = VoiceRoomState.Joined(muted = false)
+        return SocialResult.Success(Unit)
+    }
+
+    override suspend fun leave(): SocialResult<Unit> = SocialResult.Success(Unit)
+    override suspend fun setMuted(muted: Boolean): SocialResult<Unit> = SocialResult.Success(Unit)
+}
+
+private class FakeNearbySocialRepository : SocialRepository {
+    override val session = MutableStateFlow<SocialSession>(
+        SocialSession.Authenticated(
+            userId = SocialUserId("u1"),
+            displayName = "Rider",
+            tokenState = SessionTokenState.ACTIVE,
+            emailVerified = true,
+        ),
+    )
+    override val activeSharing = MutableStateFlow<SharingSession?>(null)
+
+    override suspend fun register(request: RegistrationRequest): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun login(request: LoginRequest): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun logout(): SocialResult<Unit> = SocialResult.Success(Unit)
+    override suspend fun verifyEmail(token: String): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun requestPasswordReset(email: String): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun resetPassword(token: String, newPassword: String): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun deleteAccount(): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun getProfile(): SocialResult<SocialSession.Authenticated> = unexpectedNearbyCall()
+    override suspend fun updateProfile(request: ProfileUpdate): SocialResult<SocialSession.Authenticated> = unexpectedNearbyCall()
+    override suspend fun listFriends(): SocialResult<List<FriendSummary>> = SocialResult.Success(emptyList())
+    override suspend fun sendFriendRequest(request: FriendRequest): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun respondToFriendRequest(friendshipId: String, accept: Boolean): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun listGroups(): SocialResult<List<RideGroup>> = SocialResult.Success(listOf(nearbyTestGroup()))
+    override suspend fun createGroup(name: String): SocialResult<RideGroup> = unexpectedNearbyCall()
+    override suspend fun joinGroup(inviteCode: String): SocialResult<RideGroup> = unexpectedNearbyCall()
+    override suspend fun leaveGroup(groupId: RideGroupId): SocialResult<Unit> = unexpectedNearbyCall()
+    override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> = emptyFlow()
+    override suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession> = unexpectedNearbyCall()
+    override suspend fun publishSharingUpdate(
+        groupId: RideGroupId,
+        update: ParticipantShareUpdate,
+    ): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit> = unexpectedNearbyCall()
+    override suspend fun joinVoice(groupId: RideGroupId) =
+        unexpectedNearbyCall<ru.sodovaya.volty.domain.social.VoiceRoomCredentials>()
+    override suspend fun leaveVoice(groupId: RideGroupId) = SocialResult.Success(Unit)
+}
+
+private class FakeLocationProvider : LocationProvider {
+    override val updates: Flow<LocationSnapshot> = emptyFlow()
+    override suspend fun start() = Unit
+    override suspend fun stop() = Unit
+}
+
+private class FakeTelemetrySource : SocialTelemetrySource {
+    override val latest: StateFlow<ru.sodovaya.volty.domain.social.EarnedTelemetry?> =
+        MutableStateFlow(null)
+}
+
+private fun nearbyTestGroup() = RideGroup(
+    id = RideGroupId("group-1"),
+    name = "Night Ride",
+    ownerId = SocialUserId("owner"),
+    members = listOf(
+        GroupMemberSummary(
+            userId = SocialUserId("owner"),
+            displayName = "Owner",
+            role = GroupMemberRole.OWNER,
+        ),
+    ),
+)
+
+private fun <T> unexpectedNearbyCall(): SocialResult<T> = throw AssertionError("Unexpected fake call")

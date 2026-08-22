@@ -140,6 +140,33 @@ class BegodeProtocolTest {
     }
 
     @Test
+    fun livePhaseCurrentStaysOutOfBatteryDataUntilSevenFrameCurrentArrives() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, currentRaw = -350))
+
+        val batteryBeforeSeven = assertNotNull(protocol.latestData(0))
+        assertEquals(0f, batteryBeforeSeven.current, 0f, "0x00 current is phase current")
+        assertFalse(batteryBeforeSeven.hasCurrent, "phase current is not BMS current")
+        assertEquals(0f, batteryBeforeSeven.power, 0f)
+        assertFalse(batteryBeforeSeven.hasPower, "phase current must not create battery power")
+
+        val motionBeforeSeven = assertNotNull(protocol.latestMotion(0))
+        assertEquals(3.5f, motionBeforeSeven.motorCurrentA, 0.001f)
+
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 2))
+
+        val batteryAfterSeven = assertNotNull(protocol.latestData(0))
+        assertEquals(-0.67f, batteryAfterSeven.current, 0.001f)
+        assertTrue(batteryAfterSeven.hasCurrent, "0x07 supplies battery current")
+        assertEquals(0f, batteryAfterSeven.power, 0f)
+        assertFalse(batteryAfterSeven.hasPower, "the synthetic pack still has no measured pack power")
+
+        // The 0x00 phase-current reading remains the controller motor-current
+        // reading after the independent battery-current frame arrives.
+        assertEquals(3.5f, assertNotNull(protocol.latestMotion(0)).motorCurrentA, 0.001f)
+    }
+
+    @Test
     fun branchKnowsItsChargeOnceItsCellsComplete() {
         val protocol = BegodeProtocol()
         protocol.onNotification(telemetryFrame(bmsnum = 0, packVoltageRaw = 1472, t1 = 28, t2 = 26, sectionVoltageRaw = 741))
@@ -175,6 +202,28 @@ class BegodeProtocolTest {
         val data = assertNotNull(protocol.latestData(0))
         assertEquals(8, data.cellVoltages.size, "precondition: cells still arriving")
         assertEquals(147.2f, data.voltage, 0.01f, "a partial cell sum must not be published as the pack voltage")
+    }
+
+    @Test
+    fun aPartialCellPageWithNonZeroTelemetryStillHasUnknownSoc() {
+        val protocol = BegodeProtocol()
+        protocol.onNotification(
+            telemetryFrame(
+                bmsnum = 0,
+                packVoltageRaw = 1472,
+                currentRaw = 88,
+                t1 = 28,
+                t2 = 26,
+                sectionVoltageRaw = 741
+            )
+        )
+        protocol.onNotification(cellFrame(type = 0x02, packetIndex = 0, baseMv = 3710))
+
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(8, data.cellVoltages.size, "precondition: the page is partial")
+        assertTrue(data.voltage > 0f, "the partial sample still carries a voltage")
+        assertTrue(data.power < 0f, "the partial sample still carries non-zero power-like data")
+        assertFalse(data.socKnown, "partial cells are not a complete pack SoC")
     }
 
     @Test
@@ -937,11 +986,21 @@ class BegodeProtocolTest {
         return frame(type, packetIndex, p)
     }
 
-    /** Live 0x00 frame with only the voltage field (bytes 2..3) set — all these tests need. */
-    private fun liveFrame(voltageRaw: Int): ByteArray {
+    /** Live 0x00 frame with voltage (bytes 2..3) and phase current (10..11). */
+    private fun liveFrame(voltageRaw: Int, currentRaw: Int = 0): ByteArray {
         val p = ByteArray(16)
         p[0] = (voltageRaw shr 8).toByte(); p[1] = voltageRaw.toByte()
+        p[8] = (currentRaw shr 8).toByte(); p[9] = currentRaw.toByte()
         return frame(0x00, 24, p)
+    }
+
+    /** Live 0x07 frame with battery current, motor temperature and duty. */
+    private fun motionFrame(batteryCurrentRaw: Int, motorTempRaw: Int, dutyRaw: Int): ByteArray {
+        val p = ByteArray(16)
+        p[0] = (batteryCurrentRaw shr 8).toByte(); p[1] = batteryCurrentRaw.toByte()
+        p[4] = (motorTempRaw shr 8).toByte(); p[5] = motorTempRaw.toByte()
+        p[6] = (dutyRaw shr 8).toByte(); p[7] = dutyRaw.toByte()
+        return frame(0x07, 24, p)
     }
 
     private fun assertSameDecodedData(a: BmsData, b: BmsData, label: String) {

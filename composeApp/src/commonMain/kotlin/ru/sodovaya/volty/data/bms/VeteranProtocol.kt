@@ -30,9 +30,10 @@ import kotlin.math.abs
  * current, not battery current; it therefore reaches [ControllerData]'s
  * `motorCurrentA` only.  Battery current and power remain unavailable until a
  * smart-BMS page supplies them.  Smart-BMS pages carry cell voltages,
- * temperatures and current for two packs, but no SoC gauge; pack SoC stays
- * unknown.  Controller-only SoC is the model voltage curve used by WheelLog,
- * and is marked known only for the model revisions listed above.  The Begode
+ * temperatures and current for two packs. A reported page-2 SoC is retained
+ * when present; otherwise pack SoC stays unknown. Controller-only SoC is the
+ * model voltage curve used by WheelLog, and is marked known only for the model
+ * revisions listed above. The Begode
  * `Master` is intentionally not classified here: the available sources do not
  * prove that its BLE frames use this Veteran layout.
  *
@@ -66,6 +67,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     private var smartBmsSeen = false
     private var majorVersion: Int? = null
     private var versionRaw: Int = 0
+    private var hardwareCodeValue: String? = null
+    private var reportedSoc: Float? = null
     private var tripBaselineMeters: Long? = null
 
     /** Model name derived from the firmware revision, or generic before a frame. */
@@ -74,6 +77,9 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     /** Firmware revision as WheelLog formats it (`MMM.m.pp`). */
     val firmwareVersion: String?
         get() = versionRaw.takeIf { it > 0 }?.let(::formatVersion)
+
+    /** Four-digit hardware profile decoded from the 24-bit version field. */
+    val hardwareCode: String? get() = hardwareCodeValue
 
     override fun onNotification(data: ByteArray) {
         if (data.isEmpty()) return
@@ -84,8 +90,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     override fun latestData(packIndex: Int): BmsData? {
         if (packIndex !in bms.indices) return null
         if (!smartBmsSeen) return if (packIndex == 0) mainData else null
-        val expected = expectedCellCount(majorVersion) ?: return null
-        return bms[packIndex].toData(expected)
+        val expected = bms[packIndex].reportedCellCount ?: expectedCellCount(majorVersion, hardwareCodeValue) ?: return null
+        return bms[packIndex].toData(expected, reportedSoc)
     }
 
     override val controllerCount: Int get() = 1
@@ -101,6 +107,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         smartBmsSeen = false
         majorVersion = null
         versionRaw = 0
+        hardwareCodeValue = null
+        reportedSoc = null
         tripBaselineMeters = null
     }
 
@@ -127,12 +135,16 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
             if (candidate.size < frameSize) return
 
             val frame = candidate.copyOf(frameSize)
-            if (!hasValidShape(frame) || (length > CRC_THRESHOLD && !hasValidCrc(frame, length))) {
+            val hasCrc = length > CRC_THRESHOLD
+            if (!hasValidShape(frame) || (hasCrc && !hasValidCrc(frame, length))) {
                 buffer.trimLeading(1)
                 continue
             }
 
-            parseFrame(frame)
+            // All offsets below describe the payload. A CRC-valid frame's last
+            // four bytes are not telemetry, even when a short model happens to
+            // put an otherwise plausible field offset inside that trailer.
+            parseFrame(if (hasCrc) frame.copyOf(length) else frame)
             buffer.trimLeading(frameSize)
         }
     }
@@ -162,15 +174,16 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     }
 
     private fun parseFrame(frame: ByteArray) {
-        val rawVersion = frame.u16BE(28)
-        if (rawVersion > 0) {
+        val rawVersion = frame.versionAt(28)
+        if (rawVersion != null && rawVersion > 0) {
             versionRaw = rawVersion
-            majorVersion = rawVersion / 1000
+            hardwareCodeValue = rawVersion.toString().padStart(6, '0').take(4)
+            majorVersion = if (rawVersion >= 100_000) rawVersion / 100_000 else rawVersion / 1000
         }
 
         val major = majorVersion ?: return
         if (major >= SMART_BMS_MIN_MAJOR && frame.size > BMS_PACKET_OFFSET) {
-            parseSmartBms(frame, major)
+            parseSmartBms(frame)
         }
         parseController(frame, major)
     }
@@ -184,7 +197,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         val temperature = frame.i16BE(18) / TEMPERATURE_RAW_PER_C
         if (voltage !in 20f..200f || speed !in 0f..120f || temperature !in -50f..130f) return
 
-        val soc = estimateSoc(voltage * 100f, major)
+        val soc = reportedSoc ?: estimateSoc(voltage * 100f, major)
         mainData = BmsData(
             voltage = voltage,
             // The controller field is phase current, not battery current.
@@ -231,12 +244,19 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         )
     }
 
-    private fun parseSmartBms(frame: ByteArray, major: Int) {
+    private fun parseSmartBms(frame: ByteArray) {
         val packet = frame[BMS_PACKET_OFFSET].u8()
         if (packet !in 0..7) return
         val bmsIndex = if (packet < 4) 0 else 1
         val state = bms[bmsIndex]
-        smartBmsSeen = true
+        if (packet in SMART_BMS_PAGES) smartBmsSeen = true
+
+        if (packet == 2 && frame.size > REPORTED_SOC_OFFSET) {
+            val percent = frame[REPORTED_SOC_OFFSET].u8()
+            if (percent != UNREPORTED && percent <= 100) {
+                reportedSoc = percent / PERCENT_PER_UNIT
+            }
+        }
 
         when (packet) {
             0, 4 -> {
@@ -246,13 +266,21 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
                 state.currentA = current / BMS_CURRENT_RAW_PER_AMP
             }
 
-            1, 5 -> parseCells(frame, state, firstCell = 0, offset = 53, count = 15)
+            1, 5 -> {
+                if (frame.size > REPORTED_CELL_COUNT_OFFSET) {
+                    val count = frame[REPORTED_CELL_COUNT_OFFSET].u8()
+                    if (count in 1..MAX_BMS_CELLS) state.reportedCellCount = count
+                }
+                parseCells(frame, state, firstCell = 0, offset = 53, count = 15)
+            }
             2, 6 -> parseCells(frame, state, firstCell = 15, offset = 53, count = 15)
             3, 7 -> {
                 parseCells(frame, state, firstCell = 30, offset = 59, count = 12)
                 state.temperatures.clear()
                 repeat(6) { i ->
-                    val temp = frame.i16BE(47 + i * 2) / TEMPERATURE_RAW_PER_C
+                    val offset = 47 + i * 2
+                    if (offset + 1 >= frame.size) return@repeat
+                    val temp = frame.i16BE(offset) / TEMPERATURE_RAW_PER_C
                     if (temp in -50f..150f) state.temperatures += temp
                 }
             }
@@ -271,15 +299,17 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     private class BmsState {
         val cells = arrayOfNulls<Float>(MAX_BMS_CELLS)
         var currentA: Float? = null
+        var reportedCellCount: Int? = null
         val temperatures = mutableListOf<Float>()
 
         fun reset() {
             cells.fill(null)
             currentA = null
+            reportedCellCount = null
             temperatures.clear()
         }
 
-        fun toData(expectedCells: Int): BmsData? {
+        fun toData(expectedCells: Int, reportedSoc: Float?): BmsData? {
             if (cells.take(expectedCells).any { it == null }) return null
             val completeCells = cells.take(expectedCells).map { it!! }
             return BmsData(
@@ -290,8 +320,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
                 hasCurrent = currentA != null,
                 power = 0f,
                 hasPower = false,
-                soc = 0f,
-                socKnown = false,
+                soc = reportedSoc ?: 0f,
+                socKnown = reportedSoc != null,
                 cellVoltages = completeCells,
                 temperatures = temperatures.toList(),
                 isConnected = true
@@ -334,24 +364,37 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         return (percent / 100f).coerceIn(0f, 1f)
     }
 
-    private fun modelName(major: Int?): String = when (major) {
-        0, 1 -> "Sherman"
-        2 -> "Abrams"
-        3 -> "Sherman S"
-        4 -> "Patton"
-        5 -> "Lynx"
-        6 -> "Sherman L"
-        7 -> "Patton S"
-        8 -> "Oryx"
-        9 -> "Lynx S"
-        else -> "Leaperkim"
+    private fun modelName(major: Int?): String = when (hardwareCodeValue) {
+        "0040" -> "Patton"
+        "0050" -> "Lynx"
+        "0060" -> "Sherman L"
+        "0070" -> "Patton S"
+        "0080" -> "Oryx"
+        "0090" -> "Lynx S"
+        "5010" -> "Nosfet Apex"
+        else -> when (major) {
+            0, 1 -> "Sherman"
+            2 -> "Abrams"
+            3 -> "Sherman S"
+            4 -> "Patton"
+            5 -> "Lynx"
+            6 -> "Sherman L"
+            7 -> "Patton S"
+            8 -> "Oryx"
+            9 -> "Lynx S"
+            else -> "Leaperkim"
+        }
     }
 
-    private fun expectedCellCount(major: Int?): Int? = when (major) {
-        4, 7 -> 30
-        5, 6, 9 -> 36
-        8 -> 42
-        else -> null
+    private fun expectedCellCount(major: Int?, hardwareCode: String?): Int? = when (hardwareCode) {
+        "0040" -> 30
+        "0050", "0060", "0090", "5010", "5030" -> 36
+        else -> when (major) {
+            4, 7 -> 30
+            5, 6, 9 -> 36
+            8 -> 42
+            else -> null
+        }
     }
 
     private fun formatVersion(raw: Int): String =
@@ -371,6 +414,13 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     private fun ByteArray.reverseBeInt(offset: Int): Long =
         (u16BE(offset).toLong() or (u16BE(offset + 2).toLong() shl 16)) and 0xFFFF_FFFFL
 
+    private fun ByteArray.versionAt(offset: Int): Int? {
+        if (offset + 2 >= size) return null
+        return (this[offset + 2].u8() shl 16) or
+            (this[offset].u8() shl 8) or
+            this[offset + 1].u8()
+    }
+
     private fun Byte.u8(): Int = toInt() and 0xFF
 
     private companion object {
@@ -387,6 +437,11 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         const val BMS_CURRENT_1_OFFSET = 69
         const val BMS_CURRENT_2_OFFSET = 71
         const val SMART_BMS_MIN_MAJOR = 5
+        val SMART_BMS_PAGES = setOf(1, 2, 3, 5, 6, 7)
+        const val REPORTED_SOC_OFFSET = 50
+        const val REPORTED_CELL_COUNT_OFFSET = 52
+        const val UNREPORTED = 0x80
+        const val PERCENT_PER_UNIT = 100f
         const val HARDWARE_PWM_MIN_MAJOR = 2
         const val MAX_BMS_CELLS = 42
         const val MIN_CELL_MV = 1_500

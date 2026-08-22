@@ -19,6 +19,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -41,9 +42,22 @@ import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.presentation.common.alertAvailabilityNote
 import ru.sodovaya.volty.presentation.common.motionAlertKindLabel
 import ru.sodovaya.volty.presentation.common.motionAlertUnitLabel
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
+import ru.sodovaya.volty.presentation.alerts.BatteryAlertDraft
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.alerts_add_level
+import volty.composeapp.generated.resources.alerts_battery_cell_delta
+import volty.composeapp.generated.resources.alerts_battery_cell_high
+import volty.composeapp.generated.resources.alerts_battery_cell_low
+import volty.composeapp.generated.resources.alerts_battery_charge_complete
+import volty.composeapp.generated.resources.alerts_battery_disconnect
+import volty.composeapp.generated.resources.alerts_battery_section
+import volty.composeapp.generated.resources.alerts_battery_soc_cutoff
+import volty.composeapp.generated.resources.alerts_battery_soc_low
+import volty.composeapp.generated.resources.alerts_battery_temperature_high
+import volty.composeapp.generated.resources.alerts_battery_temperature_warn
+import volty.composeapp.generated.resources.alerts_default_threshold
 import volty.composeapp.generated.resources.alerts_discard_confirm
 import volty.composeapp.generated.resources.alerts_discard_keep
 import volty.composeapp.generated.resources.alerts_discard_text
@@ -53,6 +67,10 @@ import volty.composeapp.generated.resources.alerts_level
 import volty.composeapp.generated.resources.alerts_level_muted
 import volty.composeapp.generated.resources.alerts_master
 import volty.composeapp.generated.resources.alerts_master_subtitle
+import volty.composeapp.generated.resources.alerts_music_mode
+import volty.composeapp.generated.resources.alerts_music_mode_duck
+import volty.composeapp.generated.resources.alerts_music_mode_overlay
+import volty.composeapp.generated.resources.alerts_music_mode_subtitle
 import volty.composeapp.generated.resources.alerts_preview
 import volty.composeapp.generated.resources.alerts_preview_level
 import volty.composeapp.generated.resources.alerts_preview_subtitle
@@ -145,6 +163,99 @@ fun VehicleAlertsScreen(component: VehicleAlertsComponent) {
                 checked = state.vibrationEnabled,
                 enabled = state.alarmEnabled,
                 onChange = component::onVibrationEnabledChanged
+            )
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(stringResource(Res.string.alerts_music_mode), fontSize = 14.sp)
+                Caption(stringResource(Res.string.alerts_music_mode_subtitle))
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp)
+                ) {
+                    FilterChip(
+                        selected = state.musicMode == AlarmMusicMode.DUCK_MEDIA,
+                        onClick = { component.onAlarmMusicModeChanged(AlarmMusicMode.DUCK_MEDIA) },
+                        label = { Text(stringResource(Res.string.alerts_music_mode_duck)) }
+                    )
+                    FilterChip(
+                        selected = state.musicMode == AlarmMusicMode.PLAY_OVER_MEDIA,
+                        onClick = { component.onAlarmMusicModeChanged(AlarmMusicMode.PLAY_OVER_MEDIA) },
+                        label = { Text(stringResource(Res.string.alerts_music_mode_overlay)) }
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
+            SectionLabel(stringResource(Res.string.alerts_battery_section))
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_cell_high),
+                value = state.battery.cellHigh,
+                suffix = "V",
+                enabled = state.battery.cellHighEnabled,
+                onValueChange = component::onCellHighChanged,
+                onEnabledChange = component::onCellHighEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_cell_low),
+                value = state.battery.cellLow,
+                suffix = "V",
+                enabled = state.battery.cellLowEnabled,
+                onValueChange = component::onCellLowChanged,
+                onEnabledChange = component::onCellLowEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_cell_delta),
+                value = state.battery.cellDelta,
+                suffix = "mV",
+                enabled = state.battery.cellDeltaEnabled,
+                onValueChange = component::onCellDeltaChanged,
+                onEnabledChange = component::onCellDeltaEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_temperature_warn),
+                value = state.battery.temperatureWarn,
+                suffix = "°C",
+                enabled = state.battery.temperatureWarnEnabled,
+                onValueChange = component::onTemperatureWarnChanged,
+                onEnabledChange = component::onTemperatureWarnEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_temperature_high),
+                value = state.battery.temperatureHigh,
+                suffix = "°C",
+                enabled = state.battery.temperatureHighEnabled,
+                onValueChange = component::onTemperatureHighChanged,
+                onEnabledChange = component::onTemperatureHighEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_soc_low),
+                value = state.battery.socLow,
+                suffix = "%",
+                enabled = state.battery.socLowEnabled,
+                onValueChange = component::onSocLowChanged,
+                onEnabledChange = component::onSocLowEnabledChanged,
+            )
+            BatteryAlertRow(
+                label = stringResource(Res.string.alerts_battery_soc_cutoff),
+                value = state.battery.socCutoff,
+                suffix = "%",
+                enabled = state.battery.socCutoffEnabled,
+                onValueChange = component::onSocCutoffChanged,
+                onEnabledChange = component::onSocCutoffEnabledChanged,
+            )
+            SwitchRow(
+                label = stringResource(Res.string.alerts_battery_disconnect),
+                subtitle = null,
+                checked = state.battery.disconnectEnabled,
+                enabled = true,
+                onChange = component::onDisconnectNotifyChanged,
+            )
+            SwitchRow(
+                label = stringResource(Res.string.alerts_battery_charge_complete),
+                subtitle = null,
+                checked = state.battery.chargeCompleteEnabled,
+                enabled = true,
+                onChange = component::onChargeCompleteNotifyChanged,
             )
 
             HorizontalDivider()
@@ -281,6 +392,36 @@ private fun AlertKindCard(
         }
 
         HorizontalDivider()
+    }
+}
+
+@Composable
+private fun BatteryAlertRow(
+    label: String,
+    value: String,
+    suffix: String,
+    enabled: Boolean,
+    onValueChange: (String) -> Unit,
+    onEnabledChange: (Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = onValueChange,
+            enabled = enabled,
+            singleLine = true,
+            isError = value.isNotBlank() && value.toFloatOrNull() == null && value.toIntOrNull() == null,
+            label = { Text(label) },
+            placeholder = { Text(stringResource(Res.string.alerts_default_threshold)) },
+            suffix = { Text(suffix) },
+            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal),
+            modifier = Modifier.weight(1f),
+        )
+        Switch(checked = enabled, onCheckedChange = onEnabledChange)
     }
 }
 

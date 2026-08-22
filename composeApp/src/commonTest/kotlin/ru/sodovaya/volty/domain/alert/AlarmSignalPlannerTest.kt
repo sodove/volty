@@ -106,6 +106,19 @@ class AlarmSignalPlannerTest {
     }
 
     @Test
+    fun changing_music_mode_mid_alarm_restarts_with_the_new_policy() {
+        val planner = AlarmSignalPlanner()
+        planner.update(state(2))
+
+        assertEquals(
+            AlarmTransition.RESTART,
+            planner.setModalities(AlarmModalities(musicMode = AlarmMusicMode.PLAY_OVER_MEDIA))
+        )
+        val play = planner.command as AlarmCommand.Play
+        assertEquals(AlarmMusicMode.PLAY_OVER_MEDIA, play.musicMode)
+    }
+
+    @Test
     fun setting_the_same_modalities_again_changes_nothing() {
         val planner = AlarmSignalPlanner()
         planner.update(state(2))

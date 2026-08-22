@@ -12,8 +12,16 @@
         android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"
         android:maxSdkVersion="30" />
-    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
-        android:maxSdkVersion="30" />
+    <!-- Social location is requested only from Nearby after explicit sharing
+         consent. Keeping these declarations separate from BLE monitoring means
+         entering the app still does not imply location sharing. -->
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+    <!-- HTTPS social transport, map tiles and the future WebRTC/SFU adapter. -->
+    <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Requested only after the user confirms joining a voice room. -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- The audible alarm's haptic half (F §4). Normal permission, granted at
          install; without it Vibrator.vibrate silently does nothing. -->

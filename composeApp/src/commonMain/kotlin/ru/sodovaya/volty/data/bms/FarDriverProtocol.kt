@@ -277,7 +277,8 @@ class FarDriverProtocol(
     private fun phaseCurrent(raw: Int): Float = 1.953125f * sqrt(raw.toFloat())
 
     private fun u16(frame: ByteArray, offset: Int): Int =
-        ((frame[offset].toInt() and 0xFF) shl 8) or (frame[offset + 1].toInt() and 0xFF)
+        (frame[offset].toInt() and 0xFF) or
+            ((frame[offset + 1].toInt() and 0xFF) shl 8)
 
     private fun i16(frame: ByteArray, offset: Int): Int = u16(frame, offset).toShort().toInt()
 

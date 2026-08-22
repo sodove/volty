@@ -58,9 +58,13 @@ interface VehicleEditComponent : DraftExitComponent {
     fun onAveragingWindowChanged(min: Int)
     fun onCellHighVChanged(v: Float?)
     fun onCellLowVChanged(v: Float?)
+    fun onCellDeltaMvChanged(v: Int?)
     fun onTemperatureWarnChanged(v: Float?)
     fun onTemperatureHighChanged(v: Float?)
     fun onSocLowChanged(v: Int?)
+    fun onSocCutoffChanged(v: Int?)
+    fun onDisconnectNotifyChanged(enabled: Boolean)
+    fun onChargeCompleteNotifyChanged(enabled: Boolean)
     fun onDashboardStyleChanged(style: DashboardStyle?)
     fun onSecondaryGaugeChanged(gauge: SecondaryGauge)
     fun onAutoVolumeEnabledChanged(enabled: Boolean)
@@ -278,9 +282,20 @@ interface VehicleEditComponent : DraftExitComponent {
         val averagingWindowMin: Int,
         val cellHighV: Float?,
         val cellLowV: Float?,
+        val cellDeltaMv: Int?,
         val temperatureWarnC: Float?,
         val temperatureHighC: Float?,
         val socLowPercent: Int?,
+        val socCutoffPercent: Int?,
+        val cellHighEnabled: Boolean,
+        val cellLowEnabled: Boolean,
+        val cellDeltaEnabled: Boolean,
+        val temperatureWarnEnabled: Boolean,
+        val temperatureHighEnabled: Boolean,
+        val socLowEnabled: Boolean,
+        val socCutoffEnabled: Boolean,
+        val disconnectNotify: Boolean,
+        val chargeCompleteNotify: Boolean,
         val dashboardStyle: DashboardStyle?,
         val secondaryGauge: SecondaryGauge,
         val autoVolume: AutoVolumeSettings,
@@ -323,9 +338,20 @@ interface VehicleEditComponent : DraftExitComponent {
         val averagingWindowMin: Int = 5,
         val cellHighV: Float? = null,
         val cellLowV: Float? = null,
+        val cellDeltaMv: Int? = 200,
         val temperatureWarnC: Float? = 50f,
         val temperatureHighC: Float? = 60f,
         val socLowPercent: Int? = 15,
+        val socCutoffPercent: Int? = null,
+        val cellHighEnabled: Boolean = true,
+        val cellLowEnabled: Boolean = true,
+        val cellDeltaEnabled: Boolean = true,
+        val temperatureWarnEnabled: Boolean = true,
+        val temperatureHighEnabled: Boolean = true,
+        val socLowEnabled: Boolean = true,
+        val socCutoffEnabled: Boolean = true,
+        val disconnectNotify: Boolean = true,
+        val chargeCompleteNotify: Boolean = true,
         /** Null = follow the app-level default. */
         val dashboardStyle: DashboardStyle? = null,
         val secondaryGauge: SecondaryGauge = SecondaryGauge.DUTY,
@@ -417,9 +443,20 @@ interface VehicleEditComponent : DraftExitComponent {
                 averagingWindowMin = averagingWindowMin,
                 cellHighV = cellHighV,
                 cellLowV = cellLowV,
+                cellDeltaMv = cellDeltaMv,
                 temperatureWarnC = temperatureWarnC,
                 temperatureHighC = temperatureHighC,
                 socLowPercent = socLowPercent,
+                socCutoffPercent = socCutoffPercent,
+                cellHighEnabled = cellHighEnabled,
+                cellLowEnabled = cellLowEnabled,
+                cellDeltaEnabled = cellDeltaEnabled,
+                temperatureWarnEnabled = temperatureWarnEnabled,
+                temperatureHighEnabled = temperatureHighEnabled,
+                socLowEnabled = socLowEnabled,
+                socCutoffEnabled = socCutoffEnabled,
+                disconnectNotify = disconnectNotify,
+                chargeCompleteNotify = chargeCompleteNotify,
                 dashboardStyle = dashboardStyle,
                 secondaryGauge = secondaryGauge,
                 autoVolume = autoVolume,
@@ -683,9 +720,20 @@ class DefaultVehicleEditComponent(
                     averagingWindowMin = v.averagingWindowMin,
                     cellHighV = v.alertConfig.cellHighV,
                     cellLowV = v.alertConfig.cellLowV,
+                    cellDeltaMv = v.alertConfig.cellDeltaMv,
                     temperatureWarnC = v.alertConfig.temperatureWarnC,
                     temperatureHighC = v.alertConfig.temperatureHighC,
                     socLowPercent = v.alertConfig.socLowPercent,
+                    socCutoffPercent = v.alertConfig.socCutoffPercent,
+                    cellHighEnabled = v.alertConfig.cellHighEnabled,
+                    cellLowEnabled = v.alertConfig.cellLowEnabled,
+                    cellDeltaEnabled = v.alertConfig.cellDeltaEnabled,
+                    temperatureWarnEnabled = v.alertConfig.temperatureWarnEnabled,
+                    temperatureHighEnabled = v.alertConfig.temperatureHighEnabled,
+                    socLowEnabled = v.alertConfig.socLowEnabled,
+                    socCutoffEnabled = v.alertConfig.socCutoffEnabled,
+                    disconnectNotify = v.alertConfig.disconnectNotify,
+                    chargeCompleteNotify = v.alertConfig.chargeCompleteNotify,
                     dashboardStyle = v.dashboardStyle,
                     secondaryGauge = v.secondaryGauge,
                     autoVolume = v.autoVolume,
@@ -765,9 +813,13 @@ class DefaultVehicleEditComponent(
     override fun onAveragingWindowChanged(min: Int) { _state.update { it.copy(averagingWindowMin = min) } }
     override fun onCellHighVChanged(v: Float?) { _state.update { it.copy(cellHighV = v) } }
     override fun onCellLowVChanged(v: Float?) { _state.update { it.copy(cellLowV = v) } }
+    override fun onCellDeltaMvChanged(v: Int?) { _state.update { it.copy(cellDeltaMv = v) } }
     override fun onTemperatureWarnChanged(v: Float?) { _state.update { it.copy(temperatureWarnC = v) } }
     override fun onTemperatureHighChanged(v: Float?) { _state.update { it.copy(temperatureHighC = v) } }
     override fun onSocLowChanged(v: Int?) { _state.update { it.copy(socLowPercent = v) } }
+    override fun onSocCutoffChanged(v: Int?) { _state.update { it.copy(socCutoffPercent = v) } }
+    override fun onDisconnectNotifyChanged(enabled: Boolean) { _state.update { it.copy(disconnectNotify = enabled) } }
+    override fun onChargeCompleteNotifyChanged(enabled: Boolean) { _state.update { it.copy(chargeCompleteNotify = enabled) } }
     override fun onDashboardStyleChanged(style: DashboardStyle?) { _state.update { it.copy(dashboardStyle = style) } }
     override fun onSecondaryGaugeChanged(gauge: SecondaryGauge) { _state.update { it.copy(secondaryGauge = gauge) } }
 
@@ -1271,13 +1323,24 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
     )
 }
 
-/** The five thresholds this form exposes; the rest of [AlertConfig] is not its business. */
+/** Battery alert values are preserved by this form; editing them lives on the unified alerts screen. */
 private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = copy(
     cellHighV = s.cellHighV,
     cellLowV = s.cellLowV,
+    cellDeltaMv = s.cellDeltaMv,
     temperatureWarnC = s.temperatureWarnC,
     temperatureHighC = s.temperatureHighC,
-    socLowPercent = s.socLowPercent
+    socLowPercent = s.socLowPercent,
+    socCutoffPercent = s.socCutoffPercent,
+    cellHighEnabled = s.cellHighEnabled,
+    cellLowEnabled = s.cellLowEnabled,
+    cellDeltaEnabled = s.cellDeltaEnabled,
+    temperatureWarnEnabled = s.temperatureWarnEnabled,
+    temperatureHighEnabled = s.temperatureHighEnabled,
+    socLowEnabled = s.socLowEnabled,
+    socCutoffEnabled = s.socCutoffEnabled,
+    disconnectNotify = s.disconnectNotify,
+    chargeCompleteNotify = s.chargeCompleteNotify
 )
 
 /** The CREATE path projects the source draft the rider actually assembled. */

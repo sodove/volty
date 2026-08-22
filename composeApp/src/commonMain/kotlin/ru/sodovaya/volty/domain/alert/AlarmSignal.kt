@@ -78,14 +78,24 @@ data class AlarmVibration(
     }
 }
 
+/** Whether an audible alarm should ask Android to duck other audio. */
+enum class AlarmMusicMode {
+    /** Request transient audio focus and let media continue at a lower volume. */
+    DUCK_MEDIA,
+
+    /** Do not request audio focus, so media keeps its volume while the alarm plays. */
+    PLAY_OVER_MEDIA
+}
+
 /**
- * Which of the three modality switches are on (F §4). All default true; the
- * master switch overrides both others.
+ * Which alarm modalities are on and how a tone shares the speaker (F §4).
+ * All switches default true; the master switch overrides both others.
  */
 data class AlarmModalities(
     val alarmEnabled: Boolean = true,
     val toneEnabled: Boolean = true,
-    val vibrationEnabled: Boolean = true
+    val vibrationEnabled: Boolean = true,
+    val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA
 ) {
     companion object {
         /** Everything on — the shipped defaults, and the state before prefs have loaded. */
@@ -120,7 +130,8 @@ sealed interface AlarmCommand {
     data class Play(
         val level: Int,
         val tone: AlarmTone?,
-        val vibration: AlarmVibration?
+        val vibration: AlarmVibration?,
+        val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA
     ) : AlarmCommand
 }
 
@@ -292,7 +303,12 @@ fun alarmCommandFor(level: Int, urgency: Float, modalities: AlarmModalities): Al
     val tone = if (modalities.toneEnabled) AlarmToneTable.toneFor(level, urgency) else null
     val vibration = if (modalities.vibrationEnabled) AlarmToneTable.vibrationFor(level) else null
     if (tone == null && vibration == null) return AlarmCommand.Silent
-    return AlarmCommand.Play(AlarmToneTable.clampLevel(level), tone, vibration)
+    return AlarmCommand.Play(
+        level = AlarmToneTable.clampLevel(level),
+        tone = tone,
+        vibration = vibration,
+        musicMode = modalities.musicMode
+    )
 }
 
 /**
@@ -336,6 +352,7 @@ fun alarmTransitionFor(previous: AlarmCommand, next: AlarmCommand): AlarmTransit
     previous is AlarmCommand.Play && next is AlarmCommand.Play &&
         previous.level == next.level &&
         (previous.tone == null) == (next.tone == null) &&
-        previous.vibration == next.vibration -> AlarmTransition.RETUNE
+        previous.vibration == next.vibration &&
+        previous.musicMode == next.musicMode -> AlarmTransition.RETUNE
     else -> AlarmTransition.RESTART
 }

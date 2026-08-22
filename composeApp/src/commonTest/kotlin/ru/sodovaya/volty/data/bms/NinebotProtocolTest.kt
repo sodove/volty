@@ -79,7 +79,169 @@ class NinebotProtocolTest {
     }
 
     @Test
-    fun controller_live_page_exposes_speed_distance_and_voltage_without_writes() {
+    fun crc_valid_wrong_command_and_destination_are_ignored() {
+        val protocol = NinebotProtocol()
+        val life = ByteArray(24).apply {
+            putU16(4, 73)
+            putU16(8, 5120)
+        }
+
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x3e,
+                command = 0x02,
+                parameter = 0x30,
+                data = life
+            )
+        )
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x09,
+                parameter = 0x30,
+                data = life
+            )
+        )
+
+        assertNull(protocol.latestData(0))
+    }
+
+    @Test
+    fun zero_live_page_does_not_publish_known_motion() {
+        val protocol = NinebotProtocol()
+
+        protocol.onNotification(
+            frame(
+                source = 0x14,
+                destination = 0x3e,
+                parameter = 0xB0,
+                data = ByteArray(32)
+            )
+        )
+
+        assertNull(protocol.latestMotion(0))
+    }
+
+    @Test
+    fun zero_bms_cells_do_not_become_earned_zero_volt_cells() {
+        val protocol = NinebotProtocol()
+        val life = ByteArray(24).apply {
+            putU16(4, 73)
+            putU16(8, 5120)
+        }
+
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = life))
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x3e,
+                parameter = 0x40,
+                data = ByteArray(32)
+            )
+        )
+
+        val data = assertNotNull(protocol.latestData(0))
+        assertTrue(data.cellVoltages.isEmpty())
+        assertTrue(data.cellVoltages.none { it == 0f })
+    }
+
+    @Test
+    fun crc_valid_all_zero_bms_life_page_does_not_replace_valid_life_telemetry() {
+        val protocol = NinebotProtocol()
+        val validLife = ByteArray(24).apply {
+            putU16(0, 0x0020)
+            putU16(4, 73)
+            putI16(6, -1234)
+            putU16(8, 5120)
+            this[10] = 45
+            this[11] = 50
+        }
+
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = validLife))
+        val before = assertNotNull(protocol.latestData(0))
+        assertTrue(before.socKnown)
+        assertTrue(before.hasPower)
+
+        // This is a complete, CRC-valid life page, unlike the separate zero-cell fixture.
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x3e,
+                parameter = 0x30,
+                data = ByteArray(24),
+            )
+        )
+
+        val after = assertNotNull(protocol.latestData(0))
+        assertEquals(51.2f, after.voltage, 0.001f)
+        assertEquals(-12.34f, after.current, 0.001f)
+        assertEquals(73f, after.soc, 0.001f)
+        assertTrue(after.socKnown)
+        assertTrue(after.hasPower)
+        assertEquals(before.power, after.power, 0.001f)
+    }
+
+    @Test
+    fun crc_valid_all_zero_bms_life_page_is_not_a_first_life_sample() {
+        val protocol = NinebotProtocol()
+
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x3e,
+                parameter = 0x30,
+                data = ByteArray(24),
+            )
+        )
+
+        assertNull(protocol.latestData(0))
+    }
+
+    @Test
+    fun cells_only_page_does_not_publish_a_complete_pack() {
+        val protocol = NinebotProtocol()
+        val cells = ByteArray(32).apply {
+            putU16(0, 4000)
+            putU16(2, 4010)
+        }
+
+        protocol.onNotification(
+            frame(
+                source = 0x11,
+                destination = 0x3e,
+                parameter = 0x40,
+                data = cells
+            )
+        )
+
+        assertNull(protocol.latestData(0))
+        assertNull(protocol.latestData(1))
+    }
+
+    @Test
+    fun wire_bms1_and_bms2_translate_to_public_pack_indices_zero_and_one() {
+        val protocol = NinebotProtocol()
+        val first = ByteArray(24).apply {
+            putU16(4, 61)
+            putU16(8, 5000)
+        }
+        val second = ByteArray(24).apply {
+            putU16(4, 82)
+            putU16(8, 5200)
+        }
+
+        protocol.onNotification(frame(source = 0x11, destination = 0x3e, parameter = 0x30, data = first))
+        protocol.onNotification(frame(source = 0x12, destination = 0x3e, parameter = 0x30, data = second))
+
+        assertEquals(50f, assertNotNull(protocol.latestData(0)).voltage, 0.001f)
+        assertEquals(52f, assertNotNull(protocol.latestData(1)).voltage, 0.001f)
+        assertEquals(61f, assertNotNull(protocol.latestData(0)).soc, 0.001f)
+        assertEquals(82f, assertNotNull(protocol.latestData(1)).soc, 0.001f)
+    }
+
+    @Test
+    fun controller_live_page_keeps_signed_speed_as_magnitude_and_live_current_power_unknown() {
         val protocol = NinebotProtocol()
         val live = ByteArray(32).apply {
             putU16(8, 73) // battery percent; retained as controller evidence only
@@ -98,17 +260,26 @@ class NinebotProtocolTest {
         assertTrue(motion.hasInputVoltage)
         assertEquals(51.2f, motion.inputVoltageV, 0.001f)
         assertTrue(motion.speedKnown)
+        assertTrue(motion.speedKmh >= 0f)
         assertTrue(!motion.hasDuty)
+        assertEquals(0f, motion.batteryCurrentA)
         assertTrue(!motion.hasBatteryCurrent)
+        assertEquals(0f, motion.powerW)
         assertTrue(!motion.hasPower)
     }
 
-    private fun frame(source: Int, destination: Int, parameter: Int, data: ByteArray): ByteArray {
+    private fun frame(
+        source: Int,
+        destination: Int,
+        parameter: Int,
+        data: ByteArray,
+        command: Int = 0x04
+    ): ByteArray {
         val body = ByteArray(5 + data.size)
         body[0] = data.size.toByte()
         body[1] = source.toByte()
         body[2] = destination.toByte()
-        body[3] = 0x04
+        body[3] = command.toByte()
         body[4] = parameter.toByte()
         data.copyInto(body, destinationOffset = 5)
         var sum = 0

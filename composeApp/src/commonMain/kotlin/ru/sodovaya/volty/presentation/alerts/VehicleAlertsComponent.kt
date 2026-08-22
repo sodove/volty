@@ -14,11 +14,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.alert.AlarmCommand
+import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.alert.AlertRule
 import ru.sodovaya.volty.domain.alert.MotionAlertKind
 import ru.sodovaya.volty.domain.alert.alarmPreviewCommand
 import ru.sodovaya.volty.domain.alert.availabilityFor
+import ru.sodovaya.volty.domain.model.AlertConfig
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -48,10 +50,29 @@ interface VehicleAlertsComponent {
     fun onAddLevel(kind: MotionAlertKind)
     fun onRemoveLevel(kind: MotionAlertKind, index: Int)
 
+    /** Battery alerts live on this same screen and each has its own gate. */
+    fun onCellHighChanged(text: String)
+    fun onCellHighEnabledChanged(enabled: Boolean)
+    fun onCellLowChanged(text: String)
+    fun onCellLowEnabledChanged(enabled: Boolean)
+    fun onCellDeltaChanged(text: String)
+    fun onCellDeltaEnabledChanged(enabled: Boolean)
+    fun onTemperatureWarnChanged(text: String)
+    fun onTemperatureWarnEnabledChanged(enabled: Boolean)
+    fun onTemperatureHighChanged(text: String)
+    fun onTemperatureHighEnabledChanged(enabled: Boolean)
+    fun onSocLowChanged(text: String)
+    fun onSocLowEnabledChanged(enabled: Boolean)
+    fun onSocCutoffChanged(text: String)
+    fun onSocCutoffEnabledChanged(enabled: Boolean)
+    fun onDisconnectNotifyChanged(enabled: Boolean)
+    fun onChargeCompleteNotifyChanged(enabled: Boolean)
+
     /** The three global modality switches (F §4). Applied immediately, not on save. */
     fun onAlarmEnabledChanged(enabled: Boolean)
     fun onToneEnabledChanged(enabled: Boolean)
     fun onVibrationEnabledChanged(enabled: Boolean)
+    fun onAlarmMusicModeChanged(mode: AlarmMusicMode)
 
     /** "Проверить сигнал" — play one step so the tone design can be judged by ear (F §11). */
     fun onPreview(level: Int)
@@ -85,9 +106,12 @@ interface VehicleAlertsComponent {
          * whether they have anything outstanding.
          */
         val savedLevels: Map<MotionAlertKind, List<AlertLevelDraft>> = emptyMap(),
+        val battery: BatteryAlertDraft = BatteryAlertDraft(),
+        val savedBattery: BatteryAlertDraft = BatteryAlertDraft(),
         val alarmEnabled: Boolean = true,
         val toneEnabled: Boolean = true,
         val vibrationEnabled: Boolean = true,
+        val musicMode: AlarmMusicMode = AlarmMusicMode.DUCK_MEDIA,
         val saving: Boolean = false,
         /** True while the "leave without saving?" dialog is up. */
         val discardPrompt: Boolean = false
@@ -108,7 +132,7 @@ interface VehicleAlertsComponent {
          * mark an untouched screen dirty. Neither is [AlertKindDraft.stashed] —
          * it is an undo buffer that is never persisted.
          */
-        val isDirty: Boolean get() = loaded && editedLevels(kinds) != savedLevels
+        val isDirty: Boolean get() = loaded && (editedLevels(kinds) != savedLevels || battery != savedBattery)
 
         /**
          * Blocked while any visible row is half-typed, and **blocked when nothing
@@ -127,14 +151,14 @@ interface VehicleAlertsComponent {
          * touching nothing must not pin anything.
          */
         val canSave: Boolean
-            get() = loaded && !saving && isDirty && kinds.none { it.hasInvalidThreshold }
+            get() = loaded && !saving && isDirty && kinds.none { it.hasInvalidThreshold } && !battery.hasInvalidInput
 
         /** The steps "проверить сигнал" offers — the whole range the rider can configure. */
         val previewLevels: List<Int> get() = (1..AlertRule.MAX_LEVELS).toList()
 
         /** The three switches as the one value the alarm's gate takes. */
         val modalities: AlarmModalities
-            get() = AlarmModalities(alarmEnabled, toneEnabled, vibrationEnabled)
+            get() = AlarmModalities(alarmEnabled, toneEnabled, vibrationEnabled, musicMode)
 
         /**
          * Can pressing a preview button produce anything at all?
@@ -155,6 +179,77 @@ interface VehicleAlertsComponent {
     }
 }
 
+/**
+ * Text is kept deliberately, instead of reparsing on every keystroke. That
+ * lets the rider type `4.` or clear a field without the UI fighting the cursor.
+ * A blank value means "use the chemistry default" (or no cutoff when no cutoff
+ * is configured); the separate switch is still the authoritative on/off gate.
+ */
+data class BatteryAlertDraft(
+    val cellHigh: String = "",
+    val cellHighEnabled: Boolean = true,
+    val cellLow: String = "",
+    val cellLowEnabled: Boolean = true,
+    val cellDelta: String = "200",
+    val cellDeltaEnabled: Boolean = true,
+    val temperatureWarn: String = "50",
+    val temperatureWarnEnabled: Boolean = true,
+    val temperatureHigh: String = "60",
+    val temperatureHighEnabled: Boolean = true,
+    val socLow: String = "15",
+    val socLowEnabled: Boolean = true,
+    val socCutoff: String = "",
+    val socCutoffEnabled: Boolean = true,
+    val disconnectEnabled: Boolean = true,
+    val chargeCompleteEnabled: Boolean = true,
+) {
+    val hasInvalidInput: Boolean
+        get() = listOf(cellHigh, cellLow, temperatureWarn, temperatureHigh).any { it.isNotBlank() && it.toFloatOrNull() == null } ||
+            listOf(cellDelta, socLow, socCutoff).any { it.isNotBlank() && it.toIntOrNull() == null }
+
+    fun toAlertConfig() = AlertConfig(
+        cellHighV = cellHigh.toFloatOrNull(),
+        cellLowV = cellLow.toFloatOrNull(),
+        cellDeltaMv = cellDelta.toIntOrNull(),
+        temperatureWarnC = temperatureWarn.toFloatOrNull(),
+        temperatureHighC = temperatureHigh.toFloatOrNull(),
+        socLowPercent = socLow.toIntOrNull(),
+        socCutoffPercent = socCutoff.toIntOrNull(),
+        cellHighEnabled = cellHighEnabled,
+        cellLowEnabled = cellLowEnabled,
+        cellDeltaEnabled = cellDeltaEnabled,
+        temperatureWarnEnabled = temperatureWarnEnabled,
+        temperatureHighEnabled = temperatureHighEnabled,
+        socLowEnabled = socLowEnabled,
+        socCutoffEnabled = socCutoffEnabled,
+        disconnectNotify = disconnectEnabled,
+        chargeCompleteNotify = chargeCompleteEnabled,
+    )
+
+    companion object {
+        fun from(config: AlertConfig): BatteryAlertDraft = BatteryAlertDraft(
+            cellHigh = config.cellHighV?.compactNumber().orEmpty(),
+            cellHighEnabled = config.cellHighEnabled,
+            cellLow = config.cellLowV?.compactNumber().orEmpty(),
+            cellLowEnabled = config.cellLowEnabled,
+            cellDelta = config.cellDeltaMv?.toString().orEmpty(),
+            cellDeltaEnabled = config.cellDeltaEnabled,
+            temperatureWarn = config.temperatureWarnC?.compactNumber().orEmpty(),
+            temperatureWarnEnabled = config.temperatureWarnEnabled,
+            temperatureHigh = config.temperatureHighC?.compactNumber().orEmpty(),
+            temperatureHighEnabled = config.temperatureHighEnabled,
+            socLow = config.socLowPercent?.toString().orEmpty(),
+            socLowEnabled = config.socLowEnabled,
+            socCutoff = config.socCutoffPercent?.toString().orEmpty(),
+            socCutoffEnabled = config.socCutoffEnabled,
+            disconnectEnabled = config.disconnectNotify,
+            chargeCompleteEnabled = config.chargeCompleteNotify,
+        )
+    }
+}
+
+private fun Float.compactNumber(): String = toString().removeSuffix(".0")
+
 class DefaultVehicleAlertsComponent(
     componentContext: ComponentContext,
     private val vehicleId: String,
@@ -171,7 +266,8 @@ class DefaultVehicleAlertsComponent(
         VehicleAlertsComponent.State(
             alarmEnabled = appPrefs.alarmEnabled.value,
             toneEnabled = appPrefs.alarmToneEnabled.value,
-            vibrationEnabled = appPrefs.alarmVibrationEnabled.value
+            vibrationEnabled = appPrefs.alarmVibrationEnabled.value,
+            musicMode = appPrefs.alarmMusicMode.value
         )
     )
     override val state: StateFlow<VehicleAlertsComponent.State> = _state.asStateFlow()
@@ -225,6 +321,7 @@ class DefaultVehicleAlertsComponent(
             val vehicle = vehicleRepository.get(vehicleId) ?: return@launch
             loadedVehicle = vehicle
             val drafts = alertDraftsFor(vehicle, availabilityFor(vehicle, lastObservedMotion))
+            val battery = BatteryAlertDraft.from(vehicle.alertConfig)
             _state.update {
                 it.copy(
                     loaded = true,
@@ -235,7 +332,9 @@ class DefaultVehicleAlertsComponent(
                     // vehicle — which opens on the shipped defaults — starts out
                     // *clean*: those defaults are what it already behaves as, so
                     // showing them is not an edit and must not arm Save.
-                    savedLevels = editedLevels(drafts)
+                    savedLevels = editedLevels(drafts),
+                    battery = battery,
+                    savedBattery = battery,
                 )
             }
         }
@@ -251,6 +350,7 @@ class DefaultVehicleAlertsComponent(
         scope.launch { appPrefs.alarmEnabled.collect { v -> _state.update { it.copy(alarmEnabled = v) } } }
         scope.launch { appPrefs.alarmToneEnabled.collect { v -> _state.update { it.copy(toneEnabled = v) } } }
         scope.launch { appPrefs.alarmVibrationEnabled.collect { v -> _state.update { it.copy(vibrationEnabled = v) } } }
+        scope.launch { appPrefs.alarmMusicMode.collect { v -> _state.update { it.copy(musicMode = v) } } }
     }
 
     /**
@@ -290,6 +390,27 @@ class DefaultVehicleAlertsComponent(
     override fun onRemoveLevel(kind: MotionAlertKind, index: Int) =
         editKind(kind) { it.withLevelRemoved(index) }
 
+    private fun editBattery(edit: (BatteryAlertDraft) -> BatteryAlertDraft) {
+        _state.update { it.copy(battery = edit(it.battery)) }
+    }
+
+    override fun onCellHighChanged(text: String) = editBattery { it.copy(cellHigh = text) }
+    override fun onCellHighEnabledChanged(enabled: Boolean) = editBattery { it.copy(cellHighEnabled = enabled) }
+    override fun onCellLowChanged(text: String) = editBattery { it.copy(cellLow = text) }
+    override fun onCellLowEnabledChanged(enabled: Boolean) = editBattery { it.copy(cellLowEnabled = enabled) }
+    override fun onCellDeltaChanged(text: String) = editBattery { it.copy(cellDelta = text) }
+    override fun onCellDeltaEnabledChanged(enabled: Boolean) = editBattery { it.copy(cellDeltaEnabled = enabled) }
+    override fun onTemperatureWarnChanged(text: String) = editBattery { it.copy(temperatureWarn = text) }
+    override fun onTemperatureWarnEnabledChanged(enabled: Boolean) = editBattery { it.copy(temperatureWarnEnabled = enabled) }
+    override fun onTemperatureHighChanged(text: String) = editBattery { it.copy(temperatureHigh = text) }
+    override fun onTemperatureHighEnabledChanged(enabled: Boolean) = editBattery { it.copy(temperatureHighEnabled = enabled) }
+    override fun onSocLowChanged(text: String) = editBattery { it.copy(socLow = text) }
+    override fun onSocLowEnabledChanged(enabled: Boolean) = editBattery { it.copy(socLowEnabled = enabled) }
+    override fun onSocCutoffChanged(text: String) = editBattery { it.copy(socCutoff = text) }
+    override fun onSocCutoffEnabledChanged(enabled: Boolean) = editBattery { it.copy(socCutoffEnabled = enabled) }
+    override fun onDisconnectNotifyChanged(enabled: Boolean) = editBattery { it.copy(disconnectEnabled = enabled) }
+    override fun onChargeCompleteNotifyChanged(enabled: Boolean) = editBattery { it.copy(chargeCompleteEnabled = enabled) }
+
     override fun onAlarmEnabledChanged(enabled: Boolean) {
         scope.launch { appPrefs.setAlarmEnabled(enabled) }
     }
@@ -300,6 +421,10 @@ class DefaultVehicleAlertsComponent(
 
     override fun onVibrationEnabledChanged(enabled: Boolean) {
         scope.launch { appPrefs.setAlarmVibrationEnabled(enabled) }
+    }
+
+    override fun onAlarmMusicModeChanged(mode: AlarmMusicMode) {
+        scope.launch { appPrefs.setAlarmMusicMode(mode) }
     }
 
     override fun onPreview(level: Int) = alarmPreview.preview(level)
@@ -323,11 +448,22 @@ class DefaultVehicleAlertsComponent(
                 onBackRequested()
                 return@launch
             }
-            vehicleRepository.upsert(current.copy(motionAlerts = commitRules(s.kinds)))
+            vehicleRepository.upsert(
+                current.copy(
+                    motionAlerts = commitRules(s.kinds),
+                    alertConfig = s.battery.toAlertConfig(),
+                )
+            )
             // The rows are now what is stored, so the screen is clean again: if
             // navigation is deferred or refused, backing out afterwards must not
             // ask about edits that have already been written.
-            _state.update { it.copy(saving = false, savedLevels = editedLevels(s.kinds)) }
+            _state.update {
+                it.copy(
+                    saving = false,
+                    savedLevels = editedLevels(s.kinds),
+                    savedBattery = s.battery,
+                )
+            }
             onSaved()
         }
     }

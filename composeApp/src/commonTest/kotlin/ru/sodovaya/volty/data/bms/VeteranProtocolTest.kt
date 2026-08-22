@@ -154,6 +154,87 @@ class VeteranProtocolTest {
     }
 
     @Test
+    fun `main page does not make an incomplete smart pack replace main telemetry`() {
+        val protocol = VeteranProtocol()
+
+        protocol.onNotification(LYNX_S_PAGE_0.hexBytes())
+
+        assertNotNull(protocol.latestData(0))
+        assertNull(protocol.latestData(1))
+    }
+
+    @Test
+    fun `short Patton page does not read CRC trailer as reported values`() {
+        val protocol = VeteranProtocol()
+
+        protocol.onNotification(PATTON_PAGE_2.hexBytes())
+
+        val battery = assertNotNull(protocol.latestData(0))
+        assertEquals(123.72f, battery.voltage, 0.001f)
+        assertFalse(battery.hasCurrent)
+        assertFalse(battery.hasPower)
+        assertEquals(0.94f, battery.soc, 0.01f)
+    }
+
+    @Test
+    fun `24 bit version bytes identify the Nosfet 5010 profile`() {
+        val protocol = VeteranProtocol()
+
+        protocol.onNotification(controllerFrame(versionRaw = 501_008))
+
+        assertEquals("Nosfet Apex", protocol.model)
+        assertEquals("501.0.08", protocol.firmwareVersion)
+    }
+
+    @Test
+    fun `reported page 2 SoC remains known after complete cell pages`() {
+        val protocol = VeteranProtocol()
+
+        protocol.onNotification(LYNX_S_PAGE_2.hexBytes())
+        protocol.onNotification(
+            bmsFrame(
+                packet = 1,
+                versionRaw = 9_004,
+                cells = IntArray(15) { 4_100 + it }
+            )
+        )
+        protocol.onNotification(
+            bmsFrame(
+                packet = 3,
+                versionRaw = 9_004,
+                cells = IntArray(6) { 4_140 + it },
+                temperatures = IntArray(6) { 2_500 + it * 10 }
+            )
+        )
+
+        val battery = assertNotNull(protocol.latestData(0))
+        assertEquals(0.78f, battery.soc, 0.001f)
+        assertTrue(battery.socKnown)
+    }
+
+    @Test
+    fun `reported cell count is read from payload rather than CRC`() {
+        val protocol = VeteranProtocol()
+
+        protocol.onNotification(
+            bmsFrame(
+                packet = 1,
+                reportedCellCount = 30,
+                cells = IntArray(15) { 4_100 }
+            )
+        )
+        protocol.onNotification(
+            bmsFrame(
+                packet = 2,
+                cells = IntArray(15) { 4_100 }
+            )
+        )
+
+        val battery = assertNotNull(protocol.latestData(0))
+        assertEquals(30, battery.cellVoltages.size)
+    }
+
+    @Test
     fun `reset clears the frame accumulator metadata packs and motion`() {
         val protocol = VeteranProtocol()
         val frame = controllerFrame(versionRaw = 5_001)
@@ -182,7 +263,9 @@ class VeteranProtocolTest {
             this[0] = 0xDC.toByte(); this[1] = 0x5A; this[2] = 0x5C; this[3] = len.toByte()
             putBe(4, voltageRaw); putBe(6, speedRaw); putReverseBe(8, distanceRaw); putReverseBe(12, totalDistanceRaw)
             putBe(16, phaseCurrentRaw); putBe(18, temperatureRaw)
-            putBe(20, 0); putBe(22, 0); putBe(24, 0); putBe(26, 0); putBe(28, versionRaw); putBe(30, 0); putBe(32, 0)
+            putBe(20, 0); putBe(22, 0); putBe(24, 0); putBe(26, 0)
+            this[28] = (versionRaw ushr 8).toByte(); this[29] = versionRaw.toByte(); this[30] = (versionRaw ushr 16).toByte()
+            putBe(32, 0)
             if (size >= 36) putBe(34, pwmRaw)
             if (len > 38) appendCrc(this, len)
         }
@@ -192,12 +275,15 @@ class VeteranProtocolTest {
             cells: IntArray = intArrayOf(),
             temperatures: IntArray = intArrayOf(),
             current1Raw: Int = 0,
-            current2Raw: Int = 0
-        ): ByteArray = controllerFrame(len = 83, versionRaw = 5_001).apply {
+            current2Raw: Int = 0,
+            versionRaw: Int = 5_001,
+            reportedCellCount: Int? = null
+        ): ByteArray = controllerFrame(len = 83, versionRaw = versionRaw).apply {
             this[46] = packet.toByte()
             if (packet == 0 || packet == 4) {
                 putBe(69, current1Raw); putBe(71, current2Raw)
             } else if (packet == 1 || packet == 5) {
+                reportedCellCount?.let { this[52] = it.toByte() }
                 cells.forEachIndexed { i, value -> putBe(53 + i * 2, value) }
             } else if (packet == 2 || packet == 6) {
                 cells.forEachIndexed { i, value -> putBe(53 + i * 2, value) }
@@ -229,3 +315,14 @@ class VeteranProtocolTest {
         }
     }
 }
+
+private fun String.hexBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
+
+private const val PATTON_PAGE_2 =
+    "DC5A5C3230540000EE48001BEE48001B00000DDC0D4D000007D003200FB1000219D00000006F0000808080808080022D010033AA33DD"
+
+private const val LYNX_S_PAGE_0 =
+    "DC5A5C4937190000DF6C00007042000300070C8E0379000003C002EE232C00780006007E80C800008080808080800000000BFFFFFFFFFF3211FF430AEF0CDE022A003300000002000501A0CA44"
+
+private const val LYNX_S_PAGE_2 =
+    "DC5A5C53371F0000DF6C00007042000300060C8E0378000003C002EE232C00780006007780C80000808080808080022801004E80800F520F530F4B0F550F550F550F550F540F4F0F550F560F560F550F560F52FFCECC8B"

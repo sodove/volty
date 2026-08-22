@@ -40,7 +40,7 @@ interface SettingsComponent {
         val scanTimeoutSec: Int = 5,
         val autoConnectCountdownSec: Int = 3,
         val unitSystem: UnitSystem = UnitSystem.METRIC,
-        val defaultDashboardStyle: DashboardStyle = DashboardStyle.CLEAN,
+        val defaultDashboardStyle: DashboardStyle = DashboardStyle.LIGHT,
         val faultDisplayDurationSec: Int = 60,
         val vehicles: List<Vehicle> = emptyList()
     )

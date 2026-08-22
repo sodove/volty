@@ -59,6 +59,23 @@ class KingSongProtocolTest {
     }
 
     @Test
+    fun `A9 distance uses KingSong byte order and trip is the session delta`() {
+        val protocol = KingSongProtocol()
+        val first = liveFrame(distanceMeters = 123_456)
+        val second = liveFrame(distanceMeters = 123_556)
+
+        protocol.onNotification(first)
+        val firstMotion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(123.456f, firstMotion.odometerKm, 0.001f)
+        assertEquals(0f, firstMotion.tripKm, 0.001f)
+
+        protocol.onNotification(second)
+        val secondMotion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(123.556f, secondMotion.odometerKm, 0.001f)
+        assertEquals(0.1f, secondMotion.tripKm, 0.001f)
+    }
+
+    @Test
     fun `bad tail is rejected like an invalid frame checksum and parser resynchronises`() {
         val protocol = KingSongProtocol()
         val invalid = liveFrame(voltageCv = 12_000).also { it[18] = 0x00 }
@@ -88,6 +105,62 @@ class KingSongProtocolTest {
         assertTrue(data.socKnown)
         assertFalse(data.hasPower)
         assertTrue(data.cellVoltages.isEmpty())
+    }
+
+    @Test
+    fun `exact loeuc S22 BMS sweep maps cycles and page six temperature`() {
+        val protocol = KingSongProtocol()
+        s22F1Sweep().forEach(protocol::onNotification)
+
+        val data = assertNotNull(protocol.latestData(0))
+        assertEquals(32, data.numCycles)
+        assertEquals(8, data.temperatures.size)
+        assertEquals(27f, data.temperatures[7], 0.001f)
+    }
+
+    @Test
+    fun `B9 temperature latches over later A9 temperature`() {
+        val protocol = KingSongProtocol()
+        val live = liveFrame(temperatureCentiC = 2_800)
+        val rideStats = frame(0xB9, 0x14).apply {
+            putLe(14, 2_400)
+        }
+
+        protocol.onNotification(live)
+        protocol.onNotification(rideStats)
+        assertEquals(24f, assertNotNull(protocol.latestMotion(0)).escTempC, 0.001f)
+
+        protocol.onNotification(live)
+        assertEquals(24f, assertNotNull(protocol.latestMotion(0)).escTempC, 0.001f)
+        assertEquals(listOf(28f), assertNotNull(protocol.latestData()).temperatures)
+    }
+
+    @Test
+    fun `F5 byte fifteen reports duty and survives the next A9`() {
+        val protocol = KingSongProtocol()
+        val output = frame(0xF5, 0x14).apply { this[15] = 44 }
+
+        protocol.onNotification(liveFrame())
+        protocol.onNotification(output)
+        val afterOutput = assertNotNull(protocol.latestMotion(0))
+        assertEquals(44f, afterOutput.dutyPercent, 0.001f)
+        assertTrue(afterOutput.hasDuty)
+
+        protocol.onNotification(liveFrame())
+        val afterLive = assertNotNull(protocol.latestMotion(0))
+        assertEquals(44f, afterLive.dutyPercent, 0.001f)
+        assertTrue(afterLive.hasDuty)
+    }
+
+    @Test
+    fun `F5 zero duty is known zero rather than absent`() {
+        val protocol = KingSongProtocol()
+        protocol.onNotification(liveFrame())
+        protocol.onNotification(frame(0xF5, 0x14))
+
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, motion.dutyPercent, 0.001f)
+        assertTrue(motion.hasDuty)
     }
 
     @Test
@@ -155,7 +228,7 @@ class KingSongProtocolTest {
     }
 
     private fun liveFrame(
-        voltageCv: Int,
+        voltageCv: Int = 12_600,
         speedCentiKmh: Int = 0,
         distanceMeters: Long = 0,
         currentCentiA: Int = 0,
@@ -163,7 +236,7 @@ class KingSongProtocolTest {
     ): ByteArray = frame(0xA9, 0x14).apply {
         putLe(2, voltageCv)
         putLe(4, speedCentiKmh)
-        putLe32(6, distanceMeters)
+        putKingSongDistance(6, distanceMeters)
         putLe(10, currentCentiA)
         putLe(12, temperatureCentiC)
         this[15] = 0xE0.toByte()
@@ -185,10 +258,22 @@ class KingSongProtocolTest {
         this[offset + 1] = (value shr 8).toByte()
     }
 
-    private fun ByteArray.putLe32(offset: Int, value: Long) {
-        this[offset] = value.toByte()
-        this[offset + 1] = (value shr 8).toByte()
-        this[offset + 2] = (value shr 16).toByte()
-        this[offset + 3] = (value shr 24).toByte()
+    private fun ByteArray.putKingSongDistance(offset: Int, value: Long) {
+        this[offset] = (value shr 16).toByte()
+        this[offset + 1] = (value shr 24).toByte()
+        this[offset + 2] = value.toByte()
+        this[offset + 3] = (value shr 8).toByte()
+    }
+
+    private fun s22F1Sweep(): List<ByteArray> = listOf(
+        "AA 55 4C 2A 00 00 A2 01 E8 03 20 00 E8 03 1F 0E F1 00 5A 5A",
+        "AA 55 AB 0B AC 0B A8 0B AC 0B C8 0B AE 0B B4 0B F1 01 5A 5A",
+        "AA 55 1B 0E 1B 0E 1B 0E 1D 0E 1F 0E 1B 0E 1B 0E F1 02 5A 5A",
+        "AA 55 0C 0E 1B 0E 1B 0E 21 0E 21 0E 21 0E 1B 0E F1 03 5A 5A",
+        "AA 55 1D 0E 14 0E 16 0E 17 0E 16 0E 16 0E 17 0E F1 04 5A 5A",
+        "AA 55 FD 0D FF 0D FD 0D FD 0D FD 0D FF 0D FF 0D F1 05 5A 5A",
+        "AA 55 FF 0D FD 0D 00 00 00 00 B8 0B 00 00 00 00 F1 06 5A 5A",
+    ).map { line ->
+        line.split(" ").map { it.toInt(radix = 16).toByte() }.toByteArray()
     }
 }

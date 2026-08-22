@@ -1254,6 +1254,51 @@ class VehicleComposerTest {
         assertEquals(1, link.ownedPacks.size)
     }
 
+    @Test
+    fun `a Leaperkim wheel add keeps both physical battery branches on one link`() {
+        val d = VehicleDraft().addWheel(
+            ControllerType.VETERAN,
+            BmsType.LEAPERKIM,
+            "LK:01",
+            "Sherman"
+        )
+
+        assertEquals(1, d.controllers.size)
+        assertEquals(2, d.packs.size)
+        assertTrue(d.packs.all { it.bmsType == BmsType.LEAPERKIM })
+        assertEquals(listOf("Sherman 1", "Sherman 2"), d.packs.map { it.label })
+
+        val link = planLinks(d.toPacks(), d.toControllers()).single()
+        assertEquals(ProtocolKind.VETERAN, link.protocolKind)
+        assertEquals(2, link.ownedPacks.size)
+    }
+
+    @Test
+    fun `a Nosfet wheel uses the same two Leaperkim branches`() {
+        val d = VehicleDraft().addWheel(ControllerType.NOSFET, BmsType.LEAPERKIM, "NF:01")
+
+        assertEquals(1, d.controllers.size)
+        assertEquals(2, d.packs.size)
+        assertTrue(d.packs.all { it.bmsType == BmsType.LEAPERKIM })
+    }
+
+    @Test
+    fun `completing an existing Leaperkim controller adds the missing second branch`() {
+        val controller = VehicleDraft().addController(ControllerType.VETERAN, "LK:02", "Veteran")
+        val partial = controller.addPack(BmsType.LEAPERKIM, "LK:02", "Veteran 1")
+
+        val completed = partial.addDeviceAsBoth(
+            ControllerType.VETERAN,
+            BmsType.LEAPERKIM,
+            "LK:02",
+            "Veteran"
+        )
+
+        assertEquals(1, completed.controllers.size)
+        assertEquals(2, completed.packs.size)
+        assertEquals(listOf("Veteran 1", "Veteran 2"), completed.packs.map { it.label })
+    }
+
     /**
      * The contrast that makes the previous test mean something: the two blank
      * adds the screen offers beside it produce two sources the connection layer

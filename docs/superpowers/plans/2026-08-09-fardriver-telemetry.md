@@ -8,6 +8,19 @@
 
 **Tech Stack:** Kotlin Multiplatform commonMain/commonTest, `kotlin.test`, existing `BmsProtocol`, `MotionSource`, `ByteArrayAccumulator`, `ControllerData`, `BmsData`, and `MotorConfig`.
 
+## Recorded correction: scalar byte order (2026-08-20)
+
+The original Task 1 decoder and fixtures used a big-endian helper for ordinary
+16-bit FarDriver values. That was wrong. Public reverse references from
+`jackhumbert/fardriver-controllers` and
+`bobecek79/ESP32-Fardriver-BLE-Reader` confirm little-endian encoding for the
+E2/E8/D6/F4 telemetry scalars, which matches the reported 1638.7 V and extreme
+temperature symptoms. The implementation and fixtures were corrected to
+little-endian; the EE 24-bit phase-current fields remain explicitly
+big-endian. The prior assumption is retained here as a correction record rather
+than silently rewritten. The original no-write/read-only constraint remains in
+force.
+
 ## Global Constraints
 
 - Never send FarDriver configuration, login, password, time, firmware, or keepalive commands in this first slice.

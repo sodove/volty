@@ -175,6 +175,7 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
 
     private fun parseLife(state: PackState, data: ByteArray) {
         if (data.size < LIFE_MIN_SIZE) return
+        if (data.take(LIFE_MIN_SIZE).all { it == 0.toByte() }) return
         val status = data.u16Le(0)
         val percentage = data.u16Le(4)
         val rawCurrent = data.i16Le(6) / 100f
@@ -249,7 +250,9 @@ class NinebotProtocol : BmsProtocol(), MotionSource {
             return BmsData(
                 voltage = voltage,
                 current = current,
+                hasCurrent = true,
                 power = voltage * current,
+                hasPower = true,
                 soc = socValue,
                 socKnown = soc != null,
                 cellVoltages = cells,
