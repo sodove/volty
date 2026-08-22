@@ -16,10 +16,15 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,21 +43,57 @@ import ru.sodovaya.volty.presentation.picker.PickerScreen
 import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
 import ru.sodovaya.volty.presentation.scanning.ScanningScreen
 import ru.sodovaya.volty.presentation.settings.SettingsScreen
+import ru.sodovaya.volty.presentation.nearby.NearbyScreen
+import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
+import ru.sodovaya.volty.presentation.map.RideMapScreen
+import ru.sodovaya.volty.presentation.map.rideMapHostState
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
 import ru.sodovaya.volty.presentation.welcome.WelcomeScreen
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.tab_battery
+import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
 
 @Composable
 fun RootScreen(component: RootComponent) {
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
-
+    val darkTheme = LocalVoltyDarkTheme.current
+    val socialLiveState by component.socialLiveState.collectAsState()
+    val rideAvailable by component.rideAvailable.subscribeAsState()
+    val activeRide = active as? RootComponent.Child.Ride
+    val activeRideState = activeRide?.component?.state?.collectAsState()?.value
+    var mapRecenterRequest by remember { mutableLongStateOf(0L) }
+    val vehicleSpeedKmh = activeRideState?.motion?.let(MotionReadings::speedKmh)
+    val mapHost = rideMapHostState(
+        rideAvailable = rideAvailable,
+        activeScreen = when (active) {
+            is RootComponent.Child.Ride -> RideMapScreen.RIDE
+            is RootComponent.Child.Dashboard -> RideMapScreen.BATTERY
+            is RootComponent.Child.Nearby -> RideMapScreen.NEARBY
+            else -> RideMapScreen.OTHER
+        },
+        activeStyle = activeRideState?.style,
+    )
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
+            if (mapHost.mounted) {
+                PlatformRideMapLayer(
+                    darkTheme = darkTheme,
+                    markers = socialLiveState.markers,
+                    requestLocationPermission = mapHost.visible,
+                    vehicleSpeedKmh = vehicleSpeedKmh,
+                    recenterRequest = mapRecenterRequest,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .alpha(if (mapHost.visible) 1f else 0f),
+                )
+            }
             Children(
                 stack = component.stack,
                 animation = stackAnimation(fade())
@@ -67,22 +108,32 @@ fun RootScreen(component: RootComponent) {
                     is RootComponent.Child.Scanning -> ScanningScreen(instance.component)
                     is RootComponent.Child.AutoConnect -> AutoConnectScreen(instance.component)
                     is RootComponent.Child.Picker -> PickerScreen(instance.component)
-                    is RootComponent.Child.Ride -> RideDashboardScreen(instance.component)
+                    is RootComponent.Child.Ride -> RideDashboardScreen(
+                        instance.component,
+                        // The native map is hosted above at Root level so its
+                        // Compose/GL surface survives tab changes. Light only
+                        // needs a non-null marker to leave the HUD transparent.
+                        mapLayer = if (mapHost.visible) ({}) else null,
+                        onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
+                        onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
+                        onRecenterMap = { mapRecenterRequest++ },
+                    )
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
                     is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(instance.component)
+                    is RootComponent.Child.Nearby -> NearbyScreen(instance.component)
                     is RootComponent.Child.Settings -> SettingsScreen(instance.component)
                 }
             }
         }
         // Persistent bottom tab bar — only for main destinations
-        val rideAvailable by component.rideAvailable.subscribeAsState()
         BottomTabBar(
             active = active,
             rideAvailable = rideAvailable,
+            rideStyle = activeRideState?.style,
             onTab = { tab -> component.onTab(tab) },
             modifier = Modifier.navigationBarsPadding()
         )
@@ -93,13 +144,19 @@ fun RootScreen(component: RootComponent) {
 private fun BottomTabBar(
     active: RootComponent.Child,
     rideAvailable: Boolean,
+    rideStyle: DashboardStyle?,
     onTab: (RootComponent.Tab) -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val visible = active is RootComponent.Child.Ride ||
-        active is RootComponent.Child.Dashboard ||
-        active is RootComponent.Child.Graph ||
-        active is RootComponent.Child.Settings
+    val destination = when (active) {
+        is RootComponent.Child.Ride -> RootChromeDestination.RIDE
+        is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
+        is RootComponent.Child.Graph -> RootChromeDestination.GRAPH
+        is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
+        is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
+        else -> RootChromeDestination.OTHER
+    }
+    val visible = bottomTabBarVisible(destination, rideStyle)
     if (!visible) return
 
     // Graph is no longer a tab — it's reached from a button on either dashboard.
@@ -107,6 +164,7 @@ private fun BottomTabBar(
     val current: RootComponent.Tab? = when (active) {
         is RootComponent.Child.Ride -> RootComponent.Tab.Ride
         is RootComponent.Child.Dashboard -> RootComponent.Tab.Battery
+        is RootComponent.Child.Nearby -> RootComponent.Tab.Nearby
         is RootComponent.Child.Settings -> RootComponent.Tab.Settings
         else -> null
     }
@@ -132,6 +190,10 @@ private fun BottomTabBar(
             stringResource(Res.string.tab_battery),
             current == RootComponent.Tab.Battery
         ) { onTab(RootComponent.Tab.Battery) }
+        Tab(
+            stringResource(Res.string.tab_nearby),
+            current == RootComponent.Tab.Nearby
+        ) { onTab(RootComponent.Tab.Nearby) }
         Tab("⚙", current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
     }
 }

@@ -109,17 +109,25 @@ import volty.composeapp.generated.resources.controller_issue_reconnecting
 /**
  * The Ride dashboard — the app's home screen for a vehicle with a motor
  * controller. Per the locked design (`docs/design/ride-dashboard-mockup.html`),
- * a vehicle picks one of two renderers via [DashboardStyle]:
+ * a vehicle picks one of three renderers via [DashboardStyle]:
  *  - [DashboardStyle.CLEAN]: vehicle pill, a concentric speedo hero, a 2x2
  *    metric cluster, a consumption card with a sparkline.
  *  - [DashboardStyle.CLASSIC]: [ClassicRideCluster], an eight-dial overlapping
  *    VESC-style cluster.
+ *  - [DashboardStyle.LIGHT]: a map-first dark telemetry HUD with dual side arcs,
+ *    a compact bottom telemetry strip and a battery line.
  *
- * Both styles share the vehicle pill, the Graph link, and the monospace
+ * All styles share the vehicle pill, the Graph link, and the monospace
  * odo/trip/uptime strip.
  */
 @Composable
-fun RideDashboardScreen(component: RideDashboardComponent) {
+fun RideDashboardScreen(
+    component: RideDashboardComponent,
+    mapLayer: (@Composable () -> Unit)? = null,
+    onOpenBattery: () -> Unit = {},
+    onOpenNearby: () -> Unit = {},
+    onRecenterMap: () -> Unit = {},
+) {
     val state by component.state.collectAsState()
     val vehicle = state.vehicle
     val motion = state.motion
@@ -132,7 +140,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     // than mutating state directly during composition.
     var sessionMaxSpeedKmh by remember(vehicle?.id) { mutableStateOf(0f) }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
-        if (motion.speedKnown && motion.speedKmh > sessionMaxSpeedKmh) {
+        if (motion.isConnected && motion.speedKnown && motion.speedKmh > sessionMaxSpeedKmh) {
             sessionMaxSpeedKmh = motion.speedKmh
         }
     }
@@ -150,7 +158,7 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
 
     val recentSpeeds = remember(vehicle?.id) { mutableStateListOf<Float>() }
     LaunchedEffect(vehicle?.id, motion.timestamp) {
-        if (motion.speedKnown) {
+        if (motion.isConnected && motion.speedKnown) {
             recentSpeeds.add(motion.speedKmh)
             while (recentSpeeds.size > SPARKLINE_MAX_POINTS) recentSpeeds.removeAt(0)
         }
@@ -159,14 +167,22 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .statusBarsPadding()
+            .then(if (state.style == DashboardStyle.LIGHT) Modifier else Modifier.statusBarsPadding())
     ) {
         val layoutMode = responsiveLayoutMode(maxWidth.value, maxHeight.value)
+        val lightMode = lightLayoutMode(maxWidth.value, maxHeight.value)
         Column(
             modifier = Modifier
                 .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(12.dp),
+                .then(if (state.style == DashboardStyle.LIGHT) Modifier else Modifier.verticalScroll(rememberScrollState()))
+                .background(
+                    when {
+                        state.style != DashboardStyle.LIGHT -> MaterialTheme.colorScheme.background
+                        mapLayer == null -> LightHudBackground
+                        else -> Color.Transparent
+                    }
+                )
+                .padding(if (state.style == DashboardStyle.LIGHT) 0.dp else 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
         // The configured primary controller is not enough evidence for this
@@ -217,13 +233,15 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
             ConnectionState.Idle ->
                 ("● " + stringResource(Res.string.status_idle)) to MaterialTheme.colorScheme.outline
         }
-        VehiclePill(
-            name = vehicle?.name ?: stringResource(Res.string.no_battery),
-            statusText = statusLabel,
-            statusColor = statusColor,
-            iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
-            onClick = component::onPillClicked
-        )
+        if (state.style != DashboardStyle.LIGHT) {
+            VehiclePill(
+                name = vehicle?.name ?: stringResource(Res.string.no_battery),
+                statusText = statusLabel,
+                statusColor = statusColor,
+                iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
+                onClick = component::onPillClicked
+            )
+        }
 
         if (state.faults.isNotEmpty()) {
             RideFaultsBanner(state.faults)
@@ -271,19 +289,35 @@ fun RideDashboardScreen(component: RideDashboardComponent) {
                     maxSpeedKmh = vehicleMaxSpeed,
                     modifier = Modifier.fillMaxWidth()
                 )
+                DashboardStyle.LIGHT -> LightRideDashboard(
+                    component = component,
+                    state = state,
+                    maxSpeedKmh = vehicleMaxSpeed,
+                    recentSpeeds = recentSpeeds,
+                    layoutMode = lightMode,
+                    modifier = Modifier.fillMaxWidth(),
+                    statusText = statusLabel,
+                    statusColor = statusColor,
+                    mapLayer = mapLayer,
+                    onOpenBattery = onOpenBattery,
+                    onOpenNearby = onOpenNearby,
+                    onRecenterMap = onRecenterMap,
+                )
             }
 
         // Graph is no longer a bottom tab — this is its entry point from the
         // ride dashboard. It lives here, alongside the odometer strip, rather
-        // than inside either style's renderer, so it's present for BOTH
-        // Clean and Classic (Classic's cluster otherwise leaves riders no
+        // than inside either renderer, so it's present for all styles
+        // (Classic's cluster otherwise leaves riders no
         // Graph affordance on this screen at all).
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            GraphLinkButton(onClick = component::onOpenGraph)
-        }
+        if (state.style != DashboardStyle.LIGHT) {
+            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                GraphLinkButton(onClick = component::onOpenGraph)
+            }
 
             OdometerStrip(motion = motion, units = units, uptimeSeconds = state.uptimeSeconds)
             TelemetryRateReadout(state)
+        }
         }
     }
 
