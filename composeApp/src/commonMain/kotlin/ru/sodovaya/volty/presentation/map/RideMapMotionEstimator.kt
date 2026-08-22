@@ -240,5 +240,5 @@ private fun validBearing(bearing: Float?): Float? = bearing?.takeIf { it.isFinit
 
 private fun lerpBearing(from: Float, to: Float, alpha: Double): Float {
     val delta = ((to - from + 540f) % 360f) - 180f
-    return ((from + delta * alpha).toDouble() + 360.0).mod(360.0).toFloat()
+    return ((from + delta * alpha) + 360.0).mod(360.0).toFloat()
 }
