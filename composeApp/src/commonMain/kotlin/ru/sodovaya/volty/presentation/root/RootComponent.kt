@@ -17,7 +17,6 @@ import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
 import ru.sodovaya.volty.domain.model.bmsTypeOrNull
-import ru.sodovaya.volty.domain.model.hasControllers
 import ru.sodovaya.volty.domain.model.isDemo
 import ru.sodovaya.volty.domain.model.isGuest
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -71,11 +70,7 @@ import org.koin.core.component.inject
 interface RootComponent {
     val stack: Value<ChildStack<*, Child>>
 
-    /**
-     * True when the active vehicle has a motor controller. Drives the Ride
-     * tab's visibility: a pure-BMS vehicle never sees it, so its experience is
-     * exactly the pre-Ride Battery + Settings one.
-     */
+    /** True when an active vehicle can show the Ride dashboard. */
     val rideAvailable: Value<Boolean>
 
     fun onBack()
@@ -114,9 +109,9 @@ sealed class Config {
         val startImmediately: Boolean = false
     ) : Config()
     @Serializable data class Picker(val mode: String) : Config()
-    /** The Ride dashboard — home for any vehicle that has a motor controller. */
+    /** The Ride dashboard — home for any connected vehicle source. */
     @Serializable data object Ride : Config()
-    /** The battery dashboard — home for a pure-BMS vehicle, Battery tab otherwise. */
+    /** The battery dashboard — secondary surface reached from Ride. */
     @Serializable data object Dashboard : Config()
     @Serializable data class PackDetail(val packIndex: Int) : Config()
     @Serializable data class SetupWizard(
@@ -167,15 +162,16 @@ internal fun activeVehicleForCreatePrefill(
  * every post-connect landing, the back-out target of Graph/Settings, and the
  * Ride tab's visibility.
  *
- * A vehicle with a motor controller is a *vehicle*, so it lands on the Ride
- * dashboard. A pure-BMS vehicle (and "no vehicle at all") keeps the battery
- * dashboard it has always had.
+ * Any active vehicle lands on the Ride dashboard. A BMS-only vehicle uses
+ * the same surface with GPS speed and BMS telemetry while controller-only
+ * metrics remain unavailable. With no active vehicle, the battery dashboard
+ * remains the safe fallback.
  *
  * Extracted as a pure function so it can be unit-tested without standing up
  * Decompose's [ComponentContext] and Koin: see `RootNavigationTest`.
  */
 internal fun homeConfigFor(vehicle: Vehicle?): Config =
-    if (vehicle?.hasControllers == true) Config.Ride else Config.Dashboard
+    if (vehicle != null) Config.Ride else Config.Dashboard
 
 /**
  * Destination of each bottom-bar tab. Pure for the same reason as
@@ -193,7 +189,7 @@ internal fun configForTab(tab: RootComponent.Tab): Config = when (tab) {
  * [stackConfigs] still holds one, so the root must re-route home.
  *
  * Inspects the WHOLE stack, not just its active entry: tapping Battery from
- * Ride leaves `[Ride, Dashboard]`, and switching to a controller-less vehicle
+ * Ride leaves `[Ride, Dashboard]`, and switching to a source-less vehicle
  * from the battery dashboard's own sheet would otherwise leave `Config.Ride`
  * buried underneath — one system back and the user is on a Ride dashboard with
  * no motion source and no Ride tab to escape by.
@@ -393,7 +389,7 @@ class DefaultRootComponent(
             bmsRepository.activeVehicle.collect { v ->
                 val home = homeConfigFor(v)
                 _rideAvailable.value = home is Config.Ride
-                // Switching to a controller-less vehicle must not leave a Ride
+                // Switching to a source-less vehicle must not leave a Ride
                 // entry anywhere in the stack — see [shouldLeaveRide].
                 if (shouldLeaveRide(v, stack.value.items.map { it.configuration })) {
                     replaceAll(home)
@@ -428,8 +424,8 @@ class DefaultRootComponent(
 
     /**
      * Where "home" is right now. Every post-connect landing goes through here
-     * so a controller vehicle lands on Ride and a pure-BMS one on the battery
-     * dashboard, from one rule rather than five copies of it.
+     * so every active vehicle lands on Ride, from one rule rather than five
+     * copies of it.
      */
     private fun homeConfig(): Config = homeConfigFor(bmsRepository.activeVehicle.value)
 

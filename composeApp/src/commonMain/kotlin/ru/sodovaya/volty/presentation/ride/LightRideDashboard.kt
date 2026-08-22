@@ -121,22 +121,28 @@ internal fun LightRideDashboard(
     onOpenBattery: () -> Unit = {},
     onOpenNearby: () -> Unit = {},
     onRecenterMap: () -> Unit = {},
+    gpsSpeedKmh: Float? = null,
 ) {
     SyncLightDashboardSystemBars(darkTheme = LocalVoltyDarkTheme.current)
     val palette = if (LocalVoltyDarkTheme.current) DarkLightHudPalette else BrightLightHudPalette
-    val readouts = LightDashboardMapper.map(state.motion, state.battery, state.units)
+    val readouts = LightDashboardMapper.map(
+        motion = state.motion,
+        battery = state.battery,
+        units = state.units,
+        gpsSpeedKmh = gpsSpeedKmh,
+    )
     val motorTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val controllerTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val motorCurrents = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val batteryCurrents = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val dutyHistory = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
 
-    LaunchedEffect(state.vehicle?.id, state.motion.timestamp) {
-        if (state.motion.isConnected) {
+    LaunchedEffect(state.vehicle?.id, state.motion.timestamp, state.battery.timestamp) {
+        if (state.motion.isConnected || state.battery.isConnected) {
             appendKnown(motorTemperatures, state.motion.motorTempC.takeIf { state.motion.hasMotorTemp })
             appendKnown(controllerTemperatures, state.motion.escTempC.takeIf { state.motion.hasEscTemp })
             appendKnown(motorCurrents, state.motion.motorCurrentA.takeIf { it != 0f || state.motion.hasPower })
-            appendKnown(batteryCurrents, state.motion.batteryCurrentA.takeIf { state.motion.hasBatteryCurrent })
+            appendKnown(batteryCurrents, LightDashboardMapper.batteryCurrentA(state.motion, state.battery))
             appendKnown(dutyHistory, MotionReadings.dutyPercent(state.motion))
         }
     }
@@ -198,7 +204,11 @@ internal fun LightRideDashboard(
                         LightGauge(
                             label = stringResource(Res.string.dashboard_light_speed),
                             readout = readouts.speed,
-                            fraction = LightDashboardMapper.speedFraction(state.motion, maxSpeedKmh),
+                            fraction = LightDashboardMapper.speedFraction(
+                                state.motion,
+                                maxSpeedKmh,
+                                gpsSpeedKmh,
+                            ),
                             color = LocalLightHudPalette.current.cyan,
                             layoutMode = layoutMode,
                             arcSide = LightArcSide.LEFT,

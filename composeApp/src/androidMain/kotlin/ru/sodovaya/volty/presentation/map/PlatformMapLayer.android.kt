@@ -136,6 +136,7 @@ actual fun PlatformRideMapLayer(
     requestLocationPermission: Boolean,
     vehicleSpeedKmh: Float?,
     recenterRequest: Long,
+    onGpsSpeedKmhChanged: (Float?) -> Unit,
     modifier: Modifier,
 ) {
     AndroidMapLibreView(
@@ -147,6 +148,7 @@ actual fun PlatformRideMapLayer(
         requestLocationPermission = requestLocationPermission,
         vehicleSpeedKmh = vehicleSpeedKmh,
         recenterRequest = recenterRequest,
+        onGpsSpeedKmhChanged = onGpsSpeedKmhChanged,
     )
 }
 
@@ -163,6 +165,7 @@ private fun AndroidMapLibreView(
     requestLocationPermission: Boolean,
     vehicleSpeedKmh: Float?,
     recenterRequest: Long,
+    onGpsSpeedKmhChanged: (Float?) -> Unit,
 ) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -178,6 +181,7 @@ private fun AndroidMapLibreView(
     val latestFollowState = rememberUpdatedState(followState)
     val latestOwn = rememberUpdatedState(own)
     val latestVehicleSpeedKmh = rememberUpdatedState(vehicleSpeedKmh)
+    val latestGpsSpeedKmhChanged = rememberUpdatedState(onGpsSpeedKmhChanged)
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
     val hazeState = rememberHazeState()
     val mapView = remember(context, cacheKey) {
@@ -225,13 +229,13 @@ private fun AndroidMapLibreView(
 
     DisposableEffect(context, showOwnLocation, locationPermissionGranted) {
         if (!showOwnLocation) {
-            onDispose { }
+            onDispose { latestGpsSpeedKmhChanged.value(null) }
         } else {
             val fine = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_FINE_LOCATION)
             val coarse = ContextCompat.checkSelfPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
             val manager = context.getSystemService(Context.LOCATION_SERVICE) as? LocationManager
             if (manager == null || (fine != PackageManager.PERMISSION_GRANTED && coarse != PackageManager.PERMISSION_GRANTED)) {
-                onDispose { }
+                onDispose { latestGpsSpeedKmhChanged.value(null) }
             } else {
                 var gpsFixSeen = false
                 var lastAcceptedLocation: Location? = null
@@ -245,6 +249,12 @@ private fun AndroidMapLibreView(
                             .takeIf { it > 0L }
                             ?.div(1_000_000L)
                         if (elapsedRealtimeMillis != null) motionClockUsesElapsedRealtime = true
+                        latestGpsSpeedKmhChanged.value(
+                            enriched.takeIf { it.hasSpeed() }
+                                ?.speed
+                                ?.times(3.6f)
+                                ?.takeIf { it.isFinite() && it >= 0f },
+                        )
                         motionEstimator.accept(
                             RideMapMotionFix(
                                 latitude = enriched.latitude,
@@ -271,7 +281,10 @@ private fun AndroidMapLibreView(
                         )
                     }
                 }
-                onDispose { runCatching { manager.removeUpdates(listener) } }
+                onDispose {
+                    runCatching { manager.removeUpdates(listener) }
+                    latestGpsSpeedKmhChanged.value(null)
+                }
             }
         }
     }

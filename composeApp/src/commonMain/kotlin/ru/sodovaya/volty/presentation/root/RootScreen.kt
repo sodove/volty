@@ -19,6 +19,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -69,7 +70,10 @@ fun RootScreen(component: RootComponent) {
     val activeRide = active as? RootComponent.Child.Ride
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
     var mapRecenterRequest by remember { mutableLongStateOf(0L) }
-    val vehicleSpeedKmh = activeRideState?.motion?.let(MotionReadings::speedKmh)
+    var gpsSpeedKmh by remember { mutableStateOf<Float?>(null) }
+    val vehicleSpeedKmh = activeRideState?.motion
+        ?.takeIf { it.isConnected }
+        ?.let(MotionReadings::speedKmh)
     val mapHost = rideMapHostState(
         rideAvailable = rideAvailable,
         activeScreen = when (active) {
@@ -89,6 +93,7 @@ fun RootScreen(component: RootComponent) {
                     requestLocationPermission = mapHost.visible,
                     vehicleSpeedKmh = vehicleSpeedKmh,
                     recenterRequest = mapRecenterRequest,
+                    onGpsSpeedKmhChanged = { gpsSpeedKmh = it },
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(if (mapHost.visible) 1f else 0f),
@@ -117,6 +122,7 @@ fun RootScreen(component: RootComponent) {
                         onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
                         onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
                         onRecenterMap = { mapRecenterRequest++ },
+                        gpsSpeedKmh = gpsSpeedKmh,
                     )
                     is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
@@ -178,8 +184,8 @@ private fun BottomTabBar(
             .padding(4.dp),
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // Hidden for a controller-less vehicle: a pure-BMS user gets exactly the
-        // Battery + Settings bar they had before the Ride dashboard existed.
+        // Ride is available for BMS-only vehicles too; controller-only metrics
+        // simply remain unavailable on that limited Ride surface.
         if (rideAvailable) {
             Tab(
                 stringResource(Res.string.tab_ride),

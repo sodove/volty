@@ -12,5 +12,6 @@ expect fun PlatformRideMapLayer(
     requestLocationPermission: Boolean = false,
     vehicleSpeedKmh: Float? = null,
     recenterRequest: Long = 0L,
+    onGpsSpeedKmhChanged: (Float?) -> Unit = {},
     modifier: Modifier = Modifier,
 )

@@ -86,8 +86,8 @@ class RootNavigationTest {
     }
 
     @Test
-    fun home_is_battery_for_a_pure_bms_vehicle() {
-        assertEquals(Config.Dashboard, homeConfigFor(vehicle()))
+    fun home_is_ride_for_a_pure_bms_vehicle() {
+        assertEquals(Config.Ride, homeConfigFor(vehicle()))
     }
 
     @Test
@@ -109,21 +109,20 @@ class RootNavigationTest {
     }
 
     // --- shouldLeaveRide: never leave a Ride entry behind for a vehicle that
-    // has no controller. The stack is passed in as a plain list, so the whole
-    // rule is reachable without Decompose.
+    // no longer has any source. The stack is passed in as a plain list, so the
+    // whole rule is reachable without Decompose.
 
     @Test
-    fun a_buried_ride_entry_is_left_when_the_vehicle_loses_its_controller() {
+    fun a_bms_only_vehicle_keeps_a_buried_ride_entry() {
         // Ride home, then the Battery tab: bringToFront leaves [Ride, Dashboard].
-        // Switching to a pure-BMS vehicle from the BATTERY dashboard's sheet
-        // means `active` is Dashboard — but Ride is still underneath, one system
-        // back away. Inspecting only the active entry would miss this.
-        assertTrue(shouldLeaveRide(vehicle(), listOf(Config.Ride, Config.Dashboard)))
+        // BMS-only is still a valid Ride source, so switching to it must not
+        // strand the user with a hidden Ride entry that navigation later removes.
+        assertFalse(shouldLeaveRide(vehicle(), listOf(Config.Ride, Config.Dashboard)))
     }
 
     @Test
-    fun an_active_ride_entry_is_left_when_the_vehicle_loses_its_controller() {
-        assertTrue(shouldLeaveRide(vehicle(), listOf(Config.Ride)))
+    fun an_active_ride_entry_is_kept_for_a_bms_only_vehicle() {
+        assertFalse(shouldLeaveRide(vehicle(), listOf(Config.Ride)))
     }
 
     @Test

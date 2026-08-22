@@ -127,6 +127,7 @@ fun RideDashboardScreen(
     onOpenBattery: () -> Unit = {},
     onOpenNearby: () -> Unit = {},
     onRecenterMap: () -> Unit = {},
+    gpsSpeedKmh: Float? = null,
 ) {
     val state by component.state.collectAsState()
     val vehicle = state.vehicle
@@ -139,9 +140,10 @@ fun RideDashboardScreen(
     // update below lives in a LaunchedEffect keyed on the incoming sample rather
     // than mutating state directly during composition.
     var sessionMaxSpeedKmh by remember(vehicle?.id) { mutableStateOf(0f) }
-    LaunchedEffect(vehicle?.id, motion.timestamp) {
-        if (motion.isConnected && motion.speedKnown && motion.speedKmh > sessionMaxSpeedKmh) {
-            sessionMaxSpeedKmh = motion.speedKmh
+    val displayedSpeedKmh = LightDashboardMapper.speedKmh(motion, gpsSpeedKmh)
+    LaunchedEffect(vehicle?.id, motion.timestamp, gpsSpeedKmh) {
+        if (displayedSpeedKmh != null && displayedSpeedKmh > sessionMaxSpeedKmh) {
+            sessionMaxSpeedKmh = displayedSpeedKmh
         }
     }
     // Never zero: the hero always has at least a 70 km/h scale to draw against.
@@ -157,9 +159,9 @@ fun RideDashboardScreen(
     // §15.3 item 1 already tracks lifting it out.
 
     val recentSpeeds = remember(vehicle?.id) { mutableStateListOf<Float>() }
-    LaunchedEffect(vehicle?.id, motion.timestamp) {
-        if (motion.isConnected && motion.speedKnown) {
-            recentSpeeds.add(motion.speedKmh)
+    LaunchedEffect(vehicle?.id, motion.timestamp, gpsSpeedKmh) {
+        if (displayedSpeedKmh != null) {
+            recentSpeeds.add(displayedSpeedKmh)
             while (recentSpeeds.size > SPARKLINE_MAX_POINTS) recentSpeeds.removeAt(0)
         }
     }
@@ -302,6 +304,7 @@ fun RideDashboardScreen(
                     onOpenBattery = onOpenBattery,
                     onOpenNearby = onOpenNearby,
                     onRecenterMap = onRecenterMap,
+                    gpsSpeedKmh = gpsSpeedKmh,
                 )
             }
 
