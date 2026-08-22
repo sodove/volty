@@ -37,6 +37,12 @@ without changing unrelated dashboard behavior. Re-entering follow mode immediate
 uses the current predicted location and current camera heading, so it does not queue an
 old MapLibre animation.
 
+While the vehicle is moving, a gesture temporarily wins over follow mode. After the
+last user camera gesture, wait about two seconds before returning to `FOLLOWING`; a new
+gesture resets that delay. Auto-return is disabled while the vehicle is stopped or its
+speed is unknown, so the rider can inspect the map while stationary without losing the
+chosen view. A manual recenter still returns to `FOLLOWING` immediately.
+
 ## Data and rendering rules
 
 The following existing behavior remains load-bearing:
@@ -48,6 +54,8 @@ The following existing behavior remains load-bearing:
 - Invalid or stationary bearings do not rotate the camera.
 - Automatic speed-based zoom runs only in `FOLLOWING`; manual zoom is preserved in
   `FREE`.
+- In `FREE`, the last user camera values are preserved for the grace period; automatic
+  follow resumes only after continuous movement for the grace period.
 - The live blur/vignette overlay is not changed by this feature.
 
 ## Testing
@@ -59,6 +67,8 @@ Pure common policy tests will cover the follow-mode transition contract:
 3. Re-centering enables following again.
 4. Automatic zoom is only selected while following; free mode preserves the current
    camera values.
+5. A moving vehicle schedules auto-return after the grace period, while a stopped or
+   unknown-speed vehicle does not.
 
 The Android MapLibre callback wiring will be verified by the Android debug build. The
 existing common test suite and release/build verification remain required. Compose UI
