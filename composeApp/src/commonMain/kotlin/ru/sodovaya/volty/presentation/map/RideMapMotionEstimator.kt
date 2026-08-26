@@ -32,7 +32,7 @@ internal data class RideMapMotionEstimatorPolicy(
 
 internal val defaultRideMapMotionEstimatorPolicy = RideMapMotionEstimatorPolicy(
     maxPredictionAgeMillis = defaultRideMapLocationUpdatePolicy.maxPredictionAgeMillis,
-    correctionDurationMillis = 350L,
+    correctionDurationMillis = 500L,
     correctionDeadZoneMeters = 2.0,
     hardResetDistanceMeters = 30.0,
     movingSpeedThresholdMetersPerSecond = 0.55f,

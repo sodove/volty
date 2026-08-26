@@ -8,6 +8,11 @@ import kotlin.test.assertTrue
 
 class RideMapMotionEstimatorTest {
     @Test
+    fun gps_correction_uses_the_longer_smoother_duration() {
+        assertEquals(500L, defaultRideMapMotionEstimatorPolicy.correctionDurationMillis)
+    }
+
+    @Test
     fun prediction_uses_fix_measurement_time_and_speed() {
         val estimator = RideMapMotionEstimator()
         estimator.accept(fix(timestampMillis = 0L, speedMetersPerSecond = 10f, bearingDegrees = 90f))

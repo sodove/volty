@@ -92,7 +92,11 @@ import ru.sodovaya.volty.presentation.map.rideMapTextureModeRequiredForMapCaptur
 import ru.sodovaya.volty.presentation.map.rideMapBearingDegrees
 import ru.sodovaya.volty.presentation.map.rideMapZoomForSpeed
 import ru.sodovaya.volty.presentation.map.predictRideMapCoordinate
+import ru.sodovaya.volty.presentation.map.rideMapMarkerLabel
 import ru.sodovaya.volty.presentation.map.trailOpacityForDistanceMeters
+import ru.sodovaya.volty.presentation.map.RideMapTrailSample
+import ru.sodovaya.volty.presentation.map.shouldConnectRideMapTrail
+import ru.sodovaya.volty.presentation.map.shouldRenderTrail
 import kotlin.math.cos
 import kotlin.math.pow
 import kotlin.math.sin
@@ -106,6 +110,7 @@ private const val OWN_SOURCE_ID = "volty-own-source"
 private const val OWN_LAYER_ID = "volty-own-layer"
 private const val GROUP_SOURCE_ID = "volty-group-source"
 private const val GROUP_LAYER_ID = "volty-group-layer"
+private const val GROUP_LABEL_LAYER_ID = "volty-group-label-layer"
 private const val BUILDINGS_LAYER_ID = "volty-buildings-3d"
 private const val RU_CITIES_SOURCE_ID = "volty-ru-cities-source"
 private const val RU_CITIES_LAYER_ID = "volty-ru-cities-layer"
@@ -144,7 +149,10 @@ actual fun PlatformRideMapLayer(
         darkTheme = darkTheme,
         modifier = modifier,
         markers = markers,
-        showOwnLocation = true,
+        // Nearby renders remote markers only. This flag is deliberately tied
+        // to the explicit Ride permission request so opening Nearby cannot
+        // start or reveal the user's own location stream.
+        showOwnLocation = requestLocationPermission,
         requestLocationPermission = requestLocationPermission,
         vehicleSpeedKmh = vehicleSpeedKmh,
         recenterRequest = recenterRequest,
@@ -153,7 +161,11 @@ actual fun PlatformRideMapLayer(
 }
 
 private data class MapCoordinate(val latitude: Double, val longitude: Double)
-private data class TrailPoint(val coordinate: MapCoordinate)
+private data class TrailPoint(
+    val coordinate: MapCoordinate,
+    val sample: RideMapTrailSample,
+    val connectFromPrevious: Boolean,
+)
 
 @Composable
 private fun AndroidMapLibreView(
@@ -183,6 +195,7 @@ private fun AndroidMapLibreView(
     val latestVehicleSpeedKmh = rememberUpdatedState(vehicleSpeedKmh)
     val latestGpsSpeedKmhChanged = rememberUpdatedState(onGpsSpeedKmhChanged)
     val motionEstimator = remember(cacheKey) { RideMapMotionEstimator() }
+    val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
     val hazeState = rememberHazeState()
     val mapView = remember(context, cacheKey) {
         MapViewCache.obtain(cacheKey, context)
@@ -243,6 +256,10 @@ private fun AndroidMapLibreView(
                     override fun onLocationChanged(location: Location) {
                         if (!shouldAcceptMapLocation(location, lastAcceptedLocation, gpsFixSeen)) return
                         if (location.provider == LocationManager.GPS_PROVIDER) gpsFixSeen = true
+                        // Preserve the raw fix for the historical trail. If we derive
+                        // speed/bearing first, a single bad GPS jump looks self-consistent
+                        // and can be drawn as a long false segment.
+                        appendTrail(trail, location)
                         val enriched = enrichMapLocation(location, lastAcceptedLocation)
                         lastAcceptedLocation = enriched
                         val elapsedRealtimeMillis = enriched.elapsedRealtimeNanos
@@ -266,7 +283,6 @@ private fun AndroidMapLibreView(
                             ),
                         )
                         own = enriched
-                        appendTrail(trail, enriched)
                     }
                 }
                 val providers = listOf(LocationManager.GPS_PROVIDER, LocationManager.NETWORK_PROVIDER)
@@ -328,10 +344,12 @@ private fun AndroidMapLibreView(
     LaunchedEffect(map, styleReady, markers, showOwnLocation) {
         val readyMap = map ?: return@LaunchedEffect
         var lastFrameNanos = Long.MIN_VALUE
+        var lastTrailRenderMillis: Long? = null
         while (isActive) {
             val frameNanos = withFrameNanos { it }
-            if (lastFrameNanos != Long.MIN_VALUE &&
-                frameNanos - lastFrameNanos < defaultRideMapLocationUpdatePolicy.renderIntervalMillis * 1_000_000L
+            val previousFrameNanos = lastFrameNanos
+            if (previousFrameNanos != Long.MIN_VALUE &&
+                frameNanos - previousFrameNanos < defaultRideMapLocationUpdatePolicy.renderIntervalMillis * 1_000_000L
             ) continue
             lastFrameNanos = frameNanos
 
@@ -340,6 +358,12 @@ private fun AndroidMapLibreView(
                 SystemClock.elapsedRealtime()
             } else {
                 System.currentTimeMillis()
+            }
+            val trailNowMillis = SystemClock.elapsedRealtime()
+            pruneTrail(trail, trailNowMillis)
+            if (shouldRenderTrail(trailNowMillis, lastTrailRenderMillis)) {
+                updateTrailGeoJson(readyMap, trail, trailNowMillis)
+                lastTrailRenderMillis = trailNowMillis
             }
             val locationSpeedKmh = raw?.takeIf { it.hasSpeed() }?.speed?.times(3.6f)
                 ?.takeIf { it.isFinite() && it >= 0f }
@@ -351,9 +375,7 @@ private fun AndroidMapLibreView(
                 nowMillis = nowMillis,
                 speedMetersPerSecondOverride = vehicleSpeedMps,
             )
-            val predicted = estimate?.coordinate?.let { coordinate ->
-                LatLng(coordinate.latitude, coordinate.longitude)
-            } ?: raw?.let { location ->
+            val predictedCoordinate = estimate?.coordinate ?: raw?.let { location ->
                 val predicted = predictRideMapCoordinate(
                     latitude = location.latitude,
                     longitude = location.longitude,
@@ -362,12 +384,21 @@ private fun AndroidMapLibreView(
                         ?: location.takeIf { it.hasBearing() }?.bearing,
                     ageMillis = locationAgeMillis(location),
                 )
-                LatLng(predicted.latitude, predicted.longitude)
+                predicted
             }
-            val target = predicted ?: markers.firstOrNull()?.let { LatLng(it.latitude, it.longitude) }
+            val target = predictedCoordinate?.let { LatLng(it.latitude, it.longitude) }
+                ?: markers.firstOrNull()?.let { LatLng(it.latitude, it.longitude) }
             val speedKmh = effectiveSpeedKmh
                 ?: estimate?.speedMetersPerSecond?.times(3.6f)
                 ?: 0f
+
+            // The marker is a render-time object, not a GPS-fix object. Writing
+            // it only from the LocationListener makes it visibly jump once per
+            // provider callback even though the estimator already predicts a
+            // position for every frame.
+            predictedCoordinate?.let { coordinate ->
+                updateOwnGeoJson(readyMap, coordinate)
+            }
 
             if (followState.mode == RideMapFollowMode.FREE &&
                 shouldAutoReturnToFollow(
@@ -380,30 +411,50 @@ private fun AndroidMapLibreView(
             }
 
             if (target != null && followState.mode == RideMapFollowMode.FOLLOWING) {
+                val currentCamera = readyMap.cameraPosition
+                val targetBearing = rideMapBearingDegrees(
+                    gpsBearingDegrees = estimate?.bearingDegrees
+                        ?: raw?.takeIf { it.hasBearing() }?.bearing,
+                    speedKmh = speedKmh,
+                    fallbackDegrees = currentCamera.bearing,
+                )
+                val cameraFrame = cameraSmoother.advance(
+                    targetZoom = rideMapZoomForSpeed(speedKmh, fallbackZoom = currentCamera.zoom),
+                    targetBearingDegrees = targetBearing,
+                    targetCenter = RideMapPredictedCoordinate(target.latitude, target.longitude),
+                    deltaMillis = if (previousFrameNanos == Long.MIN_VALUE) 0L
+                    else ((frameNanos - previousFrameNanos) / 1_000_000L).coerceAtMost(250L),
+                )
                 val nextPosition = CameraPosition.Builder(readyMap.cameraPosition)
-                    .target(target)
-                    .zoom(rideMapZoomForSpeed(speedKmh, fallbackZoom = readyMap.cameraPosition.zoom))
-                    .tilt(defaultRideMapCameraPolicy.tiltDegrees)
-                    .bearing(
-                        rideMapBearingDegrees(
-                            gpsBearingDegrees = estimate?.bearingDegrees
-                                ?: raw?.takeIf { it.hasBearing() }?.bearing,
-                            speedKmh = speedKmh,
-                            fallbackDegrees = readyMap.cameraPosition.bearing,
-                        ),
+                    .target(
+                        cameraFrame.center?.let { LatLng(it.latitude, it.longitude) } ?: target,
                     )
+                    .zoom(cameraFrame.zoom)
+                    .tilt(defaultRideMapCameraPolicy.tiltDegrees)
+                    .bearing(cameraFrame.bearingDegrees)
                     .build()
-                // `easeCamera` queues an animation for every fix. At a higher
-                // cadence those animations chase one another and the map lags.
-                // Move directly from the frame clock instead.
                 readyMap.moveCamera(CameraUpdateFactory.newCameraPosition(nextPosition))
+            } else {
+                // A gesture owns the camera while follow mode is free. Keep
+                // the smoother anchored to that user position so re-following
+                // never starts from a stale zoom or heading.
+                val camera = readyMap.cameraPosition
+                cameraSmoother.reset(
+                    RideMapCameraFrame(
+                        zoom = camera.zoom,
+                        bearingDegrees = camera.bearing,
+                        center = camera.target?.let { target ->
+                            RideMapPredictedCoordinate(target.latitude, target.longitude)
+                        },
+                    ),
+                )
             }
         }
     }
 
-    LaunchedEffect(map, styleReady, trail.size, own, markers) {
+    LaunchedEffect(map, styleReady, markers) {
         val readyMap = map ?: return@LaunchedEffect
-        updateGeoJson(readyMap, trail, own, markers)
+        updateMarkerGeoJson(readyMap, markers)
     }
 
     Box(modifier = modifier.background(ComposeColor(0xFF07131E))) {
@@ -590,36 +641,73 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
     if (style.getLayer(GROUP_LAYER_ID) == null) {
         style.addLayer(
             CircleLayer(GROUP_LAYER_ID, GROUP_SOURCE_ID).withProperties(
-                circleColor(Color.parseColor("#35E6A2")),
+                circleColor(
+                    Expression.match(
+                        Expression.get("stale"),
+                        Expression.color(Color.parseColor("#35E6A2")),
+                        Expression.stop(
+                            true,
+                            Expression.color(Color.parseColor("#FFB454")),
+                        ),
+                    ),
+                ),
                 circleRadius(7f),
                 circleStrokeColor(Color.WHITE),
                 circleStrokeWidth(2f),
             ),
         )
     }
+    if (style.getLayer(GROUP_LABEL_LAYER_ID) == null) {
+        style.addLayer(
+            SymbolLayer(GROUP_LABEL_LAYER_ID, GROUP_SOURCE_ID).withProperties(
+                textField(Expression.get("label")),
+                textSize(10f),
+                textColor(Color.parseColor(if (darkTheme) "#F1F7FA" else "#15232B")),
+                textHaloColor(Color.parseColor(if (darkTheme) "#07131E" else "#FFFFFF")),
+                textHaloWidth(1.25f),
+                textAllowOverlap(true),
+                textIgnorePlacement(true),
+            ),
+        )
+    }
 }
 
-private fun updateGeoJson(
+private fun updateMarkerGeoJson(
     map: MapLibreMap,
-    trail: List<TrailPoint>,
-    own: Location?,
     markers: List<ParticipantMarker>,
 ) {
     val style = map.style ?: return
-    style.getSourceAs<GeoJsonSource>(TRAIL_SOURCE_ID)?.setGeoJson(
-        trailFeatureCollection(trail),
+    style.getSourceAs<GeoJsonSource>(GROUP_SOURCE_ID)?.setGeoJson(
+        FeatureCollection.fromFeatures(markers.map { marker ->
+            Feature.fromGeometry(Point.fromLngLat(marker.longitude, marker.latitude)).apply {
+                addStringProperty("label", rideMapMarkerLabel(marker))
+                addBooleanProperty("stale", marker.stale)
+            }
+        }),
     )
+}
+
+private fun updateTrailGeoJson(
+    map: MapLibreMap,
+    trail: List<TrailPoint>,
+    nowMillis: Long,
+) {
+    map.style?.getSourceAs<GeoJsonSource>(TRAIL_SOURCE_ID)?.setGeoJson(
+        trailFeatureCollection(trail, nowMillis),
+    )
+}
+
+private fun updateOwnGeoJson(
+    map: MapLibreMap,
+    coordinate: RideMapPredictedCoordinate?,
+) {
+    val style = map.style ?: return
     style.getSourceAs<GeoJsonSource>(OWN_SOURCE_ID)?.setGeoJson(
-        own?.let {
+        coordinate?.let {
             FeatureCollection.fromFeatures(
                 listOf(Feature.fromGeometry(Point.fromLngLat(it.longitude, it.latitude))),
             )
         } ?: emptyFeatureCollection(),
-    )
-    style.getSourceAs<GeoJsonSource>(GROUP_SOURCE_ID)?.setGeoJson(
-        FeatureCollection.fromFeatures(markers.map { marker ->
-            Feature.fromGeometry(Point.fromLngLat(marker.longitude, marker.latitude))
-        }),
     )
 }
 
@@ -670,18 +758,53 @@ private fun emptyFeatureCollection(): FeatureCollection = FeatureCollection.from
 private fun appendTrail(target: MutableList<TrailPoint>, location: Location) {
     val next = MapCoordinate(location.latitude, location.longitude)
     if (target.lastOrNull()?.coordinate == next) return
-    target += TrailPoint(next)
+    val sample = RideMapTrailSample(
+        latitude = location.latitude,
+        longitude = location.longitude,
+        timestampMillis = location.elapsedRealtimeNanos
+            .takeIf { it > 0L }
+            ?.div(1_000_000L)
+            ?: SystemClock.elapsedRealtime(),
+        accuracyMeters = location.accuracy.takeIf { location.hasAccuracy() },
+        speedMetersPerSecond = location.takeIf { it.hasSpeed() }?.speed,
+    )
+    val previous = target.lastOrNull()?.sample
+    target += TrailPoint(
+        coordinate = next,
+        sample = sample,
+        connectFromPrevious = previous == null || shouldConnectRideMapTrail(previous, sample),
+    )
     while (target.size > MAX_TRAIL_POINTS) target.removeAt(0)
 }
 
-private fun trailFeatureCollection(trail: List<TrailPoint>): FeatureCollection {
+private fun pruneTrail(target: MutableList<TrailPoint>, nowMillis: Long) {
+    while (target.firstOrNull()?.let { point ->
+            !shouldRetainTrailPoint((nowMillis - point.sample.timestampMillis).coerceAtLeast(0L))
+        } == true
+    ) {
+        target.removeAt(0)
+    }
+}
+
+private fun trailFeatureCollection(
+    trail: List<TrailPoint>,
+    nowMillis: Long,
+): FeatureCollection {
     if (trail.size < 2) return emptyFeatureCollection()
     val features = mutableListOf<Feature>()
     var distanceBehind = 0.0
     for (index in trail.lastIndex downTo 1) {
+        val newerPoint = trail[index]
+        // A stale/implausible fix starts a new visual segment. Do not let the
+        // renderer bridge it with a straight line through buildings.
+        if (!newerPoint.connectFromPrevious) break
         val older = trail[index - 1].coordinate
-        val newer = trail[index].coordinate
-        val opacity = trailOpacityForDistanceMeters(distanceBehind)
+        val newer = newerPoint.coordinate
+        val ageMillis = (nowMillis - newerPoint.sample.timestampMillis).coerceAtLeast(0L)
+        val opacity = minOf(
+            trailOpacityForDistanceMeters(distanceBehind),
+            trailOpacityForAgeMillis(ageMillis),
+        )
         if (opacity > 0f) {
             Feature.fromGeometry(
                 LineString.fromLngLats(
