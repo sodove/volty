@@ -47,9 +47,9 @@ import ru.sodovaya.volty.presentation.settings.DefaultSettingsComponent
 import ru.sodovaya.volty.presentation.settings.SettingsComponent
 import ru.sodovaya.volty.presentation.nearby.DefaultNearbyComponent
 import ru.sodovaya.volty.presentation.nearby.NearbyComponent
-import ru.sodovaya.volty.presentation.nearby.DefaultSocialLiveSession
 import ru.sodovaya.volty.presentation.nearby.SocialLiveSession
 import ru.sodovaya.volty.presentation.nearby.SocialLiveState
+import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
 import ru.sodovaya.volty.presentation.vehicle.DefaultVehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
 import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
@@ -64,9 +64,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
@@ -84,6 +88,7 @@ interface RootComponent {
 
     fun onBack()
     fun onTab(tab: Tab)
+    fun onOpenGroupMap()
 
     enum class Tab { Ride, Battery, Nearby, Settings }
 
@@ -103,6 +108,8 @@ interface RootComponent {
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
         data class Nearby(val component: NearbyComponent) : Child
+        /** Retained full-screen group map route. */
+        data object GroupMap : Child
         data class Settings(val component: SettingsComponent) : Child
     }
 }
@@ -145,6 +152,7 @@ sealed class Config {
     @Serializable data class VehicleAlerts(val vehicleId: String) : Config()
     @Serializable data object Graph : Config()
     @Serializable data object Nearby : Config()
+    @Serializable data object GroupMap : Config()
     @Serializable data object Settings : Config()
 }
 
@@ -366,7 +374,7 @@ class DefaultRootComponent(
     private val vehicleRepository: VehicleRepository by inject()
     private val bmsRepository: BmsRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
-    private val socialLiveSession: SocialLiveSession = DefaultSocialLiveSession(get())
+    private val socialLiveSession: SocialLiveSession = RootSocialLiveSession(get())
     override val socialLiveState: StateFlow<SocialLiveState> = socialLiveSession.state
 
     // Lightweight scope for cold-start async work (DB reads). Previously these
@@ -466,11 +474,19 @@ class DefaultRootComponent(
         // (see Config.Graph / Config.Settings in createChild) and keeping live
         // Ride state alive. See [shouldPopOnBack] for why this doesn't need to
         // duplicate [shouldLeaveRide]'s job.
-        if (shouldPopOnBack(current, stack.value.items.size)) nav.pop() else replaceAll(homeConfig())
+        if (current is Config.GroupMap || shouldPopOnBack(current, stack.value.items.size)) {
+            nav.pop()
+        } else {
+            replaceAll(homeConfig())
+        }
     }
 
     override fun onTab(tab: RootComponent.Tab) {
         nav.bringToFront(configForTab(tab))
+    }
+
+    override fun onOpenGroupMap() {
+        goTo(Config.GroupMap)
     }
 
     /**
@@ -725,13 +741,12 @@ class DefaultRootComponent(
                 DefaultNearbyComponent(
                     componentContext = context,
                     socialRepository = get(),
-                    voiceRepository = get(),
-                    locationProvider = get(),
-                    sharingCoordinator = get(),
-                    liveSession = socialLiveSession,
-                    onBackRequested = { nav.pop() }
+                    socialRuntime = get(),
+                    onBackRequested = { nav.pop() },
+                    onOpenGroupMapRequested = { onOpenGroupMap() },
                 )
             )
+            is Config.GroupMap -> RootComponent.Child.GroupMap
             is Config.Settings -> RootComponent.Child.Settings(
                 DefaultSettingsComponent(
                     componentContext = context,
@@ -746,4 +761,42 @@ class DefaultRootComponent(
                 )
             )
         }
+}
+
+/**
+ * Root owns only this UI projection. Closing it detaches collection from the
+ * app-scoped runtime; it deliberately never calls [SocialRideRuntime.close].
+ */
+private class RootSocialLiveSession(
+    private val runtime: ru.sodovaya.volty.domain.social.SocialRideRuntime,
+) : SocialLiveSession {
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val _state = MutableStateFlow(SocialLiveState())
+    override val state: StateFlow<SocialLiveState> = _state.asStateFlow()
+
+    init {
+        scope.launch {
+            runtime.state.collect { current ->
+                _state.value = SocialLiveState(
+                    groupId = current.selectedGroup?.id,
+                    liveEvent = current.liveEvent,
+                    markers = current.markers.map {
+                        ParticipantMarker(
+                            userId = it.userId,
+                            label = it.label,
+                            latitude = it.latitude,
+                            longitude = it.longitude,
+                            accuracyMeters = it.accuracyMeters,
+                            presence = it.presence,
+                            stale = it.stale,
+                        )
+                    },
+                )
+            }
+        }
+    }
+
+    override fun selectGroup(groupId: ru.sodovaya.volty.domain.social.RideGroupId) = Unit
+    override fun clear() = runtime.clearGroup()
+    override fun close() = scope.cancel()
 }

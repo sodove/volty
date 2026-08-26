@@ -25,6 +25,7 @@ import ru.sodovaya.volty.domain.social.SocialSession
 import ru.sodovaya.volty.domain.social.SocialUserId
 import ru.sodovaya.volty.domain.social.SessionTokenState
 import ru.sodovaya.volty.domain.social.VoiceRoomCredentials
+import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
 
 class HttpSocialTransportTest {
     @Test
@@ -117,6 +118,91 @@ class HttpSocialTransportTest {
     }
 
     @Test
+    fun groupTransportKeepsOwnerInviteCodeAndDoesNotInventOneForMembers() = runTest {
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    val body = if (request.headers[HttpHeaders.Authorization] == "Bearer owner-token") {
+                        """
+                        {"id":"group-1","name":"Ride","ownerId":"user-1","members":[],"inviteOnly":true,"inviteExpiresAtEpochMillis":2000,"inviteCode":"ABC123"}
+                        """
+                    } else {
+                        """
+                        [{"id":"group-1","name":"Ride","ownerId":"user-1","members":[],"inviteOnly":true,"inviteExpiresAtEpochMillis":2000}]
+                        """
+                    }
+                    respond(
+                        content = body.trimIndent(),
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+            }
+        }
+
+        val transport = HttpSocialTransport(client, "https://example.test/v1")
+        val owner = transport.createGroup("owner-token", "Ride")
+        val member = transport.listGroups("member-token")
+
+        assertEquals("ABC123", (owner as SocialResult.Success).value.inviteCode)
+        assertEquals(null, (member as SocialResult.Success).value.single().inviteCode)
+        client.close()
+    }
+
+    @Test
+    fun groupDeleteAndMemberLeaveUseDifferentHttpContracts() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requests += request
+                    respond(
+                        content = "",
+                        status = HttpStatusCode.NoContent,
+                        headers = headersOf(),
+                    )
+                }
+            }
+        }
+        val transport = HttpSocialTransport(client, "https://example.test/v1")
+
+        transport.leaveGroup("access-token", RideGroupId("group-1"))
+        transport.deleteGroup("access-token", RideGroupId("group-1"))
+
+        assertEquals("POST", requests[0].method.value)
+        assertEquals("https://example.test/v1/groups/group-1/leave", requests[0].url.toString())
+        assertEquals("DELETE", requests[1].method.value)
+        assertEquals("https://example.test/v1/groups/group-1", requests[1].url.toString())
+        client.close()
+    }
+
+    @Test
+    fun userSearchUsesAuthenticatedQueryAndReturnsOpaqueProfileOnly() = runTest {
+        var requestData: HttpRequestData? = null
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requestData = request
+                    respond(
+                        content = """[{"userId":"user-2","displayName":"Passenger","friendshipId":null,"state":null}]""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+            }
+        }
+
+        val result = HttpSocialTransport(client, "https://example.test/v1").searchUsers("access-token", "passenger")
+
+        assertEquals("https://example.test/v1/users/search?q=passenger", requestData?.url?.toString())
+        assertEquals("Bearer access-token", requestData?.headers?.get(HttpHeaders.Authorization))
+        assertEquals("user-2", (result as SocialResult.Success).value.single().userId.value)
+        assertEquals(null, result.value.single().friendshipId)
+        assertEquals(null, result.value.single().state)
+        client.close()
+    }
+
+    @Test
     fun httpErrorsMapToTypedFailuresAndRetryAfter() = runTest {
         val client = HttpClient(MockEngine) {
             engine {
@@ -139,6 +225,16 @@ class HttpSocialTransportTest {
             result,
         )
         client.close()
+    }
+
+    @Test
+    fun websocketHandshakeFailuresAreClassifiedAsTerminalLiveEvents() {
+        assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Unauthorized))
+        assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Forbidden))
+        assertEquals(SocialFailure.NotFound, websocketHandshakeFailure(HttpStatusCode.NotFound))
+        assertEquals(null, websocketHandshakeFailure(HttpStatusCode.ServiceUnavailable))
+        assertEquals(SocialFailure.Unauthorized, websocketExceptionFailure("invalid token"))
+        assertEquals(SocialFailure.Forbidden, websocketExceptionFailure("group membership required"))
     }
 
     @Test
@@ -185,6 +281,69 @@ class HttpSocialTransportTest {
         assertEquals("https://example.test/v1/groups/group-7/voice/join", requestData?.url?.toString())
         assertEquals("POST", requestData?.method?.value)
         assertEquals("Bearer access-token", requestData?.headers?.get(HttpHeaders.Authorization))
+        client.close()
+    }
+
+    @Test
+    fun voiceProviderAvailabilityIsAuthenticatedAndCanAdvertiseUnavailable() = runTest {
+        var requestData: HttpRequestData? = null
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requestData = request
+                    respond(
+                        content = """{"available":false,"provider":"unconfigured","message":"SFU is not configured"}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+            }
+        }
+
+        val result = HttpSocialTransport(client, "https://example.test/v1").getVoiceProvider("access-token")
+
+        assertEquals(
+            SocialResult.Success(
+                VoiceProviderAvailability(false, "unconfigured", message = "SFU is not configured"),
+            ),
+            result,
+        )
+        assertEquals("https://example.test/v1/voice/provider", requestData?.url?.toString())
+        assertEquals("Bearer access-token", requestData?.headers?.get(HttpHeaders.Authorization))
+        client.close()
+    }
+
+    @Test
+    fun renewSharingUsesDedicatedPathAndDoesNotResendTelemetryProfilePayload() = runTest {
+        var requestData: HttpRequestData? = null
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler { request ->
+                    requestData = request
+                    respond(
+                        content = """{"groupId":"group-7","profile":"LOCATION","expiresAtEpochMillis":9999}""",
+                        status = HttpStatusCode.OK,
+                        headers = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()),
+                    )
+                }
+            }
+        }
+
+        val result = HttpSocialTransport(client, "https://example.test/v1").renewSharing(
+            accessToken = "access-token",
+            request = ru.sodovaya.volty.domain.social.ShareSessionRequest(
+                groupId = RideGroupId("group-7"),
+                profile = ru.sodovaya.volty.domain.social.TelemetryShareProfile.LOCATION,
+                ttlMillis = 60_000L,
+                startedAtEpochMillis = 1_000L,
+            ),
+        )
+
+        assertEquals("https://example.test/v1/groups/group-7/sharing/renew", requestData?.url?.toString())
+        assertEquals("POST", requestData?.method?.value)
+        assertTrue((requestData?.body as TextContent).text.contains("ttlMillis"))
+        assertTrue(!(requestData?.body as TextContent).text.contains("profile"))
+        assertEquals(9999L, (result as SocialResult.Success).value.expiresAtEpochMillis)
         client.close()
     }
 }

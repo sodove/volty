@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.social.FriendRequest
@@ -31,6 +33,8 @@ import ru.sodovaya.volty.domain.social.SocialSession
 import ru.sodovaya.volty.domain.social.SocialSessionPolicy
 import ru.sodovaya.volty.domain.social.SocialTransport
 import ru.sodovaya.volty.domain.social.VoiceRoomCredentials
+import ru.sodovaya.volty.domain.social.UserSearchResult
+import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
 
 /**
  * Session/cache orchestration. Tokens are read from secure storage and passed
@@ -93,6 +97,9 @@ class DefaultSocialRepository(
     override suspend fun respondToFriendRequest(friendshipId: String, accept: Boolean): SocialResult<Unit> =
         authorized { accessToken -> transport.respondToFriendRequest(accessToken, friendshipId, accept) }
 
+    override suspend fun searchUsers(query: String): SocialResult<List<UserSearchResult>> =
+        authorized { accessToken -> transport.searchUsers(accessToken, query) }
+
     override suspend fun listGroups(): SocialResult<List<RideGroup>> =
         authorized { accessToken -> transport.listGroups(accessToken) }
 
@@ -103,13 +110,86 @@ class DefaultSocialRepository(
         authorized { accessToken -> transport.joinGroup(accessToken, inviteCode) }
 
     override suspend fun leaveGroup(groupId: RideGroupId): SocialResult<Unit> =
-        authorized { accessToken -> transport.leaveGroup(accessToken, groupId) }
+        authorized { accessToken ->
+            transport.leaveGroup(accessToken, groupId).also { result ->
+                if (result is SocialResult.Success && _activeSharing.value?.groupId == groupId) {
+                    _activeSharing.value = null
+                }
+            }
+        }
+
+    override suspend fun deleteGroup(groupId: RideGroupId): SocialResult<Unit> =
+        authorized { accessToken ->
+            transport.deleteGroup(accessToken, groupId).also { result ->
+                if (result is SocialResult.Success && _activeSharing.value?.groupId == groupId) {
+                    _activeSharing.value = null
+                }
+            }
+        }
 
     override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> {
-        val accessToken = _credentials.value?.accessToken
-            ?: return flowOf(SocialLiveEvent.Failure(SocialFailure.Unauthorized))
-        return transport.observeGroup(accessToken, groupId)
+        if (SocialSessionPolicy.requiresAuthentication(_session.value)) {
+            return flowOf(SocialLiveEvent.Failure(SocialFailure.Unauthorized))
+        }
+        return kotlinx.coroutines.flow.flow {
+            var authRefreshAttempted = false
+            while (currentCoroutineContext().isActive) {
+                var refresh = false
+                try {
+                    transport.observeGroup(groupId) { currentAccessToken() }.collect { event ->
+                        when (event) {
+                            is SocialLiveEvent.Failure -> when (event.error) {
+                                SocialFailure.Unauthorized -> {
+                                    if (!authRefreshAttempted) {
+                                        authRefreshAttempted = true
+                                        refresh = true
+                                        throw StopLiveObservation
+                                    }
+                                    emit(event)
+                                    throw StopLiveObservation
+                                }
+                                SocialFailure.Forbidden,
+                                SocialFailure.NotFound -> {
+                                    emit(event)
+                                    throw StopLiveObservation
+                                }
+                                else -> emit(event)
+                            }
+                            else -> {
+                                val currentUserId = (_session.value as? SocialSession.Authenticated)?.userId
+                                when (event) {
+                                    is SocialLiveEvent.ShareExpired ->
+                                        if (event.userId == currentUserId) _activeSharing.value = null
+                                    is SocialLiveEvent.ShareRevoked ->
+                                        if (event.userId == currentUserId) _activeSharing.value = null
+                                    else -> Unit
+                                }
+                                emit(event)
+                            }
+                        }
+                    }
+                } catch (_: StopLiveObservation) {
+                    // A rejected handshake or terminal membership failure ends
+                    // this transport collection at the event boundary.
+                }
+                if (!refresh) return@flow
+                if (refresh) {
+                    when (val refreshed = refreshAccessToken(_credentials.value ?: return@flow)) {
+                        is SocialResult.Success -> Unit
+                        is SocialResult.Failure -> {
+                            emit(SocialLiveEvent.Failure(refreshed.error))
+                            return@flow
+                        }
+                    }
+                    // The flag is intentionally not reset: one live subscription
+                    // gets at most one forced refresh after a rejected handshake.
+                    continue
+                }
+            }
+        }
     }
+
+    private object StopLiveObservation : RuntimeException()
 
     override suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession> {
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()
@@ -133,10 +213,33 @@ class DefaultSocialRepository(
             _activeSharing.value = null
             return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing has expired"))
         }
-        if (update.location == null || update.telemetry?.profile?.let { it != active.profile } == true) {
+        val telemetryValid = when (active.profile) {
+            ru.sodovaya.volty.domain.social.TelemetryShareProfile.LOCATION -> update.telemetry == null
+            else -> update.telemetry != null && update.telemetry.profile == active.profile
+        }
+        if (update.location == null || !telemetryValid) {
             return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing update is incomplete"))
         }
         return authorized { accessToken -> transport.publishSharingUpdate(accessToken, groupId, update) }
+    }
+
+    override suspend fun renewSharing(request: ShareSessionRequest): SocialResult<SharingSession> {
+        val active = _activeSharing.value
+        if (active == null || active.groupId != request.groupId || active.profile != request.profile) {
+            return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing is not active for this group/profile"))
+        }
+        if (epochMillis() >= active.expiresAtEpochMillis) {
+            _activeSharing.value = null
+            return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing has expired"))
+        }
+        if (request.ttlMillis <= 0L || request.ttlMillis > LocationSharePolicy.maxTtlMillis) {
+            return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing TTL is outside the allowed range"))
+        }
+        return authorized { accessToken ->
+            transport.renewSharing(accessToken, request).also { result ->
+                if (result is SocialResult.Success) _activeSharing.value = result.value
+            }
+        }
     }
 
     override suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit> = authorized { accessToken ->
@@ -149,6 +252,9 @@ class DefaultSocialRepository(
 
     override suspend fun joinVoice(groupId: RideGroupId): SocialResult<VoiceRoomCredentials> =
         authorized { accessToken -> transport.joinVoice(accessToken, groupId) }
+
+    override suspend fun getVoiceProvider(): SocialResult<VoiceProviderAvailability> =
+        authorized { accessToken -> transport.getVoiceProvider(accessToken) }
 
     override suspend fun leaveVoice(groupId: RideGroupId): SocialResult<Unit> {
         if (SocialSessionPolicy.requiresAuthentication(_session.value) || _credentials.value == null) {
@@ -204,7 +310,15 @@ class DefaultSocialRepository(
                 _credentials.value = refreshed
                 when (val profile = transport.getProfile(refreshed.accessToken)) {
                     is SocialResult.Success -> _session.value = profile.value
-                    is SocialResult.Failure -> if (profile.error is SocialFailure.Unauthorized) clearLocalSession()
+                    is SocialResult.Failure -> if (profile.error is SocialFailure.Unauthorized) {
+                        when (val retryToken = refreshAccessToken(refreshed)) {
+                            is SocialResult.Success -> when (val retryProfile = transport.getProfile(retryToken.value)) {
+                                is SocialResult.Success -> _session.value = retryProfile.value
+                                is SocialResult.Failure -> if (retryProfile.error is SocialFailure.Unauthorized) clearLocalSession()
+                            }
+                            is SocialResult.Failure -> Unit
+                        }
+                    }
                 }
             }
             is SocialResult.Failure -> if (session.error is SocialFailure.Unauthorized) clearLocalSession()
@@ -227,6 +341,11 @@ class DefaultSocialRepository(
             is SocialResult.Success -> retryToken.value
         }
         return request(refreshed)
+    }
+
+    private suspend fun currentAccessToken(): String? = when (val result = authorized { accessToken -> SocialResult.Success(accessToken) }) {
+        is SocialResult.Success -> result.value
+        is SocialResult.Failure -> null
     }
 
     private suspend fun ensureFreshAccessToken(saved: SocialCredentials): SocialResult<String> =
@@ -312,6 +431,7 @@ class UnavailableSocialTransport : SocialTransport {
     override suspend fun createGroup(accessToken: String, name: String) = unavailable<RideGroup>()
     override suspend fun joinGroup(accessToken: String, inviteCode: String) = unavailable<RideGroup>()
     override suspend fun leaveGroup(accessToken: String, groupId: RideGroupId) = unavailable<Unit>()
+    override suspend fun deleteGroup(accessToken: String, groupId: RideGroupId) = unavailable<Unit>()
     override fun observeGroup(accessToken: String, groupId: RideGroupId): Flow<SocialLiveEvent> =
         flowOf(SocialLiveEvent.Failure(SocialFailure.Network("Social server adapter is not configured")))
     override suspend fun startSharing(accessToken: String, request: ShareSessionRequest) = unavailable<SharingSession>()

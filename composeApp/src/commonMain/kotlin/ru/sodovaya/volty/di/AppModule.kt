@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.di
 
 import ru.sodovaya.volty.data.ble.KableBmsRepository
+import ru.sodovaya.volty.data.ble.BleAdapterStateProvider
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.db.SqlDelightVehicleRepository
 import ru.sodovaya.volty.data.db.SqlDelightRideHistoryRepository
@@ -12,6 +13,7 @@ import ru.sodovaya.volty.data.social.DefaultSocialRepository
 import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.LiveKitVoiceRoomRepository
 import ru.sodovaya.volty.data.social.BmsSocialTelemetrySource
+import ru.sodovaya.volty.data.social.DefaultSocialRideRuntime
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -22,6 +24,7 @@ import ru.sodovaya.volty.domain.social.SocialTransport
 import ru.sodovaya.volty.domain.social.VoiceRoomRepository
 import ru.sodovaya.volty.domain.social.SocialTelemetrySource
 import ru.sodovaya.volty.domain.social.SocialShareSessionCoordinator
+import ru.sodovaya.volty.domain.social.SocialRideRuntime
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.bind
 import org.koin.dsl.binds
@@ -36,7 +39,7 @@ val appModule = module {
     // links the connection does — a second KableBmsRepository would have none.
     // `binds` rather than a second `single { get<BmsRepository>() as … }` so the
     // cast cannot go stale if the implementation ever moves.
-    single { KableBmsRepository(get(), get(), get()) } binds arrayOf(
+    single { KableBmsRepository(get(), get(), get(), get<BleAdapterStateProvider>()) } binds arrayOf(
         BmsRepository::class,
         CanDiscovery::class,
         ControllerConfigSource::class
@@ -47,4 +50,5 @@ val appModule = module {
     single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }
     single<SocialTelemetrySource> { BmsSocialTelemetrySource(get()) }
     single { SocialShareSessionCoordinator(get(), get()) }
+    single<SocialRideRuntime> { DefaultSocialRideRuntime(get(), get(), get(), get()) }
 }

@@ -20,7 +20,9 @@ import ru.sodovaya.volty.domain.social.LocationSnapshot
 class AndroidLocationProvider(context: Context) : LocationProvider {
     private val appContext = context.applicationContext
     private val manager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
-    private val _updates = MutableSharedFlow<LocationSnapshot>(extraBufferCapacity = 1)
+    // Replay the first usable fix so start() cannot race the publishing
+    // collector. extraBufferCapacity still keeps platform callbacks non-blocking.
+    private val _updates = MutableSharedFlow<LocationSnapshot>(replay = 1, extraBufferCapacity = 1)
     override val requiredPermissions: List<String> = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION,
@@ -50,13 +52,19 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
     override suspend fun start() = withContext(Dispatchers.Main.immediate) {
         if (started) return@withContext
         checkPermission()
-        val provider = when {
-            manager.isProviderEnabled(LocationManager.GPS_PROVIDER) -> LocationManager.GPS_PROVIDER
-            manager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) -> LocationManager.NETWORK_PROVIDER
-            else -> throw IllegalStateException("No location provider is enabled")
+        val providers = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        ).filter { provider ->
+            runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
-        manager.requestLocationUpdates(provider, 1_000L, 5f, listener)
+        check(providers.isNotEmpty()) { "No location provider is enabled" }
+        providers.forEach { provider ->
+            manager.requestLocationUpdates(provider, 1_000L, 5f, listener)
+        }
         started = true
+        emitRecentLastKnownLocation()
     }
 
     override suspend fun stop() = withContext(Dispatchers.Main.immediate) {
@@ -73,7 +81,31 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
         }
     }
 
+    private fun emitRecentLastKnownLocation() {
+        val now = System.currentTimeMillis()
+        val lastKnown = listOf(
+            LocationManager.GPS_PROVIDER,
+            LocationManager.NETWORK_PROVIDER,
+            LocationManager.PASSIVE_PROVIDER,
+        )
+            .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
+            .maxByOrNull(Location::getTime)
+            ?: return
+        val ageMillis = now - lastKnown.time
+        if (ageMillis !in 0..MAX_LAST_KNOWN_AGE_MILLIS) return
+        _updates.tryEmit(lastKnown.toSnapshot(now))
+    }
+
+    private fun Location.toSnapshot(capturedAt: Long): LocationSnapshot = LocationSnapshot(
+        latitude = latitude,
+        longitude = longitude,
+        accuracyMeters = accuracy.toDouble().coerceAtLeast(0.0),
+        capturedAtEpochMillis = capturedAt,
+        staleAfterEpochMillis = capturedAt + LOCATION_STALE_AFTER_MILLIS,
+    )
+
     private companion object {
         const val LOCATION_STALE_AFTER_MILLIS = 15_000L
+        const val MAX_LAST_KNOWN_AGE_MILLIS = 10_000L
     }
 }

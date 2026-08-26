@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.social
 
 import io.ktor.client.HttpClient
+import io.ktor.client.plugins.ResponseException
 import io.ktor.client.plugins.websocket.WebSockets
 import io.ktor.client.plugins.websocket.webSocketSession
 import io.ktor.client.request.header
@@ -52,6 +53,8 @@ import ru.sodovaya.volty.domain.social.SocialLiveEvent
 import ru.sodovaya.volty.domain.social.SocialResult
 import ru.sodovaya.volty.domain.social.SocialSession
 import ru.sodovaya.volty.domain.social.VoiceRoomCredentials
+import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
+import ru.sodovaya.volty.domain.social.UserSearchResult
 
 /**
  * The concrete REST/WebSocket boundary for the social contracts.
@@ -148,6 +151,12 @@ class HttpSocialTransport(
             ),
         )
 
+    override suspend fun searchUsers(
+        accessToken: String,
+        query: String,
+    ): SocialResult<List<UserSearchResult>> =
+        decode(requestJson(HttpMethod.Get, "users/search?q=${query.encodeUrlComponent()}", accessToken))
+
     override suspend fun listGroups(accessToken: String): SocialResult<List<RideGroup>> =
         decode(requestJson(HttpMethod.Get, "groups", accessToken))
 
@@ -172,12 +181,26 @@ class HttpSocialTransport(
         )
 
     override suspend fun leaveGroup(accessToken: String, groupId: RideGroupId): SocialResult<Unit> =
+        unit(requestJson(HttpMethod.Post, "groups/${groupId.value.pathSegment()}/leave", accessToken))
+
+    override suspend fun deleteGroup(accessToken: String, groupId: RideGroupId): SocialResult<Unit> =
         unit(requestJson(HttpMethod.Delete, "groups/${groupId.value.pathSegment()}", accessToken))
 
-    override fun observeGroup(accessToken: String, groupId: RideGroupId): Flow<SocialLiveEvent> = flow {
+    override fun observeGroup(accessToken: String, groupId: RideGroupId): Flow<SocialLiveEvent> =
+        observeGroup(groupId) { accessToken }
+
+    override fun observeGroup(
+        groupId: RideGroupId,
+        accessTokenProvider: suspend () -> String?,
+    ): Flow<SocialLiveEvent> = flow {
         var retryDelayMillis = INITIAL_RETRY_DELAY_MILLIS
         while (currentCoroutineContext().isActive) {
             try {
+                val accessToken = accessTokenProvider()
+                if (accessToken == null) {
+                    emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized))
+                    return@flow
+                }
                 val session = client.webSocketSession {
                     url(webSocketUrl(groupId))
                     header(HttpHeaders.Authorization, bearer(accessToken))
@@ -199,7 +222,21 @@ class HttpSocialTransport(
                 }
             } catch (cancelled: CancellationException) {
                 throw cancelled
-            } catch (_: Exception) {
+            } catch (error: ResponseException) {
+                val failure = websocketHandshakeFailure(error.response.status)
+                if (failure != null) {
+                    emit(SocialLiveEvent.Failure(failure))
+                    return@flow
+                }
+                emit(SocialLiveEvent.Failure(SocialFailure.Network("Live group connection unavailable")))
+                delay(retryDelayMillis)
+                retryDelayMillis = nextRetryDelay(retryDelayMillis)
+            } catch (error: Exception) {
+                val failure = websocketExceptionFailure(error.message)
+                if (failure != null) {
+                    emit(SocialLiveEvent.Failure(failure))
+                    return@flow
+                }
                 emit(SocialLiveEvent.Failure(SocialFailure.Network("Live group connection unavailable")))
                 delay(retryDelayMillis)
                 retryDelayMillis = nextRetryDelay(retryDelayMillis)
@@ -217,6 +254,19 @@ class HttpSocialTransport(
                 "groups/${request.groupId.value.pathSegment()}/sharing",
                 accessToken,
                 json.encodeToString(ShareSessionDto.from(request)),
+            ),
+        )
+
+    override suspend fun renewSharing(
+        accessToken: String,
+        request: ShareSessionRequest,
+    ): SocialResult<SharingSession> =
+        decode(
+            requestJson(
+                HttpMethod.Post,
+                "groups/${request.groupId.value.pathSegment()}/sharing/renew",
+                accessToken,
+                json.encodeToString(RenewShareSessionDto.from(request)),
             ),
         )
 
@@ -245,6 +295,9 @@ class HttpSocialTransport(
                 accessToken,
             ),
         ) { decodeVoiceRoomCredentials(it) }
+
+    override suspend fun getVoiceProvider(accessToken: String): SocialResult<VoiceProviderAvailability> =
+        decode(requestJson(HttpMethod.Get, "voice/provider", accessToken), ::decodeVoiceProviderAvailability)
 
     override suspend fun leaveVoice(accessToken: String, groupId: RideGroupId): SocialResult<Unit> =
         unit(requestJson(HttpMethod.Post, "groups/${groupId.value.pathSegment()}/voice/leave", accessToken))
@@ -347,6 +400,16 @@ class HttpSocialTransport(
         )
     }
 
+    private fun decodeVoiceProviderAvailability(element: JsonElement): VoiceProviderAvailability {
+        val source = element.jsonObject
+        return VoiceProviderAvailability(
+            available = source["available"]?.jsonPrimitive?.booleanOrNull ?: false,
+            provider = source.requiredString("provider"),
+            serverUrl = source.string("serverUrl", "server_url"),
+            message = source.string("message"),
+        )
+    }
+
     private fun decodeLiveEvent(element: JsonElement): SocialLiveEvent {
         val objectValue = element as? JsonObject
         val type = objectValue?.string("type", "kind", "event")?.lowercase()
@@ -356,7 +419,7 @@ class HttpSocialTransport(
             "share_expired", "expired" ->
                 SocialLiveEvent.ShareExpired(objectValue.requiredSocialUserId())
             "error", "failure" ->
-                SocialLiveEvent.Failure(SocialFailure.Server(objectValue.string("message", "error")))
+                SocialLiveEvent.Failure(objectValue.liveFailure())
             else -> {
                 val snapshotElement = objectValue?.get("snapshot")
                     ?: objectValue?.get("data")
@@ -367,6 +430,15 @@ class HttpSocialTransport(
                     SocialLiveEvent.Failure(SocialFailure.Server("Malformed live group event"))
                 }
             }
+        }
+    }
+
+    private fun JsonObject.liveFailure(): SocialFailure {
+        val code = string("code", "reason", "error")?.lowercase()
+        return when {
+            code == "invalid_token" || code == "unauthorized" -> SocialFailure.Unauthorized
+            code == "not_member" || code == "membership" || code == "forbidden" -> SocialFailure.Forbidden
+            else -> SocialFailure.Server(string("message", "error"))
         }
     }
 
@@ -492,6 +564,19 @@ class HttpSocialTransport(
         }
     }
 
+    @Serializable
+    private data class RenewShareSessionDto(
+        val ttlMillis: Long,
+        val startedAtEpochMillis: Long,
+    ) {
+        companion object {
+            fun from(request: ShareSessionRequest) = RenewShareSessionDto(
+                ttlMillis = request.ttlMillis,
+                startedAtEpochMillis = request.startedAtEpochMillis,
+            )
+        }
+    }
+
     private companion object {
         const val DEFAULT_BASE_URL = "https://volty.sodove.ru/v1"
         const val INITIAL_RETRY_DELAY_MILLIS = 1_000L
@@ -506,5 +591,25 @@ class HttpSocialTransport(
             explicitNulls = false
             isLenient = true
         }
+    }
+}
+
+internal fun websocketHandshakeFailure(status: HttpStatusCode): SocialFailure? = when (status) {
+    HttpStatusCode.Unauthorized -> SocialFailure.Unauthorized
+    // A handshake-level 403 can be an expired/invalid bearer token. The
+    // server's explicit not-member event is handled as terminal below.
+    HttpStatusCode.Forbidden -> SocialFailure.Unauthorized
+    HttpStatusCode.NotFound -> SocialFailure.NotFound
+    else -> null
+}
+
+internal fun websocketExceptionFailure(message: String?): SocialFailure? {
+    val value = message?.lowercase() ?: return null
+    return when {
+        "invalid token" in value || "unauthorized" in value || "authentication" in value ->
+            SocialFailure.Unauthorized
+        "not a member" in value || "not_member" in value || "membership" in value ->
+            SocialFailure.Forbidden
+        else -> null
     }
 }
