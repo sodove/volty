@@ -8,6 +8,29 @@ import kotlin.test.assertTrue
 
 class RideMapMotionEstimatorTest {
     @Test
+    fun session_timestamp_normalizer_keeps_wall_and_elapsed_fixes_in_one_domain() {
+        val normalizer = RideMapSessionTimestampNormalizer(
+            wallClockStartMillis = 1_000_000L,
+            elapsedRealtimeStartMillis = 5_000L,
+        )
+
+        assertEquals(
+            1_001_000L,
+            normalizer.normalize(
+                timestampMillis = 6_000L,
+                source = RideMapTimestampSource.ELAPSED_REALTIME,
+            ),
+        )
+        assertEquals(
+            1_000_500L,
+            normalizer.normalize(
+                timestampMillis = 1_000_500L,
+                source = RideMapTimestampSource.WALL_CLOCK,
+            ),
+        )
+    }
+
+    @Test
     fun gps_correction_uses_the_longer_smoother_duration() {
         assertEquals(500L, defaultRideMapMotionEstimatorPolicy.correctionDurationMillis)
     }

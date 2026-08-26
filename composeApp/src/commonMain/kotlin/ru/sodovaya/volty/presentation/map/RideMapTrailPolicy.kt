@@ -24,6 +24,26 @@ internal data class RideMapTrailPolicy(
 
 internal val defaultRideMapTrailPolicy = RideMapTrailPolicy()
 
+/** Splits history into visual runs without discarding runs older than a bad newest fix. */
+internal fun connectedRideMapTrailSegments(
+    samples: List<RideMapTrailSample>,
+    policy: RideMapTrailPolicy = defaultRideMapTrailPolicy,
+): List<List<RideMapTrailSample>> {
+    if (samples.isEmpty()) return emptyList()
+    val segments = mutableListOf<MutableList<RideMapTrailSample>>()
+    var current = mutableListOf(samples.first())
+    for (sample in samples.drop(1)) {
+        if (shouldConnectRideMapTrail(current.last(), sample, policy)) {
+            current += sample
+        } else {
+            segments += current
+            current = mutableListOf(sample)
+        }
+    }
+    segments += current
+    return segments
+}
+
 /**
  * Decides whether a raw GPS segment is safe to draw as one straight line.
  *

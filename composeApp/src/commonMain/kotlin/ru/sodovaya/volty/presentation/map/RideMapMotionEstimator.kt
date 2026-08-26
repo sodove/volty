@@ -15,6 +15,23 @@ internal data class RideMapMotionFix(
     val bearingDegrees: Float?,
 )
 
+internal enum class RideMapTimestampSource {
+    WALL_CLOCK,
+    ELAPSED_REALTIME,
+}
+
+/** Converts platform timestamps to the wall-clock domain used by map frames. */
+internal class RideMapSessionTimestampNormalizer(
+    private val wallClockStartMillis: Long,
+    private val elapsedRealtimeStartMillis: Long,
+) {
+    fun normalize(timestampMillis: Long, source: RideMapTimestampSource): Long = when (source) {
+        RideMapTimestampSource.WALL_CLOCK -> timestampMillis
+        RideMapTimestampSource.ELAPSED_REALTIME ->
+            wallClockStartMillis + (timestampMillis - elapsedRealtimeStartMillis)
+    }
+}
+
 internal data class RideMapMotionEstimate(
     val coordinate: RideMapPredictedCoordinate,
     val speedMetersPerSecond: Float?,

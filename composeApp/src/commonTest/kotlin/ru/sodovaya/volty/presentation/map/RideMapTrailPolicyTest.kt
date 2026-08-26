@@ -1,10 +1,28 @@
 package ru.sodovaya.volty.presentation.map
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class RideMapTrailPolicyTest {
+    @Test
+    fun disconnected_newest_point_does_not_hide_older_connected_segments() {
+        val samples = listOf(
+            sample(timestampMillis = 1_000L, longitude = 60.6000),
+            sample(timestampMillis = 2_000L, longitude = 60.6001),
+            sample(timestampMillis = 3_000L, longitude = 60.6002),
+            sample(timestampMillis = 4_000L, longitude = 60.6020),
+        )
+
+        val segments = connectedRideMapTrailSegments(samples)
+
+        assertEquals(2, segments.size)
+        assertEquals(3, segments.first().size)
+        assertEquals(1, segments.last().size)
+        assertEquals(60.6002, segments.first().last().longitude)
+    }
+
     @Test
     fun trail_does_not_connect_a_large_unreported_gps_jump() {
         val previous = sample(timestampMillis = 1_000L, longitude = 60.6000)

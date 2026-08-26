@@ -189,7 +189,12 @@ private fun AndroidMapLibreView(
     var map by remember { mutableStateOf<MapLibreMap?>(null) }
     var styleReady by remember(cacheKey) { mutableStateOf(false) }
     var followState by remember(cacheKey) { mutableStateOf(RideMapFollowState()) }
-    var motionClockUsesElapsedRealtime by remember(cacheKey) { mutableStateOf(false) }
+    val sessionTimestampNormalizer = remember(cacheKey) {
+        RideMapSessionTimestampNormalizer(
+            wallClockStartMillis = System.currentTimeMillis(),
+            elapsedRealtimeStartMillis = SystemClock.elapsedRealtime(),
+        )
+    }
     val latestFollowState = rememberUpdatedState(followState)
     val latestOwn = rememberUpdatedState(own)
     val latestVehicleSpeedKmh = rememberUpdatedState(vehicleSpeedKmh)
@@ -259,13 +264,12 @@ private fun AndroidMapLibreView(
                         // Preserve the raw fix for the historical trail. If we derive
                         // speed/bearing first, a single bad GPS jump looks self-consistent
                         // and can be drawn as a long false segment.
-                        appendTrail(trail, location)
+                        appendTrail(trail, location, sessionTimestampNormalizer)
                         val enriched = enrichMapLocation(location, lastAcceptedLocation)
                         lastAcceptedLocation = enriched
-                        val elapsedRealtimeMillis = enriched.elapsedRealtimeNanos
+                        val timestampSource = enriched.elapsedRealtimeNanos
                             .takeIf { it > 0L }
                             ?.div(1_000_000L)
-                        if (elapsedRealtimeMillis != null) motionClockUsesElapsedRealtime = true
                         latestGpsSpeedKmhChanged.value(
                             enriched.takeIf { it.hasSpeed() }
                                 ?.speed
@@ -276,7 +280,14 @@ private fun AndroidMapLibreView(
                             RideMapMotionFix(
                                 latitude = enriched.latitude,
                                 longitude = enriched.longitude,
-                                timestampMillis = elapsedRealtimeMillis ?: enriched.time,
+                                timestampMillis = sessionTimestampNormalizer.normalize(
+                                    timestampMillis = timestampSource ?: enriched.time,
+                                    source = if (timestampSource != null) {
+                                        RideMapTimestampSource.ELAPSED_REALTIME
+                                    } else {
+                                        RideMapTimestampSource.WALL_CLOCK
+                                    },
+                                ),
                                 accuracyMeters = enriched.accuracy.takeIf { enriched.hasAccuracy() },
                                 speedMetersPerSecond = enriched.takeIf { it.hasSpeed() }?.speed,
                                 bearingDegrees = enriched.takeIf { it.hasBearing() }?.bearing,
@@ -354,12 +365,8 @@ private fun AndroidMapLibreView(
             lastFrameNanos = frameNanos
 
             val raw = latestOwn.value
-            val nowMillis = if (motionClockUsesElapsedRealtime) {
-                SystemClock.elapsedRealtime()
-            } else {
-                System.currentTimeMillis()
-            }
-            val trailNowMillis = SystemClock.elapsedRealtime()
+            val nowMillis = System.currentTimeMillis()
+            val trailNowMillis = nowMillis
             pruneTrail(trail, trailNowMillis)
             if (shouldRenderTrail(trailNowMillis, lastTrailRenderMillis)) {
                 updateTrailGeoJson(readyMap, trail, trailNowMillis)
@@ -752,16 +759,27 @@ private fun locationAgeMillis(location: Location): Long {
 
 private fun emptyFeatureCollection(): FeatureCollection = FeatureCollection.fromFeatures(emptyList())
 
-private fun appendTrail(target: MutableList<TrailPoint>, location: Location) {
+private fun appendTrail(
+    target: MutableList<TrailPoint>,
+    location: Location,
+    timestampNormalizer: RideMapSessionTimestampNormalizer,
+) {
     val next = MapCoordinate(location.latitude, location.longitude)
     if (target.lastOrNull()?.coordinate == next) return
+    val elapsedRealtimeMillis = location.elapsedRealtimeNanos
+        .takeIf { it > 0L }
+        ?.div(1_000_000L)
     val sample = RideMapTrailSample(
         latitude = location.latitude,
         longitude = location.longitude,
-        timestampMillis = location.elapsedRealtimeNanos
-            .takeIf { it > 0L }
-            ?.div(1_000_000L)
-            ?: SystemClock.elapsedRealtime(),
+        timestampMillis = timestampNormalizer.normalize(
+            timestampMillis = elapsedRealtimeMillis ?: location.time,
+            source = if (elapsedRealtimeMillis != null) {
+                RideMapTimestampSource.ELAPSED_REALTIME
+            } else {
+                RideMapTimestampSource.WALL_CLOCK
+            },
+        ),
         accuracyMeters = location.accuracy.takeIf { location.hasAccuracy() },
         speedMetersPerSecond = location.takeIf { it.hasSpeed() }?.speed,
     )
@@ -790,31 +808,32 @@ private fun trailFeatureCollection(
     if (trail.size < 2) return emptyFeatureCollection()
     val features = mutableListOf<Feature>()
     var distanceBehind = 0.0
-    for (index in trail.lastIndex downTo 1) {
-        val newerPoint = trail[index]
-        // A stale/implausible fix starts a new visual segment. Do not let the
-        // renderer bridge it with a straight line through buildings.
-        if (!newerPoint.connectFromPrevious) break
-        val older = trail[index - 1].coordinate
-        val newer = newerPoint.coordinate
-        val ageMillis = (nowMillis - newerPoint.sample.timestampMillis).coerceAtLeast(0L)
-        val opacity = minOf(
-            trailOpacityForDistanceMeters(distanceBehind),
-            trailOpacityForAgeMillis(ageMillis),
-        )
-        if (opacity > 0f) {
-            Feature.fromGeometry(
-                LineString.fromLngLats(
-                    listOf(
-                        Point.fromLngLat(older.longitude, older.latitude),
-                        Point.fromLngLat(newer.longitude, newer.latitude),
+    connectedRideMapTrailSegments(trail.map { it.sample }).asReversed().forEach { segment ->
+        for (index in segment.lastIndex downTo 1) {
+            val older = segment[index - 1]
+            val newer = segment[index]
+            val ageMillis = (nowMillis - newer.timestampMillis).coerceAtLeast(0L)
+            val opacity = minOf(
+                trailOpacityForDistanceMeters(distanceBehind),
+                trailOpacityForAgeMillis(ageMillis),
+            )
+            if (opacity > 0f) {
+                Feature.fromGeometry(
+                    LineString.fromLngLats(
+                        listOf(
+                            Point.fromLngLat(older.longitude, older.latitude),
+                            Point.fromLngLat(newer.longitude, newer.latitude),
+                        ),
                     ),
-                ),
-            ).apply {
-                addNumberProperty("opacity", opacity)
-            }.also(features::add)
+                ).apply {
+                    addNumberProperty("opacity", opacity)
+                }.also(features::add)
+            }
+            distanceBehind += distanceMeters(
+                MapCoordinate(older.latitude, older.longitude),
+                MapCoordinate(newer.latitude, newer.longitude),
+            )
         }
-        distanceBehind += distanceMeters(older, newer)
     }
     return FeatureCollection.fromFeatures(features.reversed())
 }
