@@ -20,6 +20,7 @@ import ru.sodovaya.volty.domain.social.RegistrationRequest
 import ru.sodovaya.volty.domain.social.RideGroupId
 import ru.sodovaya.volty.domain.social.SessionCredentials
 import ru.sodovaya.volty.domain.social.SocialFailure
+import ru.sodovaya.volty.domain.social.SocialLiveEvent
 import ru.sodovaya.volty.domain.social.SocialResult
 import ru.sodovaya.volty.domain.social.SocialSession
 import ru.sodovaya.volty.domain.social.SocialUserId
@@ -28,6 +29,30 @@ import ru.sodovaya.volty.domain.social.VoiceRoomCredentials
 import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
 
 class HttpSocialTransportTest {
+    @Test
+    fun subscriptionTerminatedEventIsDecodedAsTerminalEvent() {
+        val event = HttpSocialTransport().decodeLiveEvent(
+            jsonForTest("""{"type":"subscription_terminated","reason":"not_member"}"""),
+        )
+
+        assertEquals(
+            SocialLiveEvent.SubscriptionTerminated("not_member"),
+            event,
+        )
+    }
+
+    @Test
+    fun forbiddenHandshakeIsMembershipFailureOnlyWhenErrorCodeSaysSo() {
+        assertEquals(
+            SocialFailure.Forbidden,
+            websocketHandshakeFailure(HttpStatusCode.Forbidden, """{"code":"not_member"}"""),
+        )
+        assertEquals(
+            SocialFailure.Unauthorized,
+            websocketHandshakeFailure(HttpStatusCode.Forbidden, """{"code":"invalid_token"}"""),
+        )
+    }
+
     @Test
     fun profileResponseWithoutTransportTokenStateBecomesAnActiveSession() = runTest {
         val client = HttpClient(MockEngine) {
@@ -228,6 +253,32 @@ class HttpSocialTransportTest {
     }
 
     @Test
+    fun forbiddenHttpErrorUsesCodeToSeparateAuthRejectionFromMembership() = runTest {
+        val responses = ArrayDeque(
+            listOf(
+                """{"code":"invalid_token"}""" to HttpStatusCode.Forbidden,
+                """{"code":"not_member"}""" to HttpStatusCode.Forbidden,
+            ),
+        )
+        val client = HttpClient(MockEngine) {
+            engine {
+                addHandler {
+                    val (body, status) = responses.removeFirst()
+                    respond(body, status, headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString()))
+                }
+            }
+        }
+
+        assertEquals(SocialResult.Failure(SocialFailure.Unauthorized), client.let {
+            HttpSocialTransport(it, "https://example.test/v1").listFriends("access")
+        })
+        assertEquals(SocialResult.Failure(SocialFailure.Forbidden), client.let {
+            HttpSocialTransport(it, "https://example.test/v1").listFriends("access")
+        })
+        client.close()
+    }
+
+    @Test
     fun websocketHandshakeFailuresAreClassifiedAsTerminalLiveEvents() {
         assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Unauthorized))
         assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Forbidden))
@@ -236,6 +287,8 @@ class HttpSocialTransportTest {
         assertEquals(SocialFailure.Unauthorized, websocketExceptionFailure("invalid token"))
         assertEquals(SocialFailure.Forbidden, websocketExceptionFailure("group membership required"))
     }
+
+    private fun jsonForTest(value: String) = kotlinx.serialization.json.Json.parseToJsonElement(value)
 
     @Test
     fun joinVoiceUsesAuthenticatedGroupPathAndDecodesCredentials() = runTest {

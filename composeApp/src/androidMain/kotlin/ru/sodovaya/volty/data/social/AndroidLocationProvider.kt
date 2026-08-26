@@ -12,11 +12,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.social.LocationProvider
 import ru.sodovaya.volty.domain.social.LocationSnapshot
 
 /** Foreground-only GPS source. Calling start is itself an explicit share action. */
+@OptIn(ExperimentalCoroutinesApi::class)
 class AndroidLocationProvider(context: Context) : LocationProvider {
     private val appContext = context.applicationContext
     private val manager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
@@ -27,8 +31,17 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION,
     )
-    override val updates: Flow<LocationSnapshot> = _updates.asSharedFlow()
+    override val updates: Flow<LocationSnapshot> = flow {
+        val generation = replayGenerationEpochMillis
+        _updates.asSharedFlow().collect { snapshot ->
+            if (isLocationFromCurrentGeneration(snapshot.capturedAtEpochMillis, generation)) {
+                emit(snapshot)
+            }
+        }
+    }
     private var started = false
+    private val registeredProviders = mutableListOf<String>()
+    private var replayGenerationEpochMillis = 0L
 
     private val listener = object : LocationListener {
         override fun onLocationChanged(location: Location) {
@@ -52,6 +65,8 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
     override suspend fun start() = withContext(Dispatchers.Main.immediate) {
         if (started) return@withContext
         checkPermission()
+        replayGenerationEpochMillis = System.currentTimeMillis()
+        _updates.resetReplayCache()
         val providers = listOf(
             LocationManager.GPS_PROVIDER,
             LocationManager.NETWORK_PROVIDER,
@@ -60,16 +75,19 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
             runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
         check(providers.isNotEmpty()) { "No location provider is enabled" }
-        providers.forEach { provider ->
-            manager.requestLocationUpdates(provider, 1_000L, 5f, listener)
-        }
+        registeredProviders += registerProvidersTransactional(
+            providers = providers,
+            register = { provider -> manager.requestLocationUpdates(provider, 1_000L, 5f, listener) },
+            unregister = { manager.removeUpdates(listener) },
+        )
         started = true
         emitRecentLastKnownLocation()
     }
 
     override suspend fun stop() = withContext(Dispatchers.Main.immediate) {
         if (!started) return@withContext
-        manager.removeUpdates(listener)
+        if (registeredProviders.isNotEmpty()) manager.removeUpdates(listener)
+        registeredProviders.clear()
         started = false
     }
 
@@ -109,3 +127,26 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
         const val MAX_LAST_KNOWN_AGE_MILLIS = 10_000L
     }
 }
+
+internal fun registerProvidersTransactional(
+    providers: List<String>,
+    register: (String) -> Unit,
+    unregister: (String) -> Unit,
+): List<String> {
+    val registered = mutableListOf<String>()
+    try {
+        providers.forEach { provider ->
+            register(provider)
+            registered += provider
+        }
+        return registered
+    } catch (error: Throwable) {
+        registered.asReversed().forEach { provider ->
+            runCatching { unregister(provider) }
+        }
+        throw error
+    }
+}
+
+internal fun isLocationFromCurrentGeneration(capturedAtEpochMillis: Long, generationEpochMillis: Long): Boolean =
+    capturedAtEpochMillis >= generationEpochMillis

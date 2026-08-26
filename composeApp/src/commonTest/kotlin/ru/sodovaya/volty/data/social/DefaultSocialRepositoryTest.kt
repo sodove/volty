@@ -7,6 +7,7 @@ import kotlin.test.assertTrue
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
@@ -35,6 +36,22 @@ import ru.sodovaya.volty.domain.social.ParticipantSnapshot
 import ru.sodovaya.volty.domain.social.PresenceStatus
 
 class DefaultSocialRepositoryTest {
+    @Test
+    fun subscriptionTerminationDoesNotEscapeTransportCatchOrReconnect() = runTest {
+        val transport = CatchingTerminalTransport()
+        val repository = DefaultSocialRepository(transport, FakeCredentials())
+        repository.login(LoginRequest("rider@example.com", "correct horse"))
+
+        val events = mutableListOf<SocialLiveEvent>()
+        repository.observeGroup(RideGroupId("group-1")).collect { event: SocialLiveEvent -> events.add(event) }
+
+        assertEquals<List<SocialLiveEvent>>(
+            listOf(SocialLiveEvent.SubscriptionTerminated("not_member")),
+            events,
+        )
+        assertEquals(1, transport.observeCalls)
+        assertEquals(0, transport.refreshCalls)
+    }
     @Test
     fun successfulLoginPersistsTokensOnlyAfterProfileIsKnown() = runTest {
         val transport = FakeTransport()
@@ -294,7 +311,31 @@ class DefaultSocialRepositoryTest {
         override suspend fun clear() { value = null }
     }
 
-    private class FakeTransport(
+    private class CatchingTerminalTransport : FakeTransport() {
+        var observeCalls = 0
+
+        override suspend fun login(request: LoginRequest): SocialResult<SessionCredentials> =
+            SocialResult.Success(SessionCredentials("access", "refresh", Long.MAX_VALUE))
+
+        override suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> {
+            refreshCalls++
+            return SocialResult.Success(SessionCredentials("fresh", "fresh-refresh", Long.MAX_VALUE))
+        }
+
+        override fun observeGroup(
+            groupId: RideGroupId,
+            accessTokenProvider: suspend () -> String?,
+        ): Flow<SocialLiveEvent> = flow {
+            observeCalls++
+            try {
+                emit(SocialLiveEvent.SubscriptionTerminated("not_member"))
+            } catch (_: Exception) {
+                // Models a transport boundary that catches generic exceptions.
+            }
+        }
+    }
+
+    private open class FakeTransport(
         private val profile: SocialResult<SocialSession.Authenticated> = SocialResult.Success(
             SocialSession.Authenticated(
                 userId = ru.sodovaya.volty.domain.social.SocialUserId("u1"),
@@ -322,8 +363,9 @@ class DefaultSocialRepositoryTest {
         private var liveAttempt = 0
 
         override suspend fun register(request: RegistrationRequest) = loginResult()
-        override suspend fun login(request: LoginRequest) = loginResult()
-        override suspend fun refreshSession(refreshToken: String) = SocialResult.Success(refreshedCredentials).also { refreshCalls++ }
+        override open suspend fun login(request: LoginRequest): SocialResult<SessionCredentials> = loginResult()
+        override open suspend fun refreshSession(refreshToken: String): SocialResult<SessionCredentials> =
+            SocialResult.Success(refreshedCredentials).also { refreshCalls++ }
         override suspend fun logout(accessToken: String) = logout
         override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> {
             profileTokens += accessToken
@@ -367,7 +409,7 @@ class DefaultSocialRepositoryTest {
         }
         override suspend fun leaveVoice(accessToken: String, groupId: RideGroupId) = SocialResult.Success(Unit)
         override fun observeGroup(accessToken: String, groupId: RideGroupId): Flow<SocialLiveEvent> = emptyFlow()
-        override fun observeGroup(
+        override open fun observeGroup(
             groupId: RideGroupId,
             accessTokenProvider: suspend () -> String?,
         ): Flow<SocialLiveEvent> = flow {

@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.transformWhile
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
@@ -135,25 +136,31 @@ class DefaultSocialRepository(
             var authRefreshAttempted = false
             while (currentCoroutineContext().isActive) {
                 var refresh = false
-                try {
-                    transport.observeGroup(groupId) { currentAccessToken() }.collect { event ->
-                        when (event) {
-                            is SocialLiveEvent.Failure -> when (event.error) {
+                transport.observeGroup(groupId) { currentAccessToken() }
+                    .transformWhile { event ->
+                        val keepCollecting = when (event) {
+                            is SocialLiveEvent.Failure -> if (event.terminal) {
+                                emit(event)
+                                false
+                            } else when (event.error) {
                                 SocialFailure.Unauthorized -> {
                                     if (!authRefreshAttempted) {
                                         authRefreshAttempted = true
                                         refresh = true
-                                        throw StopLiveObservation
+                                        false
+                                    } else {
+                                        emit(event)
+                                        false
                                     }
-                                    emit(event)
-                                    throw StopLiveObservation
                                 }
-                                SocialFailure.Forbidden,
-                                SocialFailure.NotFound -> {
+                                SocialFailure.Forbidden, SocialFailure.NotFound -> {
                                     emit(event)
-                                    throw StopLiveObservation
+                                    false
                                 }
-                                else -> emit(event)
+                                else -> {
+                                    emit(event)
+                                    true
+                                }
                             }
                             else -> {
                                 val currentUserId = (_session.value as? SocialSession.Authenticated)?.userId
@@ -165,13 +172,11 @@ class DefaultSocialRepository(
                                     else -> Unit
                                 }
                                 emit(event)
+                                true
                             }
                         }
-                    }
-                } catch (_: StopLiveObservation) {
-                    // A rejected handshake or terminal membership failure ends
-                    // this transport collection at the event boundary.
-                }
+                        keepCollecting
+                    }.collect { event -> emit(event) }
                 if (!refresh) return@flow
                 if (refresh) {
                     when (val refreshed = refreshAccessToken(_credentials.value ?: return@flow)) {
@@ -188,8 +193,6 @@ class DefaultSocialRepository(
             }
         }
     }
-
-    private object StopLiveObservation : RuntimeException()
 
     override suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession> {
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()

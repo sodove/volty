@@ -223,7 +223,7 @@ class HttpSocialTransport(
             } catch (cancelled: CancellationException) {
                 throw cancelled
             } catch (error: ResponseException) {
-                val failure = websocketHandshakeFailure(error.response.status)
+                val failure = websocketHandshakeFailure(error.response.status, error.response.bodyAsText())
                 if (failure != null) {
                     emit(SocialLiveEvent.Failure(failure))
                     return@flow
@@ -342,7 +342,10 @@ class HttpSocialTransport(
             ?: errorJson?.let(::retryAfterSeconds)
         val error = when (response.status) {
             HttpStatusCode.Unauthorized -> SocialFailure.Unauthorized
-            HttpStatusCode.Forbidden -> SocialFailure.Forbidden
+            HttpStatusCode.Forbidden -> {
+                val code = (errorJson as? JsonObject)?.string("code", "reason", "error")?.lowercase()
+                if (code.isAuthRejection()) SocialFailure.Unauthorized else SocialFailure.Forbidden
+            }
             HttpStatusCode.NotFound -> SocialFailure.NotFound
             HttpStatusCode.Conflict -> SocialFailure.Conflict
             HttpStatusCode.TooManyRequests -> SocialFailure.RateLimited(retryAfter)
@@ -410,7 +413,7 @@ class HttpSocialTransport(
         )
     }
 
-    private fun decodeLiveEvent(element: JsonElement): SocialLiveEvent {
+    internal fun decodeLiveEvent(element: JsonElement): SocialLiveEvent {
         val objectValue = element as? JsonObject
         val type = objectValue?.string("type", "kind", "event")?.lowercase()
         return when (type) {
@@ -418,6 +421,8 @@ class HttpSocialTransport(
                 SocialLiveEvent.ShareRevoked(objectValue.requiredSocialUserId())
             "share_expired", "expired" ->
                 SocialLiveEvent.ShareExpired(objectValue.requiredSocialUserId())
+            "subscription_terminated", "terminated" ->
+                SocialLiveEvent.SubscriptionTerminated(objectValue.string("reason", "message"))
             "error", "failure" ->
                 SocialLiveEvent.Failure(objectValue.liveFailure())
             else -> {
@@ -436,8 +441,8 @@ class HttpSocialTransport(
     private fun JsonObject.liveFailure(): SocialFailure {
         val code = string("code", "reason", "error")?.lowercase()
         return when {
-            code == "invalid_token" || code == "unauthorized" -> SocialFailure.Unauthorized
-            code == "not_member" || code == "membership" || code == "forbidden" -> SocialFailure.Forbidden
+            code.isAuthRejection() -> SocialFailure.Unauthorized
+            code.isMembershipRejection() -> SocialFailure.Forbidden
             else -> SocialFailure.Server(string("message", "error"))
         }
     }
@@ -594,11 +599,13 @@ class HttpSocialTransport(
     }
 }
 
-internal fun websocketHandshakeFailure(status: HttpStatusCode): SocialFailure? = when (status) {
+internal fun websocketHandshakeFailure(status: HttpStatusCode, body: String? = null): SocialFailure? = when (status) {
     HttpStatusCode.Unauthorized -> SocialFailure.Unauthorized
-    // A handshake-level 403 can be an expired/invalid bearer token. The
-    // server's explicit not-member event is handled as terminal below.
-    HttpStatusCode.Forbidden -> SocialFailure.Unauthorized
+    HttpStatusCode.Forbidden -> {
+        val code = body?.let { runCatching { websocketJson.parseToJsonElement(it).jsonObject }.getOrNull() }
+            ?.string("code", "reason", "error")?.lowercase()
+        if (code.isMembershipRejection()) SocialFailure.Forbidden else SocialFailure.Unauthorized
+    }
     HttpStatusCode.NotFound -> SocialFailure.NotFound
     else -> null
 }
@@ -612,4 +619,22 @@ internal fun websocketExceptionFailure(message: String?): SocialFailure? {
             SocialFailure.Forbidden
         else -> null
     }
+}
+
+private fun String?.isAuthRejection(): Boolean = this in setOf(
+    "invalid_token", "expired_token", "unauthorized", "authentication_required", "auth_rejected",
+)
+
+private fun String?.isMembershipRejection(): Boolean = this in setOf(
+    "not_member", "membership", "membership_required", "group_membership", "forbidden",
+)
+
+private fun JsonObject.string(vararg names: String): String? = names.firstNotNullOfOrNull { name ->
+    runCatching { this[name]?.jsonPrimitive?.contentOrNull }.getOrNull()
+}
+
+private val websocketJson = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = false
+    isLenient = true
 }

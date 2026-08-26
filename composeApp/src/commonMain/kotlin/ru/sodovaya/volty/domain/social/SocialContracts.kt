@@ -2,6 +2,8 @@ package ru.sodovaya.volty.domain.social
 
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.emitAll
+import kotlinx.coroutines.flow.flow
 
 sealed interface SocialFailure {
     data object Unauthorized : SocialFailure
@@ -53,7 +55,18 @@ sealed interface SocialLiveEvent {
     data class Snapshot(val value: LiveGroupSnapshot) : SocialLiveEvent
     data class ShareRevoked(val userId: SocialUserId) : SocialLiveEvent
     data class ShareExpired(val userId: SocialUserId) : SocialLiveEvent
-    data class Failure(val error: SocialFailure) : SocialLiveEvent
+    /** terminal=true means the server ended the subscription; it must not be retried. */
+    open class Failure(val error: SocialFailure, val terminal: Boolean = false) : SocialLiveEvent {
+        override fun equals(other: Any?): Boolean =
+            other is Failure && error == other.error && terminal == other.terminal
+
+        override fun hashCode(): Int = 31 * error.hashCode() + terminal.hashCode()
+
+        override fun toString(): String = "Failure(error=$error, terminal=$terminal)"
+    }
+
+    data class SubscriptionTerminated(val reason: String? = null) :
+        Failure(SocialFailure.Forbidden, terminal = true)
 }
 
 /** HTTPS/REST plus authenticated WebSocket; no BLE identifiers belong in these methods. */
@@ -84,6 +97,9 @@ interface SocialTransport {
 
     suspend fun respondToFriendRequest(accessToken: String, friendshipId: String, accept: Boolean): SocialResult<Unit>
 
+    suspend fun searchUsers(accessToken: String, query: String): SocialResult<List<UserSearchResult>> =
+        SocialResult.Failure(SocialFailure.InvalidRequest("User search is not supported by this transport"))
+
     suspend fun listGroups(accessToken: String): SocialResult<List<RideGroup>>
 
     suspend fun createGroup(accessToken: String, name: String): SocialResult<RideGroup>
@@ -92,9 +108,26 @@ interface SocialTransport {
 
     suspend fun leaveGroup(accessToken: String, groupId: RideGroupId): SocialResult<Unit>
 
+    suspend fun deleteGroup(accessToken: String, groupId: RideGroupId): SocialResult<Unit>
+
     fun observeGroup(accessToken: String, groupId: RideGroupId): Flow<SocialLiveEvent>
 
+    fun observeGroup(
+        groupId: RideGroupId,
+        accessTokenProvider: suspend () -> String?,
+    ): Flow<SocialLiveEvent> = flow {
+        val accessToken = accessTokenProvider()
+        if (accessToken == null) {
+            emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized))
+        } else {
+            emitAll(observeGroup(accessToken, groupId))
+        }
+    }
+
     suspend fun startSharing(accessToken: String, request: ShareSessionRequest): SocialResult<SharingSession>
+
+    suspend fun renewSharing(accessToken: String, request: ShareSessionRequest): SocialResult<SharingSession> =
+        startSharing(accessToken, request)
 
     suspend fun publishSharingUpdate(
         accessToken: String,
@@ -105,6 +138,9 @@ interface SocialTransport {
     suspend fun stopSharing(accessToken: String, groupId: RideGroupId): SocialResult<Unit>
 
     suspend fun joinVoice(accessToken: String, groupId: RideGroupId): SocialResult<VoiceRoomCredentials>
+
+    suspend fun getVoiceProvider(accessToken: String): SocialResult<VoiceProviderAvailability> =
+        SocialResult.Failure(SocialFailure.InvalidRequest("Voice provider availability is not supported by this transport"))
 
     suspend fun leaveVoice(accessToken: String, groupId: RideGroupId): SocialResult<Unit>
 }
@@ -138,6 +174,9 @@ interface SocialRepository {
 
     suspend fun respondToFriendRequest(friendshipId: String, accept: Boolean): SocialResult<Unit>
 
+    suspend fun searchUsers(query: String): SocialResult<List<UserSearchResult>> =
+        SocialResult.Failure(SocialFailure.InvalidRequest("User search is not supported by this repository"))
+
     suspend fun listGroups(): SocialResult<List<RideGroup>>
 
     suspend fun createGroup(name: String): SocialResult<RideGroup>
@@ -146,9 +185,14 @@ interface SocialRepository {
 
     suspend fun leaveGroup(groupId: RideGroupId): SocialResult<Unit>
 
+    suspend fun deleteGroup(groupId: RideGroupId): SocialResult<Unit>
+
     fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent>
 
     suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession>
+
+    suspend fun renewSharing(request: ShareSessionRequest): SocialResult<SharingSession> =
+        startSharing(request)
 
     suspend fun publishSharingUpdate(
         groupId: RideGroupId,
@@ -158,6 +202,9 @@ interface SocialRepository {
     suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit>
 
     suspend fun joinVoice(groupId: RideGroupId): SocialResult<VoiceRoomCredentials>
+
+    suspend fun getVoiceProvider(): SocialResult<VoiceProviderAvailability> =
+        SocialResult.Failure(SocialFailure.InvalidRequest("Voice provider availability is not supported by this repository"))
 
     suspend fun leaveVoice(groupId: RideGroupId): SocialResult<Unit>
 }

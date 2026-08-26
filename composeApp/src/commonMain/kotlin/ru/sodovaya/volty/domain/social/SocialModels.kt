@@ -72,6 +72,14 @@ data class FriendSummary(
 )
 
 @Serializable
+data class UserSearchResult(
+    val userId: SocialUserId,
+    val displayName: String,
+    val friendshipId: FriendshipId? = null,
+    val state: FriendshipState? = null,
+)
+
+@Serializable
 enum class GroupMemberRole {
     OWNER,
     MEMBER,
@@ -92,11 +100,16 @@ data class RideGroup(
     val members: List<GroupMemberSummary> = emptyList(),
     val inviteOnly: Boolean = true,
     val inviteExpiresAtEpochMillis: Long? = null,
+    /** Present only in an owner-scoped response; never infer or synthesize it. */
+    val inviteCode: String? = null,
 ) {
     init {
         require(name.isNotBlank()) { "Ride group name must not be blank" }
         require(!inviteOnly || inviteExpiresAtEpochMillis == null || inviteExpiresAtEpochMillis > 0L) {
             "An invite expiry must be a positive epoch timestamp"
+        }
+        require(inviteCode == null || inviteCode.isNotBlank()) {
+            "An invite code must not be blank"
         }
     }
 }
@@ -282,3 +295,18 @@ data class VoiceParticipant(
     val displayName: String,
     val isSpeaking: Boolean,
 )
+
+@Serializable
+data class VoiceProviderAvailability(
+    val available: Boolean,
+    val provider: String,
+    val serverUrl: String? = null,
+    val message: String? = null,
+) {
+    init {
+        require(provider.isNotBlank()) { "Voice provider must not be blank" }
+        require(!available || !serverUrl.isNullOrBlank()) {
+            "An available voice provider must advertise a server URL"
+        }
+    }
+}
