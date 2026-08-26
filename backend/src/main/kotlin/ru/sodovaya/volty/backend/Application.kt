@@ -66,7 +66,7 @@ private const val AUDIENCE = "volty-app"
 class AppDependencies(
     val config: AppConfig,
     val store: BackendStore,
-    val json: Json = Json { ignoreUnknownKeys = true; explicitNulls = false },
+    val json: Json = backendJson(),
     val testMode: Boolean = false,
     val liveHub: LiveHub = LiveHub(json),
 ) {
@@ -79,7 +79,8 @@ class AppDependencies(
         fun create(config: AppConfig = AppConfig.fromEnvironment()): AppDependencies {
             val dataSource = createDataSource(config)
             SchemaMigrator(dataSource).migrate()
-            return AppDependencies(config, JdbcStore(dataSource, Json { ignoreUnknownKeys = true; explicitNulls = false }))
+            val json = backendJson()
+            return AppDependencies(config, JdbcStore(dataSource, json), json = json)
         }
 
         fun forTests() = AppDependencies(AppConfig.forTests(), object : BackendStore {}, testMode = true)
@@ -402,7 +403,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     if (!dependencies.testMode) {
         scope.launch {
             while (isActive) {
-                delay(15_000)
+                delay(LIVE_LOCATION_FRESHNESS_MILLIS)
                 dependencies.store.expireShares(nowMillis()).forEach { expireAndBroadcast(dependencies, it) }
             }
         }
@@ -566,7 +567,7 @@ private fun sanitizeTelemetry(value: SharedTelemetryDto?, profile: String): Shar
 
 private fun validLocation(location: LocationDto, now: Long? = null): Boolean = location.latitude.isFinite() && location.latitude in -90.0..90.0 && location.longitude.isFinite() && location.longitude in -180.0..180.0 && location.accuracyMeters.isFinite() && location.accuracyMeters >= 0 && location.staleAfterEpochMillis >= location.capturedAtEpochMillis && (now == null || SharingRules.isLocationFresh(location.staleAfterEpochMillis, now))
 
-private const val SERVER_LOCATION_STALE_AFTER_MILLIS = 15_000L
+private const val SERVER_LOCATION_STALE_AFTER_MILLIS = LIVE_LOCATION_FRESHNESS_MILLIS
 
 private fun ApplicationCall.user(dependencies: AppDependencies): UserRecord {
     val principal = principal<JWTPrincipal>() ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Authentication is required")

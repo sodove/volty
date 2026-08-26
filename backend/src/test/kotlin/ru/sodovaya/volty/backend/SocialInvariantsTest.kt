@@ -96,6 +96,16 @@ class SocialInvariantsTest {
     }
 
     @Test
+    fun productionJsonKeepsNullableLiveFieldsInTheWireContract() {
+        val encoded = AppDependencies.forTests().json.encodeToString(
+            LiveSnapshotDto("group-1", 1000L, listOf(ParticipantDto("user-1", "Rider", "OFFLINE", null, null, 0L))),
+        )
+
+        assertTrue(encoded.contains("\"location\":null"))
+        assertTrue(encoded.contains("\"telemetry\":null"))
+    }
+
+    @Test
     fun accountDeletionBroadcastsRevocationForEveryAffectedGroup() = testApplication {
         val events = mutableListOf<Pair<String, LiveEventDto>>()
         val store = AccountStore()

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.backend
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
 import java.security.MessageDigest
 import java.security.SecureRandom
 import java.time.Instant
@@ -360,6 +361,11 @@ object SharingRules {
 }
 
 const val LIVE_LOCATION_FRESHNESS_MILLIS = 15_000L
+
+fun backendJson(): Json = Json {
+    ignoreUnknownKeys = true
+    explicitNulls = true
+}
 
 enum class LiveEventKind(val wireName: String) {
     SNAPSHOT("snapshot"),

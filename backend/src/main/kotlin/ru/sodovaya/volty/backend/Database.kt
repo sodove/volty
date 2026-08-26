@@ -521,10 +521,17 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     }
 
     override fun startSharing(userId: String, request: StartSharingRequest, expiresAt: Long): ShareRow = dataSource.connection.use { connection ->
-        connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(request.groupId)); statement.executeUpdate() }
-        connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { statement -> statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(request.groupId)); statement.executeUpdate() }
-        connection.prepareStatement("INSERT INTO sharing_sessions (id,user_id,group_id,profile,started_at,expires_at) VALUES (?, ?, ?, ?, ?, ?)").use { statement -> statement.setObject(1, UUID.randomUUID()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(request.groupId)); statement.setString(4, request.profile); statement.setLong(5, request.startedAtEpochMillis); statement.setLong(6, expiresAt); statement.executeUpdate() }
-        ShareRow(userId, request.groupId, request.profile, request.startedAtEpochMillis, expiresAt)
+        connection.autoCommit = false
+        try {
+            connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(request.groupId)); statement.executeUpdate() }
+            connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { statement -> statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(request.groupId)); statement.executeUpdate() }
+            connection.prepareStatement("INSERT INTO sharing_sessions (id,user_id,group_id,profile,started_at,expires_at) VALUES (?, ?, ?, ?, ?, ?)").use { statement -> statement.setObject(1, UUID.randomUUID()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(request.groupId)); statement.setString(4, request.profile); statement.setLong(5, request.startedAtEpochMillis); statement.setLong(6, expiresAt); statement.executeUpdate() }
+            connection.commit()
+            ShareRow(userId, request.groupId, request.profile, request.startedAtEpochMillis, expiresAt)
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
+        }
     }
 
     override fun getShare(userId: String, groupId: String): ShareRow? = dataSource.connection.use { connection ->
@@ -532,41 +539,66 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     }
 
     override fun stopSharing(userId: String, groupId: String): Boolean = dataSource.connection.use { connection ->
-        connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(groupId)); val changed = statement.executeUpdate(); connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { cleanup -> cleanup.setObject(1, UUID.fromString(userId)); cleanup.setObject(2, UUID.fromString(groupId)); cleanup.executeUpdate() }; changed > 0 }
+        connection.autoCommit = false
+        try {
+            val changed = connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(groupId)); statement.executeUpdate() }
+            connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { cleanup -> cleanup.setObject(1, UUID.fromString(userId)); cleanup.setObject(2, UUID.fromString(groupId)); cleanup.executeUpdate() }
+            connection.commit()
+            changed > 0
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
+        }
     }
 
     override fun publishSharing(userId: String, groupId: String, location: LocationDto?, telemetry: SharedTelemetryDto?, capturedAt: Long, now: Long): Boolean = dataSource.connection.use { connection ->
-        connection.prepareStatement("""
-            WITH candidate(user_id, group_id, location_json, telemetry_json, captured_at, last_seen_at) AS
-                (VALUES (?, ?, ?, ?, ?, ?))
-            INSERT INTO live_updates (user_id,group_id,location_json,telemetry_json,captured_at,last_seen_at)
-            SELECT user_id, group_id, location_json, telemetry_json, captured_at, last_seen_at FROM candidate
-            WHERE EXISTS (
-                SELECT 1 FROM group_members m JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id
-                WHERE m.user_id = candidate.user_id AND m.group_id = candidate.group_id
-                  AND s.revoked_at IS NULL AND s.started_at <= ? AND s.expires_at > ?
-            )
-            ON CONFLICT (user_id,group_id) DO UPDATE SET
-                location_json = EXCLUDED.location_json, telemetry_json = EXCLUDED.telemetry_json,
-                captured_at = EXCLUDED.captured_at, last_seen_at = EXCLUDED.last_seen_at
-            WHERE EXISTS (
-                SELECT 1 FROM group_members m JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id
-                WHERE m.user_id = live_updates.user_id AND m.group_id = live_updates.group_id
-                  AND s.revoked_at IS NULL AND s.started_at <= ? AND s.expires_at > ?
-            )
-        """.trimIndent()).use { statement ->
-            statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.setString(3, location?.let(json::encodeToString)); statement.setString(4, telemetry?.let(json::encodeToString)); statement.setLong(5, capturedAt); statement.setLong(6, now)
-            statement.setLong(7, now); statement.setLong(8, now); statement.setLong(9, now); statement.setLong(10, now)
-            statement.executeUpdate() == 1
+        connection.autoCommit = false
+        try {
+            val memberExists = connection.prepareStatement("SELECT 1 FROM group_members WHERE user_id = ? AND group_id = ? FOR UPDATE").use { statement ->
+                statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.executeQuery().use { it.next() }
+            }
+            if (!memberExists) {
+                connection.rollback()
+                return@use false
+            }
+            val active = connection.prepareStatement("SELECT 1 FROM sharing_sessions WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL AND started_at <= ? AND expires_at > ? FOR UPDATE").use { statement ->
+                statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.setLong(3, now); statement.setLong(4, now); statement.executeQuery().use { it.next() }
+            }
+            if (!active) {
+                connection.rollback()
+                return@use false
+            }
+            connection.prepareStatement("""
+                INSERT INTO live_updates (user_id,group_id,location_json,telemetry_json,captured_at,last_seen_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT (user_id,group_id) DO UPDATE SET
+                    location_json = EXCLUDED.location_json, telemetry_json = EXCLUDED.telemetry_json,
+                    captured_at = EXCLUDED.captured_at, last_seen_at = EXCLUDED.last_seen_at
+            """.trimIndent()).use { statement ->
+                statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.setString(3, location?.let(json::encodeToString)); statement.setString(4, telemetry?.let(json::encodeToString)); statement.setLong(5, capturedAt); statement.setLong(6, now); statement.executeUpdate()
+            }
+            connection.commit()
+            true
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
         }
     }
 
     override fun expireShares(now: Long): List<ShareRow> = dataSource.connection.use { connection ->
-        connection.prepareStatement("SELECT user_id,group_id,profile,started_at,expires_at FROM sharing_sessions WHERE revoked_at IS NULL AND expires_at <= ?").use { statement ->
-            statement.setLong(1, now); val expired = statement.executeQuery().use { rows -> buildList { while (rows.next()) add(ShareRow(rows.getString(1), rows.getString(2), rows.getString(3), rows.getLong(4), rows.getLong(5))) } }
+        connection.autoCommit = false
+        try {
+            val expired = connection.prepareStatement("SELECT user_id,group_id,profile,started_at,expires_at FROM sharing_sessions WHERE revoked_at IS NULL AND expires_at <= ? FOR UPDATE").use { statement ->
+                statement.setLong(1, now)
+                statement.executeQuery().use { rows -> buildList { while (rows.next()) add(ShareRow(rows.getString(1), rows.getString(2), rows.getString(3), rows.getLong(4), rows.getLong(5))) } }
+            }
             connection.prepareStatement("DELETE FROM live_updates WHERE (user_id,group_id) IN (SELECT user_id,group_id FROM sharing_sessions WHERE revoked_at IS NULL AND expires_at <= ?)").use { cleanup -> cleanup.setLong(1, now); cleanup.executeUpdate() }
             connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND expires_at <= ?").use { update -> update.setLong(1, now); update.setLong(2, now); update.executeUpdate() }
+            connection.commit()
             expired
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
         }
     }
 
@@ -575,7 +607,7 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
             SELECT m.user_id,u.display_name,l.location_json,l.telemetry_json,l.captured_at,l.last_seen_at,
                    CASE
                        WHEN s.user_id IS NULL OR s.expires_at <= ? THEN 'OFFLINE'
-                       WHEN l.last_seen_at IS NULL OR l.last_seen_at + 15_000 <= ? THEN 'STALE'
+                       WHEN l.last_seen_at IS NULL OR l.last_seen_at + ${LIVE_LOCATION_FRESHNESS_MILLIS} <= ? THEN 'STALE'
                        ELSE 'ONLINE'
                    END AS presence
             FROM group_members m
