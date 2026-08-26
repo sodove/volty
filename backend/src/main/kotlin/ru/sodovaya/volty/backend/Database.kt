@@ -90,9 +90,9 @@ data class AppConfig(
             corsOrigins = setOf("https://volty.sodove.ru"),
         )
 
-        const val DEFAULT_VOICE_TOKEN_TTL_SECONDS = 300L
+        const val DEFAULT_VOICE_TOKEN_TTL_SECONDS = 24L * 60 * 60
         const val MIN_VOICE_TOKEN_TTL_SECONDS = 30L
-        const val MAX_VOICE_TOKEN_TTL_SECONDS = 3_600L
+        const val MAX_VOICE_TOKEN_TTL_SECONDS = 24L * 60 * 60
     }
 }
 
@@ -170,12 +170,14 @@ interface BackendStore {
     fun rotateRefreshToken(id: String, replacementHash: String, now: Long): Boolean = unsupported()
     fun isAccessActive(userId: String, issuedAtEpochSeconds: Long): Boolean = false
     fun listFriends(userId: String): List<FriendSummaryDto> = unsupported()
-    fun createFriendRequest(requesterId: String, addresseeId: String, now: Long): Int = unsupported()
-    fun respondToFriendRequest(userId: String, friendshipId: String, accept: Boolean): Unit = unsupported()
+    fun searchUsers(userId: String, query: String, limit: Int = 20): List<UserSearchResultDto> = unsupported()
+    fun createFriendRequest(requesterId: String, addresseeId: String, now: Long): FriendRequestResultDto = unsupported()
+    fun respondToFriendRequest(userId: String, friendshipId: String, accept: Boolean): FriendRequestResultDto = unsupported()
     fun listGroups(userId: String): List<GroupDto> = unsupported()
     fun createGroup(userId: String, name: String, now: Long): GroupDto = unsupported()
     fun joinGroup(userId: String, inviteCode: String, now: Long): GroupDto = unsupported()
     fun leaveGroup(userId: String, groupId: String): Unit = unsupported()
+    fun deleteGroup(userId: String, groupId: String): Unit = unsupported()
     fun isGroupMember(userId: String, groupId: String): Boolean = false
     fun startSharing(userId: String, request: StartSharingRequest, expiresAt: Long): ShareRow = unsupported()
     fun getShare(userId: String, groupId: String): ShareRow? = null
@@ -250,12 +252,21 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
         connection.commit()
     }
 
-    override fun deleteAccount(userId: String) = dataSource.connection.use { connection ->
-        connection.prepareStatement("UPDATE users SET deleted_at = ?, tokens_revoked_at = ? WHERE id = ?").use { statement ->
-            val now = nowMillis(); statement.setLong(1, now); statement.setLong(2, now / 1000); statement.setObject(3, UUID.fromString(userId)); statement.executeUpdate()
+    override fun deleteAccount(userId: String): Int = dataSource.connection.use { connection ->
+        connection.autoCommit = false
+        try {
+            val now = nowMillis()
+            val changed = connection.prepareStatement("UPDATE users SET deleted_at = ?, tokens_revoked_at = ? WHERE id = ?").use { statement ->
+                statement.setLong(1, now); statement.setLong(2, now / 1000); statement.setObject(3, UUID.fromString(userId)); statement.executeUpdate()
+            }
+            connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
+            connection.prepareStatement("DELETE FROM sharing_sessions WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
+            connection.commit()
+            changed
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
         }
-        connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
-        connection.prepareStatement("DELETE FROM sharing_sessions WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
     }
 
     override fun createOneTimeToken(userId: String, purpose: String, hash: String, expiresAt: Long) = dataSource.connection.use { connection ->
@@ -315,15 +326,110 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
         }
     }
 
-    override fun createFriendRequest(requesterId: String, addresseeId: String, now: Long) = dataSource.connection.use { connection ->
-        connection.prepareStatement("INSERT INTO friendships (id,requester_id,addressee_id,status,created_at) VALUES (?, ?, ?, 'PENDING', ?)").use { statement ->
-            statement.setObject(1, UUID.randomUUID()); statement.setObject(2, UUID.fromString(requesterId)); statement.setObject(3, UUID.fromString(addresseeId)); statement.setLong(4, now); statement.executeUpdate()
+    override fun searchUsers(userId: String, query: String, limit: Int): List<UserSearchResultDto> = dataSource.connection.use { connection ->
+        connection.prepareStatement("""
+            SELECT u.id, u.display_name, f.id AS friendship_id, f.status AS friendship_status,
+                   f.requester_id, f.addressee_id
+            FROM users u
+            LEFT JOIN friendships f ON
+                ((f.requester_id = ? AND f.addressee_id = u.id) OR
+                 (f.addressee_id = ? AND f.requester_id = u.id))
+            WHERE u.id <> ? AND u.deleted_at IS NULL
+              AND (u.display_name ILIKE ? OR u.email = ?)
+            ORDER BY u.display_name
+            LIMIT ?
+        """.trimIndent()).use { statement ->
+            val normalized = query.trim()
+            statement.setObject(1, UUID.fromString(userId))
+            statement.setObject(2, UUID.fromString(userId))
+            statement.setObject(3, UUID.fromString(userId))
+            statement.setString(4, "%$normalized%")
+            statement.setString(5, normalized.lowercase())
+            statement.setInt(6, limit.coerceIn(1, 50))
+            statement.executeQuery().use { rows ->
+                buildList {
+                    while (rows.next()) {
+                        val friendshipId = rows.getString("friendship_id")
+                        val status = rows.getString("friendship_status")
+                        add(
+                            UserSearchResultDto(
+                                userId = rows.getString("id"),
+                                displayName = rows.getString("display_name"),
+                                friendshipId = friendshipId,
+                                state = status?.let {
+                                    friendState(it, rows.getString("requester_id"), userId, rows.getString("addressee_id"))
+                                },
+                            ),
+                        )
+                    }
+                }
+            }
         }
     }
 
-    override fun respondToFriendRequest(userId: String, friendshipId: String, accept: Boolean) = dataSource.connection.use { connection ->
-        connection.prepareStatement("UPDATE friendships SET status = ? WHERE id = ? AND addressee_id = ? AND status = 'PENDING'").use { statement ->
-            statement.setString(1, if (accept) "ACCEPTED" else "DECLINED"); statement.setObject(2, UUID.fromString(friendshipId)); statement.setObject(3, UUID.fromString(userId)); if (statement.executeUpdate() != 1) throw IllegalStateException("friend request not found")
+    override fun createFriendRequest(requesterId: String, addresseeId: String, now: Long): FriendRequestResultDto = dataSource.connection.use { connection ->
+        connection.autoCommit = false
+        try {
+            val requester = UUID.fromString(requesterId)
+            val addressee = UUID.fromString(addresseeId)
+            val existing = connection.prepareStatement("""
+                SELECT id, requester_id, addressee_id, status FROM friendships
+                WHERE (requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)
+                FOR UPDATE
+            """.trimIndent()).use { statement ->
+                statement.setObject(1, requester); statement.setObject(2, addressee)
+                statement.setObject(3, addressee); statement.setObject(4, requester)
+                statement.executeQuery().use { if (it.next()) FriendshipRow(it.getString(1), it.getString(2), it.getString(3), it.getString(4)) else null }
+            }
+            val result = if (existing != null) {
+                FriendRequestResultDto(existing.id, friendState(existing.status, existing.requesterId, requesterId, existing.addresseeId))
+            } else {
+                val id = connection.prepareStatement("INSERT INTO friendships (id,requester_id,addressee_id,status,created_at) VALUES (?, ?, ?, 'PENDING', ?) ON CONFLICT DO NOTHING RETURNING id").use { statement ->
+                    statement.setObject(1, UUID.randomUUID()); statement.setObject(2, requester); statement.setObject(3, addressee); statement.setLong(4, now)
+                    statement.executeQuery().use { if (it.next()) it.getString(1) else null }
+                } ?: connection.prepareStatement("""
+                    SELECT id, requester_id, addressee_id, status FROM friendships
+                    WHERE (requester_id = ? AND addressee_id = ?) OR (requester_id = ? AND addressee_id = ?)
+                """.trimIndent()).use { statement ->
+                    statement.setObject(1, requester); statement.setObject(2, addressee)
+                    statement.setObject(3, addressee); statement.setObject(4, requester)
+                    statement.executeQuery().use { if (it.next()) it.getString("id") else throw IllegalStateException("friend request could not be created") }
+                }
+                FriendRequestResultDto(id, "REQUEST_SENT")
+            }
+            connection.commit()
+            result
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
+        }
+    }
+
+    override fun respondToFriendRequest(userId: String, friendshipId: String, accept: Boolean): FriendRequestResultDto = dataSource.connection.use { connection ->
+        connection.autoCommit = false
+        try {
+            val row = connection.prepareStatement("SELECT id,requester_id,addressee_id,status FROM friendships WHERE id = ? FOR UPDATE").use { statement ->
+                statement.setObject(1, UUID.fromString(friendshipId))
+                statement.executeQuery().use { if (it.next()) FriendshipRow(it.getString(1), it.getString(2), it.getString(3), it.getString(4)) else null }
+            } ?: throw IllegalStateException("friend request not found")
+            if (row.addresseeId != userId) throw IllegalStateException("friend request not found")
+            val result = when {
+                row.status == "ACCEPTED" && accept -> FriendRequestResultDto(row.id, "ACCEPTED")
+                row.status != "PENDING" -> throw IllegalStateException("friend request not found")
+                accept -> {
+                    connection.prepareStatement("UPDATE friendships SET status = 'ACCEPTED' WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(friendshipId)); statement.executeUpdate() }
+                    FriendRequestResultDto(row.id, "ACCEPTED")
+                }
+                else -> {
+                    connection.prepareStatement("DELETE FROM friendships WHERE id = ? AND addressee_id = ? AND status = 'PENDING'").use { statement -> statement.setObject(1, UUID.fromString(friendshipId)); statement.setObject(2, UUID.fromString(userId)); statement.executeUpdate() }
+                    FriendRequestResultDto(row.id, "DECLINED")
+                }
+            }
+            connection.commit()
+            result
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
         }
     }
 
@@ -347,16 +453,60 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     override fun joinGroup(userId: String, inviteCode: String, now: Long): GroupDto = dataSource.connection.use { connection ->
         val group = connection.prepareStatement("SELECT * FROM groups WHERE invite_code = ? AND (invite_expires_at IS NULL OR invite_expires_at > ?)").use { statement -> statement.setString(1, inviteCode); statement.setLong(2, now); statement.executeQuery().use { if (it.next()) it.groupRow() else null } } ?: throw NoSuchElementException("invite not found or expired")
         connection.prepareStatement("INSERT INTO group_members (group_id,user_id,role,joined_at) VALUES (?, ?, 'MEMBER', ?) ON CONFLICT DO NOTHING").use { statement -> statement.setObject(1, UUID.fromString(group.id)); statement.setObject(2, UUID.fromString(userId)); statement.setLong(3, now); statement.executeUpdate() }
-        groupDto(group, connection, userId)
+        val ownerIsStillMember = connection.prepareStatement("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(group.id)); statement.setObject(2, UUID.fromString(group.ownerId)); statement.executeQuery().use { it.next() } }
+        val effectiveGroup = if (ownerIsStillMember) group else {
+            connection.prepareStatement("UPDATE groups SET owner_id = ? WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(group.id)); statement.executeUpdate() }
+            connection.prepareStatement("UPDATE group_members SET role = 'OWNER' WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(group.id)); statement.setObject(2, UUID.fromString(userId)); statement.executeUpdate() }
+            group.copy(ownerId = userId)
+        }
+        groupDto(effectiveGroup, connection, userId)
     }
 
     override fun leaveGroup(userId: String, groupId: String) = dataSource.connection.use { connection ->
-        val owner = connection.prepareStatement("SELECT owner_id FROM groups WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.executeQuery().use { if (it.next()) it.getString(1) else null } } ?: throw NoSuchElementException("group not found")
-        if (owner == userId) throw IllegalStateException("group owner cannot leave")
-        connection.prepareStatement("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(userId)); if (statement.executeUpdate() != 1) throw IllegalStateException("not a group member") }
-        connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(groupId)); statement.executeUpdate() }
-        connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { statement -> statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.executeUpdate() }
-        Unit
+        connection.autoCommit = false
+        try {
+            val owner = connection.prepareStatement("SELECT owner_id FROM groups WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.executeQuery().use { if (it.next()) it.getString(1) else null } } ?: throw NoSuchElementException("group not found")
+            if (owner == userId) {
+                val replacementOwner = connection.prepareStatement("SELECT user_id FROM group_members WHERE group_id = ? AND user_id <> ? ORDER BY joined_at, user_id LIMIT 1").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(userId)); statement.executeQuery().use { if (it.next()) it.getString(1) else null } }
+                if (replacementOwner != null) {
+                    connection.prepareStatement("UPDATE groups SET owner_id = ? WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(replacementOwner)); statement.setObject(2, UUID.fromString(groupId)); statement.executeUpdate() }
+                    connection.prepareStatement("UPDATE group_members SET role = 'OWNER' WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(replacementOwner)); statement.executeUpdate() }
+                }
+            }
+            connection.prepareStatement("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(userId)); if (statement.executeUpdate() != 1) throw IllegalStateException("not a group member") }
+            connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(groupId)); statement.executeUpdate() }
+            connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ? AND group_id = ?").use { statement -> statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.executeUpdate() }
+            connection.commit()
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
+        }
+    }
+
+    override fun deleteGroup(userId: String, groupId: String) = dataSource.connection.use { connection ->
+        connection.autoCommit = false
+        try {
+            val ownerId = connection.prepareStatement("SELECT owner_id FROM groups WHERE id = ?").use { statement ->
+                statement.setObject(1, UUID.fromString(groupId))
+                statement.executeQuery().use { if (it.next()) it.getString(1) else null }
+            } ?: throw NoSuchElementException("group not found")
+            if (ownerId != userId) throw GroupOwnerRequiredException()
+            val stillMember = connection.prepareStatement("SELECT 1 FROM group_members WHERE group_id = ? AND user_id = ?").use { statement ->
+                statement.setObject(1, UUID.fromString(groupId))
+                statement.setObject(2, UUID.fromString(userId))
+                statement.executeQuery().use { it.next() }
+            }
+            if (!stillMember) throw GroupOwnerRequiredException()
+            connection.prepareStatement("DELETE FROM groups WHERE id = ? AND owner_id = ?").use { statement ->
+                statement.setObject(1, UUID.fromString(groupId))
+                statement.setObject(2, UUID.fromString(userId))
+                statement.executeUpdate()
+            }
+            connection.commit()
+        } catch (error: Throwable) {
+            runCatching { connection.rollback() }
+            throw error
+        }
     }
 
     override fun isGroupMember(userId: String, groupId: String): Boolean = dataSource.connection.use { connection ->
@@ -387,22 +537,40 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     override fun expireShares(now: Long): List<ShareRow> = dataSource.connection.use { connection ->
         connection.prepareStatement("SELECT user_id,group_id,profile,started_at,expires_at FROM sharing_sessions WHERE revoked_at IS NULL AND expires_at <= ?").use { statement ->
             statement.setLong(1, now); val expired = statement.executeQuery().use { rows -> buildList { while (rows.next()) add(ShareRow(rows.getString(1), rows.getString(2), rows.getString(3), rows.getLong(4), rows.getLong(5))) } }
-            connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND expires_at <= ?").use { update -> update.setLong(1, now); update.setLong(2, now); update.executeUpdate() }
             connection.prepareStatement("DELETE FROM live_updates WHERE (user_id,group_id) IN (SELECT user_id,group_id FROM sharing_sessions WHERE revoked_at IS NULL AND expires_at <= ?)").use { cleanup -> cleanup.setLong(1, now); cleanup.executeUpdate() }
+            connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE revoked_at IS NULL AND expires_at <= ?").use { update -> update.setLong(1, now); update.setLong(2, now); update.executeUpdate() }
             expired
         }
     }
 
     override fun snapshot(groupId: String, now: Long): LiveSnapshotDto = dataSource.connection.use { connection ->
         connection.prepareStatement("""
-            SELECT l.user_id,l.location_json,l.telemetry_json,l.captured_at,l.last_seen_at,u.display_name,
-                   CASE WHEN s.expires_at <= ? THEN 'OFFLINE' WHEN l.last_seen_at + 30_000 <= ? THEN 'STALE' ELSE 'ONLINE' END AS presence
-            FROM live_updates l JOIN users u ON u.id = l.user_id
-            JOIN sharing_sessions s ON s.user_id = l.user_id AND s.group_id = l.group_id AND s.revoked_at IS NULL
-            WHERE l.group_id = ? AND u.deleted_at IS NULL
+            SELECT m.user_id,u.display_name,l.location_json,l.telemetry_json,l.captured_at,l.last_seen_at,
+                   CASE
+                       WHEN s.user_id IS NULL OR s.expires_at <= ? THEN 'OFFLINE'
+                       WHEN l.last_seen_at IS NULL OR l.last_seen_at + 30_000 <= ? THEN 'STALE'
+                       ELSE 'ONLINE'
+                   END AS presence
+            FROM group_members m
+            JOIN users u ON u.id = m.user_id
+            LEFT JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id AND s.revoked_at IS NULL
+            LEFT JOIN live_updates l ON l.user_id = m.user_id AND l.group_id = m.group_id
+            WHERE m.group_id = ? AND u.deleted_at IS NULL
+            ORDER BY m.joined_at
         """.trimIndent()).use { statement ->
             statement.setLong(1, now); statement.setLong(2, now); statement.setObject(3, UUID.fromString(groupId)); statement.executeQuery().use { rows ->
-                LiveSnapshotDto(groupId, now, buildList { while (rows.next()) add(ParticipantDto(rows.getString("user_id"), rows.getString("display_name"), rows.getString("presence"), rows.getString("location_json")?.let(json::decodeFromString), rows.getString("telemetry_json")?.let(json::decodeFromString), rows.getLong("last_seen_at"))) })
+                LiveSnapshotDto(groupId, now, buildList {
+                    while (rows.next()) {
+                        add(ParticipantDto(
+                            userId = rows.getString("user_id"),
+                            displayName = rows.getString("display_name"),
+                            presence = rows.getString("presence"),
+                            location = rows.getString("location_json")?.let(json::decodeFromString),
+                            telemetry = rows.getString("telemetry_json")?.let(json::decodeFromString),
+                            lastSeenAtEpochMillis = rows.getLong("last_seen_at").takeUnless { rows.wasNull() } ?: 0L,
+                        ))
+                    }
+                })
             }
         }
     }

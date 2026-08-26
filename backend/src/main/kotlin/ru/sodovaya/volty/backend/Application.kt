@@ -37,6 +37,7 @@ import io.ktor.server.routing.routing
 import io.ktor.server.websocket.webSocket
 import io.ktor.server.websocket.WebSockets
 import io.ktor.websocket.Frame
+import io.ktor.websocket.CloseReason
 import io.ktor.websocket.close
 import io.ktor.websocket.readText
 import kotlinx.coroutines.CoroutineScope
@@ -67,11 +68,11 @@ class AppDependencies(
     val store: BackendStore,
     val json: Json = Json { ignoreUnknownKeys = true; explicitNulls = false },
     val testMode: Boolean = false,
+    val liveHub: LiveHub = LiveHub(json),
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
     val rateLimiter = RateLimiter(maxRequests = 120, windowSeconds = 60)
-    val liveHub = LiveHub(json)
     val voiceService = VoiceService(config)
 
     companion object {
@@ -101,21 +102,62 @@ class TokenService(private val config: AppConfig) {
     fun verifier() = JWT.require(algorithm).withIssuer(ISSUER).withAudience(AUDIENCE).build()
 }
 
-class LiveHub(private val json: Json) {
-    private val sessions = ConcurrentHashMap<String, MutableSet<io.ktor.server.websocket.DefaultWebSocketServerSession>>()
+class LiveHub(
+    private val json: Json,
+    private val onBroadcast: (String, LiveEventDto) -> Unit = { _, _ -> },
+    private val onGroupRevoked: (String) -> Unit = {},
+) {
+    private data class LiveSession(val userId: String, val session: io.ktor.server.websocket.DefaultWebSocketServerSession)
+    private val sessions = ConcurrentHashMap<String, MutableSet<LiveSession>>()
 
-    fun add(groupId: String, session: io.ktor.server.websocket.DefaultWebSocketServerSession) {
-        sessions.computeIfAbsent(groupId) { ConcurrentHashMap.newKeySet() }.add(session)
+    fun add(groupId: String, userId: String, session: io.ktor.server.websocket.DefaultWebSocketServerSession) {
+        sessions.computeIfAbsent(groupId) { ConcurrentHashMap.newKeySet() }.add(LiveSession(userId, session))
     }
 
     fun remove(groupId: String, session: io.ktor.server.websocket.DefaultWebSocketServerSession) {
-        sessions[groupId]?.let { members -> members.remove(session); if (members.isEmpty()) sessions.remove(groupId, members) }
+        sessions[groupId]?.let { members -> members.removeIf { it.session == session }; if (members.isEmpty()) sessions.remove(groupId, members) }
+    }
+
+    suspend fun revokeUser(userId: String) = revoke { it.userId == userId }
+
+    suspend fun revokeUserFromGroup(groupId: String, userId: String) = revokeGroupMembers(groupId) { it.userId == userId }
+
+    suspend fun revokeGroup(groupId: String) {
+        onGroupRevoked(groupId)
+        sessions.remove(groupId)?.forEach { terminate(it) }
+    }
+
+    private suspend fun revokeGroupMembers(groupId: String, predicate: (LiveSession) -> Boolean) {
+        val members = sessions[groupId] ?: return
+        members.filter(predicate).forEach { member ->
+            members.remove(member)
+            terminate(member)
+        }
+        if (members.isEmpty()) sessions.remove(groupId, members)
+    }
+
+    private suspend fun revoke(predicate: (LiveSession) -> Boolean) {
+        sessions.forEach { (groupId, members) ->
+            members.filter(predicate).forEach { member ->
+                members.remove(member)
+                terminate(member)
+            }
+            if (members.isEmpty()) sessions.remove(groupId, members)
+        }
+    }
+
+    private suspend fun terminate(member: LiveSession) {
+        runCatching {
+            member.session.send(Frame.Text(json.encodeToString(LiveEventDto(LiveEventKind.TERMINATED.wireName))))
+            member.session.close(CloseReason(CloseReason.Codes.VIOLATED_POLICY, "subscription is no longer valid"))
+        }
     }
 
     suspend fun broadcast(groupId: String, event: LiveEventDto) {
+        onBroadcast(groupId, event)
         val payload = json.encodeToString(event)
-        sessions[groupId]?.toList()?.forEach { session ->
-            runCatching { session.send(Frame.Text(payload)) }.onFailure { remove(groupId, session) }
+        sessions[groupId]?.toList()?.forEach { member ->
+            runCatching { member.session.send(Frame.Text(payload)) }.onFailure { remove(groupId, member.session) }
         }
     }
 }
@@ -158,6 +200,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         }
         exception<io.ktor.server.plugins.ContentTransformationException> { call, _ -> call.respondError(HttpStatusCode.BadRequest, "invalid_json", "Request body is invalid") }
         exception<NoSuchElementException> { call, cause -> call.respondError(HttpStatusCode.NotFound, "not_found", cause.message ?: "Resource not found") }
+        exception<GroupOwnerRequiredException> { call, cause -> call.respondError(HttpStatusCode.Forbidden, "forbidden", cause.message ?: "Only the group owner can delete it") }
         exception<IllegalStateException> { call, cause -> call.respondError(HttpStatusCode.Conflict, "conflict", cause.message ?: "Request conflicts with current state") }
         exception<IllegalArgumentException> { call, cause -> call.respondError(HttpStatusCode.BadRequest, "invalid_request", cause.message ?: "Request is invalid") }
         exception<Throwable> { call, cause -> logger.error("Unhandled request failure", cause); call.respondError(HttpStatusCode.InternalServerError, "server_error", "Internal server error") }
@@ -219,7 +262,13 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                 val next = dependencies.refreshTokenService.issueRefreshToken(user.id, now)
                 if (!dependencies.store.rotateRefreshToken(row.id, next.hash, now)) throw ApiException(HttpStatusCode.Unauthorized, "refresh_reuse", "Refresh token has already been used")
                 dependencies.store.insertRefreshToken(user.id, next.hash, next.expiresAtEpochSeconds, now)
-                call.respond(SessionResponse(dependencies.tokenService.issueAccessToken(user.id, now), next.raw, next.expiresAtEpochSeconds * 1_000))
+                call.respond(
+                    SessionResponse(
+                        accessToken = dependencies.tokenService.issueAccessToken(user.id, now),
+                        refreshToken = next.raw,
+                        expiresAtEpochMillis = (now + dependencies.config.accessTtlSeconds) * 1_000,
+                    ),
+                )
             }
             get("/auth/verify") {
                 val token = call.request.queryParameters["token"] ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "token is required")
@@ -237,8 +286,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                 val body = call.receive<PasswordResetRequest>()
                 val email = Validation.email(body.email).orBadRequest()
                 dependencies.store.findUserByEmail(email)?.let { user ->
-                    val raw = issueOneTimeToken(dependencies, user.id, "PASSWORD_RESET")
-                    logger.info("Password reset token issued for {}: {}", email, raw)
+                    issueOneTimeToken(dependencies, user.id, "PASSWORD_RESET")
                 }
                 call.respond(HttpStatusCode.Accepted, mapOf("accepted" to true))
             }
@@ -269,17 +317,28 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                     call.respond(mapOf("loggedOut" to true))
                 }
                 delete("/account") {
-                    val user = call.user(dependencies); dependencies.store.deleteAccount(user.id); call.respond(HttpStatusCode.NoContent)
+                    val user = call.user(dependencies); dependencies.store.deleteAccount(user.id); dependencies.liveHub.revokeUser(user.id); call.respond(HttpStatusCode.NoContent)
                 }
                 get("/friends") { call.respond(dependencies.store.listFriends(call.user(dependencies).id)) }
+                get("/users/search") {
+                    val query = Validation.searchQuery(call.request.queryParameters["q"] ?: "").orBadRequest()
+                    call.respond(dependencies.store.searchUsers(call.user(dependencies).id, query))
+                }
                 post("/friends/requests") {
                     val user = call.user(dependencies); val body = call.receive<FriendRequestDto>()
                     if (body.userId == user.id) throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "Cannot befriend yourself")
                     if (dependencies.store.findUserById(body.userId) == null) throw ApiException(HttpStatusCode.NotFound, "not_found", "User not found")
-                    dependencies.store.createFriendRequest(user.id, body.userId, nowMillis()); call.respond(HttpStatusCode.Created, mapOf("sent" to true))
+                    try {
+                        val result = dependencies.store.createFriendRequest(user.id, body.userId, nowMillis())
+                        call.respond(HttpStatusCode.Created, result)
+                        return@post
+                    } catch (e: Exception) {
+                        if (e.isUniqueViolation()) throw ApiException(HttpStatusCode.Conflict, "friendship_exists", "A friendship already exists")
+                        throw e
+                    }
                 }
                 post("/friends/requests/{friendshipId}/respond") {
-                    val body = call.receive<FriendRespondRequest>(); dependencies.store.respondToFriendRequest(call.user(dependencies).id, call.parameters["friendshipId"] ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "friendshipId is required"), body.accept); call.respond(mapOf("accepted" to body.accept))
+                    val body = call.receive<FriendRespondRequest>(); val result = dependencies.store.respondToFriendRequest(call.user(dependencies).id, call.parameters["friendshipId"] ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "friendshipId is required"), body.accept); call.respond(result)
                 }
                 get("/groups") { call.respond(dependencies.store.listGroups(call.user(dependencies).id)) }
                 post("/groups") {
@@ -288,10 +347,18 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                 post("/groups/join") {
                     val body = call.receive<JoinGroupRequest>(); if (body.inviteCode.length !in 6..32) throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "inviteCode is invalid"); call.respond(dependencies.store.joinGroup(call.user(dependencies).id, body.inviteCode.trim().uppercase(), nowMillis()))
                 }
-                post("/groups/{groupId}/leave") { dependencies.store.leaveGroup(call.user(dependencies).id, call.groupId()); call.respond(mapOf("left" to true)) }
-                delete("/groups/{groupId}") { dependencies.store.leaveGroup(call.user(dependencies).id, call.groupId()); call.respond(HttpStatusCode.NoContent) }
+                post("/groups/{groupId}/leave") {
+                    val user = call.user(dependencies)
+                    val groupId = call.groupId()
+                    dependencies.store.leaveGroup(user.id, groupId)
+                    broadcastSnapshot(dependencies, groupId)
+                    dependencies.liveHub.revokeUserFromGroup(groupId, user.id)
+                    call.respond(mapOf("left" to true))
+                }
+                delete("/groups/{groupId}") { val groupId = call.groupId(); dependencies.store.deleteGroup(call.user(dependencies).id, groupId); dependencies.liveHub.revokeGroup(groupId); call.respond(HttpStatusCode.NoContent) }
                 post("/sharing/start") { handleStartSharing(call, dependencies, call.receive()) }
                 post("/groups/{groupId}/sharing") { handleSharingPost(call, dependencies) }
+                post("/groups/{groupId}/sharing/renew") { handleRenewSharing(call, dependencies) }
                 post("/groups/{groupId}/sharing/update") { handlePublishSharing(call, dependencies) }
                 post("/groups/{groupId}/sharing/stop") { handleStopSharing(call, dependencies) }
                 delete("/groups/{groupId}/sharing") { handleStopSharing(call, dependencies) }
@@ -332,27 +399,65 @@ private suspend fun handleStartSharing(call: ApplicationCall, dependencies: AppD
     val groupId = call.parameters["groupId"] ?: body.groupId
     if (body.groupId != groupId && body.groupId.isNotBlank()) throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "groupId does not match the path")
     if (!dependencies.store.isGroupMember(user.id, groupId)) throw ApiException(HttpStatusCode.Forbidden, "forbidden", "You are not a group member")
-    if (body.startedAtEpochMillis !in (now - 300_000)..(now + 30_000)) throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "startedAtEpochMillis is outside the allowed clock skew")
-    val share = dependencies.store.startSharing(user.id, body.copy(groupId = groupId, profile = profile), now + body.ttlMillis)
+    val share = dependencies.store.startSharing(
+        user.id,
+        body.copy(groupId = groupId, profile = profile, startedAtEpochMillis = now),
+        now + body.ttlMillis,
+    )
+    broadcastSnapshot(dependencies, groupId)
     call.respond(SharingResponse(share.groupId, share.profile, share.expiresAtEpochMillis))
 }
 
 private suspend fun handlePublishSharing(call: ApplicationCall, dependencies: AppDependencies, suppliedBody: PublishSharingRequest? = null) {
     val user = call.user(dependencies)
     val groupId = call.groupId()
-    val share = dependencies.store.getShare(user.id, groupId) ?: throw ApiException(HttpStatusCode.Conflict, "sharing_inactive", "Sharing is not active")
-    val body = suppliedBody ?: call.receive<PublishSharingRequest>()
+    if (!dependencies.store.isGroupMember(user.id, groupId)) throw ApiException(HttpStatusCode.Forbidden, "forbidden", "You are not a group member")
     val now = nowMillis()
-    if (now >= share.expiresAtEpochMillis) {
-        expireAndBroadcast(dependencies, share)
+    val currentShare = dependencies.store.getShare(user.id, groupId)
+    if (currentShare != null && now >= currentShare.expiresAtEpochMillis) {
+        dependencies.store.expireShares(now).forEach { expireAndBroadcast(dependencies, it) }
         throw ApiException(HttpStatusCode.Conflict, "sharing_expired", "Sharing has expired")
     }
-    if (body.location == null || !validLocation(body.location)) throw ApiException(HttpStatusCode.BadRequest, "invalid_location", "A valid location is required while sharing")
-    if (!SharingRules.isPublishable(share.startedAtEpochMillis, share.expiresAtEpochMillis, body.capturedAtEpochMillis, now)) throw ApiException(HttpStatusCode.BadRequest, "invalid_timestamp", "Update timestamp is outside the active share window")
+    dependencies.store.expireShares(now).forEach { expireAndBroadcast(dependencies, it) }
+    val share = dependencies.store.getShare(user.id, groupId) ?: throw ApiException(HttpStatusCode.Conflict, "sharing_inactive", "Sharing is not active")
+    val body = suppliedBody ?: call.receive<PublishSharingRequest>()
+    val location = body.location ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_location", "A valid, fresh location is required while sharing")
+    val serverLocation = location.copy(
+        capturedAtEpochMillis = now,
+        staleAfterEpochMillis = now + SERVER_LOCATION_STALE_AFTER_MILLIS,
+    )
+    if (!validLocation(serverLocation, now)) throw ApiException(HttpStatusCode.BadRequest, "invalid_location", "A valid, fresh location is required while sharing")
+    if (!SharingRules.isPublishable(share.startedAtEpochMillis, share.expiresAtEpochMillis, now, now)) throw ApiException(HttpStatusCode.BadRequest, "invalid_timestamp", "Update timestamp is outside the active share window")
     val telemetry = sanitizeTelemetry(body.telemetry, share.profile)
-    dependencies.store.publishSharing(user.id, groupId, body.location, telemetry, body.capturedAtEpochMillis, now)
+    dependencies.store.publishSharing(user.id, groupId, serverLocation, telemetry, now, now)
     dependencies.liveHub.broadcast(groupId, LiveEventDto(LiveEventKind.SNAPSHOT.wireName, dependencies.store.snapshot(groupId, now)))
     call.respond(mapOf("published" to true))
+}
+
+private suspend fun handleRenewSharing(call: ApplicationCall, dependencies: AppDependencies) {
+    val user = call.user(dependencies)
+    val groupId = call.groupId()
+    if (!dependencies.store.isGroupMember(user.id, groupId)) throw ApiException(HttpStatusCode.Forbidden, "forbidden", "You are not a group member")
+    val now = nowMillis()
+    val current = dependencies.store.getShare(user.id, groupId)
+    if (current != null && now >= current.expiresAtEpochMillis) {
+        dependencies.store.expireShares(now).forEach { expireAndBroadcast(dependencies, it) }
+        throw ApiException(HttpStatusCode.Conflict, "sharing_expired", "Sharing has expired")
+    }
+    dependencies.store.expireShares(now).forEach { expireAndBroadcast(dependencies, it) }
+    val active = dependencies.store.getShare(user.id, groupId)
+        ?: throw ApiException(HttpStatusCode.Conflict, "sharing_inactive", "Sharing is not active")
+    val body = call.receive<RenewSharingRequest>()
+    if (!SharingRules.isTtlValid(body.ttlMillis, dependencies.config.maxShareTtlMillis)) {
+        throw ApiException(HttpStatusCode.BadRequest, "invalid_ttl", "Sharing TTL is outside the allowed range")
+    }
+    val renewed = dependencies.store.startSharing(
+        user.id,
+        StartSharingRequest(groupId, active.profile, body.ttlMillis, now),
+        active.expiresAtEpochMillis + body.ttlMillis,
+    )
+    broadcastSnapshot(dependencies, groupId)
+    call.respond(SharingResponse(renewed.groupId, renewed.profile, renewed.expiresAtEpochMillis))
 }
 
 private suspend fun handleSharingPost(call: ApplicationCall, dependencies: AppDependencies) {
@@ -367,6 +472,7 @@ private suspend fun handleSharingPost(call: ApplicationCall, dependencies: AppDe
 private suspend fun handleStopSharing(call: ApplicationCall, dependencies: AppDependencies) {
     val user = call.user(dependencies)
     val groupId = call.groupId()
+    if (!dependencies.store.isGroupMember(user.id, groupId)) throw ApiException(HttpStatusCode.Forbidden, "forbidden", "You are not a group member")
     val stopped = dependencies.store.stopSharing(user.id, groupId)
     if (stopped) dependencies.liveHub.broadcast(groupId, LiveEventDto(LiveEventKind.REVOKED.wireName, userId = user.id))
     call.respond(mapOf("stopped" to stopped))
@@ -376,14 +482,33 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.serve
     val user = call.user(dependencies)
     val groupId = call.groupId()
     if (!dependencies.store.isGroupMember(user.id, groupId)) {
+        send(Frame.Text(dependencies.json.encodeToString(LiveEventDto(LiveEventKind.TERMINATED.wireName))))
         close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "not a group member"))
         return
     }
-    dependencies.store.expireShares(nowMillis()).forEach { expireAndBroadcast(dependencies, it) }
-    send(Frame.Text(dependencies.json.encodeToString(LiveEventDto(LiveEventKind.SNAPSHOT.wireName, dependencies.store.snapshot(groupId, nowMillis())))))
-    dependencies.liveHub.add(groupId, this)
-    try { for (frame in incoming) if (frame is Frame.Close) break }
+    dependencies.liveHub.add(groupId, user.id, this)
+    try {
+        dependencies.store.expireShares(nowMillis()).forEach { expireAndBroadcast(dependencies, it) }
+        send(Frame.Text(dependencies.json.encodeToString(LiveEventDto(LiveEventKind.SNAPSHOT.wireName, dependencies.store.snapshot(groupId, nowMillis())))))
+        for (frame in incoming) if (frame is Frame.Close) break
+    }
     finally { dependencies.liveHub.remove(groupId, this) }
+}
+
+private suspend fun broadcastSnapshot(dependencies: AppDependencies, groupId: String) {
+    val now = nowMillis()
+    try {
+        dependencies.store.expireShares(now).forEach { expireAndBroadcast(dependencies, it) }
+    } catch (error: IllegalStateException) {
+        if (!dependencies.testMode) throw error
+    }
+    val snapshot = try {
+        dependencies.store.snapshot(groupId, now)
+    } catch (error: IllegalStateException) {
+        if (!dependencies.testMode) throw error
+        null
+    }
+    dependencies.liveHub.broadcast(groupId, LiveEventDto(LiveEventKind.SNAPSHOT.wireName, snapshot))
 }
 
 private suspend fun expireAndBroadcast(dependencies: AppDependencies, share: ShareRow) {
@@ -399,11 +524,18 @@ private fun issueOneTimeToken(dependencies: AppDependencies, userId: String, pur
 private fun issueSession(dependencies: AppDependencies, user: UserRecord, nowEpochSeconds: Long = Instant.now().epochSecond): SessionResponse {
     val refresh = dependencies.refreshTokenService.issueRefreshToken(user.id, nowEpochSeconds)
     dependencies.store.insertRefreshToken(user.id, refresh.hash, refresh.expiresAtEpochSeconds, nowEpochSeconds)
-    return SessionResponse(dependencies.tokenService.issueAccessToken(user.id, nowEpochSeconds), refresh.raw, refresh.expiresAtEpochSeconds * 1_000)
+    return SessionResponse(
+        accessToken = dependencies.tokenService.issueAccessToken(user.id, nowEpochSeconds),
+        refreshToken = refresh.raw,
+        expiresAtEpochMillis = (nowEpochSeconds + dependencies.config.accessTtlSeconds) * 1_000,
+    )
 }
 
 private fun sanitizeTelemetry(value: SharedTelemetryDto?, profile: String): SharedTelemetryDto? {
-    if (profile == "LOCATION") return null
+    if (profile == "LOCATION") {
+        if (value != null) throw ApiException(HttpStatusCode.BadRequest, "invalid_telemetry", "LOCATION sharing cannot include telemetry")
+        return null
+    }
     if (value == null || value.profile != profile) throw ApiException(HttpStatusCode.BadRequest, "invalid_telemetry", "Telemetry profile must match the active sharing profile")
     return if (profile == "FULL") value else value.copy(
         profile = "RIDE",
@@ -411,7 +543,9 @@ private fun sanitizeTelemetry(value: SharedTelemetryDto?, profile: String): Shar
     )
 }
 
-private fun validLocation(location: LocationDto): Boolean = location.latitude.isFinite() && location.latitude in -90.0..90.0 && location.longitude.isFinite() && location.longitude in -180.0..180.0 && location.accuracyMeters.isFinite() && location.accuracyMeters >= 0 && location.staleAfterEpochMillis >= location.capturedAtEpochMillis
+private fun validLocation(location: LocationDto, now: Long? = null): Boolean = location.latitude.isFinite() && location.latitude in -90.0..90.0 && location.longitude.isFinite() && location.longitude in -180.0..180.0 && location.accuracyMeters.isFinite() && location.accuracyMeters >= 0 && location.staleAfterEpochMillis >= location.capturedAtEpochMillis && (now == null || SharingRules.isLocationFresh(location.staleAfterEpochMillis, now))
+
+private const val SERVER_LOCATION_STALE_AFTER_MILLIS = 15_000L
 
 private fun ApplicationCall.user(dependencies: AppDependencies): UserRecord {
     val principal = principal<JWTPrincipal>() ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Authentication is required")

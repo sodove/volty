@@ -57,6 +57,12 @@ data class FriendRequestDto(val userId: String)
 data class FriendRespondRequest(val accept: Boolean)
 
 @Serializable
+data class FriendRequestResultDto(
+    val friendshipId: String,
+    val state: String,
+)
+
+@Serializable
 data class FriendSummaryDto(
     val friendshipId: String,
     val userId: String,
@@ -69,6 +75,20 @@ data class CreateGroupRequest(val name: String)
 
 @Serializable
 data class JoinGroupRequest(val inviteCode: String)
+
+@Serializable
+data class UserSearchResultDto(
+    val userId: String,
+    val displayName: String,
+    val friendshipId: String? = null,
+    val state: String? = null,
+)
+
+@Serializable
+data class RenewSharingRequest(
+    val ttlMillis: Long,
+    val startedAtEpochMillis: Long,
+)
 
 @Serializable
 data class GroupMemberDto(val userId: String, val displayName: String, val role: String)
@@ -202,6 +222,8 @@ class ApiException(
     val details: Map<String, String>? = null,
 ) : RuntimeException(message)
 
+class GroupOwnerRequiredException : RuntimeException("Only the group owner can delete it")
+
 object Validation {
     private val emailRegex = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
 
@@ -232,6 +254,12 @@ object Validation {
         val normalized = value.trim()
         return if (normalized.length in 2..80) Result.success(normalized)
         else Result.failure(IllegalArgumentException("group name must be 2-80 characters"))
+    }
+
+    fun searchQuery(value: String): Result<String> {
+        val normalized = value.trim()
+        return if (normalized.length in 2..254) Result.success(normalized)
+        else Result.failure(IllegalArgumentException("search query must be 2-254 characters"))
     }
 
     fun profile(value: String): Result<String> = when (value.uppercase()) {
@@ -312,6 +340,14 @@ object SharingRules {
     fun allowsTelemetry(profile: String): Boolean = profile.uppercase() in setOf("RIDE", "FULL")
     fun allowsFullMetrics(profile: String): Boolean = profile.uppercase() == "FULL"
 
+    fun acceptsTelemetry(profile: String, hasTelemetry: Boolean): Boolean =
+        if (profile.uppercase() == "LOCATION") !hasTelemetry else allowsTelemetry(profile) && hasTelemetry
+
+    fun isLocationFresh(staleAfter: Long, now: Long): Boolean = staleAfter > now
+
+    fun isTtlValid(ttlMillis: Long, maxTtlMillis: Long): Boolean =
+        ttlMillis > 0L && ttlMillis <= maxTtlMillis
+
     fun isPublishable(startedAt: Long, expiresAt: Long, capturedAt: Long, now: Long): Boolean =
         now >= startedAt && now < expiresAt && capturedAt in startedAt..now
 }
@@ -320,6 +356,7 @@ enum class LiveEventKind(val wireName: String) {
     SNAPSHOT("snapshot"),
     REVOKED("share_revoked"),
     EXPIRED("share_expired"),
+    TERMINATED("subscription_terminated"),
 }
 
 fun nowMillis(): Long = Instant.now().toEpochMilli()
