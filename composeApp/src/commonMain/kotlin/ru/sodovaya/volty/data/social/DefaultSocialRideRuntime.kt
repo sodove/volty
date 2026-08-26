@@ -47,6 +47,7 @@ class DefaultSocialRideRuntime(
     private var freshnessJob: Job? = null
     private var pendingVoiceGroupId: RideGroupId? = null
     private var cachedSnapshot: ru.sodovaya.volty.domain.social.LiveGroupSnapshot? = null
+    private var selectionGeneration: Long = 0L
 
     init {
         scope.launch {
@@ -66,6 +67,7 @@ class DefaultSocialRideRuntime(
             return
         }
         val previousSharing = state.value.sharing
+        val generation = ++selectionGeneration
         liveJob?.cancel()
         freshnessJob?.cancel()
         store.selectGroup(group)
@@ -80,18 +82,23 @@ class DefaultSocialRideRuntime(
         }
         scope.launch {
             stopSharingFor(previousSharing)
+            if (generation != selectionGeneration) return@launch
             pendingVoiceGroupId = null
             if (previous != null) runCatching { voiceRepository.leave() }
-            liveJob = scope.launch {
+            val observer = scope.launch {
                 socialRepository.observeGroup(group.id).collect { event ->
-                    if (state.value.selectedGroup?.id != group.id) return@collect
+                    if (generation != selectionGeneration || state.value.selectedGroup?.id != group.id) {
+                        return@collect
+                    }
                     applyLiveEvent(event)
                 }
             }
+            if (generation == selectionGeneration) liveJob = observer else observer.cancel()
         }
     }
 
     override fun clearGroup() {
+        selectionGeneration += 1L
         val previousSharing = state.value.sharing
         val previousVoice = state.value.voice
         liveJob?.cancel()
@@ -233,7 +240,9 @@ class DefaultSocialRideRuntime(
                 store.setLive(event, markersForSnapshot(event.value, nowEpochMillis()))
             }
             is SocialLiveEvent.Failure -> {
-                if (event.error is SocialFailure.Network && cachedSnapshot != null) {
+                if (event.terminal) {
+                    clearGroup()
+                } else if (event.error is SocialFailure.Network && cachedSnapshot != null) {
                     refreshLiveProjection()
                 } else if (event.error is SocialFailure.NotFound || event.error is SocialFailure.Forbidden) {
                     clearGroup()

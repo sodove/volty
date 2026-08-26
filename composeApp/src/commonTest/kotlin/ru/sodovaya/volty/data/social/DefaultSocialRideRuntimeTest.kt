@@ -8,6 +8,7 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.CompletableDeferred
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -155,6 +156,46 @@ class DefaultSocialRideRuntimeTest {
         runtime.close()
     }
 
+    @Test
+    fun an_old_selection_does_not_attach_after_a_newer_selection() = runTest {
+        val repository = FakeRuntimeSocialRepository()
+        val runtime = runtime(repository)
+        val first = testGroup().copy(id = RideGroupId("first"))
+        val second = testGroup().copy(id = RideGroupId("second"))
+        val third = testGroup().copy(id = RideGroupId("third"))
+        val stopGate = CompletableDeferred<Unit>()
+        repository.stopSharingGate = stopGate
+        runtime.store.selectGroup(first)
+        runtime.store.setSharing(SharingSession(first.id, TelemetryShareProfile.LOCATION, 10_000L))
+
+        runtime.selectGroup(second)
+        runtime.selectGroup(third)
+        testScheduler.runCurrent()
+        stopGate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(listOf(third.id), repository.observedGroupIds)
+        runtime.close()
+    }
+
+    @Test
+    fun terminal_subscription_event_clears_selected_group_and_live_state() = runTest {
+        val repository = FakeRuntimeSocialRepository()
+        val runtime = runtime(repository)
+        runtime.selectGroup(testGroup())
+        testScheduler.advanceUntilIdle()
+        repository.events.tryEmit(snapshotEvent())
+        testScheduler.advanceUntilIdle()
+
+        repository.events.tryEmit(SocialLiveEvent.Failure(SocialFailure.Forbidden, terminal = true))
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(null, runtime.state.value.selectedGroup)
+        assertEquals(null, runtime.state.value.liveEvent)
+        assertEquals(emptyList(), runtime.state.value.markers)
+        runtime.close()
+    }
+
     private fun runtime(
         repository: FakeRuntimeSocialRepository,
         voice: FakeRuntimeVoiceRepository = FakeRuntimeVoiceRepository(),
@@ -198,6 +239,8 @@ private class FakeRuntimeSocialRepository : SocialRepository {
     var stopSharingCalls = 0
     var leaveVoiceCalls = 0
     var publishedUpdates = 0
+    val observedGroupIds = mutableListOf<RideGroupId>()
+    var stopSharingGate: CompletableDeferred<Unit>? = null
 
     override suspend fun register(request: RegistrationRequest) = unexpected<Unit>()
     override suspend fun login(request: LoginRequest) = unexpected<Unit>()
@@ -218,6 +261,7 @@ private class FakeRuntimeSocialRepository : SocialRepository {
     override suspend fun deleteGroup(groupId: RideGroupId) = unexpected<Unit>()
     override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> {
         observeCalls++
+        observedGroupIds += groupId
         return events
     }
     override suspend fun startSharing(request: ShareSessionRequest) = SocialResult.Success(
@@ -229,6 +273,7 @@ private class FakeRuntimeSocialRepository : SocialRepository {
         return SocialResult.Success(Unit)
     }
     override suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit> {
+        stopSharingGate?.await()
         stopSharingCalls++
         activeSharing.value = null
         return SocialResult.Success(Unit)

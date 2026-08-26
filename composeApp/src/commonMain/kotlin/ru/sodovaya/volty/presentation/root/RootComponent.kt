@@ -746,6 +746,9 @@ class DefaultRootComponent(
                     onOpenGroupMapRequested = { onOpenGroupMap() },
                 )
             )
+            // The native map surface is hosted once by RootScreen. This child
+            // is an explicit route marker for its chrome/back-stack state; it
+            // intentionally carries no second map instance or local data.
             is Config.GroupMap -> RootComponent.Child.GroupMap
             is Config.Settings -> RootComponent.Child.Settings(
                 DefaultSettingsComponent(

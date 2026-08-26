@@ -48,6 +48,8 @@ import ru.sodovaya.volty.presentation.nearby.NearbyScreen
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
+import ru.sodovaya.volty.presentation.map.GroupMapScreen
+import ru.sodovaya.volty.presentation.map.groupMapState
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.stats.MotionReadings
@@ -71,15 +73,17 @@ fun RootScreen(component: RootComponent) {
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
     var mapRecenterRequest by remember { mutableLongStateOf(0L) }
     var gpsSpeedKmh by remember { mutableStateOf<Float?>(null) }
+    val groupMapVisible = active is RootComponent.Child.GroupMap
     val vehicleSpeedKmh = activeRideState?.motion
         ?.takeIf { it.isConnected }
         ?.let(MotionReadings::speedKmh)
     val mapHost = rideMapHostState(
         rideAvailable = rideAvailable,
-        activeScreen = when (active) {
-            is RootComponent.Child.Ride -> RideMapScreen.RIDE
-            is RootComponent.Child.Dashboard -> RideMapScreen.BATTERY
-            is RootComponent.Child.Nearby -> RideMapScreen.NEARBY
+        activeScreen = when {
+            groupMapVisible -> RideMapScreen.GROUP_MAP
+            active is RootComponent.Child.Ride -> RideMapScreen.RIDE
+            active is RootComponent.Child.Dashboard -> RideMapScreen.BATTERY
+            active is RootComponent.Child.Nearby -> RideMapScreen.NEARBY
             else -> RideMapScreen.OTHER
         },
         activeStyle = activeRideState?.style,
@@ -90,7 +94,7 @@ fun RootScreen(component: RootComponent) {
                 PlatformRideMapLayer(
                     darkTheme = darkTheme,
                     markers = socialLiveState.markers,
-                    requestLocationPermission = mapHost.visible,
+                    requestLocationPermission = mapHost.requestLocationPermission,
                     vehicleSpeedKmh = vehicleSpeedKmh,
                     recenterRequest = mapRecenterRequest,
                     onGpsSpeedKmhChanged = { gpsSpeedKmh = it },
@@ -121,16 +125,23 @@ fun RootScreen(component: RootComponent) {
                         mapLayer = if (mapHost.visible) ({}) else null,
                         onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
                         onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
+                        onOpenGroupMap = component::onOpenGroupMap,
                         onRecenterMap = { mapRecenterRequest++ },
                         gpsSpeedKmh = gpsSpeedKmh,
+                        socialLiveState = socialLiveState,
                     )
-                    is RootComponent.Child.Dashboard -> DashboardScreen(instance.component)
+                    is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)
                     is RootComponent.Child.SetupWizard -> SetupWizardScreen(instance.component)
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
-                    is RootComponent.Child.Graph -> GraphScreen(instance.component)
+                    is RootComponent.Child.Graph -> GraphScreen(component = instance.component)
                     is RootComponent.Child.Nearby -> NearbyScreen(instance.component)
+                    is RootComponent.Child.GroupMap -> GroupMapScreen(
+                        state = groupMapState(socialLiveState.markers),
+                        darkTheme = darkTheme,
+                        onBack = component::onBack,
+                    )
                     is RootComponent.Child.Settings -> SettingsScreen(instance.component)
                 }
             }
@@ -138,9 +149,13 @@ fun RootScreen(component: RootComponent) {
         // Persistent bottom tab bar — only for main destinations
         BottomTabBar(
             active = active,
+            groupMapVisible = groupMapVisible,
             rideAvailable = rideAvailable,
             rideStyle = activeRideState?.style,
-            onTab = { tab -> component.onTab(tab) },
+            onTab = { tab ->
+                component.onTab(tab)
+            },
+            onGroupMap = component::onOpenGroupMap,
             modifier = Modifier.navigationBarsPadding()
         )
     }
@@ -149,30 +164,39 @@ fun RootScreen(component: RootComponent) {
 @Composable
 private fun BottomTabBar(
     active: RootComponent.Child,
+    groupMapVisible: Boolean,
     rideAvailable: Boolean,
     rideStyle: DashboardStyle?,
     onTab: (RootComponent.Tab) -> Unit,
+    onGroupMap: () -> Unit,
     modifier: Modifier = Modifier
 ) {
-    val destination = when (active) {
+    val destination = when {
+        groupMapVisible -> RootChromeDestination.GROUP_MAP
+        else -> when (active) {
         is RootComponent.Child.Ride -> RootChromeDestination.RIDE
         is RootComponent.Child.Dashboard -> RootChromeDestination.BATTERY
         is RootComponent.Child.Graph -> RootChromeDestination.GRAPH
         is RootComponent.Child.Nearby -> RootChromeDestination.NEARBY
         is RootComponent.Child.Settings -> RootChromeDestination.SETTINGS
         else -> RootChromeDestination.OTHER
+        }
     }
     val visible = bottomTabBarVisible(destination, rideStyle)
     if (!visible) return
 
     // Graph is no longer a tab — it's reached from a button on either dashboard.
     // While it's on screen no tab is selected, hence the nullable.
-    val current: RootComponent.Tab? = when (active) {
-        is RootComponent.Child.Ride -> RootComponent.Tab.Ride
-        is RootComponent.Child.Dashboard -> RootComponent.Tab.Battery
-        is RootComponent.Child.Nearby -> RootComponent.Tab.Nearby
-        is RootComponent.Child.Settings -> RootComponent.Tab.Settings
-        else -> null
+    val current: RootComponent.Tab? = if (groupMapVisible) {
+        null
+    } else {
+        when (active) {
+            is RootComponent.Child.Ride -> RootComponent.Tab.Ride
+            is RootComponent.Child.Dashboard -> RootComponent.Tab.Battery
+            is RootComponent.Child.Nearby -> RootComponent.Tab.Nearby
+            is RootComponent.Child.Settings -> RootComponent.Tab.Settings
+            else -> null
+        }
     }
 
     Row(
@@ -200,6 +224,9 @@ private fun BottomTabBar(
             stringResource(Res.string.tab_nearby),
             current == RootComponent.Tab.Nearby
         ) { onTab(RootComponent.Tab.Nearby) }
+        if (shouldShowGroupMapTab(destination, groupMapVisible)) {
+            Tab("Карта", groupMapVisible, onGroupMap)
+        }
         Tab("⚙", current == RootComponent.Tab.Settings) { onTab(RootComponent.Tab.Settings) }
     }
 }

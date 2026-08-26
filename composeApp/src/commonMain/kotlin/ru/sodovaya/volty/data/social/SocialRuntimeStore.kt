@@ -14,6 +14,11 @@ import ru.sodovaya.volty.domain.social.VoiceRoomState
 class SocialRuntimeStore(
     initial: SocialRuntimeState = SocialRuntimeState(),
 ) {
+    /**
+     * Sharing is deliberately runtime-only. After process death the repository
+     * starts with no local sharing claim; a future server-authorized snapshot
+     * may repopulate it, but local state must never resurrect sharing by itself.
+     */
     private val _state = MutableStateFlow(initial)
     val state: StateFlow<SocialRuntimeState> = _state.asStateFlow()
 

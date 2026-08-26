@@ -36,6 +36,21 @@ class SocialLiveSessionTest {
         )
     }
 
+    @Test
+    fun terminal_subscription_event_clears_markers() {
+        assertEquals(
+            emptyList(),
+            reduceParticipantMarkers(
+                current = listOf(marker("u1")),
+                event = SocialLiveEvent.Failure(
+                    ru.sodovaya.volty.domain.social.SocialFailure.Forbidden,
+                    terminal = true,
+                ),
+                nowEpochMillis = 10_000L,
+            ),
+        )
+    }
+
     private fun marker(userId: String) = ParticipantMarker(
         userId = userId,
         label = userId,
