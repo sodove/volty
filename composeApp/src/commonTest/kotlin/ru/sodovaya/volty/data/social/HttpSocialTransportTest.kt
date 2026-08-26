@@ -51,6 +51,14 @@ class HttpSocialTransportTest {
             SocialFailure.Unauthorized,
             websocketHandshakeFailure(HttpStatusCode.Forbidden, """{"code":"invalid_token"}"""),
         )
+        assertEquals(
+            SocialFailure.Forbidden,
+            websocketHandshakeFailure(HttpStatusCode.Forbidden),
+        )
+        assertEquals(
+            SocialFailure.Forbidden,
+            websocketHandshakeFailure(HttpStatusCode.Forbidden, """{"code":"unknown"}"""),
+        )
     }
 
     @Test
@@ -281,7 +289,7 @@ class HttpSocialTransportTest {
     @Test
     fun websocketHandshakeFailuresAreClassifiedAsTerminalLiveEvents() {
         assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Unauthorized))
-        assertEquals(SocialFailure.Unauthorized, websocketHandshakeFailure(HttpStatusCode.Forbidden))
+        assertEquals(SocialFailure.Forbidden, websocketHandshakeFailure(HttpStatusCode.Forbidden))
         assertEquals(SocialFailure.NotFound, websocketHandshakeFailure(HttpStatusCode.NotFound))
         assertEquals(null, websocketHandshakeFailure(HttpStatusCode.ServiceUnavailable))
         assertEquals(SocialFailure.Unauthorized, websocketExceptionFailure("invalid token"))

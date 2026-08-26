@@ -13,6 +13,13 @@ class AndroidLocationProviderTest {
     }
 
     @Test
+    fun oldGenerationIsRejectedAtCallbackAndCollectionTime() {
+        assertEquals(false, shouldAcceptLocationUpdate(1L, 2L, isStarted = true))
+        assertEquals(false, shouldAcceptLocationUpdate(2L, 1L, isStarted = false))
+        assertEquals(true, shouldAcceptLocationUpdate(2L, 2L, isStarted = true))
+    }
+
+    @Test
     fun providerRegistrationRollsBackOnlyProvidersRegisteredBeforeFailure() {
         val registered = mutableListOf<String>()
         val unregistered = mutableListOf<String>()

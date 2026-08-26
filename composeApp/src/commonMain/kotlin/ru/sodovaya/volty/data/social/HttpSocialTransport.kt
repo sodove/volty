@@ -604,7 +604,7 @@ internal fun websocketHandshakeFailure(status: HttpStatusCode, body: String? = n
     HttpStatusCode.Forbidden -> {
         val code = body?.let { runCatching { websocketJson.parseToJsonElement(it).jsonObject }.getOrNull() }
             ?.string("code", "reason", "error")?.lowercase()
-        if (code.isMembershipRejection()) SocialFailure.Forbidden else SocialFailure.Unauthorized
+        if (code.isAuthRejection()) SocialFailure.Unauthorized else SocialFailure.Forbidden
     }
     HttpStatusCode.NotFound -> SocialFailure.NotFound
     else -> null

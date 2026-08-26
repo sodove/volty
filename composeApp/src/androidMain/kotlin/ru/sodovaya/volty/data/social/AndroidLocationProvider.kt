@@ -26,45 +26,34 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
     private val manager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     // Replay the first usable fix so start() cannot race the publishing
     // collector. extraBufferCapacity still keeps platform callbacks non-blocking.
-    private val _updates = MutableSharedFlow<LocationSnapshot>(replay = 1, extraBufferCapacity = 1)
+    private val _updates = MutableSharedFlow<LocationUpdate>(replay = 1, extraBufferCapacity = 1)
     override val requiredPermissions: List<String> = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
         Manifest.permission.ACCESS_COARSE_LOCATION,
     )
     override val updates: Flow<LocationSnapshot> = flow {
-        val generation = replayGenerationEpochMillis
-        _updates.asSharedFlow().collect { snapshot ->
-            if (isLocationFromCurrentGeneration(snapshot.capturedAtEpochMillis, generation)) {
-                emit(snapshot)
+        _updates.asSharedFlow().collect { update ->
+            if (shouldAcceptLocationUpdate(update.generation, currentGeneration, started) &&
+                isLocationFromCurrentGeneration(update.snapshot.capturedAtEpochMillis, replayGenerationEpochMillis)
+            ) {
+                emit(update.snapshot)
             }
         }
     }
+    @Volatile
     private var started = false
     private val registeredProviders = mutableListOf<String>()
+    @Volatile
+    private var currentGeneration = 0L
+    @Volatile
     private var replayGenerationEpochMillis = 0L
-
-    private val listener = object : LocationListener {
-        override fun onLocationChanged(location: Location) {
-            val capturedAt = System.currentTimeMillis()
-            _updates.tryEmit(
-                LocationSnapshot(
-                    latitude = location.latitude,
-                    longitude = location.longitude,
-                    accuracyMeters = location.accuracy.toDouble().coerceAtLeast(0.0),
-                    capturedAtEpochMillis = capturedAt,
-                    staleAfterEpochMillis = capturedAt + LOCATION_STALE_AFTER_MILLIS,
-                )
-            )
-        }
-
-        override fun onProviderEnabled(provider: String) = Unit
-        override fun onProviderDisabled(provider: String) = Unit
-        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
-    }
+    private var activeListener: LocationListener? = null
 
     override suspend fun start() = withContext(Dispatchers.Main.immediate) {
         if (started) return@withContext
         checkPermission()
+        val generation = currentGeneration + 1L
+        currentGeneration = generation
         replayGenerationEpochMillis = System.currentTimeMillis()
         _updates.resetReplayCache()
         val providers = listOf(
@@ -75,20 +64,24 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
             runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false)
         }
         check(providers.isNotEmpty()) { "No location provider is enabled" }
+        val listener = listenerFor(generation)
         registeredProviders += registerProvidersTransactional(
             providers = providers,
             register = { provider -> manager.requestLocationUpdates(provider, 1_000L, 5f, listener) },
             unregister = { manager.removeUpdates(listener) },
         )
+        activeListener = listener
         started = true
         emitRecentLastKnownLocation()
     }
 
     override suspend fun stop() = withContext(Dispatchers.Main.immediate) {
         if (!started) return@withContext
-        if (registeredProviders.isNotEmpty()) manager.removeUpdates(listener)
+        activeListener?.let { manager.removeUpdates(it) }
         registeredProviders.clear()
         started = false
+        currentGeneration += 1L
+        activeListener = null
     }
 
     private fun checkPermission() {
@@ -111,7 +104,7 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
             ?: return
         val ageMillis = now - lastKnown.time
         if (ageMillis !in 0..MAX_LAST_KNOWN_AGE_MILLIS) return
-        _updates.tryEmit(lastKnown.toSnapshot(now))
+        _updates.tryEmit(LocationUpdate(currentGeneration, lastKnown.toSnapshot(now)))
     }
 
     private fun Location.toSnapshot(capturedAt: Long): LocationSnapshot = LocationSnapshot(
@@ -120,6 +113,34 @@ class AndroidLocationProvider(context: Context) : LocationProvider {
         accuracyMeters = accuracy.toDouble().coerceAtLeast(0.0),
         capturedAtEpochMillis = capturedAt,
         staleAfterEpochMillis = capturedAt + LOCATION_STALE_AFTER_MILLIS,
+    )
+
+    private fun listenerFor(generation: Long): LocationListener = object : LocationListener {
+        override fun onLocationChanged(location: Location) {
+            if (!shouldAcceptLocationUpdate(generation, currentGeneration, started)) return
+            val capturedAt = System.currentTimeMillis()
+            _updates.tryEmit(
+                LocationUpdate(
+                    generation,
+                    LocationSnapshot(
+                        latitude = location.latitude,
+                        longitude = location.longitude,
+                        accuracyMeters = location.accuracy.toDouble().coerceAtLeast(0.0),
+                        capturedAtEpochMillis = capturedAt,
+                        staleAfterEpochMillis = capturedAt + LOCATION_STALE_AFTER_MILLIS,
+                    ),
+                ),
+            )
+        }
+
+        override fun onProviderEnabled(provider: String) = Unit
+        override fun onProviderDisabled(provider: String) = Unit
+        override fun onStatusChanged(provider: String?, status: Int, extras: Bundle?) = Unit
+    }
+
+    private data class LocationUpdate(
+        val generation: Long,
+        val snapshot: LocationSnapshot,
     )
 
     private companion object {
@@ -150,3 +171,9 @@ internal fun registerProvidersTransactional(
 
 internal fun isLocationFromCurrentGeneration(capturedAtEpochMillis: Long, generationEpochMillis: Long): Boolean =
     capturedAtEpochMillis >= generationEpochMillis
+
+internal fun shouldAcceptLocationUpdate(
+    updateGeneration: Long,
+    currentGeneration: Long,
+    isStarted: Boolean,
+): Boolean = isStarted && updateGeneration == currentGeneration
