@@ -23,9 +23,9 @@ class SocialLiveSessionTest {
     }
 
     @Test
-    fun liveStreamFailureClearsStaleMarkers() {
+    fun liveStreamFailureKeepsLastKnownMarkersAsStale() {
         assertEquals(
-            emptyList(),
+            listOf(marker("u1").copy(presence = PresenceStatus.STALE, stale = true)),
             reduceParticipantMarkers(
                 current = listOf(marker("u1")),
                 event = SocialLiveEvent.Failure(

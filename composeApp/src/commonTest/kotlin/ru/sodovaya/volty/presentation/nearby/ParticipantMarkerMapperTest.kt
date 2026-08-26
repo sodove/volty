@@ -27,12 +27,14 @@ class ParticipantMarkerMapperTest {
     }
 
     @Test
-    fun staleLocationIsNotDrawn() {
+    fun staleLocationIsRetainedAsAStaleMarker() {
         val markers = ParticipantMarkerMapper.map(
             listOf(participant(capturedAt = 1_000L, staleAfter = 1_500L)),
             nowEpochMillis = 2_000L,
         )
-        assertTrue(markers.isEmpty())
+        assertEquals(1, markers.size)
+        assertEquals(PresenceStatus.STALE, markers.single().presence)
+        assertTrue(markers.single().stale)
     }
 
     private fun participant(capturedAt: Long, staleAfter: Long = 10_000L) = ParticipantSnapshot(

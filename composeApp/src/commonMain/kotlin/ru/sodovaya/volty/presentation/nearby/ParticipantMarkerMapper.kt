@@ -23,17 +23,19 @@ object ParticipantMarkerMapper {
     ): List<ParticipantMarker> = participants.mapNotNull { participant ->
         val location = participant.location ?: return@mapNotNull null
         if (location.capturedAtEpochMillis > nowEpochMillis) return@mapNotNull null
-        if (LocationSharePolicy.snapshotStatus(location, nowEpochMillis) == LocationSnapshotStatus.STALE) {
-            return@mapNotNull null
-        }
+        val snapshotIsStale = LocationSharePolicy.snapshotStatus(location, nowEpochMillis) == LocationSnapshotStatus.STALE
         ParticipantMarker(
             userId = participant.userId.value,
             label = participant.displayName,
             latitude = location.latitude,
             longitude = location.longitude,
             accuracyMeters = location.accuracyMeters,
-            presence = participant.presence,
-            stale = participant.presence == PresenceStatus.STALE,
+            presence = if (snapshotIsStale && participant.presence == PresenceStatus.ONLINE) {
+                PresenceStatus.STALE
+            } else {
+                participant.presence
+            },
+            stale = participant.presence == PresenceStatus.STALE || snapshotIsStale,
         )
     }
 }
