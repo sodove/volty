@@ -10,6 +10,11 @@ internal data class RideMapCameraFrame(
     val center: RideMapPredictedCoordinate? = null,
 )
 
+/** Keeps user-camera fallbacks inside the zoom range used by ride follow mode. */
+internal fun clampRideMapCameraZoom(zoom: Double): Double =
+    zoom.takeIf { it.isFinite() }?.coerceIn(RIDE_MAP_MIN_ZOOM, RIDE_MAP_MAX_ZOOM)
+        ?: RIDE_MAP_MAX_ZOOM
+
 /**
  * Frame-rate independent enough for the ride map: a new GPS/controller target
  * is approached over several render frames instead of being assigned directly

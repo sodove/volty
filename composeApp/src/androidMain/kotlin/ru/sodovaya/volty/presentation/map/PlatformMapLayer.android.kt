@@ -95,7 +95,6 @@ import ru.sodovaya.volty.presentation.map.predictRideMapCoordinate
 import ru.sodovaya.volty.presentation.map.rideMapMarkerLabel
 import ru.sodovaya.volty.presentation.map.trailOpacityForDistanceMeters
 import ru.sodovaya.volty.presentation.map.RideMapTrailSample
-import ru.sodovaya.volty.presentation.map.shouldConnectRideMapTrail
 import ru.sodovaya.volty.presentation.map.shouldRenderTrail
 import kotlin.math.cos
 import kotlin.math.pow
@@ -164,7 +163,6 @@ private data class MapCoordinate(val latitude: Double, val longitude: Double)
 private data class TrailPoint(
     val coordinate: MapCoordinate,
     val sample: RideMapTrailSample,
-    val connectFromPrevious: Boolean,
 )
 
 @Composable
@@ -426,7 +424,9 @@ private fun AndroidMapLibreView(
                     fallbackDegrees = currentCamera.bearing,
                 )
                 val cameraFrame = cameraSmoother.advance(
-                    targetZoom = rideMapZoomForSpeed(speedKmh, fallbackZoom = currentCamera.zoom),
+                    targetZoom = clampRideMapCameraZoom(
+                        rideMapZoomForSpeed(speedKmh, fallbackZoom = currentCamera.zoom),
+                    ),
                     targetBearingDegrees = targetBearing,
                     targetCenter = RideMapPredictedCoordinate(target.latitude, target.longitude),
                     deltaMillis = if (previousFrameNanos == Long.MIN_VALUE) 0L
@@ -783,11 +783,9 @@ private fun appendTrail(
         accuracyMeters = location.accuracy.takeIf { location.hasAccuracy() },
         speedMetersPerSecond = location.takeIf { it.hasSpeed() }?.speed,
     )
-    val previous = target.lastOrNull()?.sample
     target += TrailPoint(
         coordinate = next,
         sample = sample,
-        connectFromPrevious = previous == null || shouldConnectRideMapTrail(previous, sample),
     )
     while (target.size > MAX_TRAIL_POINTS) target.removeAt(0)
 }
