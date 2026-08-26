@@ -9,6 +9,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.social.LocationProvider
 import ru.sodovaya.volty.domain.social.LocationSharePolicy
 import ru.sodovaya.volty.domain.social.LocationSnapshotStatus
@@ -48,6 +50,7 @@ class DefaultSocialRideRuntime(
     private var pendingVoiceGroupId: RideGroupId? = null
     private var cachedSnapshot: ru.sodovaya.volty.domain.social.LiveGroupSnapshot? = null
     private var selectionGeneration: Long = 0L
+    private val sharingMutex = Mutex()
 
     init {
         scope.launch {
@@ -81,7 +84,7 @@ class DefaultSocialRideRuntime(
             }
         }
         scope.launch {
-            stopSharingFor(previousSharing)
+            stopSharingFor(previousSharing, generation)
             if (generation != selectionGeneration) return@launch
             pendingVoiceGroupId = null
             if (previous != null) runCatching { voiceRepository.leave() }
@@ -99,6 +102,7 @@ class DefaultSocialRideRuntime(
 
     override fun clearGroup() {
         selectionGeneration += 1L
+        val generation = selectionGeneration
         val previousSharing = state.value.sharing
         val previousVoice = state.value.voice
         liveJob?.cancel()
@@ -108,7 +112,7 @@ class DefaultSocialRideRuntime(
         cachedSnapshot = null
         store.clear()
         scope.launch {
-            stopSharingFor(previousSharing)
+            stopSharingFor(previousSharing, generation)
             if (previousVoice is VoiceRoomState.Joined || previousVoice is VoiceRoomState.Joining) {
                 runCatching { voiceRepository.leave() }
             }
@@ -143,21 +147,34 @@ class DefaultSocialRideRuntime(
     override suspend fun renewSharing(ttlMillis: Long): SocialResult<SharingSession> =
         startSharingInternal(ttlMillis, renew = true)
 
-    private suspend fun startSharingInternal(ttlMillis: Long, renew: Boolean): SocialResult<SharingSession> {
-        val group = state.value.selectedGroup ?: return failure("No group is selected")
-        val request = ShareSessionRequest(
-            groupId = group.id,
-            profile = state.value.shareProfile,
-            ttlMillis = ttlMillis,
-            startedAtEpochMillis = epochMillis(),
-        )
-        val result = if (renew) socialRepository.renewSharing(request) else socialRepository.startSharing(request)
-        if (result is SocialResult.Success) {
+    private suspend fun startSharingInternal(ttlMillis: Long, renew: Boolean): SocialResult<SharingSession> =
+        sharingMutex.withLock {
+            val group = state.value.selectedGroup ?: return@withLock failure("No group is selected")
+            val generation = selectionGeneration
+            val request = ShareSessionRequest(
+                groupId = group.id,
+                profile = state.value.shareProfile,
+                ttlMillis = ttlMillis,
+                startedAtEpochMillis = epochMillis(),
+            )
+            val result = if (renew) socialRepository.renewSharing(request) else socialRepository.startSharing(request)
+            if (result !is SocialResult.Success) {
+                if (isCurrentGeneration(generation, group.id)) {
+                    runCatching { locationProvider.stop() }
+                }
+                return@withLock result
+            }
+            if (!isCurrentGeneration(generation, group.id)) {
+                return@withLock result
+            }
+
             store.setSharing(result.value)
             sharingJob?.cancel()
             sharingJob = scope.launch {
                 locationProvider.updates.collect { location ->
-                    sharingCoordinator.publish(group.id, result.value.profile, location)
+                    if (isCurrentGeneration(generation, group.id)) {
+                        sharingCoordinator.publish(group.id, result.value.profile, location)
+                    }
                 }
             }
             try {
@@ -165,34 +182,40 @@ class DefaultSocialRideRuntime(
             } catch (error: Throwable) {
                 sharingJob?.cancel()
                 sharingJob = null
-                store.setSharing(null)
-                runCatching { socialRepository.stopSharing(group.id) }
-                return SocialResult.Failure(
-                    SocialFailure.Network(error.message ?: "Location sharing could not start"),
-                )
+                if (isCurrentGeneration(generation, group.id)) {
+                    store.setSharing(null)
+                    runCatching { socialRepository.stopSharing(group.id) }
+                    return@withLock SocialResult.Failure(
+                        SocialFailure.Network(error.message ?: "Location sharing could not start"),
+                    )
+                }
             }
-        } else {
-            runCatching { locationProvider.stop() }
+            result
         }
-        return result
-    }
 
     override suspend fun stopSharing(): SocialResult<Unit> {
-        return stopSharingFor(state.value.sharing)
+        return stopSharingFor(state.value.sharing, selectionGeneration)
     }
 
-    private suspend fun stopSharingFor(knownSharing: SharingSession?): SocialResult<Unit> {
+    private suspend fun stopSharingFor(
+        knownSharing: SharingSession?,
+        generation: Long,
+    ): SocialResult<Unit> = sharingMutex.withLock {
         val sharing = knownSharing ?: socialRepository.activeSharing.value
-        stopSharingInternal()
-        return if (sharing == null) SocialResult.Success(Unit)
+        if (isCurrentGeneration(generation)) {
+            stopSharingInternal(generation)
+        }
+        if (sharing == null) SocialResult.Success(Unit)
         else socialRepository.stopSharing(sharing.groupId)
     }
 
-    private suspend fun stopSharingInternal() {
+    private suspend fun stopSharingInternal(generation: Long) {
         sharingJob?.cancel()
         sharingJob = null
         runCatching { locationProvider.stop() }
-        store.setSharing(null)
+        if (isCurrentGeneration(generation)) {
+            store.setSharing(null)
+        }
     }
 
     override suspend fun joinVoice(): SocialResult<Unit> {
@@ -205,7 +228,9 @@ class DefaultSocialRideRuntime(
     override suspend fun setMuted(muted: Boolean): SocialResult<Unit> = voiceRepository.setMuted(muted)
 
     override suspend fun logoutCleanup() {
-        stopSharing()
+        selectionGeneration += 1L
+        val generation = selectionGeneration
+        stopSharingFor(state.value.sharing, generation)
         pendingVoiceGroupId = null
         runCatching { voiceRepository.leave() }
         liveJob?.cancel()
@@ -308,4 +333,8 @@ class DefaultSocialRideRuntime(
         SocialResult.Failure(SocialFailure.InvalidRequest(message))
 
     private fun epochMillis(): Long = nowEpochMillis()
+
+    private fun isCurrentGeneration(groupGeneration: Long, groupId: RideGroupId? = null): Boolean =
+        selectionGeneration == groupGeneration &&
+            (groupId == null || state.value.selectedGroup?.id == groupId)
 }

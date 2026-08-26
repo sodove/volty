@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.launch
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -179,6 +180,80 @@ class DefaultSocialRideRuntimeTest {
     }
 
     @Test
+    fun an_old_selection_cleanup_does_not_clear_new_group_sharing() = runTest {
+        val repository = FakeRuntimeSocialRepository()
+        val runtime = runtime(repository)
+        val first = testGroup().copy(id = RideGroupId("first"))
+        val second = testGroup().copy(id = RideGroupId("second"))
+        val stopGate = CompletableDeferred<Unit>()
+        repository.stopSharingGate = stopGate
+
+        runtime.store.selectGroup(first)
+        val firstSharing = SharingSession(first.id, TelemetryShareProfile.LOCATION, 10_000L)
+        runtime.store.setSharing(firstSharing)
+        runtime.selectGroup(second)
+        testScheduler.runCurrent()
+
+        val secondSharing = SharingSession(second.id, TelemetryShareProfile.LOCATION, 20_000L)
+        runtime.store.setSharing(secondSharing)
+        stopGate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(secondSharing, runtime.state.value.sharing)
+        runtime.close()
+    }
+
+    @Test
+    fun suspended_start_from_old_group_does_not_publish_or_install_sharing() = runTest {
+        val repository = FakeRuntimeSocialRepository()
+        val location = FakeRuntimeLocationProvider()
+        val runtime = runtime(repository, location = location)
+        val first = testGroup().copy(id = RideGroupId("first"))
+        val second = testGroup().copy(id = RideGroupId("second"))
+        val startGate = CompletableDeferred<Unit>()
+        repository.startSharingGate = startGate
+
+        runtime.store.selectGroup(first)
+        val start = launch { runtime.startSharing(60_000L) }
+        testScheduler.runCurrent()
+        runtime.selectGroup(second)
+        startGate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(null, runtime.state.value.sharing)
+        assertEquals(0, location.startCalls)
+        assertEquals(0, repository.publishedUpdates)
+        start.join()
+        runtime.close()
+    }
+
+    @Test
+    fun suspended_renewal_from_old_group_does_not_publish_or_replace_sharing() = runTest {
+        val repository = FakeRuntimeSocialRepository()
+        val location = FakeRuntimeLocationProvider()
+        val runtime = runtime(repository, location = location)
+        val first = testGroup().copy(id = RideGroupId("first"))
+        val second = testGroup().copy(id = RideGroupId("second"))
+        val renewGate = CompletableDeferred<Unit>()
+        repository.renewSharingGate = renewGate
+
+        runtime.store.selectGroup(first)
+        val original = SharingSession(first.id, TelemetryShareProfile.LOCATION, 10_000L)
+        runtime.store.setSharing(original)
+        val renew = launch { runtime.renewSharing(60_000L) }
+        testScheduler.runCurrent()
+        runtime.selectGroup(second)
+        renewGate.complete(Unit)
+        testScheduler.advanceUntilIdle()
+
+        assertEquals(null, runtime.state.value.sharing)
+        assertEquals(0, location.startCalls)
+        assertEquals(0, repository.publishedUpdates)
+        renew.join()
+        runtime.close()
+    }
+
+    @Test
     fun terminal_subscription_event_clears_selected_group_and_live_state() = runTest {
         val repository = FakeRuntimeSocialRepository()
         val runtime = runtime(repository)
@@ -187,7 +262,7 @@ class DefaultSocialRideRuntimeTest {
         repository.events.tryEmit(snapshotEvent())
         testScheduler.advanceUntilIdle()
 
-        repository.events.tryEmit(SocialLiveEvent.Failure(SocialFailure.Forbidden, terminal = true))
+        repository.events.tryEmit(SocialLiveEvent.SubscriptionTerminated("not_member"))
         testScheduler.advanceUntilIdle()
 
         assertEquals(null, runtime.state.value.selectedGroup)
@@ -239,6 +314,8 @@ private class FakeRuntimeSocialRepository : SocialRepository {
     var stopSharingCalls = 0
     var leaveVoiceCalls = 0
     var publishedUpdates = 0
+    var startSharingGate: CompletableDeferred<Unit>? = null
+    var renewSharingGate: CompletableDeferred<Unit>? = null
     val observedGroupIds = mutableListOf<RideGroupId>()
     var stopSharingGate: CompletableDeferred<Unit>? = null
 
@@ -264,10 +341,18 @@ private class FakeRuntimeSocialRepository : SocialRepository {
         observedGroupIds += groupId
         return events
     }
-    override suspend fun startSharing(request: ShareSessionRequest) = SocialResult.Success(
-        SharingSession(request.groupId, request.profile, request.startedAtEpochMillis + request.ttlMillis),
-    )
-    override suspend fun renewSharing(request: ShareSessionRequest) = startSharing(request)
+    override suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession> {
+        startSharingGate?.await()
+        return SocialResult.Success(
+            SharingSession(request.groupId, request.profile, request.startedAtEpochMillis + request.ttlMillis),
+        )
+    }
+    override suspend fun renewSharing(request: ShareSessionRequest): SocialResult<SharingSession> {
+        renewSharingGate?.await()
+        return SocialResult.Success(
+            SharingSession(request.groupId, request.profile, request.startedAtEpochMillis + request.ttlMillis),
+        )
+    }
     override suspend fun publishSharingUpdate(groupId: RideGroupId, update: ParticipantShareUpdate): SocialResult<Unit> {
         publishedUpdates++
         return SocialResult.Success(Unit)
@@ -304,8 +389,10 @@ private class FakeRuntimeLocationProvider(
     val locationUpdates = MutableSharedFlow<LocationSnapshot>(extraBufferCapacity = 1)
     override val updates: Flow<LocationSnapshot> = locationUpdates
     var stopCalls = 0
+    var startCalls = 0
 
     override suspend fun start() {
+        startCalls++
         onStart?.invoke()
     }
     override suspend fun stop() { stopCalls++ }
