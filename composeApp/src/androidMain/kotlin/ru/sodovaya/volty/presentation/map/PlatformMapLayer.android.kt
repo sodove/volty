@@ -642,13 +642,10 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
         style.addLayer(
             CircleLayer(GROUP_LAYER_ID, GROUP_SOURCE_ID).withProperties(
                 circleColor(
-                    Expression.match(
-                        Expression.get("stale"),
+                    Expression.switchCase(
+                        Expression.eq(Expression.get("stale"), true),
+                        Expression.color(Color.parseColor("#FFB454")),
                         Expression.color(Color.parseColor("#35E6A2")),
-                        Expression.stop(
-                            true,
-                            Expression.color(Color.parseColor("#FFB454")),
-                        ),
                     ),
                 ),
                 circleRadius(7f),
