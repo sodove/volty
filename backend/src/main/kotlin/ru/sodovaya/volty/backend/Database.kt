@@ -163,6 +163,7 @@ interface BackendStore {
     fun markEmailVerified(userId: String): Int = unsupported()
     fun revokeAllUserTokens(userId: String, nowEpochSeconds: Long): Unit = unsupported()
     fun deleteAccount(userId: String): Int = unsupported()
+    fun listGroupIdsForUser(userId: String): List<String> = emptyList()
     fun createOneTimeToken(userId: String, purpose: String, hash: String, expiresAt: Long): Int = unsupported()
     fun consumeOneTimeToken(purpose: String, hash: String, now: Long): String? = unsupported()
     fun insertRefreshToken(userId: String, tokenHash: String, expiresAt: Long, now: Long): String = unsupported()
@@ -266,6 +267,13 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
         } catch (error: Throwable) {
             runCatching { connection.rollback() }
             throw error
+        }
+    }
+
+    override fun listGroupIdsForUser(userId: String): List<String> = dataSource.connection.use { connection ->
+        connection.prepareStatement("SELECT group_id FROM group_members WHERE user_id = ?").use { statement ->
+            statement.setObject(1, UUID.fromString(userId))
+            statement.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }
         }
     }
 
@@ -468,10 +476,9 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
             val owner = connection.prepareStatement("SELECT owner_id FROM groups WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.executeQuery().use { if (it.next()) it.getString(1) else null } } ?: throw NoSuchElementException("group not found")
             if (owner == userId) {
                 val replacementOwner = connection.prepareStatement("SELECT user_id FROM group_members WHERE group_id = ? AND user_id <> ? ORDER BY joined_at, user_id LIMIT 1").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(userId)); statement.executeQuery().use { if (it.next()) it.getString(1) else null } }
-                if (replacementOwner != null) {
-                    connection.prepareStatement("UPDATE groups SET owner_id = ? WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(replacementOwner)); statement.setObject(2, UUID.fromString(groupId)); statement.executeUpdate() }
-                    connection.prepareStatement("UPDATE group_members SET role = 'OWNER' WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(replacementOwner)); statement.executeUpdate() }
-                }
+                if (replacementOwner == null) throw GroupOwnerCannotLeaveException()
+                connection.prepareStatement("UPDATE groups SET owner_id = ? WHERE id = ?").use { statement -> statement.setObject(1, UUID.fromString(replacementOwner)); statement.setObject(2, UUID.fromString(groupId)); statement.executeUpdate() }
+                connection.prepareStatement("UPDATE group_members SET role = 'OWNER' WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(replacementOwner)); statement.executeUpdate() }
             }
             connection.prepareStatement("DELETE FROM group_members WHERE group_id = ? AND user_id = ?").use { statement -> statement.setObject(1, UUID.fromString(groupId)); statement.setObject(2, UUID.fromString(userId)); if (statement.executeUpdate() != 1) throw IllegalStateException("not a group member") }
             connection.prepareStatement("UPDATE sharing_sessions SET revoked_at = ? WHERE user_id = ? AND group_id = ? AND revoked_at IS NULL").use { statement -> statement.setLong(1, nowMillis()); statement.setObject(2, UUID.fromString(userId)); statement.setObject(3, UUID.fromString(groupId)); statement.executeUpdate() }
@@ -529,8 +536,28 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     }
 
     override fun publishSharing(userId: String, groupId: String, location: LocationDto?, telemetry: SharedTelemetryDto?, capturedAt: Long, now: Long): Boolean = dataSource.connection.use { connection ->
-        connection.prepareStatement("INSERT INTO live_updates (user_id,group_id,location_json,telemetry_json,captured_at,last_seen_at) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (user_id,group_id) DO UPDATE SET location_json = EXCLUDED.location_json, telemetry_json = EXCLUDED.telemetry_json, captured_at = EXCLUDED.captured_at, last_seen_at = EXCLUDED.last_seen_at").use { statement ->
-            statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.setString(3, location?.let(json::encodeToString)); statement.setString(4, telemetry?.let(json::encodeToString)); statement.setLong(5, capturedAt); statement.setLong(6, now); statement.executeUpdate() > 0
+        connection.prepareStatement("""
+            WITH candidate(user_id, group_id, location_json, telemetry_json, captured_at, last_seen_at) AS
+                (VALUES (?, ?, ?, ?, ?, ?))
+            INSERT INTO live_updates (user_id,group_id,location_json,telemetry_json,captured_at,last_seen_at)
+            SELECT user_id, group_id, location_json, telemetry_json, captured_at, last_seen_at FROM candidate
+            WHERE EXISTS (
+                SELECT 1 FROM group_members m JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id
+                WHERE m.user_id = candidate.user_id AND m.group_id = candidate.group_id
+                  AND s.revoked_at IS NULL AND s.started_at <= ? AND s.expires_at > ?
+            )
+            ON CONFLICT (user_id,group_id) DO UPDATE SET
+                location_json = EXCLUDED.location_json, telemetry_json = EXCLUDED.telemetry_json,
+                captured_at = EXCLUDED.captured_at, last_seen_at = EXCLUDED.last_seen_at
+            WHERE EXISTS (
+                SELECT 1 FROM group_members m JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id
+                WHERE m.user_id = live_updates.user_id AND m.group_id = live_updates.group_id
+                  AND s.revoked_at IS NULL AND s.started_at <= ? AND s.expires_at > ?
+            )
+        """.trimIndent()).use { statement ->
+            statement.setObject(1, UUID.fromString(userId)); statement.setObject(2, UUID.fromString(groupId)); statement.setString(3, location?.let(json::encodeToString)); statement.setString(4, telemetry?.let(json::encodeToString)); statement.setLong(5, capturedAt); statement.setLong(6, now)
+            statement.setLong(7, now); statement.setLong(8, now); statement.setLong(9, now); statement.setLong(10, now)
+            statement.executeUpdate() == 1
         }
     }
 
@@ -548,17 +575,17 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
             SELECT m.user_id,u.display_name,l.location_json,l.telemetry_json,l.captured_at,l.last_seen_at,
                    CASE
                        WHEN s.user_id IS NULL OR s.expires_at <= ? THEN 'OFFLINE'
-                       WHEN l.last_seen_at IS NULL OR l.last_seen_at + 30_000 <= ? THEN 'STALE'
+                       WHEN l.last_seen_at IS NULL OR l.last_seen_at + 15_000 <= ? THEN 'STALE'
                        ELSE 'ONLINE'
                    END AS presence
             FROM group_members m
             JOIN users u ON u.id = m.user_id
-            LEFT JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id AND s.revoked_at IS NULL
-            LEFT JOIN live_updates l ON l.user_id = m.user_id AND l.group_id = m.group_id
+            LEFT JOIN sharing_sessions s ON s.user_id = m.user_id AND s.group_id = m.group_id AND s.revoked_at IS NULL AND s.started_at <= ? AND s.expires_at > ?
+            LEFT JOIN live_updates l ON l.user_id = m.user_id AND l.group_id = m.group_id AND s.user_id IS NOT NULL
             WHERE m.group_id = ? AND u.deleted_at IS NULL
             ORDER BY m.joined_at
         """.trimIndent()).use { statement ->
-            statement.setLong(1, now); statement.setLong(2, now); statement.setObject(3, UUID.fromString(groupId)); statement.executeQuery().use { rows ->
+            statement.setLong(1, now); statement.setLong(2, now); statement.setLong(3, now); statement.setLong(4, now); statement.setObject(5, UUID.fromString(groupId)); statement.executeQuery().use { rows ->
                 LiveSnapshotDto(groupId, now, buildList {
                     while (rows.next()) {
                         add(ParticipantDto(

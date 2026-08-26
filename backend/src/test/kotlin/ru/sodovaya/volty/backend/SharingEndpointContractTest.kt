@@ -200,11 +200,32 @@ class SharingEndpointContractTest {
         assertNull(store.activeShare)
     }
 
+    @Test
+    fun publishTreatsAnUnconditionalStoreRejectionAsInactive() = testApplication {
+        val store = SharingStore().also { it.publishAccepted = false }
+        val dependencies = AppDependencies(AppConfig.forTests(), store, testMode = true)
+        application { module(dependencies) }
+        val auth = dependencies.tokenService.issueAccessToken("user-1")
+        val now = nowMillis()
+        store.activeShare = ShareRow("user-1", "group-1", "LOCATION", now - 1, now + 60_000)
+
+        val response = client.post("/v1/groups/group-1/sharing/update") {
+            bearerAuth(auth)
+            header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            setBody("{\"capturedAtEpochMillis\":$now,\"location\":{\"latitude\":56.8,\"longitude\":60.6,\"accuracyMeters\":5.0,\"capturedAtEpochMillis\":$now,\"staleAfterEpochMillis\":${now + 15000}},\"telemetry\":null}")
+        }
+
+        assertEquals(HttpStatusCode.Conflict, response.status)
+        assertTrue(response.bodyAsText().contains("sharing_inactive"))
+        assertNull(store.lastLocation)
+    }
+
     private class SharingStore : BackendStore {
         private val user = UserRecord("user-1", "rider@example.com", "ignored", "Rider", true)
         var activeShare: ShareRow? = null
         var lastLocation: LocationDto? = null
         var lastTelemetry: SharedTelemetryDto? = null
+        var publishAccepted: Boolean = true
 
         override fun findUserById(id: String): UserRecord? = user.takeIf { it.id == id }
         override fun isAccessActive(userId: String, issuedAtEpochSeconds: Long): Boolean = userId == user.id
@@ -226,6 +247,7 @@ class SharingEndpointContractTest {
         override fun leaveGroup(userId: String, groupId: String) = Unit
         override fun deleteGroup(userId: String, groupId: String) = Unit
         override fun publishSharing(userId: String, groupId: String, location: LocationDto?, telemetry: SharedTelemetryDto?, capturedAt: Long, now: Long): Boolean {
+            if (!publishAccepted) return false
             lastLocation = location
             lastTelemetry = telemetry
             return true

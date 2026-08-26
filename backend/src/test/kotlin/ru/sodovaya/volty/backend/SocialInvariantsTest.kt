@@ -3,6 +3,7 @@ package ru.sodovaya.volty.backend
 import io.ktor.client.request.bearerAuth
 import io.ktor.client.request.header
 import io.ktor.client.request.post
+import io.ktor.client.request.delete
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.ContentType
@@ -14,6 +15,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class SocialInvariantsTest {
     private val json = Json { ignoreUnknownKeys = true }
@@ -84,6 +86,34 @@ class SocialInvariantsTest {
         assertNull(snapshot.participants.single { it.userId == "user-2" }.location)
     }
 
+    @Test
+    fun nullableLiveFieldsAreExplicitlyRepresentedOnTheWire() {
+        val encoded = json.encodeToString(
+            LiveSnapshotDto("group-1", 1000L, listOf(ParticipantDto("user-1", "Rider", "OFFLINE", null, null, 0L))),
+        )
+        assertTrue(encoded.contains("\"location\":null"))
+        assertTrue(encoded.contains("\"telemetry\":null"))
+    }
+
+    @Test
+    fun accountDeletionBroadcastsRevocationForEveryAffectedGroup() = testApplication {
+        val events = mutableListOf<Pair<String, LiveEventDto>>()
+        val store = AccountStore()
+        val dependencies = AppDependencies(
+            AppConfig.forTests(), store, testMode = true,
+            liveHub = LiveHub(Json, onBroadcast = { groupId, event -> events += groupId to event }),
+        )
+        application { module(dependencies) }
+
+        val response = client.delete("/v1/account") {
+            bearerAuth(dependencies.tokenService.issueAccessToken("user-1"))
+        }
+
+        assertEquals(HttpStatusCode.NoContent, response.status)
+        assertEquals(listOf("group-1", "group-2"), events.map { it.first })
+        assertTrue(events.all { it.second.type == LiveEventKind.REVOKED.wireName && it.second.userId == "user-1" })
+    }
+
     private class FriendStore : BackendStore {
         private val users = setOf("user-1", "user-2")
         private var state = "PENDING"
@@ -105,5 +135,12 @@ class SocialInvariantsTest {
             if (accept) state = "ACCEPTED" else state = "DECLINED"
             return FriendRequestResultDto(friendshipId, state)
         }
+    }
+
+    private class AccountStore : BackendStore {
+        override fun findUserById(id: String): UserRecord? = UserRecord("user-1", "rider@example.com", "ignored", "Rider", true).takeIf { it.id == id }
+        override fun isAccessActive(userId: String, issuedAtEpochSeconds: Long): Boolean = userId == "user-1"
+        override fun listGroupIdsForUser(userId: String): List<String> = listOf("group-1", "group-2")
+        override fun deleteAccount(userId: String): Int = 1
     }
 }

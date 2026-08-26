@@ -6,11 +6,11 @@ Base URL: `https://volty.sodove.ru/v1`. JSON uses the same camelCase names and u
 
 | Method | Path | Body / result |
 |---|---|---|
-| POST | `/auth/register` | `{email,password,displayName}` -> `SessionCredentials` |
+| POST | `/auth/register` | `{email,password,displayName}` -> `SessionCredentials`; account is immediately usable, with no email-confirmation gate |
 | POST | `/auth/login` | `{email,password}` -> `SessionCredentials` |
 | POST | `/auth/refresh` | `{refreshToken}` -> rotated `SessionCredentials` |
 | POST | `/auth/logout` | bearer -> `{loggedOut:true}`; revokes all sessions |
-| GET/POST | `/auth/verify` | query `token` or `{token}` -> `{verified:true}` |
+| GET/POST | `/auth/verify` | legacy compatibility endpoint; query `token` or `{token}` -> `{verified:true}`; registration/login do not depend on it |
 | POST | `/auth/password-reset/request` | `{email}` -> `202`; never reveals account existence |
 | POST | `/auth/password-reset` | `{token,newPassword}` -> `{reset:true}` |
 | GET | `/profile` | bearer -> authenticated profile |
@@ -22,6 +22,7 @@ Base URL: `https://volty.sodove.ru/v1`. JSON uses the same camelCase names and u
 | Method | Path | Body / result |
 |---|---|---|
 | GET | `/friends` | bearer -> `List<FriendSummary>` |
+| GET | `/users/search?q=...` | bearer -> `List<UserSearchResult>`; returns opaque `userId`, `displayName`, optional friendship id/state, never email |
 | POST | `/friends/requests` | `{userId}` -> `201` |
 | POST | `/friends/requests/{friendshipId}/respond` | `{accept}` -> result |
 | GET | `/groups` | bearer -> `List<RideGroup>` |
@@ -33,13 +34,19 @@ Groups never become public: membership is required for every group read, share, 
 
 ## Sharing and live snapshots
 
-The client-compatible `POST /groups/{groupId}/sharing` accepts `{groupId,profile,ttlMillis,startedAtEpochMillis}` to start a share. The legacy-compatible `POST /sharing/start` accepts the same body. `profile` is `LOCATION`, `RIDE`, or `FULL`; TTL is positive and capped at 24 hours. Starting a new share revokes the previous share for that user/group.
+The client-compatible `POST /groups/{groupId}/sharing` accepts `{groupId,profile,ttlMillis,startedAtEpochMillis}` to start a share. The legacy-compatible `POST /sharing/start` accepts the same body. `profile` is `LOCATION`, `RIDE`, or `FULL`; TTL is positive and capped at 24 hours. The server clock is authoritative for the session start and expiry, so a device with an incorrect wall clock cannot make sharing fail. Starting a new share revokes the previous share for that user/group.
 
-`POST /groups/{groupId}/sharing/update` accepts `{capturedAtEpochMillis,location,telemetry}`. The same body is also accepted by `POST /groups/{groupId}/sharing` when `ttlMillis` is absent. Location is required and validated. `LOCATION` rejects telemetry; `RIDE` strips full metrics; `FULL` preserves only the capability/known/value fields received from the client. Values are never fabricated by the server. Only the latest update is retained.
+`POST /groups/{groupId}/sharing/update` accepts `{capturedAtEpochMillis,location,telemetry}`. The same body is also accepted by `POST /groups/{groupId}/sharing` when `ttlMillis` is absent. Location coordinates and accuracy are validated, while the server stamps the accepted update time and freshness window itself; client wall-clock timestamps are not trusted. `LOCATION` rejects telemetry; `RIDE` strips full metrics; `FULL` preserves only the capability/known/value fields received from the client. Values are never fabricated by the server. Only the latest update is retained.
+
+`POST /groups/{groupId}/sharing/renew` accepts `{ttlMillis,startedAtEpochMillis}` and renews the current session without changing its profile. The server clock is authoritative for the renewed session start. Renewal rotates the active session and removes the previous live update before the next publish.
 
 `DELETE /groups/{groupId}/sharing` immediately removes the live row and broadcasts `{"type":"share_revoked","userId":"opaque-user-id"}`. `POST /groups/{groupId}/sharing/stop` is an equivalent explicit-stop alias.
 
+Live snapshot participants are roster-complete: `location` and `telemetry` are explicitly nullable JSON fields and are `null` when no accepted live update exists. A location/telemetry row is projected only while its member has current, unexpired sharing. Presence becomes `STALE` after 15 seconds without a live update; this is the single server freshness threshold and matches the client policy.
+
 The authenticated WebSocket is available at both `/v1/ws/groups/{groupId}` (the mobile client path) and `/v1/groups/{groupId}/live`. The first frame is `{"type":"snapshot","snapshot":{"groupId":"...","capturedAtEpochMillis":0,"participants":[]}}`. Expiry broadcasts `{"type":"share_expired","userId":"..."}`. Presence is `ONLINE`, `STALE`, or `OFFLINE`; no BLE address, vehicle id, or route history is part of any payload.
+
+If membership is revoked, the server sends `{"type":"subscription_terminated"}` and closes the WebSocket with a policy-violation close. This is terminal: clients must stop retrying until the user selects a valid group. Transient network closes may retry with backoff and must request a fresh snapshot after reconnecting; they must not erase the last roster locally.
 
 ## Typed errors and voice boundary
 

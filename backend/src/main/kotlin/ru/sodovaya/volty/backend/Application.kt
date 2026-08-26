@@ -114,6 +114,19 @@ class LiveHub(
         sessions.computeIfAbsent(groupId) { ConcurrentHashMap.newKeySet() }.add(LiveSession(userId, session))
     }
 
+    suspend fun addAndRevalidate(
+        groupId: String,
+        userId: String,
+        session: io.ktor.server.websocket.DefaultWebSocketServerSession,
+        stillMember: suspend () -> Boolean,
+    ): Boolean {
+        add(groupId, userId, session)
+        if (stillMember()) return true
+        remove(groupId, session)
+        terminate(LiveSession(userId, session))
+        return false
+    }
+
     fun remove(groupId: String, session: io.ktor.server.websocket.DefaultWebSocketServerSession) {
         sessions[groupId]?.let { members -> members.removeIf { it.session == session }; if (members.isEmpty()) sessions.remove(groupId, members) }
     }
@@ -201,6 +214,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         exception<io.ktor.server.plugins.ContentTransformationException> { call, _ -> call.respondError(HttpStatusCode.BadRequest, "invalid_json", "Request body is invalid") }
         exception<NoSuchElementException> { call, cause -> call.respondError(HttpStatusCode.NotFound, "not_found", cause.message ?: "Resource not found") }
         exception<GroupOwnerRequiredException> { call, cause -> call.respondError(HttpStatusCode.Forbidden, "forbidden", cause.message ?: "Only the group owner can delete it") }
+        exception<GroupOwnerCannotLeaveException> { call, cause -> call.respondError(HttpStatusCode.Forbidden, "group_owner_cannot_leave", cause.message ?: "The sole group owner cannot leave the group") }
         exception<IllegalStateException> { call, cause -> call.respondError(HttpStatusCode.Conflict, "conflict", cause.message ?: "Request conflicts with current state") }
         exception<IllegalArgumentException> { call, cause -> call.respondError(HttpStatusCode.BadRequest, "invalid_request", cause.message ?: "Request is invalid") }
         exception<Throwable> { call, cause -> logger.error("Unhandled request failure", cause); call.respondError(HttpStatusCode.InternalServerError, "server_error", "Internal server error") }
@@ -317,7 +331,12 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                     call.respond(mapOf("loggedOut" to true))
                 }
                 delete("/account") {
-                    val user = call.user(dependencies); dependencies.store.deleteAccount(user.id); dependencies.liveHub.revokeUser(user.id); call.respond(HttpStatusCode.NoContent)
+                    val user = call.user(dependencies)
+                    val affectedGroups = dependencies.store.listGroupIdsForUser(user.id)
+                    dependencies.store.deleteAccount(user.id)
+                    affectedGroups.forEach { groupId -> dependencies.liveHub.broadcast(groupId, LiveEventDto(LiveEventKind.REVOKED.wireName, userId = user.id)) }
+                    dependencies.liveHub.revokeUser(user.id)
+                    call.respond(HttpStatusCode.NoContent)
                 }
                 get("/friends") { call.respond(dependencies.store.listFriends(call.user(dependencies).id)) }
                 get("/users/search") {
@@ -429,7 +448,9 @@ private suspend fun handlePublishSharing(call: ApplicationCall, dependencies: Ap
     if (!validLocation(serverLocation, now)) throw ApiException(HttpStatusCode.BadRequest, "invalid_location", "A valid, fresh location is required while sharing")
     if (!SharingRules.isPublishable(share.startedAtEpochMillis, share.expiresAtEpochMillis, now, now)) throw ApiException(HttpStatusCode.BadRequest, "invalid_timestamp", "Update timestamp is outside the active share window")
     val telemetry = sanitizeTelemetry(body.telemetry, share.profile)
-    dependencies.store.publishSharing(user.id, groupId, serverLocation, telemetry, now, now)
+    if (!dependencies.store.publishSharing(user.id, groupId, serverLocation, telemetry, now, now)) {
+        throw ApiException(HttpStatusCode.Conflict, "sharing_inactive", "Sharing is not active")
+    }
     dependencies.liveHub.broadcast(groupId, LiveEventDto(LiveEventKind.SNAPSHOT.wireName, dependencies.store.snapshot(groupId, now)))
     call.respond(mapOf("published" to true))
 }
@@ -486,7 +507,7 @@ private suspend fun io.ktor.server.websocket.DefaultWebSocketServerSession.serve
         close(io.ktor.websocket.CloseReason(io.ktor.websocket.CloseReason.Codes.VIOLATED_POLICY, "not a group member"))
         return
     }
-    dependencies.liveHub.add(groupId, user.id, this)
+    if (!dependencies.liveHub.addAndRevalidate(groupId, user.id, this) { dependencies.store.isGroupMember(user.id, groupId) }) return
     try {
         dependencies.store.expireShares(nowMillis()).forEach { expireAndBroadcast(dependencies, it) }
         send(Frame.Text(dependencies.json.encodeToString(LiveEventDto(LiveEventKind.SNAPSHOT.wireName, dependencies.store.snapshot(groupId, nowMillis())))))

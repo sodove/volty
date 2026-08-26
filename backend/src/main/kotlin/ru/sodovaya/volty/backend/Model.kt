@@ -223,6 +223,7 @@ class ApiException(
 ) : RuntimeException(message)
 
 class GroupOwnerRequiredException : RuntimeException("Only the group owner can delete it")
+class GroupOwnerCannotLeaveException : RuntimeException("The sole group owner cannot leave the group")
 
 object Validation {
     private val emailRegex = Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$")
@@ -345,12 +346,20 @@ object SharingRules {
 
     fun isLocationFresh(staleAfter: Long, now: Long): Boolean = staleAfter > now
 
+    fun presence(hasActiveShare: Boolean, lastSeenAt: Long?, now: Long): String = when {
+        !hasActiveShare -> "OFFLINE"
+        lastSeenAt == null || lastSeenAt + LIVE_LOCATION_FRESHNESS_MILLIS <= now -> "STALE"
+        else -> "ONLINE"
+    }
+
     fun isTtlValid(ttlMillis: Long, maxTtlMillis: Long): Boolean =
         ttlMillis > 0L && ttlMillis <= maxTtlMillis
 
     fun isPublishable(startedAt: Long, expiresAt: Long, capturedAt: Long, now: Long): Boolean =
         now >= startedAt && now < expiresAt && capturedAt in startedAt..now
 }
+
+const val LIVE_LOCATION_FRESHNESS_MILLIS = 15_000L
 
 enum class LiveEventKind(val wireName: String) {
     SNAPSHOT("snapshot"),
