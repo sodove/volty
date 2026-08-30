@@ -14,6 +14,7 @@ import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.LiveKitVoiceRoomRepository
 import ru.sodovaya.volty.data.social.BmsSocialTelemetrySource
 import ru.sodovaya.volty.data.social.DefaultSocialRideRuntime
+import ru.sodovaya.volty.data.navigation.HttpNavigationRepository
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.VehicleRepository
@@ -25,6 +26,7 @@ import ru.sodovaya.volty.domain.social.VoiceRoomRepository
 import ru.sodovaya.volty.domain.social.SocialTelemetrySource
 import ru.sodovaya.volty.domain.social.SocialShareSessionCoordinator
 import ru.sodovaya.volty.domain.social.SocialRideRuntime
+import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import org.koin.core.module.dsl.singleOf
 import org.koin.dsl.bind
 import org.koin.dsl.binds
@@ -46,6 +48,7 @@ val appModule = module {
     )
     single { AlertEngine(get(), get()) }
     single<SocialTransport> { HttpSocialTransport() }
+    single<NavigationRepository> { HttpNavigationRepository() }
     singleOf(::DefaultSocialRepository) bind SocialRepository::class
     single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }
     single<SocialTelemetrySource> { BmsSocialTelemetrySource(get()) }
