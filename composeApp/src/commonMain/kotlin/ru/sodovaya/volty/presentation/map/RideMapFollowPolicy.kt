@@ -1,16 +1,16 @@
 package ru.sodovaya.volty.presentation.map
 
-internal enum class RideMapFollowMode {
+enum class RideMapFollowMode {
     FOLLOWING,
     FREE,
 }
 
-internal enum class RideMapCameraMoveOrigin {
+enum class RideMapCameraMoveOrigin {
     GESTURE,
     PROGRAMMATIC,
 }
 
-internal data class RideMapFollowState(
+data class RideMapFollowState(
     val mode: RideMapFollowMode = RideMapFollowMode.FOLLOWING,
     val lastGestureAtMillis: Long? = null,
 )
