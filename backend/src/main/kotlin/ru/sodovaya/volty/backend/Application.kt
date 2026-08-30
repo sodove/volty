@@ -69,10 +69,15 @@ class AppDependencies(
     val json: Json = backendJson(),
     val testMode: Boolean = false,
     val liveHub: LiveHub = LiveHub(json),
+    val navigationProvider: NavigationProvider = navigationProviderFor(config),
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
     val rateLimiter = RateLimiter(maxRequests = 120, windowSeconds = 60)
+    val navigationSearchLimiter = RateLimiter(maxRequests = 20, windowSeconds = 60)
+    val navigationRouteLimiter = RateLimiter(maxRequests = 10, windowSeconds = 60)
+    val navigationSearchCache = NavigationTtlCache<List<NavigationPlaceDto>>(maxEntries = 256, ttlMillis = 60_000L)
+    val navigationRouteCache = NavigationTtlCache<NavigationRouteResponse>(maxEntries = 256, ttlMillis = 30_000L)
     val voiceService = VoiceService(config)
 
     companion object {
@@ -247,7 +252,8 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
 
     routing {
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
-        route("/v1") {
+            route("/v1") {
+            installNavigationRoutes(dependencies)
             post("/auth/register") {
                 val body = call.receive<RegisterRequest>()
                 val email = Validation.email(body.email).orBadRequest()
@@ -576,7 +582,7 @@ private fun ApplicationCall.user(dependencies: AppDependencies): UserRecord {
 
 private fun UserRecord.toProfile() = ProfileResponse(id, displayName, emailVerified = emailVerified)
 private fun ApplicationCall.groupId(): String = parameters["groupId"] ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "groupId is required")
-private fun ApplicationCall.requestId(): String = callId ?: "unknown"
+internal fun ApplicationCall.requestId(): String = callId ?: "unknown"
 private suspend fun ApplicationCall.respondError(status: HttpStatusCode, code: String, message: String, details: Map<String, String>? = null) = respond(status, ApiError(code, message, requestId(), details))
 private fun <T> Result<T>.orBadRequest(): T = getOrElse { throw ApiException(HttpStatusCode.BadRequest, "invalid_request", it.message ?: "Request is invalid") }
 private fun Throwable.isUniqueViolation(): Boolean = this is java.sql.SQLException && sqlState == "23505"

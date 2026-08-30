@@ -27,6 +27,9 @@ dependencies {
     implementation("io.ktor:ktor-server-call-logging:$ktorVersion")
     implementation("io.ktor:ktor-server-default-headers:$ktorVersion")
     implementation("io.ktor:ktor-server-call-id:$ktorVersion")
+    implementation("io.ktor:ktor-client-core:$ktorVersion")
+    implementation("io.ktor:ktor-client-cio:$ktorVersion")
+    implementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
     implementation("io.livekit:livekit-server:0.15.0")
     implementation("com.auth0:java-jwt:4.5.0")
     implementation("com.zaxxer:HikariCP:6.3.0")
@@ -36,6 +39,7 @@ dependencies {
 
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion")
     testImplementation("io.ktor:ktor-client-content-negotiation:$ktorVersion")
+    testImplementation("io.ktor:ktor-client-mock:$ktorVersion")
     testImplementation("io.ktor:ktor-client-websockets:$ktorVersion")
     testImplementation("io.ktor:ktor-serialization-kotlinx-json:$ktorVersion")
     testImplementation("org.jetbrains.kotlin:kotlin-test")
