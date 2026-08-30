@@ -6,7 +6,7 @@ import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
 
-internal data class RideMapTrailSample(
+data class RideMapTrailSample(
     val latitude: Double,
     val longitude: Double,
     val timestampMillis: Long,
