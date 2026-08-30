@@ -91,13 +91,27 @@ sealed interface NavigationAction {
         val failure: NavigationFailure,
         val requestGeneration: Long = 0L,
     ) : NavigationAction
+    data class RerouteStarted(
+        val requestGeneration: Long,
+        val attempt: Int,
+    ) : NavigationAction
+    data class RerouteLoaded(
+        val plan: RoutePlan,
+        val requestGeneration: Long,
+    ) : NavigationAction
+    data class RerouteFailed(
+        val failure: NavigationFailure,
+        val requestGeneration: Long,
+    ) : NavigationAction
 
     data class AlternativeSelected(val routeId: String) : NavigationAction
     data object StartNavigation : NavigationAction
     data class GuidanceUpdated(val guidance: RouteGuidance) : NavigationAction
     data class BeginRerouting(val attempt: Int) : NavigationAction
-    data class RerouteFailed(val failure: NavigationFailure) : NavigationAction
     data object Arrived : NavigationAction
+    data object GuidanceCleared : NavigationAction
+    data object RequestsCancelled : NavigationAction
+    data object LifecycleLocationUnavailable : NavigationAction
     data object StopNavigation : NavigationAction
 
     data class LocationStatusChanged(val status: LocationUiStatus) : NavigationAction
@@ -246,6 +260,42 @@ object NavigationReducer {
             state
         }
 
+        is NavigationAction.RerouteStarted -> if (isCurrent(state, action.requestGeneration)) {
+            when (val phase = state.phase) {
+                is NavigationPhase.Rerouting -> state.copy(
+                    phase = phase.copy(attempt = action.attempt, failure = null),
+                )
+                else -> state
+            }
+        } else {
+            state
+        }
+
+        is NavigationAction.RerouteLoaded -> if (isCurrent(state, action.requestGeneration)) {
+            when (state.phase) {
+                is NavigationPhase.Rerouting -> state.copy(
+                    phase = NavigationPhase.Navigating(
+                        plan = action.plan,
+                        selectedRouteId = action.plan.alternatives.first().id,
+                        guidance = null,
+                    ),
+                    arrivalSoc = unknownArrivalSoc(),
+                )
+                else -> state
+            }
+        } else {
+            state
+        }
+
+        is NavigationAction.RerouteFailed -> if (isCurrent(state, action.requestGeneration)) {
+            when (val phase = state.phase) {
+                is NavigationPhase.Rerouting -> state.copy(phase = phase.copy(failure = action.failure))
+                else -> state
+            }
+        } else {
+            state
+        }
+
         is NavigationAction.AlternativeSelected -> state.copy(phase = state.phase.selectAlternative(action.routeId))
 
         NavigationAction.StartNavigation -> when (val phase = state.phase) {
@@ -274,12 +324,9 @@ object NavigationReducer {
                     attempt = action.attempt,
                     failure = null,
                 ),
+                requestGeneration = nextGeneration(state),
+                arrivalSoc = unknownArrivalSoc(),
             )
-            else -> state
-        }
-
-        is NavigationAction.RerouteFailed -> when (val phase = state.phase) {
-            is NavigationPhase.Rerouting -> state.copy(phase = phase.copy(failure = action.failure))
             else -> state
         }
 
@@ -289,6 +336,30 @@ object NavigationReducer {
             )
             else -> state
         }
+
+        NavigationAction.GuidanceCleared -> when (val phase = state.phase) {
+            is NavigationPhase.Navigating -> state.copy(phase = phase.copy(guidance = null))
+            else -> state
+        }
+
+        NavigationAction.RequestsCancelled -> state.copy(
+            phase = when (val phase = state.phase) {
+                is NavigationPhase.Planning -> phase.copy(requestInFlight = false)
+                else -> phase
+            },
+            requestGeneration = nextGeneration(state),
+        )
+
+        NavigationAction.LifecycleLocationUnavailable -> state.copy(
+            phase = when (val phase = state.phase) {
+                is NavigationPhase.Navigating -> phase.copy(guidance = null)
+                is NavigationPhase.Planning -> phase.copy(requestInFlight = false)
+                else -> phase
+            },
+            locationStatus = LocationUiStatus.NOT_REQUESTED,
+            arrivalSoc = unknownArrivalSoc(),
+            requestGeneration = nextGeneration(state),
+        )
 
         NavigationAction.StopNavigation -> state.copy(
             phase = NavigationPhase.Idle,
@@ -319,7 +390,7 @@ object NavigationReducer {
             this
         }
         is NavigationPhase.Navigating -> if (plan.alternatives.any { it.id == routeId }) {
-            copy(selectedRouteId = routeId)
+            copy(selectedRouteId = routeId, guidance = null)
         } else {
             this
         }

@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.presentation.navigation
 
 import com.arkivanov.decompose.ComponentContext
+import com.arkivanov.essenty.lifecycle.doOnStart
+import com.arkivanov.essenty.lifecycle.doOnStop
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineDispatcher
@@ -26,8 +28,12 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.RouteProgressEngine
+import ru.sodovaya.volty.domain.navigation.RouteProgressUpdate
+import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import kotlin.math.max
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -73,9 +79,15 @@ class DefaultLightNavigationComponent(
     private var permissionDeniedOverride = false
     private var permissionGrantedOverride = false
     private var suppressRepositoryLocationStatus = false
+    private var lifecycleStopped = false
+    private val progressEngine = RouteProgressEngine()
+    private var rerouteJob: Job? = null
+    private var lastRerouteEpisodeId: Long? = null
     private var closed = false
 
     init {
+        lifecycle.doOnStart { onLifecycleStarted() }
+        lifecycle.doOnStop { onLifecycleStopped() }
         lifecycle.doOnDestroy { close() }
         scope.launch {
             locationRepository.state.collect { locationState ->
@@ -84,6 +96,7 @@ class DefaultLightNavigationComponent(
                         current.copy(locationStatus = locationUiStatus(locationState))
                     }
                 }
+                if (!closed && !lifecycleStopped) processNavigationLocation(locationState)
             }
         }
     }
@@ -103,6 +116,10 @@ class DefaultLightNavigationComponent(
         if (closed) return
         searchJob?.cancel()
         routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(null)
+        lastRerouteEpisodeId = null
+        releaseNavigationDemand()
         reduce(NavigationAction.QueryChanged(query))
         if (query.trim().length < MIN_SEARCH_LENGTH) return
         scheduleSearch(query)
@@ -112,12 +129,20 @@ class DefaultLightNavigationComponent(
         if (closed) return
         searchJob?.cancel()
         routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(null)
+        lastRerouteEpisodeId = null
+        releaseNavigationDemand()
         reduce(NavigationAction.PlaceSelected(place))
     }
 
     override fun onProfileSelected(profile: RouteProfile) {
         if (closed) return
         routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(null)
+        lastRerouteEpisodeId = null
+        releaseNavigationDemand()
         reduce(NavigationAction.ProfileSelected(profile))
     }
 
@@ -129,27 +154,45 @@ class DefaultLightNavigationComponent(
 
     override fun onAlternativeSelected(routeId: String) {
         if (closed) return
+        val before = _state.value.phase
         reduce(NavigationAction.AlternativeSelected(routeId))
+        val after = _state.value.phase
+        if (before is NavigationPhase.Navigating &&
+            after is NavigationPhase.Navigating &&
+            before.selectedRouteId != after.selectedRouteId
+        ) {
+            progressEngine.reset(after.selectedRouteId)
+            lastRerouteEpisodeId = null
+        }
     }
 
     override fun onStartNavigation() {
-        if (closed) return
+        if (closed || lifecycleStopped) return
         val before = _state.value.phase
+        if (before is NavigationPhase.RouteReady && freshOrigin() == null) return
         reduce(NavigationAction.StartNavigation)
         if (before is NavigationPhase.RouteReady && _state.value.phase is NavigationPhase.Navigating) {
+            progressEngine.reset(before.selectedRouteId)
+            lastRerouteEpisodeId = null
             ensureNavigationDemand()
         }
     }
 
     override fun onRetry() {
         if (closed) return
-        val phase = _state.value.phase as? NavigationPhase.Planning ?: return
-        if (phase.requestInFlight) return
-        if (phase.destination != null && phase.profile != null && phase.profileConfirmed) {
-            requestRouteIfPossible()
-        } else if (phase.query.trim().length >= MIN_SEARCH_LENGTH) {
-            searchJob?.cancel()
-            scheduleSearch(phase.query)
+        if (lifecycleStopped) return
+        when (val phase = _state.value.phase) {
+            is NavigationPhase.Rerouting -> retryRerouteManually(phase)
+            is NavigationPhase.Planning -> {
+                if (phase.requestInFlight) return
+                if (phase.destination != null && phase.profile != null && phase.profileConfirmed) {
+                    requestRouteIfPossible()
+                } else if (phase.query.trim().length >= MIN_SEARCH_LENGTH) {
+                    searchJob?.cancel()
+                    scheduleSearch(phase.query)
+                }
+            }
+            else -> Unit
         }
     }
 
@@ -157,6 +200,9 @@ class DefaultLightNavigationComponent(
         if (closed) return
         searchJob?.cancel()
         routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(null)
+        lastRerouteEpisodeId = null
         suppressRepositoryLocationStatus = true
         reduce(NavigationAction.StopNavigation)
         releaseLocationDemands()
@@ -168,6 +214,7 @@ class DefaultLightNavigationComponent(
         if (!visible) {
             releaseMapDemand()
         } else if (canUseLocation()) {
+            if (lifecycleStopped) return
             suppressRepositoryLocationStatus = false
             ensureMapDemand()
         } else {
@@ -186,7 +233,7 @@ class DefaultLightNavigationComponent(
             return
         }
         refreshLocationState()
-        if (mapVisible) ensureMapDemand()
+        if (mapVisible && !lifecycleStopped) ensureMapDemand()
     }
 
     override fun onCameraGesture(nowElapsedMillis: Long) {
@@ -195,7 +242,7 @@ class DefaultLightNavigationComponent(
     }
 
     override fun onRecenterRequested() {
-        if (closed) return
+        if (closed || lifecycleStopped) return
         suppressRepositoryLocationStatus = false
         reduce(NavigationAction.RecenterRequested)
         refreshLocationState()
@@ -205,8 +252,12 @@ class DefaultLightNavigationComponent(
     override fun close() {
         if (closed) return
         closed = true
+        lifecycleStopped = true
         searchJob?.cancel()
         routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(null)
+        lastRerouteEpisodeId = null
         reduce(NavigationAction.StopNavigation)
 
         val releaseMap = mapDemandOwned
@@ -250,6 +301,7 @@ class DefaultLightNavigationComponent(
     }
 
     private fun requestRouteIfPossible() {
+        if (closed || lifecycleStopped) return
         val phase = _state.value.phase as? NavigationPhase.Planning ?: return
         if (!phase.profileConfirmed || phase.destination == null || phase.profile == null) return
         if (phase.requestInFlight) return
@@ -261,7 +313,7 @@ class DefaultLightNavigationComponent(
         routeJob?.cancel()
         routeJob = scope.launch {
             ensureNavigationDemand()
-            if (_state.value.requestGeneration != requestGeneration || closed) return@launch
+            if (_state.value.requestGeneration != requestGeneration || closed || lifecycleStopped) return@launch
             val result = try {
                 navigationRepository.routes(
                     RouteRequest(
@@ -276,7 +328,7 @@ class DefaultLightNavigationComponent(
             } catch (_: Throwable) {
                 NavigationResult.Failure(NavigationFailure.Offline)
             }
-            if (_state.value.requestGeneration != requestGeneration || closed) return@launch
+            if (_state.value.requestGeneration != requestGeneration || closed || lifecycleStopped) return@launch
             when (result) {
                 is NavigationResult.Success -> reduce(
                     NavigationAction.RouteLoaded(
@@ -289,7 +341,158 @@ class DefaultLightNavigationComponent(
                     releaseNavigationDemand()
                 }
             }
+            if (result is NavigationResult.Success) {
+                progressEngine.reset(null)
+                lastRerouteEpisodeId = null
+            }
         }
+    }
+
+    private fun processNavigationLocation(locationState: RideLocationState) {
+        val phase = _state.value.phase as? NavigationPhase.Navigating ?: return
+        val route = phase.plan.alternatives.firstOrNull { it.id == phase.selectedRouteId } ?: return
+        val fix = (locationState.status as? RideLocationStatus.Available)?.fix
+        when (val update = progressEngine.update(route, fix, nowEpochMillis())) {
+            is RouteProgressUpdate.Unavailable -> reduce(NavigationAction.GuidanceCleared)
+            is RouteProgressUpdate.OnRoute -> reduce(NavigationAction.GuidanceUpdated(update.guidance))
+            is RouteProgressUpdate.OffRouteCandidate -> Unit
+            is RouteProgressUpdate.OffRouteConfirmed -> startAutomaticReroute(
+                plan = phase.plan,
+                fix = fix,
+                episodeId = update.episodeId,
+            )
+            RouteProgressUpdate.Arrived -> {
+                reduce(NavigationAction.Arrived)
+                releaseNavigationDemand()
+            }
+        }
+    }
+
+    private fun startAutomaticReroute(
+        plan: RoutePlan,
+        fix: RideLocationFix?,
+        episodeId: Long,
+    ) {
+        if (closed || lifecycleStopped || fix == null) return
+        if (lastRerouteEpisodeId == episodeId || rerouteJob?.isActive == true) return
+        val phase = _state.value.phase as? NavigationPhase.Navigating ?: return
+        if (phase.plan != plan) return
+
+        lastRerouteEpisodeId = episodeId
+        rerouteJob?.cancel()
+        reduce(NavigationAction.BeginRerouting(attempt = 1))
+        val requestGeneration = _state.value.requestGeneration
+        rerouteJob = scope.launch {
+            runReroute(
+                plan = plan,
+                requestGeneration = requestGeneration,
+                initialOrigin = fix.coordinate,
+                automaticRetries = true,
+            )
+        }
+    }
+
+    private fun retryRerouteManually(phase: NavigationPhase.Rerouting) {
+        val origin = freshOrigin() ?: return
+        rerouteJob?.cancel()
+        val requestGeneration = _state.value.requestGeneration
+        reduce(
+            NavigationAction.RerouteStarted(
+                requestGeneration = requestGeneration,
+                attempt = phase.attempt + 1,
+            ),
+        )
+        rerouteJob = scope.launch {
+            runReroute(
+                plan = phase.plan,
+                requestGeneration = requestGeneration,
+                initialOrigin = origin.coordinate,
+                automaticRetries = false,
+            )
+        }
+    }
+
+    private suspend fun runReroute(
+        plan: RoutePlan,
+        requestGeneration: Long,
+        initialOrigin: GeoCoordinate,
+        automaticRetries: Boolean,
+    ) {
+        var retryNumber = 0
+        var retryAfterMillis = 0L
+        while (true) {
+            if (!isCurrentRerouting(requestGeneration)) return
+            if (retryNumber > 0) {
+                val baseDelayMillis = if (retryNumber == 1) FIRST_REROUTE_RETRY_MILLIS else SECOND_REROUTE_RETRY_MILLIS
+                delay(max(baseDelayMillis, retryAfterMillis))
+                if (!isCurrentRerouting(requestGeneration)) return
+            }
+
+            val origin = if (retryNumber == 0) {
+                initialOrigin
+            } else {
+                freshOrigin()?.coordinate ?: return
+            }
+            if (retryNumber > 0) {
+                reduce(
+                    NavigationAction.RerouteStarted(
+                        requestGeneration = requestGeneration,
+                        attempt = retryNumber + 1,
+                    ),
+                )
+            }
+            val result = try {
+                navigationRepository.routes(
+                    RouteRequest(
+                        origin = origin,
+                        destination = plan.destination,
+                        profile = plan.profile,
+                        languageTag = languageTag,
+                    ),
+                )
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Throwable) {
+                NavigationResult.Failure(NavigationFailure.Offline)
+            }
+            if (!isCurrentRerouting(requestGeneration)) return
+            when (result) {
+                is NavigationResult.Success -> {
+                    reduce(NavigationAction.RerouteLoaded(result.value, requestGeneration))
+                    progressEngine.reset(selectedRouteIdOrNull())
+                    lastRerouteEpisodeId = null
+                    return
+                }
+                is NavigationResult.Failure -> {
+                    reduce(NavigationAction.RerouteFailed(result.reason, requestGeneration))
+                    if (!automaticRetries || retryNumber >= MAX_AUTOMATIC_REROUTE_RETRIES) return
+                    retryNumber += 1
+                    retryAfterMillis = retryAfterMillis(result.reason)
+                }
+            }
+        }
+    }
+
+    private fun isCurrentRerouting(requestGeneration: Long): Boolean =
+        !closed &&
+            !lifecycleStopped &&
+            _state.value.requestGeneration == requestGeneration &&
+            _state.value.phase is NavigationPhase.Rerouting
+
+    private fun selectedRouteIdOrNull(): String? = when (val phase = _state.value.phase) {
+        is NavigationPhase.Navigating -> phase.selectedRouteId
+        is NavigationPhase.Arrived -> phase.selectedRouteId
+        is NavigationPhase.RouteReady -> phase.selectedRouteId
+        is NavigationPhase.Rerouting -> phase.selectedRouteId
+        NavigationPhase.Idle -> null
+        is NavigationPhase.Planning -> null
+    }
+
+    private fun retryAfterMillis(failure: NavigationFailure): Long = when (failure) {
+        is NavigationFailure.RateLimited -> failure.retryAfterSeconds
+            .coerceAtLeast(0L)
+            .coerceAtMost(Long.MAX_VALUE / MILLIS_PER_SECOND) * MILLIS_PER_SECOND
+        else -> 0L
     }
 
     private fun isCurrentPlanning(requestGeneration: Long, query: String): Boolean {
@@ -325,7 +528,7 @@ class DefaultLightNavigationComponent(
     }
 
     private fun ensureMapDemand() {
-        if (mapDemandOwned || !mapVisible || !canUseLocation()) return
+        if (closed || lifecycleStopped || mapDemandOwned || !mapVisible || !canUseLocation()) return
         mapDemandOwned = true
         scope.launch {
             runCatching { locationRepository.setDemand(LocationConsumer.MAP, true) }
@@ -333,7 +536,7 @@ class DefaultLightNavigationComponent(
     }
 
     private fun ensureNavigationDemand() {
-        if (navigationDemandOwned) return
+        if (closed || lifecycleStopped || navigationDemandOwned) return
         navigationDemandOwned = true
         scope.launch {
             runCatching { locationRepository.setDemand(LocationConsumer.NAVIGATION, true) }
@@ -359,6 +562,33 @@ class DefaultLightNavigationComponent(
     private fun releaseLocationDemands() {
         releaseMapDemand()
         releaseNavigationDemand()
+    }
+
+    private fun onLifecycleStopped() {
+        if (closed || lifecycleStopped) return
+        lifecycleStopped = true
+        suppressRepositoryLocationStatus = true
+        searchJob?.cancel()
+        routeJob?.cancel()
+        rerouteJob?.cancel()
+        progressEngine.reset(selectedRouteIdOrNull())
+        lastRerouteEpisodeId = null
+        reduce(NavigationAction.RequestsCancelled)
+        reduce(NavigationAction.LifecycleLocationUnavailable)
+        releaseLocationDemands()
+    }
+
+    private fun onLifecycleStarted() {
+        if (closed) return
+        lifecycleStopped = false
+        suppressRepositoryLocationStatus = false
+        refreshLocationState()
+        if (mapVisible && canUseLocation()) ensureMapDemand()
+        when (_state.value.phase) {
+            is NavigationPhase.Navigating,
+            is NavigationPhase.Rerouting -> ensureNavigationDemand()
+            else -> Unit
+        }
     }
 
     private fun locationUiStatus(state: RideLocationState): LocationUiStatus {
@@ -387,5 +617,9 @@ class DefaultLightNavigationComponent(
         const val SEARCH_DEBOUNCE_MILLIS = 350L
         const val MAX_LOCATION_AGE_MILLIS = 5_000L
         const val MAX_LOCATION_ACCURACY_METERS = 50.0
+        const val FIRST_REROUTE_RETRY_MILLIS = 2_000L
+        const val SECOND_REROUTE_RETRY_MILLIS = 5_000L
+        const val MAX_AUTOMATIC_REROUTE_RETRIES = 2
+        const val MILLIS_PER_SECOND = 1_000L
     }
 }
