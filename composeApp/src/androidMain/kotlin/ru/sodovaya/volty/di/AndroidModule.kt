@@ -2,6 +2,7 @@ package ru.sodovaya.volty.di
 
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
+import ru.sodovaya.volty.data.location.AndroidRideLocationRepository
 import ru.sodovaya.volty.data.social.AndroidSocialCredentialStore
 import ru.sodovaya.volty.data.social.AndroidLiveKitVoiceRoomEngine
 import ru.sodovaya.volty.data.social.AndroidLocationProvider
@@ -16,14 +17,16 @@ import ru.sodovaya.volty.permissions.PermissionsChecker
 import ru.sodovaya.volty.service.ServiceController
 import ru.sodovaya.volty.domain.social.LocationProvider
 import ru.sodovaya.volty.domain.social.VoiceRoomEngine
+import ru.sodovaya.volty.domain.location.RideLocationRepository
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
     single { DataStoreFactory(androidContext()) }
+    single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
-    single<LocationProvider> { AndroidLocationProvider(androidContext()) }
+    single<LocationProvider> { AndroidLocationProvider(get()) }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext()) }
     single { PermissionsChecker(androidContext()) }
     single<Notifier> { AndroidNotifier(androidContext()) }
