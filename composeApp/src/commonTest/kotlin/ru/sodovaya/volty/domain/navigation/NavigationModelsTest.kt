@@ -10,7 +10,9 @@ class NavigationModelsTest {
         assertFailsWith<IllegalArgumentException> { GeoCoordinate(Double.NaN, 60.6) }
         assertFailsWith<IllegalArgumentException> { GeoCoordinate(56.8, Double.POSITIVE_INFINITY) }
         assertFailsWith<IllegalArgumentException> { GeoCoordinate(90.001, 60.6) }
+        assertFailsWith<IllegalArgumentException> { GeoCoordinate(-90.001, 60.6) }
         assertFailsWith<IllegalArgumentException> { GeoCoordinate(56.8, -180.001) }
+        assertFailsWith<IllegalArgumentException> { GeoCoordinate(56.8, 180.001) }
 
         assertEquals(GeoCoordinate(-90.0, -180.0), GeoCoordinate(-90.0, -180.0))
         assertEquals(GeoCoordinate(90.0, 180.0), GeoCoordinate(90.0, 180.0))
@@ -19,6 +21,70 @@ class NavigationModelsTest {
     @Test
     fun route_rejects_short_geometry_and_invalid_shape_indices() {
         val destination = coordinate(56.801, 60.601)
+        val geometry = listOf(coordinate(56.8, 60.6), destination)
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteManeuver(
+                id = "negative-shape-index",
+                kind = ManeuverKind.ARRIVE,
+                instruction = "Arrive",
+                streetName = null,
+                shapeIndex = -1,
+                distanceMeters = 0.0,
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteManeuver(
+                id = "non-finite-maneuver-distance",
+                kind = ManeuverKind.ARRIVE,
+                instruction = "Arrive",
+                streetName = null,
+                shapeIndex = 1,
+                distanceMeters = Double.NaN,
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteManeuver(
+                id = "negative-maneuver-distance",
+                kind = ManeuverKind.ARRIVE,
+                instruction = "Arrive",
+                streetName = null,
+                shapeIndex = 1,
+                distanceMeters = -1.0,
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteAlternative(
+                id = "non-finite-route-distance",
+                distanceMeters = Double.NaN,
+                durationSeconds = 30L,
+                geometry = geometry,
+                maneuvers = listOf(arrival(shapeIndex = 1)),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteAlternative(
+                id = "negative-route-distance",
+                distanceMeters = -1.0,
+                durationSeconds = 30L,
+                geometry = geometry,
+                maneuvers = listOf(arrival(shapeIndex = 1)),
+            )
+        }
+
+        assertFailsWith<IllegalArgumentException> {
+            RouteAlternative(
+                id = "zero-route-duration",
+                distanceMeters = 100.0,
+                durationSeconds = 0L,
+                geometry = geometry,
+                maneuvers = listOf(arrival(shapeIndex = 1)),
+            )
+        }
 
         assertFailsWith<IllegalArgumentException> {
             RouteAlternative(
@@ -35,18 +101,8 @@ class NavigationModelsTest {
                 id = "outside",
                 distanceMeters = 100.0,
                 durationSeconds = 30L,
-                geometry = listOf(coordinate(56.8, 60.6), destination),
+                geometry = geometry,
                 maneuvers = listOf(arrival(shapeIndex = 2)),
-            )
-        }
-
-        assertFailsWith<IllegalArgumentException> {
-            RouteAlternative(
-                id = "before-geometry",
-                distanceMeters = 100.0,
-                durationSeconds = 30L,
-                geometry = listOf(coordinate(56.8, 60.6), destination),
-                maneuvers = listOf(arrival(shapeIndex = -1)),
             )
         }
 
@@ -55,7 +111,7 @@ class NavigationModelsTest {
                 id = "empty-maneuvers",
                 distanceMeters = 100.0,
                 durationSeconds = 30L,
-                geometry = listOf(coordinate(56.8, 60.6), destination),
+                geometry = geometry,
                 maneuvers = emptyList(),
             )
         }
@@ -65,7 +121,7 @@ class NavigationModelsTest {
                 id = "does-not-arrive",
                 distanceMeters = 100.0,
                 durationSeconds = 30L,
-                geometry = listOf(coordinate(56.8, 60.6), destination),
+                geometry = geometry,
                 maneuvers = listOf(
                     RouteManeuver(
                         id = "straight",
