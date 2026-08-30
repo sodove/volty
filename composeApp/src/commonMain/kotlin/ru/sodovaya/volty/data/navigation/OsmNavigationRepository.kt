@@ -6,11 +6,15 @@ import io.ktor.client.request.header
 import io.ktor.client.request.parameter
 import io.ktor.client.request.url
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsText
+import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.fromHttpToGmtDate
 import io.ktor.http.isSuccess
+import io.ktor.util.date.GMTDate
+import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CancellationException
+import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
@@ -53,11 +57,11 @@ class OsmNavigationRepository(
             header(HttpHeaders.AcceptLanguage, language.acceptLanguage)
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
-        val body = response.bodyAsText()
-        response.toResult(body) { decodePhoton(body) }
+        val body = response.readBoundedBody()
+        response.toResult(body) { text -> decodePhoton(text) }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Throwable) {
+    } catch (_: Exception) {
         NavigationResult.Failure(NavigationFailure.Offline)
     }
 
@@ -77,12 +81,12 @@ class OsmNavigationRepository(
             header(HttpHeaders.AcceptLanguage, language.acceptLanguage)
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
-        val body = response.bodyAsText()
+        val body = response.readBoundedBody()
         val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
-        response.toResult(body) { decodeRoutePlan(body, request, limit) }
+        response.toResult(body) { text -> decodeRoutePlan(text, request, limit) }
     } catch (cancelled: CancellationException) {
         throw cancelled
-    } catch (_: Throwable) {
+    } catch (_: Exception) {
         NavigationResult.Failure(NavigationFailure.Offline)
     }
 
@@ -252,6 +256,7 @@ class OsmNavigationRepository(
         "right" -> ManeuverKind.RIGHT
         "sharp right" -> ManeuverKind.SHARP_RIGHT
         "straight" -> ManeuverKind.STRAIGHT
+        "uturn", "u-turn" -> ManeuverKind.U_TURN
         else -> null
     }
 
@@ -338,22 +343,29 @@ class OsmNavigationRepository(
         return closestIndex
     }
 
-    private suspend fun <T> HttpResponse.toResult(body: String, decode: () -> T): NavigationResult<T> {
-        if (body.length > MAX_RESPONSE_CHARS) {
-            return NavigationResult.Failure(NavigationFailure.MalformedResponse)
+    private suspend fun HttpResponse.readBoundedBody(): BoundedBody {
+        val contentLength = headers[HttpHeaders.ContentLength]?.trim()?.toLongOrNull()
+        if (contentLength != null && contentLength >= MAX_RESPONSE_BYTES) {
+            return BoundedBody.TooLarge
         }
-        if (status.isSuccess()) {
-            return try {
-                NavigationResult.Success(decode())
-            } catch (_: NoRouteResponseException) {
-                NavigationResult.Failure(NavigationFailure.NoRoute)
-            } catch (cancelled: CancellationException) {
-                throw cancelled
-            } catch (_: Throwable) {
-                NavigationResult.Failure(NavigationFailure.MalformedResponse)
-            }
+
+        val bytes = bodyAsChannel()
+            .readRemaining(MAX_RESPONSE_BYTES)
+            .readByteArray()
+        if (bytes.size >= MAX_RESPONSE_BYTES) {
+            return BoundedBody.TooLarge
         }
-        return when {
+        val text = bytes.decodeToString()
+        return if (text.length > MAX_RESPONSE_CHARS) {
+            BoundedBody.TooLarge
+        } else {
+            BoundedBody.Text(text)
+        }
+    }
+
+    private fun <T> HttpResponse.toResult(body: BoundedBody, decode: (String) -> T): NavigationResult<T> {
+        if (!status.isSuccess()) {
+            return when {
             status == HttpStatusCode.TooManyRequests ->
                 NavigationResult.Failure(NavigationFailure.RateLimited(retryAfterSeconds()))
             status.value in 500..599 ->
@@ -361,22 +373,47 @@ class OsmNavigationRepository(
             status.value in 400..499 ->
                 NavigationResult.Failure(NavigationFailure.InvalidRequest("Navigation request was rejected"))
             else -> NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
+            }
+        }
+        if (body is BoundedBody.TooLarge) {
+            return NavigationResult.Failure(NavigationFailure.MalformedResponse)
+        }
+        val text = body.value
+        return try {
+            NavigationResult.Success(decode(text))
+        } catch (_: NoRouteResponseException) {
+            NavigationResult.Failure(NavigationFailure.NoRoute)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            NavigationResult.Failure(NavigationFailure.MalformedResponse)
         }
     }
 
-    private fun HttpResponse.retryAfterSeconds(): Long =
-        headers[HttpHeaders.RetryAfter]
-            ?.trim()
-            ?.toLongOrNull()
-            ?.coerceAtLeast(1L)
-            ?: DEFAULT_RETRY_AFTER_SECONDS
+    private fun HttpResponse.retryAfterSeconds(): Long {
+        val value = headers[HttpHeaders.RetryAfter]?.trim()
+            ?: return DEFAULT_RETRY_AFTER_SECONDS
+        value.toLongOrNull()?.let { return it.coerceAtLeast(1L) }
+        return try {
+            ((value.fromHttpToGmtDate().timestamp - GMTDate().timestamp) / 1000L)
+                .coerceAtLeast(1L)
+        } catch (_: Exception) {
+            DEFAULT_RETRY_AFTER_SECONDS
+        }
+    }
 
     private fun requestLanguage(languageTag: String): RequestLanguage {
         val requested = languageTag.trim()
-        val baseLanguage = requested.substringBefore('-').substringBefore('_').ifBlank { "default" }
+        val baseLanguage = requested.substringBefore('-').substringBefore('_').lowercase()
+            .ifBlank { "default" }
         val russian = baseLanguage.equals("ru", ignoreCase = true)
+        val photonLanguage = when {
+            russian -> "default"
+            baseLanguage in SUPPORTED_PHOTON_LANGUAGES -> baseLanguage
+            else -> "default"
+        }
         return RequestLanguage(
-            photonLanguage = if (russian) "default" else baseLanguage,
+            photonLanguage = photonLanguage,
             acceptLanguage = if (russian) "ru-RU,ru" else requested.ifBlank { baseLanguage },
             isRussian = russian,
         )
@@ -384,8 +421,19 @@ class OsmNavigationRepository(
 
     private fun String.asJsonObject(): JsonObject = try {
         json.parseToJsonElement(this).jsonObject
-    } catch (_: Throwable) {
+    } catch (_: Exception) {
         throw MalformedResponseException()
+    }
+
+    private sealed interface BoundedBody {
+        val value: String
+
+        data class Text(override val value: String) : BoundedBody
+
+        data object TooLarge : BoundedBody {
+            override val value: String
+                get() = error("Oversized response has no materialized body")
+        }
     }
 
     private fun JsonObject.requiredArray(key: String): JsonArray =
@@ -424,8 +472,10 @@ class OsmNavigationRepository(
         const val OSRM_URL = "https://routing.openstreetmap.de/routed-bike/route/v1/driving"
         const val USER_AGENT = "Volty/0.7.4 navigation (Photon + FOSSGIS OSRM)"
         const val MAX_RESPONSE_CHARS = 2_000_000
+        const val MAX_RESPONSE_BYTES = MAX_RESPONSE_CHARS * 4L + 1L
         const val MAX_ALTERNATIVES = 3
         const val DEFAULT_RETRY_AFTER_SECONDS = 60L
+        val SUPPORTED_PHOTON_LANGUAGES = setOf("default", "de", "en", "fr", "it")
         val json = Json {
             ignoreUnknownKeys = true
             explicitNulls = false

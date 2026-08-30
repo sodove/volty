@@ -10,7 +10,11 @@ import io.ktor.http.HttpHeaders
 import io.ktor.http.HttpMethod
 import io.ktor.http.HttpStatusCode
 import io.ktor.http.headersOf
+import io.ktor.utils.io.ByteChannel
+import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.ManeuverKind
@@ -25,6 +29,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertIs
 import kotlin.test.assertNull
+import kotlin.test.assertTrue
 
 class OsmNavigationRepositoryTest {
     @Test
@@ -74,6 +79,34 @@ class OsmNavigationRepositoryTest {
         assertNull(request.url.parameters["lat"])
         assertNull(request.url.parameters["lon"])
         assertEquals("en-US", request.headers[HttpHeaders.AcceptLanguage])
+    }
+
+    @Test
+    fun search_falls_back_to_photon_default_for_unsupported_language() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = repository(requests) {
+            "{\"type\":\"FeatureCollection\",\"features\":[]}"
+        }
+
+        repository.search("Museo", near = null, languageTag = "es-ES")
+
+        val request = requests.single()
+        assertEquals("default", request.url.parameters["lang"])
+        assertEquals("es-ES", request.headers[HttpHeaders.AcceptLanguage])
+    }
+
+    @Test
+    fun search_uses_supported_photon_language_for_italian() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = repository(requests) {
+            "{\"type\":\"FeatureCollection\",\"features\":[]}"
+        }
+
+        repository.search("Roma", near = null, languageTag = "it-IT")
+
+        val request = requests.single()
+        assertEquals("it", request.url.parameters["lang"])
+        assertEquals("it-IT", request.headers[HttpHeaders.AcceptLanguage])
     }
 
     @Test
@@ -196,24 +229,88 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
-    fun oversized_body_is_malformed_network_failure_is_offline_and_cancellation_is_rethrown() = runTest {
-        val oversized = repository { "x".repeat(2_000_001) }
-        assertEquals(
-            NavigationFailure.MalformedResponse,
-            assertFailure(oversized.search("x", null, "en-US")),
-        )
+    fun oversized_stream_is_stopped_at_bounded_utf8_read_limit() = runTest {
+        val channel = ByteChannel(autoFlush = true)
+        val chunk = ByteArray(8192) { 'x'.code.toByte() }
+        val totalBytes = 12_000_000
+        var writtenBytes = 0
+        val writer = launch {
+            repeat(totalBytes / chunk.size) {
+                channel.writeFully(chunk)
+                writtenBytes += chunk.size
+            }
+            channel.close()
+        }
+        val oversized = OsmNavigationRepository(HttpClient(MockEngine {
+            respond(channel, headers = jsonHeaders())
+        }))
 
+        try {
+            val result = oversized.search("x", null, "en-US")
+            assertEquals(NavigationFailure.MalformedResponse, assertFailure(result))
+            assertTrue(writtenBytes < totalBytes, "bounded read must not consume the full response")
+        } finally {
+            writer.cancelAndJoin()
+            channel.cancel(CancellationException("test cleanup"))
+        }
+    }
+
+    @Test
+    fun oversized_error_body_preserves_http_failure_status() = runTest {
+        val oversizedBody = ByteArray(8_000_001) { 'x'.code.toByte() }
+        val limited = OsmNavigationRepository(HttpClient(MockEngine {
+            respond(
+                oversizedBody,
+                HttpStatusCode.TooManyRequests,
+                headersOf(
+                    HttpHeaders.ContentLength to listOf(oversizedBody.size.toString()),
+                    HttpHeaders.RetryAfter to listOf("17"),
+                ),
+            )
+        }))
+
+        assertEquals(
+            NavigationFailure.RateLimited(17),
+            assertFailure(limited.search("x", null, "en-US")),
+        )
+    }
+
+    @Test
+    fun network_failure_is_offline() = runTest {
         val offline = OsmNavigationRepository(HttpClient(MockEngine {
             throw IllegalStateException("network down")
         }))
         assertEquals(NavigationFailure.Offline, assertFailure(offline.search("x", null, "en-US")))
+    }
 
+    @Test
+    fun cancellation_and_fatal_errors_are_not_swallowed() = runTest {
         val cancelled = OsmNavigationRepository(HttpClient(MockEngine {
             throw CancellationException("cancelled")
         }))
         assertFailsWith<CancellationException> {
             cancelled.search("x", null, "en-US")
         }
+
+        val fatal = OsmNavigationRepository(HttpClient(MockEngine {
+            throw AssertionError("fatal")
+        }))
+        assertFailsWith<AssertionError> {
+            fatal.search("x", null, "en-US")
+        }
+    }
+
+    @Test
+    fun http_date_retry_after_is_parsed_with_safe_past_date_fallback() = runTest {
+        val limited = repository(
+            status = HttpStatusCode.TooManyRequests,
+            headers = headersOf(HttpHeaders.RetryAfter, "Wed, 21 Oct 2015 07:28:00 GMT"),
+        ) { "" }
+
+        assertEquals(
+            NavigationFailure.RateLimited(1),
+            assertFailure(limited.search("x", null, "en-US")),
+        )
     }
 
     private fun repository(
@@ -278,7 +375,7 @@ class OsmNavigationRepositoryTest {
                 {"distance":100,"duration":20,"name":"ул. Ленина","maneuver":{"type":"depart","modifier":"straight","location":[60.6057,56.8389]}},
                 {"distance":200,"duration":40,"name":"проспект Мира","maneuver":{"type":"turn","modifier":"right","location":[60.61,56.81]}},
                 {"distance":250,"duration":50,"name":"","maneuver":{"type":"roundabout","modifier":"right","exit":2,"location":[60.62,56.82]}},
-                {"distance":300,"duration":60,"name":"ул. Восточная","maneuver":{"type":"uturn","location":[60.625,56.825]}},
+                {"distance":300,"duration":60,"name":"ул. Восточная","maneuver":{"type":"turn","modifier":"uturn","location":[60.625,56.825]}},
                 {"distance":384.5,"duration":100,"name":"ул. Малышева","maneuver":{"type":"turn","modifier":"straight","location":[60.628,56.828]}},
                 {"distance":0,"duration":0,"name":"","maneuver":{"type":"arrive","location":[60.63,56.83]}}
               ]}]
