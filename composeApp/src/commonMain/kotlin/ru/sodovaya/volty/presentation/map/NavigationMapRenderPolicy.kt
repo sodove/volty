@@ -12,6 +12,7 @@ object NavigationMapRenderPolicy {
         trail: List<NavigationTrailPoint> = emptyList(),
         participantMarkers: List<ru.sodovaya.volty.presentation.nearby.ParticipantMarker> = emptyList(),
         cameraSequence: Long = state.requestGeneration,
+        recenterSequence: Long? = null,
     ): NavigationMapScene {
         val phase = state.phase
         val plan = when (phase) {
@@ -58,6 +59,10 @@ object NavigationMapRenderPolicy {
             phase is NavigationPhase.RouteReady -> MapCameraRequest.FitAlternatives(
                 sequence = cameraSequence,
                 points = lines.flatMap(NavigationRouteLine::points),
+            )
+            recenterSequence != null && recenterSequence > 0L && ownFix != null -> MapCameraRequest.Recenter(
+                sequence = recenterSequence,
+                fix = ownFix,
             )
             phase is NavigationPhase.Navigating &&
                 ownFix != null &&

@@ -24,7 +24,9 @@ import ru.sodovaya.volty.domain.location.RideLocationRepository
 import ru.sodovaya.volty.domain.location.RideLocationState
 import ru.sodovaya.volty.domain.location.RideLocationStatus
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
+import ru.sodovaya.volty.domain.navigation.ArrivalEnergyEstimator
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
+import ru.sodovaya.volty.domain.navigation.NavigationEnergySource
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
@@ -39,6 +41,8 @@ import kotlin.time.ExperimentalTime
 
 interface LightNavigationComponent {
     val state: StateFlow<LightNavigationState>
+    val locationState: StateFlow<RideLocationState>
+    val locationPermissions: List<String>
 
     fun onPlannerRequested()
     fun onQueryChanged(query: String)
@@ -61,6 +65,7 @@ class DefaultLightNavigationComponent(
     componentContext: ComponentContext,
     private val navigationRepository: NavigationRepository,
     private val locationRepository: RideLocationRepository,
+    private val energySource: NavigationEnergySource? = null,
     private val languageTag: String = "ru-RU",
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val nowEpochMillis: () -> Long = {
@@ -70,6 +75,8 @@ class DefaultLightNavigationComponent(
     private val scope = CoroutineScope(dispatcher + SupervisorJob())
     private val _state = MutableStateFlow(LightNavigationState())
     override val state: StateFlow<LightNavigationState> = _state.asStateFlow()
+    override val locationState: StateFlow<RideLocationState> = locationRepository.state
+    override val locationPermissions: List<String> = locationRepository.requiredPermissions
 
     private var searchJob: Job? = null
     private var routeJob: Job? = null
@@ -97,6 +104,13 @@ class DefaultLightNavigationComponent(
                     }
                 }
                 if (!closed && !lifecycleStopped) processNavigationLocation(locationState)
+            }
+        }
+        energySource?.let { source ->
+            scope.launch {
+                source.evidence.collect { evidence ->
+                    refreshArrivalSoc(evidence)
+                }
             }
         }
     }
@@ -354,7 +368,10 @@ class DefaultLightNavigationComponent(
         val fix = (locationState.status as? RideLocationStatus.Available)?.fix
         when (val update = progressEngine.update(route, fix, nowEpochMillis())) {
             is RouteProgressUpdate.Unavailable -> reduce(NavigationAction.GuidanceCleared)
-            is RouteProgressUpdate.OnRoute -> reduce(NavigationAction.GuidanceUpdated(update.guidance))
+            is RouteProgressUpdate.OnRoute -> {
+                reduce(NavigationAction.GuidanceUpdated(update.guidance))
+                refreshArrivalSoc()
+            }
             is RouteProgressUpdate.OffRouteCandidate -> Unit
             is RouteProgressUpdate.OffRouteConfirmed -> startAutomaticReroute(
                 plan = phase.plan,
@@ -363,6 +380,7 @@ class DefaultLightNavigationComponent(
             )
             RouteProgressUpdate.Arrived -> {
                 reduce(NavigationAction.Arrived)
+                refreshArrivalSoc()
                 releaseNavigationDemand()
             }
         }
@@ -502,6 +520,21 @@ class DefaultLightNavigationComponent(
 
     private fun reduce(action: NavigationAction) {
         _state.update { current -> NavigationReducer.reduce(current, action) }
+    }
+
+    private fun refreshArrivalSoc(evidence: ru.sodovaya.volty.domain.navigation.NavigationEnergyEvidence? = energySource?.evidence?.value) {
+        if (evidence == null) return
+        val remainingDistanceMeters = when (val phase = _state.value.phase) {
+            is NavigationPhase.Navigating -> phase.guidance?.remainingDistanceMeters
+            is NavigationPhase.Arrived -> 0.0
+            else -> null
+        }
+        val estimate = ArrivalEnergyEstimator.estimate(
+            evidence = evidence,
+            remainingDistanceMeters = remainingDistanceMeters,
+            nowEpochMillis = nowEpochMillis(),
+        )
+        reduce(NavigationAction.ArrivalSocChanged(estimate))
     }
 
     private fun refreshLocationState() {

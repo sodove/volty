@@ -12,14 +12,17 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -48,11 +51,17 @@ import ru.sodovaya.volty.presentation.nearby.NearbyScreen
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
+import ru.sodovaya.volty.presentation.map.NavigationMapRenderPolicy
+import ru.sodovaya.volty.presentation.map.NavigationMapScene
+import ru.sodovaya.volty.presentation.map.NavigationTrailPoint
+import ru.sodovaya.volty.presentation.map.RideMapTrailSample
 import ru.sodovaya.volty.presentation.map.GroupMapScreen
 import ru.sodovaya.volty.presentation.map.groupMapState
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.domain.location.RideLocationStatus
+import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
 import ru.sodovaya.volty.presentation.welcome.WelcomeScreen
@@ -71,12 +80,35 @@ fun RootScreen(component: RootComponent) {
     val rideAvailable by component.rideAvailable.subscribeAsState()
     val activeRide = active as? RootComponent.Child.Ride
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
+    val navigationState by component.navigation.state.collectAsState()
+    val locationState by component.navigation.locationState.collectAsState()
     var mapRecenterRequest by remember { mutableLongStateOf(0L) }
-    var gpsSpeedKmh by remember { mutableStateOf<Float?>(null) }
     val groupMapVisible = active is RootComponent.Child.GroupMap
-    val vehicleSpeedKmh = activeRideState?.motion
-        ?.takeIf { it.isConnected }
-        ?.let(MotionReadings::speedKmh)
+    val rideMapVisible = active is RootComponent.Child.Ride &&
+        rideAvailable &&
+        activeRideState?.style == DashboardStyle.LIGHT
+    val ownFix = (locationState.status as? RideLocationStatus.Available)?.fix
+    val freshGpsSpeedKmh = ownFix
+        ?.takeIf { navigationState.locationStatus == ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH }
+        ?.speedMetersPerSecond
+        ?.times(3.6)
+        ?.toFloat()
+    val trail = remember(activeRideState?.vehicle?.id) { mutableStateListOf<NavigationTrailPoint>() }
+    LaunchedEffect(rideMapVisible, activeRideState?.vehicle?.id, ownFix?.capturedAtEpochMillis) {
+        if (rideMapVisible && ownFix != null && trail.lastOrNull()?.sample?.timestampMillis != ownFix.capturedAtEpochMillis) {
+            trail += NavigationTrailPoint(
+                coordinate = ownFix.coordinate,
+                sample = RideMapTrailSample(
+                    latitude = ownFix.coordinate.latitude,
+                    longitude = ownFix.coordinate.longitude,
+                    timestampMillis = ownFix.capturedAtEpochMillis,
+                    accuracyMeters = ownFix.accuracyMeters.toFloat(),
+                    speedMetersPerSecond = ownFix.speedMetersPerSecond?.toFloat(),
+                ),
+            )
+            while (trail.size > 240) trail.removeAt(0)
+        }
+    }
     val mapHost = rideMapHostState(
         rideAvailable = rideAvailable,
         activeScreen = when {
@@ -88,16 +120,52 @@ fun RootScreen(component: RootComponent) {
         },
         activeStyle = activeRideState?.style,
     )
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestMultiplePermissions(),
+    ) { grants ->
+        val granted = component.navigation.locationPermissions.all { grants[it] == true }
+        component.navigation.onLocationPermissionResult(granted)
+    }
+    val requestLocationPermission = {
+        val permissions = component.navigation.locationPermissions
+        if (permissions.isEmpty()) {
+            component.navigation.onLocationPermissionResult(true)
+        } else {
+            locationPermissionLauncher.launch(permissions.toTypedArray())
+        }
+    }
+    LaunchedEffect(rideMapVisible) {
+        component.navigation.onMapVisibilityChanged(rideMapVisible)
+    }
+    val mapScene = if (rideMapVisible) {
+        NavigationMapRenderPolicy.scene(
+            state = navigationState,
+            ownFix = ownFix,
+            trail = trail,
+            participantMarkers = socialLiveState.markers,
+            cameraSequence = navigationState.phase.hashCode().toLong(),
+            recenterSequence = mapRecenterRequest,
+        )
+    } else {
+        NavigationMapScene(
+            ownFix = null,
+            trail = emptyList(),
+            participantMarkers = socialLiveState.markers,
+            routes = emptyList(),
+            destination = null,
+            followState = navigationState.followState,
+            cameraRequest = null,
+        )
+    }
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             if (mapHost.mounted) {
                 PlatformRideMapLayer(
+                    scene = mapScene,
                     darkTheme = darkTheme,
-                    markers = socialLiveState.markers,
-                    requestLocationPermission = mapHost.requestLocationPermission,
-                    vehicleSpeedKmh = vehicleSpeedKmh,
-                    recenterRequest = mapRecenterRequest,
-                    onGpsSpeedKmhChanged = { gpsSpeedKmh = it },
+                    onCameraGesture = { now ->
+                        if (active is RootComponent.Child.Ride) component.navigation.onCameraGesture(now)
+                    },
                     modifier = Modifier
                         .fillMaxSize()
                         .alpha(if (mapHost.visible) 1f else 0f),
@@ -126,9 +194,33 @@ fun RootScreen(component: RootComponent) {
                         onOpenBattery = { component.onTab(RootComponent.Tab.Battery) },
                         onOpenNearby = { component.onTab(RootComponent.Tab.Nearby) },
                         onOpenGroupMap = component::onOpenGroupMap,
-                        onRecenterMap = { mapRecenterRequest++ },
-                        gpsSpeedKmh = gpsSpeedKmh,
+                        onRecenterMap = {
+                            mapRecenterRequest++
+                            component.navigation.onRecenterRequested()
+                            if (component.navigation.locationState.value.status !is RideLocationStatus.Available) {
+                                requestLocationPermission()
+                            }
+                        },
+                        gpsSpeedKmh = freshGpsSpeedKmh,
                         socialLiveState = socialLiveState,
+                        navigationState = navigationState,
+                        navigationCallbacks = LightNavigationCallbacks(
+                            onOpenPlanner = {
+                                component.navigation.onPlannerRequested()
+                                if (component.navigation.locationState.value.status !is RideLocationStatus.Available) {
+                                    requestLocationPermission()
+                                }
+                            },
+                            onQueryChanged = component.navigation::onQueryChanged,
+                            onPlaceSelected = component.navigation::onPlaceSelected,
+                            onProfileSelected = component.navigation::onProfileSelected,
+                            onProfileConfirmed = component.navigation::onProfileConfirmed,
+                            onAlternativeSelected = component.navigation::onAlternativeSelected,
+                            onStartNavigation = component.navigation::onStartNavigation,
+                            onRetry = component.navigation::onRetry,
+                            onStopNavigation = component.navigation::onStopNavigation,
+                            onRequestLocationPermission = requestLocationPermission,
+                        ),
                     )
                     is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)
                     is RootComponent.Child.PackDetail -> PackDetailScreen(instance.component)

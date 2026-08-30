@@ -142,6 +142,36 @@ class NavigationMapRenderPolicyTest {
 
         assertEquals(10L, request.sequence)
         assertIs<MapCameraRequest.Recenter>(request)
+
+        val scene = NavigationMapRenderPolicy.scene(
+            state = LightNavigationState(),
+            ownFix = fix(1_000L),
+            recenterSequence = 10L,
+        )
+        assertEquals(request, scene.cameraRequest)
+    }
+
+    @Test
+    fun `route fit wins over a retained recenter sequence`() {
+        val routePlan = plan()
+        val state = LightNavigationState(
+            phase = NavigationPhase.RouteReady(routePlan, selectedRouteId = "short"),
+            requestGeneration = 7L,
+        )
+
+        val scene = NavigationMapRenderPolicy.scene(
+            state = state,
+            ownFix = fix(1_000L),
+            recenterSequence = 10L,
+        )
+
+        assertEquals(
+            MapCameraRequest.FitAlternatives(
+                sequence = 7L,
+                points = routePlan.alternatives.flatMap { it.geometry },
+            ),
+            scene.cameraRequest,
+        )
     }
 
     private companion object {

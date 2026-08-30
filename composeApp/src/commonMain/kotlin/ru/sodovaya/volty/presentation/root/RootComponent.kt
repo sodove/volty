@@ -50,6 +50,8 @@ import ru.sodovaya.volty.presentation.nearby.NearbyComponent
 import ru.sodovaya.volty.presentation.nearby.SocialLiveSession
 import ru.sodovaya.volty.presentation.nearby.SocialLiveState
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
+import ru.sodovaya.volty.presentation.navigation.DefaultLightNavigationComponent
+import ru.sodovaya.volty.presentation.navigation.LightNavigationComponent
 import ru.sodovaya.volty.presentation.vehicle.DefaultVehicleEditComponent
 import ru.sodovaya.volty.presentation.vehicle.DraftExitComponent
 import ru.sodovaya.volty.presentation.vehicle.VehicleDraft
@@ -79,6 +81,9 @@ import org.koin.core.component.inject
 
 interface RootComponent {
     val stack: Value<ChildStack<*, Child>>
+
+    /** One navigation owner retained while the root switches dashboard tabs. */
+    val navigation: LightNavigationComponent
 
     /** True when an active vehicle can show the Ride dashboard. */
     val rideAvailable: Value<Boolean>
@@ -374,12 +379,21 @@ class DefaultRootComponent(
     private val vehicleRepository: VehicleRepository by inject()
     private val bmsRepository: BmsRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
+    private val locationRepository: ru.sodovaya.volty.domain.location.RideLocationRepository by inject()
     private val socialLiveSession: SocialLiveSession = RootSocialLiveSession(get())
     override val socialLiveState: StateFlow<SocialLiveState> = socialLiveSession.state
+
+    override val navigation: LightNavigationComponent = DefaultLightNavigationComponent(
+        componentContext = componentContext,
+        navigationRepository = get(),
+        locationRepository = locationRepository,
+        energySource = get(),
+    )
 
     // Lightweight scope for cold-start async work (DB reads). Previously these
     // ran via runBlocking on the UI thread — risky on slow devices.
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private var lastNavigationVehicleId: String? = bmsRepository.activeVehicle.value?.id
 
     private val _rideAvailable =
         MutableValue(homeConfigFor(bmsRepository.activeVehicle.value) is Config.Ride)
@@ -389,6 +403,7 @@ class DefaultRootComponent(
         lifecycle.doOnDestroy {
             scope.coroutineContext[Job]?.cancel()
             socialLiveSession.close()
+            navigation.close()
         }
     }
 
@@ -412,6 +427,12 @@ class DefaultRootComponent(
         // for a re-navigation. Declared after `stack` because it reads it.
         scope.launch {
             bmsRepository.activeVehicle.collect { v ->
+                if (v?.id != lastNavigationVehicleId) {
+                    lastNavigationVehicleId = v?.id
+                    // The component survives tab changes, but a route must
+                    // never survive a vehicle switch or disconnect.
+                    navigation.onStopNavigation()
+                }
                 val home = homeConfigFor(v)
                 _rideAvailable.value = home is Config.Ride
                 // Switching to a source-less vehicle must not leave a Ride
