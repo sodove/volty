@@ -1,14 +1,26 @@
 package ru.sodovaya.volty.presentation.navigation
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -16,41 +28,58 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.Surface
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.RadioButton
+import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
-import ru.sodovaya.volty.domain.navigation.RouteProfile
+import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
+import ru.sodovaya.volty.presentation.map.platformNavigationGlass
+import ru.sodovaya.volty.presentation.ride.LocalLightHudPalette
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import volty.composeapp.generated.resources.Res
+import volty.composeapp.generated.resources.dashboard_light_group_online
+import volty.composeapp.generated.resources.dashboard_light_group_ride
 import volty.composeapp.generated.resources.navigation_allow_location
 import volty.composeapp.generated.resources.navigation_arrival_soc
 import volty.composeapp.generated.resources.navigation_arrival_soc_unknown
 import volty.composeapp.generated.resources.navigation_arrived
-import volty.composeapp.generated.resources.navigation_confirm_profile
+import volty.composeapp.generated.resources.navigation_build_route
+import volty.composeapp.generated.resources.navigation_close
 import volty.composeapp.generated.resources.navigation_destination
 import volty.composeapp.generated.resources.navigation_duration_hours_minutes
 import volty.composeapp.generated.resources.navigation_duration_minutes
+import volty.composeapp.generated.resources.navigation_invalid_request
 import volty.composeapp.generated.resources.navigation_location_fresh_required
 import volty.composeapp.generated.resources.navigation_location_permission_denied
 import volty.composeapp.generated.resources.navigation_location_permission_required
@@ -58,45 +87,38 @@ import volty.composeapp.generated.resources.navigation_location_poor_accuracy
 import volty.composeapp.generated.resources.navigation_location_provider_disabled
 import volty.composeapp.generated.resources.navigation_location_searching
 import volty.composeapp.generated.resources.navigation_location_stale
+import volty.composeapp.generated.resources.navigation_malformed_response
 import volty.composeapp.generated.resources.navigation_no_results
-import volty.composeapp.generated.resources.navigation_profile_bicycle
-import volty.composeapp.generated.resources.navigation_profile_bicycle_description
-import volty.composeapp.generated.resources.navigation_profile_light_ev
-import volty.composeapp.generated.resources.navigation_profile_light_ev_description
-import volty.composeapp.generated.resources.navigation_profile_motor_scooter
-import volty.composeapp.generated.resources.navigation_profile_motor_scooter_description
-import volty.composeapp.generated.resources.navigation_profile_title
+import volty.composeapp.generated.resources.navigation_no_route
+import volty.composeapp.generated.resources.navigation_open_location_settings
+import volty.composeapp.generated.resources.navigation_provider_unavailable
+import volty.composeapp.generated.resources.navigation_rate_limited
 import volty.composeapp.generated.resources.navigation_retry
 import volty.composeapp.generated.resources.navigation_route_alternatives
 import volty.composeapp.generated.resources.navigation_route_loading
+import volty.composeapp.generated.resources.navigation_route_offline
 import volty.composeapp.generated.resources.navigation_route_option
+import volty.composeapp.generated.resources.navigation_rerouting
 import volty.composeapp.generated.resources.navigation_search_hint
 import volty.composeapp.generated.resources.navigation_search_offline
 import volty.composeapp.generated.resources.navigation_searching
+import volty.composeapp.generated.resources.navigation_select_destination
+import volty.composeapp.generated.resources.navigation_select_route
+import volty.composeapp.generated.resources.navigation_soc_bms_disconnected
+import volty.composeapp.generated.resources.navigation_soc_capacity_unearned
+import volty.composeapp.generated.resources.navigation_soc_consumption_unearned
+import volty.composeapp.generated.resources.navigation_soc_packs_partial
+import volty.composeapp.generated.resources.navigation_soc_telemetry_stale
+import volty.composeapp.generated.resources.navigation_soc_unearned
 import volty.composeapp.generated.resources.navigation_start
 import volty.composeapp.generated.resources.navigation_stop
 import volty.composeapp.generated.resources.navigation_title
 import volty.composeapp.generated.resources.navigation_turn_in
-import volty.composeapp.generated.resources.navigation_no_route
-import volty.composeapp.generated.resources.navigation_route_offline
-import volty.composeapp.generated.resources.navigation_rate_limited
-import volty.composeapp.generated.resources.navigation_provider_unavailable
-import volty.composeapp.generated.resources.navigation_invalid_request
-import volty.composeapp.generated.resources.navigation_malformed_response
-import volty.composeapp.generated.resources.navigation_rerouting
-import volty.composeapp.generated.resources.navigation_soc_bms_disconnected
-import volty.composeapp.generated.resources.navigation_soc_packs_partial
-import volty.composeapp.generated.resources.navigation_soc_unearned
-import volty.composeapp.generated.resources.navigation_soc_capacity_unearned
-import volty.composeapp.generated.resources.navigation_soc_telemetry_stale
-import volty.composeapp.generated.resources.navigation_soc_consumption_unearned
 
 data class LightNavigationCallbacks(
     val onOpenPlanner: () -> Unit = {},
     val onQueryChanged: (String) -> Unit = {},
     val onPlaceSelected: (PlaceCandidate) -> Unit = {},
-    val onProfileSelected: (RouteProfile) -> Unit = {},
-    val onProfileConfirmed: () -> Unit = {},
     val onAlternativeSelected: (String) -> Unit = {},
     val onStartNavigation: () -> Unit = {},
     val onRetry: () -> Unit = {},
@@ -105,47 +127,109 @@ data class LightNavigationCallbacks(
     val onOpenLocationSettings: () -> Unit = {},
 )
 
+data class LightNavigationNearby(
+    val participantCount: Int,
+    val onlineParticipantCount: Int,
+)
+
+private data class LightNavigationGlass(
+    val containerColor: Color,
+    val borderColor: Color,
+)
+
+@Composable
+private fun lightNavigationGlass(): LightNavigationGlass {
+    val palette = LocalLightHudPalette.current
+    return LightNavigationGlass(
+        containerColor = palette.surfaceStrong,
+        borderColor = Color(0x445A8C99),
+    )
+}
+
 @Composable
 internal fun LightNavigationOverlay(
     state: LightNavigationState,
     callbacks: LightNavigationCallbacks,
     units: UnitSystem,
     modifier: Modifier = Modifier,
+    nearby: LightNavigationNearby? = null,
+    onOpenNearby: () -> Unit = {},
 ) {
     val model = LightNavigationUiMapper.map(state, units)
-    if (model.phase == NavigationUiPhase.IDLE) return
+    when (LightNavigationSurfacePolicy.forPhase(model.phase)) {
+        LightNavigationSurface.HIDDEN -> Unit
+        LightNavigationSurface.PLANNER -> PlannerSurface(
+            model = model,
+            callbacks = callbacks,
+            units = units,
+            nearby = nearby,
+            onOpenNearby = onOpenNearby,
+            modifier = modifier,
+        )
+        LightNavigationSurface.GUIDANCE_DOCK -> GuidanceDock(
+            model = model,
+            callbacks = callbacks,
+            units = units,
+            nearby = nearby,
+            onOpenNearby = onOpenNearby,
+            modifier = modifier,
+        )
+    }
+}
 
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(22.dp),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.96f),
-        tonalElevation = 8.dp,
-        shadowElevation = 8.dp,
-    ) {
-        Column(
+@Composable
+private fun PlannerSurface(
+    model: NavigationUiModel,
+    callbacks: LightNavigationCallbacks,
+    units: UnitSystem,
+    nearby: LightNavigationNearby?,
+    onOpenNearby: () -> Unit,
+    modifier: Modifier,
+) {
+    val glass = lightNavigationGlass()
+    val plannerShape = RoundedCornerShape(18.dp)
+    Box(modifier = modifier) {
+        Card(
             modifier = Modifier
                 .fillMaxWidth()
-                .verticalScroll(rememberScrollState())
-                .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp),
+                .heightIn(max = 440.dp)
+                .clip(plannerShape)
+                .then(platformNavigationGlass()),
+            shape = plannerShape,
+            colors = CardDefaults.cardColors(
+                containerColor = glass.containerColor,
+            ),
+            border = BorderStroke(1.dp, glass.borderColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
         ) {
+            Column(
+                modifier = Modifier
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(
+                    if (model.phase == NavigationUiPhase.ROUTE_READY) 6.dp else 10.dp,
+                ),
+            ) {
             NavigationHeader(
-                title = when (model.phase) {
-                    NavigationUiPhase.NAVIGATING,
-                    NavigationUiPhase.REROUTING,
-                    NavigationUiPhase.ARRIVED -> stringResource(Res.string.navigation_title)
-                    else -> stringResource(Res.string.navigation_destination)
-                },
+                title = stringResource(Res.string.navigation_destination),
                 onClose = callbacks.onStopNavigation,
             )
-            NavigationLocationBanner(model, callbacks)
+            if (model.locationBanner != null) {
+                NavigationLocationBanner(model, callbacks)
+            }
             when (model.phase) {
-                NavigationUiPhase.PLANNING -> PlanningContent(model, callbacks)
+                NavigationUiPhase.PLANNING -> Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    PlanningContent(model, callbacks)
+                }
                 NavigationUiPhase.ROUTE_READY -> RouteReadyContent(model, callbacks, units)
-                NavigationUiPhase.NAVIGATING -> GuidanceContent(model, callbacks, units)
-                NavigationUiPhase.REROUTING -> ReroutingContent(model, callbacks)
-                NavigationUiPhase.ARRIVED -> ArrivedContent(model, callbacks)
-                NavigationUiPhase.IDLE -> Unit
+                else -> Unit
+            }
+            nearby?.let { nearbyState ->
+                NavigationNearbyDock(nearbyState, onOpenNearby)
+            }
             }
         }
     }
@@ -153,16 +237,23 @@ internal fun LightNavigationOverlay(
 
 @Composable
 private fun NavigationHeader(title: String, onClose: () -> Unit) {
+    val closeDescription = stringResource(Res.string.navigation_close)
+    val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.Navigation, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+            Icon(Icons.Default.Navigation, contentDescription = null, tint = palette.cyan)
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
-        IconButton(onClick = onClose) {
+        IconButton(
+            onClick = onClose,
+            modifier = Modifier.semantics {
+                contentDescription = closeDescription
+            },
+        ) {
             Icon(Icons.Default.Close, contentDescription = null)
         }
     }
@@ -170,130 +261,167 @@ private fun NavigationHeader(title: String, onClose: () -> Unit) {
 
 @Composable
 private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val palette = LocalLightHudPalette.current
+
     OutlinedTextField(
         value = model.query,
         onValueChange = callbacks.onQueryChanged,
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         label = { Text(stringResource(Res.string.navigation_search_hint)) },
+        colors = OutlinedTextFieldDefaults.colors(
+            focusedTextColor = palette.text,
+            unfocusedTextColor = palette.text,
+            focusedBorderColor = palette.cyan,
+            focusedLabelColor = palette.cyan,
+            cursorColor = palette.cyan,
+            unfocusedBorderColor = palette.muted.copy(alpha = 0.7f),
+            unfocusedLabelColor = palette.muted,
+        ),
     )
 
-    if (model.requestInFlight && model.searchResults.isEmpty()) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+    if (model.requestInFlight) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = palette.cyan)
             Text(
-                if (model.destination != null && model.profileConfirmed) {
+                if (model.destination != null) {
                     stringResource(Res.string.navigation_route_loading)
                 } else {
                     stringResource(Res.string.navigation_searching)
                 },
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
     }
-    model.searchResults.forEach { place -> PlaceResult(place, callbacks.onPlaceSelected) }
-    if (model.query.trim().length >= 3 && !model.requestInFlight && model.searchResults.isEmpty() && model.failureBanner == null) {
+    if (model.searchResults.isNotEmpty()) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(
+                    (LightNavigationSearchPolicy.visibleResultRows(model.searchResults.size) * 56).dp,
+                ),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            items(model.searchResults, key = { it.id }) { place ->
+                PlaceResult(place) {
+                    keyboardController?.hide()
+                    focusManager.clearFocus(force = true)
+                    callbacks.onPlaceSelected(it)
+                }
+            }
+        }
+    }
+    if (shouldShowNavigationNoResults(model)) {
         Text(stringResource(Res.string.navigation_no_results), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
     model.destination?.let { destination ->
-        Text(
-            text = destination.title,
-            style = MaterialTheme.typography.titleSmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        destination.subtitle?.let { Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        Text(stringResource(Res.string.navigation_profile_title), fontWeight = FontWeight.SemiBold)
-        model.profiles.forEach { profile ->
-            ProfileCard(profile, callbacks.onProfileSelected)
-        }
-        if (model.selectedProfile != null && !model.profileConfirmed) {
-            TextButton(
-                onClick = callbacks.onProfileConfirmed,
-                enabled = model.canConfirmProfile,
+            Column(
                 modifier = Modifier.fillMaxWidth(),
-            ) { Text(stringResource(Res.string.navigation_confirm_profile)) }
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = destination.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                destination.subtitle?.let {
+                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (!model.requestInFlight && model.failureBanner == null) {
+                    Button(
+                        onClick = callbacks.onRetry,
+                        enabled = model.canRetry,
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = navigationActionButtonColors(),
+                    ) {
+                        Text(stringResource(Res.string.navigation_build_route))
+                    }
+                }
+            }
         }
-    }
     FailureBanner(model, callbacks)
 }
 
+internal fun shouldShowNavigationNoResults(model: NavigationUiModel): Boolean =
+    model.destination == null &&
+        model.query.trim().length >= 3 &&
+        !model.requestInFlight &&
+        model.searchResults.isEmpty() &&
+        model.failureBanner == null
+
 @Composable
 private fun PlaceResult(place: PlaceCandidate, onSelected: (PlaceCandidate) -> Unit) {
+    val destinationDescription = stringResource(Res.string.navigation_select_destination, place.title)
+    val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable { onSelected(place) }
-            .padding(vertical = 8.dp),
+            .height(56.dp)
+            .clickable(role = Role.Button) { onSelected(place) }
+            .semantics(mergeDescendants = true) {
+                contentDescription = destinationDescription
+            }
+            .padding(horizontal = 4.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
-        Column {
+        Icon(Icons.Default.LocationOn, contentDescription = null, tint = palette.cyan)
+        Column(Modifier.weight(1f)) {
             Text(place.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
             place.subtitle?.let {
-                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
+                Text(
+                    it,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
-        }
-    }
-}
-
-@Composable
-private fun ProfileCard(profile: NavigationUiProfile, onSelected: (RouteProfile) -> Unit) {
-    val (title, description) = when (profile.value) {
-        RouteProfile.BICYCLE -> stringResource(Res.string.navigation_profile_bicycle) to
-            stringResource(Res.string.navigation_profile_bicycle_description)
-        RouteProfile.LIGHT_EV -> stringResource(Res.string.navigation_profile_light_ev) to
-            stringResource(Res.string.navigation_profile_light_ev_description)
-        RouteProfile.MOTOR_SCOOTER -> stringResource(Res.string.navigation_profile_motor_scooter) to
-            stringResource(Res.string.navigation_profile_motor_scooter_description)
-    }
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { onSelected(profile.value) },
-        colors = CardDefaults.cardColors(
-            containerColor = if (profile.selected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-            },
-        ),
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Column(Modifier.weight(1f)) {
-                Text(title, fontWeight = FontWeight.SemiBold)
-                Text(description, color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 12.sp)
-            }
-            FilterChip(
-                selected = profile.selected,
-                onClick = { onSelected(profile.value) },
-                label = { Text(if (profile.confirmed) "✓" else "") },
-            )
         }
     }
 }
 
 @Composable
 private fun RouteReadyContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks, units: UnitSystem) {
-    Text(model.destination?.title.orEmpty(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-    Text(stringResource(Res.string.navigation_route_alternatives), color = MaterialTheme.colorScheme.onSurfaceVariant)
-    model.alternatives.forEach { alternative ->
-        RouteOption(alternative, units, callbacks.onAlternativeSelected)
-    }
-    if (model.locationBanner == NavigationUiCopyKey.LOCATION_PERMISSION_REQUIRED ||
-        model.locationBanner == NavigationUiCopyKey.LOCATION_PERMISSION_DENIED ||
-        model.locationBanner == NavigationUiCopyKey.LOCATION_FRESH_REQUIRED
+    val startDescription = stringResource(Res.string.navigation_start)
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        OutlinedButton(onClick = callbacks.onRequestLocationPermission, modifier = Modifier.fillMaxWidth()) {
-            Text(stringResource(Res.string.navigation_allow_location))
+        Text(model.destination?.title.orEmpty(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        Text(
+            stringResource(Res.string.navigation_route_alternatives),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+        )
+        model.alternatives.forEach { alternative ->
+            RouteOption(alternative, units, callbacks.onAlternativeSelected)
+        }
+        if (model.locationBanner == NavigationUiCopyKey.LOCATION_PERMISSION_REQUIRED ||
+            model.locationBanner == NavigationUiCopyKey.LOCATION_PERMISSION_DENIED ||
+            model.locationBanner == NavigationUiCopyKey.LOCATION_FRESH_REQUIRED
+        ) {
+            OutlinedButton(onClick = callbacks.onRequestLocationPermission, modifier = Modifier.fillMaxWidth()) {
+                Text(stringResource(Res.string.navigation_allow_location))
+            }
+        }
+        Button(
+            onClick = callbacks.onStartNavigation,
+            enabled = model.canStart,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = startDescription },
+            colors = navigationActionButtonColors(),
+        ) {
+            Text(stringResource(Res.string.navigation_start))
         }
     }
-    Button(
-        onClick = callbacks.onStartNavigation,
-        enabled = model.canStart,
-        modifier = Modifier.fillMaxWidth(),
-    ) { Text(stringResource(Res.string.navigation_start)) }
 }
 
 @Composable
@@ -302,100 +430,380 @@ private fun RouteOption(
     units: UnitSystem,
     onSelected: (String) -> Unit,
 ) {
+    val palette = LocalLightHudPalette.current
     val duration = durationText(alternative.durationMinutes)
-    Card(
-        modifier = Modifier.fillMaxWidth().clickable { onSelected(alternative.routeId) },
-        colors = CardDefaults.cardColors(
-            containerColor = if (alternative.selected) {
-                MaterialTheme.colorScheme.primaryContainer
-            } else {
-                MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.55f)
-            },
+    val routeDescription = stringResource(
+        Res.string.navigation_select_route,
+        stringResource(
+            Res.string.navigation_route_option,
+            distanceWithUnit(alternative.distanceText, units),
+            duration,
         ),
+    )
+    val backgroundColor by animateColorAsState(
+        targetValue = if (alternative.selected) {
+            palette.cyan.copy(alpha = 0.22f)
+        } else {
+            palette.surface.copy(alpha = 0.72f)
+        },
+        label = "navigation_route_selection",
+    )
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .selectable(
+                selected = alternative.selected,
+                onClick = { onSelected(alternative.routeId) },
+                role = Role.RadioButton,
+            )
+            .semantics(mergeDescendants = true) {
+                contentDescription = routeDescription
+            },
+        colors = CardDefaults.cardColors(containerColor = backgroundColor),
+        border = if (alternative.selected) {
+            BorderStroke(1.dp, palette.cyan)
+        } else null,
     ) {
         Row(
-            modifier = Modifier.fillMaxWidth().padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = LightNavigationDockPolicy.routeOptionMinHeight().dp)
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(if (alternative.selected) "●" else "○", color = MaterialTheme.colorScheme.primary)
+            RadioButton(
+                selected = alternative.selected,
+                onClick = null,
+                colors = RadioButtonDefaults.colors(
+                    selectedColor = palette.cyan,
+                    unselectedColor = palette.muted,
+                ),
+            )
             Text(
                 stringResource(
                     Res.string.navigation_route_option,
                     distanceWithUnit(alternative.distanceText, units),
                     duration,
                 ),
-                modifier = Modifier.weight(1f).padding(horizontal = 8.dp),
+                modifier = Modifier.weight(1f),
             )
         }
     }
 }
 
 @Composable
-private fun GuidanceContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks, units: UnitSystem) {
-    model.maneuver?.let { maneuver ->
+private fun navigationActionButtonColors() = ButtonDefaults.buttonColors(
+    containerColor = LocalLightHudPalette.current.cyan,
+    contentColor = if (LocalVoltyDarkTheme.current) Color(0xFF06222B) else Color.White,
+)
+
+@Composable
+private fun GuidanceDock(
+    model: NavigationUiModel,
+    callbacks: LightNavigationCallbacks,
+    units: UnitSystem,
+    nearby: LightNavigationNearby?,
+    onOpenNearby: () -> Unit,
+    modifier: Modifier,
+) {
+    val glass = lightNavigationGlass()
+    val guidanceShape = RoundedCornerShape(16.dp)
+    val stopDescription = stringResource(Res.string.navigation_stop)
+    val retryDescription = stringResource(Res.string.navigation_retry)
+    BoxWithConstraints(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+        Card(
+            modifier = Modifier
+                .fillMaxWidth(LightNavigationDockPolicy.guidanceCardWidthFraction())
+                .clip(guidanceShape)
+                .then(platformNavigationGlass()),
+            shape = guidanceShape,
+            colors = CardDefaults.cardColors(
+                containerColor = glass.containerColor,
+            ),
+            border = BorderStroke(1.dp, glass.borderColor),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            GuidanceDockContent(
+                model = model,
+                phase = model.phase,
+                units = units,
+                nearby = nearby,
+                onOpenNearby = onOpenNearby,
+                onRetry = callbacks.onRetry,
+                canRetry = model.canRetry,
+                retryDescription = retryDescription,
+                onStop = callbacks.onStopNavigation,
+                stopDescription = stopDescription,
+            )
+        }
+    }
+}
+
+@Composable
+private fun GuidanceDockContent(
+    model: NavigationUiModel,
+    phase: NavigationUiPhase,
+    units: UnitSystem,
+    nearby: LightNavigationNearby?,
+    onOpenNearby: () -> Unit,
+    onRetry: () -> Unit,
+    canRetry: Boolean,
+    retryDescription: String,
+    onStop: () -> Unit,
+    stopDescription: String,
+) {
+    val colors = MaterialTheme.colorScheme
+    val palette = LocalLightHudPalette.current
+    val maneuver = model.maneuver
+    val phaseDescription = guidanceDescription(model, phase)
+    Column(modifier = Modifier.fillMaxWidth()) {
         Row(
-            modifier = Modifier.fillMaxWidth(),
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 92.dp)
+                .padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
             Text(
-                maneuverIcon(maneuver.icon),
-                style = MaterialTheme.typography.displaySmall,
-                color = MaterialTheme.colorScheme.primary,
+                text = guidanceIcon(maneuver, phase),
+                color = palette.cyan,
+                fontSize = 50.sp,
+                lineHeight = 52.sp,
+                modifier = Modifier.semantics { contentDescription = phaseDescription },
             )
-            Column(Modifier.weight(1f)) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                        when (phase) {
+                            NavigationUiPhase.NAVIGATING -> if (maneuver == null) {
+                                Text(
+                                    stringResource(Res.string.navigation_location_searching),
+                                    color = colors.onSurfaceVariant,
+                                    maxLines = 1,
+                                )
+                            } else {
+                                Text(
+                                    stringResource(
+                                        Res.string.navigation_turn_in,
+                                        distanceWithUnit(maneuver.distanceText, units),
+                                    ),
+                                    color = palette.cyan,
+                                    fontSize = 13.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Text(
+                                    guidancePrimaryText(maneuver),
+                                    fontWeight = FontWeight.SemiBold,
+                                    fontSize = 15.sp,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                maneuver.streetName
+                                    ?.takeIf { it != maneuver.instruction }
+                                    ?.let { streetName ->
+                                        Text(
+                                            streetName,
+                                            color = colors.onSurfaceVariant,
+                                            fontSize = 12.sp,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                            }
+                            NavigationUiPhase.REROUTING ->
+                                Text(stringResource(Res.string.navigation_rerouting), fontWeight = FontWeight.SemiBold)
+                            NavigationUiPhase.ARRIVED ->
+                                Text(stringResource(Res.string.navigation_arrived), fontWeight = FontWeight.SemiBold)
+                            else -> Unit
+                        }
+            }
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                if (phase == NavigationUiPhase.NAVIGATING) {
+                    model.remainingDistanceText?.let { distance ->
+                        Column(horizontalAlignment = Alignment.End) {
+                            Text(
+                                distanceWithUnit(distance, units),
+                                color = palette.cyan,
+                                fontWeight = FontWeight.SemiBold,
+                                fontSize = 13.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                durationText(model.remainingDurationMinutes ?: 1L),
+                                color = colors.onSurfaceVariant,
+                                fontSize = 11.sp,
+                                maxLines = 1,
+                            )
+                        }
+                    }
+                    nearby?.let { NavigationNearbySummary(it, onOpenNearby) }
+                }
+                if (phase == NavigationUiPhase.REROUTING) {
+                    IconButton(
+                        onClick = onRetry,
+                        enabled = canRetry,
+                        modifier = Modifier.semantics { contentDescription = retryDescription },
+                    ) {
+                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
+                    }
+                }
+            }
+            GuidanceStopButton(onStop = onStop, description = stopDescription)
+        }
+        if (phase == NavigationUiPhase.ARRIVED) ArrivalSoc(model)
+        if (phase == NavigationUiPhase.REROUTING) {
+            model.failureBanner?.let { key ->
                 Text(
-                    stringResource(Res.string.navigation_turn_in, distanceWithUnit(maneuver.distanceText, units)),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    text = if (model.retryAfterSeconds != null) {
+                        stringResource(Res.string.navigation_rate_limited, model.retryAfterSeconds)
+                    } else copyText(key),
+                    color = colors.error,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-                Text(maneuver.streetName ?: maneuver.instruction, fontWeight = FontWeight.Bold)
-                if (maneuver.streetName != null) Text(maneuver.instruction, fontSize = 12.sp)
             }
         }
     }
-    model.remainingDistanceText?.let { distance ->
+}
+
+@Composable
+private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
+    val description = stringResource(Res.string.dashboard_light_group_ride)
+    val palette = LocalLightHudPalette.current
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .minimumInteractiveComponentSize()
+            .clickable(role = Role.Button, onClick = onOpenNearby)
+            .semantics(mergeDescendants = true) { contentDescription = description }
+            .padding(vertical = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(7.dp),
+    ) {
+        Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan, modifier = Modifier.size(17.dp))
+        Column(Modifier.weight(1f)) {
+            Text(stringResource(Res.string.dashboard_light_group_ride), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(
+                stringResource(Res.string.dashboard_light_group_online, state.onlineParticipantCount),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 11.sp,
+                maxLines = 1,
+            )
+        }
+        Text("${state.participantCount}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp, lineHeight = 18.sp)
+    }
+}
+
+@Composable
+private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
+    val description = stringResource(Res.string.dashboard_light_group_ride)
+    val palette = LocalLightHudPalette.current
+    Column(
+        modifier = Modifier
+            .minimumInteractiveComponentSize()
+            .clickable(role = Role.Button, onClick = onOpenNearby)
+            .semantics(mergeDescendants = true) { contentDescription = description },
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(1.dp),
+    ) {
+        NavigationNearbyAvatars(state.participantCount)
         Text(
-            stringResource(
-                Res.string.navigation_route_option,
-                distanceWithUnit(distance, units),
-                durationText(model.remainingDurationMinutes ?: 1L),
-            ),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            stringResource(Res.string.dashboard_light_group_online, state.onlineParticipantCount),
+            color = palette.cyan,
+            fontSize = 11.sp,
+            fontWeight = FontWeight.SemiBold,
+            maxLines = 1,
         )
     }
-    ArrivalSoc(model)
-    Button(onClick = callbacks.onStopNavigation, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(Res.string.navigation_stop))
+}
+
+@Composable
+private fun NavigationNearbyAvatars(participantCount: Int) {
+    val colors = listOf(Color(0xFF2D9CDB), Color(0xFF38B86D), Color(0xFF9D6BD9))
+    val visibleAvatars = participantCount.coerceIn(1, colors.size)
+    Box(modifier = Modifier.size(width = 48.dp, height = 25.dp)) {
+        repeat(visibleAvatars) { index ->
+            Box(
+                modifier = Modifier
+                    .offset(x = (index * 13).dp)
+                    .size(25.dp)
+                    .clip(CircleShape)
+                    .background(colors[index])
+                    .border(1.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape),
+            )
+        }
     }
 }
 
 @Composable
-private fun ReroutingContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
-    Text(stringResource(Res.string.navigation_rerouting), fontWeight = FontWeight.Bold)
-    FailureBanner(model, callbacks)
-    Button(onClick = callbacks.onRetry, enabled = model.canRetry, modifier = Modifier.fillMaxWidth()) {
-        Icon(Icons.Default.Refresh, contentDescription = null)
-        Text(stringResource(Res.string.navigation_retry), modifier = Modifier.padding(start = 6.dp))
-    }
-    OutlinedButton(onClick = callbacks.onStopNavigation, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(Res.string.navigation_stop))
+private fun GuidanceStopButton(onStop: () -> Unit, description: String) {
+    val palette = LocalLightHudPalette.current
+    IconButton(
+        onClick = onStop,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .border(1.dp, palette.cyan.copy(alpha = 0.55f), CircleShape),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(19.dp))
+        }
     }
 }
 
+private fun guidanceIcon(
+    maneuver: NavigationUiManeuver?,
+    phase: NavigationUiPhase,
+): String = when (phase) {
+    NavigationUiPhase.REROUTING -> "↻"
+    NavigationUiPhase.ARRIVED -> "⚑"
+    else -> maneuver?.let { maneuverIcon(it.icon) } ?: "·"
+}
+
+internal fun guidancePrimaryText(maneuver: NavigationUiManeuver): String {
+    val instruction = maneuver.instruction.trim()
+    if (instruction.isBlank()) return maneuver.streetName.orEmpty()
+
+    val street = maneuver.streetName?.trim()?.takeIf { it.isNotEmpty() }
+        ?: return instruction
+    return listOf(
+        " на $street",
+        " по $street",
+        " к $street",
+        " onto $street",
+        " on $street",
+        " at $street",
+    ).firstOrNull(instruction::endsWith)
+        ?.let(instruction::removeSuffix)
+        ?.trim()
+        ?: instruction
+}
+
 @Composable
-private fun ArrivedContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
-    Text(stringResource(Res.string.navigation_arrived), fontWeight = FontWeight.Bold)
-    ArrivalSoc(model)
-    Button(onClick = callbacks.onStopNavigation, modifier = Modifier.fillMaxWidth()) {
-        Text(stringResource(Res.string.navigation_stop))
-    }
+private fun guidanceDescription(model: NavigationUiModel, phase: NavigationUiPhase): String = when (phase) {
+    NavigationUiPhase.REROUTING -> stringResource(Res.string.navigation_rerouting)
+    NavigationUiPhase.ARRIVED -> stringResource(Res.string.navigation_arrived)
+    else -> model.maneuver?.instruction ?: stringResource(Res.string.navigation_title)
 }
 
 @Composable
 private fun ArrivalSoc(model: NavigationUiModel) {
     model.arrivalSocPercent?.let {
-        Text(stringResource(Res.string.navigation_arrival_soc, it), color = MaterialTheme.colorScheme.primary)
+        Text(stringResource(Res.string.navigation_arrival_soc, it), color = LocalLightHudPalette.current.cyan)
     } ?: model.arrivalSocReason?.let { reason ->
         Text(
             stringResource(Res.string.navigation_arrival_soc_unknown, copyText(reason)),
@@ -407,13 +815,12 @@ private fun ArrivalSoc(model: NavigationUiModel) {
 @Composable
 private fun NavigationLocationBanner(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
     val key = model.locationBanner ?: return
-    val text = copyText(key)
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text(text, color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
+        Text(copyText(key), color = MaterialTheme.colorScheme.error, modifier = Modifier.weight(1f))
         when (key) {
             NavigationUiCopyKey.LOCATION_PERMISSION_REQUIRED,
             NavigationUiCopyKey.LOCATION_PERMISSION_DENIED ->
@@ -422,7 +829,7 @@ private fun NavigationLocationBanner(model: NavigationUiModel, callbacks: LightN
                 }
             NavigationUiCopyKey.LOCATION_PROVIDER_DISABLED ->
                 TextButton(onClick = callbacks.onOpenLocationSettings) {
-                    Text(stringResource(Res.string.navigation_allow_location))
+                    Text(stringResource(Res.string.navigation_open_location_settings))
                 }
             else -> Unit
         }
@@ -431,16 +838,23 @@ private fun NavigationLocationBanner(model: NavigationUiModel, callbacks: LightN
 
 @Composable
 private fun FailureBanner(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
-    val key = model.failureBanner ?: return
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Text(
-            text = if (model.retryAfterSeconds != null) {
-                stringResource(Res.string.navigation_rate_limited, model.retryAfterSeconds)
-            } else copyText(key),
-            color = MaterialTheme.colorScheme.error,
-        )
-        if (model.canRetry) {
-            TextButton(onClick = callbacks.onRetry) { Text(stringResource(Res.string.navigation_retry)) }
+    model.failureBanner?.let { key ->
+        val retryDescription = stringResource(Res.string.navigation_retry)
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(
+                text = if (model.retryAfterSeconds != null) {
+                    stringResource(Res.string.navigation_rate_limited, model.retryAfterSeconds)
+                } else copyText(key),
+                color = MaterialTheme.colorScheme.error,
+            )
+            if (model.canRetry) {
+                TextButton(
+                    onClick = callbacks.onRetry,
+                    modifier = Modifier.semantics {
+                        contentDescription = retryDescription
+                    },
+                ) { Text(stringResource(Res.string.navigation_retry)) }
+            }
         }
     }
 }
@@ -491,9 +905,10 @@ private fun copyText(key: NavigationUiCopyKey): String = when (key) {
     NavigationUiCopyKey.ROUTE_PROVIDER_UNAVAILABLE -> stringResource(Res.string.navigation_provider_unavailable)
     NavigationUiCopyKey.ROUTE_INVALID_REQUEST -> stringResource(Res.string.navigation_invalid_request)
     NavigationUiCopyKey.ROUTE_MALFORMED_RESPONSE -> stringResource(Res.string.navigation_malformed_response)
-    NavigationUiCopyKey.PROFILE_REQUIRED -> stringResource(Res.string.navigation_profile_title)
-    NavigationUiCopyKey.PROFILE_CONFIRMATION_REQUIRED -> stringResource(Res.string.navigation_confirm_profile)
-    NavigationUiCopyKey.SOC_NO_ROUTE -> stringResource(Res.string.navigation_arrival_soc_unknown, stringResource(Res.string.navigation_no_route))
+    NavigationUiCopyKey.SOC_NO_ROUTE -> stringResource(
+        Res.string.navigation_arrival_soc_unknown,
+        stringResource(Res.string.navigation_no_route),
+    )
     NavigationUiCopyKey.SOC_BMS_DISCONNECTED -> stringResource(Res.string.navigation_soc_bms_disconnected)
     NavigationUiCopyKey.SOC_PACKS_PARTIAL -> stringResource(Res.string.navigation_soc_packs_partial)
     NavigationUiCopyKey.SOC_UNEARNED -> stringResource(Res.string.navigation_soc_unearned)

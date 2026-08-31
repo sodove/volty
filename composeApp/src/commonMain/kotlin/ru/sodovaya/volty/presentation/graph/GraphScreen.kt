@@ -35,6 +35,7 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -86,6 +87,7 @@ import volty.composeapp.generated.resources.graph_now
 import volty.composeapp.generated.resources.graph_power
 import volty.composeapp.generated.resources.graph_plot
 import volty.composeapp.generated.resources.graph_point_time
+import volty.composeapp.generated.resources.graph_ride_max_note
 import volty.composeapp.generated.resources.graph_remove
 import volty.composeapp.generated.resources.graph_scale_note
 import volty.composeapp.generated.resources.graph_signals
@@ -111,7 +113,9 @@ private val PlotColors = listOf(
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalTime::class)
 @Composable
-fun GraphScreen(component: GraphComponent) {
+fun GraphScreen(
+    component: GraphComponent,
+) {
     val state by component.state.collectAsState()
     var showHistory by remember { mutableStateOf(false) }
     var showComparison by remember { mutableStateOf(false) }
@@ -131,6 +135,7 @@ fun GraphScreen(component: GraphComponent) {
                             text = stringResource(Res.string.graph_compare),
                             modifier = Modifier
                                 .clickable { showComparison = true }
+                                .minimumInteractiveComponentSize()
                                 .padding(horizontal = 6.dp, vertical = 8.dp),
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold,
@@ -143,6 +148,7 @@ fun GraphScreen(component: GraphComponent) {
                                     component.onHistoryRequested()
                                     showHistory = true
                                 }
+                                .minimumInteractiveComponentSize()
                                 .padding(horizontal = 6.dp, vertical = 8.dp),
                             color = MaterialTheme.colorScheme.primary,
                             fontWeight = FontWeight.SemiBold,
@@ -430,6 +436,14 @@ private fun MetricTable(
                 fontWeight = FontWeight.SemiBold
             )
         }
+        item {
+            Text(
+                stringResource(Res.string.graph_ride_max_note),
+                modifier = Modifier.padding(horizontal = 8.dp),
+                fontSize = 10.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         item { MetricStatsHeader() }
         items(metrics, key = { it.name }) { metric ->
             if (metric == metrics.first() || metricGroupResource(metric) != metricGroupResource(metrics[metrics.indexOf(metric) - 1])) {
@@ -446,6 +460,7 @@ private fun MetricTable(
                 active = metric in state.visibleMetrics,
                 point = state.selectedPoints[metric] ?: state.series[metric]?.points?.lastOrNull(),
                 extrema = plotExtrema(state.series[metric]?.points.orEmpty()),
+                ridePeak = state.ridePeaks[metric],
                 canRemove = state.visibleMetrics.size > 1,
                 onToggle = { enabled -> if (enabled) onMetricAdded(metric) else onMetricRemoved(metric) }
             )
@@ -504,6 +519,7 @@ private fun MetricRow(
     active: Boolean,
     point: GraphPoint?,
     extrema: PlotExtrema?,
+    ridePeak: Float?,
     canRemove: Boolean,
     onToggle: (Boolean) -> Unit
 ) {
@@ -514,6 +530,7 @@ private fun MetricRow(
             .clip(RoundedCornerShape(12.dp))
             .background(if (active) color.copy(alpha = 0.10f) else Color.Transparent)
             .clickable { onToggle(!active) }
+            .minimumInteractiveComponentSize()
             .padding(horizontal = 8.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -546,7 +563,9 @@ private fun MetricRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
             Text(
-                text = extrema?.let { formatVal(it.max, metric) } ?: "—",
+                text = ridePeak?.let { formatVal(it, metric) }
+                    ?: extrema?.let { formatVal(it.max, metric) }
+                    ?: "—",
                 modifier = Modifier.weight(1f),
                 textAlign = TextAlign.End,
                 fontSize = 12.sp,
@@ -582,6 +601,7 @@ private fun WindowPicker(window: GraphWindow, onSelect: (GraphWindow) -> Unit) {
                         .clip(RoundedCornerShape(12.dp))
                         .background(if (active) MaterialTheme.colorScheme.primary else Color.Transparent)
                         .clickable { onSelect(candidate) }
+                        .minimumInteractiveComponentSize()
                         .padding(horizontal = 12.dp, vertical = 7.dp),
                     color = if (active) MaterialTheme.colorScheme.onPrimary else MaterialTheme.colorScheme.onSurfaceVariant,
                     fontSize = 11.sp,

@@ -14,7 +14,6 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.presentation.navigation.LightNavigationState
 import ru.sodovaya.volty.presentation.navigation.NavigationPhase
 
@@ -38,6 +37,19 @@ class NavigationMapRenderPolicyTest {
     }
 
     @Test
+    fun `route preview suspends live follow so the fitted route remains visible`() {
+        val state = LightNavigationState(
+            phase = NavigationPhase.RouteReady(plan(), selectedRouteId = "short"),
+            requestGeneration = 7L,
+            followState = RideMapFollowState(RideMapFollowMode.FOLLOWING),
+        )
+
+        val scene = NavigationMapRenderPolicy.scene(state, ownFix = fix(1_000L))
+
+        assertEquals(RideMapFollowMode.FREE, scene.followState.mode)
+    }
+
+    @Test
     fun `navigation follows own fix but never refits route bounds`() {
         val fix = fix(1_000L)
         val state = LightNavigationState(
@@ -46,6 +58,7 @@ class NavigationMapRenderPolicyTest {
                 selectedRouteId = "short",
                 guidance = guidance("short", remainingDistance = 500.0),
             ),
+            locationStatus = ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH,
             requestGeneration = 8L,
         )
 
@@ -58,6 +71,25 @@ class NavigationMapRenderPolicyTest {
     }
 
     @Test
+    fun `stale navigation fix keeps route visible but disables active guidance and follow camera`() {
+        val state = LightNavigationState(
+            phase = NavigationPhase.Navigating(
+                plan = plan(),
+                selectedRouteId = "short",
+                guidance = guidance("short", remainingDistance = 500.0),
+            ),
+            locationStatus = ru.sodovaya.volty.presentation.navigation.LocationUiStatus.STALE,
+            requestGeneration = 8L,
+        )
+
+        val scene = NavigationMapRenderPolicy.scene(state, ownFix = fix(1_000L))
+
+        assertTrue(scene.routes.first().selected)
+        assertFalse(scene.routes.first().active)
+        assertEquals(null, scene.cameraRequest)
+    }
+
+    @Test
     fun `free follow preserves user camera and completed fraction is clamped`() {
         val state = LightNavigationState(
             phase = NavigationPhase.Navigating(
@@ -65,6 +97,7 @@ class NavigationMapRenderPolicyTest {
                 selectedRouteId = "short",
                 guidance = guidance("short", remainingDistance = -100.0),
             ),
+            locationStatus = ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH,
             followState = RideMapFollowState(RideMapFollowMode.FREE, 42L),
         )
 
@@ -208,7 +241,6 @@ class NavigationMapRenderPolicyTest {
                 subtitle = null,
                 coordinate = GeoCoordinate(56.83, 60.61),
             ),
-            profile = RouteProfile.LIGHT_EV,
             alternatives = listOf(
                 alternative("short", 1_000.0, 56.60),
                 alternative("long", 2_000.0, 56.61),

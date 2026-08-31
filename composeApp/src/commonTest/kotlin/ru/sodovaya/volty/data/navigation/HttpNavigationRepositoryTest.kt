@@ -17,7 +17,6 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteRequest
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
@@ -56,7 +55,7 @@ class HttpNavigationRepositoryTest {
         val plan = assertIs<NavigationResult.Success<*>>(result).value
         assertEquals(3, (plan as ru.sodovaya.volty.domain.navigation.RoutePlan).alternatives.size)
         val body = (requests.single().body as TextContent).text
-        assertTrue(body.contains("\"profile\":\"BICYCLE\""))
+        assertTrue(!body.contains("\"profile\""))
         assertTrue(body.contains("\"alternativesLimit\":3"))
         assertTrue(body.contains("\"latitude\":56.8"))
         assertEquals(ContentType.Application.Json, requests.single().body.contentType)
@@ -80,7 +79,7 @@ class HttpNavigationRepositoryTest {
         assertEquals(NavigationFailure.ProviderUnavailable, assertFailure(unavailable.search("Main", null, "ru-RU")))
 
         val malformed = HttpNavigationRepository(HttpClient(MockEngine {
-            respond("{\"schemaVersion\":1,\"destination\":{\"id\":\"p\",\"title\":\"P\",\"latitude\":56.8,\"longitude\":60.6},\"profile\":\"BICYCLE\",\"routes\":[]}", headers = jsonHeaders())
+            respond("{\"schemaVersion\":1,\"destination\":{\"id\":\"p\",\"title\":\"P\",\"latitude\":56.8,\"longitude\":60.6},\"routes\":[]}", headers = jsonHeaders())
         }), "https://example.test/v1")
         assertEquals(NavigationFailure.MalformedResponse, assertFailure(malformed.routes(testRequest())))
     }
@@ -101,7 +100,6 @@ class HttpNavigationRepositoryTest {
     private fun testRequest() = RouteRequest(
         origin = GeoCoordinate(56.8, 60.6),
         destination = PlaceCandidate("place-1", "Main Street", "Yekaterinburg", GeoCoordinate(56.81, 60.61)),
-        profile = RouteProfile.BICYCLE,
         languageTag = "ru-RU",
         alternativesLimit = 3,
     )
@@ -115,7 +113,6 @@ class HttpNavigationRepositoryTest {
         {
           "schemaVersion": 1,
           "destination": {"id":"place-1","title":"Main Street","subtitle":"Yekaterinburg","latitude":56.81,"longitude":60.61},
-          "profile":"BICYCLE",
           "routes":[${(1..count).joinToString(",") { index ->
             """{"id":"route-$index","distanceMeters":100.0,"durationSeconds":20,"geometry":[{"latitude":56.8,"longitude":60.6},{"latitude":56.81,"longitude":60.61}],"maneuvers":[{"id":"m-$index","kind":"ARRIVE","instruction":"Arrive","streetName":null,"shapeIndex":1,"distanceMeters":100.0}]}"""
           }}]

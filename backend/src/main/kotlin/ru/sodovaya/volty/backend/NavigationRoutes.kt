@@ -63,7 +63,6 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
         throw ApiException(HttpStatusCode.PayloadTooLarge, "navigation_body_too_large", "Navigation request is too large")
     }
     val body = call.receive<NavigationRouteRequestDto>()
-    val profile = resolveNavigationProfile(body.profile, dependencies.config)
     validateCoordinate(body.origin)
     validatePlace(body.destination)
     val languageTag = validateLanguageTag(body.languageTag)
@@ -71,6 +70,7 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
     if (!dependencies.config.navigationEnabled || dependencies.config.navigationProvider == "disabled") {
         throw navigationUnavailable()
     }
+    if (dependencies.config.navigationProfileId?.trim().isNullOrEmpty()) throw navigationUnavailable()
     val ip = call.request.local.remoteHost
     val now = Instant.now().toEpochMilli()
     if (!dependencies.navigationRouteLimiter.allow(ip, now / 1_000L)) {
@@ -79,7 +79,6 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
     val providerRequest = ProviderRouteRequest(
         origin = body.origin,
         destination = GeoCoordinateDto(body.destination.latitude, body.destination.longitude),
-        providerProfileId = profile.providerId,
         languageTag = languageTag,
         alternativesLimit = body.alternativesLimit,
     )
@@ -98,7 +97,6 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
             val response = providerResponse.copy(
                 schemaVersion = 1,
                 destination = body.destination,
-                profile = profile.voltyName,
                 routes = result.value.routes.take(body.alternativesLimit),
             )
             if (!isValidRouteResponse(response)) throw navigationMalformed()
@@ -110,21 +108,6 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
         ProviderResult.MalformedResponse -> throw navigationMalformed()
     }
 }
-
-private fun resolveNavigationProfile(raw: String, config: AppConfig): NavigationProfileMapping {
-    val normalized = raw.trim().lowercase()
-    val key = when (normalized) {
-        "bicycle" -> "bicycle"
-        "light_ev", "light-ev", "light ev" -> "light_ev"
-        "motor_scooter", "motor-scooter", "motor scooter" -> "motor_scooter"
-        else -> throw invalidNavigation("profile is not supported")
-    }
-    val providerId = config.navigationProfileIds[key]?.trim().orEmpty()
-    if (providerId.isEmpty()) throw navigationUnavailable()
-    return NavigationProfileMapping(key.uppercase(), providerId)
-}
-
-private data class NavigationProfileMapping(val voltyName: String, val providerId: String)
 
 private fun validateNavigationQuery(query: String) {
     if (query.length !in 3..160) throw invalidNavigation("q must be between 3 and 160 characters")
@@ -216,7 +199,6 @@ private fun AppDependencies.routeCacheKey(request: ProviderRouteRequest): String
     request.origin.longitude,
     request.destination.latitude,
     request.destination.longitude,
-    request.providerProfileId,
     request.languageTag,
     request.alternativesLimit,
 ).joinToString("|")

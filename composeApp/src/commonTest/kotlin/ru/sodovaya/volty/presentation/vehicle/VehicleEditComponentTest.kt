@@ -168,7 +168,7 @@ class VehicleEditComponentTest {
     }
 
     private class FakeVehicleRepo(
-        private val saved: List<Vehicle>,
+        private var saved: List<Vehicle>,
         savedPeaks: Map<String, GaugePeaks> = emptyMap()
     ) : VehicleRepository {
         val upserts = mutableListOf<Vehicle>()
@@ -198,6 +198,10 @@ class VehicleEditComponentTest {
         override suspend fun upsert(vehicle: Vehicle) {
             upserts += vehicle
             upsertGate?.await()
+        }
+        /** Simulate the alerts screen saving while this editor is underneath it. */
+        fun replaceStored(vehicle: Vehicle) {
+            saved = listOf(vehicle)
         }
         override suspend fun delete(id: String) {}
         override suspend fun touch(id: String) {}
@@ -1187,6 +1191,37 @@ class VehicleEditComponentTest {
         assertEquals(MotorConfig(polePairs = 7, wheelDiameterMm = 200, gearRatio = 2.5f), saved.controllers.single().motor)
         assertEquals(DashboardStyle.CLEAN, saved.dashboardStyle)
         assertEquals(SecondaryGauge.BATTERY, saved.secondaryGauge)
+    }
+
+    /**
+     * The alerts screen is pushed on top of this form and owns the complete
+     * [AlertConfig]. Saving that screen updates the repository while this
+     * component is still alive, so a later vehicle save must not write the
+     * editor's old alert snapshot back over the newer battery/reconnect values.
+     */
+    @Test
+    fun `saving the vehicle after alerts were edited preserves the latest alert config`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val original = existingVehicle()
+        val repo = FakeVehicleRepo(listOf(original))
+        val c = component(repo)
+        advanceUntilIdle()
+
+        val latestAlerts = original.alertConfig.copy(
+            cellLowV = 2.85f,
+            cellDeltaMv = 420,
+            disconnectNotify = true,
+            chargeCompleteNotify = true
+        )
+        // This is the write performed by VehicleAlertsComponent while the
+        // vehicle editor remains underneath it in the navigation stack.
+        repo.replaceStored(original.copy(alertConfig = latestAlerts))
+
+        c.onNameChanged("Renamed")
+        c.onSave()
+        advanceUntilIdle()
+
+        assertEquals(latestAlerts, repo.upserts.single().alertConfig)
     }
 
     /**

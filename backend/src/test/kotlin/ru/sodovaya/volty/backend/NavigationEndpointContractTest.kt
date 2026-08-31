@@ -27,7 +27,7 @@ class NavigationEndpointContractTest {
     }
 
     @Test
-    fun invalid_route_input_and_unknown_profile_do_not_call_provider() = testApplication {
+    fun invalid_route_input_is_rejected_but_legacy_profile_is_ignored() = testApplication {
         val provider = FakeNavigationProvider()
         application { module(testDependencies(provider)) }
 
@@ -35,14 +35,14 @@ class NavigationEndpointContractTest {
             header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
             setBody(routeRequest(origin = GeoCoordinateDto(91.0, 60.6)))
         }
-        val unknown = client.post("/v1/navigation/routes") {
+        val legacy = client.post("/v1/navigation/routes") {
             header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
             setBody(routeRequest(profile = "spaceship"))
         }
 
         assertEquals(HttpStatusCode.BadRequest, invalid.status)
-        assertEquals(HttpStatusCode.BadRequest, unknown.status)
-        assertEquals(0, provider.routeCalls)
+        assertEquals(HttpStatusCode.OK, legacy.status)
+        assertEquals(1, provider.routeCalls)
     }
 
     @Test
@@ -93,11 +93,7 @@ class NavigationEndpointContractTest {
             navigationProvider = "graphhopper",
             navigationEnabled = true,
             graphHopperApiKey = "test-key",
-            navigationProfileIds = mapOf(
-                "bicycle" to "bike-custom",
-                "light_ev" to "small-electric",
-                "motor_scooter" to "scooter-custom",
-            ),
+            navigationProfileId = "personal-mobility",
         ),
         store = object : BackendStore {},
         testMode = true,
@@ -106,7 +102,7 @@ class NavigationEndpointContractTest {
 
     private fun routeRequest(
         origin: GeoCoordinateDto = GeoCoordinateDto(56.8, 60.6),
-        profile: String = "BICYCLE",
+        profile: String? = null,
     ) = backendJson().encodeToString(
         NavigationRouteRequestDto(
             origin = origin,
@@ -123,7 +119,6 @@ class NavigationEndpointContractTest {
         var routeResult: ProviderResult<NavigationRouteResponse> = ProviderResult.Success(
             NavigationRouteResponse(
                 destination = NavigationPlaceDto("place-1", "Main Street", null, 56.81, 60.61),
-                profile = "bike-custom",
                 routes = listOf(
                     NavigationRouteDto(
                         id = "route-1",

@@ -63,6 +63,9 @@
 -dontwarn org.openjsse.net.ssl.OpenJSSE
 -dontwarn kotlin.native.ObjCName
 
+# Embedded BRouter loads its profile model and formatters by class name.
+-keep class btools.** { *; }
+
 -flattenpackagehierarchy
 -allowaccessmodification
 

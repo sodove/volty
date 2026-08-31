@@ -2,7 +2,12 @@ package ru.sodovaya.volty.di
 
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
+import ru.sodovaya.volty.data.ble.AndroidBleAdapterStateProvider
+import ru.sodovaya.volty.data.ble.BleAdapterStateProvider
 import ru.sodovaya.volty.data.location.AndroidRideLocationRepository
+import ru.sodovaya.volty.data.navigation.AndroidHybridNavigationRepository
+import ru.sodovaya.volty.data.navigation.OsmNavigationRepository
+import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRoutingPackageManager
 import ru.sodovaya.volty.data.social.AndroidSocialCredentialStore
 import ru.sodovaya.volty.data.social.AndroidLiveKitVoiceRoomEngine
 import ru.sodovaya.volty.data.social.AndroidLocationProvider
@@ -18,16 +23,26 @@ import ru.sodovaya.volty.service.ServiceController
 import ru.sodovaya.volty.domain.social.LocationProvider
 import ru.sodovaya.volty.domain.social.VoiceRoomEngine
 import ru.sodovaya.volty.domain.location.RideLocationRepository
+import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import org.koin.android.ext.koin.androidContext
 import org.koin.dsl.module
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
     single { DataStoreFactory(androidContext()) }
+    single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
     single<LocationProvider> { AndroidLocationProvider(get()) }
-    single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext()) }
+    single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
+    single { AndroidOfflineRoutingPackageManager(androidContext()) }
+    single<NavigationRepository> {
+        AndroidHybridNavigationRepository(
+            online = get<OsmNavigationRepository>(),
+            packageManager = get(),
+            context = androidContext(),
+        )
+    }
     single { PermissionsChecker(androidContext()) }
     single<Notifier> { AndroidNotifier(androidContext()) }
     // A single: one speaker, so exactly one owner. Task 8's service drives it and

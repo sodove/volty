@@ -9,10 +9,10 @@ import ru.sodovaya.volty.presentation.root.RootComponent
 import ru.sodovaya.volty.presentation.root.RootScreen
 
 @Composable
-fun App(root: RootComponent) {
+fun App(root: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
     VoltyTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
-            RootScreen(root)
+            RootScreen(root, onOpenLocationSettings)
         }
     }
 }

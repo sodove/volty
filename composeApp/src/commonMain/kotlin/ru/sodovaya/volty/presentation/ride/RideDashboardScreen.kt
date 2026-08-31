@@ -46,8 +46,10 @@ import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
+import ru.sodovaya.volty.domain.social.SocialRideRuntime
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
+import ru.sodovaya.volty.presentation.common.NearbyLinkButton
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.VehiclePill
 import ru.sodovaya.volty.presentation.common.bmsTypeLabel
@@ -55,6 +57,9 @@ import ru.sodovaya.volty.presentation.common.iconKeyToEmoji
 import ru.sodovaya.volty.presentation.common.ResponsiveLayoutMode
 import ru.sodovaya.volty.presentation.common.responsiveLayoutMode
 import ru.sodovaya.volty.presentation.dashboard.VehicleSheet
+import ru.sodovaya.volty.presentation.nearby.SocialLiveState
+import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
+import ru.sodovaya.volty.presentation.navigation.LightNavigationState
 import ru.sodovaya.volty.presentation.ride.gauge.RadialGauge
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
@@ -99,6 +104,7 @@ import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
 import volty.composeapp.generated.resources.status_idle
 import volty.composeapp.generated.resources.status_reconnecting
+import org.koin.compose.koinInject
 import volty.composeapp.generated.resources.status_scanning
 import volty.composeapp.generated.resources.controller_issue_not_reported
 import volty.composeapp.generated.resources.controller_issue_not_understood
@@ -126,9 +132,14 @@ fun RideDashboardScreen(
     mapLayer: (@Composable () -> Unit)? = null,
     onOpenBattery: () -> Unit = {},
     onOpenNearby: () -> Unit = {},
+    onOpenGroupMap: () -> Unit = {},
     onRecenterMap: () -> Unit = {},
     gpsSpeedKmh: Float? = null,
+    socialLiveState: SocialLiveState = SocialLiveState(),
+    navigationState: LightNavigationState? = null,
+    navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
+    val socialRuntime: SocialRideRuntime = koinInject()
     val state by component.state.collectAsState()
     val vehicle = state.vehicle
     val motion = state.motion
@@ -140,10 +151,14 @@ fun RideDashboardScreen(
     // update below lives in a LaunchedEffect keyed on the incoming sample rather
     // than mutating state directly during composition.
     var sessionMaxSpeedKmh by remember(vehicle?.id) { mutableStateOf(0f) }
+    var sessionMaxDutyPercent by remember(vehicle?.id) { mutableStateOf(0f) }
     val displayedSpeedKmh = LightDashboardMapper.speedKmh(motion, gpsSpeedKmh)
     LaunchedEffect(vehicle?.id, motion.timestamp, gpsSpeedKmh) {
         if (displayedSpeedKmh != null && displayedSpeedKmh > sessionMaxSpeedKmh) {
             sessionMaxSpeedKmh = displayedSpeedKmh
+        }
+        MotionReadings.dutyPercent(motion)?.let { duty ->
+            if (duty > sessionMaxDutyPercent) sessionMaxDutyPercent = duty
         }
     }
     // Never zero: the hero always has at least a 70 km/h scale to draw against.
@@ -245,7 +260,7 @@ fun RideDashboardScreen(
             )
         }
 
-        if (state.faults.isNotEmpty()) {
+        if (state.faults.isNotEmpty() && rideFaultPlacement(state.style) == RideFaultPlacement.INLINE) {
             RideFaultsBanner(state.faults)
         }
 
@@ -298,13 +313,21 @@ fun RideDashboardScreen(
                     recentSpeeds = recentSpeeds,
                     layoutMode = lightMode,
                     modifier = Modifier.fillMaxWidth(),
-                    statusText = statusLabel,
+                    faults = state.faults,
                     statusColor = statusColor,
                     mapLayer = mapLayer,
                     onOpenBattery = onOpenBattery,
                     onOpenNearby = onOpenNearby,
+                    onOpenGroupMap = onOpenGroupMap,
                     onRecenterMap = onRecenterMap,
+                    onOpenGraph = component::onOpenGraph,
+                    rideMaxSpeedKmh = sessionMaxSpeedKmh,
+                    rideMaxDutyPercent = sessionMaxDutyPercent,
                     gpsSpeedKmh = gpsSpeedKmh,
+                    socialLiveState = socialLiveState,
+                    socialRuntime = socialRuntime,
+                    navigationState = navigationState,
+                    navigationCallbacks = navigationCallbacks,
                 )
             }
 
@@ -314,7 +337,13 @@ fun RideDashboardScreen(
         // (Classic's cluster otherwise leaves riders no
         // Graph affordance on this screen at all).
         if (state.style != DashboardStyle.LIGHT) {
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                NearbyLinkButton(onClick = onOpenNearby)
+                Spacer(Modifier.width(8.dp))
                 GraphLinkButton(onClick = component::onOpenGraph)
             }
 
@@ -337,9 +366,13 @@ fun RideDashboardScreen(
 }
 
 @Composable
-private fun RideFaultsBanner(faults: List<RideDashboardComponent.FaultEntry>) {
+internal fun RideFaultsBanner(
+    faults: List<RideDashboardComponent.FaultEntry>,
+    modifier: Modifier = Modifier,
+) {
     Column(
         modifier = Modifier
+            .then(modifier)
             .fillMaxWidth()
             .clip(RoundedCornerShape(16.dp))
             .background(MaterialTheme.colorScheme.errorContainer)

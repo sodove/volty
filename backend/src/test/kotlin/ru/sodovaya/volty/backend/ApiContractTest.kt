@@ -52,6 +52,7 @@ class ApiContractTest {
         }
         assertEquals(HttpStatusCode.Created, registered.status)
         val session = json.decodeFromString<SessionResponse>(registered.bodyAsText())
+        assertTrue(session.expiresAtEpochMillis in (System.currentTimeMillis()..(System.currentTimeMillis() + 20 * 60_000L)))
 
         val profile = jsonClient.get("/v1/profile") { bearerAuth(session.accessToken) }
         assertEquals(HttpStatusCode.OK, profile.status)

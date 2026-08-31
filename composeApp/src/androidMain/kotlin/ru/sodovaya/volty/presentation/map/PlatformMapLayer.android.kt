@@ -187,6 +187,11 @@ private fun AndroidMapLibreView(
     val hazeState = rememberHazeState()
     val mapView = remember(context, cacheKey) { MapViewCache.obtain(cacheKey, context) }
 
+    DisposableEffect(hazeState) {
+        publishMapHazeState(hazeState)
+        onDispose { publishMapHazeState(null) }
+    }
+
     LaunchedEffect(map, darkTheme) {
         val readyMap = map ?: return@LaunchedEffect
         val targetStyleUrl = if (darkTheme) DARK_MAP_STYLE_URL else LIGHT_MAP_STYLE_URL
@@ -372,7 +377,25 @@ private fun fitAlternatives(map: MapLibreMap, points: List<GeoCoordinate>) {
     }
     val boundsBuilder = LatLngBounds.Builder()
     latLngs.forEach(boundsBuilder::include)
-    map.animateCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 80))
+    val bounds = boundsBuilder.build()
+    // Keep the preview in the unobstructed map band: the HUD and the route card
+    // occupy the top and bottom edges of the native map view. Flattening the
+    // camera also prevents the retained ride tilt from projecting a long route
+    // underneath the dashboard chrome.
+    val horizontalPadding = (map.width * 0.06f).toInt().coerceAtLeast(48)
+    val topPadding = (map.height * 0.14f).toInt().coerceAtLeast(96)
+    val bottomPadding = (map.height * 0.28f).toInt().coerceAtLeast(180)
+    map.moveCamera(
+        CameraUpdateFactory.newLatLngBounds(
+            bounds,
+            0.0,
+            0.0,
+            horizontalPadding,
+            topPadding,
+            horizontalPadding,
+            bottomPadding,
+        ),
+    )
 }
 
 private fun recenter(map: MapLibreMap, fix: RideLocationFix) {
@@ -391,7 +414,7 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .fillMaxHeight(MAP_BLUR_BAND_FRACTION)
+                .fillMaxHeight(MAP_TOP_BLUR_BAND_FRACTION)
                 .hazeEffect(state = hazeState) {
                     blurRadius = 24.dp
                     inputScale = HazeInputScale.Auto
@@ -405,7 +428,7 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .fillMaxHeight(MAP_BLUR_BAND_FRACTION)
+                .fillMaxHeight(MAP_BOTTOM_BLUR_BAND_FRACTION)
                 .hazeEffect(state = hazeState) {
                     blurRadius = 24.dp
                     inputScale = HazeInputScale.Auto
@@ -418,7 +441,8 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
     }
 }
 
-private const val MAP_BLUR_BAND_FRACTION = 0.30f
+private const val MAP_TOP_BLUR_BAND_FRACTION = 0.30f
+private const val MAP_BOTTOM_BLUR_BAND_FRACTION = 0.40f
 
 @Composable
 private fun MapBlurBand(modifier: Modifier) {

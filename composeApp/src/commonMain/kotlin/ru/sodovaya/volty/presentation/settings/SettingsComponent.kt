@@ -6,6 +6,7 @@ import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.CoroutineScope
@@ -28,6 +29,7 @@ interface SettingsComponent {
     fun onUnitSystemChanged(system: UnitSystem)
     fun onDefaultDashboardStyleChanged(style: DashboardStyle)
     fun onFaultDisplayDurationChanged(seconds: Int)
+    fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
     fun onEditVehicle(id: String)
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
@@ -42,6 +44,7 @@ interface SettingsComponent {
         val unitSystem: UnitSystem = UnitSystem.METRIC,
         val defaultDashboardStyle: DashboardStyle = DashboardStyle.LIGHT,
         val faultDisplayDurationSec: Int = 60,
+        val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val vehicles: List<Vehicle> = emptyList()
     )
 }
@@ -65,7 +68,8 @@ class DefaultSettingsComponent(
             autoConnectCountdownSec = appPrefs.autoConnectCountdownSec.value,
             unitSystem = appPrefs.unitSystem.value,
             defaultDashboardStyle = appPrefs.defaultDashboardStyle.value,
-            faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value
+            faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
+            voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
         )
     )
     override val state: StateFlow<SettingsComponent.State> = _state.asStateFlow()
@@ -85,6 +89,7 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
+        scope.launch { appPrefs.voiceMicrophoneSource.collect { v -> _state.update { it.copy(voiceMicrophoneSource = v) } } }
     }
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
@@ -94,6 +99,7 @@ class DefaultSettingsComponent(
     override fun onUnitSystemChanged(system: UnitSystem) { scope.launch { appPrefs.setUnitSystem(system) } }
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
+    override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
     override fun onEditVehicle(id: String) { onEditVehicleRequested(id) }
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }

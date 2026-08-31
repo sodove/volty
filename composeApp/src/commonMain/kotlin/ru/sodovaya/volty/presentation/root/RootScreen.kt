@@ -72,7 +72,7 @@ import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
 
 @Composable
-fun RootScreen(component: RootComponent) {
+fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
     val darkTheme = LocalVoltyDarkTheme.current
@@ -213,13 +213,12 @@ fun RootScreen(component: RootComponent) {
                             },
                             onQueryChanged = component.navigation::onQueryChanged,
                             onPlaceSelected = component.navigation::onPlaceSelected,
-                            onProfileSelected = component.navigation::onProfileSelected,
-                            onProfileConfirmed = component.navigation::onProfileConfirmed,
                             onAlternativeSelected = component.navigation::onAlternativeSelected,
                             onStartNavigation = component.navigation::onStartNavigation,
                             onRetry = component.navigation::onRetry,
                             onStopNavigation = component.navigation::onStopNavigation,
                             onRequestLocationPermission = requestLocationPermission,
+                            onOpenLocationSettings = onOpenLocationSettings,
                         ),
                     )
                     is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)

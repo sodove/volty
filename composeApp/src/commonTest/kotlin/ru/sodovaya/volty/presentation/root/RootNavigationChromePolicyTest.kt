@@ -23,4 +23,22 @@ class RootNavigationChromePolicyTest {
         assertTrue(bottomTabBarVisible(RootChromeDestination.NEARBY, null))
         assertTrue(bottomTabBarVisible(RootChromeDestination.SETTINGS, null))
     }
+
+    @Test
+    fun group_map_has_root_chrome_but_light_ride_does_not() {
+        assertTrue(bottomTabBarVisible(RootChromeDestination.GROUP_MAP, null))
+        assertFalse(bottomTabBarVisible(RootChromeDestination.RIDE, DashboardStyle.LIGHT))
+    }
+
+    @Test
+    fun nearby_does_not_add_a_second_map_tab() {
+        assertFalse(shouldShowGroupMapTab(RootChromeDestination.NEARBY, groupMapVisible = false))
+        assertTrue(shouldShowGroupMapTab(RootChromeDestination.GROUP_MAP, groupMapVisible = true))
+    }
+
+    @Test
+    fun group_map_back_is_a_pop_and_never_a_runtime_reset() {
+        assertTrue(groupMapBackAction(hasPreviousDestination = true).shouldPop)
+        assertFalse(groupMapBackAction(hasPreviousDestination = true).clearsSocialRuntime)
+    }
 }

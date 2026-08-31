@@ -30,4 +30,10 @@ class LightHudGeometryPolicyTest {
         assertTrue(left.valueWeight >= 700)
         assertTrue(left.labelWeight >= 600)
     }
+
+    @Test
+    fun map_controls_are_kept_on_the_right_edge_at_screen_center() {
+        assertEquals(LightMapControlsEdge.RIGHT, lightMapControlsPlacement().edge)
+        assertEquals(LightMapControlsVertical.CENTER, lightMapControlsPlacement().vertical)
+    }
 }

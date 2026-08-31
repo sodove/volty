@@ -50,6 +50,7 @@ internal fun bleRepositoryTest(
     vehicleRepository: VehicleRepository = EmptyVehicleRepository(),
     serviceStart: () -> Unit = {},
     serviceStop: () -> Unit = {},
+    bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
     body: suspend TestScope.(KableBmsRepository) -> Unit
 ): TestResult = runTest {
     val repo = KableBmsRepository.forTesting(
@@ -57,6 +58,7 @@ internal fun bleRepositoryTest(
         serviceStart = serviceStart,
         serviceStop = serviceStop,
         coroutineContext = StandardTestDispatcher(testScheduler),
+        bleAdapterStateProvider = bleAdapterStateProvider,
     )
     try {
         body(repo)

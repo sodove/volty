@@ -57,11 +57,13 @@ kotlin {
             implementation(libs.graphics.shapes)
             implementation(libs.haze)
             implementation(libs.ktor.client.cio)
+            implementation(libs.ktor.client.okhttp)
             implementation("org.maplibre.gl:android-sdk:13.0.2")
             implementation("io.livekit:livekit-android:2.25.3") {
                 exclude(group = "com.github.davidliu", module = "audioswitch")
             }
             implementation(files("libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar"))
+            implementation(files("libs/brouter-1.7.10-all.jar"))
         }
     }
 }
@@ -125,8 +127,8 @@ android {
         applicationId = "ru.sodovaya.volty"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.6.7"
+        versionCode = 26
+        versionName = "0.7.4"
     }
 
     compileOptions {

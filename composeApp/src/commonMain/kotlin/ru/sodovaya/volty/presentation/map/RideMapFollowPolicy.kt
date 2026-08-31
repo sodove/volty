@@ -15,7 +15,7 @@ data class RideMapFollowState(
     val lastGestureAtMillis: Long? = null,
 )
 
-internal const val RIDE_MAP_AUTO_RETURN_DELAY_MILLIS = 2_000L
+internal const val RIDE_MAP_AUTO_RETURN_DELAY_MILLIS = 5_000L
 internal const val RIDE_MAP_MOVING_SPEED_THRESHOLD_KMH = 2f
 
 internal fun onRideMapCameraMoveStarted(

@@ -39,7 +39,6 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -88,7 +87,7 @@ class LightNavigationComponentProgressTest {
     }
 
     @Test
-    fun `starting a ready route requires a fresh accurate position`() = runTest {
+    fun `starting a ready route accepts the last known position when stale`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         Dispatchers.setMain(dispatcher)
         val now = MutableStateFlow(10_000L)
@@ -102,14 +101,27 @@ class LightNavigationComponentProgressTest {
 
         now.value = 20_000L
         component.onStartNavigation()
-        assertIs<NavigationPhase.RouteReady>(component.state.value.phase)
+        assertIs<NavigationPhase.Navigating>(component.state.value.phase)
+        component.close()
+    }
 
-        now.value = 10_000L
-        location.state.value = location.state.value.copy(
-            status = RideLocationStatus.Available(fix(9_900L, accuracy = 10.0)),
+    @Test
+    fun `starting a ready route does not wait for a second location fix`() = runTest {
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        Dispatchers.setMain(dispatcher)
+        val now = MutableStateFlow(10_000L)
+        val location = FakeLocationRepository(
+            RideLocationState(RideLocationStatus.Available(fix(9_000L, accuracy = 10.0))),
         )
+        val navigation = FakeNavigationRepository()
+        val component = component(navigation, location, dispatcher, now)
+        startRoute(component)
+        advanceUntilIdle()
+
+        location.state.value = location.state.value.copy(status = RideLocationStatus.Searching)
         advanceUntilIdle()
         component.onStartNavigation()
+
         assertIs<NavigationPhase.Navigating>(component.state.value.phase)
         component.close()
     }
@@ -306,8 +318,7 @@ class LightNavigationComponentProgressTest {
     private fun startRoute(component: DefaultLightNavigationComponent) {
         component.onPlannerRequested()
         component.onPlaceSelected(place)
-        component.onProfileSelected(RouteProfile.LIGHT_EV)
-        component.onProfileConfirmed()
+        component.onRetry()
     }
 
     private fun component(
@@ -399,7 +410,6 @@ class LightNavigationComponentProgressTest {
             )
             return RoutePlan(
                 destination = place,
-                profile = RouteProfile.LIGHT_EV,
                 alternatives = listOf(
                     RouteAlternative(
                         id = routeId,

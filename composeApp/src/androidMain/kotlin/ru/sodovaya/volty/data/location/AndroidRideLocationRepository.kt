@@ -19,6 +19,8 @@ import ru.sodovaya.volty.domain.location.LocationConsumer
 import ru.sodovaya.volty.domain.location.LocationDemandPolicy
 import ru.sodovaya.volty.domain.location.LocationDemandPolicyState
 import ru.sodovaya.volty.domain.location.LocationSource
+import ru.sodovaya.volty.domain.location.LocationTimestampPolicy
+import ru.sodovaya.volty.domain.location.LocationUpdatePolicy
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.location.RideLocationRepository
 import ru.sodovaya.volty.domain.location.RideLocationState
@@ -42,14 +44,27 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
 
     override suspend fun setDemand(consumer: LocationConsumer, enabled: Boolean) =
         withContext(Dispatchers.Main.immediate) {
+            val navigationWasEnabled = LocationConsumer.NAVIGATION in policyState.demands
             val transition = LocationDemandPolicy.setDemand(policyState, consumer, enabled)
             if (!transition.changed) return@withContext
 
             policyState = transition.state
-            publishState()
             when {
-                transition.shouldStart -> tryStartPlatformUpdates()
-                transition.shouldStop -> stopPlatformUpdates()
+                transition.shouldStart -> {
+                    publishState()
+                    tryStartPlatformUpdates()
+                }
+                transition.shouldStop -> {
+                    publishState()
+                    stopPlatformUpdates()
+                }
+                navigationWasEnabled != (LocationConsumer.NAVIGATION in policyState.demands) && platformStarted -> {
+                    stopPlatformUpdates()
+                    policyState = LocationDemandPolicy.restart(policyState)
+                    publishState()
+                    tryStartPlatformUpdates()
+                }
+                else -> publishState()
             }
         }
 
@@ -135,9 +150,10 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
     }
 
     private fun requestUpdates(provider: String, listener: LocationListener) {
+        val requestPolicy = LocationUpdatePolicy.requestFor(policyState.demands)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            val request = LocationRequest.Builder(1_000L)
-                .setMinUpdateDistanceMeters(5f)
+            val request = LocationRequest.Builder(requestPolicy.intervalMillis)
+                .setMinUpdateDistanceMeters(requestPolicy.minDistanceMeters)
                 .setQuality(LocationRequest.QUALITY_HIGH_ACCURACY)
                 .build()
             manager.requestLocationUpdates(
@@ -148,7 +164,12 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
             )
         } else {
             @Suppress("DEPRECATION")
-            manager.requestLocationUpdates(provider, 1_000L, 5f, listener)
+            manager.requestLocationUpdates(
+                provider,
+                requestPolicy.intervalMillis,
+                requestPolicy.minDistanceMeters,
+                listener,
+            )
         }
     }
 
@@ -176,9 +197,18 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
             .mapNotNull { provider -> runCatching { manager.getLastKnownLocation(provider) }.getOrNull() }
             .maxByOrNull(Location::getTime)
             ?: return
-        val ageMillis = now - lastKnown.time
-        if (ageMillis !in 0..MAX_LAST_KNOWN_AGE_MILLIS) return
-        acceptLocation(lastKnown, generation, now)
+        // Keep even an old last-known coordinate available for route planning.
+        // The navigation component still marks it stale and never uses it for
+        // live guidance; dropping it here would make the explicit "route from
+        // the last point" behavior impossible.
+        acceptLocation(
+            lastKnown,
+            generation,
+            LocationTimestampPolicy.capturedAtForLastKnown(
+                lastKnownEpochMillis = lastKnown.time,
+                nowEpochMillis = now,
+            ),
+        )
     }
 
     @Suppress("DEPRECATION")
@@ -232,10 +262,6 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
             status = policyState.status,
             demands = policyState.demands,
         )
-    }
-
-    private companion object {
-        const val MAX_LAST_KNOWN_AGE_MILLIS = 10_000L
     }
 
     private class LocationPermissionRequiredException : IllegalStateException(

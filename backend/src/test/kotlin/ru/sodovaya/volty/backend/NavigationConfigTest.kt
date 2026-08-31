@@ -17,7 +17,7 @@ class NavigationConfigTest {
     }
 
     @Test
-    fun graphhopper_requires_key_and_all_profile_mappings() {
+    fun graphhopper_requires_key_and_one_generic_profile_mapping() {
         val missingKey = assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(baseEnvironment() + mapOf("VOLTY_NAV_PROVIDER" to "graphhopper"))
         }
@@ -32,25 +32,23 @@ class NavigationConfigTest {
                 ),
             )
         }
-        assertTrue("VOLTY_NAV_PROFILE_BICYCLE" in (missingMapping.message ?: ""))
+        assertTrue("VOLTY_NAV_PROFILE" in (missingMapping.message ?: ""))
         assertFalse("do-not-log-this-key" in (missingMapping.message ?: ""))
     }
 
     @Test
-    fun configured_graphhopper_profiles_are_normalized_without_exposing_secrets() {
+    fun configured_graphhopper_profile_is_normalized_without_exposing_secrets() {
         val config = AppConfig.fromEnvironment(
             baseEnvironment() + mapOf(
                 "VOLTY_NAV_PROVIDER" to "GRAPHhopper",
                 "GRAPHHOPPER_API_KEY" to "do-not-log-this-key",
-                "VOLTY_NAV_PROFILE_BICYCLE" to "bike-custom",
-                "VOLTY_NAV_PROFILE_LIGHT_EV" to "small-electric",
-                "VOLTY_NAV_PROFILE_MOTOR_SCOOTER" to "scooter-custom",
+                "VOLTY_NAV_PROFILE" to "personal-mobility",
             ),
         )
 
         assertEquals("graphhopper", config.navigationProvider)
         assertTrue(config.navigationEnabled)
-        assertEquals("bike-custom", config.navigationProfileIds["bicycle"])
+        assertEquals("personal-mobility", config.navigationProfileId)
         assertFalse(config.toString().contains("do-not-log-this-key"))
     }
 

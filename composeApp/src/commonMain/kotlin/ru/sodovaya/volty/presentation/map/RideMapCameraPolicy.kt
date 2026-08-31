@@ -13,9 +13,9 @@ internal val defaultRideMapCameraPolicy = RideMapCameraPolicy(
     appliesWithoutTarget = true,
 )
 
-internal const val RIDE_MAP_MIN_ZOOM = 13.5
+internal const val RIDE_MAP_MIN_ZOOM = 15.0
 internal const val RIDE_MAP_MAX_ZOOM = 16.5
-private const val RIDE_MAP_ZOOM_SPEED_LIMIT_KMH = 80f
+private const val RIDE_MAP_ZOOM_SPEED_LIMIT_KMH = 140f
 
 /** Higher speed needs more context around the rider; invalid speed preserves the current zoom. */
 internal fun rideMapZoomForSpeed(

@@ -30,11 +30,33 @@ import ru.sodovaya.volty.domain.social.VoiceRoomCredentials
 import ru.sodovaya.volty.domain.social.VoiceRoomEngine
 import ru.sodovaya.volty.domain.social.VoiceRoomFailureReason
 import ru.sodovaya.volty.domain.social.VoiceRoomState
+import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class LiveKitVoiceRoomRepositoryTest {
+    @Test
+    fun unavailableProviderIsKnownBeforeJoinAttempt() = runTest {
+        val repository = LiveKitVoiceRoomRepository(
+            socialRepository = FakeSocialRepository(
+                voiceProvider = SocialResult.Success(
+                    VoiceProviderAvailability(
+                        available = false,
+                        provider = "unconfigured",
+                        message = "SFU is not configured",
+                    ),
+                ),
+            ),
+            engine = FakeVoiceRoomEngine(),
+            scope = voiceScope(),
+        )
+
+        advanceUntilIdle()
+
+        assertEquals(VoiceRoomState.Unavailable, repository.state.value)
+    }
+
     @Test
     fun joinConnectsLiveKitWithOpenMicAndMirrorsParticipants() = runTest {
         val engine = FakeVoiceRoomEngine()
@@ -203,6 +225,9 @@ private class FakeSocialRepository(
             expiresAtEpochMillis = 10_000L,
         ),
     ),
+    private val voiceProvider: SocialResult<VoiceProviderAvailability> = SocialResult.Success(
+        VoiceProviderAvailability(true, "livekit", "wss://voice.example.test"),
+    ),
 ) : SocialRepository {
     override val session = MutableStateFlow<SocialSession>(
         SocialSession.Authenticated(
@@ -220,6 +245,8 @@ private class FakeSocialRepository(
         joinVoiceCalls += groupId
         return joinVoiceResult
     }
+
+    override suspend fun getVoiceProvider(): SocialResult<VoiceProviderAvailability> = voiceProvider
 
     override suspend fun leaveVoice(groupId: RideGroupId): SocialResult<Unit> {
         leaveVoiceCalls += groupId
@@ -242,6 +269,7 @@ private class FakeSocialRepository(
     override suspend fun createGroup(name: String): SocialResult<RideGroup> = unexpectedSocialCall()
     override suspend fun joinGroup(inviteCode: String): SocialResult<RideGroup> = unexpectedSocialCall()
     override suspend fun leaveGroup(groupId: RideGroupId): SocialResult<Unit> = unexpectedSocialCall()
+    override suspend fun deleteGroup(groupId: RideGroupId): SocialResult<Unit> = unexpectedSocialCall()
     override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> = emptyFlow()
     override suspend fun startSharing(request: ShareSessionRequest): SocialResult<SharingSession> = unexpectedSocialCall()
     override suspend fun publishSharingUpdate(

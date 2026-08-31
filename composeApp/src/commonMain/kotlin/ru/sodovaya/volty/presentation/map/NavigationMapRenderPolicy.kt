@@ -31,7 +31,9 @@ object NavigationMapRenderPolicy {
             NavigationPhase.Idle,
             is NavigationPhase.Planning -> null
         }
+        val hasFreshLocation = state.locationStatus == ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH
         val guidance = (phase as? NavigationPhase.Navigating)?.guidance
+            ?.takeIf { hasFreshLocation }
         val lines = plan?.alternatives.orEmpty().map { route ->
             val isSelected = route.id == selectedRouteId
             val completedFraction = when {
@@ -47,8 +49,8 @@ object NavigationMapRenderPolicy {
                 selected = isSelected,
                 active = when (phase) {
                     is NavigationPhase.Rerouting -> false
-                    is NavigationPhase.RouteReady,
-                    is NavigationPhase.Navigating,
+                    is NavigationPhase.RouteReady -> isSelected
+                    is NavigationPhase.Navigating -> isSelected && hasFreshLocation
                     is NavigationPhase.Arrived -> isSelected
                     else -> false
                 },
@@ -66,6 +68,7 @@ object NavigationMapRenderPolicy {
             )
             phase is NavigationPhase.Navigating &&
                 ownFix != null &&
+                hasFreshLocation &&
                 state.followState.mode == RideMapFollowMode.FOLLOWING -> MapCameraRequest.FollowFix(
                 sequence = cameraSequence,
                 fix = ownFix,
@@ -78,7 +81,14 @@ object NavigationMapRenderPolicy {
             participantMarkers = participantMarkers,
             routes = lines,
             destination = plan?.destination?.coordinate,
-            followState = state.followState,
+            // RouteReady owns the camera until the user starts guidance. The Android
+            // renderer otherwise fits the route and then its live-follow loop immediately
+            // snaps back to the retained GPS fix, leaving only a local route fragment visible.
+            followState = if (phase is NavigationPhase.RouteReady) {
+                state.followState.copy(mode = RideMapFollowMode.FREE)
+            } else {
+                state.followState
+            },
             cameraRequest = cameraRequest,
         )
     }

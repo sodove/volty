@@ -33,7 +33,6 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteProgressEngine
 import ru.sodovaya.volty.domain.navigation.RouteProgressUpdate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 import kotlin.math.max
 import kotlin.time.Clock
@@ -47,8 +46,6 @@ interface LightNavigationComponent {
     fun onPlannerRequested()
     fun onQueryChanged(query: String)
     fun onPlaceSelected(place: PlaceCandidate)
-    fun onProfileSelected(profile: RouteProfile)
-    fun onProfileConfirmed()
     fun onAlternativeSelected(routeId: String)
     fun onStartNavigation()
     fun onRetry()
@@ -87,6 +84,7 @@ class DefaultLightNavigationComponent(
     private var permissionGrantedOverride = false
     private var suppressRepositoryLocationStatus = false
     private var lifecycleStopped = false
+    private var awaitingRouteOrigin = false
     private val progressEngine = RouteProgressEngine()
     private var rerouteJob: Job? = null
     private var lastRerouteEpisodeId: Long? = null
@@ -103,7 +101,10 @@ class DefaultLightNavigationComponent(
                         current.copy(locationStatus = locationUiStatus(locationState))
                     }
                 }
-                if (!closed && !lifecycleStopped) processNavigationLocation(locationState)
+                if (!closed && !lifecycleStopped) {
+                    processNavigationLocation(locationState)
+                    processPendingRouteOrigin()
+                }
             }
         }
         energySource?.let { source ->
@@ -133,6 +134,7 @@ class DefaultLightNavigationComponent(
         rerouteJob?.cancel()
         progressEngine.reset(null)
         lastRerouteEpisodeId = null
+        awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.QueryChanged(query))
         if (query.trim().length < MIN_SEARCH_LENGTH) return
@@ -146,24 +148,9 @@ class DefaultLightNavigationComponent(
         rerouteJob?.cancel()
         progressEngine.reset(null)
         lastRerouteEpisodeId = null
+        awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.PlaceSelected(place))
-    }
-
-    override fun onProfileSelected(profile: RouteProfile) {
-        if (closed) return
-        routeJob?.cancel()
-        rerouteJob?.cancel()
-        progressEngine.reset(null)
-        lastRerouteEpisodeId = null
-        releaseNavigationDemand()
-        reduce(NavigationAction.ProfileSelected(profile))
-    }
-
-    override fun onProfileConfirmed() {
-        if (closed) return
-        reduce(NavigationAction.ProfileConfirmed)
-        requestRouteIfPossible()
     }
 
     override fun onAlternativeSelected(routeId: String) {
@@ -183,7 +170,6 @@ class DefaultLightNavigationComponent(
     override fun onStartNavigation() {
         if (closed || lifecycleStopped) return
         val before = _state.value.phase
-        if (before is NavigationPhase.RouteReady && freshOrigin() == null) return
         reduce(NavigationAction.StartNavigation)
         if (before is NavigationPhase.RouteReady && _state.value.phase is NavigationPhase.Navigating) {
             progressEngine.reset(before.selectedRouteId)
@@ -199,7 +185,7 @@ class DefaultLightNavigationComponent(
             is NavigationPhase.Rerouting -> retryRerouteManually(phase)
             is NavigationPhase.Planning -> {
                 if (phase.requestInFlight) return
-                if (phase.destination != null && phase.profile != null && phase.profileConfirmed) {
+                if (phase.destination != null) {
                     requestRouteIfPossible()
                 } else if (phase.query.trim().length >= MIN_SEARCH_LENGTH) {
                     searchJob?.cancel()
@@ -217,6 +203,7 @@ class DefaultLightNavigationComponent(
         rerouteJob?.cancel()
         progressEngine.reset(null)
         lastRerouteEpisodeId = null
+        awaitingRouteOrigin = false
         suppressRepositoryLocationStatus = true
         reduce(NavigationAction.StopNavigation)
         releaseLocationDemands()
@@ -272,6 +259,7 @@ class DefaultLightNavigationComponent(
         rerouteJob?.cancel()
         progressEngine.reset(null)
         lastRerouteEpisodeId = null
+        awaitingRouteOrigin = false
         reduce(NavigationAction.StopNavigation)
 
         val releaseMap = mapDemandOwned
@@ -317,9 +305,17 @@ class DefaultLightNavigationComponent(
     private fun requestRouteIfPossible() {
         if (closed || lifecycleStopped) return
         val phase = _state.value.phase as? NavigationPhase.Planning ?: return
-        if (!phase.profileConfirmed || phase.destination == null || phase.profile == null) return
+        val destination = phase.destination ?: return
         if (phase.requestInFlight) return
-        val origin = freshOrigin() ?: return
+        val origin = routeOrigin()
+        if (origin == null) {
+            awaitingRouteOrigin = true
+            reduce(NavigationAction.LocationStatusChanged(locationUiStatus(locationRepository.state.value)))
+            ensureNavigationDemand()
+            refreshLocationState()
+            return
+        }
+        awaitingRouteOrigin = false
         val requestGeneration = _state.value.requestGeneration
         reduce(NavigationAction.RouteRequestStarted(requestGeneration))
         if (!(_state.value.phase as? NavigationPhase.Planning)?.requestInFlight.orFalse()) return
@@ -332,8 +328,7 @@ class DefaultLightNavigationComponent(
                 navigationRepository.routes(
                     RouteRequest(
                         origin = origin.coordinate,
-                        destination = phase.destination,
-                        profile = phase.profile,
+                        destination = destination,
                         languageTag = languageTag,
                     ),
                 )
@@ -360,6 +355,20 @@ class DefaultLightNavigationComponent(
                 lastRerouteEpisodeId = null
             }
         }
+    }
+
+    /**
+     * A tap on Build route may legitimately happen before Android delivers its
+     * first fix. Retry that one pending request when a usable fix arrives; a
+     * provider failure remains an explicit retry so a flaky public service does
+     * not get hammered by every location callback.
+     */
+    private fun processPendingRouteOrigin() {
+        if (!awaitingRouteOrigin) return
+        val phase = _state.value.phase as? NavigationPhase.Planning ?: return
+        if (phase.destination == null || phase.requestInFlight || routeOrigin() == null) return
+        awaitingRouteOrigin = false
+        requestRouteIfPossible()
     }
 
     private fun processNavigationLocation(locationState: RideLocationState) {
@@ -464,7 +473,6 @@ class DefaultLightNavigationComponent(
                     RouteRequest(
                         origin = origin,
                         destination = plan.destination,
-                        profile = plan.profile,
                         languageTag = languageTag,
                     ),
                 )
@@ -526,6 +534,7 @@ class DefaultLightNavigationComponent(
         if (evidence == null) return
         val remainingDistanceMeters = when (val phase = _state.value.phase) {
             is NavigationPhase.Navigating -> phase.guidance?.remainingDistanceMeters
+                ?: phase.plan.alternatives.firstOrNull { it.id == phase.selectedRouteId }?.distanceMeters
             is NavigationPhase.Arrived -> 0.0
             else -> null
         }
@@ -550,6 +559,12 @@ class DefaultLightNavigationComponent(
         val fix = (locationRepository.state.value.status as? RideLocationStatus.Available)?.fix ?: return null
         val ageMillis = nowEpochMillis() - fix.capturedAtEpochMillis
         if (ageMillis !in 0L..MAX_LOCATION_AGE_MILLIS) return null
+        if (fix.accuracyMeters > MAX_LOCATION_ACCURACY_METERS) return null
+        return fix
+    }
+
+    private fun routeOrigin(): RideLocationFix? {
+        val fix = (locationRepository.state.value.status as? RideLocationStatus.Available)?.fix ?: return null
         if (fix.accuracyMeters > MAX_LOCATION_ACCURACY_METERS) return null
         return fix
     }

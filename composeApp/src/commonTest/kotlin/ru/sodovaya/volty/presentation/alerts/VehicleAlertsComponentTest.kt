@@ -506,6 +506,27 @@ class VehicleAlertsComponentTest {
         assertTrue(saved, "and the screen closes itself")
     }
 
+    @Test
+    fun `saving battery and reconnect alert settings writes them onto the vehicle`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeVehicleRepo(vehicle())
+        val c = component(repo)
+        advanceUntilIdle()
+
+        c.onCellLowChanged("2.85")
+        c.onCellDeltaChanged("420")
+        c.onDisconnectNotifyChanged(false)
+        c.onChargeCompleteNotifyChanged(false)
+        c.onSave()
+        advanceUntilIdle()
+
+        val alerts = repo.upserts.single().alertConfig
+        assertEquals(2.85f, alerts.cellLowV)
+        assertEquals(420, alerts.cellDeltaMv)
+        assertFalse(alerts.disconnectNotify)
+        assertFalse(alerts.chargeCompleteNotify)
+    }
+
     /** Out-of-order input reaches storage sorted — the normaliser is on the save path. */
     @Test
     fun `the save path normalises out-of-order thresholds`() = runTest {

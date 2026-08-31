@@ -34,6 +34,7 @@ import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
 
@@ -47,6 +48,8 @@ class GraphComponentTelemetryTest {
         override val connectionState = MutableStateFlow<ConnectionState>(ConnectionState.Idle)
         val batteries = MutableStateFlow<List<BmsData>>(emptyList())
         val motion = MutableStateFlow<List<ControllerData>>(emptyList())
+        val fullBatteries = MutableStateFlow<List<BmsData>>(emptyList())
+        val fullMotion = MutableStateFlow<List<ControllerData>>(emptyList())
 
         override fun scanAll(): Flow<DiscoveredDevice> = emptyFlow()
         override suspend fun connect(vehicle: Vehicle): Result<Unit> = Result.success(Unit)
@@ -54,8 +57,10 @@ class GraphComponentTelemetryTest {
         override suspend fun connectDemo(profile: DemoProfile): Result<Unit> = Result.success(Unit)
         override suspend fun disconnect() = Unit
         override suspend fun disconnectLink(address: String) = Unit
-        override fun samples(window: Duration): Flow<List<BmsData>> = batteries
-        override fun motionSamples(window: Duration): Flow<List<ControllerData>> = motion
+        override fun samples(window: Duration): Flow<List<BmsData>> =
+            if (window > 5.minutes) fullBatteries else batteries
+        override fun motionSamples(window: Duration): Flow<List<ControllerData>> =
+            if (window > 5.minutes) fullMotion else motion
         override fun movingAverage(window: Duration): Flow<MovingAvg> = emptyFlow()
         override suspend fun onAppResumed() = Unit
     }
@@ -94,6 +99,25 @@ class GraphComponentTelemetryTest {
 
         assertEquals(listOf(31f), component.state.value.values)
         assertEquals(Instant.fromEpochSeconds(10), component.state.value.series[GraphMetric.SPEED]?.points?.single()?.timestamp)
+    }
+
+    @Test
+    fun `ride peak remains visible when selected graph window is shorter`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val repo = FakeRepo()
+        val component = component(repo)
+        component.onMetricSelected(GraphMetric.SPEED)
+        repo.motion.value = listOf(
+            ControllerData(speedKmh = 31f, speedSource = SpeedSource.REPORTED, timestamp = Instant.fromEpochSeconds(10))
+        )
+        repo.fullMotion.value = listOf(
+            ControllerData(speedKmh = 31f, speedSource = SpeedSource.REPORTED, timestamp = Instant.fromEpochSeconds(10)),
+            ControllerData(speedKmh = 78f, speedSource = SpeedSource.REPORTED, timestamp = Instant.fromEpochSeconds(20))
+        )
+        advanceUntilIdle()
+
+        assertEquals(31f, component.state.value.series[GraphMetric.SPEED]?.points?.maxOf { it.value })
+        assertEquals(78f, component.state.value.ridePeaks[GraphMetric.SPEED])
     }
 
     @Test
