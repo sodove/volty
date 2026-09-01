@@ -16,12 +16,14 @@ class LightNavigationDockPolicyTest {
     fun `planner attaches to the keyboard and relies on navigation system insets otherwise`() {
         assertEquals(0f, LightNavigationDockPolicy.plannerBottomPadding(imeVisible = true))
         assertEquals(0f, LightNavigationDockPolicy.plannerBottomPadding(imeVisible = false))
+        assertEquals(8f, LightNavigationDockPolicy.plannerImeGap())
     }
 
     @Test
     fun `active guidance is anchored by its local HUD gap rather than a screen sized inset`() {
         assertEquals(1f, LightNavigationDockPolicy.guidanceCardWidthFraction())
         assertEquals(16f, LightNavigationDockPolicy.guidanceHudGap())
+        assertEquals(90f, LightNavigationDockPolicy.guidanceCardMinHeight())
         assertEquals(0f, LightNavigationDockPolicy.bottomPadding(LightNavigationSurface.GUIDANCE_DOCK))
     }
 

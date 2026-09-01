@@ -127,8 +127,8 @@ android {
         applicationId = "ru.sodovaya.volty"
         minSdk = 26
         targetSdk = 36
-        versionCode = 26
-        versionName = "0.7.4"
+        versionCode = 28
+        versionName = "0.7.6"
     }
 
     compileOptions {

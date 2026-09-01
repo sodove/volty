@@ -29,6 +29,7 @@ import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 import ru.sodovaya.volty.domain.navigation.offline.OfflineCoverageResult
+import ru.sodovaya.volty.domain.navigation.offline.OfflineRouteCalculationPolicy
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRoutingPolicy
 import kotlin.math.ceil
 import kotlin.math.abs
@@ -55,7 +56,9 @@ class AndroidHybridNavigationRepository(
         online.search(query, near, languageTag)
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
-        ensureBundledPackage()
+        withContext(Dispatchers.IO) {
+            ensureBundledPackage()
+        }
         val manifest = packageManager.activeManifest
         val packageDirectory = packageManager.activePackageDirectory
         if (manifest != null && packageDirectory != null &&
@@ -84,9 +87,9 @@ class AndroidHybridNavigationRepository(
         packageDirectory: java.io.File,
     ): NavigationResult<RoutePlan> = withContext(Dispatchers.Default) {
         try {
-            val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
+            val budget = OfflineRouteCalculationPolicy.firstResultBudget()
             val alternatives = mutableListOf<RouteAlternative>()
-            for (alternativeIndex in 0 until limit) {
+            for (alternativeIndex in 0 until budget.maxAlternatives) {
                 val route = routeWithBRouter(
                     request = request,
                     packageDirectory = packageDirectory,
@@ -137,7 +140,7 @@ class AndroidHybridNavigationRepository(
         ).apply {
             quite = true
         }
-        engine.doRun(MAX_RUNNING_TIME_MILLIS)
+        engine.doRun(OfflineRouteCalculationPolicy.firstResultBudget().maxRuntimeMillis)
         val foundTrack = engine.getFoundTrack()
         val error = engine.getErrorMessage()
         if (error != null) {
@@ -340,7 +343,5 @@ class AndroidHybridNavigationRepository(
         const val BROUTER_LATITUDE_OFFSET = 90.0
         const val ROUTE_GEOMETRY_TOLERANCE_DEGREES = 0.0005
         const val PROFILE_FILE = "volty.brf"
-        const val MAX_ALTERNATIVES = 3
-        const val MAX_RUNNING_TIME_MILLIS = 60_000L
     }
 }

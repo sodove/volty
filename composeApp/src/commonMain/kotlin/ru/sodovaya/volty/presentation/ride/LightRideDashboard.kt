@@ -271,7 +271,7 @@ internal fun LightRideDashboard(
         }
 
         Column(
-            modifier = Modifier.fillMaxSize().statusBarsPadding()
+            modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
                 .padding(start = 10.dp, top = 6.dp, end = 10.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -351,7 +351,6 @@ internal fun LightRideDashboard(
                         onOpenNearby = openGroupSheet,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 10.dp)
                             .padding(bottom = LightNavigationDockPolicy.guidanceHudGap().dp)
                             .zIndex(2f),
                     )
@@ -403,6 +402,7 @@ internal fun LightRideDashboard(
                     .imePadding()
                     .navigationBarsPadding()
                     .padding(horizontal = 10.dp)
+                    .padding(bottom = LightNavigationDockPolicy.plannerImeGap().dp)
                     .zIndex(2f),
             ) {
                 LightNavigationOverlay(
@@ -654,7 +654,7 @@ private fun LightTopBar(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LightCircleButton(Icons.Default.Groups, "Nearby", onClick = onNearby)

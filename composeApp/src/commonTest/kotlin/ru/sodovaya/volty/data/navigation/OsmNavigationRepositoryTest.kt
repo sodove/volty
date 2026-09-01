@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.navigation
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.ContentType
@@ -456,6 +457,30 @@ class OsmNavigationRepositoryTest {
             throw IllegalStateException("network down")
         }))
         assertEquals(NavigationFailure.Offline, assertFailure(offline.search("x", null, "en-US")))
+    }
+
+    @Test
+    fun request_timeout_during_search_is_mapped_to_offline() = runTest {
+        val timedOut = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            throw HttpRequestTimeoutException(request)
+        }))
+
+        assertEquals(
+            NavigationFailure.Offline,
+            assertFailure(timedOut.search("Екатеринбург", null, "ru-RU")),
+        )
+    }
+
+    @Test
+    fun request_timeout_during_route_is_mapped_to_offline() = runTest {
+        val timedOut = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            throw HttpRequestTimeoutException(request)
+        }))
+
+        assertEquals(
+            NavigationFailure.Offline,
+            assertFailure(timedOut.routes(testRequest())),
+        )
     }
 
     @Test

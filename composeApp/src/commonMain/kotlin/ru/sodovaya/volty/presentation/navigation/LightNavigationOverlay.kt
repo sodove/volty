@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.presentation.navigation
 
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -13,6 +16,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
@@ -24,6 +28,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
@@ -51,6 +56,8 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -60,6 +67,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
@@ -204,10 +214,10 @@ private fun PlannerSurface(
         ) {
             Column(
                 modifier = Modifier
-                .verticalScroll(rememberScrollState())
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 14.dp, vertical = 8.dp),
                 verticalArrangement = Arrangement.spacedBy(
-                    if (model.phase == NavigationUiPhase.ROUTE_READY) 6.dp else 10.dp,
+                    if (model.phase == NavigationUiPhase.ROUTE_READY) 4.dp else 10.dp,
                 ),
             ) {
             NavigationHeader(
@@ -217,15 +227,21 @@ private fun PlannerSurface(
             if (model.locationBanner != null) {
                 NavigationLocationBanner(model, callbacks)
             }
-            when (model.phase) {
-                NavigationUiPhase.PLANNING -> Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    PlanningContent(model, callbacks)
+            Crossfade(
+                targetState = model.phase,
+                animationSpec = tween(durationMillis = 180),
+                label = "navigation_planner_content",
+            ) { phase ->
+                when (phase) {
+                    NavigationUiPhase.PLANNING -> Column(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        PlanningContent(model, callbacks)
+                    }
+                    NavigationUiPhase.ROUTE_READY -> RouteReadyContent(model, callbacks, units)
+                    else -> Unit
                 }
-                NavigationUiPhase.ROUTE_READY -> RouteReadyContent(model, callbacks, units)
-                else -> Unit
             }
             nearby?.let { nearbyState ->
                 NavigationNearbyDock(nearbyState, onOpenNearby)
@@ -468,7 +484,7 @@ private fun RouteOption(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = LightNavigationDockPolicy.routeOptionMinHeight().dp)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+                .padding(horizontal = 8.dp, vertical = 2.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -558,26 +574,30 @@ private fun GuidanceDockContent(
     val maneuver = model.maneuver
     val phaseDescription = guidanceDescription(model, phase)
     Column(modifier = Modifier.fillMaxWidth()) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = 92.dp)
-                .padding(horizontal = 12.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(10.dp),
-        ) {
-            Text(
-                text = guidanceIcon(maneuver, phase),
-                color = palette.cyan,
-                fontSize = 50.sp,
-                lineHeight = 52.sp,
-                modifier = Modifier.semantics { contentDescription = phaseDescription },
-            )
+        Crossfade(
+            targetState = phase,
+            animationSpec = tween(durationMillis = 180),
+            label = "navigation_guidance_content",
+        ) { animatedPhase ->
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(LightNavigationDockPolicy.guidanceCardMinHeight().dp)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                GuidanceManeuverGlyph(
+                    maneuver = maneuver,
+                    phase = animatedPhase,
+                    color = palette.cyan,
+                    contentDescription = phaseDescription,
+                )
             Column(
                 modifier = Modifier.weight(1f),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                        when (phase) {
+                        when (animatedPhase) {
                             NavigationUiPhase.NAVIGATING -> if (maneuver == null) {
                                 Text(
                                     stringResource(Res.string.navigation_location_searching),
@@ -626,7 +646,7 @@ private fun GuidanceDockContent(
                 horizontalAlignment = Alignment.End,
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                if (phase == NavigationUiPhase.NAVIGATING) {
+                if (animatedPhase == NavigationUiPhase.NAVIGATING) {
                     model.remainingDistanceText?.let { distance ->
                         Column(horizontalAlignment = Alignment.End) {
                             Text(
@@ -647,7 +667,7 @@ private fun GuidanceDockContent(
                     }
                     nearby?.let { NavigationNearbySummary(it, onOpenNearby) }
                 }
-                if (phase == NavigationUiPhase.REROUTING) {
+                if (animatedPhase == NavigationUiPhase.REROUTING) {
                     IconButton(
                         onClick = onRetry,
                         enabled = canRetry,
@@ -657,7 +677,8 @@ private fun GuidanceDockContent(
                     }
                 }
             }
-            GuidanceStopButton(onStop = onStop, description = stopDescription)
+                GuidanceStopButton(onStop = onStop, description = stopDescription)
+            }
         }
         if (phase == NavigationUiPhase.ARRIVED) ArrivalSoc(model)
         if (phase == NavigationUiPhase.REROUTING) {
@@ -765,6 +786,74 @@ private fun GuidanceStopButton(onStop: () -> Unit, description: String) {
     }
 }
 
+@Composable
+private fun GuidanceManeuverGlyph(
+    maneuver: NavigationUiManeuver?,
+    phase: NavigationUiPhase,
+    color: Color,
+    contentDescription: String,
+) {
+    Box(
+        modifier = Modifier
+            .size(width = 56.dp, height = 60.dp)
+            .semantics { this.contentDescription = contentDescription },
+        contentAlignment = Alignment.Center,
+    ) {
+        val angle = guidanceArrowAngle(maneuver, phase)
+        if (phase == NavigationUiPhase.NAVIGATING && maneuver?.icon == NavigationUiManeuverIcon.LEFT) {
+            Icon(
+                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                contentDescription = null,
+                tint = color,
+                modifier = Modifier.size(48.dp),
+            )
+        } else if (angle == null) {
+            Text(
+                text = guidanceIcon(maneuver, phase),
+                color = color,
+                fontSize = 42.sp,
+                lineHeight = 48.sp,
+            )
+        } else {
+            Canvas(Modifier.fillMaxSize()) {
+                val center = Offset(size.width / 2f, size.height / 2f)
+                val shaftLength = minOf(size.width, size.height) * 0.32f
+                val headLength = shaftLength * 0.42f
+                val strokeWidth = 2.5.dp.toPx()
+                val tip = Offset(
+                    x = center.x + cos(angle.toDouble()).toFloat() * shaftLength,
+                    y = center.y + sin(angle.toDouble()).toFloat() * shaftLength,
+                )
+                val tail = Offset(
+                    x = center.x - cos(angle.toDouble()).toFloat() * shaftLength,
+                    y = center.y - sin(angle.toDouble()).toFloat() * shaftLength,
+                )
+                drawLine(color, tail, tip, strokeWidth, cap = StrokeCap.Round)
+                drawLine(
+                    color,
+                    tip,
+                    Offset(
+                        x = tip.x - cos((angle - PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
+                        y = tip.y - sin((angle - PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
+                    ),
+                    strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+                drawLine(
+                    color,
+                    tip,
+                    Offset(
+                        x = tip.x - cos((angle + PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
+                        y = tip.y - sin((angle + PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
+                    ),
+                    strokeWidth,
+                    cap = StrokeCap.Round,
+                )
+            }
+        }
+    }
+}
+
 private fun guidanceIcon(
     maneuver: NavigationUiManeuver?,
     phase: NavigationUiPhase,
@@ -772,6 +861,28 @@ private fun guidanceIcon(
     NavigationUiPhase.REROUTING -> "↻"
     NavigationUiPhase.ARRIVED -> "⚑"
     else -> maneuver?.let { maneuverIcon(it.icon) } ?: "·"
+}
+
+private fun guidanceArrowAngle(
+    maneuver: NavigationUiManeuver?,
+    phase: NavigationUiPhase,
+): Float? = if (phase != NavigationUiPhase.NAVIGATING || maneuver == null) {
+    null
+} else {
+    when (maneuver.icon) {
+        NavigationUiManeuverIcon.DEPART -> -PI.toFloat() * 0.25f
+        NavigationUiManeuverIcon.STRAIGHT -> -PI.toFloat() / 2f
+        NavigationUiManeuverIcon.SLIGHT_LEFT -> -PI.toFloat() * 0.72f
+        NavigationUiManeuverIcon.LEFT,
+        NavigationUiManeuverIcon.SHARP_LEFT -> PI.toFloat()
+        NavigationUiManeuverIcon.SLIGHT_RIGHT -> -PI.toFloat() * 0.28f
+        NavigationUiManeuverIcon.RIGHT,
+        NavigationUiManeuverIcon.SHARP_RIGHT -> 0f
+        NavigationUiManeuverIcon.U_TURN,
+        NavigationUiManeuverIcon.ROUNDABOUT,
+        NavigationUiManeuverIcon.ARRIVE,
+        NavigationUiManeuverIcon.UNKNOWN -> null
+    }
 }
 
 internal fun guidancePrimaryText(maneuver: NavigationUiManeuver): String {

@@ -49,6 +49,7 @@ class NavigationReducerTest {
         assertEquals("парк", next.query)
         assertTrue(next.searchResults.isEmpty())
         assertNull(next.destination)
+        assertTrue(next.requestInFlight, "a searchable query is pending during debounce")
         assertEquals(withResults.requestGeneration + 1L, changed.requestGeneration)
     }
 
