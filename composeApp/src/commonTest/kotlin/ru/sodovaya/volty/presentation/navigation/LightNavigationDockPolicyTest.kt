@@ -2,7 +2,6 @@ package ru.sodovaya.volty.presentation.navigation
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 class LightNavigationDockPolicyTest {
     @Test
@@ -14,17 +13,18 @@ class LightNavigationDockPolicyTest {
     }
 
     @Test
-    fun `planner leaves a small visual gap above the keyboard only while it is visible`() {
-        assertEquals(12f, LightNavigationDockPolicy.plannerBottomPadding(imeVisible = true))
+    fun `planner attaches to the keyboard and relies on navigation system insets otherwise`() {
+        assertEquals(0f, LightNavigationDockPolicy.plannerBottomPadding(imeVisible = true))
         assertEquals(0f, LightNavigationDockPolicy.plannerBottomPadding(imeVisible = false))
+        assertEquals(8f, LightNavigationDockPolicy.plannerImeGap())
     }
 
     @Test
-    fun `active guidance keeps a telemetry-sized bottom gap`() {
-        assertTrue(
-            LightNavigationDockPolicy.bottomPadding(LightNavigationSurface.GUIDANCE_DOCK) >
-                LightNavigationDockPolicy.bottomPadding(LightNavigationSurface.PLANNER),
-        )
+    fun `active guidance is anchored by its local HUD gap rather than a screen sized inset`() {
+        assertEquals(1f, LightNavigationDockPolicy.guidanceCardWidthFraction())
+        assertEquals(16f, LightNavigationDockPolicy.guidanceHudGap())
+        assertEquals(90f, LightNavigationDockPolicy.guidanceCardMinHeight())
+        assertEquals(0f, LightNavigationDockPolicy.bottomPadding(LightNavigationSurface.GUIDANCE_DOCK))
     }
 
     @Test
@@ -32,6 +32,11 @@ class LightNavigationDockPolicyTest {
         assertEquals(3, LightNavigationSearchPolicy.MAX_VISIBLE_RESULTS)
         assertEquals(3, LightNavigationSearchPolicy.visibleResultRows(8))
         assertEquals(1, LightNavigationSearchPolicy.visibleResultRows(1))
+    }
+
+    @Test
+    fun `route choices keep a full touch target`() {
+        assertEquals(52f, LightNavigationDockPolicy.routeOptionMinHeight())
     }
 
     @Test
