@@ -134,8 +134,14 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             locationPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
+    val locationPermissionRequired = locationState.status is RideLocationStatus.PermissionRequired
     LaunchedEffect(rideMapVisible) {
         component.navigation.onMapVisibilityChanged(rideMapVisible)
+    }
+    LaunchedEffect(mapHost.requestLocationPermission, locationPermissionRequired) {
+        if (mapHost.requestLocationPermission && locationPermissionRequired) {
+            requestLocationPermission()
+        }
     }
     val mapScene = if (rideMapVisible) {
         NavigationMapRenderPolicy.scene(

@@ -115,7 +115,7 @@ class OsmNavigationRepository(
                 ?: NavigationResult.Failure(lastFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: Exception) {
+        } catch (error: Exception) {
             primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
                 ?: NavigationResult.Failure(lastFailure)
         }
@@ -126,7 +126,7 @@ class OsmNavigationRepository(
         request: RouteRequest,
         acceptLanguage: String,
         alternativesLimit: Int,
-    ): NavigationResult<RoutePlan> {
+    ): NavigationResult<RoutePlan> = try {
         val origin = request.origin
         val destination = request.destination.coordinate
         val response = client.get {
@@ -142,9 +142,13 @@ class OsmNavigationRepository(
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
         val body = response.readBoundedBody()
-        return response.toResult(body) { text ->
+        response.toResult(body) { text ->
             decodeRoutePlan(text, request, alternativesLimit)
         }
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        NavigationResult.Failure(NavigationFailure.Offline)
     }
 
     private fun decodePhoton(body: String): List<PlaceCandidate> {

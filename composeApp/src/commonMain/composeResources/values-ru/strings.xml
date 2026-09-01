@@ -685,7 +685,7 @@
     <string name="navigation_start">Начать навигацию</string>
     <string name="navigation_stop">Остановить навигацию</string>
     <string name="navigation_retry">Повторить</string>
-    <string name="navigation_turn_in">через %1$s</string>
+    <string name="navigation_turn_in">Поворот через %1$s</string>
     <string name="navigation_rerouting">Ищем новый маршрут…</string>
     <string name="navigation_arrived">Вы приехали</string>
     <string name="navigation_close">Закрыть навигацию</string>

@@ -1,41 +1,42 @@
 package ru.sodovaya.volty.presentation.navigation
 
-import androidx.compose.animation.Crossfade
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Canvas
+import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.ime
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -44,9 +45,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -54,11 +53,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -67,14 +63,8 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.PI
-import kotlin.math.cos
-import kotlin.math.sin
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
-import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
-import ru.sodovaya.volty.presentation.map.platformNavigationGlass
-import ru.sodovaya.volty.presentation.ride.LocalLightHudPalette
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import volty.composeapp.generated.resources.Res
@@ -142,20 +132,6 @@ data class LightNavigationNearby(
     val onlineParticipantCount: Int,
 )
 
-private data class LightNavigationGlass(
-    val containerColor: Color,
-    val borderColor: Color,
-)
-
-@Composable
-private fun lightNavigationGlass(): LightNavigationGlass {
-    val palette = LocalLightHudPalette.current
-    return LightNavigationGlass(
-        containerColor = palette.surfaceStrong,
-        borderColor = Color(0x445A8C99),
-    )
-}
-
 @Composable
 internal fun LightNavigationOverlay(
     state: LightNavigationState,
@@ -196,40 +172,48 @@ private fun PlannerSurface(
     onOpenNearby: () -> Unit,
     modifier: Modifier,
 ) {
-    val glass = lightNavigationGlass()
-    val plannerShape = RoundedCornerShape(18.dp)
+    val colors = MaterialTheme.colorScheme
+    val imeVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     Box(modifier = modifier) {
         Card(
             modifier = Modifier
                 .fillMaxWidth()
+                .widthIn(max = 560.dp)
                 .heightIn(max = 440.dp)
-                .clip(plannerShape)
-                .then(platformNavigationGlass()),
-            shape = plannerShape,
+                .navigationBarsPadding()
+                .padding(bottom = LightNavigationDockPolicy.plannerBottomPadding(imeVisible).dp)
+                .animateContentSize(),
+            shape = RoundedCornerShape(18.dp),
             colors = CardDefaults.cardColors(
-                containerColor = glass.containerColor,
+                containerColor = colors.surfaceContainer.copy(alpha = 0.96f),
             ),
-            border = BorderStroke(1.dp, glass.borderColor),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            border = BorderStroke(1.dp, colors.primary.copy(alpha = 0.35f)),
+            elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
         ) {
             Column(
                 modifier = Modifier
-                    .verticalScroll(rememberScrollState())
-                    .padding(horizontal = 14.dp, vertical = 8.dp),
+                .verticalScroll(rememberScrollState())
+                .padding(horizontal = 14.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(
-                    if (model.phase == NavigationUiPhase.ROUTE_READY) 4.dp else 10.dp,
+                    if (model.phase == NavigationUiPhase.ROUTE_READY) 6.dp else 10.dp,
                 ),
             ) {
             NavigationHeader(
                 title = stringResource(Res.string.navigation_destination),
                 onClose = callbacks.onStopNavigation,
             )
-            if (model.locationBanner != null) {
+            AnimatedVisibility(
+                visible = model.locationBanner != null,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
                 NavigationLocationBanner(model, callbacks)
             }
-            Crossfade(
+            AnimatedContent(
                 targetState = model.phase,
-                animationSpec = tween(durationMillis = 180),
+                transitionSpec = {
+                    (fadeIn() + expandVertically()).togetherWith(fadeOut() + shrinkVertically())
+                },
                 label = "navigation_planner_content",
             ) { phase ->
                 when (phase) {
@@ -254,14 +238,13 @@ private fun PlannerSurface(
 @Composable
 private fun NavigationHeader(title: String, onClose: () -> Unit) {
     val closeDescription = stringResource(Res.string.navigation_close)
-    val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier.fillMaxWidth(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Icon(Icons.Default.Navigation, contentDescription = null, tint = palette.cyan)
+            Icon(Icons.Default.Navigation, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
             Text(title, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
         }
         IconButton(
@@ -279,7 +262,6 @@ private fun NavigationHeader(title: String, onClose: () -> Unit) {
 private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
     val focusManager = LocalFocusManager.current
     val keyboardController = LocalSoftwareKeyboardController.current
-    val palette = LocalLightHudPalette.current
 
     OutlinedTextField(
         value = model.query,
@@ -287,35 +269,39 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
         modifier = Modifier.fillMaxWidth(),
         singleLine = true,
         label = { Text(stringResource(Res.string.navigation_search_hint)) },
-        colors = OutlinedTextFieldDefaults.colors(
-            focusedTextColor = palette.text,
-            unfocusedTextColor = palette.text,
-            focusedBorderColor = palette.cyan,
-            focusedLabelColor = palette.cyan,
-            cursorColor = palette.cyan,
-            unfocusedBorderColor = palette.muted.copy(alpha = 0.7f),
-            unfocusedLabelColor = palette.muted,
-        ),
     )
 
-    if (model.requestInFlight) {
+    AnimatedVisibility(
+        visible = model.requestInFlight,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp, color = palette.cyan)
-            Text(
-                if (model.destination != null) {
-                    stringResource(Res.string.navigation_route_loading)
-                } else {
-                    stringResource(Res.string.navigation_searching)
-                },
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            CircularProgressIndicator(Modifier.size(18.dp), strokeWidth = 2.dp)
+            AnimatedContent(
+                targetState = model.destination != null,
+                label = "navigation_request_kind",
+            ) { buildingRoute ->
+                Text(
+                    if (buildingRoute) {
+                        stringResource(Res.string.navigation_route_loading)
+                    } else {
+                        stringResource(Res.string.navigation_searching)
+                    },
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
-    if (model.searchResults.isNotEmpty()) {
+    AnimatedVisibility(
+        visible = model.searchResults.isNotEmpty(),
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
         LazyColumn(
             modifier = Modifier
                 .fillMaxWidth()
@@ -333,12 +319,21 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
             }
         }
     }
-    if (shouldShowNavigationNoResults(model)) {
+    AnimatedVisibility(
+        visible = shouldShowNavigationNoResults(model),
+        enter = fadeIn(),
+        exit = fadeOut(),
+    ) {
         Text(stringResource(Res.string.navigation_no_results), color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    model.destination?.let { destination ->
+    AnimatedVisibility(
+        visible = model.destination != null,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
+        model.destination?.let { destination ->
             Column(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth().animateContentSize(),
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Text(
@@ -354,13 +349,13 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
                         onClick = callbacks.onRetry,
                         enabled = model.canRetry,
                         modifier = Modifier.fillMaxWidth(),
-                        colors = navigationActionButtonColors(),
                     ) {
                         Text(stringResource(Res.string.navigation_build_route))
                     }
                 }
             }
         }
+    }
     FailureBanner(model, callbacks)
 }
 
@@ -374,7 +369,6 @@ internal fun shouldShowNavigationNoResults(model: NavigationUiModel): Boolean =
 @Composable
 private fun PlaceResult(place: PlaceCandidate, onSelected: (PlaceCandidate) -> Unit) {
     val destinationDescription = stringResource(Res.string.navigation_select_destination, place.title)
-    val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -387,7 +381,7 @@ private fun PlaceResult(place: PlaceCandidate, onSelected: (PlaceCandidate) -> U
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Icon(Icons.Default.LocationOn, contentDescription = null, tint = palette.cyan)
+        Icon(Icons.Default.LocationOn, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
         Column(Modifier.weight(1f)) {
             Text(place.title, maxLines = 1, overflow = TextOverflow.Ellipsis)
             place.subtitle?.let {
@@ -407,7 +401,7 @@ private fun PlaceResult(place: PlaceCandidate, onSelected: (PlaceCandidate) -> U
 private fun RouteReadyContent(model: NavigationUiModel, callbacks: LightNavigationCallbacks, units: UnitSystem) {
     val startDescription = stringResource(Res.string.navigation_start)
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         Text(model.destination?.title.orEmpty(), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
@@ -433,7 +427,6 @@ private fun RouteReadyContent(model: NavigationUiModel, callbacks: LightNavigati
             modifier = Modifier
                 .fillMaxWidth()
                 .semantics { contentDescription = startDescription },
-            colors = navigationActionButtonColors(),
         ) {
             Text(stringResource(Res.string.navigation_start))
         }
@@ -446,7 +439,6 @@ private fun RouteOption(
     units: UnitSystem,
     onSelected: (String) -> Unit,
 ) {
-    val palette = LocalLightHudPalette.current
     val duration = durationText(alternative.durationMinutes)
     val routeDescription = stringResource(
         Res.string.navigation_select_route,
@@ -458,15 +450,16 @@ private fun RouteOption(
     )
     val backgroundColor by animateColorAsState(
         targetValue = if (alternative.selected) {
-            palette.cyan.copy(alpha = 0.22f)
+            MaterialTheme.colorScheme.primaryContainer
         } else {
-            palette.surface.copy(alpha = 0.72f)
+            MaterialTheme.colorScheme.surfaceContainer
         },
         label = "navigation_route_selection",
     )
     Card(
         modifier = Modifier
             .fillMaxWidth()
+            .animateContentSize()
             .selectable(
                 selected = alternative.selected,
                 onClick = { onSelected(alternative.routeId) },
@@ -477,25 +470,15 @@ private fun RouteOption(
             },
         colors = CardDefaults.cardColors(containerColor = backgroundColor),
         border = if (alternative.selected) {
-            BorderStroke(1.dp, palette.cyan)
+            BorderStroke(1.dp, MaterialTheme.colorScheme.primary)
         } else null,
     ) {
         Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = LightNavigationDockPolicy.routeOptionMinHeight().dp)
-                .padding(horizontal = 8.dp, vertical = 2.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 6.dp, vertical = 1.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            RadioButton(
-                selected = alternative.selected,
-                onClick = null,
-                colors = RadioButtonDefaults.colors(
-                    selectedColor = palette.cyan,
-                    unselectedColor = palette.muted,
-                ),
-            )
+            RadioButton(selected = alternative.selected, onClick = null)
             Text(
                 stringResource(
                     Res.string.navigation_route_option,
@@ -509,12 +492,6 @@ private fun RouteOption(
 }
 
 @Composable
-private fun navigationActionButtonColors() = ButtonDefaults.buttonColors(
-    containerColor = LocalLightHudPalette.current.cyan,
-    contentColor = if (LocalVoltyDarkTheme.current) Color(0xFF06222B) else Color.White,
-)
-
-@Composable
 private fun GuidanceDock(
     model: NavigationUiModel,
     callbacks: LightNavigationCallbacks,
@@ -523,184 +500,184 @@ private fun GuidanceDock(
     onOpenNearby: () -> Unit,
     modifier: Modifier,
 ) {
-    val glass = lightNavigationGlass()
-    val guidanceShape = RoundedCornerShape(16.dp)
+    val colors = MaterialTheme.colorScheme
     val stopDescription = stringResource(Res.string.navigation_stop)
     val retryDescription = stringResource(Res.string.navigation_retry)
-    BoxWithConstraints(modifier = modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Card(
-            modifier = Modifier
-                .fillMaxWidth(LightNavigationDockPolicy.guidanceCardWidthFraction())
-                .clip(guidanceShape)
-                .then(platformNavigationGlass()),
-            shape = guidanceShape,
-            colors = CardDefaults.cardColors(
-                containerColor = glass.containerColor,
-            ),
-            border = BorderStroke(1.dp, glass.borderColor),
-            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    Card(
+        modifier = modifier
+            .fillMaxWidth()
+            .widthIn(max = 560.dp)
+            .animateContentSize(),
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = colors.surfaceContainer.copy(alpha = 0.94f),
+        ),
+        border = BorderStroke(1.dp, colors.primary.copy(alpha = 0.35f)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 3.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 7.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp),
         ) {
-            GuidanceDockContent(
-                model = model,
-                phase = model.phase,
-                units = units,
-                nearby = nearby,
-                onOpenNearby = onOpenNearby,
-                onRetry = callbacks.onRetry,
-                canRetry = model.canRetry,
-                retryDescription = retryDescription,
-                onStop = callbacks.onStopNavigation,
-                stopDescription = stopDescription,
-            )
+            AnimatedContent(
+                targetState = model.phase,
+                transitionSpec = { fadeIn() togetherWith fadeOut() },
+                label = "navigation_guidance_phase",
+            ) { phase ->
+                val phaseDescription = guidanceDescription(model, phase)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = guidanceIcon(model.maneuver, phase),
+                        color = colors.primary,
+                        fontSize = 28.sp,
+                        lineHeight = 30.sp,
+                        modifier = Modifier.semantics { contentDescription = phaseDescription },
+                    )
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(1.dp),
+                    ) {
+                        when (phase) {
+                            NavigationUiPhase.NAVIGATING -> {
+                                val maneuver = model.maneuver
+                                if (maneuver == null) {
+                                    Text(
+                                        stringResource(Res.string.navigation_location_searching),
+                                        color = colors.onSurfaceVariant,
+                                        maxLines = 1,
+                                    )
+                                } else {
+                                    Text(
+                                        guidancePrimaryText(maneuver),
+                                        fontWeight = FontWeight.Bold,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    maneuver.streetName
+                                        ?.takeIf { it != maneuver.instruction }
+                                        ?.let { streetName ->
+                                            Text(
+                                                streetName,
+                                                color = colors.onSurfaceVariant,
+                                                fontSize = 10.sp,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                    Text(
+                                        stringResource(
+                                            Res.string.navigation_turn_in,
+                                            distanceWithUnit(maneuver.distanceText, units),
+                                        ),
+                                        color = colors.onSurfaceVariant,
+                                        fontSize = 12.sp,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            NavigationUiPhase.REROUTING ->
+                                Text(stringResource(Res.string.navigation_rerouting), fontWeight = FontWeight.Bold)
+                            NavigationUiPhase.ARRIVED ->
+                                Text(stringResource(Res.string.navigation_arrived), fontWeight = FontWeight.Bold)
+                            else -> Unit
+                        }
+                    }
+                    when (phase) {
+                        NavigationUiPhase.NAVIGATING,
+                        NavigationUiPhase.ARRIVED ->
+                            DockAction(
+                                text = stringResource(Res.string.navigation_stop),
+                                description = stopDescription,
+                                onClick = callbacks.onStopNavigation,
+                            )
+                        NavigationUiPhase.REROUTING -> {
+                            DockAction(
+                                text = stringResource(Res.string.navigation_retry),
+                                description = retryDescription,
+                                enabled = model.canRetry,
+                                icon = true,
+                                onClick = callbacks.onRetry,
+                            )
+                            DockAction(
+                                text = stringResource(Res.string.navigation_stop),
+                                description = stopDescription,
+                                onClick = callbacks.onStopNavigation,
+                            )
+                        }
+                        else -> Unit
+                    }
+                }
+            }
+
+            AnimatedVisibility(
+                visible = model.phase == NavigationUiPhase.NAVIGATING && model.remainingDistanceText != null,
+                enter = fadeIn(),
+                exit = fadeOut(),
+            ) {
+                model.remainingDistanceText?.let { distance ->
+                    AnimatedContent(
+                        targetState = distance to model.remainingDurationMinutes,
+                        label = "navigation_remaining",
+                    ) { (remainingDistance, remainingDuration) ->
+                        Text(
+                            stringResource(
+                                Res.string.navigation_route_option,
+                                distanceWithUnit(remainingDistance, units),
+                                durationText(remainingDuration ?: 1L),
+                            ),
+                            color = colors.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
+            if (model.phase == NavigationUiPhase.REROUTING) {
+                model.failureBanner?.let { key ->
+                    Text(
+                        text = if (model.retryAfterSeconds != null) {
+                            stringResource(Res.string.navigation_rate_limited, model.retryAfterSeconds)
+                        } else copyText(key),
+                        color = colors.error,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+            }
+            if (model.phase == NavigationUiPhase.ARRIVED) ArrivalSoc(model)
+            if (model.phase == NavigationUiPhase.NAVIGATING && nearby != null) {
+                NavigationNearbySummary(nearby, onOpenNearby)
+            }
         }
     }
 }
 
 @Composable
-private fun GuidanceDockContent(
-    model: NavigationUiModel,
-    phase: NavigationUiPhase,
-    units: UnitSystem,
-    nearby: LightNavigationNearby?,
-    onOpenNearby: () -> Unit,
-    onRetry: () -> Unit,
-    canRetry: Boolean,
-    retryDescription: String,
-    onStop: () -> Unit,
-    stopDescription: String,
+private fun DockAction(
+    text: String,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+    icon: Boolean = false,
 ) {
-    val colors = MaterialTheme.colorScheme
-    val palette = LocalLightHudPalette.current
-    val maneuver = model.maneuver
-    val phaseDescription = guidanceDescription(model, phase)
-    Column(modifier = Modifier.fillMaxWidth()) {
-        Crossfade(
-            targetState = phase,
-            animationSpec = tween(durationMillis = 180),
-            label = "navigation_guidance_content",
-        ) { animatedPhase ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(LightNavigationDockPolicy.guidanceCardMinHeight().dp)
-                    .padding(horizontal = 12.dp, vertical = 8.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                GuidanceManeuverGlyph(
-                    maneuver = maneuver,
-                    phase = animatedPhase,
-                    color = palette.cyan,
-                    contentDescription = phaseDescription,
-                )
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                        when (animatedPhase) {
-                            NavigationUiPhase.NAVIGATING -> if (maneuver == null) {
-                                Text(
-                                    stringResource(Res.string.navigation_location_searching),
-                                    color = colors.onSurfaceVariant,
-                                    maxLines = 1,
-                                )
-                            } else {
-                                Text(
-                                    stringResource(
-                                        Res.string.navigation_turn_in,
-                                        distanceWithUnit(maneuver.distanceText, units),
-                                    ),
-                                    color = palette.cyan,
-                                    fontSize = 13.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                Text(
-                                    guidancePrimaryText(maneuver),
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 15.sp,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                maneuver.streetName
-                                    ?.takeIf { it != maneuver.instruction }
-                                    ?.let { streetName ->
-                                        Text(
-                                            streetName,
-                                            color = colors.onSurfaceVariant,
-                                            fontSize = 12.sp,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                    }
-                            }
-                            NavigationUiPhase.REROUTING ->
-                                Text(stringResource(Res.string.navigation_rerouting), fontWeight = FontWeight.SemiBold)
-                            NavigationUiPhase.ARRIVED ->
-                                Text(stringResource(Res.string.navigation_arrived), fontWeight = FontWeight.SemiBold)
-                            else -> Unit
-                        }
-            }
-            Column(
-                horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-            ) {
-                if (animatedPhase == NavigationUiPhase.NAVIGATING) {
-                    model.remainingDistanceText?.let { distance ->
-                        Column(horizontalAlignment = Alignment.End) {
-                            Text(
-                                distanceWithUnit(distance, units),
-                                color = palette.cyan,
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 13.sp,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                durationText(model.remainingDurationMinutes ?: 1L),
-                                color = colors.onSurfaceVariant,
-                                fontSize = 11.sp,
-                                maxLines = 1,
-                            )
-                        }
-                    }
-                    nearby?.let { NavigationNearbySummary(it, onOpenNearby) }
-                }
-                if (animatedPhase == NavigationUiPhase.REROUTING) {
-                    IconButton(
-                        onClick = onRetry,
-                        enabled = canRetry,
-                        modifier = Modifier.semantics { contentDescription = retryDescription },
-                    ) {
-                        Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(18.dp))
-                    }
-                }
-            }
-                GuidanceStopButton(onStop = onStop, description = stopDescription)
-            }
-        }
-        if (phase == NavigationUiPhase.ARRIVED) ArrivalSoc(model)
-        if (phase == NavigationUiPhase.REROUTING) {
-            model.failureBanner?.let { key ->
-                Text(
-                    text = if (model.retryAfterSeconds != null) {
-                        stringResource(Res.string.navigation_rate_limited, model.retryAfterSeconds)
-                    } else copyText(key),
-                    color = colors.error,
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
+    TextButton(
+        onClick = onClick,
+        enabled = enabled,
+        modifier = Modifier.semantics { contentDescription = description },
+    ) {
+        if (icon) Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+        Text(text, maxLines = 1)
     }
 }
 
 @Composable
 private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
     val description = stringResource(Res.string.dashboard_light_group_ride)
-    val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -711,7 +688,7 @@ private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () 
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(7.dp),
     ) {
-        Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan, modifier = Modifier.size(17.dp))
+        Icon(Icons.Default.Groups, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(17.dp))
         Column(Modifier.weight(1f)) {
             Text(stringResource(Res.string.dashboard_light_group_ride), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(
@@ -729,128 +706,26 @@ private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () 
 @Composable
 private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
     val description = stringResource(Res.string.dashboard_light_group_ride)
-    val palette = LocalLightHudPalette.current
-    Column(
+    Row(
         modifier = Modifier
             .minimumInteractiveComponentSize()
             .clickable(role = Role.Button, onClick = onOpenNearby)
             .semantics(mergeDescendants = true) { contentDescription = description },
-        horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(1.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        NavigationNearbyAvatars(state.participantCount)
+        Icon(
+            Icons.Default.Groups,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.size(16.dp),
+        )
         Text(
             stringResource(Res.string.dashboard_light_group_online, state.onlineParticipantCount),
-            color = palette.cyan,
-            fontSize = 11.sp,
-            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 10.sp,
             maxLines = 1,
         )
-    }
-}
-
-@Composable
-private fun NavigationNearbyAvatars(participantCount: Int) {
-    val colors = listOf(Color(0xFF2D9CDB), Color(0xFF38B86D), Color(0xFF9D6BD9))
-    val visibleAvatars = participantCount.coerceIn(1, colors.size)
-    Box(modifier = Modifier.size(width = 48.dp, height = 25.dp)) {
-        repeat(visibleAvatars) { index ->
-            Box(
-                modifier = Modifier
-                    .offset(x = (index * 13).dp)
-                    .size(25.dp)
-                    .clip(CircleShape)
-                    .background(colors[index])
-                    .border(1.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape),
-            )
-        }
-    }
-}
-
-@Composable
-private fun GuidanceStopButton(onStop: () -> Unit, description: String) {
-    val palette = LocalLightHudPalette.current
-    IconButton(
-        onClick = onStop,
-        modifier = Modifier.semantics { contentDescription = description },
-    ) {
-        Box(
-            modifier = Modifier
-                .size(36.dp)
-                .clip(CircleShape)
-                .border(1.dp, palette.cyan.copy(alpha = 0.55f), CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.Default.Close, contentDescription = null, modifier = Modifier.size(19.dp))
-        }
-    }
-}
-
-@Composable
-private fun GuidanceManeuverGlyph(
-    maneuver: NavigationUiManeuver?,
-    phase: NavigationUiPhase,
-    color: Color,
-    contentDescription: String,
-) {
-    Box(
-        modifier = Modifier
-            .size(width = 56.dp, height = 60.dp)
-            .semantics { this.contentDescription = contentDescription },
-        contentAlignment = Alignment.Center,
-    ) {
-        val angle = guidanceArrowAngle(maneuver, phase)
-        if (phase == NavigationUiPhase.NAVIGATING && maneuver?.icon == NavigationUiManeuverIcon.LEFT) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                contentDescription = null,
-                tint = color,
-                modifier = Modifier.size(48.dp),
-            )
-        } else if (angle == null) {
-            Text(
-                text = guidanceIcon(maneuver, phase),
-                color = color,
-                fontSize = 42.sp,
-                lineHeight = 48.sp,
-            )
-        } else {
-            Canvas(Modifier.fillMaxSize()) {
-                val center = Offset(size.width / 2f, size.height / 2f)
-                val shaftLength = minOf(size.width, size.height) * 0.32f
-                val headLength = shaftLength * 0.42f
-                val strokeWidth = 2.5.dp.toPx()
-                val tip = Offset(
-                    x = center.x + cos(angle.toDouble()).toFloat() * shaftLength,
-                    y = center.y + sin(angle.toDouble()).toFloat() * shaftLength,
-                )
-                val tail = Offset(
-                    x = center.x - cos(angle.toDouble()).toFloat() * shaftLength,
-                    y = center.y - sin(angle.toDouble()).toFloat() * shaftLength,
-                )
-                drawLine(color, tail, tip, strokeWidth, cap = StrokeCap.Round)
-                drawLine(
-                    color,
-                    tip,
-                    Offset(
-                        x = tip.x - cos((angle - PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
-                        y = tip.y - sin((angle - PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
-                    ),
-                    strokeWidth,
-                    cap = StrokeCap.Round,
-                )
-                drawLine(
-                    color,
-                    tip,
-                    Offset(
-                        x = tip.x - cos((angle + PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
-                        y = tip.y - sin((angle + PI.toFloat() * 0.72f).toDouble()).toFloat() * headLength,
-                    ),
-                    strokeWidth,
-                    cap = StrokeCap.Round,
-                )
-            }
-        }
     }
 }
 
@@ -861,28 +736,6 @@ private fun guidanceIcon(
     NavigationUiPhase.REROUTING -> "↻"
     NavigationUiPhase.ARRIVED -> "⚑"
     else -> maneuver?.let { maneuverIcon(it.icon) } ?: "·"
-}
-
-private fun guidanceArrowAngle(
-    maneuver: NavigationUiManeuver?,
-    phase: NavigationUiPhase,
-): Float? = if (phase != NavigationUiPhase.NAVIGATING || maneuver == null) {
-    null
-} else {
-    when (maneuver.icon) {
-        NavigationUiManeuverIcon.DEPART -> -PI.toFloat() * 0.25f
-        NavigationUiManeuverIcon.STRAIGHT -> -PI.toFloat() / 2f
-        NavigationUiManeuverIcon.SLIGHT_LEFT -> -PI.toFloat() * 0.72f
-        NavigationUiManeuverIcon.LEFT,
-        NavigationUiManeuverIcon.SHARP_LEFT -> PI.toFloat()
-        NavigationUiManeuverIcon.SLIGHT_RIGHT -> -PI.toFloat() * 0.28f
-        NavigationUiManeuverIcon.RIGHT,
-        NavigationUiManeuverIcon.SHARP_RIGHT -> 0f
-        NavigationUiManeuverIcon.U_TURN,
-        NavigationUiManeuverIcon.ROUNDABOUT,
-        NavigationUiManeuverIcon.ARRIVE,
-        NavigationUiManeuverIcon.UNKNOWN -> null
-    }
 }
 
 internal fun guidancePrimaryText(maneuver: NavigationUiManeuver): String {
@@ -914,7 +767,7 @@ private fun guidanceDescription(model: NavigationUiModel, phase: NavigationUiPha
 @Composable
 private fun ArrivalSoc(model: NavigationUiModel) {
     model.arrivalSocPercent?.let {
-        Text(stringResource(Res.string.navigation_arrival_soc, it), color = LocalLightHudPalette.current.cyan)
+        Text(stringResource(Res.string.navigation_arrival_soc, it), color = MaterialTheme.colorScheme.primary)
     } ?: model.arrivalSocReason?.let { reason ->
         Text(
             stringResource(Res.string.navigation_arrival_soc_unknown, copyText(reason)),
@@ -927,7 +780,7 @@ private fun ArrivalSoc(model: NavigationUiModel) {
 private fun NavigationLocationBanner(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
     val key = model.locationBanner ?: return
     Row(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().animateContentSize(),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
@@ -949,7 +802,12 @@ private fun NavigationLocationBanner(model: NavigationUiModel, callbacks: LightN
 
 @Composable
 private fun FailureBanner(model: NavigationUiModel, callbacks: LightNavigationCallbacks) {
-    model.failureBanner?.let { key ->
+    AnimatedVisibility(
+        visible = model.failureBanner != null,
+        enter = fadeIn() + expandVertically(),
+        exit = fadeOut() + shrinkVertically(),
+    ) {
+        val key = model.failureBanner ?: return@AnimatedVisibility
         val retryDescription = stringResource(Res.string.navigation_retry)
         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(

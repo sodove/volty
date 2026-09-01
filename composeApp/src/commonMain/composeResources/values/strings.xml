@@ -687,7 +687,7 @@
     <string name="navigation_start">Start navigation</string>
     <string name="navigation_stop">Stop navigation</string>
     <string name="navigation_retry">Try again</string>
-    <string name="navigation_turn_in">in %1$s</string>
+    <string name="navigation_turn_in">Turn in %1$s</string>
     <string name="navigation_rerouting">Finding a new route…</string>
     <string name="navigation_arrived">You have arrived</string>
     <string name="navigation_close">Close navigation</string>

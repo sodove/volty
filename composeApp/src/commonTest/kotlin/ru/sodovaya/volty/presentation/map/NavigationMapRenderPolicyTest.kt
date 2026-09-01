@@ -131,12 +131,25 @@ class NavigationMapRenderPolicyTest {
     fun `reset has no route or destination source`() {
         val scene = NavigationMapRenderPolicy.scene(
             state = LightNavigationState(),
-            ownFix = fix(1_000L),
+            ownFix = null,
         )
 
         assertTrue(scene.routes.isEmpty())
         assertEquals(null, scene.destination)
         assertEquals(null, scene.cameraRequest)
+    }
+
+    @Test
+    fun `first idle location asks the map to recenter on the rider`() {
+        val riderFix = fix(1_000L)
+
+        val scene = NavigationMapRenderPolicy.scene(
+            state = LightNavigationState(),
+            ownFix = riderFix,
+        )
+
+        val request = assertIs<MapCameraRequest.Recenter>(scene.cameraRequest)
+        assertEquals(riderFix, request.fix)
     }
 
     @Test

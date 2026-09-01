@@ -81,7 +81,6 @@ class DefaultLightNavigationComponent(
     private var mapDemandOwned = false
     private var navigationDemandOwned = false
     private var permissionDeniedOverride = false
-    private var permissionGrantedOverride = false
     private var suppressRepositoryLocationStatus = false
     private var lifecycleStopped = false
     private var awaitingRouteOrigin = false
@@ -123,7 +122,6 @@ class DefaultLightNavigationComponent(
             reduce(NavigationAction.PlannerRequested)
         }
         permissionDeniedOverride = false
-        permissionGrantedOverride = false
         refreshLocationState()
     }
 
@@ -214,19 +212,16 @@ class DefaultLightNavigationComponent(
         mapVisible = visible
         if (!visible) {
             releaseMapDemand()
-        } else if (canUseLocation()) {
+        } else {
             if (lifecycleStopped) return
             suppressRepositoryLocationStatus = false
             ensureMapDemand()
-        } else {
-            refreshLocationState()
         }
     }
 
     override fun onLocationPermissionResult(granted: Boolean) {
         if (closed) return
         suppressRepositoryLocationStatus = false
-        permissionGrantedOverride = granted
         permissionDeniedOverride = !granted
         if (!granted) {
             reduce(NavigationAction.LocationStatusChanged(LocationUiStatus.PERMISSION_DENIED))
@@ -247,7 +242,7 @@ class DefaultLightNavigationComponent(
         suppressRepositoryLocationStatus = false
         reduce(NavigationAction.RecenterRequested)
         refreshLocationState()
-        if (mapVisible && canUseLocation()) ensureMapDemand()
+        if (mapVisible) ensureMapDemand()
     }
 
     override fun close() {
@@ -569,14 +564,8 @@ class DefaultLightNavigationComponent(
         return fix
     }
 
-    private fun canUseLocation(): Boolean {
-        if (permissionDeniedOverride) return false
-        val status = locationRepository.state.value.status
-        return permissionGrantedOverride || status is RideLocationStatus.Available
-    }
-
     private fun ensureMapDemand() {
-        if (closed || lifecycleStopped || mapDemandOwned || !mapVisible || !canUseLocation()) return
+        if (closed || lifecycleStopped || mapDemandOwned || !mapVisible || permissionDeniedOverride) return
         mapDemandOwned = true
         scope.launch {
             runCatching { locationRepository.setDemand(LocationConsumer.MAP, true) }
@@ -631,7 +620,7 @@ class DefaultLightNavigationComponent(
         lifecycleStopped = false
         suppressRepositoryLocationStatus = false
         refreshLocationState()
-        if (mapVisible && canUseLocation()) ensureMapDemand()
+        if (mapVisible) ensureMapDemand()
         when (_state.value.phase) {
             is NavigationPhase.Navigating,
             is NavigationPhase.Rerouting -> ensureNavigationDemand()

@@ -73,6 +73,10 @@ object NavigationMapRenderPolicy {
                 sequence = cameraSequence,
                 fix = ownFix,
             )
+            phase is NavigationPhase.Idle && ownFix != null -> MapCameraRequest.Recenter(
+                sequence = cameraSequence,
+                fix = ownFix,
+            )
             else -> null
         }
         return NavigationMapScene(

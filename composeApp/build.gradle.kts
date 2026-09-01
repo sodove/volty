@@ -1,5 +1,8 @@
 import java.util.Properties
 
+val appVersionCode = 28
+val appVersionName = "0.7.6"
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.application)
@@ -127,13 +130,20 @@ android {
         applicationId = "ru.sodovaya.volty"
         minSdk = 26
         targetSdk = 36
-        versionCode = 28
-        versionName = "0.7.6"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+    applicationVariants.all {
+        val variantBuildType = buildType.name
+        outputs.all {
+            (this as com.android.build.gradle.api.ApkVariantOutput).outputFileName =
+                "volty-$appVersionName-$variantBuildType.apk"
+        }
     }
 }
 

@@ -140,7 +140,7 @@ class LightNavigationComponentPlanningTest {
     }
 
     @Test
-    fun `map demand waits for a granted permission and denied permission keeps search usable`() =
+    fun `map visibility starts location demand and denied permission keeps search usable`() =
         runTest(dispatcher) {
             Dispatchers.setMain(dispatcher)
             val navigation = FakeNavigationRepository()
@@ -150,10 +150,12 @@ class LightNavigationComponentPlanningTest {
             component.onPlannerRequested()
             component.onMapVisibilityChanged(true)
             advanceUntilIdle()
-            assertTrue(location.demands.isEmpty())
+            assertEquals(listOf(LocationConsumer.MAP), location.demands)
 
             component.onLocationPermissionResult(false)
             assertEquals(LocationUiStatus.PERMISSION_DENIED, component.state.value.locationStatus)
+            advanceUntilIdle()
+            assertTrue(location.demands.isEmpty())
             component.onQueryChanged("дом")
             advanceTimeBy(350L)
             advanceUntilIdle()

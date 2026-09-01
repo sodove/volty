@@ -461,25 +461,25 @@ class OsmNavigationRepositoryTest {
 
     @Test
     fun request_timeout_during_search_is_mapped_to_offline() = runTest {
-        val timedOut = OsmNavigationRepository(HttpClient(MockEngine { request ->
+        val slow = OsmNavigationRepository(HttpClient(MockEngine { request ->
             throw HttpRequestTimeoutException(request)
         }))
 
         assertEquals(
             NavigationFailure.Offline,
-            assertFailure(timedOut.search("Екатеринбург", null, "ru-RU")),
+            assertFailure(slow.search("Екатеринбург", null, "ru-RU")),
         )
     }
 
     @Test
     fun request_timeout_during_route_is_mapped_to_offline() = runTest {
-        val timedOut = OsmNavigationRepository(HttpClient(MockEngine { request ->
+        val slow = OsmNavigationRepository(HttpClient(MockEngine { request ->
             throw HttpRequestTimeoutException(request)
         }))
 
         assertEquals(
             NavigationFailure.Offline,
-            assertFailure(timedOut.routes(testRequest())),
+            assertFailure(slow.routes(testRequest())),
         )
     }
 

@@ -56,9 +56,7 @@ class AndroidHybridNavigationRepository(
         online.search(query, near, languageTag)
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
-        withContext(Dispatchers.IO) {
-            ensureBundledPackage()
-        }
+        withContext(Dispatchers.IO) { ensureBundledPackage() }
         val manifest = packageManager.activeManifest
         val packageDirectory = packageManager.activePackageDirectory
         if (manifest != null && packageDirectory != null &&
