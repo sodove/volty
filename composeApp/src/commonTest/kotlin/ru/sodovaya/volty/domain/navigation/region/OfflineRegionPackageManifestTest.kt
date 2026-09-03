@@ -95,9 +95,27 @@ class OfflineRegionPackageManifestTest {
         assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_CHECKSUM })
     }
 
+    @Test
+    fun manifest_rejects_invalid_timestamps_and_bbox_with_specific_errors() {
+        val invalid = validManifest(
+            createdAt = "yesterday",
+            osmTimestamp = "not-a-timestamp",
+            bbox = listOf(61.45, 56.30, 59.55, 57.25),
+        )
+
+        val errors = OfflineRegionPackageManifestPolicy.validate(invalid, currentAppVersionCode = 28)
+
+        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_CREATED_AT })
+        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_SOURCE })
+        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_BBOX })
+    }
+
     private fun validManifest(
         regionId: String = "ru-sve-yekaterinburg-agglomeration",
         releaseVersion: String = "2026.09.1",
+        createdAt: String = "2026-09-03T00:00:00Z",
+        osmTimestamp: String = "2026-09-02T00:00:00Z",
+        bbox: List<Double> = listOf(59.55, 56.30, 61.45, 57.25),
         compatibility: OfflineRegionCompatibility = OfflineRegionCompatibility(
             minAppVersionCode = 28,
             routingEngine = "valhalla",
@@ -119,14 +137,14 @@ class OfflineRegionPackageManifestTest {
         schemaVersion = 2,
         regionId = regionId,
         releaseVersion = releaseVersion,
-        createdAt = "2026-09-03T00:00:00Z",
+        createdAt = createdAt,
         source = OfflineRegionSource(
             osmReplicationSequence = 1L,
-            osmTimestamp = "2026-09-02T00:00:00Z",
+            osmTimestamp = osmTimestamp,
         ),
         compatibility = compatibility,
         coverage = OfflineRegionCoverage(
-            bbox = listOf(59.55, 56.30, 61.45, 57.25),
+            bbox = bbox,
             routingBufferKm = 30,
         ),
         components = components,

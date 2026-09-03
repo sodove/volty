@@ -4,6 +4,7 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlin.time.Instant
 
 @Serializable
 data class OfflineRegionSource(
@@ -132,6 +133,7 @@ enum class OfflineRegionManifestErrorCode {
     INVALID_MAP_SCHEMA,
     INVALID_SEARCH_SCHEMA,
     INVALID_ROUTING_BUFFER,
+    INVALID_BBOX,
     INVALID_ARTIFACT_URL,
     INVALID_ARTIFACT_SIZE,
     INVALID_CHECKSUM,
@@ -166,10 +168,12 @@ object OfflineRegionPackageManifestPolicy {
         if (!RELEASE_VERSION_PATTERN.matches(manifest.releaseVersion)) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_RELEASE_VERSION, manifest.releaseVersion)
         }
-        if (manifest.createdAt.isBlank()) {
+        if (!isValidTimestamp(manifest.createdAt)) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_CREATED_AT, manifest.createdAt)
         }
-        if (manifest.source.osmReplicationSequence < 0L || manifest.source.osmTimestamp.isBlank()) {
+        if (manifest.source.osmReplicationSequence < 0L ||
+            !isValidTimestamp(manifest.source.osmTimestamp)
+        ) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_SOURCE, manifest.source.toString())
         }
 
@@ -212,7 +216,7 @@ object OfflineRegionPackageManifestPolicy {
             )
         }
         if (!isValidBbox(manifest.coverage.bbox)) {
-            errors += error(OfflineRegionManifestErrorCode.INVALID_SOURCE, "coverage.bbox")
+            errors += error(OfflineRegionManifestErrorCode.INVALID_BBOX, "coverage.bbox")
         }
 
         validateBaseArtifact(
@@ -302,6 +306,9 @@ object OfflineRegionPackageManifestPolicy {
             south in -90.0..90.0 && north in -90.0..90.0 &&
             west <= east && south <= north
     }
+
+    private fun isValidTimestamp(value: String): Boolean = value.isNotBlank() &&
+        runCatching { Instant.parse(value) }.isSuccess
 
     private fun error(
         code: OfflineRegionManifestErrorCode,
