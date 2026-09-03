@@ -1028,3 +1028,13 @@ returns the original requested limit. GPS-aware searches still prioritize proxim
 relevance only as a stable tie-breaker; location-free searches use relevance first. The ranking and
 normalization rules are pure common code with focused regression tests, while the Android adapter
 continues to bind all query values and never interpolates user text into SQL.
+
+### Execution checkpoint — ARM64 Valhalla package smoke under QEMU — 2026-09-03
+
+The EKB `v0.1.2` routing archive was mounted into the multi-architecture Valhalla image on the
+remote x86_64 host after installing the ARM64 binfmt handler. The ARM64 image loaded all 110 tiles,
+reported ready in two seconds, and returned a successful route with one alternative. This verifies
+that the regional tile format is readable and routable by the ARM64 Valhalla service under QEMU;
+it is not an Android ARM64 `.so` execution test. Physical ARM64 hardware or an ARM64 host is still
+required for the Valhalla Mobile Android gate, along with lifecycle, size/memory, and configured
+signed-catalog end-to-end checks.
