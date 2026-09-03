@@ -59,6 +59,7 @@ kotlin {
             implementation(libs.datastore.preferences)
             implementation(libs.graphics.shapes)
             implementation(libs.haze)
+            implementation(libs.valhalla.mobile)
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.okhttp)
             implementation("org.maplibre.gl:android-sdk:13.0.2")

@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.navigation.offline
 
+import android.content.Context
 import java.lang.reflect.InvocationTargetException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -16,14 +17,18 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRuntime
 /**
  * Android bridge for the published Valhalla Mobile AAR.
  *
- * Reflection is deliberate while the AAR gate is still pending: this source can
- * land independently of the binary dependency and cannot silently make the
- * current production APK claim that Valhalla is installed. DI should bind this
- * only after the ARM64/x86_64 wrapper smoke passes.
+ * Reflection keeps this adapter independently deployable while the Android
+ * dependency and regional catalog are being rolled out. The important detail
+ * is that the AAR owns the config schema: do not pass the server/CLI JSON to
+ * its legacy string constructor. Build the config through the version-matched
+ * factory and use the Context constructor exercised by the AAR smoke harness.
  */
 class AndroidOfflineValhallaRuntime(
     private val packageStore: AndroidOfflineRegionPackageStore,
+    context: Context,
 ) : OfflineRegionRuntime {
+    private val applicationContext = context.applicationContext
+
     override suspend fun search(
         regionId: String,
         request: OfflineGeocoderRequest,
@@ -62,18 +67,40 @@ class AndroidOfflineValhallaRuntime(
         request: RouteRequest,
     ): String {
         val type = Class.forName(VALHALLA_CLASS)
-        val engine = type.getConstructor(String::class.java)
-            .newInstance(installed.routingConfig.absolutePath)
+        val factoryType = Class.forName(VALHALLA_CONFIG_FACTORY_CLASS)
+        val factory = factoryType.getField("INSTANCE").get(null)
+        val configFactory = factoryType.methods.firstOrNull { method ->
+            method.name == "usingTileExtract" &&
+                method.parameterTypes.contentEquals(
+                    arrayOf(String::class.java, String::class.java),
+                )
+        } ?: throw NoSuchMethodException("ValhallaConfigFactory.usingTileExtract")
+        val config = configFactory.invoke(
+            factory,
+            installed.routingTileExtract.absolutePath,
+            null,
+        ) ?: throw IllegalStateException("Valhalla config factory returned null")
+        val constructor = type.constructors.firstOrNull { candidate ->
+            val parameters = candidate.parameterTypes
+            parameters.size == 2 &&
+                parameters[0].isAssignableFrom(applicationContext.javaClass) &&
+                parameters[1].isAssignableFrom(config.javaClass)
+        } ?: throw NoSuchMethodException("Valhalla(Context, ValhallaConfig)")
+        val engine = constructor.newInstance(applicationContext, config)
         return try {
             type.getMethod("routeRaw", String::class.java)
                 .invoke(engine, ValhallaRouteCodec.encodeRequest(request)) as? String
                 ?: throw IllegalStateException("Valhalla returned a non-string response")
         } catch (error: InvocationTargetException) {
             throw IllegalStateException("Valhalla route failed", error.targetException)
+        } finally {
+            runCatching { type.getMethod("close").invoke(engine) }
         }
     }
 
     private companion object {
         const val VALHALLA_CLASS = "com.valhalla.valhalla.Valhalla"
+        const val VALHALLA_CONFIG_FACTORY_CLASS =
+            "com.valhalla.valhalla.config.ValhallaConfigFactory"
     }
 }

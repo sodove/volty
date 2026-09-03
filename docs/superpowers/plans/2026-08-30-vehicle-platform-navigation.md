@@ -765,15 +765,18 @@ AAR was inspected on 2026-09-03: 10,455,999 bytes and native libraries for `arm6
 factories for a tiles directory or tile extract. See the [Valhalla Mobile README](https://github.com/Rallista/valhalla-mobile)
 and [Valhalla tile specification](https://github.com/valhalla/valhalla-docs/blob/master/tiles.md).
 
-The gate is not passed yet. This checkout has NDK `27.0.12077973`, while the wrapper's Android
-build instructions currently specify NDK `29.0.14206865`; no real Valhalla regional tileset has
-been run through the wrapper in Volty. Before deleting the BRouter prototype, build a throwaway
-ARM64/debug smoke with the published AAR, load a real Yekaterinburg tileset, execute a route, and
-measure alternatives, cold start, peak RSS, native size, and process/lifecycle stability. Debug
-must also exercise x86_64; release must exclude x86 and x86_64. PASS requires a usable first route,
-at least one genuinely distinct alternative on the route corpus, no native crash, and agreed size/
-memory budgets. FAIL keeps BRouter as a separately documented fallback decision, not as an unseen
-second production engine.
+The full gate is not passed yet: ARM64 hardware/emulation and the final process/lifecycle check
+remain open. The x86_64 debug subgate was exercised on 2026-09-03 with the real EKB `tiles.tar`
+from `ekb-package-v0.1.1`: the published AAR loaded in 239 ms, returned three route trips (with
+the `alternates` field present) in 171 ms, and produced a 20,133-byte response without a native
+crash. The throwaway APK was 43,689,550 bytes and the post-route emulator sample was 101,987 KiB
+PSS / 172,572 KiB RSS; these are measurements for the gate, not release budgets. Before deleting
+the BRouter prototype, exercise the same package through ARM64, repeat a cold start and multiple
+route/close cycles, and measure peak memory/native size and lifecycle stability. Debug must also
+exercise x86_64; release must exclude x86 and x86_64. PASS requires a usable first route, at least
+one genuinely distinct alternative on the route corpus, no native crash, and agreed size/memory
+budgets. FAIL keeps BRouter as a separately documented fallback decision, not as an unseen second
+production engine.
 
 ### MVP boundary after the gate
 
@@ -844,6 +847,8 @@ unsigned releases through the manifest policy plus an injected Ed25519 verifier.
 
 The Valhalla JSON codec requests up to three alternatives with generic `auto` costing, maps
 polyline6/legs/maneuvers into the existing route contract, and applies the existing geometry
-diversity filter. The Android Valhalla bridge remains intentionally unbound until the published
-AAR is exercised with the real EKB package on ARM64 and x86_64. No BRouter assets were removed,
-no APK/Gradle build was run, and Settings/DI/PMTiles renderer wiring remains after the gate.
+diversity filter. The Android bridge now creates the version-matched AAR config through
+`ValhallaConfigFactory.usingTileExtract(...)` and closes each native engine after a request; it
+remains intentionally unbound until the ARM64 gate is complete. No BRouter assets were removed,
+no APK/Gradle application build was run, and Settings/DI/PMTiles renderer wiring remains after
+the gate.
