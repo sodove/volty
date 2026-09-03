@@ -11,6 +11,16 @@ enum class OfflineRegionPackageFailure {
     UNKNOWN,
 }
 
+/**
+ * Lets the Android storage/download boundary preserve the reason for a
+ * failure instead of flattening every IOException into a network error.
+ */
+class OfflineRegionPackageFailureException(
+    val category: OfflineRegionPackageFailure,
+    message: String,
+    cause: Throwable? = null,
+) : Exception(message, cause)
+
 data class OfflineRegionPackageState(
     val region: OfflineRegionManifest,
     val latestRelease: OfflineRegionPackageManifest?,

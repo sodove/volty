@@ -18,6 +18,8 @@ import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionArtifactDownload
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionComponent
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailureException
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionResumeDecision
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionResumePolicy
 
@@ -69,6 +71,8 @@ class AndroidOfflineRegionArtifactDownloader(
             files
         } catch (cancelled: CancellationException) {
             throw cancelled
+        } catch (failure: OfflineRegionPackageFailureException) {
+            throw failure
         } catch (error: Exception) {
             if (error is InterruptedIOException) throw error
             throw IOException("Regional artifact download failed", error)
@@ -160,7 +164,10 @@ class AndroidOfflineRegionArtifactDownloader(
             }
             val actualChecksum = sha256(part)
             if (!actualChecksum.equals(artifact.sha256, ignoreCase = true)) {
-                throw IOException("Checksum mismatch for ${artifact.component}")
+                throw OfflineRegionPackageFailureException(
+                    category = OfflineRegionPackageFailure.CHECKSUM,
+                    message = "Checksum mismatch for ${artifact.component}",
+                )
             }
             moveAtomically(part, target)
         } finally {

@@ -4,6 +4,7 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import android.os.SystemClock
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -63,17 +64,22 @@ class AndroidOfflineRegionPackageRepository(
     private val jobs = ConcurrentHashMap<String, Job>()
     private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val catalogRefreshMutex = Mutex()
+    private val catalogRetryLock = Any()
+    private var catalogRetryJob: Job? = null
+    private var lastCatalogRetryElapsedMillis: Long? = null
     @Volatile
     private var catalog: OfflineRegionCatalog? = null
 
     private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
             retryWaitingDownloads()
+            retryCatalogIfNeeded()
         }
 
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
             if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
                 retryWaitingDownloads()
+                retryCatalogIfNeeded()
             }
         }
     }
@@ -217,8 +223,24 @@ class AndroidOfflineRegionPackageRepository(
                 )
             }
             throw cancelled
+        } catch (failure: OfflineRegionPackageFailureException) {
+            updateState(regionId) {
+                it.copy(status = OfflineRegionPackageStatus.FAILED, failure = failure.category)
+            }
         } catch (_: IOException) {
-            updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.NETWORK) }
+            updateState(regionId) {
+                it.copy(
+                    status = OfflineRegionPackageStatus.FAILED,
+                    // IO during download is normally transport failure; IO
+                    // during install is local storage failure. The explicit
+                    // exception above handles checksum/package incompatibility.
+                    failure = if (installationFailed) {
+                        OfflineRegionPackageFailure.STORAGE
+                    } else {
+                        OfflineRegionPackageFailure.NETWORK
+                    },
+                )
+            }
         } catch (_: Exception) {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.UNKNOWN) }
         }
@@ -290,6 +312,36 @@ class AndroidOfflineRegionPackageRepository(
         requireNotNull(catalog?.regions?.firstOrNull { it.region.regionId == regionId }) {
             "Region catalog has not loaded region $regionId"
         }
+
+    /**
+     * Startup refresh is deliberately fire-and-forget. If it failed before
+     * any catalog region was published, a later network transition must make
+     * the catalog discoverable without requiring a trip through Settings.
+     * Keep a cooldown because Android can deliver several capability events
+     * for one connection and catalog refresh is an actual network request.
+     */
+    private fun retryCatalogIfNeeded() {
+        if (catalog != null || catalogUrl.isBlank()) return
+        synchronized(catalogRetryLock) {
+            if (catalog != null || catalogRetryJob?.isActive == true) return
+            val now = SystemClock.elapsedRealtime()
+            val previousAttempt = lastCatalogRetryElapsedMillis
+            if (previousAttempt != null && now - previousAttempt < CATALOG_RETRY_COOLDOWN_MILLIS) return
+            lastCatalogRetryElapsedMillis = now
+            catalogRetryJob = retryScope.launch {
+                try {
+                    refreshCatalog()
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // The next network transition or explicit Settings action
+                    // may try again; do not surface a duplicate global error.
+                } finally {
+                    synchronized(catalogRetryLock) { catalogRetryJob = null }
+                }
+            }
+        }
+    }
 
     private fun publishStates() {
         val loaded = catalog ?: return
@@ -441,5 +493,6 @@ class AndroidOfflineRegionPackageRepository(
         const val COPY_BUFFER_SIZE = 16 * 1024
         const val CATALOG_CONNECT_TIMEOUT_MILLIS = 10_000
         const val CATALOG_READ_TIMEOUT_MILLIS = 15_000
+        const val CATALOG_RETRY_COOLDOWN_MILLIS = 30_000L
     }
 }

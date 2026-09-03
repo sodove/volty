@@ -17,6 +17,8 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCodec
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailureException
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 
 /**
@@ -52,12 +54,23 @@ class AndroidOfflineRegionPackageStore(
     ): InstalledOfflineRegion = synchronized(lock) {
         require(manifest.regionId == plan.regionId) { "manifest and plan region differ" }
         require(manifest.releaseVersion == plan.releaseVersion) { "manifest and plan release differ" }
-        require(
-            OfflineRegionPackageManifestPolicy.validate(manifest, currentAppVersionCode).isEmpty(),
-        ) { "regional release manifest is incompatible with this app" }
-        require(manifestVerifier.verify(manifest)) { "regional release signature is invalid" }
-        require(downloadedArtifacts.keys == OfflineRegionComponent.entries.toSet()) {
-            "a regional package must provide exactly three downloaded artifacts"
+        if (OfflineRegionPackageManifestPolicy.validate(manifest, currentAppVersionCode).isNotEmpty()) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "regional release manifest is incompatible with this app",
+            )
+        }
+        if (!manifestVerifier.verify(manifest)) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "regional release signature is invalid",
+            )
+        }
+        if (downloadedArtifacts.keys != OfflineRegionComponent.entries.toSet()) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "a regional package must provide exactly three downloaded artifacts",
+            )
         }
         downloadedArtifacts.forEach { (component, file) ->
             val expected = plan.artifacts.single { it.component == component }
@@ -70,7 +83,17 @@ class AndroidOfflineRegionPackageStore(
         var publishedPackage = false
         try {
             if (!staging.mkdirs()) throw IOException("Could not create regional package staging directory")
-            extractPackage(downloadedArtifacts, staging)
+            try {
+                extractPackage(downloadedArtifacts, staging)
+            } catch (failure: OfflineRegionPackageFailureException) {
+                throw failure
+            } catch (error: IOException) {
+                throw OfflineRegionPackageFailureException(
+                    category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                    message = "regional package archive is invalid",
+                    cause = error,
+                )
+            }
             writeSyncedText(
                 File(staging, MANIFEST_FILE),
                 OfflineRegionPackageManifestCodec.encode(manifest),
@@ -208,7 +231,12 @@ class AndroidOfflineRegionPackageStore(
 
     private fun rewriteValhallaPaths(routingDirectory: File, packageDirectory: File) {
         val config = File(routingDirectory, VALHALLA_CONFIG_FILE)
-        if (!config.isFile) throw IOException("Regional routing archive has no valhalla config")
+        if (!config.isFile) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional routing archive has no valhalla config",
+            )
+        }
         val rootPath = packageDirectory.canonicalPath.replace(File.separatorChar, '/')
         val rewritten = config.readText(Charsets.UTF_8)
             .replace("/work/tiles.tar", "$rootPath/$ROUTING_DIRECTORY/tiles.tar")
@@ -230,18 +258,37 @@ class AndroidOfflineRegionPackageStore(
             !File(routing, ROUTING_ADMINS_DATABASE_FILE).isFile ||
             !File(routing, ROUTING_TIMEZONES_DATABASE_FILE).isFile
         ) {
-            throw IOException("Regional routing component is incomplete")
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional routing component is incomplete",
+            )
         }
-        if (!search.isFile || search.length() == 0L) throw IOException("Regional search component is incomplete")
-        if (!map.isFile || map.length() == 0L) throw IOException("Regional map component is incomplete")
+        if (!search.isFile || search.length() == 0L) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional search component is incomplete",
+            )
+        }
+        if (!map.isFile || map.length() == 0L) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional map component is incomplete",
+            )
+        }
 
         val expected = manifest.components
         val installedSearchBytes = search.length()
         if (installedSearchBytes != expected.search.installedBytes) {
-            throw IOException("Regional search installed size does not match the manifest")
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional search installed size does not match the manifest",
+            )
         }
         if (map.length() != expected.map.installedBytes) {
-            throw IOException("Regional map installed size does not match the manifest")
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "Regional map installed size does not match the manifest",
+            )
         }
         // The routing config contains absolute paths after installation. Its
         // byte length is platform-dependent, so only the required files are
@@ -281,10 +328,16 @@ class AndroidOfflineRegionPackageStore(
         component: OfflineRegionComponent,
     ) {
         if (!file.isFile || file.length() != expectedBytes) {
-            throw IOException("Downloaded $component artifact has an unexpected size")
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.CHECKSUM,
+                message = "Downloaded $component artifact has an unexpected size",
+            )
         }
         if (!sha256(file).equals(expectedSha256, ignoreCase = true)) {
-            throw IOException("Downloaded $component artifact has an unexpected checksum")
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.CHECKSUM,
+                message = "Downloaded $component artifact has an unexpected checksum",
+            )
         }
     }
 

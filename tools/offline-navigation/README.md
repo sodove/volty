@@ -46,13 +46,20 @@ inside the spec are relative to that spec file:
 ```
 
 ```bash
-python3 build-catalog.py --spec regions.json --output catalog.json
+python3 build-catalog.py --spec regions.json --output catalog.json \
+  --public-key /secure/volty-regions-ed25519.public.b64 \
+  --key-id volty-regions-2026 \
+  --current-app-version-code 28
 ```
 
-Only signed manifests are accepted. The builder rejects duplicate regions,
-invalid bounds, mismatched IDs, and logical bounds outside the signed release
-coverage. The catalog itself is served over HTTPS; each release manifest is
-verified independently by the Android public key before installation.
+Only signed manifests are accepted. The publisher verifies every manifest
+against the expected Ed25519 public key and key ID, then applies the same
+schema, Valhalla engine/data version, app-version, artifact, HTTPS, map, and
+search compatibility gates used by the Android package policy. It also rejects
+duplicate regions, invalid bounds, mismatched IDs, and logical bounds outside
+the signed release coverage. The catalog itself is served over HTTPS; each
+release manifest is verified independently by the Android public key before
+installation.
 
 The current pilot bbox is the EKB agglomeration with a routing buffer:
 `59.10,56.00,61.90,57.55` (west,south,east,north). `osmium extract --strategy=smart`

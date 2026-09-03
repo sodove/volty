@@ -1074,3 +1074,21 @@ progress/errors, asks before deleting a ready region, displays the advertised up
 distinguishes network wait, mobile approval, queue, and deletion states. Failed states render the
 recorded failure category. No APK/Gradle build was run; the changed Kotlin/UI paths still require
 the normal compile/test gate once application builds are allowed.
+
+### Execution checkpoint — release validation and catalog recovery — 2026-09-03
+
+The regional publisher now verifies each signed manifest independently with the
+expected Ed25519 public key and key ID before adding it to a catalog. It applies
+the Android-compatible schema, app-version, Valhalla engine/data-version,
+artifact/HTTPS, PMTiles, search, and coverage gates instead of checking only
+that a non-empty signature field exists. The CLI requires the public key, key
+ID, and consuming app version; focused host tests cover a valid signature, a
+wrong signature, a newer-app manifest, and a routing-version mismatch.
+
+The Android package path now preserves failure categories: checksum corruption,
+invalid/incomplete regional archives, and incompatible manifests are no longer
+reported as network failures; unclassified I/O during installation is reported
+as storage failure. If startup catalog discovery fails before any region is
+published, Android retries it once connectivity returns with a 30-second
+cooldown, so automatic regional download does not depend on opening Settings.
+Host tool tests and Python compilation pass. No APK/Gradle build was run.
