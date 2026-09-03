@@ -34,6 +34,7 @@ import ru.sodovaya.volty.domain.navigation.RouteProgressEngine
 import ru.sodovaya.volty.domain.navigation.RouteProgressUpdate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import kotlin.math.max
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -46,6 +47,8 @@ interface LightNavigationComponent {
     fun onPlannerRequested()
     fun onQueryChanged(query: String)
     fun onPlaceSelected(place: PlaceCandidate)
+    fun onRouteStyleChanged(style: RouteStyle)
+    fun onTopSpeedChanged(speedKph: Int)
     fun onAlternativeSelected(routeId: String)
     fun onStartNavigation()
     fun onRetry()
@@ -149,6 +152,16 @@ class DefaultLightNavigationComponent(
         awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.PlaceSelected(place))
+    }
+
+    override fun onRouteStyleChanged(style: RouteStyle) {
+        if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        reduce(NavigationAction.RouteStyleChanged(style))
+    }
+
+    override fun onTopSpeedChanged(speedKph: Int) {
+        if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        reduce(NavigationAction.TopSpeedChanged(speedKph))
     }
 
     override fun onAlternativeSelected(routeId: String) {
@@ -312,6 +325,8 @@ class DefaultLightNavigationComponent(
         }
         awaitingRouteOrigin = false
         val requestGeneration = _state.value.requestGeneration
+        val routeStyle = _state.value.routeStyle
+        val routingPreferences = _state.value.routingPreferences
         reduce(NavigationAction.RouteRequestStarted(requestGeneration))
         if (!(_state.value.phase as? NavigationPhase.Planning)?.requestInFlight.orFalse()) return
 
@@ -325,6 +340,8 @@ class DefaultLightNavigationComponent(
                         origin = origin.coordinate,
                         destination = destination,
                         languageTag = languageTag,
+                        style = routeStyle,
+                        preferences = routingPreferences,
                     ),
                 )
             } catch (error: CancellationException) {
@@ -464,11 +481,14 @@ class DefaultLightNavigationComponent(
                 )
             }
             val result = try {
+                val currentState = _state.value
                 navigationRepository.routes(
                     RouteRequest(
                         origin = origin,
                         destination = plan.destination,
                         languageTag = languageTag,
+                        style = currentState.routeStyle,
+                        preferences = currentState.routingPreferences,
                     ),
                 )
             } catch (error: CancellationException) {

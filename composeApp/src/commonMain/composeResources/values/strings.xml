@@ -681,6 +681,12 @@
     <string name="navigation_route_loading">Building route…</string>
     <string name="navigation_build_route">Build route</string>
     <string name="navigation_route_alternatives">Routes</string>
+    <string name="navigation_route_profile">Route profile</string>
+    <string name="navigation_route_style_fast_highways">Fast</string>
+    <string name="navigation_route_style_fast_without_highways">Fast, no highways</string>
+    <string name="navigation_route_style_curvy">Curvy</string>
+    <string name="navigation_route_style_max_curvy_touring">Maximum curvy touring</string>
+    <string name="navigation_route_top_speed">Top speed: %1$d km/h</string>
     <string name="navigation_route_option">%1$s · %2$s</string>
     <string name="navigation_duration_minutes">%1$d min</string>
     <string name="navigation_duration_hours_minutes">%1$d h %2$d min</string>

@@ -219,6 +219,8 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                             },
                             onQueryChanged = component.navigation::onQueryChanged,
                             onPlaceSelected = component.navigation::onPlaceSelected,
+                            onRouteStyleChanged = component.navigation::onRouteStyleChanged,
+                            onTopSpeedChanged = component.navigation::onTopSpeedChanged,
                             onAlternativeSelected = component.navigation::onAlternativeSelected,
                             onStartNavigation = component.navigation::onStartNavigation,
                             onRetry = component.navigation::onRetry,

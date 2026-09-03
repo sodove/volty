@@ -13,6 +13,7 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -40,12 +41,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -65,6 +68,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 import volty.composeapp.generated.resources.Res
@@ -98,6 +102,12 @@ import volty.composeapp.generated.resources.navigation_route_alternatives
 import volty.composeapp.generated.resources.navigation_route_loading
 import volty.composeapp.generated.resources.navigation_route_offline
 import volty.composeapp.generated.resources.navigation_route_option
+import volty.composeapp.generated.resources.navigation_route_profile
+import volty.composeapp.generated.resources.navigation_route_style_curvy
+import volty.composeapp.generated.resources.navigation_route_style_fast_highways
+import volty.composeapp.generated.resources.navigation_route_style_fast_without_highways
+import volty.composeapp.generated.resources.navigation_route_style_max_curvy_touring
+import volty.composeapp.generated.resources.navigation_route_top_speed
 import volty.composeapp.generated.resources.navigation_rerouting
 import volty.composeapp.generated.resources.navigation_search_hint
 import volty.composeapp.generated.resources.navigation_search_offline
@@ -119,6 +129,8 @@ data class LightNavigationCallbacks(
     val onOpenPlanner: () -> Unit = {},
     val onQueryChanged: (String) -> Unit = {},
     val onPlaceSelected: (PlaceCandidate) -> Unit = {},
+    val onRouteStyleChanged: (RouteStyle) -> Unit = {},
+    val onTopSpeedChanged: (Int) -> Unit = {},
     val onAlternativeSelected: (String) -> Unit = {},
     val onStartNavigation: () -> Unit = {},
     val onRetry: () -> Unit = {},
@@ -271,6 +283,11 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
         label = { Text(stringResource(Res.string.navigation_search_hint)) },
     )
 
+    RoutingOptions(
+        model = model,
+        callbacks = callbacks,
+    )
+
     AnimatedVisibility(
         visible = model.requestInFlight,
         enter = fadeIn() + expandVertically(),
@@ -357,6 +374,58 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
         }
     }
     FailureBanner(model, callbacks)
+}
+
+@Composable
+private fun RoutingOptions(
+    model: NavigationUiModel,
+    callbacks: LightNavigationCallbacks,
+) {
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(
+            stringResource(Res.string.navigation_route_profile),
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            fontSize = 13.sp,
+        )
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            RouteStyle.entries.forEach { style ->
+                FilterChip(
+                    selected = model.routeStyle == style,
+                    enabled = !model.requestInFlight,
+                    onClick = { callbacks.onRouteStyleChanged(style) },
+                    label = { Text(style.label()) },
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(stringResource(Res.string.navigation_route_top_speed, model.topSpeedKph), fontSize = 13.sp)
+        }
+        Slider(
+            value = model.topSpeedKph.toFloat(),
+            onValueChange = { callbacks.onTopSpeedChanged(it.toInt()) },
+            valueRange = 20f..130f,
+            steps = 10,
+            enabled = !model.requestInFlight,
+        )
+    }
+}
+
+@Composable
+private fun RouteStyle.label(): String = when (this) {
+    RouteStyle.FAST_WITH_HIGHWAYS -> stringResource(Res.string.navigation_route_style_fast_highways)
+    RouteStyle.FAST_WITHOUT_HIGHWAYS -> stringResource(Res.string.navigation_route_style_fast_without_highways)
+    RouteStyle.CURVY -> stringResource(Res.string.navigation_route_style_curvy)
+    RouteStyle.MAX_CURVY_TOURING -> stringResource(Res.string.navigation_route_style_max_curvy_touring)
 }
 
 internal fun shouldShowNavigationNoResults(model: NavigationUiModel): Boolean =

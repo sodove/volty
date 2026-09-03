@@ -679,6 +679,12 @@
     <string name="navigation_route_loading">Строим маршрут…</string>
     <string name="navigation_build_route">Построить маршрут</string>
     <string name="navigation_route_alternatives">Маршруты</string>
+    <string name="navigation_route_profile">Профиль маршрута</string>
+    <string name="navigation_route_style_fast_highways">Быстрый</string>
+    <string name="navigation_route_style_fast_without_highways">Быстрый без магистралей</string>
+    <string name="navigation_route_style_curvy">Извилистый</string>
+    <string name="navigation_route_style_max_curvy_touring">Максимально извилистый</string>
+    <string name="navigation_route_top_speed">Максимальная скорость: %1$d км/ч</string>
     <string name="navigation_route_option">%1$s · %2$s</string>
     <string name="navigation_duration_minutes">%1$d мин</string>
     <string name="navigation_duration_hours_minutes">%1$d ч %2$d мин</string>

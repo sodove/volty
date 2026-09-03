@@ -30,6 +30,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LightNavigationComponentPlanningTest {
@@ -109,6 +110,30 @@ class LightNavigationComponentPlanningTest {
         advanceUntilIdle()
         assertTrue(location.demands.isEmpty())
         assertEquals(LocationUiStatus.NOT_REQUESTED, component.state.value.locationStatus)
+        component.close()
+    }
+
+    @Test
+    fun `route request carries the selected profile and speed`() = runTest(dispatcher) {
+        Dispatchers.setMain(dispatcher)
+        val navigation = FakeNavigationRepository()
+        val location = FakeLocationRepository(
+            RideLocationState(
+                status = RideLocationStatus.Available(fix(capturedAt = 9_000L, accuracy = 10.0)),
+            ),
+        )
+        val component = component(navigation, location)
+
+        component.onPlannerRequested()
+        component.onRouteStyleChanged(RouteStyle.CURVY)
+        component.onTopSpeedChanged(120)
+        component.onPlaceSelected(place)
+        component.onRetry()
+        advanceUntilIdle()
+
+        val request = navigation.routeRequests.single()
+        assertEquals(RouteStyle.CURVY, request.style)
+        assertEquals(120, request.preferences.declaredTopSpeedKph)
         component.close()
     }
 

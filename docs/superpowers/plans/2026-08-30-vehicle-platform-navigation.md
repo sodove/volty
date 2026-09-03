@@ -859,6 +859,12 @@ The Android package store and catalog repository now receive the installed APK's
 `versionCode` instead of a duplicated literal. This keeps manifest compatibility checks correct
 when the app version is bumped for a release.
 
+The planner now exposes the four generic route styles (`fast`, `fast without highways`, `curvy`,
+and `maximum curvy touring`) plus a 20–130 km/h speed slider. The selected values are carried into
+the Valhalla `auto` costing request and reused for reroutes; no EUC/scooter/bicycle selector or
+type-derived motorway rule was added. RED coverage checks reducer state, UI mapping, and the
+component's actual request payload. Both Russian and fallback English strings are present.
+
 ### Execution checkpoint — regional runtime contracts (2026-09-03)
 
 The common/runtime implementation now includes a strict catalog and release download plan,
