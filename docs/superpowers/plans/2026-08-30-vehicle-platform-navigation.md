@@ -1113,3 +1113,15 @@ manifest with an ephemeral key: it produced a schema-2 one-region catalog and
 the signature/key-ID checks passed. The temporary key and workspace were
 removed after the smoke. The app test suite and Android runtime still need to
 execute this path when the build pause is lifted.
+
+### Execution checkpoint — process-scoped current-region download — 2026-09-03
+
+Automatic map package discovery is now observed from the process application scope,
+not only from `PlatformMapLayer`. An already-owned location fix is combined with
+catalog state, so a region is reconsidered both when the rider moves and when the
+verified catalog arrives after startup. The observer does not request location
+permission or create a location demand; it preserves the existing map source's
+deduplication, metered-data approval, retry cooldown, and online-map fallback.
+
+No APK/Gradle build was run; the Kotlin wiring still needs the normal compile/test
+gate when the explicit build pause is lifted.
