@@ -1,8 +1,10 @@
 package ru.sodovaya.volty.domain.navigation.region
 
+import kotlinx.serialization.Serializable
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 
 /** Geographic extent used to decide whether a regional package can serve a request. */
+@Serializable
 data class OfflineRegionBounds(
     val south: Double,
     val west: Double,
@@ -34,12 +36,18 @@ data class OfflineRegionManifest(
 }
 
 enum class OfflineRegionPackageStatus {
-    AVAILABLE,
+    NOT_INSTALLED,
+    QUEUED,
+    WAITING_FOR_NETWORK,
+    AWAITING_METERED_APPROVAL,
     DOWNLOADING,
-    INSTALLED,
-    UPDATE_AVAILABLE,
     PAUSED,
+    VERIFYING,
+    INSTALLING,
+    READY,
+    UPDATE_AVAILABLE,
     FAILED,
+    DELETING,
 }
 
 sealed interface RegionCoverageResolution {

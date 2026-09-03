@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.navigation.routing
 
 import kotlinx.coroutines.flow.Flow
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
+import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
@@ -52,7 +53,7 @@ sealed interface RoutePlanningUpdate {
     }
 
     data class AlternativeAdded(
-        val routeId: String,
+        val route: RouteAlternative,
         val source: RouteSource,
     ) : RoutePlanningUpdate
 

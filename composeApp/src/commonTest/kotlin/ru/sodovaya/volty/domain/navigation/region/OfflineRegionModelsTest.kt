@@ -41,12 +41,18 @@ class OfflineRegionModelsTest {
     fun package_status_exposes_installability_without_ui_specific_states() {
         assertEquals(
             listOf(
-                OfflineRegionPackageStatus.AVAILABLE,
+                OfflineRegionPackageStatus.NOT_INSTALLED,
+                OfflineRegionPackageStatus.QUEUED,
+                OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
+                OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
                 OfflineRegionPackageStatus.DOWNLOADING,
-                OfflineRegionPackageStatus.INSTALLED,
-                OfflineRegionPackageStatus.UPDATE_AVAILABLE,
                 OfflineRegionPackageStatus.PAUSED,
+                OfflineRegionPackageStatus.VERIFYING,
+                OfflineRegionPackageStatus.INSTALLING,
+                OfflineRegionPackageStatus.READY,
+                OfflineRegionPackageStatus.UPDATE_AVAILABLE,
                 OfflineRegionPackageStatus.FAILED,
+                OfflineRegionPackageStatus.DELETING,
             ),
             OfflineRegionPackageStatus.entries,
         )

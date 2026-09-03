@@ -61,6 +61,19 @@ class RoutePlanningModelsTest {
         assertEquals(RouteSource.OFFLINE, update.source)
     }
 
+    @Test
+    fun alternative_update_carries_the_route_for_progressive_rendering() {
+        val alternative = route("scenic")
+
+        val update = RoutePlanningUpdate.AlternativeAdded(
+            route = alternative,
+            source = RouteSource.OFFLINE,
+        )
+
+        assertEquals("scenic", update.route.id)
+        assertEquals(RouteSource.OFFLINE, update.source)
+    }
+
     private fun place(id: String) = PlaceCandidate(
         id = id,
         title = id,
