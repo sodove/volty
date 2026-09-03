@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
@@ -16,6 +17,28 @@ import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
 class OfflineFirstNavigationRepositoryTest {
+    @Test
+    fun first_request_during_catalog_refresh_queues_the_current_region_after_refresh() = runTest {
+        val refreshGate = CompletableDeferred<Unit>()
+        val packages = FakePackages(
+            catalogLoadedOnStart = false,
+            catalogRefreshGate = refreshGate,
+        )
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+
+        val result = repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+
+        assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result)
+        assertEquals(1, online.searchCalls)
+        assertEquals(emptyList(), packages.downloads)
+
+        refreshGate.complete(Unit)
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("ekb"), packages.downloads)
+    }
+
     @Test
     fun missing_region_starts_one_background_download_and_keeps_online_search_available() = runTest {
         val packages = FakePackages()
@@ -96,18 +119,31 @@ class OfflineFirstNavigationRepositoryTest {
     )
 
     private class FakePackages(
-        status: OfflineRegionPackageStatus = OfflineRegionPackageStatus.NOT_INSTALLED,
+        private val status: OfflineRegionPackageStatus = OfflineRegionPackageStatus.NOT_INSTALLED,
+        catalogLoadedOnStart: Boolean = true,
+        private val catalogRefreshGate: CompletableDeferred<Unit>? = null,
     ) : OfflineRegionPackageRepository {
         private val region = OfflineRegionManifest(
             "ekb",
             "Екатеринбург",
             OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
         )
-        private val _states = MutableStateFlow(listOf(OfflineRegionPackageState(region, null, status)))
+        private val _states = MutableStateFlow(
+            if (catalogLoadedOnStart) {
+                listOf(OfflineRegionPackageState(region, null, status))
+            } else {
+                emptyList()
+            },
+        )
         val downloads = mutableListOf<String>()
         override val states = _states
 
-        override suspend fun refreshCatalog() = Unit
+        override suspend fun refreshCatalog() {
+            catalogRefreshGate?.await()
+            if (_states.value.isEmpty()) {
+                _states.value = listOf(OfflineRegionPackageState(region, null, status))
+            }
+        }
 
         override suspend fun requestDownload(
             regionId: String,

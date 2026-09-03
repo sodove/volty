@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
@@ -44,13 +45,14 @@ class OfflineFirstNavigationRepository(
     private val scheduledDownloads = mutableSetOf<String>()
     private val catalogRefreshLock = Any()
     private var catalogRefreshAttempted = false
+    private var catalogRefreshJob: Job? = null
 
     override suspend fun search(
         query: String,
         near: GeoCoordinate?,
         languageTag: String,
     ): NavigationResult<List<PlaceCandidate>> {
-        ensureCatalog()
+        val catalogRefresh = ensureCatalog()
         val request = OfflineGeocoderRequestPolicy.create(query, near, languageTag)
         if (request == null || near == null) return online.search(query, near, languageTag)
 
@@ -69,7 +71,15 @@ class OfflineFirstNavigationRepository(
             is OfflineRegionAccessDecision.RequestMeteredApproval
             -> online.search(query, near, languageTag)
             is OfflineRegionAccessDecision.UseOnlineFallback -> {
-                scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.SEARCH)
+                if (decision.missingRegionIds.isEmpty()) {
+                    scheduleDownloadAfterCatalogRefresh(
+                        refreshJob = catalogRefresh,
+                        points = listOf(near),
+                        trigger = OfflineRegionDownloadTrigger.SEARCH,
+                    )
+                } else {
+                    scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.SEARCH)
+                }
                 online.search(query, near, languageTag)
             }
             OfflineRegionAccessDecision.UnavailableOffline ->
@@ -78,7 +88,7 @@ class OfflineFirstNavigationRepository(
     }
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
-        ensureCatalog()
+        val catalogRefresh = ensureCatalog()
         return when (
             val decision = access(
                 points = listOf(request.origin, request.destination.coordinate),
@@ -93,7 +103,15 @@ class OfflineFirstNavigationRepository(
             is OfflineRegionAccessDecision.RequestMeteredApproval
             -> online.routes(request)
             is OfflineRegionAccessDecision.UseOnlineFallback -> {
-                scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.ROUTE)
+                if (decision.missingRegionIds.isEmpty()) {
+                    scheduleDownloadAfterCatalogRefresh(
+                        refreshJob = catalogRefresh,
+                        points = listOf(request.origin, request.destination.coordinate),
+                        trigger = OfflineRegionDownloadTrigger.ROUTE,
+                    )
+                } else {
+                    scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.ROUTE)
+                }
                 online.routes(request)
             }
             is OfflineRegionAccessDecision.WaitForDownload -> if (
@@ -114,15 +132,17 @@ class OfflineFirstNavigationRepository(
      * before startup refresh finishes. The request never waits for the catalog
      * network timeout; it continues through the online path immediately.
      */
-    private fun ensureCatalog() {
-        if (packages.states.value.isNotEmpty() || catalogRefreshAttempted) return
-        if (network.current() == OfflineNetworkAvailability.OFFLINE) return
-        synchronized(catalogRefreshLock) {
-            if (packages.states.value.isNotEmpty() || catalogRefreshAttempted) return
+    private fun ensureCatalog(): Job? {
+        if (packages.states.value.isNotEmpty()) return null
+        if (network.current() == OfflineNetworkAvailability.OFFLINE) return null
+        return synchronized(catalogRefreshLock) {
+            if (packages.states.value.isNotEmpty()) return@synchronized null
+            catalogRefreshJob?.let { return@synchronized it }
+            if (catalogRefreshAttempted) return@synchronized null
             catalogRefreshAttempted = true
             downloadScope.launch {
                 runCatching { packages.refreshCatalog() }
-            }
+            }.also { catalogRefreshJob = it }
         }
     }
 
@@ -162,6 +182,26 @@ class OfflineFirstNavigationRepository(
     ) {
         decision.missingRegionIds.firstOrNull()?.let { regionId ->
             scheduleDownload(regionId, trigger)
+        }
+    }
+
+    private fun scheduleDownloadAfterCatalogRefresh(
+        refreshJob: Job?,
+        points: List<GeoCoordinate>,
+        trigger: OfflineRegionDownloadTrigger,
+    ) {
+        refreshJob ?: return
+        downloadScope.launch {
+            refreshJob.join()
+            when (val decision = access(points, trigger)) {
+                is OfflineRegionAccessDecision.StartDownload ->
+                    scheduleDownload(decision.regionId, decision.trigger)
+
+                is OfflineRegionAccessDecision.UseOnlineFallback ->
+                    scheduleMissingRegionDownload(decision, trigger)
+
+                else -> Unit
+            }
         }
     }
 }

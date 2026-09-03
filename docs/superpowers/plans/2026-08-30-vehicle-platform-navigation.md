@@ -942,3 +942,11 @@ throwaway gate APK. No Android ARM64 emulator is available on the current Window
 x86_64 hosts: Android Emulator rejects an ARM64 system image before boot, even with `-no-accel`.
 The ARM64 runtime gate therefore still needs physical ARM64 hardware or an ARM64 host; this does
 not block the BRouter source fix or the existing x86_64 Valhalla smoke.
+
+The asynchronous catalog boundary had one more race: a first search/route could fall back online
+while the catalog was still loading, observe no region entries, and lose the automatic download
+request permanently. The offline-first repository now retains the refresh job and re-evaluates the
+same request coordinates after it completes. This queues the current region without delaying the
+online result, while the existing metered-data policy still turns the queued request into a prompt
+unless the rider enabled the no-prompt setting. A regression test covers the suspended-refresh
+interleaving and confirms that it queues exactly one region after catalog publication.
