@@ -30,6 +30,50 @@ class ValhallaRouteCodecTest {
     }
 
     @Test
+    fun request_keeps_style_as_highway_bias_without_faking_curvature_controls() {
+        val fast = ValhallaRouteCodec.encodeRequest(request(style = RouteStyle.FAST_WITH_HIGHWAYS))
+        val curvy = ValhallaRouteCodec.encodeRequest(request(style = RouteStyle.CURVY))
+        val touring = ValhallaRouteCodec.encodeRequest(request(style = RouteStyle.MAX_CURVY_TOURING))
+        val avoidUnpaved = ValhallaRouteCodec.encodeRequest(
+            request(preferences = RoutingPreferences(declaredTopSpeedKph = 90, avoidUnpaved = true)),
+        )
+
+        assertContains(fast, "\"use_highways\":1.0")
+        assertContains(curvy, "\"use_highways\":0.4")
+        assertContains(touring, "\"use_highways\":0.15")
+        listOf(fast, curvy, touring).forEach { json ->
+            assertContains(json, "\"use_distance\":0.0")
+            assertContains(json, "\"shortest\":false")
+            assertContains(json, "\"ignore_restrictions\":false")
+            assertContains(json, "\"ignore_access\":false")
+            assertContains(json, "\"ignore_oneways\":false")
+            assertContains(json, "\"ignore_closures\":false")
+            kotlin.test.assertFalse(json.contains("maneuver_penalty"))
+        }
+        assertContains(avoidUnpaved, "\"exclude_unpaved\":true")
+        kotlin.test.assertFalse(avoidUnpaved.contains("use_unpaved"))
+    }
+
+    @Test
+    fun request_keeps_tolls_and_ferries_neutral_until_the_rider_asks_to_avoid_them() {
+        val neutral = ValhallaRouteCodec.encodeRequest(request())
+        val avoid = ValhallaRouteCodec.encodeRequest(
+            request(
+                preferences = RoutingPreferences(
+                    declaredTopSpeedKph = 90,
+                    avoidTolls = true,
+                    avoidFerries = true,
+                ),
+            ),
+        )
+
+        assertContains(neutral, "\"use_tolls\":0.5")
+        assertContains(neutral, "\"use_ferry\":0.5")
+        assertContains(avoid, "\"use_tolls\":0.0")
+        assertContains(avoid, "\"use_ferry\":0.0")
+    }
+
+    @Test
     fun response_decodes_primary_and_top_level_alternates_with_polyline6_and_maneuvers() {
         val body = """
             {
@@ -84,12 +128,15 @@ class ValhallaRouteCodecTest {
         assertEquals(NavigationFailure.MalformedResponse, assertIs<NavigationResult.Failure>(malformed).reason)
     }
 
-    private fun request(style: RouteStyle = RouteStyle.FAST_WITH_HIGHWAYS) = RouteRequest(
+    private fun request(
+        style: RouteStyle = RouteStyle.FAST_WITH_HIGHWAYS,
+        preferences: RoutingPreferences = RoutingPreferences(declaredTopSpeedKph = 90),
+    ) = RouteRequest(
         origin = GeoCoordinate(56.84, 60.61),
         destination = PlaceCandidate("finish", "Плотинка", "Екатеринбург", GeoCoordinate(56.85, 60.62)),
         languageTag = "ru-RU",
         style = style,
-        preferences = RoutingPreferences(declaredTopSpeedKph = 90),
+        preferences = preferences,
         alternativesLimit = 3,
     )
 }

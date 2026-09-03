@@ -107,6 +107,14 @@ The backend boundary also permits:
 
 [Valhalla turn-by-turn](https://valhalla.github.io/valhalla/api/turn-by-turn/overview/) returns route shape and maneuvers and supports customizable costing. [OSRM](https://project-osrm.org/docs/v5.24.0/api/) supports alternatives, steps, and GeoJSON, but profiles are prepared statically and it has no geocoder, so it is a poorer initial fit for three explicit personal-EV policies. The public [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/) forbids client-side autocomplete, caps use at one request per second, and asks apps to proxy/cache and remain switchable; therefore public Nominatim is not the MVP geocoder. No provider name appears in Compose state or strings.
 
+The regional offline Valhalla path keeps one transport-agnostic `auto` costing. Valhalla 3.6.3
+does not expose a road-curvature signal, so the named touring styles may adjust highway
+willingness but must not promise scenic or curvy geometry. Route diversity comes from requesting
+up to three alternatives and accepting only genuinely distinct geometry. Neutral toll/ferry
+preferences use the engine midpoint; avoidance uses the documented zero value. Unpaved avoidance
+uses `exclude_unpaved`; unsupported `use_unpaved` and invented curvature penalties are forbidden.
+Access, one-way, closure, and restriction handling stays at the engine's safe defaults.
+
 ### Transport, privacy, and resilience rules
 
 - App → Volty backend uses `/v1/navigation/search` and `/v1/navigation/routes`; the app never calls GraphHopper directly.

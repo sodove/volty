@@ -38,9 +38,19 @@ object ValhallaRouteCodec {
             put("auto", buildJsonObject {
                 put("top_speed", request.preferences.declaredTopSpeedKph)
                 put("use_highways", request.style.highwayPreference())
-                put("use_tolls", if (request.preferences.avoidTolls) 0.0 else 1.0)
-                put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 1.0)
-                put("use_unpaved", if (request.preferences.avoidUnpaved) 0.0 else 1.0)
+                // Valhalla 3.6.3 has no road-curvature signal. Keep the
+                // generic style contract honest: styles tune highway
+                // willingness, while actual diversity comes from alternates
+                // and the geometry policy rather than fake scenic knobs.
+                put("use_distance", 0.0)
+                put("shortest", false)
+                put("ignore_restrictions", false)
+                put("ignore_access", false)
+                put("ignore_oneways", false)
+                put("ignore_closures", false)
+                put("use_tolls", if (request.preferences.avoidTolls) 0.0 else 0.5)
+                put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
+                put("exclude_unpaved", request.preferences.avoidUnpaved)
             })
         })
         put("directions_options", buildJsonObject {
