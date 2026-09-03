@@ -22,6 +22,22 @@ class VoiceContractTest {
     private val json = Json { ignoreUnknownKeys = true }
 
     @Test
+    fun defaultLivekitTokenCoversTheMaximumSharingWindow() {
+        val config = AppConfig.fromEnvironment(
+            mapOf(
+                "VOLTY_JWT_SECRET" to "test-secret-that-is-long-enough-for-hmac",
+                "VOLTY_VOICE_PROVIDER" to "livekit",
+                "LIVEKIT_URL" to "wss://voice.sodove.ru",
+                "LIVEKIT_API_KEY" to "livekit-key",
+                "LIVEKIT_API_SECRET" to "livekit-secret",
+                "VOLTY_PUBLIC_IP" to "203.0.113.10",
+            ),
+        )
+
+        assertEquals(AppConfig.MAX_VOICE_TOKEN_TTL_SECONDS, config.voiceTokenTtlSeconds)
+    }
+
+    @Test
     fun livekitProviderRequiresFullCredentialSet() {
         val error = assertFailsWith<IllegalArgumentException> {
             AppConfig.fromEnvironment(

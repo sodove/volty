@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.navigation
 
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.MockEngine
+import io.ktor.client.plugins.HttpRequestTimeoutException
 import io.ktor.client.engine.mock.respond
 import io.ktor.client.request.HttpRequestData
 import io.ktor.http.ContentType
@@ -64,6 +65,18 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
+    fun search_normalizes_user_whitespace_before_sending_the_photon_query() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = repository(requests) {
+            "{\"type\":\"FeatureCollection\",\"features\":[]}"
+        }
+
+        repository.search("  Алатырь   центр  ", near = null, languageTag = "ru-RU")
+
+        assertEquals("Алатырь центр", requests.single().url.parameters["q"])
+    }
+
+    @Test
     fun search_uses_base_language_and_omits_bias_without_near() = runTest {
         val requests = mutableListOf<HttpRequestData>()
         val repository = repository(requests) {
@@ -110,7 +123,7 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
-    fun routes_use_fixed_fossgis_routed_bike_url_and_decode_alternatives_maneuvers_and_geojson() = runTest {
+    fun routes_use_fixed_fossgis_routed_car_url_and_decode_alternatives_maneuvers_and_geojson() = runTest {
         val requests = mutableListOf<HttpRequestData>()
         val repository = repository(requests) { osrmResponseWithRoutes() }
 
@@ -121,7 +134,7 @@ class OsmNavigationRepositoryTest {
         assertEquals(HttpMethod.Get, request.method)
         assertEquals("routing.openstreetmap.de", request.url.host)
         assertEquals(
-            "/routed-bike/route/v1/driving/60.6057,56.8389;60.63,56.83",
+            "/routed-car/route/v1/driving/60.6057,56.8389;60.63,56.83",
             request.url.encodedPath,
         )
         assertEquals("full", request.url.parameters["overview"])
@@ -157,6 +170,169 @@ class OsmNavigationRepositoryTest {
         val second = plan.alternatives[1]
         assertEquals(ManeuverKind.ARRIVE, second.maneuvers.last().kind)
         assertEquals(second.geometry.lastIndex, second.maneuvers.last().shapeIndex)
+    }
+
+    @Test
+    fun routes_fall_back_to_osrm_demo_after_primary_transport_failure() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            if (request.url.host == "routing.openstreetmap.de") {
+                throw IllegalStateException("primary TLS handshake failed")
+            }
+            respond(osrmResponseWithRoutes(), headers = jsonHeaders())
+        }))
+
+        val result = repository.routes(testRequest())
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(
+            listOf("routing.openstreetmap.de", "router.project-osrm.org"),
+            requests.map { it.url.host },
+        )
+    }
+
+    @Test
+    fun routes_fall_back_to_osrm_demo_when_primary_is_rate_limited() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            if (request.url.host == "routing.openstreetmap.de") {
+                respond(
+                    "{}",
+                    HttpStatusCode.TooManyRequests,
+                    headersOf(HttpHeaders.RetryAfter, "17"),
+                )
+            } else {
+                respond(osrmResponseWithRoutes(), headers = jsonHeaders())
+            }
+        }))
+
+        val result = repository.routes(testRequest())
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(
+            listOf("routing.openstreetmap.de", "router.project-osrm.org"),
+            requests.map { it.url.host },
+        )
+    }
+
+    @Test
+    fun routes_aggregate_primary_and_fallback_routes_in_primary_first_order() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            val response = if (request.url.host == "routing.openstreetmap.de") {
+                osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary"))
+            } else {
+                osrmResponse(
+                    osrmRoute(1400.0, 350.0, 60.615, 56.82, "fallback one"),
+                    osrmRoute(1600.0, 390.0, 60.62, 56.81, "fallback two"),
+                )
+            }
+            respond(response, headers = jsonHeaders())
+        }))
+
+        val result = repository.routes(testRequest())
+
+        val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
+        assertEquals(listOf(1200.0, 1400.0, 1600.0), plan.alternatives.map { it.distanceMeters })
+        assertEquals(2, requests.size)
+        assertEquals(requests[0].url.parameters, requests[1].url.parameters)
+        assertEquals(
+            requests[0].url.encodedPath.substringAfterLast("/driving/"),
+            requests[1].url.encodedPath.substringAfterLast("/driving/"),
+        )
+    }
+
+    @Test
+    fun routes_deduplicate_equivalent_routes_across_providers() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            val response = if (request.url.host == "routing.openstreetmap.de") {
+                osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary"))
+            } else {
+                osrmResponse(
+                    osrmRoute(1208.0, 324.0, 60.61008, 56.81007, "fallback duplicate"),
+                    osrmRoute(1500.0, 400.0, 60.615, 56.82, "fallback distinct"),
+                )
+            }
+            respond(response, headers = jsonHeaders())
+        }))
+
+        val result = repository.routes(testRequest())
+
+        val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
+        assertEquals(2, plan.alternatives.size)
+        assertEquals(listOf(1200.0, 1500.0), plan.alternatives.map { it.distanceMeters })
+        assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun routes_with_alternatives_limit_one_return_exactly_one_without_fallback_request() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            respond(
+                osrmResponse(
+                    osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary"),
+                    osrmRoute(1500.0, 400.0, 60.615, 56.82, "unneeded"),
+                ),
+                headers = jsonHeaders(),
+            )
+        }))
+
+        val result = repository.routes(testRequest(alternativesLimit = 1))
+
+        val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
+        assertEquals(1, plan.alternatives.size)
+        assertEquals(1, requests.size)
+    }
+
+    @Test
+    fun routes_preserve_typed_provider_failure_when_both_providers_fail() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            if (request.url.host == "routing.openstreetmap.de") {
+                respond("", HttpStatusCode.ServiceUnavailable, headers = jsonHeaders())
+            } else {
+                respond(
+                    "",
+                    HttpStatusCode.TooManyRequests,
+                    headers = headersOf(HttpHeaders.RetryAfter, "17"),
+                )
+            }
+        }))
+
+        val result = repository.routes(testRequest())
+
+        assertEquals(NavigationFailure.RateLimited(17), assertFailure(result))
+        assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun aggregated_route_ids_are_unique_and_deterministic() = runTest {
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            val response = if (request.url.host == "routing.openstreetmap.de") {
+                osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary"))
+            } else {
+                osrmResponse(
+                    osrmRoute(1400.0, 350.0, 60.615, 56.82, "fallback one"),
+                    osrmRoute(1600.0, 390.0, 60.62, 56.81, "fallback two"),
+                )
+            }
+            respond(response, headers = jsonHeaders())
+        }))
+
+        val first = assertIs<NavigationResult.Success<RoutePlan>>(repository.routes(testRequest())).value
+        val second = assertIs<NavigationResult.Success<RoutePlan>>(repository.routes(testRequest())).value
+
+        val expectedIds = listOf("osrm-route-1", "osrm-route-2", "osrm-route-3")
+        assertEquals(expectedIds, first.alternatives.map { it.id })
+        assertEquals(expectedIds, second.alternatives.map { it.id })
+        assertEquals(expectedIds.size, first.alternatives.map { it.id }.toSet().size)
     }
 
     @Test
@@ -284,6 +460,30 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
+    fun request_timeout_during_search_is_mapped_to_offline() = runTest {
+        val slow = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            throw HttpRequestTimeoutException(request)
+        }))
+
+        assertEquals(
+            NavigationFailure.Offline,
+            assertFailure(slow.search("Екатеринбург", null, "ru-RU")),
+        )
+    }
+
+    @Test
+    fun request_timeout_during_route_is_mapped_to_offline() = runTest {
+        val slow = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            throw HttpRequestTimeoutException(request)
+        }))
+
+        assertEquals(
+            NavigationFailure.Offline,
+            assertFailure(slow.routes(testRequest())),
+        )
+    }
+
+    @Test
     fun cancellation_and_fatal_errors_are_not_swallowed() = runTest {
         val cancelled = OsmNavigationRepository(HttpClient(MockEngine {
             throw CancellationException("cancelled")
@@ -341,6 +541,29 @@ class OsmNavigationRepositoryTest {
         assertIs<NavigationResult.Failure>(result).reason
 
     private fun jsonHeaders() = headersOf(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+
+    private fun osrmResponse(vararg routes: String) =
+        """{"code":"Ok","routes":[${routes.joinToString(",")}]}"""
+
+    private fun osrmRoute(
+        distance: Double,
+        duration: Double,
+        middleLongitude: Double,
+        middleLatitude: Double,
+        streetName: String,
+    ) = """
+        {
+          "distance":$distance,
+          "duration":$duration,
+          "geometry":{"type":"LineString","coordinates":[
+            [60.6057,56.8389],[$middleLongitude,$middleLatitude],[60.63,56.83]
+          ]},
+          "legs":[{"steps":[
+            {"distance":$distance,"duration":$duration,"name":"$streetName",
+             "maneuver":{"type":"depart","location":[60.6057,56.8389]}}
+          ]}]
+        }
+    """.trimIndent()
 
     private fun photonResponse() = """
         {

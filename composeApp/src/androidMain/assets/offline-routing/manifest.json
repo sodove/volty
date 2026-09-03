@@ -1,0 +1,25 @@
+{
+  "formatVersion": 1,
+  "packageVersion": 1,
+  "packageId": "ural-yekaterinburg",
+  "bounds": {
+    "south": 55.0,
+    "west": 60.0,
+    "north": 60.0,
+    "east": 65.0
+  },
+  "files": [
+    {
+      "name": "E60_N55.rd5",
+      "sha256": "aeed713b53deabd6f9afc0a7c1f53b28916c9579bff28e0b21afaacdc43eeca3"
+    },
+    {
+      "name": "lookups.dat",
+      "sha256": "bf8fc3b2c052b7204e9c5a8d78e4d6ab6b125d3236a943f34583b838c477f419"
+    },
+    {
+      "name": "volty.brf",
+      "sha256": "cbcaa6e795e7f1f0b2299569169b34b7821438caa157bf4b6b44d0a8cb2f1cef"
+    }
+  ]
+}

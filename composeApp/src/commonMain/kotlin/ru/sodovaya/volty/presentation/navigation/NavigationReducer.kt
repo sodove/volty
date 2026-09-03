@@ -6,7 +6,6 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.presentation.map.RideMapFollowState
 
 enum class LocationUiStatus {
@@ -27,8 +26,6 @@ sealed interface NavigationPhase {
         val query: String,
         val searchResults: List<PlaceCandidate>,
         val destination: PlaceCandidate?,
-        val profile: RouteProfile?,
-        val profileConfirmed: Boolean,
         val requestInFlight: Boolean,
         val failure: NavigationFailure?,
     ) : NavigationPhase
@@ -69,8 +66,6 @@ sealed interface NavigationAction {
     data object PlannerRequested : NavigationAction
     data class QueryChanged(val query: String) : NavigationAction
     data class PlaceSelected(val place: PlaceCandidate) : NavigationAction
-    data class ProfileSelected(val profile: RouteProfile) : NavigationAction
-    data object ProfileConfirmed : NavigationAction
 
     data class SearchStarted(val requestGeneration: Long) : NavigationAction
     data class SearchLoaded(
@@ -122,6 +117,8 @@ sealed interface NavigationAction {
 
 /** Pure state machine for the retained planner and navigation scene. */
 object NavigationReducer {
+    private const val MIN_SEARCH_LENGTH = 3
+
     fun reduce(state: LightNavigationState, action: NavigationAction): LightNavigationState = when (action) {
         NavigationAction.PlannerRequested -> if (state.phase is NavigationPhase.Idle) {
             state.copy(phase = emptyPlanning())
@@ -135,9 +132,7 @@ object NavigationReducer {
                     query = action.query,
                     searchResults = emptyList(),
                     destination = null,
-                    profile = null,
-                    profileConfirmed = false,
-                    requestInFlight = false,
+                    requestInFlight = action.query.trim().length >= MIN_SEARCH_LENGTH,
                     failure = null,
                 ),
                 requestGeneration = nextGeneration(state),
@@ -148,38 +143,14 @@ object NavigationReducer {
         is NavigationAction.PlaceSelected -> when (val phase = state.phase) {
             is NavigationPhase.Planning -> state.copy(
                 phase = phase.copy(
+                    searchResults = emptyList(),
                     destination = action.place,
-                    profile = null,
-                    profileConfirmed = false,
                     requestInFlight = false,
                     failure = null,
                 ),
                 requestGeneration = nextGeneration(state),
                 arrivalSoc = unknownArrivalSoc(),
             )
-            else -> state
-        }
-
-        is NavigationAction.ProfileSelected -> when (val phase = state.phase) {
-            is NavigationPhase.Planning -> state.copy(
-                phase = phase.copy(
-                    profile = action.profile,
-                    profileConfirmed = false,
-                    requestInFlight = false,
-                    failure = null,
-                ),
-                requestGeneration = nextGeneration(state),
-                arrivalSoc = unknownArrivalSoc(),
-            )
-            else -> state
-        }
-
-        NavigationAction.ProfileConfirmed -> when (val phase = state.phase) {
-            is NavigationPhase.Planning -> if (phase.destination != null && phase.profile != null) {
-                state.copy(phase = phase.copy(profileConfirmed = true, failure = null))
-            } else {
-                state
-            }
             else -> state
         }
 
@@ -222,11 +193,7 @@ object NavigationReducer {
 
         is NavigationAction.RouteRequestStarted -> if (isCurrent(state, action.requestGeneration)) {
             when (val phase = state.phase) {
-                is NavigationPhase.Planning -> if (
-                    phase.destination != null &&
-                    phase.profile != null &&
-                    phase.profileConfirmed
-                ) {
+                is NavigationPhase.Planning -> if (phase.destination != null) {
                     state.copy(phase = phase.copy(requestInFlight = true, failure = null))
                 } else {
                     state
@@ -411,8 +378,6 @@ object NavigationReducer {
         query = "",
         searchResults = emptyList(),
         destination = null,
-        profile = null,
-        profileConfirmed = false,
         requestInFlight = false,
         failure = null,
     )

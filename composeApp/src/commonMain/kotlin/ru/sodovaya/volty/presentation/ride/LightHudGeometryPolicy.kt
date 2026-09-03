@@ -2,6 +2,15 @@ package ru.sodovaya.volty.presentation.ride
 
 internal enum class LightArcSide { LEFT, RIGHT }
 
+internal enum class LightMapControlsEdge { LEFT, RIGHT }
+
+internal enum class LightMapControlsVertical { TOP, CENTER, BOTTOM }
+
+internal data class LightMapControlsPlacement(
+    val edge: LightMapControlsEdge,
+    val vertical: LightMapControlsVertical,
+)
+
 internal data class LightGaugeGeometry(
     val arcStartDegrees: Float,
     val arcSweepDegrees: Float,
@@ -24,6 +33,11 @@ internal fun lightGaugeBlockTopSpacing(layoutMode: LightLayoutMode): Float = 0f
 
 internal fun lightDashboardMiddleSpacerWeight(): Float = 1f
 
+internal fun lightMapControlsPlacement(): LightMapControlsPlacement = LightMapControlsPlacement(
+    edge = LightMapControlsEdge.RIGHT,
+    vertical = LightMapControlsVertical.CENTER,
+)
+
 internal fun lightGaugeGeometry(
     layoutMode: LightLayoutMode,
     arcSide: LightArcSide,
@@ -34,11 +48,11 @@ internal fun lightGaugeGeometry(
     arcHeightFraction = 0.92f,
     progressesFromTop = true,
     valueSizeSp = when (layoutMode) {
-        LightLayoutMode.COMPACT -> 28f
-        LightLayoutMode.MEDIUM -> 31f
-        LightLayoutMode.WIDE -> 33f
+        LightLayoutMode.COMPACT -> 30f
+        LightLayoutMode.MEDIUM -> 34f
+        LightLayoutMode.WIDE -> 37f
     },
     valueWeight = 700,
-    labelSizeSp = 8f,
+    labelSizeSp = 9f,
     labelWeight = 700,
 )

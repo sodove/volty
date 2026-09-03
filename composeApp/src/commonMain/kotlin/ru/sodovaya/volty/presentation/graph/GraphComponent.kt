@@ -64,6 +64,8 @@ interface GraphComponent {
         val avg: Float? = null,
         val peak: Float? = null,
         val min: Float? = null,
+        /** Maximum for the complete retained current ride, independent of the selected window. */
+        val ridePeaks: Map<GraphMetric, Float> = emptyMap(),
         /** Null means no measured rate interval exists to integrate. */
         val used: Float? = null
     )
@@ -86,6 +88,8 @@ class DefaultGraphComponent(
     private var sampleJob: Job? = null
     private var latestSamples: List<BmsData> = emptyList()
     private var latestMotion: List<ControllerData> = emptyList()
+    private var latestRideSamples: List<BmsData> = emptyList()
+    private var latestRideMotion: List<ControllerData> = emptyList()
 
     init {
         lifecycle.doOnDestroy { scope.coroutineContext[Job]?.cancel() }
@@ -103,13 +107,25 @@ class DefaultGraphComponent(
         val window = _state.value.window.duration ?: 6.hours  // ALL uses a large window
         sampleJob = scope.launch {
             combine(
-                bmsRepository.samples(window),
-                bmsRepository.motionSamples(window)
-            ) { samples, motion -> samples to motion }.collect { (samples, motion) ->
+                combine(
+                    bmsRepository.samples(window),
+                    bmsRepository.motionSamples(window)
+                ) { samples, motion -> samples to motion },
+                combine(
+                    bmsRepository.samples(RideEnergy.SESSION_WINDOW),
+                    bmsRepository.motionSamples(RideEnergy.SESSION_WINDOW)
+                ) { samples, motion -> samples to motion }
+            ) { selected, ride -> selected to ride }.collect { (selected, ride) ->
+                val (samples, motion) = selected
+                val (rideSamples, rideMotion) = ride
                 latestSamples = samples
                 latestMotion = motion
+                latestRideSamples = rideSamples
+                latestRideMotion = rideMotion
                 _state.update {
-                    if (it.selectedRideId == null) computeStats(it, samples, motion) else it
+                    if (it.selectedRideId == null) {
+                        computeStats(it, samples, motion, rideSamples, rideMotion)
+                    } else it
                 }
             }
         }
@@ -118,28 +134,46 @@ class DefaultGraphComponent(
     private fun computeStats(
         prev: GraphComponent.State,
         samples: List<BmsData>,
-        motion: List<ControllerData>
+        motion: List<ControllerData>,
+        rideSamples: List<BmsData>,
+        rideMotion: List<ControllerData>
     ): GraphComponent.State {
-        val metric = prev.metric
         // Graphs are consumption-positive: discharge plots upward. The domain
         // convention is "+ = charging", so for POWER/CURRENT we negate the series
         // for display. Every derived stat (now/avg/peak/min/used) is then computed
         // from the negated values so "Peak" = peak consumption and "Used" is the
         // net Wh/Ah consumed over the window. SOC/VOLTAGE/TEMPERATURE are unchanged.
-        val series = prev.visibleMetrics.associateWith { selected ->
-            if (selected.source == GraphSource.BATTERY) {
-                GraphTelemetryMapper.batterySeries(samples, selected)
-            } else {
-                GraphTelemetryMapper.motionSeries(motion, selected)
-            }
-        }
-        return computeDerivedStats(prev, series, computeUsed(samples, metric))
+        val series = seriesFor(prev.visibleMetrics, samples, motion)
+        val ridePeaks = ridePeaksFor(seriesFor(prev.visibleMetrics, rideSamples, rideMotion))
+        return computeDerivedStats(prev, series, computeUsed(samples, prev.metric), ridePeaks)
     }
+
+    private fun seriesFor(
+        metrics: List<GraphMetric>,
+        samples: List<BmsData>,
+        motion: List<ControllerData>
+    ): Map<GraphMetric, GraphSeries> = metrics.associateWith { selected ->
+        if (selected.source == GraphSource.BATTERY) {
+            GraphTelemetryMapper.batterySeries(samples, selected)
+        } else {
+            GraphTelemetryMapper.motionSeries(motion, selected)
+        }
+    }
+
+    private fun ridePeaksFor(series: Map<GraphMetric, GraphSeries>): Map<GraphMetric, Float> =
+        series.mapNotNull { (metric, graph) ->
+            graph.points.asSequence()
+                .map { it.value }
+                .filter { it.isFinite() }
+                .maxOrNull()
+                ?.let { metric to it }
+        }.toMap()
 
     private fun computeDerivedStats(
         prev: GraphComponent.State,
         series: Map<GraphMetric, GraphSeries>,
-        used: Float? = null
+        used: Float? = null,
+        ridePeaks: Map<GraphMetric, Float> = prev.ridePeaks
     ): GraphComponent.State {
         val metric = prev.metric
         val activeSeries = series[metric]?.points.orEmpty()
@@ -159,6 +193,7 @@ class DefaultGraphComponent(
             avg = avg,
             peak = peak,
             min = min,
+            ridePeaks = ridePeaks,
             used = used,
             selectedPoints = selectedPoints
         )
@@ -201,7 +236,7 @@ class DefaultGraphComponent(
             }
             val updated = current.copy(metric = metric, visibleMetrics = metrics)
             if (current.selectedRideId == null) {
-                computeStats(updated, latestSamples, latestMotion)
+                computeStats(updated, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
             } else {
                 computeDerivedStats(updated, updated.series, used = null)
             }
@@ -216,7 +251,7 @@ class DefaultGraphComponent(
             if (metric in current.visibleMetrics) current
             else {
                 val updated = current.copy(visibleMetrics = current.visibleMetrics + metric)
-                if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion)
+                if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
                 else computeDerivedStats(updated, updated.series + (metric to GraphSeries(metric, emptyList())))
             }
         }
@@ -230,7 +265,7 @@ class DefaultGraphComponent(
                     visibleMetrics = remaining,
                     metric = if (current.metric == metric) remaining.first() else current.metric
                 )
-            if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion)
+            if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
             else computeDerivedStats(updated, updated.series - metric)
         }
     }
@@ -251,7 +286,7 @@ class DefaultGraphComponent(
             val metrics = current.visibleMetrics + listOf(x, y).filterNot { it in current.visibleMetrics }
             val expanded = current.copy(visibleMetrics = metrics)
             val withSeries = if (current.selectedRideId == null) {
-                computeStats(expanded, latestSamples, latestMotion)
+                computeStats(expanded, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
             } else {
                 computeDerivedStats(expanded, expanded.series)
             }
@@ -284,7 +319,12 @@ class DefaultGraphComponent(
         scope.launch {
             if (rideId == null) {
                 _state.update { current ->
-                    current.copy(selectedRideId = null, selectedTimestamp = null, selectedPoints = emptyMap())
+                    current.copy(
+                        selectedRideId = null,
+                        selectedTimestamp = null,
+                        selectedPoints = emptyMap(),
+                        ridePeaks = emptyMap()
+                    )
                 }
                 restartCollection()
                 return@launch
@@ -302,7 +342,8 @@ class DefaultGraphComponent(
                 computeDerivedStats(
                     current.copy(selectedRideId = rideId, series = series, selectedTimestamp = null),
                     series,
-                    used = null
+                    used = null,
+                    ridePeaks = ridePeaksFor(loaded)
                 )
             }
         }

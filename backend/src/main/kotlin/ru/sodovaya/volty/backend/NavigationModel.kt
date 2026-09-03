@@ -18,7 +18,6 @@ data class ProviderSearchRequest(
 data class ProviderRouteRequest(
     val origin: GeoCoordinateDto,
     val destination: GeoCoordinateDto,
-    val providerProfileId: String,
     val languageTag: String,
     val alternativesLimit: Int,
 )
@@ -55,7 +54,6 @@ data class NavigationRouteDto(
 data class NavigationRouteResponse(
     val schemaVersion: Int = 1,
     val destination: NavigationPlaceDto,
-    val profile: String,
     val routes: List<NavigationRouteDto>,
 )
 
@@ -63,7 +61,8 @@ data class NavigationRouteResponse(
 data class NavigationRouteRequestDto(
     val origin: GeoCoordinateDto,
     val destination: NavigationPlaceDto,
-    val profile: String,
+    // Accepted only to keep older app builds wire-compatible; it is ignored.
+    val profile: String? = null,
     val languageTag: String,
     val alternativesLimit: Int = 3,
 )

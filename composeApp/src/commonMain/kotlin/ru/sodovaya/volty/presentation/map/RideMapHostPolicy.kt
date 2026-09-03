@@ -6,12 +6,14 @@ internal enum class RideMapScreen {
     RIDE,
     BATTERY,
     NEARBY,
+    GROUP_MAP,
     OTHER,
 }
 
 internal data class RideMapHostState(
     val mounted: Boolean,
     val visible: Boolean,
+    val requestLocationPermission: Boolean,
 )
 
 /** Haze can only sample the live map when MapLibre renders through a TextureView. */
@@ -25,7 +27,17 @@ internal fun rideMapHostState(
     rideAvailable: Boolean,
     activeScreen: RideMapScreen,
     activeStyle: DashboardStyle?,
-): RideMapHostState = RideMapHostState(
-    mounted = rideAvailable,
-    visible = rideAvailable && activeScreen == RideMapScreen.RIDE && activeStyle == DashboardStyle.LIGHT,
-)
+): RideMapHostState {
+    val rideMapVisible = rideAvailable &&
+        activeScreen == RideMapScreen.RIDE &&
+        activeStyle == DashboardStyle.LIGHT
+    val nearbyMapVisible = activeScreen == RideMapScreen.NEARBY ||
+        activeScreen == RideMapScreen.GROUP_MAP
+    return RideMapHostState(
+        mounted = rideAvailable || nearbyMapVisible,
+        visible = rideMapVisible || nearbyMapVisible,
+        // Nearby may render remote markers, but opening it must never ask for
+        // or start the user's own location stream.
+        requestLocationPermission = rideMapVisible,
+    )
+}

@@ -38,35 +38,45 @@ object LightDashboardMapper {
         battery: BmsData,
         units: UnitSystem,
         gpsSpeedKmh: Float? = null,
-    ): LightTelemetryReadouts {
+    ): LightTelemetryReadouts = map(values(motion, battery, gpsSpeedKmh), units)
+
+    internal fun values(
+        motion: ControllerData,
+        battery: BmsData,
+        gpsSpeedKmh: Float? = null,
+    ): LightTelemetryValues {
         val connected = motion.isConnected
-        val speed = speedKmh(motion, gpsSpeedKmh)
-        val duty = MotionReadings.dutyPercent(motion)?.takeIf { connected }
-        val motorCurrent = motion.motorCurrentA.takeIf { connected && (it != 0f || motion.hasPower) }
-        val batteryCurrent = batteryCurrentA(motion, battery)
-        val controllerTemperature = MotionReadings.escTempC(motion)?.takeIf { connected }
-        val motorTemperature = MotionReadings.motorTempC(motion)?.takeIf { connected }
-        return LightTelemetryReadouts(
-            speed = speed?.let { LightReadout(UnitFormatter.speed(it, units), UnitFormatter.speedUnit(units)) }
-                ?: LightReadout(UNKNOWN_READOUT),
-            duty = duty?.let { LightReadout(it.roundToInt().toString(), "%") }
-                ?: LightReadout(UNKNOWN_READOUT),
-            motorCurrent = motorCurrent?.let { LightReadout(formatFixed(it, 0), "A") }
-                ?: LightReadout(UNKNOWN_READOUT),
-            batteryCurrent = batteryCurrent?.let { LightReadout(formatSigned(it, 1), "A") }
-                ?: LightReadout(UNKNOWN_READOUT),
-            controllerTemperature = controllerTemperature?.let { LightReadout(formatFixed(it, 0), "°C") }
-                ?: LightReadout(UNKNOWN_READOUT),
-            motorTemperature = motorTemperature?.let { LightReadout(formatFixed(it, 0), "°C") }
-                ?: LightReadout(UNKNOWN_READOUT),
-            batterySoc = if (battery.isConnected && battery.socKnown) {
-                LightReadout(battery.soc.roundToInt().toString(), "%")
-            } else LightReadout(UNKNOWN_READOUT),
-            batteryVoltage = if (battery.isConnected && battery.voltage > 0f) {
-                LightReadout(formatFixed(battery.voltage, 1), "V")
-            } else LightReadout(UNKNOWN_READOUT),
+        return LightTelemetryValues(
+            speedKmh = speedKmh(motion, gpsSpeedKmh),
+            dutyPercent = MotionReadings.dutyPercent(motion)?.takeIf { connected },
+            motorCurrentA = motion.motorCurrentA.takeIf { connected && (it != 0f || motion.hasPower) },
+            batteryCurrentA = batteryCurrentA(motion, battery),
+            controllerTemperatureC = MotionReadings.escTempC(motion)?.takeIf { connected },
+            motorTemperatureC = MotionReadings.motorTempC(motion)?.takeIf { connected },
+            batterySocPercent = if (battery.isConnected && battery.socKnown) battery.soc else null,
+            batteryVoltageV = if (battery.isConnected && battery.voltage > 0f) battery.voltage else null,
         )
     }
+
+    internal fun map(values: LightTelemetryValues, units: UnitSystem): LightTelemetryReadouts =
+        LightTelemetryReadouts(
+            speed = values.speedKmh?.let { LightReadout(UnitFormatter.speed(it, units), UnitFormatter.speedUnit(units)) }
+                ?: LightReadout(UNKNOWN_READOUT),
+            duty = values.dutyPercent?.let { LightReadout(it.roundToInt().toString(), "%") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            motorCurrent = values.motorCurrentA?.let { LightReadout(formatFixed(it, 0), "A") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            batteryCurrent = values.batteryCurrentA?.let { LightReadout(formatSigned(it, 1), "A") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            controllerTemperature = values.controllerTemperatureC?.let { LightReadout(formatFixed(it, 0), "°C") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            motorTemperature = values.motorTemperatureC?.let { LightReadout(formatFixed(it, 0), "°C") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            batterySoc = values.batterySocPercent?.let { LightReadout(it.roundToInt().toString(), "%") }
+                ?: LightReadout(UNKNOWN_READOUT),
+            batteryVoltage = values.batteryVoltageV?.let { LightReadout(formatFixed(it, 1), "V") }
+                ?: LightReadout(UNKNOWN_READOUT),
+        )
 
     fun speedKmh(motion: ControllerData, gpsSpeedKmh: Float?): Float? =
         MotionReadings.speedKmh(motion)?.takeIf { motion.isConnected }

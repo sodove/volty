@@ -62,7 +62,6 @@ class NavigationProviderTest {
             ProviderRouteRequest(
                 origin = GeoCoordinateDto(56.8, 60.6),
                 destination = GeoCoordinateDto(56.81, 60.61),
-                providerProfileId = "bike-custom",
                 languageTag = "ru-RU",
                 alternativesLimit = 3,
             ),
@@ -72,7 +71,7 @@ class NavigationProviderTest {
         val request = requireNotNull(requestData)
         assertEquals("56.8,60.6", request.url.parameters.getAll("point")?.first())
         assertEquals("56.81,60.61", request.url.parameters.getAll("point")?.last())
-        assertEquals("bike-custom", request.url.parameters["profile"])
+        assertEquals("personal-mobility", request.url.parameters["profile"])
         assertEquals("ru-RU", request.url.parameters["locale"])
         assertEquals("false", request.url.parameters["points_encoded"])
         assertEquals("alternative_route", request.url.parameters["algorithm"])
@@ -99,11 +98,10 @@ class NavigationProviderTest {
             ProviderResult.MalformedResponse,
             provider.routes(
                 ProviderRouteRequest(
-                    GeoCoordinateDto(56.8, 60.6),
-                    GeoCoordinateDto(56.81, 60.61),
-                    "bike-custom",
-                    "ru-RU",
-                    1,
+                    origin = GeoCoordinateDto(56.8, 60.6),
+                    destination = GeoCoordinateDto(56.81, 60.61),
+                    languageTag = "ru-RU",
+                    alternativesLimit = 1,
                 ),
             ),
         )
@@ -113,11 +111,7 @@ class NavigationProviderTest {
         navigationProvider = "graphhopper",
         navigationEnabled = true,
         graphHopperApiKey = "test-key",
-        navigationProfileIds = mapOf(
-            "bicycle" to "bike-custom",
-            "light_ev" to "small-electric",
-            "motor_scooter" to "scooter-custom",
-        ),
+        navigationProfileId = "personal-mobility",
     )
 
     private fun routeFixture() = """

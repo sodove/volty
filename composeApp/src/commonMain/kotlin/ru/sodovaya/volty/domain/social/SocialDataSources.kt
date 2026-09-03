@@ -28,15 +28,18 @@ class SocialShareSessionCoordinator(
         profile: TelemetryShareProfile,
         location: LocationSnapshot,
     ): SocialResult<Unit> {
-        val earned = telemetry.latest.value ?: return SocialResult.Failure(
-            SocialFailure.InvalidRequest("No earned telemetry is available yet"),
-        )
+        val sharedTelemetry = if (profile == TelemetryShareProfile.LOCATION) {
+            null
+        } else {
+            val earned = telemetry.latest.value ?: EarnedTelemetry()
+            TelemetryShareMapper.map(profile, earned)
+        }
         return repository.publishSharingUpdate(
             groupId = groupId,
             update = ParticipantShareUpdate(
                 capturedAtEpochMillis = location.capturedAtEpochMillis,
                 location = location,
-                telemetry = TelemetryShareMapper.map(profile, earned),
+                telemetry = sharedTelemetry,
             ),
         )
     }

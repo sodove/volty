@@ -19,26 +19,33 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.BatteryFull
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Groups
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.LocationSearching
 import androidx.compose.material.icons.filled.Navigation
-import androidx.compose.material.icons.filled.PowerSettingsNew
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.zIndex
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -52,20 +59,44 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.stats.MotionReadings
+import ru.sodovaya.volty.domain.social.PresenceStatus
+import ru.sodovaya.volty.domain.social.SocialRideRuntime
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.presentation.common.SyncLightDashboardSystemBars
+import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
+import ru.sodovaya.volty.presentation.nearby.SocialLiveState
+import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
+import ru.sodovaya.volty.presentation.navigation.LightNavigationDockPolicy
+import ru.sodovaya.volty.presentation.navigation.LightNearbyPlacement
+import ru.sodovaya.volty.presentation.navigation.LightNearbyPlacementPolicy
+import ru.sodovaya.volty.presentation.navigation.LightNavigationNearby
+import ru.sodovaya.volty.presentation.navigation.LightNavigationOverlay
+import ru.sodovaya.volty.presentation.navigation.LightNavigationPanelPlacement
+import ru.sodovaya.volty.presentation.navigation.LightNavigationPanelPolicy
+import ru.sodovaya.volty.presentation.navigation.LightNavigationState
+import ru.sodovaya.volty.presentation.navigation.LightNavigationSurface
+import ru.sodovaya.volty.presentation.navigation.LightNavigationSurfacePolicy
+import ru.sodovaya.volty.presentation.navigation.LightNavigationUiMapper
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.dashboard_light_battery
 import volty.composeapp.generated.resources.dashboard_light_battery_current
 import volty.composeapp.generated.resources.dashboard_light_controller
 import volty.composeapp.generated.resources.dashboard_light_duty
+import volty.composeapp.generated.resources.dashboard_light_group_map
+import volty.composeapp.generated.resources.dashboard_light_group_map_unavailable
+import volty.composeapp.generated.resources.dashboard_light_group_online
+import volty.composeapp.generated.resources.dashboard_light_group_ride
 import volty.composeapp.generated.resources.dashboard_light_motor
 import volty.composeapp.generated.resources.dashboard_light_motor_current
 import volty.composeapp.generated.resources.dashboard_light_speed
 import volty.composeapp.generated.resources.no_battery
+import volty.composeapp.generated.resources.navigation_open
+import volty.composeapp.generated.resources.navigation_recenter
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
 internal val LightHudBackground = Color(0xFF07131E)
 
@@ -107,6 +138,34 @@ private val BrightLightHudPalette = LightHudPalette(
 
 private val LocalLightHudPalette = staticCompositionLocalOf { DarkLightHudPalette }
 
+private fun lightHudTextScale(layoutMode: LightLayoutMode): Float = when (layoutMode) {
+    LightLayoutMode.COMPACT -> 1f
+    LightLayoutMode.MEDIUM -> 1.10f
+    LightLayoutMode.WIDE -> 1.16f
+}
+
+private fun lightHudSp(base: Float, layoutMode: LightLayoutMode) =
+    (base * lightHudTextScale(layoutMode)).sp
+
+private fun lightTopGraphHeight(layoutMode: LightLayoutMode): Float = when (layoutMode) {
+    LightLayoutMode.COMPACT -> 20f
+    LightLayoutMode.MEDIUM -> 23f
+    LightLayoutMode.WIDE -> 25f
+}
+
+internal data class LightGroupRideUiState(
+    val groupId: ru.sodovaya.volty.domain.social.RideGroupId,
+    val markers: List<ParticipantMarker>,
+) {
+    val participantCount: Int get() = markers.size
+    val onlineParticipantCount: Int get() = markers.count { it.presence == PresenceStatus.ONLINE }
+}
+
+internal fun lightGroupRideUiState(state: SocialLiveState): LightGroupRideUiState? =
+    state.groupId?.let { groupId ->
+        LightGroupRideUiState(groupId = groupId, markers = state.markers)
+    }
+
 @Composable
 internal fun LightRideDashboard(
     component: RideDashboardComponent,
@@ -114,23 +173,70 @@ internal fun LightRideDashboard(
     maxSpeedKmh: Float,
     recentSpeeds: List<Float>,
     layoutMode: LightLayoutMode,
-    statusText: String,
     statusColor: Color,
+    faults: List<RideDashboardComponent.FaultEntry> = emptyList(),
     modifier: Modifier = Modifier,
     mapLayer: (@Composable () -> Unit)? = null,
     onOpenBattery: () -> Unit = {},
     onOpenNearby: () -> Unit = {},
+    onOpenGroupMap: () -> Unit = {},
     onRecenterMap: () -> Unit = {},
+    onOpenGraph: () -> Unit = {},
+    rideMaxSpeedKmh: Float = 0f,
+    rideMaxDutyPercent: Float = 0f,
     gpsSpeedKmh: Float? = null,
+    socialLiveState: SocialLiveState = SocialLiveState(),
+    socialRuntime: SocialRideRuntime? = null,
+    navigationState: LightNavigationState? = null,
+    navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
     SyncLightDashboardSystemBars(darkTheme = LocalVoltyDarkTheme.current)
     val palette = if (LocalVoltyDarkTheme.current) DarkLightHudPalette else BrightLightHudPalette
-    val readouts = LightDashboardMapper.map(
+    val targetTelemetry = LightDashboardMapper.values(
         motion = state.motion,
         battery = state.battery,
-        units = state.units,
         gpsSpeedKmh = gpsSpeedKmh,
     )
+    val latestTelemetry = rememberUpdatedState(targetTelemetry)
+    val telemetrySmoother = remember(state.vehicle?.id) { LightTelemetrySmoother() }
+    var displayedTelemetry by remember(state.vehicle?.id) { mutableStateOf(targetTelemetry) }
+    LaunchedEffect(state.vehicle?.id) {
+        var previousFrameNanos = Long.MIN_VALUE
+        while (isActive) {
+            val frameNanos = withFrameNanos { it }
+            val deltaMillis = if (previousFrameNanos == Long.MIN_VALUE) 0L
+            else ((frameNanos - previousFrameNanos) / 1_000_000L).coerceAtMost(250L)
+            previousFrameNanos = frameNanos
+            displayedTelemetry = telemetrySmoother.advance(latestTelemetry.value, deltaMillis)
+        }
+    }
+    val readouts = LightDashboardMapper.map(displayedTelemetry, state.units)
+    val groupRide = lightGroupRideUiState(socialLiveState)
+    val navigationSurface = navigationState?.let { currentState ->
+        LightNavigationSurfacePolicy.forPhase(
+            LightNavigationUiMapper.map(currentState, state.units).phase,
+        )
+    } ?: LightNavigationSurface.HIDDEN
+    val nearbyPlacement = LightNearbyPlacementPolicy.forSurface(
+        navigationSurface = navigationSurface,
+        nearbyActive = groupRide != null,
+    )
+    val navigationPanelPlacement = LightNavigationPanelPolicy.forSurface(navigationSurface)
+    val navigationNearby = groupRide?.takeIf {
+        nearbyPlacement == LightNearbyPlacement.PLANNER_ROW ||
+            nearbyPlacement == LightNearbyPlacement.GUIDANCE_DOCK
+    }?.let { liveGroup ->
+        LightNavigationNearby(
+            participantCount = liveGroup.participantCount,
+            onlineParticipantCount = liveGroup.onlineParticipantCount,
+        )
+    }
+    val runtimeState = socialRuntime?.state?.collectAsState()?.value
+    var groupSheetOpen by remember { mutableStateOf(false) }
+    val sheetScope = rememberCoroutineScope()
+    val openGroupSheet = {
+        if (runtimeState?.selectedGroup != null) groupSheetOpen = true else onOpenNearby()
+    }
     val motorTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val controllerTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val motorCurrents = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
@@ -149,6 +255,11 @@ internal fun LightRideDashboard(
 
     CompositionLocalProvider(LocalLightHudPalette provides palette) {
         Box(modifier = modifier.fillMaxSize()) {
+        val navigationDockBottomPadding = if (navigationPanelPlacement == LightNavigationPanelPlacement.MAP_BOTTOM_PANEL) {
+            LightNavigationDockPolicy.bottomPadding(navigationSurface).dp
+        } else 0.dp
+
+        Box(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (mapLayer == null) LightMapFallback()
             else mapLayer()
@@ -168,20 +279,20 @@ internal fun LightRideDashboard(
         ) {
             LightTopBar(
                 name = state.vehicle?.name ?: stringResource(Res.string.no_battery),
-                statusText = statusText,
                 statusColor = if (state.connection is ru.sodovaya.volty.domain.model.ConnectionState.Connected) LocalLightHudPalette.current.battery else statusColor,
                 temperature = readouts.controllerTemperature,
                 onPillClick = component::onPillClicked,
-                onNearby = onOpenNearby,
-                onEdit = component::onEditVehicle,
+                onNearby = openGroupSheet,
                 onSettings = component::onOpenSettings,
-                onDisconnect = component::onDisconnect,
+                layoutMode = layoutMode,
             )
 
             LightTopGraphs(
                 speed = recentSpeeds,
                 duty = dutyHistory,
-                maxSpeedKmh = maxSpeedKmh,
+                speedPeak = rideMaxSpeedKmh,
+                dutyPeak = rideMaxDutyPercent.takeIf { it > 0f },
+                layoutMode = layoutMode,
             )
 
             Box(
@@ -204,11 +315,8 @@ internal fun LightRideDashboard(
                         LightGauge(
                             label = stringResource(Res.string.dashboard_light_speed),
                             readout = readouts.speed,
-                            fraction = LightDashboardMapper.speedFraction(
-                                state.motion,
-                                maxSpeedKmh,
-                                gpsSpeedKmh,
-                            ),
+                            fraction = (displayedTelemetry.speedKmh?.div(maxSpeedKmh) ?: 0f)
+                                .coerceIn(0f, 1f),
                             color = LocalLightHudPalette.current.cyan,
                             layoutMode = layoutMode,
                             arcSide = LightArcSide.LEFT,
@@ -217,35 +325,34 @@ internal fun LightRideDashboard(
                         LightGauge(
                             label = stringResource(Res.string.dashboard_light_duty),
                             readout = readouts.duty,
-                            fraction = LightDashboardMapper.dutyFraction(state.motion),
+                            fraction = (displayedTelemetry.dutyPercent?.div(100f) ?: 0f)
+                                .coerceIn(0f, 1f),
                             color = LocalLightHudPalette.current.green,
                             layoutMode = layoutMode,
                             arcSide = LightArcSide.RIGHT,
                             modifier = Modifier.weight(1f),
                         )
                     }
-
-                    Column(
-                        modifier = Modifier.align(Alignment.CenterStart).padding(start = 2.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        LightCircleButton(Icons.Default.Navigation, "Ориентация")
-                        LightCircleButton(Icons.Default.LocationSearching, "Моё положение", onClick = onRecenterMap)
-                    }
                 }
             }
 
             Spacer(Modifier.weight(lightDashboardMiddleSpacerWeight()))
 
+            if (nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD) groupRide?.let { liveGroup ->
+                LightGroupRideCard(
+                    state = liveGroup,
+                    mapAvailable = mapLayer != null,
+                    onOpenNearby = openGroupSheet,
+                )
+            }
+
             Row(
                 modifier = Modifier.fillMaxWidth().padding(bottom = 2.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                    LightCircleButton(Icons.Default.History, "История")
+                    LightCircleButton(Icons.Default.ShowChart, "Графики", onClick = onOpenGraph)
                     Spacer(Modifier.weight(1f))
                     LightCircleButton(Icons.Default.BatteryFull, "Батарея", onClick = onOpenBattery)
-                    Spacer(Modifier.size(8.dp))
-                    LightCircleButton(Icons.Default.Groups, "Nearby", onClick = onOpenNearby)
                 }
             LightTelemetryStrip(
                 readouts = readouts,
@@ -259,8 +366,173 @@ internal fun LightRideDashboard(
                 readout = readouts.batteryVoltage,
                 soc = readouts.batterySoc,
                 fraction = LightDashboardMapper.batteryFraction(state.battery),
+                layoutMode = layoutMode,
             )
         }
+
+        if (navigationPanelPlacement == LightNavigationPanelPlacement.MAP_BOTTOM_PANEL &&
+            navigationSurface != LightNavigationSurface.HIDDEN &&
+            navigationState != null && navigationCallbacks != null
+        ) {
+            LightNavigationOverlay(
+                state = navigationState,
+                callbacks = navigationCallbacks,
+                units = state.units,
+                nearby = navigationNearby,
+                onOpenNearby = openGroupSheet,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = 18.dp)
+                    .padding(bottom = navigationDockBottomPadding)
+                    .zIndex(2f),
+            )
+        }
+
+        if (navigationSurface != LightNavigationSurface.PLANNER) {
+            val mapControlsPlacement = lightMapControlsPlacement()
+            Box(
+                modifier = Modifier.fillMaxSize().padding(end = 2.dp).zIndex(3f),
+                contentAlignment = when {
+                    mapControlsPlacement.edge == LightMapControlsEdge.RIGHT &&
+                        mapControlsPlacement.vertical == LightMapControlsVertical.CENTER -> Alignment.CenterEnd
+                    mapControlsPlacement.edge == LightMapControlsEdge.LEFT &&
+                        mapControlsPlacement.vertical == LightMapControlsVertical.CENTER -> Alignment.CenterStart
+                    mapControlsPlacement.edge == LightMapControlsEdge.RIGHT -> Alignment.BottomEnd
+                    else -> Alignment.BottomStart
+                },
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    LightCircleButton(
+                        Icons.Default.Navigation,
+                        stringResource(Res.string.navigation_open),
+                        onClick = { navigationCallbacks?.onOpenPlanner?.invoke() },
+                    )
+                    LightCircleButton(
+                        Icons.Default.LocationSearching,
+                        stringResource(Res.string.navigation_recenter),
+                        onClick = onRecenterMap,
+                    )
+                }
+            }
+        }
+
+        if (faults.isNotEmpty() && navigationSurface != LightNavigationSurface.PLANNER) {
+            RideFaultsBanner(
+                faults = faults,
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(horizontal = 10.dp)
+                    .zIndex(4f),
+            )
+        }
+
+        if (groupSheetOpen && runtimeState != null) {
+            LightGroupSheet(
+                runtime = runtimeState,
+                onDismiss = { groupSheetOpen = false },
+                onStartSharing = { ttlMillis -> socialRuntime?.let { runtime ->
+                    sheetScope.launch { runtime.startSharing(ttlMillis) }
+                } },
+                onRenewSharing = { ttlMillis -> socialRuntime?.let { runtime ->
+                    sheetScope.launch { runtime.renewSharing(ttlMillis) }
+                } },
+                onStopSharing = { socialRuntime?.let { runtime ->
+                    sheetScope.launch { runtime.stopSharing() }
+                } },
+                onJoinVoice = { socialRuntime?.let { runtime ->
+                    val groupId = runtime.state.value.selectedGroup?.id ?: return@let
+                    if (runtime.voicePermissions.isNotEmpty()) runtime.requestVoicePermission(groupId)
+                    else sheetScope.launch { runtime.joinVoice() }
+                } },
+                onToggleMute = { socialRuntime?.let { runtime ->
+                    val voice = runtime.state.value.voice as? ru.sodovaya.volty.domain.social.VoiceRoomState.Joined
+                    if (voice != null) sheetScope.launch { runtime.setMuted(!voice.muted) }
+                } },
+                onLeaveVoice = { socialRuntime?.let { runtime ->
+                    sheetScope.launch { runtime.leaveVoice() }
+                } },
+                onOpenNearby = onOpenNearby,
+                onOpenGroupMap = {
+                    groupSheetOpen = false
+                    onOpenGroupMap()
+                },
+            )
+        }
+        }
+    }
+}
+}
+
+
+@Composable
+private fun LightGroupRideCard(
+    state: LightGroupRideUiState,
+    mapAvailable: Boolean,
+    onOpenNearby: () -> Unit,
+) {
+    val palette = LocalLightHudPalette.current
+    val shape = RoundedCornerShape(18.dp)
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(shape)
+            .background(palette.surfaceStrong)
+            .border(1.dp, palette.green.copy(alpha = 0.35f), shape)
+            .clickable(onClick = onOpenNearby)
+            .minimumInteractiveComponentSize()
+            .padding(horizontal = 10.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .size(30.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(palette.green.copy(alpha = 0.16f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                Icons.Default.Groups,
+                contentDescription = null,
+                tint = palette.green,
+                modifier = Modifier.size(16.dp),
+            )
+        }
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = stringResource(Res.string.dashboard_light_group_ride),
+                color = palette.text,
+                fontSize = 11.sp,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 1,
+            )
+            Text(
+                text = if (mapAvailable) {
+                    stringResource(Res.string.dashboard_light_group_map, state.participantCount)
+                } else {
+                    stringResource(Res.string.dashboard_light_group_map_unavailable)
+                },
+                color = palette.muted,
+                fontSize = 8.sp,
+                maxLines = 1,
+            )
+        }
+        Column(horizontalAlignment = Alignment.End) {
+            Text(
+                text = stringResource(
+                    Res.string.dashboard_light_group_online,
+                    state.onlineParticipantCount,
+                ),
+                color = palette.green,
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+            )
+            Text("›", color = palette.muted, fontSize = 20.sp, lineHeight = 18.sp)
         }
     }
 }
@@ -269,35 +541,47 @@ internal fun LightRideDashboard(
 private fun LightTopGraphs(
     speed: List<Float>,
     duty: List<Float>,
-    maxSpeedKmh: Float,
+    speedPeak: Float,
+    dutyPeak: Float?,
+    layoutMode: LightLayoutMode,
 ) {
-    val speedPeak = speed.maxOrNull()?.roundToInt()?.takeIf { it > 0 } ?: maxSpeedKmh.roundToInt()
-    val dutyPeak = duty.maxOrNull()?.roundToInt()?.takeIf { it > 0 } ?: 100
+    // These labels describe observed samples, not the minimum scale used by
+    // the gauges. In particular, a parked vehicle must not claim "max 70".
+    val observedSpeedPeak = speedPeak.takeIf { it.isFinite() && it > 0f }
+        ?: lightGraphPeak(speed).toFloat()
+    val observedDutyPeak = dutyPeak?.takeIf { it.isFinite() && it > 0f }
+        ?: lightGraphPeak(duty).toFloat()
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 1.dp),
         horizontalArrangement = Arrangement.spacedBy(28.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LightTopGraph(
-            label = "max ${speedPeak}km/h",
+            label = "max ${observedSpeedPeak.roundToInt()}km/h",
             values = speed,
             color = LocalLightHudPalette.current.cyan,
+            layoutMode = layoutMode,
             modifier = Modifier.weight(1f),
         )
         LightTopGraph(
-            label = "max ${dutyPeak}%",
+            label = "max ${observedDutyPeak.roundToInt()}%",
             values = duty,
             color = LocalLightHudPalette.current.green,
+            layoutMode = layoutMode,
             modifier = Modifier.weight(1f),
         )
     }
 }
+
+internal fun lightGraphPeak(values: List<Float>): Int =
+    values.asSequence().filter { it.isFinite() }.maxOrNull()?.roundToInt() ?: 0
 
 @Composable
 private fun LightTopGraph(
     label: String,
     values: List<Float>,
     color: Color,
+    layoutMode: LightLayoutMode,
     modifier: Modifier,
 ) {
     val palette = LocalLightHudPalette.current
@@ -305,9 +589,9 @@ private fun LightTopGraph(
         Text(
             label,
             color = LocalLightHudPalette.current.muted.copy(alpha = 0.8f),
-            style = TextStyle(fontSize = 7.sp, lineHeight = 8.sp),
+            style = TextStyle(fontSize = lightHudSp(8.5f, layoutMode), lineHeight = lightHudSp(10f, layoutMode)),
         )
-        Box(Modifier.fillMaxWidth().height(18.dp)) {
+        Box(Modifier.fillMaxWidth().height(lightTopGraphHeight(layoutMode).dp)) {
             Canvas(Modifier.fillMaxSize()) {
                 val baseline = size.height - 2.dp.toPx()
                 drawLine(
@@ -333,66 +617,50 @@ private fun LightTopGraph(
 @Composable
 private fun LightTopBar(
     name: String,
-    statusText: String,
     statusColor: Color,
     temperature: LightReadout,
     onPillClick: () -> Unit,
     onNearby: () -> Unit,
-    onEdit: () -> Unit,
     onSettings: () -> Unit,
-    onDisconnect: () -> Unit,
+    layoutMode: LightLayoutMode,
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LightCircleButton(Icons.Default.Groups, "Nearby", onClick = onNearby)
-        Spacer(Modifier.weight(1f))
-        Row(
-            modifier = Modifier.clip(RoundedCornerShape(22.dp))
-                .background(LocalLightHudPalette.current.surfaceStrong)
-                .border(1.dp, Color(0x445A8C99), RoundedCornerShape(22.dp))
-                .clickable(onClick = onPillClick)
-                .padding(horizontal = 9.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(4.dp),
-        ) {
-            Box(Modifier.size(5.dp).clip(CircleShape).background(statusColor))
-            Text(name, color = LocalLightHudPalette.current.text, style = TextStyle(fontSize = 9.sp, lineHeight = 10.sp, fontWeight = FontWeight.SemiBold))
-            Icon(Icons.Default.ExpandMore, contentDescription = null, tint = LocalLightHudPalette.current.muted, modifier = Modifier.size(12.dp))
-            Box(
-                modifier = Modifier.size(22.dp).clickable(onClick = onEdit),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    Icons.Default.Edit,
-                    contentDescription = "Редактировать",
-                    tint = LocalLightHudPalette.current.muted,
-                    modifier = Modifier.size(11.dp),
-                )
-            }
-            Icon(
-                Icons.Default.PowerSettingsNew,
-                contentDescription = statusText,
-                tint = Color(0xFFFF6871),
-                modifier = Modifier.size(12.dp).clickable(onClick = onDisconnect),
-            )
-        }
-        Spacer(Modifier.weight(1f))
         Box(
-            modifier = Modifier.size(28.dp)
-                .clip(CircleShape)
-                .background(LocalLightHudPalette.current.surface)
-                .clickable(onClick = onSettings),
+            modifier = Modifier
+                .weight(1f)
+                .clickable(onClick = onPillClick)
+                .minimumInteractiveComponentSize(),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(Icons.Default.Settings, contentDescription = "Настройки", tint = LocalLightHudPalette.current.muted, modifier = Modifier.size(14.dp))
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(36.dp)
+                    .clip(RoundedCornerShape(22.dp))
+                    .background(LocalLightHudPalette.current.surfaceStrong)
+                    .border(1.dp, Color(0x445A8C99), RoundedCornerShape(22.dp))
+                    .padding(horizontal = 14.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center,
+            ) {
+                Box(Modifier.size(7.dp).clip(CircleShape).background(statusColor))
+                Spacer(Modifier.size(7.dp))
+                Text(name, color = LocalLightHudPalette.current.text, style = TextStyle(fontSize = lightHudSp(12f, layoutMode), lineHeight = lightHudSp(14f, layoutMode), fontWeight = FontWeight.SemiBold))
+                Spacer(Modifier.size(3.dp))
+                Icon(Icons.Default.ExpandMore, contentDescription = null, tint = LocalLightHudPalette.current.muted, modifier = Modifier.size(18.dp))
+            }
         }
+        LightCircleButton(Icons.Default.Settings, "Настройки", onClick = onSettings)
     }
     Text(
         text = temperature.value.takeIf { temperature.unit.isNotEmpty() }?.let { "$it${temperature.unit}" } ?: "—",
         color = LocalLightHudPalette.current.muted,
-        style = TextStyle(fontSize = 8.sp, lineHeight = 9.sp),
+        style = TextStyle(fontSize = lightHudSp(9.5f, layoutMode), lineHeight = lightHudSp(11f, layoutMode)),
         modifier = Modifier.fillMaxWidth().padding(top = 1.dp),
         textAlign = androidx.compose.ui.text.style.TextAlign.Center,
     )
@@ -465,7 +733,7 @@ private fun LightGauge(
                 if (readout.unit.isNotEmpty()) Text(
                     readout.unit,
                     color = LocalLightHudPalette.current.muted,
-                    style = TextStyle(fontSize = 8.sp, lineHeight = 9.sp, fontWeight = FontWeight.SemiBold),
+                    style = TextStyle(fontSize = 9.sp, lineHeight = 10.sp, fontWeight = FontWeight.SemiBold),
                 )
             }
         }
@@ -493,13 +761,13 @@ private fun LightTelemetryStrip(
                 modifier = Modifier.weight(1f).padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
-                Text(cell.label.uppercase(), color = cell.color, fontSize = 7.sp, fontWeight = FontWeight.Bold, maxLines = 1)
+                Text(cell.label.uppercase(), color = cell.color, fontSize = lightHudSp(8.5f, layoutMode), fontWeight = FontWeight.Bold, maxLines = 1)
                 Row(verticalAlignment = Alignment.Bottom) {
-                    Text(cell.readout.value, color = LocalLightHudPalette.current.text, fontFamily = FontFamily.Monospace, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
-                    if (cell.readout.unit.isNotEmpty()) Text(" ${cell.readout.unit}", color = LocalLightHudPalette.current.muted, fontSize = 8.sp, fontWeight = FontWeight.SemiBold)
+                    Text(cell.readout.value, color = LocalLightHudPalette.current.text, fontFamily = FontFamily.Monospace, fontSize = lightHudSp(16f, layoutMode), fontWeight = FontWeight.SemiBold)
+                    if (cell.readout.unit.isNotEmpty()) Text(" ${cell.readout.unit}", color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(9.5f, layoutMode), fontWeight = FontWeight.SemiBold)
                 }
-                if (cell.history.size >= 2) SparklineGraph(cell.history, color = cell.color, modifier = Modifier.fillMaxWidth().height(15.dp))
-                else Spacer(Modifier.height(15.dp))
+                if (cell.history.size >= 2) SparklineGraph(cell.history, color = cell.color, modifier = Modifier.fillMaxWidth().height(18.dp))
+                else Spacer(Modifier.height(18.dp))
             }
         }
     }
@@ -508,7 +776,7 @@ private fun LightTelemetryStrip(
 private data class LightMetric(val label: String, val readout: LightReadout, val history: List<Float>, val color: Color)
 
 @Composable
-private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction: Float) {
+private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction: Float, layoutMode: LightLayoutMode) {
     val palette = LocalLightHudPalette.current
     Column(Modifier.fillMaxWidth().padding(horizontal = 5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Canvas(Modifier.fillMaxWidth().height(13.dp)) {
@@ -521,8 +789,8 @@ private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction:
             }
         }
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text(if (readout.unit.isNotEmpty()) "${readout.value} ${readout.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.muted, fontSize = 9.sp)
-            Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+            Text(if (readout.unit.isNotEmpty()) "${readout.value} ${readout.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.muted, fontSize = lightHudSp(10f, layoutMode))
+            Text(if (soc.unit.isNotEmpty()) "${soc.value}${soc.unit}" else UNKNOWN_READOUT, color = LocalLightHudPalette.current.battery, fontSize = lightHudSp(11f, layoutMode), fontWeight = FontWeight.Bold)
         }
     }
 }
@@ -530,13 +798,20 @@ private fun LightBatteryLine(readout: LightReadout, soc: LightReadout, fraction:
 @Composable
 private fun LightCircleButton(icon: androidx.compose.ui.graphics.vector.ImageVector, description: String, onClick: () -> Unit = {}) {
     Box(
-        modifier = Modifier.size(28.dp)
-            .clip(CircleShape)
-            .background(LocalLightHudPalette.current.surface)
-            .clickable(onClick = onClick),
+        modifier = Modifier
+            .clickable(onClick = onClick)
+            .minimumInteractiveComponentSize(),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(icon, contentDescription = description, tint = LocalLightHudPalette.current.text.copy(alpha = 0.85f), modifier = Modifier.size(14.dp))
+        Box(
+            modifier = Modifier
+                .size(36.dp)
+                .clip(CircleShape)
+                .background(LocalLightHudPalette.current.surface),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(icon, contentDescription = description, tint = LocalLightHudPalette.current.text.copy(alpha = 0.85f), modifier = Modifier.size(18.dp))
+        }
     }
 }
 
@@ -587,7 +862,7 @@ private fun LightMapVignette(darkTheme: Boolean, modifier: Modifier = Modifier) 
 private const val MAX_HISTORY_POINTS = 40
 
 private fun appendKnown(target: MutableList<Float>, value: Float?) {
-    if (value == null) return
+    if (value == null || !value.isFinite()) return
     target += value
     while (target.size > MAX_HISTORY_POINTS) target.removeAt(0)
 }

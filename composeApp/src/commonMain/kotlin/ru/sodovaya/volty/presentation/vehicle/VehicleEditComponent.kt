@@ -1323,24 +1323,40 @@ private fun Vehicle.withEdits(s: VehicleEditComponent.State): Vehicle {
     )
 }
 
-/** Battery alert values are preserved by this form; editing them lives on the unified alerts screen. */
+/**
+ * Apply the alert values this form owns without clobbering a newer value saved
+ * by the dedicated alerts screen while this form was underneath it.
+ *
+ * [State.savedValues] is the snapshot taken when this form was opened. If the
+ * form value still equals that snapshot, the form did not edit that field and
+ * the value from the freshly re-read [AlertConfig] wins. If it differs, the
+ * rider explicitly changed it on this form and it wins over the newer row.
+ * This also makes a change-and-revert behave as an untouched field, which is
+ * the same rule used by [State.isDirty].
+ */
+private fun <T> VehicleEditComponent.State.alertValue(
+    formValue: T,
+    latestValue: T,
+    baseline: (VehicleEditComponent.EditableValues) -> T
+): T = if (savedValues != null && formValue == baseline(savedValues)) latestValue else formValue
+
 private fun AlertConfig.withEdits(s: VehicleEditComponent.State): AlertConfig = copy(
-    cellHighV = s.cellHighV,
-    cellLowV = s.cellLowV,
-    cellDeltaMv = s.cellDeltaMv,
-    temperatureWarnC = s.temperatureWarnC,
-    temperatureHighC = s.temperatureHighC,
-    socLowPercent = s.socLowPercent,
-    socCutoffPercent = s.socCutoffPercent,
-    cellHighEnabled = s.cellHighEnabled,
-    cellLowEnabled = s.cellLowEnabled,
-    cellDeltaEnabled = s.cellDeltaEnabled,
-    temperatureWarnEnabled = s.temperatureWarnEnabled,
-    temperatureHighEnabled = s.temperatureHighEnabled,
-    socLowEnabled = s.socLowEnabled,
-    socCutoffEnabled = s.socCutoffEnabled,
-    disconnectNotify = s.disconnectNotify,
-    chargeCompleteNotify = s.chargeCompleteNotify
+    cellHighV = s.alertValue(s.cellHighV, this.cellHighV) { it.cellHighV },
+    cellLowV = s.alertValue(s.cellLowV, this.cellLowV) { it.cellLowV },
+    cellDeltaMv = s.alertValue(s.cellDeltaMv, this.cellDeltaMv) { it.cellDeltaMv },
+    temperatureWarnC = s.alertValue(s.temperatureWarnC, this.temperatureWarnC) { it.temperatureWarnC },
+    temperatureHighC = s.alertValue(s.temperatureHighC, this.temperatureHighC) { it.temperatureHighC },
+    socLowPercent = s.alertValue(s.socLowPercent, this.socLowPercent) { it.socLowPercent },
+    socCutoffPercent = s.alertValue(s.socCutoffPercent, this.socCutoffPercent) { it.socCutoffPercent },
+    cellHighEnabled = s.alertValue(s.cellHighEnabled, this.cellHighEnabled) { it.cellHighEnabled },
+    cellLowEnabled = s.alertValue(s.cellLowEnabled, this.cellLowEnabled) { it.cellLowEnabled },
+    cellDeltaEnabled = s.alertValue(s.cellDeltaEnabled, this.cellDeltaEnabled) { it.cellDeltaEnabled },
+    temperatureWarnEnabled = s.alertValue(s.temperatureWarnEnabled, this.temperatureWarnEnabled) { it.temperatureWarnEnabled },
+    temperatureHighEnabled = s.alertValue(s.temperatureHighEnabled, this.temperatureHighEnabled) { it.temperatureHighEnabled },
+    socLowEnabled = s.alertValue(s.socLowEnabled, this.socLowEnabled) { it.socLowEnabled },
+    socCutoffEnabled = s.alertValue(s.socCutoffEnabled, this.socCutoffEnabled) { it.socCutoffEnabled },
+    disconnectNotify = s.alertValue(s.disconnectNotify, this.disconnectNotify) { it.disconnectNotify },
+    chargeCompleteNotify = s.alertValue(s.chargeCompleteNotify, this.chargeCompleteNotify) { it.chargeCompleteNotify }
 )
 
 /** The CREATE path projects the source draft the rider actually assembled. */

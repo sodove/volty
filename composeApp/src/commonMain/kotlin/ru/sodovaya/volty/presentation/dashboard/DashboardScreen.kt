@@ -90,7 +90,9 @@ import volty.composeapp.generated.resources.status_scanning
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun DashboardScreen(component: DashboardComponent) {
+fun DashboardScreen(
+    component: DashboardComponent,
+) {
     val state by component.state.collectAsState()
     val data = state.data
     val vehicle = state.vehicle
@@ -134,7 +136,6 @@ fun DashboardScreen(component: DashboardComponent) {
             iconEmoji = iconKeyToEmoji(vehicle?.iconKey),
             onClick = component::onPillClicked
         )
-
         // BMS faults — only shown when non-empty so the dashboard isn't cluttered
         if (data.bmsFaults.isNotEmpty()) {
             FaultsBanner(faults = data.bmsFaults)

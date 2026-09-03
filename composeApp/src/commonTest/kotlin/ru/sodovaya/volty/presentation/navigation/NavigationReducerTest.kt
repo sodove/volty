@@ -15,7 +15,6 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 
 class NavigationReducerTest {
     private val place = PlaceCandidate(
@@ -37,8 +36,6 @@ class NavigationReducerTest {
                 query = "набережная",
                 searchResults = listOf(place),
                 destination = place,
-                profile = RouteProfile.LIGHT_EV,
-                profileConfirmed = true,
                 requestInFlight = false,
                 failure = null,
             ),
@@ -52,60 +49,37 @@ class NavigationReducerTest {
         assertEquals("парк", next.query)
         assertTrue(next.searchResults.isEmpty())
         assertNull(next.destination)
-        assertNull(next.profile)
-        assertFalse(next.profileConfirmed)
+        assertTrue(next.requestInFlight, "a searchable query is pending during debounce")
         assertEquals(withResults.requestGeneration + 1L, changed.requestGeneration)
     }
 
     @Test
-    fun `place selection is not enough and suggested profile never confirms`() {
+    fun `place selection clears stale search results and provides enough intent to start route loading`() {
         val initial = NavigationReducer.reduce(
             LightNavigationState(),
             NavigationAction.PlannerRequested,
         )
+        val withResults = initial.copy(
+            phase = NavigationPhase.Planning(
+                query = "набережная",
+                searchResults = listOf(place, secondPlace),
+                destination = null,
+                requestInFlight = false,
+                failure = null,
+            ),
+        )
         val selected = NavigationReducer.reduce(
-            initial,
+            withResults,
             NavigationAction.PlaceSelected(place),
         )
         val selectedPhase = assertIs<NavigationPhase.Planning>(selected.phase)
         assertEquals(place, selectedPhase.destination)
-        assertNull(selectedPhase.profile)
-        assertFalse(selectedPhase.profileConfirmed)
-
-        val suggested = NavigationReducer.reduce(
+        assertTrue(selectedPhase.searchResults.isEmpty())
+        val started = NavigationReducer.reduce(
             selected,
-            NavigationAction.ProfileSelected(RouteProfile.LIGHT_EV),
+            NavigationAction.RouteRequestStarted(selected.requestGeneration),
         )
-        val suggestedPhase = assertIs<NavigationPhase.Planning>(suggested.phase)
-        assertEquals(RouteProfile.LIGHT_EV, suggestedPhase.profile)
-        assertFalse(suggestedPhase.profileConfirmed)
-
-        val confirmed = NavigationReducer.reduce(suggested, NavigationAction.ProfileConfirmed)
-        assertTrue(assertIs<NavigationPhase.Planning>(confirmed.phase).profileConfirmed)
-    }
-
-    @Test
-    fun `changing profile invalidates confirmation and routes`() {
-        val planning = NavigationPhase.Planning(
-            query = "набережная",
-            searchResults = listOf(place),
-            destination = place,
-            profile = RouteProfile.LIGHT_EV,
-            profileConfirmed = true,
-            requestInFlight = false,
-            failure = null,
-        )
-        val state = LightNavigationState(phase = planning)
-        val changed = NavigationReducer.reduce(
-            state,
-            NavigationAction.ProfileSelected(RouteProfile.BICYCLE),
-        )
-        val next = assertIs<NavigationPhase.Planning>(changed.phase)
-        assertEquals(RouteProfile.BICYCLE, next.profile)
-        assertFalse(next.profileConfirmed)
-        assertEquals(listOf(place), next.searchResults)
-        assertNull(next.failure)
-        assertEquals(state.requestGeneration + 1L, changed.requestGeneration)
+        assertTrue(assertIs<NavigationPhase.Planning>(started.phase).requestInFlight)
     }
 
     @Test
@@ -196,7 +170,6 @@ class NavigationReducerTest {
         )
         return RoutePlan(
             destination = place,
-            profile = RouteProfile.LIGHT_EV,
             alternatives = listOf(alternative("route-a"), alternative("route-b")),
         )
     }

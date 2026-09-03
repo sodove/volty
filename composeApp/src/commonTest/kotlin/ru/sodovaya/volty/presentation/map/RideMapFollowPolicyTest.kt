@@ -37,11 +37,11 @@ class RideMapFollowPolicyTest {
     }
 
     @Test
-    fun moving_map_auto_returns_after_two_seconds() {
+    fun moving_map_auto_returns_after_five_seconds() {
         val free = RideMapFollowState(RideMapFollowMode.FREE, lastGestureAtMillis = 1_000L)
 
-        assertFalse(shouldAutoReturnToFollow(free, speedKmh = 20f, nowMillis = 2_999L))
-        assertTrue(shouldAutoReturnToFollow(free, speedKmh = 20f, nowMillis = 3_000L))
+        assertFalse(shouldAutoReturnToFollow(free, speedKmh = 20f, nowMillis = 5_999L))
+        assertTrue(shouldAutoReturnToFollow(free, speedKmh = 20f, nowMillis = 6_000L))
     }
 
     @Test
@@ -50,6 +50,27 @@ class RideMapFollowPolicyTest {
 
         assertFalse(shouldAutoReturnToFollow(free, speedKmh = 0f, nowMillis = 5_000L))
         assertFalse(shouldAutoReturnToFollow(free, speedKmh = null, nowMillis = 5_000L))
+    }
+
+    @Test
+    fun a_slow_roll_does_not_auto_return_until_movement_reaches_threshold() {
+        val free = RideMapFollowState(RideMapFollowMode.FREE, lastGestureAtMillis = 1_000L)
+
+        assertFalse(shouldAutoReturnToFollow(free, speedKmh = 1.9f, nowMillis = 6_000L))
+        assertTrue(shouldAutoReturnToFollow(free, speedKmh = 2f, nowMillis = 6_000L))
+    }
+
+    @Test
+    fun programmatic_camera_motion_does_not_restart_manual_camera_grace_period() {
+        val free = RideMapFollowState(RideMapFollowMode.FREE, lastGestureAtMillis = 1_000L)
+        val afterProgrammaticMove = onRideMapCameraMoveStarted(
+            state = free,
+            origin = RideMapCameraMoveOrigin.PROGRAMMATIC,
+            nowMillis = 2_500L,
+        )
+
+        assertFalse(shouldAutoReturnToFollow(afterProgrammaticMove, speedKmh = 20f, nowMillis = 5_999L))
+        assertTrue(shouldAutoReturnToFollow(afterProgrammaticMove, speedKmh = 20f, nowMillis = 6_000L))
     }
 
     @Test
@@ -65,7 +86,7 @@ class RideMapFollowPolicyTest {
             nowMillis = 2_500L,
         )
 
-        assertFalse(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 4_499L))
-        assertTrue(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 4_500L))
+        assertFalse(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 7_499L))
+        assertTrue(shouldAutoReturnToFollow(second, speedKmh = 20f, nowMillis = 7_500L))
     }
 }

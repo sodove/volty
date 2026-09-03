@@ -15,7 +15,6 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.util.UnitSystem
 
 class LightNavigationUiMapperTest {
@@ -27,14 +26,12 @@ class LightNavigationUiMapperTest {
     )
 
     @Test
-    fun `planning exposes search and keeps selected profile visibly unconfirmed`() {
+    fun `planning exposes search without a vehicle profile choice`() {
         val state = LightNavigationState(
             phase = NavigationPhase.Planning(
                 query = "набережная",
                 searchResults = listOf(destination),
                 destination = destination,
-                profile = RouteProfile.LIGHT_EV,
-                profileConfirmed = false,
                 requestInFlight = false,
                 failure = null,
             ),
@@ -44,10 +41,8 @@ class LightNavigationUiMapperTest {
 
         assertEquals(NavigationUiPhase.PLANNING, ui.phase)
         assertEquals(listOf(destination), ui.searchResults)
-        assertTrue(ui.profiles.single { it.value == RouteProfile.LIGHT_EV }.selected)
-        assertFalse(ui.profiles.single { it.value == RouteProfile.LIGHT_EV }.confirmed)
-        assertTrue(ui.canConfirmProfile)
         assertFalse(ui.canStart)
+        assertFalse(shouldShowNavigationNoResults(ui))
     }
 
     @Test
@@ -64,6 +59,45 @@ class LightNavigationUiMapperTest {
         assertEquals(3L, ui.alternatives.first { it.routeId == "route-a" }.durationMinutes)
         assertTrue(ui.alternatives.single { it.routeId == "route-b" }.selected)
         assertTrue(ui.canStart)
+    }
+
+    @Test
+    fun `ready route remains startable when gps is stale`() {
+        val ui = LightNavigationUiMapper.map(
+            LightNavigationState(
+                phase = NavigationPhase.RouteReady(plan(), selectedRouteId = "route-a"),
+                locationStatus = LocationUiStatus.STALE,
+            ),
+            UnitSystem.METRIC,
+        )
+
+        assertTrue(ui.canStart)
+    }
+
+    @Test
+    fun `ready route remains startable while location is still searching`() {
+        val ui = LightNavigationUiMapper.map(
+            LightNavigationState(
+                phase = NavigationPhase.RouteReady(plan(), selectedRouteId = "route-a"),
+                locationStatus = LocationUiStatus.SEARCHING,
+            ),
+            UnitSystem.METRIC,
+        )
+
+        assertTrue(ui.canStart)
+    }
+
+    @Test
+    fun `a valid route does not render no route as an arrival soc reason`() {
+        val ui = LightNavigationUiMapper.map(
+            LightNavigationState(
+                phase = NavigationPhase.Navigating(plan(), selectedRouteId = "route-a", guidance = null),
+                arrivalSoc = ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.NO_ROUTE),
+            ),
+            UnitSystem.METRIC,
+        )
+
+        assertNull(ui.arrivalSocReason)
     }
 
     @Test
@@ -159,8 +193,6 @@ class LightNavigationUiMapperTest {
                     query = "park",
                     searchResults = emptyList(),
                     destination = null,
-                    profile = null,
-                    profileConfirmed = false,
                     requestInFlight = false,
                     failure = failure,
                 ),
@@ -189,8 +221,6 @@ class LightNavigationUiMapperTest {
                         query = "park",
                         searchResults = emptyList(),
                         destination = destination,
-                        profile = RouteProfile.LIGHT_EV,
-                        profileConfirmed = true,
                         requestInFlight = false,
                         failure = NavigationFailure.Offline,
                     ),
@@ -202,7 +232,6 @@ class LightNavigationUiMapperTest {
 
     private fun plan(): RoutePlan = RoutePlan(
         destination = destination,
-        profile = RouteProfile.LIGHT_EV,
         alternatives = listOf(
             route("route-a", distanceMeters = 2_500.0, durationSeconds = 150L),
             route("route-b", distanceMeters = 3_000.0, durationSeconds = 210L),

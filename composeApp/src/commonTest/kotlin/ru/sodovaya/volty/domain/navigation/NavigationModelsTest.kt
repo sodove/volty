@@ -146,36 +146,45 @@ class NavigationModelsTest {
         )
         val one = alternative("one", destination.coordinate)
 
-        assertEquals(1, RoutePlan(destination, RouteProfile.BICYCLE, listOf(one)).alternatives.size)
+        assertEquals(1, RoutePlan(destination, listOf(one)).alternatives.size)
 
         val three = listOf(
             one,
             alternative("two", destination.coordinate),
             alternative("three", destination.coordinate),
         )
-        assertEquals(3, RoutePlan(destination, RouteProfile.LIGHT_EV, three).alternatives.size)
+        assertEquals(3, RoutePlan(destination, three).alternatives.size)
 
         assertFailsWith<IllegalArgumentException> {
-            RoutePlan(destination, RouteProfile.BICYCLE, emptyList())
+            RoutePlan(destination, emptyList())
         }
         assertFailsWith<IllegalArgumentException> {
             RoutePlan(
                 destination,
-                RouteProfile.MOTOR_SCOOTER,
                 three + alternative("four", destination.coordinate),
             )
         }
         assertFailsWith<IllegalArgumentException> {
-            RoutePlan(destination, RouteProfile.BICYCLE, listOf(one, one.copy(id = "one")))
+            RoutePlan(destination, listOf(one, one.copy(id = "one")))
         }
     }
 
     @Test
-    fun route_profiles_have_no_vendor_or_car_fallback_value() {
-        assertEquals(
-            listOf(RouteProfile.BICYCLE, RouteProfile.LIGHT_EV, RouteProfile.MOTOR_SCOOTER),
-            RouteProfile.values().toList(),
+    fun route_request_has_no_vehicle_choice() {
+        val destination = PlaceCandidate(
+            id = "place-1",
+            title = "Destination",
+            subtitle = null,
+            coordinate = coordinate(56.801, 60.601),
         )
+
+        val request = RouteRequest(
+            origin = coordinate(56.8, 60.6),
+            destination = destination,
+            languageTag = "ru-RU",
+        )
+
+        assertEquals(destination, request.destination)
     }
 
     private fun coordinate(latitude: Double, longitude: Double): GeoCoordinate =

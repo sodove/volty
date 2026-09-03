@@ -42,7 +42,7 @@ fun GraphLinkButton(onClick: () -> Unit, modifier: Modifier = Modifier) {
     ) {
         Text(
             text = stringResource(Res.string.tab_graph) + " ›",
-            fontSize = 10.sp,
+            fontSize = 12.sp,
             fontWeight = FontWeight.SemiBold,
             color = MaterialTheme.colorScheme.primary
         )

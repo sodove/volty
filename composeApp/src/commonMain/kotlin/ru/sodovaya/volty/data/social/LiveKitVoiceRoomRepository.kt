@@ -17,6 +17,7 @@ import ru.sodovaya.volty.domain.social.VoiceRoomEngine
 import ru.sodovaya.volty.domain.social.VoiceRoomFailureReason
 import ru.sodovaya.volty.domain.social.VoiceRoomRepository
 import ru.sodovaya.volty.domain.social.VoiceRoomState
+import ru.sodovaya.volty.domain.social.SocialSession
 import ru.sodovaya.volty.domain.social.reduce
 
 class LiveKitVoiceRoomRepository(
@@ -27,12 +28,23 @@ class LiveKitVoiceRoomRepository(
     override val requiredPermissions: List<String>
         get() = engine.requiredPermissions
 
-    private val _state = MutableStateFlow<VoiceRoomState>(VoiceRoomState.Available)
+    private val _state = MutableStateFlow<VoiceRoomState>(VoiceRoomState.Unavailable)
     override val state: StateFlow<VoiceRoomState> = _state.asStateFlow()
 
     private var activeGroupId: RideGroupId? = null
 
     init {
+        scope.launch {
+            socialRepository.session.collect { session ->
+                if (session is SocialSession.Authenticated) {
+                    if (activeGroupId == null && _state.value !is VoiceRoomState.Joining && _state.value !is VoiceRoomState.Failed) {
+                        refreshAvailability()
+                    }
+                } else if (activeGroupId == null) {
+                    _state.value = VoiceRoomState.Unavailable
+                }
+            }
+        }
         scope.launch {
             engine.participants.collect { participants ->
                 _state.update { current ->
@@ -51,6 +63,12 @@ class LiveKitVoiceRoomRepository(
     }
 
     override suspend fun join(groupId: RideGroupId): SocialResult<Unit> {
+        if (_state.value == VoiceRoomState.Unavailable) {
+            refreshAvailability()
+        }
+        if (_state.value == VoiceRoomState.Unavailable) {
+            return SocialResult.Failure(SocialFailure.InvalidRequest("Voice provider is unavailable"))
+        }
         if (activeGroupId != null && activeGroupId != groupId) {
             leave()
         }
@@ -64,7 +82,7 @@ class LiveKitVoiceRoomRepository(
     override suspend fun leave(): SocialResult<Unit> {
         val groupId = activeGroupId
         if (groupId == null) {
-            _state.value = VoiceRoomState.Available
+            if (_state.value != VoiceRoomState.Unavailable) _state.value = VoiceRoomState.Available
             return SocialResult.Success(Unit)
         }
         activeGroupId = null
@@ -119,5 +137,25 @@ class LiveKitVoiceRoomRepository(
             reason = VoiceRoomFailureReason.CONNECTION_FAILED,
         )
         return SocialResult.Failure(error)
+    }
+
+    private suspend fun refreshAvailability() {
+        if (activeGroupId != null) return
+        when (val result = socialRepository.getVoiceProvider()) {
+            is SocialResult.Success -> {
+                if (activeGroupId != null || _state.value is VoiceRoomState.Joining || _state.value is VoiceRoomState.Failed) return
+                val provider = result.value
+                _state.value = if (provider.available && provider.provider.equals("livekit", ignoreCase = true)) {
+                    VoiceRoomState.Available
+                } else {
+                    VoiceRoomState.Unavailable
+                }
+            }
+            is SocialResult.Failure -> {
+                if (activeGroupId == null && _state.value !is VoiceRoomState.Joining && _state.value !is VoiceRoomState.Failed) {
+                    _state.value = VoiceRoomState.Unavailable
+                }
+            }
+        }
     }
 }

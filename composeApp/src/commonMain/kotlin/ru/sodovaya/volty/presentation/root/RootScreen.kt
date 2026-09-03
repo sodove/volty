@@ -72,7 +72,7 @@ import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
 
 @Composable
-fun RootScreen(component: RootComponent) {
+fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
     val darkTheme = LocalVoltyDarkTheme.current
@@ -134,8 +134,14 @@ fun RootScreen(component: RootComponent) {
             locationPermissionLauncher.launch(permissions.toTypedArray())
         }
     }
+    val locationPermissionRequired = locationState.status is RideLocationStatus.PermissionRequired
     LaunchedEffect(rideMapVisible) {
         component.navigation.onMapVisibilityChanged(rideMapVisible)
+    }
+    LaunchedEffect(mapHost.requestLocationPermission, locationPermissionRequired) {
+        if (mapHost.requestLocationPermission && locationPermissionRequired) {
+            requestLocationPermission()
+        }
     }
     val mapScene = if (rideMapVisible) {
         NavigationMapRenderPolicy.scene(
@@ -213,13 +219,12 @@ fun RootScreen(component: RootComponent) {
                             },
                             onQueryChanged = component.navigation::onQueryChanged,
                             onPlaceSelected = component.navigation::onPlaceSelected,
-                            onProfileSelected = component.navigation::onProfileSelected,
-                            onProfileConfirmed = component.navigation::onProfileConfirmed,
                             onAlternativeSelected = component.navigation::onAlternativeSelected,
                             onStartNavigation = component.navigation::onStartNavigation,
                             onRetry = component.navigation::onRetry,
                             onStopNavigation = component.navigation::onStopNavigation,
                             onRequestLocationPermission = requestLocationPermission,
+                            onOpenLocationSettings = onOpenLocationSettings,
                         ),
                     )
                     is RootComponent.Child.Dashboard -> DashboardScreen(component = instance.component)

@@ -27,7 +27,6 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
 class HttpNavigationRepository(
@@ -121,7 +120,6 @@ class HttpNavigationRepository(
             latitude = destination.coordinate.latitude,
             longitude = destination.coordinate.longitude,
         ),
-        profile = profile.name,
         languageTag = languageTag,
         alternativesLimit = alternativesLimit,
     )
@@ -129,8 +127,6 @@ class HttpNavigationRepository(
     private fun decodeRoutePlan(wire: NavigationRouteResponseWire): RoutePlan {
         if (wire.schemaVersion != 1 || wire.routes.isEmpty()) throw MalformedNavigationResponseException()
         val destination = decodePlace(wire.destination)
-        val profile = runCatching { RouteProfile.valueOf(wire.profile) }
-            .getOrElse { throw MalformedNavigationResponseException() }
         val routes = wire.routes.map { route ->
             RouteAlternative(
                 id = route.id,
@@ -149,7 +145,7 @@ class HttpNavigationRepository(
                 },
             )
         }
-        return RoutePlan(destination, profile, routes)
+        return RoutePlan(destination, routes)
     }
 
     private fun decodeManeuverKind(value: String): ManeuverKind =
@@ -192,7 +188,8 @@ class HttpNavigationRepository(
     private data class NavigationRouteResponseWire(
         val schemaVersion: Int = 1,
         val destination: NavigationPlaceWire,
-        val profile: String,
+        // Kept for compatibility with an older backend response. Route identity is transport-agnostic.
+        val profile: String? = null,
         val routes: List<NavigationRouteWire>,
     )
 
@@ -200,7 +197,6 @@ class HttpNavigationRepository(
     private data class NavigationRouteRequestWire(
         val origin: GeoCoordinateWire,
         val destination: NavigationPlaceWire,
-        val profile: String,
         val languageTag: String,
         val alternativesLimit: Int,
     )

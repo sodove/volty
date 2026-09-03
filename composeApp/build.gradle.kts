@@ -1,5 +1,8 @@
 import java.util.Properties
 
+val appVersionCode = 28
+val appVersionName = "0.7.6"
+
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
     alias(libs.plugins.android.application)
@@ -57,11 +60,13 @@ kotlin {
             implementation(libs.graphics.shapes)
             implementation(libs.haze)
             implementation(libs.ktor.client.cio)
+            implementation(libs.ktor.client.okhttp)
             implementation("org.maplibre.gl:android-sdk:13.0.2")
             implementation("io.livekit:livekit-android:2.25.3") {
                 exclude(group = "com.github.davidliu", module = "audioswitch")
             }
             implementation(files("libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar"))
+            implementation(files("libs/brouter-1.7.10-all.jar"))
         }
     }
 }
@@ -125,13 +130,28 @@ android {
         applicationId = "ru.sodovaya.volty"
         minSdk = 26
         targetSdk = 36
-        versionCode = 19
-        versionName = "0.6.7"
+        versionCode = appVersionCode
+        versionName = appVersionName
     }
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
+    }
+    applicationVariants.all {
+        val variantBuildType = buildType.name
+        outputs.all {
+            (this as com.android.build.gradle.api.ApkVariantOutput).outputFileName =
+                "volty-$appVersionName-$variantBuildType.apk"
+        }
+    }
+}
+
+androidComponents {
+    onVariants(selector().withBuildType("release")) { variant ->
+        // Keep x86 ABIs for debug/emulator builds, but do not ship them in production.
+        variant.packaging.jniLibs.excludes.add("**/x86/*.so")
+        variant.packaging.jniLibs.excludes.add("**/x86_64/*.so")
     }
 }
 

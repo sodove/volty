@@ -5,7 +5,6 @@ import ru.sodovaya.volty.domain.navigation.ArrivalSocUnknownReason
 import ru.sodovaya.volty.domain.navigation.ManeuverKind
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.util.UnitFormatter
@@ -52,8 +51,6 @@ enum class NavigationUiCopyKey {
     ROUTE_PROVIDER_UNAVAILABLE,
     ROUTE_INVALID_REQUEST,
     ROUTE_MALFORMED_RESPONSE,
-    PROFILE_REQUIRED,
-    PROFILE_CONFIRMATION_REQUIRED,
     SOC_NO_ROUTE,
     SOC_BMS_DISCONNECTED,
     SOC_PACKS_PARTIAL,
@@ -62,12 +59,6 @@ enum class NavigationUiCopyKey {
     SOC_TELEMETRY_STALE,
     SOC_CONSUMPTION_UNEARNED,
 }
-
-data class NavigationUiProfile(
-    val value: RouteProfile,
-    val selected: Boolean,
-    val confirmed: Boolean,
-)
 
 data class NavigationUiAlternative(
     val routeId: String,
@@ -88,9 +79,6 @@ data class NavigationUiModel(
     val query: String,
     val searchResults: List<PlaceCandidate>,
     val destination: PlaceCandidate?,
-    val profiles: List<NavigationUiProfile>,
-    val selectedProfile: RouteProfile?,
-    val profileConfirmed: Boolean,
     val requestInFlight: Boolean,
     val selectedRouteId: String?,
     val alternatives: List<NavigationUiAlternative>,
@@ -102,7 +90,6 @@ data class NavigationUiModel(
     val retryAfterSeconds: Long?,
     val arrivalSocPercent: Int?,
     val arrivalSocReason: NavigationUiCopyKey?,
-    val canConfirmProfile: Boolean,
     val canStart: Boolean,
     val canRetry: Boolean,
     val canStop: Boolean,
@@ -120,23 +107,11 @@ object LightNavigationUiMapper {
         val planning = phase as? NavigationPhase.Planning
         val locationBanner = locationBanner(state.locationStatus, phase)
         val failure = phase.failureOrNull()
-        val profile = planning?.profile
-        val profiles = RouteProfile.values().map { value ->
-            NavigationUiProfile(
-                value = value,
-                selected = value == profile,
-                confirmed = value == profile && planning.profileConfirmed,
-            )
-        }
-
         return NavigationUiModel(
             phase = phase.toUiPhase(),
             query = planning?.query.orEmpty(),
             searchResults = planning?.searchResults.orEmpty(),
             destination = phase.destinationOrNull(),
-            profiles = profiles,
-            selectedProfile = profile,
-            profileConfirmed = planning?.profileConfirmed == true,
             requestInFlight = planning?.requestInFlight == true,
             selectedRouteId = selectedRouteId,
             alternatives = routePlan?.alternatives.orEmpty().map { route ->
@@ -154,16 +129,19 @@ object LightNavigationUiMapper {
             failureBanner = failure?.let {
                 failureBanner(
                     failure = it,
-                    searchFailure = planning?.profileConfirmed != true,
+                    searchFailure = planning?.destination == null,
                 )
             },
             retryAfterSeconds = (failure as? NavigationFailure.RateLimited)?.retryAfterSeconds,
             arrivalSocPercent = (state.arrivalSoc as? ArrivalSocEstimate.Known)?.percent,
-            arrivalSocReason = (state.arrivalSoc as? ArrivalSocEstimate.Unknown)?.reason?.toUiCopyKey(),
-            canConfirmProfile = planning?.destination != null && profile != null && !planning.profileConfirmed,
-            canStart = phase is NavigationPhase.RouteReady && state.locationStatus == LocationUiStatus.FRESH,
+            arrivalSocReason = (state.arrivalSoc as? ArrivalSocEstimate.Unknown)
+                ?.reason
+                ?.takeUnless { it == ArrivalSocUnknownReason.NO_ROUTE && routePlan != null }
+                ?.toUiCopyKey(),
+            canStart = phase is NavigationPhase.RouteReady,
             canRetry = when (phase) {
-                is NavigationPhase.Planning -> !phase.requestInFlight && phase.failure != null
+                is NavigationPhase.Planning -> !phase.requestInFlight &&
+                    (phase.destination != null || phase.failure != null)
                 is NavigationPhase.Rerouting -> phase.failure != null
                 else -> false
             },
@@ -214,7 +192,7 @@ object LightNavigationUiMapper {
     private fun locationBanner(status: LocationUiStatus, phase: NavigationPhase): NavigationUiCopyKey? = when (status) {
         LocationUiStatus.NOT_REQUESTED -> if (
             phase is NavigationPhase.RouteReady ||
-            (phase is NavigationPhase.Planning && phase.profileConfirmed)
+            (phase is NavigationPhase.Planning && phase.destination != null)
         ) NavigationUiCopyKey.LOCATION_FRESH_REQUIRED else null
         LocationUiStatus.PERMISSION_REQUIRED -> NavigationUiCopyKey.LOCATION_PERMISSION_REQUIRED
         LocationUiStatus.PERMISSION_DENIED -> NavigationUiCopyKey.LOCATION_PERMISSION_DENIED

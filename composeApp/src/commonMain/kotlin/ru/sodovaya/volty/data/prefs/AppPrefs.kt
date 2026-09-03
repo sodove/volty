@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.stateIn
 import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.util.UnitSystem
 
 class AppPrefs(private val store: DataStore<Preferences>) {
@@ -63,6 +64,10 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     val faultDisplayDurationSec: StateFlow<Int> = store.data
         .map { (it[Keys.FAULT_DISPLAY_DURATION_SEC] ?: DEFAULT_FAULT_DISPLAY_DURATION_SEC).coerceAtLeast(0) }
         .stateIn(scope, SharingStarted.Eagerly, DEFAULT_FAULT_DISPLAY_DURATION_SEC)
+
+    val voiceMicrophoneSource: StateFlow<VoiceMicrophoneSource> = store.data
+        .map { VoiceMicrophoneSource.fromPersisted(it[Keys.VOICE_MICROPHONE_SOURCE]) }
+        .stateIn(scope, SharingStarted.Eagerly, VoiceMicrophoneSource.AUTO)
 
     // --- The audible alarm's three switches (F §4). All default **true**: the
     // alarm is the feature a rider depends on when they are not looking at the
@@ -125,6 +130,9 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setFaultDisplayDurationSec(seconds: Int) = store.edit {
         it[Keys.FAULT_DISPLAY_DURATION_SEC] = seconds.coerceAtLeast(0)
     }
+    suspend fun setVoiceMicrophoneSource(source: VoiceMicrophoneSource) = store.edit {
+        it[Keys.VOICE_MICROPHONE_SOURCE] = source.name
+    }
     suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
     suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
@@ -141,6 +149,7 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val UNIT_SYSTEM = stringPreferencesKey("unit_system")
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
         val FAULT_DISPLAY_DURATION_SEC = intPreferencesKey("fault_display_duration_sec")
+        val VOICE_MICROPHONE_SOURCE = stringPreferencesKey("voice_microphone_source")
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")

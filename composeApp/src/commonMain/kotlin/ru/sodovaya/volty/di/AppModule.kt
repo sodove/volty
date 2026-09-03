@@ -14,7 +14,7 @@ import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.LiveKitVoiceRoomRepository
 import ru.sodovaya.volty.data.social.BmsSocialTelemetrySource
 import ru.sodovaya.volty.data.social.DefaultSocialRideRuntime
-import ru.sodovaya.volty.data.navigation.HttpNavigationRepository
+import ru.sodovaya.volty.data.navigation.OsmNavigationRepository
 import ru.sodovaya.volty.data.navigation.BmsNavigationEnergySource
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
@@ -50,7 +50,10 @@ val appModule = module {
     )
     single { AlertEngine(get(), get()) }
     single<SocialTransport> { HttpSocialTransport() }
-    single<NavigationRepository> { HttpNavigationRepository() }
+    // Android replaces the public repository binding with the hybrid online /
+    // embedded-BRouter implementation. Keep the concrete online repository
+    // available for it without defining the interface twice in Koin.
+    single { OsmNavigationRepository() }
     single<NavigationEnergySource> { BmsNavigationEnergySource(get()) }
     singleOf(::DefaultSocialRepository) bind SocialRepository::class
     single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }

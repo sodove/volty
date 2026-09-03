@@ -28,7 +28,7 @@ data class AppConfig(
     val publicIp: String? = null,
     val navigationProvider: String = "disabled",
     val graphHopperApiKey: String? = null,
-    val navigationProfileIds: Map<String, String> = emptyMap(),
+    val navigationProfileId: String? = null,
     val navigationConnectTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     val navigationRequestTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     val navigationEnabled: Boolean = false,
@@ -50,7 +50,7 @@ data class AppConfig(
         "accessTtlSeconds=$accessTtlSeconds, refreshTtlSeconds=$refreshTtlSeconds, " +
         "maxShareTtlMillis=$maxShareTtlMillis, corsOrigins=$corsOrigins, " +
         "voiceProvider=$voiceProvider, voiceConfigured=${liveKitConfigOrNull() != null}, " +
-        "navigationProvider=$navigationProvider, navigationProfileIds=$navigationProfileIds, " +
+        "navigationProvider=$navigationProvider, navigationProfileId=$navigationProfileId, " +
         "navigationConnectTimeoutMillis=$navigationConnectTimeoutMillis, " +
         "navigationRequestTimeoutMillis=$navigationRequestTimeoutMillis, " +
         "navigationEnabled=$navigationEnabled)"
@@ -76,18 +76,12 @@ data class AppConfig(
                     else -> error("VOLTY_NAVIGATION_ENABLED must be true or false")
                 }
             } ?: (navigationProvider != "disabled")
-            val profileIds = mapOf(
-                "bicycle" to env["VOLTY_NAV_PROFILE_BICYCLE"].orEmpty().trim(),
-                "light_ev" to env["VOLTY_NAV_PROFILE_LIGHT_EV"].orEmpty().trim(),
-                "motor_scooter" to env["VOLTY_NAV_PROFILE_MOTOR_SCOOTER"].orEmpty().trim(),
-            ).filterValues(String::isNotEmpty)
+            val navigationProfileId = env["VOLTY_NAV_PROFILE"]?.trim()?.takeIf(String::isNotEmpty)
             val graphHopperApiKey = env["GRAPHHOPPER_API_KEY"]?.trim()?.takeIf(String::isNotEmpty)
             if (navigationProvider == "graphhopper") {
                 val missing = buildList {
                     if (graphHopperApiKey == null) add("GRAPHHOPPER_API_KEY")
-                    if (profileIds["bicycle"].isNullOrBlank()) add("VOLTY_NAV_PROFILE_BICYCLE")
-                    if (profileIds["light_ev"].isNullOrBlank()) add("VOLTY_NAV_PROFILE_LIGHT_EV")
-                    if (profileIds["motor_scooter"].isNullOrBlank()) add("VOLTY_NAV_PROFILE_MOTOR_SCOOTER")
+                    if (navigationProfileId == null) add("VOLTY_NAV_PROFILE")
                 }
                 require(missing.isEmpty()) {
                     "VOLTY_NAV_PROVIDER=graphhopper requires ${missing.joinToString(", ")}"
@@ -122,7 +116,7 @@ data class AppConfig(
                 publicIp = env["VOLTY_PUBLIC_IP"]?.trim()?.takeIf(String::isNotEmpty),
                 navigationProvider = navigationProvider,
                 graphHopperApiKey = graphHopperApiKey,
-                navigationProfileIds = profileIds,
+                navigationProfileId = navigationProfileId,
                 navigationConnectTimeoutMillis = navigationConnectTimeoutMillis,
                 navigationRequestTimeoutMillis = navigationRequestTimeoutMillis,
                 navigationEnabled = navigationEnabled,

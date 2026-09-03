@@ -372,7 +372,25 @@ private fun fitAlternatives(map: MapLibreMap, points: List<GeoCoordinate>) {
     }
     val boundsBuilder = LatLngBounds.Builder()
     latLngs.forEach(boundsBuilder::include)
-    map.animateCamera(CameraUpdateFactory.newLatLngBounds(boundsBuilder.build(), 80))
+    val bounds = boundsBuilder.build()
+    // Keep the preview in the unobstructed map band: the HUD and the route card
+    // occupy the top and bottom edges of the native map view. Flattening the
+    // camera also prevents the retained ride tilt from projecting a long route
+    // underneath the dashboard chrome.
+    val horizontalPadding = (map.width * 0.06f).toInt().coerceAtLeast(48)
+    val topPadding = (map.height * 0.14f).toInt().coerceAtLeast(96)
+    val bottomPadding = (map.height * 0.28f).toInt().coerceAtLeast(180)
+    map.moveCamera(
+        CameraUpdateFactory.newLatLngBounds(
+            bounds,
+            0.0,
+            0.0,
+            horizontalPadding,
+            topPadding,
+            horizontalPadding,
+            bottomPadding,
+        ),
+    )
 }
 
 private fun recenter(map: MapLibreMap, fix: RideLocationFix) {

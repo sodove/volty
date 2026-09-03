@@ -48,6 +48,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
+import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
@@ -81,6 +82,11 @@ import volty.composeapp.generated.resources.settings_title
 import volty.composeapp.generated.resources.settings_units
 import volty.composeapp.generated.resources.settings_units_imperial
 import volty.composeapp.generated.resources.settings_units_metric
+import volty.composeapp.generated.resources.settings_voice_microphone
+import volty.composeapp.generated.resources.settings_voice_microphone_auto
+import volty.composeapp.generated.resources.settings_voice_microphone_headset
+import volty.composeapp.generated.resources.settings_voice_microphone_phone
+import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -177,6 +183,33 @@ fun SettingsScreen(component: SettingsComponent) {
                         onClick = { component.onUnitSystemChanged(u) },
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = unitSystems.size)
                     ) { Text(unitLabels[u] ?: u.name) }
+                }
+            }
+
+            // NEARBY VOICE MICROPHONE
+            SectionLabel(stringResource(Res.string.settings_voice_microphone))
+            Text(
+                stringResource(Res.string.settings_voice_microphone_subtitle),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            val microphoneSources = listOf(
+                VoiceMicrophoneSource.AUTO,
+                VoiceMicrophoneSource.PHONE,
+                VoiceMicrophoneSource.HEADSET,
+            )
+            val microphoneLabels = mapOf(
+                VoiceMicrophoneSource.AUTO to stringResource(Res.string.settings_voice_microphone_auto),
+                VoiceMicrophoneSource.PHONE to stringResource(Res.string.settings_voice_microphone_phone),
+                VoiceMicrophoneSource.HEADSET to stringResource(Res.string.settings_voice_microphone_headset),
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                microphoneSources.forEachIndexed { idx, source ->
+                    SegmentedButton(
+                        selected = state.voiceMicrophoneSource == source,
+                        onClick = { component.onVoiceMicrophoneSourceChanged(source) },
+                        shape = SegmentedButtonDefaults.itemShape(index = idx, count = microphoneSources.size),
+                    ) { Text(microphoneLabels[source] ?: source.name) }
                 }
             }
 

@@ -14,12 +14,6 @@ data class GeoCoordinate(
     }
 }
 
-enum class RouteProfile {
-    BICYCLE,
-    LIGHT_EV,
-    MOTOR_SCOOTER,
-}
-
 data class PlaceCandidate(
     val id: String,
     val title: String,
@@ -83,7 +77,6 @@ data class RouteAlternative(
 
 data class RoutePlan(
     val destination: PlaceCandidate,
-    val profile: RouteProfile,
     val alternatives: List<RouteAlternative>,
 ) {
     init {
@@ -97,7 +90,6 @@ data class RoutePlan(
 data class RouteRequest(
     val origin: GeoCoordinate,
     val destination: PlaceCandidate,
-    val profile: RouteProfile,
     val languageTag: String,
     val alternativesLimit: Int = 3,
 )

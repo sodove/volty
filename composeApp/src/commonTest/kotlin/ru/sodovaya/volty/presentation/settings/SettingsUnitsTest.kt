@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -47,5 +48,18 @@ class SettingsUnitsTest {
         prefs.setUnitSystem(UnitSystem.IMPERIAL)
 
         assertEquals(UnitSystem.IMPERIAL, prefs.unitSystem.first { it == UnitSystem.IMPERIAL })
+    }
+
+    @Test
+    fun choosing_voice_microphone_source_persists_and_shows_in_state() = runTest {
+        val prefs = AppPrefs(FakePreferencesDataStore(mutablePreferencesOf()))
+        assertEquals(VoiceMicrophoneSource.AUTO, prefs.voiceMicrophoneSource.value)
+
+        prefs.setVoiceMicrophoneSource(VoiceMicrophoneSource.HEADSET)
+
+        assertEquals(
+            VoiceMicrophoneSource.HEADSET,
+            prefs.voiceMicrophoneSource.first { it == VoiceMicrophoneSource.HEADSET },
+        )
     }
 }

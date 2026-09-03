@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.social
 import android.Manifest
 import android.app.Application
 import android.content.Context
+import com.twilio.audioswitch.AudioDevice
 import io.livekit.android.LiveKit
 import io.livekit.android.events.collect
 import io.livekit.android.room.Room
@@ -12,13 +13,17 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.social.SocialUserId
 import ru.sodovaya.volty.domain.social.VoiceParticipant
 import ru.sodovaya.volty.domain.social.VoiceRoomEngine
+import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 
 class AndroidLiveKitVoiceRoomEngine(
     appContext: Context,
+    private val appPrefs: AppPrefs,
 ) : VoiceRoomEngine {
     override val requiredPermissions: List<String> = listOf(Manifest.permission.RECORD_AUDIO)
     private val application = appContext.applicationContext as Application
@@ -29,10 +34,19 @@ class AndroidLiveKitVoiceRoomEngine(
     private var room: Room? = null
     private var eventsJob: Job? = null
 
+    init {
+        scope.launch {
+            appPrefs.voiceMicrophoneSource.collect { source ->
+                room?.let { applyMicrophoneSource(it, source) }
+            }
+        }
+    }
+
     override suspend fun connect(serverUrl: String, participantToken: String): Result<Unit> = runCatching {
         disconnect()
         val liveRoom = LiveKit.create(appContext = application)
         room = liveRoom
+        applyMicrophoneSource(liveRoom, appPrefs.voiceMicrophoneSource.value)
         eventsJob = scope.launch {
             liveRoom.events.collect {
                 _participants.value = liveRoom.remoteParticipants.values.map(::mapParticipant)
@@ -72,5 +86,23 @@ class AndroidLiveKitVoiceRoomEngine(
             displayName = displayName,
             isSpeaking = participant.isSpeaking,
         )
+    }
+
+    private fun applyMicrophoneSource(room: Room, source: VoiceMicrophoneSource) {
+        room.audioSwitchHandler?.preferredDeviceList = when (source) {
+            VoiceMicrophoneSource.AUTO -> null
+            VoiceMicrophoneSource.PHONE -> listOf(
+                AudioDevice.Speakerphone::class.java,
+                AudioDevice.Earpiece::class.java,
+                AudioDevice.BluetoothHeadset::class.java,
+                AudioDevice.WiredHeadset::class.java,
+            )
+            VoiceMicrophoneSource.HEADSET -> listOf(
+                AudioDevice.BluetoothHeadset::class.java,
+                AudioDevice.WiredHeadset::class.java,
+                AudioDevice.Speakerphone::class.java,
+                AudioDevice.Earpiece::class.java,
+            )
+        }
     }
 }

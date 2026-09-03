@@ -135,6 +135,7 @@ class KableBmsRepository private constructor(
      */
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
     private val rideHistoryRepository: RideHistoryRepository,
+    private val bleAdapterStateProvider: BleAdapterStateProvider,
 ) : BmsRepository, CanDiscovery, ControllerConfigSource {
 
     /** Production constructor used by Koin. */
@@ -142,12 +143,14 @@ class KableBmsRepository private constructor(
         vehicleRepository: VehicleRepository,
         serviceController: ru.sodovaya.volty.service.ServiceController,
         rideHistoryRepository: RideHistoryRepository,
+        bleAdapterStateProvider: BleAdapterStateProvider,
     ) : this(
         vehicleRepository = vehicleRepository,
         serviceStart = { serviceController.start() },
         serviceStop = { serviceController.stop() },
         coroutineContext = Dispatchers.Default,
         rideHistoryRepository = rideHistoryRepository,
+        bleAdapterStateProvider = bleAdapterStateProvider,
     )
 
     internal companion object {
@@ -322,12 +325,14 @@ class KableBmsRepository private constructor(
             serviceStop: () -> Unit,
             coroutineContext: kotlin.coroutines.CoroutineContext,
             rideHistoryRepository: RideHistoryRepository = NoOpRideHistoryRepository,
+            bleAdapterStateProvider: BleAdapterStateProvider = BleAdapterStateProvider { true },
         ): KableBmsRepository = KableBmsRepository(
             vehicleRepository = vehicleRepository,
             serviceStart = serviceStart,
             serviceStop = serviceStop,
             coroutineContext = coroutineContext,
             rideHistoryRepository = rideHistoryRepository,
+            bleAdapterStateProvider = bleAdapterStateProvider,
         )
     }
 
@@ -828,6 +833,15 @@ class KableBmsRepository private constructor(
             ?.takeIf { it > 0 }
 
     override fun scanAll(): Flow<DiscoveredDevice> = flow {
+        val unavailableReason = bleUnavailableReason(
+            bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
+        )
+        if (unavailableReason != null) {
+            _connectionState.value = ConnectionState.Failed(unavailableReason)
+            println("[VOLTY-BLE] scan skipped: $unavailableReason")
+            return@flow
+        }
+
         // Keyed by EVERY address each vehicle can be recognised by — the same
         // index the Scanning and Picker screens use, see [vehiclesByAddress].
         // The primary pack alone is not enough: a controller-only vehicle
@@ -848,35 +862,43 @@ class KableBmsRepository private constructor(
             is ConnectionState.Reconnecting -> Unit
             else -> _connectionState.value = ConnectionState.Scanning
         }
-        val scanner = Scanner()
-        scanner.advertisements.collect { ad ->
-            val name = ad.name
-            val serviceList = ad.uuids.map { it.toString().lowercase() }
-            // May be null: the picker now lists every device and lets the user
-            // pick the type manually, so we no longer drop unrecognized ads.
-            val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
-            val controllerType = BmsTypeDetector.detectController(name = name, serviceUuids = serviceList)
-            val id = ad.identifier.toString()
-            val knownVehicle = knownAddresses[id]
-            val resolved = resolveDeviceTypes(
-                address = id,
-                knownVehicle = knownVehicle,
-                rememberedType = rememberedTypes[id],
-                detectedBmsType = type,
-                detectedControllerType = controllerType
-            )
-            cacheAdvertisement(id, ad)
-            emit(
-                DiscoveredDevice(
+        try {
+            val scanner = Scanner()
+            scanner.advertisements.collect { ad ->
+                val name = ad.name
+                val serviceList = ad.uuids.map { it.toString().lowercase() }
+                // May be null: the picker now lists every device and lets the user
+                // pick the type manually, so we no longer drop unrecognized ads.
+                val type = BmsTypeDetector.detect(name = name, serviceUuids = serviceList)
+                val controllerType = BmsTypeDetector.detectController(name = name, serviceUuids = serviceList)
+                val id = ad.identifier.toString()
+                val knownVehicle = knownAddresses[id]
+                val resolved = resolveDeviceTypes(
                     address = id,
-                    name = name,
-                    rssi = ad.rssi,
-                    bmsType = resolved.bmsType,
-                    controllerType = resolved.controllerType,
-                    typeProvenance = resolved.provenance,
-                    knownVehicle = knownVehicle
+                    knownVehicle = knownVehicle,
+                    rememberedType = rememberedTypes[id],
+                    detectedBmsType = type,
+                    detectedControllerType = controllerType
                 )
-            )
+                cacheAdvertisement(id, ad)
+                emit(
+                    DiscoveredDevice(
+                        address = id,
+                        name = name,
+                        rssi = ad.rssi,
+                        bmsType = resolved.bmsType,
+                        controllerType = resolved.controllerType,
+                        typeProvenance = resolved.provenance,
+                        knownVehicle = knownVehicle
+                    )
+                )
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val reason = readableBleFailureReason(e)
+            _connectionState.value = ConnectionState.Failed(reason)
+            println("[VOLTY-BLE] scan stopped: $reason")
         }
     }.flowOn(Dispatchers.Default)
 
@@ -2142,6 +2164,15 @@ class KableBmsRepository private constructor(
     // ----- Connect: one vehicle, N links -----
 
     private suspend fun doConnect(address: String, type: BmsType?, vehicle: Vehicle?): Result<Unit> {
+        val unavailableReason = bleUnavailableReason(
+            bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
+        )
+        if (unavailableReason != null) {
+            _connectionState.value = ConnectionState.Failed(unavailableReason)
+            println("[VOLTY-BLE] connect skipped: $unavailableReason")
+            return Result.failure(IllegalStateException(unavailableReason))
+        }
+
         println("[VOLTY-BLE] doConnect: starting addr=$address type=$type vehicle=${vehicle?.name}")
         // Tracks the orchestrator THIS attempt installed, so every failure
         // path (including the catch-all below) can undo exactly its own
@@ -2275,7 +2306,7 @@ class KableBmsRepository private constructor(
             // could clobber the successor's freshly installed orchestrator.
             throw e
         } catch (e: Exception) {
-            _connectionState.value = ConnectionState.Failed(e.message ?: "Connection failed")
+            _connectionState.value = ConnectionState.Failed(readableBleFailureReason(e))
             clearOrchestratorAfterFailure(installedOrchestrator)
             Result.failure(e)
         }
@@ -2311,6 +2342,13 @@ class KableBmsRepository private constructor(
         // Tracks the orchestrator THIS attempt installed (rebuild path only),
         // so every failure path can undo exactly its own installation.
         var installedOrchestrator: VehicleConnection? = null
+        val unavailableReason = bleUnavailableReason(
+            bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
+        )
+        if (unavailableReason != null) {
+            setLinkState(link, LinkStatus.FAILED, reason = unavailableReason)
+            return Result.failure(IllegalStateException(unavailableReason))
+        }
         return try {
             // Tear down this link's previous (dead) session under the lock,
             // as the old doConnect preamble did for the single session.
@@ -2448,7 +2486,8 @@ class KableBmsRepository private constructor(
             // Deliberately NO cleanup here — same contract as doConnect's.
             throw e
         } catch (e: Exception) {
-            setLinkState(link, LinkStatus.FAILED, reason = e.message ?: "Connection failed")
+            val reason = readableBleFailureReason(e)
+            setLinkState(link, LinkStatus.FAILED, reason = reason)
             clearOrchestratorAfterFailure(installedOrchestrator)
             Result.failure(e)
         }

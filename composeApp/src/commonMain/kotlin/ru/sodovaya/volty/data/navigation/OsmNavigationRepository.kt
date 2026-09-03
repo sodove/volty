@@ -34,10 +34,11 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import kotlin.math.abs
 import kotlin.math.ceil
 
 class OsmNavigationRepository(
-    private val client: HttpClient = HttpClient(),
+    private val client: HttpClient = createNavigationHttpClient(),
 ) : NavigationRepository {
     override suspend fun search(
         query: String,
@@ -47,7 +48,7 @@ class OsmNavigationRepository(
         val language = requestLanguage(languageTag)
         val response = client.get {
             url(PHOTON_URL)
-            parameter("q", query)
+            parameter("q", query.trim().replace(WHITESPACE, " "))
             parameter("limit", 8)
             parameter("lang", language.photonLanguage)
             near?.let {
@@ -65,25 +66,85 @@ class OsmNavigationRepository(
         NavigationResult.Failure(NavigationFailure.Offline)
     }
 
-    override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> = try {
+    override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
         val language = requestLanguage(request.languageTag)
+        val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
+        var lastFailure: NavigationFailure = NavigationFailure.Offline
+        var primaryPlan: RoutePlan? = null
+
+        return try {
+            for (endpoint in OSRM_URLS) {
+                val result = try {
+                    routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    NavigationResult.Failure(NavigationFailure.Offline)
+                }
+
+                when (result) {
+                    is NavigationResult.Success -> {
+                        val previousPrimary = primaryPlan
+                        if (previousPrimary == null) {
+                            primaryPlan = result.value
+                            if (result.value.alternatives.size >= limit) {
+                                return NavigationResult.Success(result.value.withDeterministicRouteIds(limit))
+                            }
+                        } else {
+                            return NavigationResult.Success(
+                                previousPrimary.aggregateWith(result.value, limit),
+                            )
+                        }
+                    }
+                    is NavigationResult.Failure -> {
+                        lastFailure = result.reason
+                        val successfulPrimary = primaryPlan
+                        if (successfulPrimary != null) {
+                            return NavigationResult.Success(successfulPrimary.withDeterministicRouteIds(limit))
+                        }
+                        if (result.reason !is NavigationFailure.Offline &&
+                            result.reason !is NavigationFailure.ProviderUnavailable &&
+                            result.reason !is NavigationFailure.RateLimited
+                        ) {
+                            return result
+                        }
+                    }
+                }
+            }
+            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
+                ?: NavigationResult.Failure(lastFailure)
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (error: Exception) {
+            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
+                ?: NavigationResult.Failure(lastFailure)
+        }
+    }
+
+    private suspend fun routeFromEndpoint(
+        endpoint: String,
+        request: RouteRequest,
+        acceptLanguage: String,
+        alternativesLimit: Int,
+    ): NavigationResult<RoutePlan> = try {
         val origin = request.origin
         val destination = request.destination.coordinate
         val response = client.get {
             url(
-                "$OSRM_URL/${origin.longitude},${origin.latitude};" +
+                "$endpoint/${origin.longitude},${origin.latitude};" +
                     "${destination.longitude},${destination.latitude}",
             )
             parameter("overview", "full")
             parameter("geometries", "geojson")
             parameter("steps", true)
             parameter("alternatives", true)
-            header(HttpHeaders.AcceptLanguage, language.acceptLanguage)
+            header(HttpHeaders.AcceptLanguage, acceptLanguage)
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
         val body = response.readBoundedBody()
-        val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
-        response.toResult(body) { text -> decodeRoutePlan(text, request, limit) }
+        response.toResult(body) { text ->
+            decodeRoutePlan(text, request, alternativesLimit)
+        }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -158,6 +219,68 @@ class OsmNavigationRepository(
         }
         if (alternatives.isEmpty()) throw MalformedResponseException()
         return RoutePlan(request.destination, alternatives)
+    }
+
+    private fun RoutePlan.aggregateWith(other: RoutePlan, limit: Int): RoutePlan {
+        val alternatives = mutableListOf<RouteAlternative>()
+        (this.alternatives + other.alternatives).forEach { candidate ->
+            if (alternatives.size < limit && alternatives.none { it.isEquivalentTo(candidate) }) {
+                alternatives += candidate
+            }
+        }
+        return copy(
+            alternatives = alternatives.mapIndexed { index, route ->
+                route.withDeterministicId(index)
+            },
+        )
+    }
+
+    private fun RoutePlan.withDeterministicRouteIds(limit: Int): RoutePlan = copy(
+        alternatives = alternatives.take(limit).mapIndexed { index, route ->
+            route.withDeterministicId(index)
+        },
+    )
+
+    private fun RouteAlternative.withDeterministicId(index: Int): RouteAlternative {
+        val routeId = "osrm-route-${index + 1}"
+        return copy(
+            id = routeId,
+            maneuvers = maneuvers.mapIndexed { maneuverIndex, maneuver ->
+                val maneuverId = if (maneuverIndex == maneuvers.lastIndex && maneuver.kind == ManeuverKind.ARRIVE) {
+                    "$routeId-arrive"
+                } else {
+                    "$routeId-step-${maneuverIndex + 1}"
+                }
+                maneuver.copy(id = maneuverId)
+            },
+        )
+    }
+
+    private fun RouteAlternative.isEquivalentTo(other: RouteAlternative): Boolean {
+        val distanceTolerance = maxOf(
+            ROUTE_DISTANCE_TOLERANCE_METERS,
+            maxOf(distanceMeters, other.distanceMeters) * ROUTE_DISTANCE_TOLERANCE_RATIO,
+        )
+        val durationTolerance = maxOf(
+            ROUTE_DURATION_TOLERANCE_SECONDS.toDouble(),
+            maxOf(durationSeconds, other.durationSeconds).toDouble() * ROUTE_DURATION_TOLERANCE_RATIO,
+        )
+        return abs(distanceMeters - other.distanceMeters) <= distanceTolerance &&
+            abs(durationSeconds.toDouble() - other.durationSeconds.toDouble()) <= durationTolerance &&
+            geometriesEquivalent(geometry, other.geometry)
+    }
+
+    private fun geometriesEquivalent(
+        first: List<GeoCoordinate>,
+        second: List<GeoCoordinate>,
+    ): Boolean = first.all { point -> second.any { it.isWithinRouteToleranceOf(point) } } &&
+        second.all { point -> first.any { it.isWithinRouteToleranceOf(point) } }
+
+    private fun GeoCoordinate.isWithinRouteToleranceOf(other: GeoCoordinate): Boolean {
+        val latitudeDelta = latitude - other.latitude
+        val longitudeDelta = longitude - other.longitude
+        return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta <=
+            ROUTE_GEOMETRY_TOLERANCE_DEGREES * ROUTE_GEOMETRY_TOLERANCE_DEGREES
     }
 
     private fun decodeRouteAlternative(
@@ -469,11 +592,20 @@ class OsmNavigationRepository(
 
     private companion object {
         const val PHOTON_URL = "https://photon.komoot.io/api/"
-        const val OSRM_URL = "https://routing.openstreetmap.de/routed-bike/route/v1/driving"
-        const val USER_AGENT = "Volty/0.7.4 navigation (Photon + FOSSGIS OSRM)"
+        val OSRM_URLS = listOf(
+            "https://routing.openstreetmap.de/routed-car/route/v1/driving",
+            "https://router.project-osrm.org/route/v1/driving",
+        )
+        const val USER_AGENT = "Volty/0.7.4 navigation (Photon + OSM OSRM)"
         const val MAX_RESPONSE_CHARS = 2_000_000
         const val MAX_RESPONSE_BYTES = MAX_RESPONSE_CHARS * 4L + 1L
         const val MAX_ALTERNATIVES = 3
+        const val ROUTE_DISTANCE_TOLERANCE_METERS = 25.0
+        val WHITESPACE = Regex("\\s+")
+        const val ROUTE_DISTANCE_TOLERANCE_RATIO = 0.02
+        const val ROUTE_DURATION_TOLERANCE_SECONDS = 5L
+        const val ROUTE_DURATION_TOLERANCE_RATIO = 0.05
+        const val ROUTE_GEOMETRY_TOLERANCE_DEGREES = 0.0002
         const val DEFAULT_RETRY_AFTER_SECONDS = 60L
         val SUPPORTED_PHOTON_LANGUAGES = setOf("default", "de", "en", "fr", "it")
         val json = Json {

@@ -29,7 +29,6 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
-import ru.sodovaya.volty.domain.navigation.RouteProfile
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -92,7 +91,7 @@ class LightNavigationComponentPlanningTest {
     }
 
     @Test
-    fun `route request requires a confirmed profile and a fresh origin`() = runTest(dispatcher) {
+    fun `route request uses the last known origin when it is stale`() = runTest(dispatcher) {
         Dispatchers.setMain(dispatcher)
         val navigation = FakeNavigationRepository()
         val location = FakeLocationRepository(
@@ -104,18 +103,12 @@ class LightNavigationComponentPlanningTest {
 
         component.onPlannerRequested()
         component.onPlaceSelected(place)
-        component.onProfileSelected(RouteProfile.LIGHT_EV)
-        component.onProfileConfirmed()
-        advanceUntilIdle()
-        assertTrue(navigation.routeRequests.isEmpty())
-
-        location.state.value = location.state.value.copy(
-            status = RideLocationStatus.Available(fix(capturedAt = 9_000L, accuracy = 10.0)),
-        )
-        component.onProfileConfirmed()
+        component.onRetry()
         advanceUntilIdle()
         assertEquals(1, navigation.routeRequests.size)
-        assertEquals(LocationConsumer.NAVIGATION, location.demands.single())
+        assertEquals(GeoCoordinate(56.83, 60.60), navigation.routeRequests.single().origin)
+        assertEquals(LocationUiStatus.STALE, component.state.value.locationStatus)
+        assertEquals(listOf(LocationConsumer.NAVIGATION), location.demands)
         component.onStopNavigation()
         advanceUntilIdle()
         assertTrue(location.demands.isEmpty())
@@ -124,7 +117,30 @@ class LightNavigationComponentPlanningTest {
     }
 
     @Test
-    fun `map demand waits for a granted permission and denied permission keeps search usable`() =
+    fun `route request started before the first fix retries once when a fix appears`() = runTest(dispatcher) {
+        Dispatchers.setMain(dispatcher)
+        val navigation = FakeNavigationRepository()
+        val location = FakeLocationRepository()
+        val component = component(navigation, location)
+
+        component.onPlannerRequested()
+        component.onPlaceSelected(place)
+        component.onRetry()
+        advanceUntilIdle()
+        assertTrue(navigation.routeRequests.isEmpty())
+
+        location.state.value = RideLocationState(
+            status = RideLocationStatus.Available(fix(capturedAt = 9_900L, accuracy = 10.0)),
+        )
+        advanceUntilIdle()
+
+        assertEquals(1, navigation.routeRequests.size)
+        assertIs<NavigationPhase.RouteReady>(component.state.value.phase)
+        component.close()
+    }
+
+    @Test
+    fun `map visibility starts location demand and denied permission keeps search usable`() =
         runTest(dispatcher) {
             Dispatchers.setMain(dispatcher)
             val navigation = FakeNavigationRepository()
@@ -134,10 +150,12 @@ class LightNavigationComponentPlanningTest {
             component.onPlannerRequested()
             component.onMapVisibilityChanged(true)
             advanceUntilIdle()
-            assertTrue(location.demands.isEmpty())
+            assertEquals(listOf(LocationConsumer.MAP), location.demands)
 
             component.onLocationPermissionResult(false)
             assertEquals(LocationUiStatus.PERMISSION_DENIED, component.state.value.locationStatus)
+            advanceUntilIdle()
+            assertTrue(location.demands.isEmpty())
             component.onQueryChanged("дом")
             advanceTimeBy(350L)
             advanceUntilIdle()
@@ -189,8 +207,7 @@ class LightNavigationComponentPlanningTest {
         val component = component(navigation, location, now = 10_000L)
         component.onPlannerRequested()
         component.onPlaceSelected(place)
-        component.onProfileSelected(RouteProfile.LIGHT_EV)
-        component.onProfileConfirmed()
+        component.onRetry()
         advanceUntilIdle()
 
         val failed = assertIs<NavigationPhase.Planning>(component.state.value.phase)
@@ -294,7 +311,6 @@ class LightNavigationComponentPlanningTest {
 
         fun fakePlan(): RoutePlan = ru.sodovaya.volty.domain.navigation.RoutePlan(
             destination = place,
-            profile = RouteProfile.LIGHT_EV,
             alternatives = listOf(
                 ru.sodovaya.volty.domain.navigation.RouteAlternative(
                     id = "route-1",

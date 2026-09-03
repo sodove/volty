@@ -8,6 +8,7 @@ internal enum class RootChromeDestination {
     BATTERY,
     GRAPH,
     NEARBY,
+    GROUP_MAP,
     SETTINGS,
     OTHER,
 }
@@ -24,6 +25,23 @@ internal fun bottomTabBarVisible(
     RootChromeDestination.BATTERY,
     RootChromeDestination.GRAPH,
     RootChromeDestination.NEARBY,
+    RootChromeDestination.GROUP_MAP,
     RootChromeDestination.SETTINGS -> true
     RootChromeDestination.OTHER -> false
 }
+
+internal fun shouldShowGroupMapTab(
+    destination: RootChromeDestination,
+    groupMapVisible: Boolean,
+): Boolean = groupMapVisible && destination == RootChromeDestination.GROUP_MAP
+
+internal data class GroupMapBackAction(
+    val shouldPop: Boolean,
+    val clearsSocialRuntime: Boolean,
+)
+
+internal fun groupMapBackAction(hasPreviousDestination: Boolean): GroupMapBackAction =
+    GroupMapBackAction(
+        shouldPop = hasPreviousDestination,
+        clearsSocialRuntime = false,
+    )
