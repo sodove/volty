@@ -2,7 +2,6 @@ package ru.sodovaya.volty.domain.navigation.routing
 
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
-import kotlin.math.abs
 
 /**
  * Keeps the provider's first route as the primary choice and removes near-identical
@@ -11,8 +10,6 @@ import kotlin.math.abs
  */
 object RouteDiversityPolicy {
     private const val MAX_ALTERNATIVES = 3
-    private const val DISTANCE_TOLERANCE_METERS = 120.0
-    private const val DURATION_TOLERANCE_SECONDS = 20.0
     // Roughly 35–40 m on the latitude axis. A 70–80 m corridor tolerance was
     // collapsing genuinely parallel urban roads into one route.
     private const val GEOMETRY_TOLERANCE_DEGREES = 0.00035
@@ -37,9 +34,10 @@ object RouteDiversityPolicy {
     }
 
     private fun RouteAlternative.isEquivalentTo(other: RouteAlternative): Boolean {
-        return abs(distanceMeters - other.distanceMeters) <= DISTANCE_TOLERANCE_METERS &&
-            abs(durationSeconds.toDouble() - other.durationSeconds.toDouble()) <= DURATION_TOLERANCE_SECONDS &&
-            geometriesEquivalent(geometry, other.geometry)
+        // Distance and duration are route metadata, not route identity. They can
+        // differ after costing/style changes even when the provider returned the
+        // same road sequence, so they must not create a fake alternative.
+        return geometriesEquivalent(geometry, other.geometry)
     }
 
     private fun geometriesEquivalent(

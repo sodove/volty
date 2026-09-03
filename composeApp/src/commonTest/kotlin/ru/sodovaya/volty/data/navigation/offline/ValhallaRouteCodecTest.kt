@@ -93,7 +93,7 @@ class ValhallaRouteCodecTest {
                   "summary": {"length": 1.4, "time": 100},
                   "legs": [{
                     "summary": {"length": 1.4, "time": 100},
-                    "shape": "_sflkB_|irrB_pR_pR",
+                    "shape": "_sflkB_|irrBonT_mV",
                     "maneuvers": [
                       {"type": 1, "instruction": "Начните движение", "begin_shape_index": 0, "length": 0.0},
                       {"type": 2, "instruction": "Вы прибыли", "begin_shape_index": 1, "length": 1.4}

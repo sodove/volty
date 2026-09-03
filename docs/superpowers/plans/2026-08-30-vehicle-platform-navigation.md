@@ -1189,3 +1189,12 @@ The same host also ran the exact request against the packaged Valhalla 3.6.3 ser
 `v0.1.5`: the status endpoint became ready, `alternates` was present, and three returned trips
 had distinct geometry hashes with lengths 1.834, 1.816, and 3.182 km. The one-shot container and
 temporary extract were removed after the smoke.
+
+### Execution checkpoint — geometry-only route deduplication — 2026-09-03
+
+The shared alternative filter no longer treats distance or duration as route identity. A provider
+can return the same road sequence with different metrics after costing/style changes; such a
+candidate must not consume one of the three alternative slots. The filter now compares only the
+bounded route geometry tolerance, while genuinely parallel corridors remain distinct. A fresh
+direct x86 JVM compile and five-method route-policy run passed, including a regression with the
+same geometry and deliberately different distance/time. No APK or Gradle build was run.

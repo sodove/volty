@@ -36,6 +36,24 @@ class RouteDiversityPolicyTest {
     }
 
     @Test
+    fun same_geometry_with_different_metrics_is_not_fake_diversity() {
+        val primary = route("primary", listOf(point(56.80, 60.50), point(56.81, 60.51)))
+        val sameRoadWithDifferentMetrics = primary.copy(
+            id = "same-road-different-metrics",
+            distanceMeters = 4_500.0,
+            durationSeconds = 900L,
+        )
+
+        assertEquals(
+            listOf("primary"),
+            RouteDiversityPolicy.select(
+                listOf(primary, sameRoadWithDifferentMetrics),
+                limit = 3,
+            ).map { it.id },
+        )
+    }
+
+    @Test
     fun nearby_parallel_corridors_are_not_collapsed_into_the_primary_route() {
         val primary = route(
             "primary",
