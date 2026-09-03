@@ -3,6 +3,9 @@ package ru.sodovaya.volty.domain.navigation.region
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
@@ -55,7 +58,14 @@ class OfflineFirstNavigationRepository(
     ): NavigationResult<List<PlaceCandidate>> {
         val catalogRefresh = ensureCatalog()
         val request = OfflineGeocoderRequestPolicy.create(query, near, languageTag)
-        if (request == null || near == null) return online.search(query, near, languageTag)
+        if (request == null) return online.search(query, near, languageTag)
+        if (near == null) {
+            return searchInstalledRegions(
+                request = request,
+                rawQuery = query,
+                languageTag = languageTag,
+            )
+        }
 
         return when (
             val decision = access(
@@ -173,6 +183,52 @@ class OfflineFirstNavigationRepository(
         preferences = preferences(),
         allowOnlineFallback = true,
     )
+
+    /**
+     * A location is helpful for ranking but is not a prerequisite for local
+     * autocomplete. Search every ready regional index concurrently when the
+     * caller has no current fix, then keep deterministic first-seen results.
+     */
+    private suspend fun searchInstalledRegions(
+        request: OfflineGeocoderRequest,
+        rawQuery: String,
+        languageTag: String,
+    ): NavigationResult<List<PlaceCandidate>> {
+        val regionIds = packages.states.value
+            .asSequence()
+            .filter { it.status == OfflineRegionPackageStatus.READY ||
+                it.status == OfflineRegionPackageStatus.UPDATE_AVAILABLE }
+            .map { it.region.regionId }
+            .distinct()
+            .sorted()
+            .toList()
+        if (regionIds.isEmpty()) {
+            return if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+                NavigationResult.Failure(NavigationFailure.Offline)
+            } else {
+                online.search(rawQuery, null, languageTag)
+            }
+        }
+
+        val results = coroutineScope {
+            regionIds.map { regionId ->
+                async { runtime.search(regionId, request) }
+            }.awaitAll()
+        }
+        val candidates = LinkedHashMap<String, PlaceCandidate>()
+        results.forEach { result ->
+            if (result is NavigationResult.Success) {
+                result.value.forEach { candidate ->
+                    candidates.putIfAbsent(candidate.id, candidate)
+                }
+            }
+        }
+        if (candidates.isNotEmpty() || results.any { it is NavigationResult.Success }) {
+            return NavigationResult.Success(candidates.values.take(request.query.limit))
+        }
+        return results.filterIsInstance<NavigationResult.Failure>().firstOrNull()
+            ?: NavigationResult.Failure(NavigationFailure.Offline)
+    }
 
     private fun scheduleDownload(
         regionId: String,

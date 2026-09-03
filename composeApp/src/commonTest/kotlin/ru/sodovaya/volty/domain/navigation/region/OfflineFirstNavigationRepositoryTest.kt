@@ -90,6 +90,27 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun search_without_a_location_uses_every_installed_region() = runTest {
+        val packages = FakePackages(
+            status = OfflineRegionPackageStatus.READY,
+            regionIds = listOf("ekb", "tyumen"),
+        )
+        val online = FakeNavigation()
+        val runtime = FakeRuntime()
+        val repository = repository(packages, online, runtime)
+
+        val result = repository.search("Плотинка", near = null, languageTag = "ru-RU")
+
+        assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result)
+        assertEquals(listOf("ekb", "tyumen"), runtime.searchRegions)
+        assertEquals(
+            listOf("ekb:place", "shared", "tyumen:place"),
+            assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result).value.map { it.id },
+        )
+        assertEquals(0, online.searchCalls)
+    }
+
+    @Test
     fun metered_missing_region_stays_online_and_enters_download_queue_for_confirmation() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
@@ -144,15 +165,21 @@ class OfflineFirstNavigationRepositoryTest {
         catalogLoadedOnStart: Boolean = true,
         private val catalogRefreshGate: CompletableDeferred<Unit>? = null,
         private var catalogRefreshFailures: Int = 0,
+        private val regionIds: List<String> = listOf("ekb"),
     ) : OfflineRegionPackageRepository {
-        private val region = OfflineRegionManifest(
-            "ekb",
-            "Екатеринбург",
-            OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
-        )
         private val _states = MutableStateFlow(
             if (catalogLoadedOnStart) {
-                listOf(OfflineRegionPackageState(region, null, status))
+                regionIds.map { regionId ->
+                    OfflineRegionPackageState(
+                        OfflineRegionManifest(
+                            regionId,
+                            regionId,
+                            OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
+                        ),
+                        null,
+                        status,
+                    )
+                }
             } else {
                 emptyList()
             },
@@ -167,7 +194,17 @@ class OfflineFirstNavigationRepositoryTest {
                 throw IOException("temporary catalog failure")
             }
             if (_states.value.isEmpty()) {
-                _states.value = listOf(OfflineRegionPackageState(region, null, status))
+                _states.value = regionIds.map { regionId ->
+                    OfflineRegionPackageState(
+                        OfflineRegionManifest(
+                            regionId,
+                            regionId,
+                            OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
+                        ),
+                        null,
+                        status,
+                    )
+                }
             }
         }
 
@@ -199,8 +236,24 @@ class OfflineFirstNavigationRepositoryTest {
 
     private class FakeRuntime : OfflineRegionRuntime {
         var routeCalls = 0
+        val searchRegions = mutableListOf<String>()
         override suspend fun search(regionId: String, request: OfflineGeocoderRequest): NavigationResult<List<PlaceCandidate>> =
-            NavigationResult.Success(emptyList())
+            NavigationResult.Success(
+                listOf(
+                    PlaceCandidate(
+                        id = "$regionId:place",
+                        title = "Place",
+                        subtitle = regionId,
+                        coordinate = GeoCoordinate(56.84, 60.61),
+                    ),
+                    PlaceCandidate(
+                        id = "shared",
+                        title = "Shared",
+                        subtitle = null,
+                        coordinate = GeoCoordinate(56.85, 60.62),
+                    ),
+                ),
+            ).also { searchRegions += regionId }
         override suspend fun routes(regionId: String, request: RouteRequest): NavigationResult<RoutePlan> {
             routeCalls++
             return NavigationResult.Success(RoutePlan(request.destination, listOf(route())))

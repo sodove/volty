@@ -999,3 +999,14 @@ when installing and when reconstructing an active package after restart. The pub
 the same default and exposes `--routing-data-version` for a deliberate, reviewed engine upgrade;
 its mismatch regression test and Python 3 compile check pass. A direct store install cannot create
 a `READY` package for an incompatible core even if a future caller bypasses the repository.
+
+### Execution checkpoint — location-independent offline autocomplete — 2026-09-03
+
+Offline autocomplete no longer requires a current GPS fix. When the query is valid and at least one
+regional package is `READY` or `UPDATE_AVAILABLE`, the repository queries every distinct installed
+region's local FTS index concurrently, merges results in deterministic region order, removes duplicate
+candidate IDs, and applies the requested result limit. With a location, the existing coverage-based
+single-region path remains in place for fast proximity ranking. If no region is installed, the
+location-free request keeps the existing online fallback while connected and returns the typed offline
+failure without a network call when fully offline. A common repository test covers two installed
+regions, concurrent fan-out, deterministic merge, deduplication, and the zero-online-call contract.
