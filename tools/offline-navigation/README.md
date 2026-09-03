@@ -85,3 +85,18 @@ compiler used to turn OSM data into the regional extract; it does not rebuild
 the mobile runtime. If the mobile engine changes, pass an explicit
 `--routing-data-version` and reviewed `VALHALLA_IMAGE` together so the manifest
 cannot silently describe data built by another engine version.
+
+For a production APK, pass the explicit Gradle gate together with the real
+HTTPS catalog, the Base64 raw 32-byte Ed25519 public key, its key ID, and the
+release keystore secrets:
+
+```powershell
+.\gradlew.bat :composeApp:assembleRelease `
+  -PvoltyProductionRelease=true `
+  -PvoltyOfflineCatalogUrl=https://cdn.example/volty/catalog.json `
+  -PvoltyOfflineManifestKeyId=volty-regions-2026 `
+  -PvoltyOfflineManifestPublicKey=<base64-public-key>
+```
+
+Without `voltyProductionRelease=true`, ordinary development builds may keep
+the offline catalog inert; that mode must not be used for a production rollout.

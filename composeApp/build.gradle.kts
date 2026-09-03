@@ -1,7 +1,12 @@
+import java.util.Base64
 import java.util.Properties
 
 val appVersionCode = 28
 val appVersionName = "0.7.6"
+val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
+    value.toBooleanStrictOrNull()
+        ?: error("voltyProductionRelease must be true or false")
+} ?: false
 val offlineCatalogUrl = providers.gradleProperty("voltyOfflineCatalogUrl").orNull.orEmpty()
 val offlineManifestKeyId = providers.gradleProperty("voltyOfflineManifestKeyId").orNull.orEmpty()
 val offlineManifestPublicKey = providers.gradleProperty("voltyOfflineManifestPublicKey").orNull.orEmpty()
@@ -83,8 +88,8 @@ android {
     // without OS env vars), falling back to environment variables for CI.
     // Properties: storeFile (root-relative), storePassword, keyAlias, keyPassword.
     // See keystore.properties.example. When neither source provides a usable
-    // keystore (fresh clone / CI without secrets) the release config is skipped
-    // and debug falls back to the default debug keystore so the build still works.
+    // keystore (fresh clone / CI without secrets) ordinary development builds
+    // remain usable; the explicit production gate below fails closed.
     val keystoreProps = Properties().apply {
         val f = rootProject.file("keystore.properties")
         if (f.exists()) f.inputStream().use { load(it) }
@@ -95,15 +100,38 @@ android {
     val storeFilePath = signingSecret("storeFile", "VOLTY_KEYSTORE_FILE") ?: "123.jks"
     val releaseStoreFile = rootProject.file(storeFilePath)
     val releaseStorePassword = signingSecret("storePassword", "VOLTY_KEYSTORE_PASSWORD")
-    val hasReleaseKeystore = releaseStoreFile.exists() && releaseStorePassword != null
+    val releaseKeyAlias = signingSecret("keyAlias", "VOLTY_KEY_ALIAS")
+    val releaseKeyPassword = signingSecret("keyPassword", "VOLTY_KEY_PASSWORD")
+    val hasReleaseKeystore = releaseStoreFile.exists() &&
+        !releaseStorePassword.isNullOrBlank() &&
+        !releaseKeyAlias.isNullOrBlank() &&
+        !releaseKeyPassword.isNullOrBlank()
+
+    if (productionReleaseGate) {
+        require(hasReleaseKeystore) {
+            "Production release requires a configured release keystore"
+        }
+        require(offlineCatalogUrl.startsWith("https://")) {
+            "Production release requires -PvoltyOfflineCatalogUrl=https://..."
+        }
+        require(offlineManifestKeyId.isNotBlank() && offlineManifestKeyId != "UNSIGNED_DEV") {
+            "Production release requires -PvoltyOfflineManifestKeyId"
+        }
+        val publicKey = runCatching {
+            Base64.getDecoder().decode(offlineManifestPublicKey)
+        }.getOrNull()
+        require(publicKey?.size == 32) {
+            "Production release requires a Base64 Ed25519 public key (32 raw bytes)"
+        }
+    }
 
     signingConfigs {
         if (hasReleaseKeystore) {
             create("release") {
                 storeFile = releaseStoreFile
                 storePassword = releaseStorePassword
-                keyAlias = signingSecret("keyAlias", "VOLTY_KEY_ALIAS")
-                keyPassword = signingSecret("keyPassword", "VOLTY_KEY_PASSWORD")
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
             }
         }
     }

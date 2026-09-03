@@ -1092,3 +1092,10 @@ as storage failure. If startup catalog discovery fails before any region is
 published, Android retries it once connectivity returns with a 30-second
 cooldown, so automatic regional download does not depend on opening Settings.
 Host tool tests and Python compilation pass. No APK/Gradle build was run.
+
+The Gradle script now has an explicit `voltyProductionRelease=true` gate. It
+fails closed when a production invocation lacks a real release keystore, an
+HTTPS catalog URL, a non-development manifest key ID, or a valid Base64 raw
+Ed25519 public key. The default developer build behavior remains unchanged;
+this gate was inspected but not executed because application builds are still
+paused.
