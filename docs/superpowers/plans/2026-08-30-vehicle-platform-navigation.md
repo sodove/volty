@@ -1158,4 +1158,9 @@ packaged Valhalla service again returned three distinct route summaries
 pilot artifact with a placeholder CDN URL; it is not a production catalog
 release.
 
+As a separate publisher smoke, that manifest was signed with a throwaway
+Ed25519 key and accepted by `build-catalog.py` as a one-region schema-2 catalog;
+both the manifest and catalog carried the same non-development key ID. The key
+and temporary signed outputs were deleted on the remote host.
+
 No APK/Gradle build was run.
