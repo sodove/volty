@@ -19,15 +19,18 @@ data class BRouterProfileOverrides(
     val considerForest: Boolean,
     val considerTown: Boolean,
 ) {
-    fun asKeyValues(): Map<String, String> = mapOf(
+    /** BRouter consumes and mutates this map while parsing the profile. */
+    fun asKeyValues(): MutableMap<String, String> = mutableMapOf(
         "vmax" to topSpeedKph.toString(),
-        "avoid_toll" to avoidTolls.toString(),
-        "avoid_unpaved" to avoidUnpaved.toString(),
-        "avoid_motorways" to avoidMotorways.toString(),
-        "consider_river" to considerRiver.toString(),
-        "consider_forest" to considerForest.toString(),
-        "consider_town" to considerTown.toString(),
+        "avoid_toll" to avoidTolls.asBRouterBoolean(),
+        "avoid_unpaved" to avoidUnpaved.asBRouterBoolean(),
+        "avoid_motorways" to avoidMotorways.asBRouterBoolean(),
+        "consider_river" to considerRiver.asBRouterBoolean(),
+        "consider_forest" to considerForest.asBRouterBoolean(),
+        "consider_town" to considerTown.asBRouterBoolean(),
     )
+
+    private fun Boolean.asBRouterBoolean(): String = if (this) "1" else "0"
 }
 
 object BRouterRouteProfilePolicy {

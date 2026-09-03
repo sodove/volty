@@ -16,10 +16,10 @@ class BRouterRouteProfilePolicyTest {
         ).asKeyValues()
 
         assertEquals("130", values["vmax"])
-        assertEquals("false", values["avoid_motorways"])
-        assertEquals("false", values["consider_river"])
-        assertEquals("false", values["consider_forest"])
-        assertEquals("false", values["consider_town"])
+        assertEquals("0", values["avoid_motorways"])
+        assertEquals("0", values["consider_river"])
+        assertEquals("0", values["consider_forest"])
+        assertEquals("0", values["consider_town"])
     }
 
     @Test
@@ -38,7 +38,7 @@ class BRouterRouteProfilePolicyTest {
 
         val touring = BRouterRouteProfilePolicy.overrides(RouteStyle.MAX_CURVY_TOURING, preferences)
         assertTrue(touring.considerTown)
-        assertEquals("true", touring.asKeyValues()["avoid_toll"])
-        assertEquals("true", touring.asKeyValues()["avoid_unpaved"])
+        assertEquals("1", touring.asKeyValues()["avoid_toll"])
+        assertEquals("1", touring.asKeyValues()["avoid_unpaved"])
     }
 }
