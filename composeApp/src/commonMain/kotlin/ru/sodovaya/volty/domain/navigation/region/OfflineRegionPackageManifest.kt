@@ -347,5 +347,4 @@ object OfflineRegionPackageManifestPolicy {
     private val RELEASE_VERSION_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
     private val RESERVED_KEY_IDS = setOf("UNSIGNED_DEV", "UNSIGNED")
-    private const val UNSIGNED_VALUE = "UNSIGNED"
 }
