@@ -1099,3 +1099,11 @@ HTTPS catalog URL, a non-development manifest key ID, or a valid Base64 raw
 Ed25519 public key. The default developer build behavior remains unchanged;
 this gate was inspected but not executed because application builds are still
 paused.
+
+The catalog envelope is now signed with the same external Ed25519 key as its
+release manifests. The publisher verifies that the signing and verification
+keys match, emits schema version 2 with `catalogSignature`, and the Android
+repository rejects a catalog whose signature does not verify before publishing
+its regions. Existing release-manifest verification remains in place. Focused
+catalog codec/policy coverage still needs to run in the app test suite when
+Gradle builds are allowed again.

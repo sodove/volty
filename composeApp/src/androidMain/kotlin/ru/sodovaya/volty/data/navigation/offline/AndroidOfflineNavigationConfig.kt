@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.navigation.offline
 
 import android.content.Context
 import android.content.pm.PackageManager
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalog
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 
@@ -26,6 +28,12 @@ data class AndroidOfflineNavigationConfig(
         DisabledOfflineManifestVerifier
     }
 
+    fun catalogVerifier(): OfflineRegionCatalogVerifier = if (enabled) {
+        AndroidEd25519ManifestVerifier(keyId, publicKeyBase64)
+    } else {
+        DisabledOfflineCatalogVerifier
+    }
+
     companion object {
         private const val CATALOG_URL = "ru.sodovaya.volty.offline.catalog_url"
         private const val KEY_ID = "ru.sodovaya.volty.offline.manifest_key_id"
@@ -46,4 +54,8 @@ data class AndroidOfflineNavigationConfig(
 
 private object DisabledOfflineManifestVerifier : OfflineRegionManifestVerifier {
     override fun verify(manifest: OfflineRegionPackageManifest): Boolean = false
+}
+
+private object DisabledOfflineCatalogVerifier : OfflineRegionCatalogVerifier {
+    override fun verify(catalog: OfflineRegionCatalog): Boolean = false
 }

@@ -15,7 +15,9 @@ from typing import Any
 from urllib.parse import urlparse
 
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 EXPECTED_ROUTING_DATA_VERSION = "valhalla-3.6.3"
 EXPECTED_SCHEMA_VERSION = 2
@@ -68,6 +70,19 @@ def canonical_payload(manifest: dict[str, Any]) -> bytes:
             component = components.get(component_name)
             if isinstance(component, dict) and component.get("compression") is None:
                 component.pop("compression", None)
+    return json.dumps(
+        unsigned,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def canonical_catalog_payload(catalog: dict[str, Any]) -> bytes:
+    """Match OfflineRegionCatalogCodec.signingPayload byte-for-byte."""
+
+    unsigned = copy.deepcopy(catalog)
+    unsigned.pop("catalogSignature", None)
     return json.dumps(
         unsigned,
         ensure_ascii=False,
@@ -255,6 +270,33 @@ def load_public_key(path: Path) -> Ed25519PublicKey:
     return Ed25519PublicKey.from_public_bytes(raw)
 
 
+def load_private_key(path: Path) -> Ed25519PrivateKey:
+    from cryptography.hazmat.primitives.serialization import load_pem_private_key
+
+    key = load_pem_private_key(path.read_bytes(), password=None)
+    if not isinstance(key, Ed25519PrivateKey):
+        raise ValueError(f"{path}: private key must be an unencrypted Ed25519 PEM key")
+    return key
+
+
+def sign_catalog(
+    catalog: dict[str, Any],
+    private_key: Ed25519PrivateKey,
+    key_id: str,
+) -> dict[str, Any]:
+    if not key_id.strip() or key_id == "UNSIGNED_DEV":
+        raise ValueError("catalog signing key ID must identify a production key")
+    signature = private_key.sign(canonical_catalog_payload(catalog))
+    signed = copy.deepcopy(catalog)
+    signed["catalogSignature"] = {
+        "keyId": key_id,
+        "algorithm": "ed25519",
+        "value": base64.b64encode(signature).decode("ascii"),
+    }
+    private_key.public_key().verify(signature, canonical_catalog_payload(signed))
+    return signed
+
+
 def build_catalog(
     spec_path: Path,
     generated_at: str | None,
@@ -319,9 +361,14 @@ def build_catalog(
         )
 
     return {
-        "schemaVersion": 1,
+        "schemaVersion": 2,
         "generatedAt": generated_at or datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
         "regions": catalog_entries,
+        "catalogSignature": {
+            "keyId": "UNSIGNED_DEV",
+            "algorithm": "ed25519",
+            "value": "UNSIGNED",
+        },
     }
 
 
@@ -334,6 +381,12 @@ def main() -> int:
         type=Path,
         required=True,
         help="Ed25519 public key (raw 32 bytes or Base64) for publisher-side verification",
+    )
+    parser.add_argument(
+        "--private-key",
+        type=Path,
+        required=True,
+        help="unencrypted Ed25519 PEM key used to sign the generated catalog",
     )
     parser.add_argument("--key-id", required=True, help="expected production manifest key id")
     parser.add_argument(
@@ -350,14 +403,28 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    public_key = load_public_key(args.public_key)
+    private_key = load_private_key(args.private_key)
+    private_public_key = private_key.public_key().public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    configured_public_key = public_key.public_bytes(
+        serialization.Encoding.Raw,
+        serialization.PublicFormat.Raw,
+    )
+    if private_public_key != configured_public_key:
+        raise ValueError("catalog signing key does not match the manifest verification key")
+
     catalog = build_catalog(
         args.spec,
         args.generated_at,
         expected_routing_data_version=args.routing_data_version,
-        public_key=load_public_key(args.public_key),
+        public_key=public_key,
         expected_key_id=args.key_id,
         current_app_version_code=args.current_app_version_code,
     )
+    catalog = sign_catalog(catalog, private_key, args.key_id)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_name(f".{args.output.name}.tmp")
     temporary.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

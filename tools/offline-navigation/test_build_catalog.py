@@ -151,6 +151,28 @@ class BuildCatalogTest(unittest.TestCase):
                     current_app_version_code=28,
                 )
 
+    def test_signs_the_catalog_and_keeps_the_key_aligned(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, key = self.signed_manifest()
+            spec_path = self.write_spec(root, manifest)
+            catalog = MODULE.build_catalog(
+                spec_path,
+                generated_at="2026-09-03T00:00:00Z",
+                public_key=key.public_key(),
+                expected_key_id="release-key",
+                current_app_version_code=28,
+            )
+
+            signed = MODULE.sign_catalog(catalog, key, "release-key")
+            signature = base64.b64decode(signed["catalogSignature"]["value"])
+            key.public_key().verify(signature, MODULE.canonical_catalog_payload(signed))
+            self.assertEqual("release-key", signed["catalogSignature"]["keyId"])
+
+    def test_catalog_signing_rejects_a_development_key_id(self):
+        with self.assertRaisesRegex(ValueError, "production key"):
+            MODULE.sign_catalog({}, Ed25519PrivateKey.generate(), "UNSIGNED_DEV")
+
 
 if __name__ == "__main__":
     unittest.main()

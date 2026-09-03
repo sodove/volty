@@ -20,6 +20,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineFirstNavigationRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRuntime
 import ru.sodovaya.volty.data.prefs.AppPrefs
@@ -60,6 +61,9 @@ val androidModule = module {
     single<OfflineRegionManifestVerifier> {
         get<AndroidOfflineNavigationConfig>().verifier()
     }
+    single<OfflineRegionCatalogVerifier> {
+        get<AndroidOfflineNavigationConfig>().catalogVerifier()
+    }
     single {
         AndroidOfflineRegionPackageStore(
             context = androidContext(),
@@ -73,6 +77,7 @@ val androidModule = module {
             catalogUrl = get<AndroidOfflineNavigationConfig>().catalogUrl,
             currentAppVersionCode = get<Int>(named(APP_VERSION_CODE)),
             manifestVerifier = get(),
+            catalogVerifier = get(),
             packageStore = get(),
             preferences = {
                 OfflineDownloadPreferences(

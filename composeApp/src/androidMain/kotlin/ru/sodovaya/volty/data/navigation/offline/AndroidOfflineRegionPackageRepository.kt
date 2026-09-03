@@ -30,6 +30,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogCodec
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogPolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogSignaturePolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogEntry
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanFactory
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
@@ -53,6 +54,7 @@ class AndroidOfflineRegionPackageRepository(
     private val catalogUrl: String,
     private val currentAppVersionCode: Int,
     private val manifestVerifier: OfflineRegionManifestVerifier,
+    private val catalogVerifier: OfflineRegionCatalogVerifier,
     private val packageStore: AndroidOfflineRegionPackageStore,
     private val preferences: () -> OfflineDownloadPreferences = { OfflineDownloadPreferences() },
     private val userAgent: String = "Volty/0.7 offline-region-repository",
@@ -297,6 +299,9 @@ class AndroidOfflineRegionPackageRepository(
                 ?: throw IOException("Catalog is malformed")
             val errors = OfflineRegionCatalogPolicy.validate(loaded, currentAppVersionCode)
             if (errors.isNotEmpty()) throw IOException("Catalog validation failed")
+            if (!OfflineRegionCatalogSignaturePolicy.isVerified(loaded, catalogVerifier)) {
+                throw IOException("Catalog signature verification failed")
+            }
             val unverified = OfflineRegionCatalogSignaturePolicy.unverifiedReleaseIds(
                 catalog = loaded,
                 verifier = manifestVerifier,

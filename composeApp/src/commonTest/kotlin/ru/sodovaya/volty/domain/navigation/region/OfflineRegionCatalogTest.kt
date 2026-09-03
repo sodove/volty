@@ -11,8 +11,9 @@ class OfflineRegionCatalogTest {
         val result = OfflineRegionCatalogCodec.parse(
             """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "generatedAt": "2026-09-03T00:00:00Z",
+              "catalogSignature": {"keyId": "key", "algorithm": "ed25519", "value": "signature"},
               "regions": [{
                 "region": {
                   "regionId": "ru-sve-ekb",
@@ -35,8 +36,9 @@ class OfflineRegionCatalogTest {
         val result = OfflineRegionCatalogCodec.parse(
             """
             {
-              "schemaVersion": 1,
+              "schemaVersion": 2,
               "generatedAt": "2026-09-03T00:00:00Z",
+              "catalogSignature": {"keyId": "key", "algorithm": "ed25519", "value": "signature"},
               "regions": [],
               "unexpected": true
             }
@@ -51,7 +53,7 @@ class OfflineRegionCatalogTest {
         val region = region("ru-sve-ekb")
         val errors = OfflineRegionCatalogPolicy.validate(
             OfflineRegionCatalog(
-                schemaVersion = 1,
+                schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
                 regions = listOf(
                     OfflineRegionCatalogEntry(region, null),
@@ -60,6 +62,7 @@ class OfflineRegionCatalogTest {
                         release(regionId = "ru-sve-other"),
                     ),
                 ),
+                signature = catalogSignature(),
             ),
             currentAppVersionCode = 28,
         )
@@ -77,9 +80,10 @@ class OfflineRegionCatalogTest {
     fun validation_accepts_catalog_without_downloadable_releases() {
         val result = OfflineRegionCatalogPolicy.validate(
             OfflineRegionCatalog(
-                schemaVersion = 1,
+                schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
                 regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null)),
+                signature = catalogSignature(),
             ),
             currentAppVersionCode = 28,
         )
@@ -88,11 +92,27 @@ class OfflineRegionCatalogTest {
     }
 
     @Test
+    fun validation_rejects_an_unsigned_catalog_envelope() {
+        val errors = OfflineRegionCatalogPolicy.validate(
+            OfflineRegionCatalog(
+                schemaVersion = 2,
+                generatedAt = "2026-09-03T00:00:00Z",
+                regions = emptyList(),
+                signature = OfflineRegionCatalogSignature("UNSIGNED_DEV", "ed25519", "UNSIGNED"),
+            ),
+            currentAppVersionCode = 28,
+        )
+
+        assertEquals(OfflineRegionCatalogErrorCode.INVALID_SIGNATURE, errors.single().code)
+    }
+
+    @Test
     fun signature_policy_rejects_unverified_latest_releases_before_download() {
         val catalog = OfflineRegionCatalog(
-            schemaVersion = 1,
+            schemaVersion = 2,
             generatedAt = "2026-09-03T00:00:00Z",
             regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), release())),
+            signature = catalogSignature(),
         )
 
         val unverified = OfflineRegionCatalogSignaturePolicy.unverifiedReleaseIds(
@@ -110,9 +130,10 @@ class OfflineRegionCatalogTest {
         )
         val errors = OfflineRegionCatalogPolicy.validate(
             OfflineRegionCatalog(
-                schemaVersion = 1,
+                schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
                 regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), release)),
+                signature = catalogSignature(),
             ),
             currentAppVersionCode = 28,
         )
@@ -128,6 +149,8 @@ class OfflineRegionCatalogTest {
         displayName = "Екатеринбург",
         bounds = OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
     )
+
+    private fun catalogSignature() = OfflineRegionCatalogSignature("key", "ed25519", "signature")
 
     private fun release(regionId: String = "ru-sve-ekb") = OfflineRegionPackageManifest(
         schemaVersion = 2,

@@ -48,6 +48,7 @@ inside the spec are relative to that spec file:
 ```bash
 python3 build-catalog.py --spec regions.json --output catalog.json \
   --public-key /secure/volty-regions-ed25519.public.b64 \
+  --private-key /secure/volty-regions-ed25519.pem \
   --key-id volty-regions-2026 \
   --current-app-version-code 28
 ```
@@ -57,8 +58,9 @@ against the expected Ed25519 public key and key ID, then applies the same
 schema, Valhalla engine/data version, app-version, artifact, HTTPS, map, and
 search compatibility gates used by the Android package policy. It also rejects
 duplicate regions, invalid bounds, mismatched IDs, and logical bounds outside
-the signed release coverage. The catalog itself is served over HTTPS; each
-release manifest is verified independently by the Android public key before
+the signed release coverage. The resulting catalog is signed with the same
+key, and the app verifies that signature before publishing catalog regions into
+local state; each release manifest is then verified independently before
 installation.
 
 The current pilot bbox is the EKB agglomeration with a routing buffer:

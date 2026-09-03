@@ -1,8 +1,12 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlin.time.Instant
 
 @Serializable
@@ -10,6 +14,15 @@ data class OfflineRegionCatalog(
     val schemaVersion: Int,
     val generatedAt: String,
     val regions: List<OfflineRegionCatalogEntry>,
+    @SerialName("catalogSignature")
+    val signature: OfflineRegionCatalogSignature,
+)
+
+@Serializable
+data class OfflineRegionCatalogSignature(
+    val keyId: String,
+    val algorithm: String,
+    val value: String,
 )
 
 @Serializable
@@ -46,11 +59,19 @@ object OfflineRegionCatalogCodec {
     }
 
     fun encode(catalog: OfflineRegionCatalog): String = json.encodeToString(catalog)
+
+    /** Stable UTF-8 payload used by the catalog Ed25519 signature verifier. */
+    fun signingPayload(catalog: OfflineRegionCatalog): String {
+        val unsignedObject = json.encodeToJsonElement(catalog).jsonObject.toMutableMap()
+        unsignedObject.remove("catalogSignature")
+        return json.encodeToString(JsonObject(unsignedObject))
+    }
 }
 
 enum class OfflineRegionCatalogErrorCode {
     UNSUPPORTED_SCHEMA_VERSION,
     INVALID_GENERATED_AT,
+    INVALID_SIGNATURE,
     DUPLICATE_REGION_ID,
     RELEASE_REGION_MISMATCH,
     REGION_BOUNDS_MISMATCH,
@@ -63,7 +84,7 @@ data class OfflineRegionCatalogValidationError(
 )
 
 object OfflineRegionCatalogPolicy {
-    const val CURRENT_SCHEMA_VERSION: Int = 1
+    const val CURRENT_SCHEMA_VERSION: Int = 2
 
     fun validate(
         catalog: OfflineRegionCatalog,
@@ -80,6 +101,17 @@ object OfflineRegionCatalogPolicy {
             errors += OfflineRegionCatalogValidationError(
                 OfflineRegionCatalogErrorCode.INVALID_GENERATED_AT,
                 catalog.generatedAt,
+            )
+        }
+        if (catalog.signature.keyId.isBlank() ||
+            catalog.signature.algorithm.lowercase() != "ed25519" ||
+            catalog.signature.value.isBlank() ||
+            catalog.signature.keyId == UNSIGNED_KEY_ID ||
+            catalog.signature.value == UNSIGNED_VALUE
+        ) {
+            errors += OfflineRegionCatalogValidationError(
+                OfflineRegionCatalogErrorCode.INVALID_SIGNATURE,
+                catalog.signature.keyId,
             )
         }
 
@@ -127,6 +159,14 @@ object OfflineRegionCatalogPolicy {
             this[2] >= bounds.east &&
             this[3] >= bounds.north
     }
+
+    private const val UNSIGNED_KEY_ID = "UNSIGNED_DEV"
+    private const val UNSIGNED_VALUE = "UNSIGNED"
+}
+
+/** Platform-provided verifier for the catalog envelope itself. */
+fun interface OfflineRegionCatalogVerifier {
+    fun verify(catalog: OfflineRegionCatalog): Boolean
 }
 
 /**
@@ -137,6 +177,11 @@ object OfflineRegionCatalogPolicy {
  * this gate before downloading any advertised artifact.
  */
 object OfflineRegionCatalogSignaturePolicy {
+    fun isVerified(
+        catalog: OfflineRegionCatalog,
+        verifier: OfflineRegionCatalogVerifier,
+    ): Boolean = runCatching { verifier.verify(catalog) }.getOrDefault(false)
+
     fun unverifiedReleaseIds(
         catalog: OfflineRegionCatalog,
         verifier: OfflineRegionManifestVerifier,
