@@ -64,7 +64,9 @@ by digest in `build-package.sh`/`Dockerfile`. A release may override them only
 with an explicitly reviewed digest. Do not commit downloaded tiles or signing
 keys to this repository.
 
-The default routing image is the amd64 Valhalla 3.6.3 image used by the
-published `valhalla-mobile:0.6.3` AAR. If the mobile engine changes, pass an
-explicit `--routing-data-version` and reviewed `VALHALLA_IMAGE` together so
-the manifest cannot silently describe data built by another engine version.
+The app consumes the already-built Android `io.github.rallista:valhalla-mobile:0.6.3`
+AAR. The pinned amd64 Valhalla 3.6.3 image below is only the host-side tile
+compiler used to turn OSM data into the regional extract; it does not rebuild
+the mobile runtime. If the mobile engine changes, pass an explicit
+`--routing-data-version` and reviewed `VALHALLA_IMAGE` together so the manifest
+cannot silently describe data built by another engine version.

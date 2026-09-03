@@ -977,7 +977,9 @@ the pinned amd64 Valhalla 3.6.3 image and records `valhalla-3.6.3` in new manife
 
 The pilot package was rebuilt on `sodovaya@192.168.1.141` as
 `/home/sodovaya/volty-navigation-build/ekb-package-v0.1.2` with the pinned Valhalla 3.6.3
-image and the ready mobile engine's declared routing-data version. The package verifier accepted
+tile compiler and the ready mobile engine's declared routing-data version. The app runtime is
+the already-built `io.github.rallista:valhalla-mobile:0.6.3` Android AAR; the Docker image only
+compiles regional OSM data and does not rebuild that mobile library. The package verifier accepted
 all three components and 276,841 FTS4 rows; the Valhalla 3.6.3 service smoke returned three trip
 branches including alternatives. The manifest reports 82,401,294 bytes downloaded and
 173,498,489 bytes installed: routing 23,657,305/70,583,783, search 14,176,803/58,347,520, and

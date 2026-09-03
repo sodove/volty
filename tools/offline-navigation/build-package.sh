@@ -22,8 +22,9 @@ MIN_APP_VERSION_CODE=""
 OSM_SEQUENCE=""
 OSM_TIMESTAMP=""
 TOOLS_IMAGE="${TOOLS_IMAGE:-volty/offline-tools:20260903}"
-# The published valhalla-mobile 0.6.3 AAR is built from Valhalla 3.6.3.
-# This is the amd64 image digest used by the reproducible Linux build host.
+# The app uses the already-built valhalla-mobile 0.6.3 Android AAR.
+# This amd64 image is only the reproducible Linux-side OSM tile compiler;
+# it must match the engine's tile format, but it does not build the AAR.
 VALHALLA_IMAGE="${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla@sha256:0cf1520c6a38b8a7e13a1931541e0ab6e9e42b64b4ca014293b6b8373d493160}"
 ROUTING_DATA_VERSION="${ROUTING_DATA_VERSION:-valhalla-3.6.3}"
 PMTILES_IMAGE="${PMTILES_IMAGE:-protomaps/go-pmtiles@sha256:a52c195560a656b8309311a7d591b90eb2c5ae55ec9111f26049371d86a22a69}"
