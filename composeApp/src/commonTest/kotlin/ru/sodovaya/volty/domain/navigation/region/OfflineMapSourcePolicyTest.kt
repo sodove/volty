@@ -35,7 +35,52 @@ class OfflineMapSourcePolicyTest {
             network = OfflineNetworkAvailability.METERED,
         )
 
-        assertEquals(OfflineMapSourceDecision.UseOnline, decision)
+        assertEquals(OfflineMapSourceDecision.UseOnlineAndWait("ekb"), decision)
+    }
+
+    @Test
+    fun incomplete_package_is_unavailable_when_network_drops() {
+        val decision = OfflineMapSourcePolicy.select(
+            viewport = viewport(),
+            packages = listOf(snapshot(OfflineRegionPackageStatus.DOWNLOADING)),
+            network = OfflineNetworkAvailability.OFFLINE,
+        )
+
+        assertEquals(OfflineMapSourceDecision.UnavailableOffline, decision)
+    }
+
+    @Test
+    fun missing_region_starts_background_download_on_wifi_while_map_stays_online() {
+        val decision = OfflineMapSourcePolicy.select(
+            viewport = viewport(),
+            packages = listOf(snapshot(OfflineRegionPackageStatus.NOT_INSTALLED)),
+            network = OfflineNetworkAvailability.UNMETERED,
+        )
+
+        assertEquals(OfflineMapSourceDecision.UseOnlineAndStartDownload("ekb"), decision)
+    }
+
+    @Test
+    fun missing_region_requests_mobile_confirmation() {
+        val decision = OfflineMapSourcePolicy.select(
+            viewport = viewport(),
+            packages = listOf(snapshot(OfflineRegionPackageStatus.NOT_INSTALLED)),
+            network = OfflineNetworkAvailability.METERED,
+        )
+
+        assertEquals(OfflineMapSourceDecision.UseOnlineAndRequestMeteredApproval("ekb"), decision)
+    }
+
+    @Test
+    fun metered_setting_allows_background_map_download() {
+        val decision = OfflineMapSourcePolicy.select(
+            viewport = viewport(),
+            packages = listOf(snapshot(OfflineRegionPackageStatus.NOT_INSTALLED)),
+            network = OfflineNetworkAvailability.METERED,
+            preferences = OfflineDownloadPreferences(skipMeteredConfirmation = true),
+        )
+
+        assertEquals(OfflineMapSourceDecision.UseOnlineAndStartDownload("ekb"), decision)
     }
 
     @Test

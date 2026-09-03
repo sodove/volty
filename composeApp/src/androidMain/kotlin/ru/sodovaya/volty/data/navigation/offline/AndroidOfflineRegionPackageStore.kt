@@ -128,11 +128,22 @@ class AndroidOfflineRegionPackageStore(
 
     /** Creates a private, resumable download directory outside the active package tree. */
     fun createDownloadStaging(regionId: String, releaseVersion: String): File = synchronized(lock) {
+        require(REGION_ID_PATTERN.matches(regionId)) { "invalid region id" }
+        require(RELEASE_VERSION_PATTERN.matches(releaseVersion)) { "invalid release version" }
         val directory = File(File(root, DOWNLOADS_DIRECTORY), "$regionId-$releaseVersion")
         if (!directory.mkdirs() && !directory.isDirectory) {
             throw IOException("Could not create regional download staging directory")
         }
         directory
+    }
+
+    /** Returns existing resumable state without creating a directory on a read/refresh path. */
+    fun existingDownloadStaging(regionId: String, releaseVersion: String): File? = synchronized(lock) {
+        if (!REGION_ID_PATTERN.matches(regionId) || !RELEASE_VERSION_PATTERN.matches(releaseVersion)) {
+            return@synchronized null
+        }
+        File(File(root, DOWNLOADS_DIRECTORY), "$regionId-$releaseVersion")
+            .takeIf { it.isDirectory && isChildOf(it, File(root, DOWNLOADS_DIRECTORY)) }
     }
 
     fun discardDownloadStaging(directory: File) = synchronized(lock) {
@@ -441,6 +452,7 @@ class AndroidOfflineRegionPackageStore(
         const val TAR_BLOCK_SIZE = 512
         const val COPY_BUFFER_SIZE = 64 * 1024
         val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
+        val RELEASE_VERSION_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
         val PACKAGE_NAME_PATTERN = Regex("[A-Za-z0-9._-]{1,128}")
     }
 }
