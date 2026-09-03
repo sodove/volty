@@ -1144,4 +1144,18 @@ three component checks. A Valhalla 3.6.3 service smoke against the packaged
 were 9.674, 9.483, and 7.694 km. This validates the artifact pipeline and
 alternative generation, not the Android ABI/runtime gate.
 
+The build log exposed that a clipped logical extract can leave administrative
+boundary relations incomplete (`0` rows inserted). The builder is therefore
+adjusted to derive `admins.sqlite` from the source PBF while keeping the
+routing graph on the filtered, buffered extract; this keeps admin context out
+of the graph-size problem and is validated by the next package rebuild.
+
+The follow-up `v0.1.5` package passed the same verifier with one admin area,
+276,841 FTS rows, 161,325,985 downloaded bytes, and 301,050,211 installed
+bytes. Search prefix `плот*` still returns Russian place results, and the
+packaged Valhalla service again returned three distinct route summaries
+(9.674, 9.483, and 7.694 km) with status `0`. The package remains an unsigned
+pilot artifact with a placeholder CDN URL; it is not a production catalog
+release.
+
 No APK/Gradle build was run.

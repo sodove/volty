@@ -107,10 +107,13 @@ valhalla_run valhalla_build_config \
   --mjolnir-tile-extract /work/installed/routing/tiles.tar \
   --mjolnir-admin /work/installed/routing/admins.sqlite \
   --mjolnir-timezone /work/installed/routing/timezones.sqlite > "$STAGING/installed/routing/valhalla.json"
-# Administrative boundaries come from the logical extract. The routing-only
-# input deliberately omits multipolygon/admin relations to keep its graph
-# bounded, but the package still needs a useful admins.sqlite.
-valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json /work/region.osm.pbf
+# Administrative boundaries come from the source PBF rather than either
+# clipped extract. The routing-only input deliberately omits multipolygon/admin
+# relations to keep its graph bounded, while a smart logical extract can leave
+# boundary relations incomplete. Admin extraction is not used to build graph
+# tiles, so reading the source here does not enlarge the routing graph.
+valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json \
+  "/input/$INPUT_NAME"
 valhalla_run valhalla_build_tiles -c /work/installed/routing/valhalla.json -j "$THREADS" /work/routing.osm.pbf
 valhalla_run valhalla_build_extract -c /work/installed/routing/valhalla.json -v
 sed -i 's#/work/installed/routing#/work#g' "$STAGING/installed/routing/valhalla.json"

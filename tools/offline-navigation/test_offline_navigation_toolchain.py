@@ -161,7 +161,8 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json /work/region.osm.pbf',
+            'valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json \\\n'
+            '  "/input/$INPUT_NAME"',
             script,
         )
         self.assertNotIn(
