@@ -114,7 +114,7 @@ android {
         require(offlineCatalogUrl.startsWith("https://")) {
             "Production release requires -PvoltyOfflineCatalogUrl=https://..."
         }
-        require(offlineManifestKeyId.isNotBlank() && offlineManifestKeyId != "UNSIGNED_DEV") {
+        require(offlineManifestKeyId.isNotBlank() && offlineManifestKeyId !in setOf("UNSIGNED_DEV", "UNSIGNED")) {
             "Production release requires -PvoltyOfflineManifestKeyId"
         }
         val publicKey = runCatching {

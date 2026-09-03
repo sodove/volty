@@ -106,7 +106,7 @@ object OfflineRegionCatalogPolicy {
         if (catalog.signature.keyId.isBlank() ||
             catalog.signature.algorithm.lowercase() != "ed25519" ||
             catalog.signature.value.isBlank() ||
-            catalog.signature.keyId == UNSIGNED_KEY_ID ||
+            catalog.signature.keyId in RESERVED_KEY_IDS ||
             catalog.signature.value == UNSIGNED_VALUE
         ) {
             errors += OfflineRegionCatalogValidationError(
@@ -160,7 +160,7 @@ object OfflineRegionCatalogPolicy {
             this[3] >= bounds.north
     }
 
-    private const val UNSIGNED_KEY_ID = "UNSIGNED_DEV"
+    private val RESERVED_KEY_IDS = setOf("UNSIGNED_DEV", "UNSIGNED")
     private const val UNSIGNED_VALUE = "UNSIGNED"
 }
 

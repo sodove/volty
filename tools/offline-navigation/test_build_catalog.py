@@ -170,8 +170,9 @@ class BuildCatalogTest(unittest.TestCase):
             self.assertEqual("release-key", signed["catalogSignature"]["keyId"])
 
     def test_catalog_signing_rejects_a_development_key_id(self):
-        with self.assertRaisesRegex(ValueError, "production key"):
-            MODULE.sign_catalog({}, Ed25519PrivateKey.generate(), "UNSIGNED_DEV")
+        for key_id in ("UNSIGNED_DEV", "UNSIGNED"):
+            with self.subTest(key_id=key_id), self.assertRaisesRegex(ValueError, "production key"):
+                MODULE.sign_catalog({}, Ed25519PrivateKey.generate(), key_id)
 
 
 if __name__ == "__main__":

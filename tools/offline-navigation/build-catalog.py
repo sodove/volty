@@ -240,7 +240,7 @@ def signed_manifest(
         raise ValueError(f"{manifest_path}: manifest must use Ed25519")
     if (
         not key_id
-        or key_id == "UNSIGNED_DEV"
+        or key_id in {"UNSIGNED_DEV", "UNSIGNED"}
         or not str(signature.get("value", "")).strip()
         or str(signature.get("value", "")).strip() == "UNSIGNED"
     ):
@@ -284,7 +284,7 @@ def sign_catalog(
     private_key: Ed25519PrivateKey,
     key_id: str,
 ) -> dict[str, Any]:
-    if not key_id.strip() or key_id == "UNSIGNED_DEV":
+    if not key_id.strip() or key_id in {"UNSIGNED_DEV", "UNSIGNED"}:
         raise ValueError("catalog signing key ID must identify a production key")
     signature = private_key.sign(canonical_catalog_payload(catalog))
     signed = copy.deepcopy(catalog)
