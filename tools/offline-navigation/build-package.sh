@@ -77,11 +77,18 @@ valhalla_run() {
     "$VALHALLA_IMAGE" "$@"
 }
 
+valhalla_timezone_run() {
+  docker run --rm --network host --workdir /work --user "$(id -u):$(id -g)" \
+    -v "$STAGING:/work" -v "$PARENT:/input:ro" \
+    "$VALHALLA_IMAGE" "$@"
+}
+
 echo "Extracting logical region with routing buffer"
 tools_run osmium extract --bbox "$BBOX" --strategy=smart \
   "/input/$INPUT_NAME" -o /work/region.osm.pbf
 
 echo "Building Valhalla routing component"
+valhalla_timezone_run valhalla_build_timezones > "$STAGING/installed/routing/timezones.sqlite"
 valhalla_run valhalla_build_config \
   --mjolnir-tile-dir /work/installed/routing/tiles \
   --mjolnir-tile-extract /work/installed/routing/tiles.tar \
@@ -92,7 +99,7 @@ valhalla_run valhalla_build_tiles -c /work/installed/routing/valhalla.json -j "$
 valhalla_run valhalla_build_extract -c /work/installed/routing/valhalla.json -v
 sed -i 's#/work/installed/routing#/work#g' "$STAGING/installed/routing/valhalla.json"
 tar -czf "$STAGING/artifacts/routing/valhalla-routing.tar.gz" \
-  -C "$STAGING/installed/routing" tiles.tar admins.sqlite valhalla.json
+  -C "$STAGING/installed/routing" tiles.tar admins.sqlite timezones.sqlite valhalla.json
 rm -rf "$STAGING/installed/routing/tiles"
 
 echo "Building FTS4 search component"

@@ -41,6 +41,7 @@ class AndroidOfflineRegionPackageStore(
         synchronized(lock) {
             ensureDirectories()
             cleanupStaging()
+            cleanupOrphanedPackages()
         }
     }
 
@@ -87,6 +88,7 @@ class AndroidOfflineRegionPackageStore(
             rewriteValhallaPaths(File(published, ROUTING_DIRECTORY), published)
             verifyInstalledPackage(published, manifest)
             publishPointer(manifest.regionId, published.name)
+            cleanupOrphanedPackages()
             InstalledOfflineRegion.fromDirectory(published, manifest)
         } finally {
             staging.deleteRecursively()
@@ -223,7 +225,11 @@ class AndroidOfflineRegionPackageStore(
         val routing = File(directory, ROUTING_DIRECTORY)
         val search = File(directory, "$SEARCH_DIRECTORY/$SEARCH_DATABASE_FILE")
         val map = File(directory, "$MAP_DIRECTORY/$MAP_FILE")
-        if (!File(routing, VALHALLA_CONFIG_FILE).isFile || !File(routing, "tiles.tar").isFile) {
+        if (!File(routing, VALHALLA_CONFIG_FILE).isFile ||
+            !File(routing, ROUTING_TILE_EXTRACT_FILE).isFile ||
+            !File(routing, ROUTING_ADMINS_DATABASE_FILE).isFile ||
+            !File(routing, ROUTING_TIMEZONES_DATABASE_FILE).isFile
+        ) {
             throw IOException("Regional routing component is incomplete")
         }
         if (!search.isFile || search.length() == 0L) throw IOException("Regional search component is incomplete")
@@ -427,6 +433,60 @@ class AndroidOfflineRegionPackageStore(
             ?.forEach(File::deleteRecursively)
     }
 
+    /**
+     * Keeps only verified packages named by a valid active pointer. A process
+     * can die after publishing a package directory but before publishing its
+     * pointer, and normal updates otherwise leave the previous release behind.
+     * Both cases are safe to reclaim because the pointer is the sole active
+     * ownership record.
+     */
+    private fun cleanupOrphanedPackages() {
+        val referenced = active.listFiles()
+            ?.asSequence()
+            ?.filter { it.isFile && it.name.endsWith(".pointer") }
+            ?.mapNotNull { pointer ->
+                val regionId = pointer.name.removeSuffix(".pointer")
+                if (!REGION_ID_PATTERN.matches(regionId)) return@mapNotNull null
+                val packageName = runCatching { pointer.readText(Charsets.UTF_8).trim() }
+                    .getOrNull()
+                    ?: return@mapNotNull null
+                if (!PACKAGE_NAME_PATTERN.matches(packageName)) return@mapNotNull null
+                val directory = File(File(packages, regionId), packageName)
+                if (!directory.isDirectory ||
+                    directory.canonicalFile.parentFile != File(packages, regionId).canonicalFile
+                ) {
+                    return@mapNotNull null
+                }
+                val manifest = readManifest(directory) ?: return@mapNotNull null
+                if (runCatching { verifyInstalledPackage(directory, manifest) }.isFailure) {
+                    return@mapNotNull null
+                }
+                "$regionId/$packageName"
+            }
+            ?.toSet()
+            .orEmpty()
+
+        packages.listFiles()
+            ?.filter { regionDirectory ->
+                regionDirectory.isDirectory &&
+                    REGION_ID_PATTERN.matches(regionDirectory.name) &&
+                    regionDirectory.canonicalFile.parentFile == packages.canonicalFile
+            }
+            ?.forEach { regionDirectory ->
+                regionDirectory.listFiles()
+                    ?.filter { packageDirectory ->
+                        packageDirectory.isDirectory &&
+                            PACKAGE_NAME_PATTERN.matches(packageDirectory.name) &&
+                            packageDirectory.canonicalFile.parentFile == regionDirectory.canonicalFile
+                    }
+                    ?.filterNot { packageDirectory ->
+                        "${regionDirectory.name}/${packageDirectory.name}" in referenced
+                    }
+                    ?.forEach(File::deleteRecursively)
+                if (regionDirectory.listFiles().isNullOrEmpty()) regionDirectory.delete()
+            }
+    }
+
     data class InstalledOfflineRegion(
         val manifest: OfflineRegionPackageManifest,
         val directory: File,
@@ -458,6 +518,9 @@ class AndroidOfflineRegionPackageStore(
         const val SEARCH_DIRECTORY = "search"
         const val MAP_DIRECTORY = "map"
         const val VALHALLA_CONFIG_FILE = "valhalla.json"
+        const val ROUTING_TILE_EXTRACT_FILE = "tiles.tar"
+        const val ROUTING_ADMINS_DATABASE_FILE = "admins.sqlite"
+        const val ROUTING_TIMEZONES_DATABASE_FILE = "timezones.sqlite"
         const val SEARCH_DATABASE_FILE = "places.sqlite"
         const val MAP_FILE = "map.pmtiles"
         const val TAR_BLOCK_SIZE = 512

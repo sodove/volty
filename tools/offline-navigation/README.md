@@ -64,6 +64,14 @@ by digest in `build-package.sh`/`Dockerfile`. A release may override them only
 with an explicitly reviewed digest. Do not commit downloaded tiles or signing
 keys to this repository.
 
+The routing build also runs the pinned image's `valhalla_build_timezones` helper
+and includes the generated `timezones.sqlite` in the routing archive. That one
+helper uses the host network because the Docker bridge on the build host cannot
+reach its upstream boundary archive; the rest of the Valhalla build remains on
+the ordinary Docker network. `verify-package.py` rejects a routing archive that
+is missing any required database/archive or that does not reference those files
+from `valhalla.json`.
+
 The app consumes the already-built Android `io.github.rallista:valhalla-mobile:0.6.3`
 AAR. The pinned amd64 Valhalla 3.6.3 image below is only the host-side tile
 compiler used to turn OSM data into the regional extract; it does not rebuild

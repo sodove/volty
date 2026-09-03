@@ -1038,3 +1038,23 @@ that the regional tile format is readable and routable by the ARM64 Valhalla ser
 it is not an Android ARM64 `.so` execution test. Physical ARM64 hardware or an ARM64 host is still
 required for the Valhalla Mobile Android gate, along with lifecycle, size/memory, and configured
 signed-catalog end-to-end checks.
+
+### Execution checkpoint — timezone-complete package and recovery hardening — 2026-09-03
+
+The host artifact toolchain now generates the timezone database with the pinned
+Valhalla image's `valhalla_build_timezones` helper, packages it alongside
+`tiles.tar`, `admins.sqlite`, and `valhalla.json`, and verifies both the required
+files and their config references before a package can be accepted. The EKB
+candidate was rebuilt remotely as `ekb-package-v0.1.3`; the manifest reports
+158,268,225 bytes downloaded and 293,311,018 bytes installed across routing,
+search, and PMTiles. The external verifier found 276,841 FTS4 rows and all four
+routing entries.
+
+The exact Valhalla 3.6.3 ARM64 service image loaded all 110 tiles under QEMU and
+returned a route with one alternative. This is still Linux service evidence, not
+execution of the Android `valhalla-mobile` ARM64 `.so`; the Android hardware/host
+gate remains open. The Android package store now rejects incomplete routing data,
+removes failed-install download staging so it cannot loop at 100%, and garbage
+collects unreferenced published packages after restart or pointer publication.
+Host tool tests pass; no APK/Gradle build, production signature, HTTPS catalog, or
+device Android ARM64 smoke was performed.

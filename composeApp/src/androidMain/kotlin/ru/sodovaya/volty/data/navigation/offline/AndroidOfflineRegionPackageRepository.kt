@@ -156,6 +156,7 @@ class AndroidOfflineRegionPackageRepository(
                 failure = null,
             )
         }
+        var installationFailed = false
         try {
             val artifacts = downloader.download(plan, staging) { downloadedBytes ->
                 updateState(regionId) { state ->
@@ -167,7 +168,17 @@ class AndroidOfflineRegionPackageRepository(
                 }
             }
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.INSTALLING) }
-            packageStore.install(release, plan, artifacts)
+            try {
+                packageStore.install(release, plan, artifacts)
+            } catch (cancelled: CancellationException) {
+                installationFailed = true
+                packageStore.discardDownloadStaging(staging)
+                throw cancelled
+            } catch (error: Exception) {
+                installationFailed = true
+                packageStore.discardDownloadStaging(staging)
+                throw error
+            }
             updateState(regionId) {
                 it.copy(
                     latestRelease = release,
@@ -179,7 +190,13 @@ class AndroidOfflineRegionPackageRepository(
             }
             packageStore.discardDownloadStaging(staging)
         } catch (cancelled: CancellationException) {
-            updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.PAUSED, failure = OfflineRegionPackageFailure.CANCELLED) }
+            updateState(regionId) {
+                it.copy(
+                    status = OfflineRegionPackageStatus.PAUSED,
+                    downloadedBytes = if (installationFailed) 0L else it.downloadedBytes,
+                    failure = OfflineRegionPackageFailure.CANCELLED,
+                )
+            }
             throw cancelled
         } catch (_: IOException) {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.NETWORK) }
