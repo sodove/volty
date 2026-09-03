@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+EXPECTED_ROUTING_DATA_VERSION = "valhalla-3.6.3"
+
 
 def load_json(path: Path) -> dict[str, Any]:
     value = json.loads(path.read_text(encoding="utf-8"))
@@ -40,7 +42,11 @@ def coverage_covers(coverage: list[float], bounds: list[float]) -> bool:
     )
 
 
-def signed_manifest(manifest_path: Path, expected_region_id: str) -> dict[str, Any]:
+def signed_manifest(
+    manifest_path: Path,
+    expected_region_id: str,
+    expected_routing_data_version: str,
+) -> dict[str, Any]:
     manifest = load_json(manifest_path)
     if manifest.get("regionId") != expected_region_id:
         raise ValueError(
@@ -65,13 +71,26 @@ def signed_manifest(manifest_path: Path, expected_region_id: str) -> dict[str, A
     coverage = finite_bbox(coverage_object.get("bbox"), f"{manifest_path}: coverage.bbox")
     if not manifest.get("releaseVersion"):
         raise ValueError(f"{manifest_path}: releaseVersion is required")
+    compatibility = manifest.get("compatibility")
+    if not isinstance(compatibility, dict):
+        raise ValueError(f"{manifest_path}: compatibility must be an object")
+    routing_data_version = str(compatibility.get("routingDataVersion", "")).strip()
+    if routing_data_version != expected_routing_data_version:
+        raise ValueError(
+            f"{manifest_path}: routingDataVersion {routing_data_version!r} does not match "
+            f"{expected_routing_data_version!r}"
+        )
     # Keep this check local to the publishing tool; cryptographic verification
     # still happens in the app with the public key configured in the APK.
     manifest["coverage"]["bbox"] = coverage
     return manifest
 
 
-def build_catalog(spec_path: Path, generated_at: str | None) -> dict[str, Any]:
+def build_catalog(
+    spec_path: Path,
+    generated_at: str | None,
+    expected_routing_data_version: str = EXPECTED_ROUTING_DATA_VERSION,
+) -> dict[str, Any]:
     spec = load_json(spec_path)
     entries = spec.get("regions")
     if not isinstance(entries, list) or not entries:
@@ -98,7 +117,11 @@ def build_catalog(spec_path: Path, generated_at: str | None) -> dict[str, Any]:
         manifest_path = Path(manifest_value)
         if not manifest_path.is_absolute():
             manifest_path = spec_path.parent / manifest_path
-        manifest = signed_manifest(manifest_path, region_id)
+        manifest = signed_manifest(
+            manifest_path,
+            region_id,
+            expected_routing_data_version,
+        )
         coverage = finite_bbox(manifest["coverage"]["bbox"], f"{region_id}: coverage.bbox")
         bounds = finite_bbox(entry.get("bounds", coverage), f"{region_id}: bounds")
         if not coverage_covers(coverage, bounds):
@@ -132,9 +155,18 @@ def main() -> int:
     parser.add_argument("--spec", type=Path, required=True, help="JSON file describing catalog regions")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--generated-at", help="optional reproducible ISO-8601 catalog timestamp")
+    parser.add_argument(
+        "--routing-data-version",
+        default=EXPECTED_ROUTING_DATA_VERSION,
+        help="routing data version consumed by the bundled Valhalla Mobile engine",
+    )
     args = parser.parse_args()
 
-    catalog = build_catalog(args.spec, args.generated_at)
+    catalog = build_catalog(
+        args.spec,
+        args.generated_at,
+        expected_routing_data_version=args.routing_data_version,
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
     temporary = args.output.with_name(f".{args.output.name}.tmp")
     temporary.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")

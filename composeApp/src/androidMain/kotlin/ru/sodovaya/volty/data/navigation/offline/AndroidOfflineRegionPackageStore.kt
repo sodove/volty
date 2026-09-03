@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionComponent
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCodec
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestPolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 
 /**
@@ -50,6 +51,9 @@ class AndroidOfflineRegionPackageStore(
     ): InstalledOfflineRegion = synchronized(lock) {
         require(manifest.regionId == plan.regionId) { "manifest and plan region differ" }
         require(manifest.releaseVersion == plan.releaseVersion) { "manifest and plan release differ" }
+        require(
+            OfflineRegionPackageManifestPolicy.validate(manifest, currentAppVersionCode).isEmpty(),
+        ) { "regional release manifest is incompatible with this app" }
         require(manifestVerifier.verify(manifest)) { "regional release signature is invalid" }
         require(downloadedArtifacts.keys == OfflineRegionComponent.entries.toSet()) {
             "a regional package must provide exactly three downloaded artifacts"

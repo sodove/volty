@@ -170,6 +170,13 @@ data class OfflineRegionManifestValidationError(
 object OfflineRegionPackageManifestPolicy {
     const val CURRENT_SCHEMA_VERSION: Int = 2
     const val EXPECTED_ROUTING_ENGINE: String = "valhalla"
+    /**
+     * Tile format consumed by the ready Android valhalla-mobile:0.6.3 AAR.
+     * Bump this together with the mobile engine when its embedded Valhalla
+     * core changes; accepting any non-empty value would activate incompatible
+     * regional tiles after an ordinary catalog refresh.
+     */
+    const val EXPECTED_ROUTING_DATA_VERSION: String = "valhalla-3.6.3"
     const val EXPECTED_MAP_FORMAT: String = "pmtiles"
 
     fun validate(
@@ -210,7 +217,7 @@ object OfflineRegionPackageManifestPolicy {
                 manifest.compatibility.routingEngine,
             )
         }
-        if (manifest.compatibility.routingDataVersion.isBlank()) {
+        if (manifest.compatibility.routingDataVersion != EXPECTED_ROUTING_DATA_VERSION) {
             errors += error(
                 OfflineRegionManifestErrorCode.INVALID_ROUTING_DATA_VERSION,
                 manifest.compatibility.routingDataVersion,

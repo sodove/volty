@@ -3,6 +3,7 @@ package ru.sodovaya.volty.domain.navigation.region
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
+import kotlin.test.assertTrue
 
 class OfflineRegionDownloadPlanTest {
     @Test
@@ -38,6 +39,21 @@ class OfflineRegionDownloadPlanTest {
     }
 
     @Test
+    fun rejects_routing_tiles_built_for_a_different_mobile_engine() {
+        val result = OfflineRegionDownloadPlanFactory.create(
+            release(routingDataVersion = "valhalla-3.8.3"),
+            currentAppVersionCode = 28,
+        )
+
+        val rejected = assertIs<OfflineRegionDownloadPlanResult.Rejected>(result)
+        assertTrue(
+            rejected.errors.any {
+                it.code == OfflineRegionManifestErrorCode.INVALID_ROUTING_DATA_VERSION
+            },
+        )
+    }
+
+    @Test
     fun resume_policy_only_appends_a_strictly_shorter_partial_file() {
         assertEquals(
             OfflineRegionResumeDecision.Resume(12L),
@@ -57,13 +73,16 @@ class OfflineRegionDownloadPlanTest {
         )
     }
 
-    private fun release(minAppVersionCode: Int = 28) = OfflineRegionPackageManifest(
+    private fun release(
+        minAppVersionCode: Int = 28,
+        routingDataVersion: String = "valhalla-3.6.3",
+    ) = OfflineRegionPackageManifest(
         schemaVersion = 2,
         regionId = "ru-sve-ekb",
         releaseVersion = "2026.09.1",
         createdAt = "2026-09-03T00:00:00Z",
         source = OfflineRegionSource(1L, "2026-09-02T00:00:00Z"),
-        compatibility = OfflineRegionCompatibility(minAppVersionCode, "valhalla", "valhalla-3.8.3", 1, 1),
+        compatibility = OfflineRegionCompatibility(minAppVersionCode, "valhalla", routingDataVersion, 1, 1),
         coverage = OfflineRegionCoverage(listOf(59.0, 56.0, 62.0, 57.5), 20),
         components = OfflineRegionComponents(
             routing = OfflineRegionRoutingArtifact("https://cdn.test/routing", 10L, 100L, checksum, "gzip"),

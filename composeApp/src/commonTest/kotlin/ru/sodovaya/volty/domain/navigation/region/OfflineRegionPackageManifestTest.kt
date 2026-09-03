@@ -139,7 +139,7 @@ class OfflineRegionPackageManifestTest {
         compatibility: OfflineRegionCompatibility = OfflineRegionCompatibility(
             minAppVersionCode = 28,
             routingEngine = "valhalla",
-            routingDataVersion = "valhalla-tiles-2026.09.1",
+            routingDataVersion = OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION,
             mapSchemaVersion = 1,
             searchSchemaVersion = 1,
         ),
@@ -224,7 +224,7 @@ class OfflineRegionPackageManifestTest {
               "compatibility": {
                 "minAppVersionCode": 28,
                 "routingEngine": "valhalla",
-                "routingDataVersion": "valhalla-tiles-2026.09.1",
+                "routingDataVersion": "${OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION}",
                 "mapSchemaVersion": 1,
                 "searchSchemaVersion": 1
               },

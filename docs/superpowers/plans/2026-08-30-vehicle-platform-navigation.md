@@ -989,3 +989,13 @@ An ephemeral Ed25519 key was used only to exercise the signer and catalog builde
 key, signed manifest, and catalog were deleted. This proves the publishing mechanics, not a
 production release: the real catalog still requires the deployment signing key and HTTPS object
 storage. The package itself remains outside git.
+
+### Execution checkpoint — routing format fail-closed gate — 2026-09-03
+
+The regional compatibility policy now requires the exact `valhalla-3.6.3` tile format consumed by
+the ready `valhalla-mobile:0.6.3` Android AAR, rather than accepting any non-empty routing version.
+The check is used by the common download-plan/catalog path and by the Android package store both
+when installing and when reconstructing an active package after restart. The publisher CLI applies
+the same default and exposes `--routing-data-version` for a deliberate, reviewed engine upgrade;
+its mismatch regression test and Python 3 compile check pass. A direct store install cannot create
+a `READY` package for an incompatible core even if a future caller bypasses the repository.
