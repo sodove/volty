@@ -13,6 +13,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
@@ -57,6 +58,8 @@ interface SettingsComponent {
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
+        val offlineCatalogRefreshing: Boolean = false,
+        val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList()
     )
 }
@@ -120,7 +123,18 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.setOfflineSkipMeteredConfirmation(enabled) }
     }
     override fun onRefreshOfflineRegions() {
-        scope.launch { runCatching { offlineRegionsRepository.refreshCatalog() } }
+        _state.update { it.copy(offlineCatalogRefreshing = true, offlineCatalogError = false) }
+        scope.launch {
+            try {
+                offlineRegionsRepository.refreshCatalog()
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                _state.update { it.copy(offlineCatalogError = true) }
+            } finally {
+                _state.update { it.copy(offlineCatalogRefreshing = false) }
+            }
+        }
     }
     override fun onDownloadOfflineRegion(regionId: String) {
         scope.launch {

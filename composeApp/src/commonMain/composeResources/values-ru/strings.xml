@@ -717,6 +717,8 @@
     <string name="settings_offline_navigation_subtitle">Скачайте маршрутизацию, поиск и карту региона для работы без сети.</string>
     <string name="settings_offline_mobile_data">Не спрашивать перед загрузкой через мобильную сеть</string>
     <string name="settings_offline_refresh">Обновить список регионов</string>
+    <string name="settings_offline_refreshing">Обновляем…</string>
+    <string name="settings_offline_catalog_failed">Не удалось обновить список регионов; попробуйте ещё раз.</string>
     <string name="settings_offline_not_configured">Загрузка регионов не настроена в этой сборке.</string>
     <string name="settings_offline_size_line">Скачивание: %1$s · На устройстве: %2$s</string>
     <string name="settings_offline_download">Скачать</string>
@@ -729,6 +731,20 @@
     <string name="settings_offline_status_downloading">Скачивание · %1$s / %2$s</string>
     <string name="settings_offline_status_paused">Пауза · %1$s / %2$s</string>
     <string name="settings_offline_status_waiting">Ждём Wi‑Fi или разрешения мобильной сети</string>
+    <string name="settings_offline_status_waiting_network">Ждём подключения к сети</string>
+    <string name="settings_offline_status_metered">Ждём разрешения на мобильный трафик</string>
+    <string name="settings_offline_status_queued">В очереди на загрузку</string>
     <string name="settings_offline_status_installing">Устанавливаем…</string>
+    <string name="settings_offline_status_deleting">Удаляем…</string>
     <string name="settings_offline_status_failed">Не удалось скачать; повторите попытку</string>
+    <string name="settings_offline_status_failed_network">Ошибка сети; попробуйте ещё раз</string>
+    <string name="settings_offline_status_failed_storage">Не хватает места или нет доступа к хранилищу</string>
+    <string name="settings_offline_status_failed_checksum">Данные повредились при загрузке; попробуйте ещё раз</string>
+    <string name="settings_offline_status_failed_incompatible">Эта версия региона несовместима с приложением</string>
+    <string name="settings_offline_status_failed_cancelled">Загрузка приостановлена</string>
+    <string name="settings_offline_delete_title">Удалить оффлайн-данные региона «%1$s»?</string>
+    <string name="settings_offline_delete_text">С устройства будут удалены маршрутизация, поиск и карта этого региона.</string>
+    <string name="settings_offline_metered_title">Скачать «%1$s» через мобильную сеть?</string>
+    <string name="settings_offline_metered_text">Регион ещё не доступен оффлайн. Загрузка может использовать много мобильного трафика.</string>
+    <string name="settings_offline_metered_later">Позже</string>
 </resources>

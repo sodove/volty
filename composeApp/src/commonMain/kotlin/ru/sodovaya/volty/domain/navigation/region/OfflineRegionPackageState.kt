@@ -58,6 +58,9 @@ data class OfflineRegionPackageState(
 interface OfflineRegionPackageRepository {
     val states: StateFlow<List<OfflineRegionPackageState>>
 
+    /** True after a verified catalog has been published into [states]. */
+    fun isCatalogLoaded(): Boolean = false
+
     suspend fun refreshCatalog()
 
     suspend fun requestDownload(

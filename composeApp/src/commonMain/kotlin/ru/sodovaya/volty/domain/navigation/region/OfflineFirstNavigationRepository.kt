@@ -78,9 +78,12 @@ class OfflineFirstNavigationRepository(
                 scheduleDownload(decision.regionId, decision.trigger)
                 online.search(query, near, languageTag)
             }
-            is OfflineRegionAccessDecision.WaitForDownload,
-            is OfflineRegionAccessDecision.RequestMeteredApproval
-            -> online.search(query, near, languageTag)
+            is OfflineRegionAccessDecision.WaitForDownload -> {
+                retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.SEARCH)
+                online.search(query, near, languageTag)
+            }
+            is OfflineRegionAccessDecision.RequestMeteredApproval ->
+                online.search(query, near, languageTag)
             is OfflineRegionAccessDecision.UseOnlineFallback -> {
                 if (decision.missingRegionIds.isEmpty()) {
                     scheduleDownloadAfterCatalogRefresh(
@@ -111,8 +114,7 @@ class OfflineFirstNavigationRepository(
                 scheduleDownload(decision.regionId, decision.trigger)
                 online.routes(request)
             }
-            is OfflineRegionAccessDecision.RequestMeteredApproval
-            -> online.routes(request)
+            is OfflineRegionAccessDecision.RequestMeteredApproval -> online.routes(request)
             is OfflineRegionAccessDecision.UseOnlineFallback -> {
                 if (decision.missingRegionIds.isEmpty()) {
                     scheduleDownloadAfterCatalogRefresh(
@@ -125,12 +127,13 @@ class OfflineFirstNavigationRepository(
                 }
                 online.routes(request)
             }
-            is OfflineRegionAccessDecision.WaitForDownload -> if (
-                network.current() == OfflineNetworkAvailability.OFFLINE
-            ) {
-                NavigationResult.Failure(NavigationFailure.Offline)
-            } else {
-                online.routes(request)
+            is OfflineRegionAccessDecision.WaitForDownload -> {
+                retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.ROUTE)
+                if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+                    NavigationResult.Failure(NavigationFailure.Offline)
+                } else {
+                    online.routes(request)
+                }
             }
             OfflineRegionAccessDecision.UnavailableOffline ->
                 NavigationResult.Failure(NavigationFailure.Offline)
@@ -144,10 +147,10 @@ class OfflineFirstNavigationRepository(
      * network timeout; it continues through the online path immediately.
      */
     private fun ensureCatalog(): Job? {
-        if (packages.states.value.isNotEmpty()) return null
+        if (packages.isCatalogLoaded()) return null
         if (network.current() == OfflineNetworkAvailability.OFFLINE) return null
         return synchronized(catalogRefreshLock) {
-            if (packages.states.value.isNotEmpty()) return@synchronized null
+            if (packages.isCatalogLoaded()) return@synchronized null
             catalogRefreshJob?.takeIf { it.isActive }?.let { return@synchronized it }
             if (catalogRefreshAttempted) return@synchronized null
             catalogRefreshAttempted = true
@@ -243,6 +246,21 @@ class OfflineFirstNavigationRepository(
             } finally {
                 synchronized(scheduledDownloads) { scheduledDownloads.remove(regionId) }
             }
+        }
+    }
+
+    /** Retry only downloads that were waiting for connectivity; a rider's explicit pause wins. */
+    private fun retryWaitingDownload(
+        regionId: String,
+        trigger: OfflineRegionDownloadTrigger,
+    ) {
+        val status = packages.states.value
+            .firstOrNull { it.region.regionId == regionId }
+            ?.status
+        if (status == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
+            status == OfflineRegionPackageStatus.QUEUED
+        ) {
+            scheduleDownload(regionId, trigger)
         }
     }
 

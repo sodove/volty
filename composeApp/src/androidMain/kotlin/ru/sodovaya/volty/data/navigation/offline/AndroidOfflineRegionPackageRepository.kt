@@ -2,14 +2,17 @@ package ru.sodovaya.volty.data.navigation.offline
 
 import android.content.Context
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -58,14 +61,30 @@ class AndroidOfflineRegionPackageRepository(
     private val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
     private val _states = MutableStateFlow<List<OfflineRegionPackageState>>(emptyList())
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val retryScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val catalogRefreshMutex = Mutex()
     @Volatile
     private var catalog: OfflineRegionCatalog? = null
 
+    private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
+        override fun onAvailable(network: Network) {
+            retryWaitingDownloads()
+        }
+
+        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+                retryWaitingDownloads()
+            }
+        }
+    }
+
     override val states: StateFlow<List<OfflineRegionPackageState>> = _states.asStateFlow()
+
+    override fun isCatalogLoaded(): Boolean = catalog != null
 
     init {
         _states.value = packageStore.installedRegions().map(::stateForInstalled)
+        runCatching { connectivity?.registerDefaultNetworkCallback(connectivityCallback) }
     }
 
     override suspend fun refreshCatalog() = catalogRefreshMutex.withLock {
@@ -377,6 +396,25 @@ class AndroidOfflineRegionPackageRepository(
         } else {
             OfflineNetworkAvailability.UNMETERED
         }
+    }
+
+    /** Wake automatic downloads as soon as Android reports that connectivity returned. */
+    private fun retryWaitingDownloads() {
+        _states.value
+            .filter {
+                it.status == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
+                    it.status == OfflineRegionPackageStatus.QUEUED
+            }
+            .forEach { state ->
+                retryScope.launch {
+                    runCatching {
+                        requestDownload(
+                            regionId = state.region.regionId,
+                            trigger = OfflineRegionDownloadTrigger.SETTINGS,
+                        )
+                    }
+                }
+            }
     }
 
     private fun java.io.InputStream.readBounded(maxBytes: Long): String {

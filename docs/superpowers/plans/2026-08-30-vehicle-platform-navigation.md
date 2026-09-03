@@ -1058,3 +1058,19 @@ removes failed-install download staging so it cannot loop at 100%, and garbage
 collects unreferenced published packages after restart or pointer publication.
 Host tool tests pass; no APK/Gradle build, production signature, HTTPS catalog, or
 device Android ARM64 smoke was performed.
+
+### Execution checkpoint — automatic download UX and network recovery — 2026-09-03
+
+The regional package lifecycle now retries `WAITING_FOR_NETWORK`/queued automatic downloads
+when Android reports connectivity, while a rider-selected `PAUSED` download is never resumed by
+a later search or route request. The offline-first repository also retries catalog discovery when
+verified local packages exist but the catalog has not loaded, so one failed startup refresh no
+longer hides new regions forever.
+
+Metered automatic downloads are now visible as a root-level confirmation dialog, including when
+the rider is on the map or planner rather than Settings; confirming continues the same resumable
+download, and dismissing leaves it available in Settings. Settings now shows catalog refresh
+progress/errors, asks before deleting a ready region, displays the advertised update version, and
+distinguishes network wait, mobile approval, queue, and deletion states. Failed states render the
+recorded failure category. No APK/Gradle build was run; the changed Kotlin/UI paths still require
+the normal compile/test gate once application builds are allowed.

@@ -61,6 +61,23 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun installed_region_does_not_suppress_catalog_refresh_after_a_failure() = runTest {
+        val packages = FakePackages(
+            status = OfflineRegionPackageStatus.READY,
+            catalogRefreshFailures = 1,
+        )
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+
+        repository.routes(routeRequest())
+        testScheduler.runCurrent()
+        repository.routes(routeRequest())
+        testScheduler.runCurrent()
+
+        assertEquals(2, packages.catalogRefreshCalls)
+    }
+
+    @Test
     fun missing_region_starts_one_background_download_and_keeps_online_search_available() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
@@ -129,6 +146,30 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun next_request_retries_a_download_that_was_waiting_for_network() = runTest {
+        val packages = FakePackages(status = OfflineRegionPackageStatus.WAITING_FOR_NETWORK)
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+
+        repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("ekb"), packages.downloads)
+    }
+
+    @Test
+    fun next_request_does_not_resume_a_download_paused_by_the_rider() = runTest {
+        val packages = FakePackages(status = OfflineRegionPackageStatus.PAUSED)
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+
+        repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+        testScheduler.runCurrent()
+
+        assertEquals(emptyList(), packages.downloads)
+    }
+
+    @Test
     fun missing_region_in_full_offline_mode_does_not_call_online() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
@@ -185,9 +226,11 @@ class OfflineFirstNavigationRepositoryTest {
             },
         )
         val downloads = mutableListOf<String>()
+        var catalogRefreshCalls = 0
         override val states = _states
 
         override suspend fun refreshCatalog() {
+            catalogRefreshCalls += 1
             catalogRefreshGate?.await()
             if (catalogRefreshFailures > 0) {
                 catalogRefreshFailures -= 1

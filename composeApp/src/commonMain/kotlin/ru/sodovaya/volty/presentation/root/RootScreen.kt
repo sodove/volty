@@ -14,16 +14,20 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -61,6 +65,9 @@ import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.location.RideLocationStatus
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
@@ -70,6 +77,12 @@ import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.tab_battery
 import volty.composeapp.generated.resources.tab_nearby
 import volty.composeapp.generated.resources.tab_ride
+import volty.composeapp.generated.resources.settings_offline_download_mobile
+import volty.composeapp.generated.resources.settings_offline_metered_later
+import volty.composeapp.generated.resources.settings_offline_metered_text
+import volty.composeapp.generated.resources.settings_offline_metered_title
+import kotlinx.coroutines.launch
+import org.koin.compose.koinInject
 
 @Composable
 fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
@@ -78,6 +91,19 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val darkTheme = LocalVoltyDarkTheme.current
     val socialLiveState by component.socialLiveState.collectAsState()
     val rideAvailable by component.rideAvailable.subscribeAsState()
+    val offlineRegions: OfflineRegionPackageRepository = koinInject()
+    val offlineRegionStates by offlineRegions.states.collectAsState()
+    val meteredApproval = offlineRegionStates.firstOrNull {
+        it.status == OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL
+    }
+    var dismissedMeteredRegionId by remember { mutableStateOf<String?>(null) }
+    val visibleMeteredApproval = meteredApproval?.takeUnless {
+        it.region.regionId == dismissedMeteredRegionId
+    }
+    LaunchedEffect(meteredApproval?.region?.regionId) {
+        dismissedMeteredRegionId = null
+    }
+    val offlineActionScope = rememberCoroutineScope()
     val activeRide = active as? RootComponent.Child.Ride
     val activeRideState = activeRide?.component?.state?.collectAsState()?.value
     val navigationState by component.navigation.state.collectAsState()
@@ -256,6 +282,36 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             },
             onGroupMap = component::onOpenGroupMap,
             modifier = Modifier.navigationBarsPadding()
+        )
+    }
+
+    visibleMeteredApproval?.let { region ->
+        AlertDialog(
+            onDismissRequest = { dismissedMeteredRegionId = region.region.regionId },
+            title = { Text(stringResource(Res.string.settings_offline_metered_title, region.region.displayName)) },
+            text = { Text(stringResource(Res.string.settings_offline_metered_text)) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        offlineActionScope.launch {
+                            runCatching {
+                                offlineRegions.requestDownload(
+                                    regionId = region.region.regionId,
+                                    trigger = OfflineRegionDownloadTrigger.SETTINGS,
+                                    meteredConfirmed = true,
+                                )
+                            }
+                        }
+                    },
+                ) {
+                    Text(stringResource(Res.string.settings_offline_download_mobile))
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { dismissedMeteredRegionId = region.region.regionId }) {
+                    Text(stringResource(Res.string.settings_offline_metered_later))
+                }
+            },
         )
     }
 }

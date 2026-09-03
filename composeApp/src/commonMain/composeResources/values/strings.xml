@@ -719,6 +719,8 @@
     <string name="settings_offline_navigation_subtitle">Download regional routing, search, and map data for use without a connection.</string>
     <string name="settings_offline_mobile_data">Do not ask before downloading over mobile data</string>
     <string name="settings_offline_refresh">Refresh regions</string>
+    <string name="settings_offline_refreshing">Refreshing…</string>
+    <string name="settings_offline_catalog_failed">Could not refresh regions; try again.</string>
     <string name="settings_offline_not_configured">Regional downloads are not configured in this build.</string>
     <string name="settings_offline_size_line">%1$s download · %2$s on device</string>
     <string name="settings_offline_download">Download</string>
@@ -731,6 +733,20 @@
     <string name="settings_offline_status_downloading">Downloading · %1$s / %2$s</string>
     <string name="settings_offline_status_paused">Paused · %1$s / %2$s</string>
     <string name="settings_offline_status_waiting">Waiting for Wi-Fi or mobile approval</string>
+    <string name="settings_offline_status_waiting_network">Waiting for a connection</string>
+    <string name="settings_offline_status_metered">Waiting for mobile-data approval</string>
+    <string name="settings_offline_status_queued">Queued for download</string>
     <string name="settings_offline_status_installing">Installing…</string>
+    <string name="settings_offline_status_deleting">Removing…</string>
     <string name="settings_offline_status_failed">Download failed; try again</string>
+    <string name="settings_offline_status_failed_network">Network error; try again</string>
+    <string name="settings_offline_status_failed_storage">Not enough storage or permission to write data</string>
+    <string name="settings_offline_status_failed_checksum">Downloaded data is corrupted; try again</string>
+    <string name="settings_offline_status_failed_incompatible">This region release is not compatible with the app</string>
+    <string name="settings_offline_status_failed_cancelled">Download paused</string>
+    <string name="settings_offline_delete_title">Delete %1$s offline data?</string>
+    <string name="settings_offline_delete_text">Routing, search, and map files for this region will be removed from the device.</string>
+    <string name="settings_offline_metered_title">Download %1$s over mobile data?</string>
+    <string name="settings_offline_metered_text">The region is not available offline yet. Downloading it may use a large amount of mobile data.</string>
+    <string name="settings_offline_metered_later">Later</string>
 </resources>
