@@ -1235,3 +1235,26 @@ An intermediate attempt used an already clipped `test-region.osm.pbf` after the 
 reported an ordering warning. It produced incomplete admin data and Tilemaker later aborted, so
 that input and the sorted temporary copy were removed. The successful `v0.1.6` build uses the
 original full source and is the only current pilot candidate.
+
+### Execution checkpoint — offline map glyphs and regional labels — 2026-09-03
+
+The offline MapLibre style now renders labels from the PMTiles `place`, `transportation_name`,
+and `poi` layers. Because MapLibre Native Android 13.0.2 does not provide usable local-font
+fallback when the style omits glyphs, the app ships three generated Noto Sans Regular glyph
+ranges (Latin/common punctuation, Cyrillic, and general punctuation) totaling 252,923 bytes.
+The loopback PMTiles server serves only the fixed font stack and those fixed ranges from APK
+assets; unsupported font/range/path requests return 404, and the glyph response is bounded.
+The generator is checked in and reproduced the asset SHA-256 values on the remote Linux host.
+JSON style validation, Node syntax validation, and a direct Android-server Kotlin compile passed.
+The actual MapLibre visual smoke remains pending because it needs a device/emulator; it is not a
+unit-test claim.
+
+### Execution checkpoint — release APK with offline map labels — 2026-09-03
+
+The release build includes the loopback glyph server and Noto glyph assets while continuing to use
+the precompiled Maven `io.github.rallista:valhalla-mobile:0.6.3` dependency. The current release
+is `0.7.6` / version code `28`; `:composeApp:testDebugUnitTest` passed and
+`:composeApp:assembleRelease` completed successfully. `apksigner` verified the APK with APK
+Signature Scheme v2. The single production APK is `79,604,111` bytes and contains only the
+`arm64-v8a` and `armeabi-v7a` native ABIs; x86/x86_64 remain available only to debug/test
+artifacts. The APK was not visually smoke-tested on a device in this checkpoint.

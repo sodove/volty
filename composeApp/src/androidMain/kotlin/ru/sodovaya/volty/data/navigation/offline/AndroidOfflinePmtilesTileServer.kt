@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.navigation.offline
 
+import android.content.res.AssetManager
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.BufferedOutputStream
@@ -25,7 +26,9 @@ import java.util.zip.GZIPInputStream
  * requested by the renderer. The server binds to 127.0.0.1 and accepts no
  * external connections.
  */
-class AndroidOfflinePmtilesTileServer : Closeable {
+class AndroidOfflinePmtilesTileServer(
+    private val assetManager: AssetManager,
+) : Closeable {
     private val lock = Any()
     private val executor: ExecutorService = Executors.newCachedThreadPool { runnable ->
         Thread(runnable, "VoltyOfflinePmtiles").apply { isDaemon = true }
@@ -48,6 +51,12 @@ class AndroidOfflinePmtilesTileServer : Closeable {
             archivePath = canonicalPath
         }
         "http://127.0.0.1:${server!!.localPort}/tiles/{z}/{x}/{y}.pbf"
+    }
+
+    /** Returns the loopback glyph template after [sourceUrl] has selected an archive. */
+    fun glyphsUrl(): String = synchronized(lock) {
+        check(server != null && archive != null) { "PMTiles archive must be selected first" }
+        "http://127.0.0.1:${server!!.localPort}/glyphs/{fontstack}/{range}.pbf"
     }
 
     override fun close() {
@@ -100,6 +109,8 @@ class AndroidOfflinePmtilesTileServer : Closeable {
                         HttpResponse(200, "application/x-protobuf", bytes, current.tileIsGzip)
                     } ?: HttpResponse(404, "", ByteArray(0), false)
                 }
+            } ?: GLYPH_PATH.matchEntire(path)?.let { match ->
+                serveGlyph(match.groupValues[1], match.groupValues[2])
             } ?: if (path == "/tilejson.json") {
                 HttpResponse(200, "application/json", current.tileJson(sourceUrlForJson()), false)
             } else {
@@ -107,6 +118,22 @@ class AndroidOfflinePmtilesTileServer : Closeable {
             }
         }
         respond(socket, response.code, response.contentType, response.body, response.gzip)
+    }
+
+    private fun serveGlyph(encodedFontStack: String, range: String): HttpResponse {
+        val fontStack = runCatching {
+            java.net.URLDecoder.decode(encodedFontStack, StandardCharsets.UTF_8.name())
+        }.getOrNull() ?: return HttpResponse(400, "text/plain", ByteArray(0), false)
+        if (fontStack != FONT_STACK || !GLYPH_RANGE.matches(range)) {
+            return HttpResponse(404, "", ByteArray(0), false)
+        }
+        val assetPath = "$GLYPH_ASSET_DIRECTORY/$fontStack/$range.pbf"
+        return try {
+            val body = assetManager.open(assetPath).use { it.readBoundedBytes(MAX_GLYPH_BYTES) }
+            HttpResponse(200, "application/x-protobuf", body, false)
+        } catch (_: IOException) {
+            HttpResponse(404, "", ByteArray(0), false)
+        }
     }
 
     private fun sourceUrlForJson(): String =
@@ -149,7 +176,25 @@ class AndroidOfflinePmtilesTileServer : Closeable {
     private companion object {
         const val REQUEST_TIMEOUT_MILLIS = 5_000
         const val MAX_REQUEST_LINE = 8_192
+        const val MAX_GLYPH_BYTES = 4 * 1024 * 1024
+        const val FONT_STACK = "Noto Sans Regular"
+        const val GLYPH_ASSET_DIRECTORY = "offline-map-glyphs"
         val TILE_PATH = Regex("/tiles/(\\d+)/(\\d+)/(\\d+)\\.(?:pbf|mvt)")
+        val GLYPH_PATH = Regex("/glyphs/([^/]+)/([0-9]+-[0-9]+)\\.pbf")
+        val GLYPH_RANGE = Regex("(?:0-255|1024-1279|8192-8447)")
+    }
+}
+
+private fun java.io.InputStream.readBoundedBytes(maxBytes: Int): ByteArray {
+    val output = java.io.ByteArrayOutputStream()
+    val buffer = ByteArray(16 * 1024)
+    var total = 0
+    while (true) {
+        val count = read(buffer)
+        if (count < 0) return output.toByteArray()
+        total += count
+        if (total > maxBytes) throw IOException("Glyph asset is too large")
+        output.write(buffer, 0, count)
     }
 }
 

@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.navigation.offline
 
+import android.content.res.AssetManager
 import java.io.Closeable
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CoroutineScope
@@ -10,11 +11,12 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 
 /** Bridges the regional PMTiles store to MapLibre's ordinary vector source API. */
 class AndroidOfflineMapSource(
+    assetManager: AssetManager,
     private val packageStore: AndroidOfflineRegionPackageStore,
     private val packages: OfflineRegionPackageRepository,
     private val downloadScope: CoroutineScope,
 ) : Closeable {
-    private val tileServer = AndroidOfflinePmtilesTileServer()
+    private val tileServer = AndroidOfflinePmtilesTileServer(assetManager)
     private val scheduledDownloads = ConcurrentHashMap.newKeySet<String>()
     private val automaticRetryAfterMillis = ConcurrentHashMap<String, Long>()
 
@@ -31,6 +33,8 @@ class AndroidOfflineMapSource(
             ?: return null
         return tileServer.sourceUrl(installed.mapFile)
     }
+
+    fun glyphsUrl(): String = tileServer.glyphsUrl()
 
     /**
      * Starts at most one background MAP download for the catalog region under

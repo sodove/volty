@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -34,6 +35,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanFactory
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailureException
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState

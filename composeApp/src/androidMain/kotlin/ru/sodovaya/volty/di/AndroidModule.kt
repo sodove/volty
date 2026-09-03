@@ -99,6 +99,7 @@ val androidModule = module {
     }
     single {
         AndroidOfflineMapSource(
+            assetManager = androidContext().assets,
             packageStore = get(),
             packages = get(),
             downloadScope = get(named(OFFLINE_DOWNLOAD_SCOPE)),

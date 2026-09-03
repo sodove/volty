@@ -81,6 +81,12 @@ import volty.composeapp.generated.resources.settings_delete_title
 import volty.composeapp.generated.resources.settings_dynamic_color
 import volty.composeapp.generated.resources.settings_dynamic_color_subtitle
 import volty.composeapp.generated.resources.settings_my_batteries
+import volty.composeapp.generated.resources.settings_offline_attribution
+import volty.composeapp.generated.resources.settings_offline_status_failed_cancelled
+import volty.composeapp.generated.resources.settings_offline_status_failed_checksum
+import volty.composeapp.generated.resources.settings_offline_status_failed_incompatible
+import volty.composeapp.generated.resources.settings_offline_status_failed_network
+import volty.composeapp.generated.resources.settings_offline_status_failed_storage
 import volty.composeapp.generated.resources.settings_scan_timeout
 import volty.composeapp.generated.resources.settings_seconds
 import volty.composeapp.generated.resources.settings_theme

@@ -74,6 +74,7 @@ import org.maplibre.android.style.layers.PropertyFactory.textField
 import org.maplibre.android.style.layers.PropertyFactory.textHaloColor
 import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
 import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
+import org.maplibre.android.style.layers.PropertyFactory.textFont
 import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.sources.GeoJsonSource
 import org.koin.compose.koinInject
@@ -213,7 +214,13 @@ private fun AndroidMapLibreView(
         }
         styleReady = false
         val builder = if (offlineSourceUrl != null) {
-            Style.Builder().fromJson(offlineStyleJson(offlineSourceUrl, darkTheme))
+            Style.Builder().fromJson(
+                offlineStyleJson(
+                    tileUrl = offlineSourceUrl,
+                    glyphsUrl = offlineMapSource.glyphsUrl(),
+                    darkTheme = darkTheme,
+                ),
+            )
         } else {
             Style.Builder().fromUri(targetStyleUrl)
         }
@@ -494,6 +501,7 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
         ?: SymbolLayer(RU_CITIES_LAYER_ID, RU_CITIES_SOURCE_ID).also { style.addLayer(it) }
     cities.withProperties(
         textField(Expression.get("name")),
+        textFont(arrayOf("Noto Sans Regular")),
         textSize(9f),
         textColor(Color.parseColor(if (darkTheme) "#E8F0F4" else "#1C2730")),
         textHaloColor(Color.parseColor(if (darkTheme) "#07131E" else "#FFFFFF")),
@@ -552,6 +560,7 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
         style.addLayer(
             SymbolLayer(GROUP_LABEL_LAYER_ID, GROUP_SOURCE_ID).withProperties(
                 textField(Expression.get("label")),
+                textFont(arrayOf("Noto Sans Regular")),
                 textSize(10f),
                 textColor(Color.parseColor(if (darkTheme) "#F1F7FA" else "#15232B")),
                 textHaloColor(Color.parseColor(if (darkTheme) "#07131E" else "#FFFFFF")),
@@ -563,13 +572,15 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
     }
 }
 
-/** A small label-free fallback style whose only network input is the local PMTiles server. */
-private fun offlineStyleJson(tileUrl: String, darkTheme: Boolean): String {
+/** A small offline style whose only network input is the local PMTiles server. */
+private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Boolean): String {
     val background = if (darkTheme) "#07131E" else "#EEF3F5"
     val landuse = if (darkTheme) "#10232B" else "#E4ECEA"
     val water = if (darkTheme) "#12384A" else "#B9DDEB"
     val roads = if (darkTheme) "#9AAAB3" else "#7A858B"
     val buildings = if (darkTheme) "#344952" else "#D0D7D9"
+    val label = if (darkTheme) "#E8F0F4" else "#1C2730"
+    val halo = if (darkTheme) "#07131E" else "#FFFFFF"
     return """
         {
           "version": 8,
@@ -581,13 +592,17 @@ private fun offlineStyleJson(tileUrl: String, darkTheme: Boolean): String {
               "maxzoom": 14
             }
           },
+          "glyphs":"$glyphsUrl",
           "layers": [
             {"id":"background","type":"background","paint":{"background-color":"$background"}},
             {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.8}},
             {"id":"water","type":"fill","source":"openmaptiles","source-layer":"water","paint":{"fill-color":"$water"}},
             {"id":"waterway","type":"line","source":"openmaptiles","source-layer":"waterway","paint":{"line-color":"$water","line-width":1.5}},
             {"id":"roads","type":"line","source":"openmaptiles","source-layer":"transportation","paint":{"line-color":"$roads","line-width":1.4,"line-opacity":0.9}},
-            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.75}}
+            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.75}},
+            {"id":"place-labels","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":5,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],5,10,14,17],"text-max-width":8,"symbol-sort-key":["get","rank"]},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
+            {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":10,"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],10,9,14,13],"text-max-angle":30,"text-max-width":8,"text-padding":2},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
+            {"id":"poi-labels","type":"symbol","source":"openmaptiles","source-layer":"poi","minzoom":13,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":10,"text-max-width":7,"text-offset":[0,0.8],"text-anchor":"top"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}}
           ]
         }
     """.trimIndent()

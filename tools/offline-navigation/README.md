@@ -75,6 +75,16 @@ by digest in `build-package.sh`/`Dockerfile`. A release may override them only
 with an explicitly reviewed digest. Do not commit downloaded tiles or signing
 keys to this repository.
 
+The Android offline map style also ships three small Noto Sans Regular glyph
+ranges for local Russian labels. They can be regenerated with `fontnik` 0.7.7:
+
+```text
+npm install --prefix /tmp/volty-fontnik fontnik@0.7.7
+node tools/offline-navigation/build-glyphs.js \
+  /path/to/NotoSans-Regular.ttf \
+  composeApp/src/androidMain/assets/offline-map-glyphs
+```
+
 The routing build also runs the pinned image's `valhalla_build_timezones` helper
 and includes the generated `timezones.sqlite` in the routing archive. That one
 helper uses the host network because the Docker bridge on the build host cannot
