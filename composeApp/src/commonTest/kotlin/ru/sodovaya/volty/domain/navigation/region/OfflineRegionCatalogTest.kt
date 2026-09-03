@@ -88,6 +88,22 @@ class OfflineRegionCatalogTest {
     }
 
     @Test
+    fun signature_policy_rejects_unverified_latest_releases_before_download() {
+        val catalog = OfflineRegionCatalog(
+            schemaVersion = 1,
+            generatedAt = "2026-09-03T00:00:00Z",
+            regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), release())),
+        )
+
+        val unverified = OfflineRegionCatalogSignaturePolicy.unverifiedReleaseIds(
+            catalog = catalog,
+            verifier = OfflineRegionManifestVerifier { false },
+        )
+
+        assertEquals(listOf("ru-sve-ekb"), unverified)
+    }
+
+    @Test
     fun validation_rejects_a_region_that_is_outside_its_release_coverage() {
         val release = release().copy(
             coverage = OfflineRegionCoverage(listOf(60.0, 56.5, 61.0, 57.0), 20),

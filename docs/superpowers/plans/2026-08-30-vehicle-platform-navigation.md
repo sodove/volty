@@ -1010,3 +1010,12 @@ single-region path remains in place for fast proximity ranking. If no region is 
 location-free request keeps the existing online fallback while connected and returns the typed offline
 failure without a network call when fully offline. A common repository test covers two installed
 regions, concurrent fan-out, deterministic merge, deduplication, and the zero-online-call contract.
+
+### Execution checkpoint — verify catalog releases before download — 2026-09-03
+
+The Android catalog repository now applies the injected Ed25519 verifier to every advertised
+`latestRelease` before publishing the catalog or allowing any component download. Structural
+validation and the package-store install check remain in place, so a forged or otherwise
+unverified release fails closed before network bytes are committed to staging. Verification errors
+are treated as invalid signatures, and catalog entries without a downloadable release remain valid.
+The common signature-policy regression test passes; no production key or catalog endpoint was added.

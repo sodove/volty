@@ -128,3 +128,22 @@ object OfflineRegionCatalogPolicy {
             this[3] >= bounds.north
     }
 }
+
+/**
+ * Cryptographic gate for releases advertised by a catalog.
+ *
+ * Structural catalog validation is deliberately separate from signature
+ * verification because the verifier is platform-provided. Callers must run
+ * this gate before downloading any advertised artifact.
+ */
+object OfflineRegionCatalogSignaturePolicy {
+    fun unverifiedReleaseIds(
+        catalog: OfflineRegionCatalog,
+        verifier: OfflineRegionManifestVerifier,
+    ): List<String> = catalog.regions.mapNotNull { entry ->
+        val release = entry.latestRelease ?: return@mapNotNull null
+        entry.region.regionId.takeUnless {
+            runCatching { verifier.verify(release) }.getOrDefault(false)
+        }
+    }
+}

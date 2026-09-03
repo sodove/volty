@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalog
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogCodec
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogSignaturePolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogEntry
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanFactory
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
@@ -238,6 +239,11 @@ class AndroidOfflineRegionPackageRepository(
                 ?: throw IOException("Catalog is malformed")
             val errors = OfflineRegionCatalogPolicy.validate(loaded, currentAppVersionCode)
             if (errors.isNotEmpty()) throw IOException("Catalog validation failed")
+            val unverified = OfflineRegionCatalogSignaturePolicy.unverifiedReleaseIds(
+                catalog = loaded,
+                verifier = manifestVerifier,
+            )
+            if (unverified.isNotEmpty()) throw IOException("Catalog contains unverified releases")
             loaded
         } finally {
             connection.disconnect()
