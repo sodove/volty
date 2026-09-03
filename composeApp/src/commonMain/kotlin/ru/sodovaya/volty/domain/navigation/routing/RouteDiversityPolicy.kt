@@ -13,7 +13,7 @@ object RouteDiversityPolicy {
     private const val MAX_ALTERNATIVES = 3
     private const val DISTANCE_TOLERANCE_METERS = 120.0
     private const val DURATION_TOLERANCE_SECONDS = 20.0
-    // About 35 m at the pilot latitude. A 70–80 m corridor tolerance was
+    // Roughly 35–40 m on the latitude axis. A 70–80 m corridor tolerance was
     // collapsing genuinely parallel urban roads into one route.
     private const val GEOMETRY_TOLERANCE_DEGREES = 0.00035
 
