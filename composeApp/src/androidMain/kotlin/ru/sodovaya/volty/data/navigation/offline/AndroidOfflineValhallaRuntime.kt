@@ -51,12 +51,6 @@ class AndroidOfflineValhallaRuntime(
             ValhallaRouteCodec.decodeRoutePlan(response, request)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (_: ClassNotFoundException) {
-            NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
-        } catch (_: NoSuchMethodException) {
-            NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
-        } catch (_: ReflectiveOperationException) {
-            NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
         } catch (_: LinkageError) {
             NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
         } catch (_: RuntimeException) {
