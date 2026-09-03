@@ -963,3 +963,27 @@ APK is 79,431,244 bytes and contains only the release ABIs `arm64-v8a` and `arme
 This verifies packaging and JVM wiring, not native execution on ARM64 hardware. The ARM64
 Valhalla Mobile smoke therefore remains the next release gate; BRouter assets stay present until
 that gate, the configured signed-catalog smoke, and the end-to-end regional package path pass.
+
+### Retraction — routing artifact version alignment — 2026-09-03
+
+The earlier regional-artifact checkpoint described the pilot routing data as Valhalla 3.8.3. That
+was the service-container version used for the first data smoke, not the engine shipped in the
+ready `valhalla-mobile:0.6.3` AAR. The upstream mobile tag points at Valhalla 3.6.3, so the 3.8.3
+regional artifact is not a release candidate for this APK. The artifact toolchain now defaults to
+the pinned amd64 Valhalla 3.6.3 image and records `valhalla-3.6.3` in new manifests. The old
+3.8.3 package remains a diagnostic artifact only and must not enter the signed catalog.
+
+### Execution checkpoint — matching EKB regional candidate — 2026-09-03
+
+The pilot package was rebuilt on `sodovaya@192.168.1.141` as
+`/home/sodovaya/volty-navigation-build/ekb-package-v0.1.2` with the pinned Valhalla 3.6.3
+image and the ready mobile engine's declared routing-data version. The package verifier accepted
+all three components and 276,841 FTS4 rows; the Valhalla 3.6.3 service smoke returned three trip
+branches including alternatives. The manifest reports 82,401,294 bytes downloaded and
+173,498,489 bytes installed: routing 23,657,305/70,583,783, search 14,176,803/58,347,520, and
+PMTiles 44,567,186/44,567,186.
+
+An ephemeral Ed25519 key was used only to exercise the signer and catalog builder; its private
+key, signed manifest, and catalog were deleted. This proves the publishing mechanics, not a
+production release: the real catalog still requires the deployment signing key and HTTPS object
+storage. The package itself remains outside git.

@@ -37,6 +37,11 @@ def main() -> int:
     parser.add_argument("--region-id", required=True)
     parser.add_argument("--release-version", required=True)
     parser.add_argument("--min-app-version-code", type=int, required=True)
+    parser.add_argument(
+        "--routing-data-version",
+        default="valhalla-3.6.3",
+        help="routing data version consumed by the bundled Valhalla Mobile engine",
+    )
     parser.add_argument("--osm-sequence", type=int, required=True)
     parser.add_argument("--osm-timestamp", required=True)
     parser.add_argument("--bbox", required=True, help="west,south,east,north")
@@ -62,7 +67,7 @@ def main() -> int:
         "compatibility": {
             "minAppVersionCode": args.min_app_version_code,
             "routingEngine": "valhalla",
-            "routingDataVersion": "valhalla-3.8.3",
+            "routingDataVersion": args.routing_data_version,
             "mapSchemaVersion": 1,
             "searchSchemaVersion": 1,
         },

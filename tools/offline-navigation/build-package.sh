@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   echo "Usage: $0 INPUT.osm.pbf OUTPUT_DIR --release-version VERSION --min-app-version-code CODE --osm-sequence N --osm-timestamp ISO-8601 [options]" >&2
-  echo "Options: --bbox west,south,east,north --region-id ID --routing-buffer-km N --base-url URL" >&2
+  echo "Options: --bbox west,south,east,north --region-id ID --routing-buffer-km N --routing-data-version VERSION --base-url URL" >&2
 }
 
 if [[ $# -lt 2 ]]; then usage; exit 2; fi
@@ -22,8 +22,11 @@ MIN_APP_VERSION_CODE=""
 OSM_SEQUENCE=""
 OSM_TIMESTAMP=""
 TOOLS_IMAGE="${TOOLS_IMAGE:-volty/offline-tools:20260903}"
-VALHALLA_IMAGE="${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla@sha256:a7d0d02ed5ce4f2817105b443eb58494a5757fc6b48780a39c9cc62740296432}"
-PMTILES_IMAGE="${PMTILES_IMAGE:-protomaps/go-pmtiles@sha256:06574f01f55a78f78f887bc7ebf729a5c093c0d6e17d9876300cfcb0758b59d4}"
+# The published valhalla-mobile 0.6.3 AAR is built from Valhalla 3.6.3.
+# This is the amd64 image digest used by the reproducible Linux build host.
+VALHALLA_IMAGE="${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla@sha256:0cf1520c6a38b8a7e13a1931541e0ab6e9e42b64b4ca014293b6b8373d493160}"
+ROUTING_DATA_VERSION="${ROUTING_DATA_VERSION:-valhalla-3.6.3}"
+PMTILES_IMAGE="${PMTILES_IMAGE:-protomaps/go-pmtiles@sha256:a52c195560a656b8309311a7d591b90eb2c5ae55ec9111f26049371d86a22a69}"
 THREADS="${THREADS:-6}"
 
 while [[ $# -gt 0 ]]; do
@@ -34,6 +37,7 @@ while [[ $# -gt 0 ]]; do
     --base-url) BASE_URL="$2"; shift 2 ;;
     --release-version) RELEASE_VERSION="$2"; shift 2 ;;
     --min-app-version-code) MIN_APP_VERSION_CODE="$2"; shift 2 ;;
+    --routing-data-version) ROUTING_DATA_VERSION="$2"; shift 2 ;;
     --osm-sequence) OSM_SEQUENCE="$2"; shift 2 ;;
     --osm-timestamp) OSM_TIMESTAMP="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
@@ -115,7 +119,8 @@ python3 "$SCRIPT_DIR/build-manifest.py" \
   --map-installed "$STAGING/installed/map" \
   --region-id "$REGION_ID" --release-version "$RELEASE_VERSION" \
   --min-app-version-code "$MIN_APP_VERSION_CODE" --osm-sequence "$OSM_SEQUENCE" \
-  --osm-timestamp "$OSM_TIMESTAMP" --bbox "$BBOX" --routing-buffer-km "$ROUTING_BUFFER_KM" \
+  --routing-data-version "$ROUTING_DATA_VERSION" --osm-timestamp "$OSM_TIMESTAMP" \
+  --bbox "$BBOX" --routing-buffer-km "$ROUTING_BUFFER_KM" \
   --base-url "$BASE_URL"
 
 mkdir -p "$STAGING/routing" "$STAGING/search" "$STAGING/map"
