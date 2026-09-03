@@ -1272,4 +1272,20 @@ had already exposed that API 34 did not provide the JCA Ed25519 `KeyFactory`; th
 uses the precompiled Bouncy Castle lightweight Ed25519 API while Valhalla remains the precompiled
 Maven `io.github.rallista:valhalla-mobile:0.6.3` artifact. The signed EKB package survived app
 startup, Settings showed `Готово · 0.1.6`, and local `ekb` autocomplete returned `Ekb-Cars`.
-Full test and release gates remain to run on this integrated tree.
+The integrated tree now also has fresh verification evidence: the full Android unit suite is
+`2393` tests with zero failures, errors, or skips; the common database migration task and the
+18-case offline-navigation host-tool suite pass; and the x86 emulator can use the installed EKB
+package with Wi-Fi and mobile data disabled. In that offline smoke, `ekb` returned local FTS
+results, Valhalla returned three route choices (`2.1`, `3.6`, and `4.2 km`), and starting the
+selected route rendered a real localized maneuver (`Поверните налево на улица 8 Марта`). The
+latest Terra planner surface, route chips, glass card, and Settings region lifecycle were
+visually checked on the emulator.
+
+The production packaging gate was run with a deliberately fake catalog URL/key only as a build
+smoke: the signed `0.7.6` APK is `80,718,109` bytes, contains only `arm64-v8a` and
+`armeabi-v7a`, and its dex files contain no `btools/`, `btools.`, or `RoutingEngine` markers.
+The gate is configuration-cache clean. This artifact is not distributable until the real signed
+HTTPS catalog/key is supplied. The full Valhalla Mobile Android ARM64 gate likewise remains open:
+the existing ARM64 evidence is Linux service execution under QEMU, not execution of the Android
+native library; BRouter therefore remains available only to debug builds until that external
+device/host gate is passed.

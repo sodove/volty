@@ -40,10 +40,11 @@ import kotlin.math.ceil
 import kotlin.math.roundToInt
 
 /**
- * Routes locally when the bundled/downloaded BRouter package covers both
- * endpoints, then falls back to the public OSM routers. Search remains online
- * because this class intentionally does not pretend that a routing graph is a
- * geocoder.
+ * Debug-only compatibility repository for the pre-Valhalla BRouter path.
+ * Production builds select [OfflineFirstNavigationRepository] through the
+ * build-time runtime flag and R8 removes this class and its BRouter dependency.
+ * Search remains online because this class intentionally does not pretend that
+ * a routing graph is a geocoder.
  */
 class AndroidHybridNavigationRepository(
     private val online: NavigationRepository,

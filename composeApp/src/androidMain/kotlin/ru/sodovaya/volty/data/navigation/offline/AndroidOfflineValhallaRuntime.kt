@@ -46,16 +46,20 @@ class AndroidOfflineValhallaRuntime(
     ): NavigationResult<RoutePlan> = withContext(Dispatchers.Default) {
         val installed = packageStore.active(regionId)
             ?: return@withContext NavigationResult.Failure(NavigationFailure.Offline)
-        try {
-            val response = invokeValhalla(installed, request)
-            ValhallaRouteCodec.decodeRoutePlan(response, request)
+        val response = try {
+            invokeValhalla(installed, request)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: LinkageError) {
-            NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
+            return@withContext NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
         } catch (_: RuntimeException) {
-            NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
+            return@withContext NavigationResult.Failure(NavigationFailure.ProviderUnavailable)
         }
+
+        // Keep native invocation failures separate from a response that the
+        // engine returned but the app cannot understand. The latter is a
+        // malformed provider response, not an unavailable native engine.
+        ValhallaRouteCodec.decodeRoutePlan(response, request)
     }
 
     private fun invokeValhalla(

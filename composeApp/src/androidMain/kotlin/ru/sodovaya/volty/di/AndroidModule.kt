@@ -2,6 +2,7 @@ package ru.sodovaya.volty.di
 
 import android.content.Context
 import android.os.Build
+import ru.sodovaya.volty.BuildConfig
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
 import ru.sodovaya.volty.data.ble.AndroidBleAdapterStateProvider
@@ -121,7 +122,7 @@ val androidModule = module {
         )
     }
     single<NavigationRepository> {
-        if (get<AndroidOfflineNavigationConfig>().enabled) {
+        if (BuildConfig.VOLTY_OFFLINE_RUNTIME_ENABLED) {
             get<OfflineFirstNavigationRepository>(named(OFFLINE_FIRST_NAVIGATION))
         } else {
             AndroidHybridNavigationRepository(

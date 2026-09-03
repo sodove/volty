@@ -63,9 +63,6 @@
 -dontwarn org.openjsse.net.ssl.OpenJSSE
 -dontwarn kotlin.native.ObjCName
 
-# Embedded BRouter loads its profile model and formatters by class name.
--keep class btools.** { *; }
-
 -flattenpackagehierarchy
 -allowaccessmodification
 
@@ -85,5 +82,8 @@
 } # what the fuck.
 
 -keep, allowobfuscation, allowoptimization class com.sodove.sdveschedule.** { *; }
-# Don't touch third party libraries (what the fuck is going on?)
+# Keep third-party entry points available for reflective integrations, while
+# still allowing R8 to remove an engine that is not reachable in this variant.
+# In particular, production builds must not retain the debug-only BRouter
+# fallback after BuildConfig selects the regional Valhalla runtime.
 -keep, allowobfuscation, allowoptimization, allowshrinking class !com.sodove.sdveschedule.** { *; }

@@ -1,5 +1,45 @@
 import java.util.Base64
 import java.util.Properties
+import java.util.zip.ZipFile
+import org.gradle.api.DefaultTask
+import org.gradle.api.file.RegularFileProperty
+import org.gradle.api.provider.ListProperty
+import org.gradle.api.tasks.Input
+import org.gradle.api.tasks.InputFile
+import org.gradle.api.tasks.PathSensitive
+import org.gradle.api.tasks.PathSensitivity
+import org.gradle.api.tasks.TaskAction
+import org.gradle.work.DisableCachingByDefault
+
+@DisableCachingByDefault(because = "The task inspects the assembled APK contents")
+abstract class VerifyProductionReleaseTask : DefaultTask() {
+    @get:InputFile
+    @get:PathSensitive(PathSensitivity.RELATIVE)
+    abstract val apk: RegularFileProperty
+
+    @get:Input
+    abstract val forbiddenMarkers: ListProperty<String>
+
+    @TaskAction
+    fun verify() {
+        val apkFile = apk.get().asFile
+        require(apkFile.isFile) { "Release APK was not produced: ${apkFile.absolutePath}" }
+
+        val dexMarkers = ZipFile(apkFile).use { archive ->
+            archive.entries().asSequence()
+                .filter { it.name.endsWith(".dex") }
+                .flatMap { entry ->
+                    val bytes = archive.getInputStream(entry).use { it.readBytes() }
+                    val text = bytes.toString(Charsets.ISO_8859_1)
+                    forbiddenMarkers.get().filter(text::contains).asSequence()
+                }
+                .toSet()
+        }
+        require(dexMarkers.isEmpty()) {
+            "Production APK still contains the debug-only BRouter runtime: $dexMarkers"
+        }
+    }
+}
 
 val appVersionCode = 28
 val appVersionName = "0.7.6"
@@ -10,6 +50,7 @@ val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").o
 val offlineCatalogUrl = providers.gradleProperty("voltyOfflineCatalogUrl").orNull.orEmpty()
 val offlineManifestKeyId = providers.gradleProperty("voltyOfflineManifestKeyId").orNull.orEmpty()
 val offlineManifestPublicKey = providers.gradleProperty("voltyOfflineManifestPublicKey").orNull.orEmpty()
+val offlineRuntimeEnabled = productionReleaseGate || offlineCatalogUrl.isNotBlank()
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -140,6 +181,10 @@ android {
     namespace = "ru.sodovaya.volty"
     compileSdk = 36
 
+    buildFeatures {
+        buildConfig = true
+    }
+
     packaging {
         resources {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
@@ -167,6 +212,7 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
+        buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", offlineRuntimeEnabled.toString())
         manifestPlaceholders["voltyOfflineCatalogUrl"] = offlineCatalogUrl
         manifestPlaceholders["voltyOfflineManifestKeyId"] = offlineManifestKeyId
         manifestPlaceholders["voltyOfflineManifestPublicKey"] = offlineManifestPublicKey
@@ -190,6 +236,16 @@ androidComponents {
         // Keep x86 ABIs for debug/emulator builds, but do not ship them in production.
         variant.packaging.jniLibs.excludes.add("**/x86/*.so")
         variant.packaging.jniLibs.excludes.add("**/x86_64/*.so")
+    }
+}
+
+if (productionReleaseGate) {
+    val productionApk = layout.buildDirectory
+        .file("outputs/apk/release/volty-$appVersionName-release.apk")
+    tasks.register<VerifyProductionReleaseTask>("verifyProductionReleaseOmitsBRouter") {
+        apk.set(productionApk)
+        forbiddenMarkers.set(listOf("btools/", "btools.", "RoutingEngine"))
+        dependsOn("assembleRelease")
     }
 }
 
