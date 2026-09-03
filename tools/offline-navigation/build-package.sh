@@ -87,10 +87,18 @@ valhalla_timezone_run() {
     "$VALHALLA_IMAGE" "$@"
 }
 
-echo "Extracting logical region with routing buffer"
-echo "Logical bbox: $BBOX; routing bbox: $ROUTING_BBOX"
-tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=smart \
+echo "Extracting logical region for map and search"
+tools_run osmium extract --bbox "$BBOX" --strategy=smart \
   "/input/$INPUT_NAME" -o /work/region.osm.pbf
+
+echo "Extracting routing-only region with buffer"
+echo "Logical bbox: $BBOX; routing bbox: $ROUTING_BBOX"
+tools_run osmium tags-filter \
+  "/input/$INPUT_NAME" nwr/highway route=ferry type=restriction \
+  -o /work/routing-source.osm.pbf
+tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=complete_ways \
+  /work/routing-source.osm.pbf -o /work/routing.osm.pbf
+rm -f "$STAGING/routing-source.osm.pbf"
 
 echo "Building Valhalla routing component"
 valhalla_timezone_run valhalla_build_timezones > "$STAGING/installed/routing/timezones.sqlite"
@@ -99,8 +107,11 @@ valhalla_run valhalla_build_config \
   --mjolnir-tile-extract /work/installed/routing/tiles.tar \
   --mjolnir-admin /work/installed/routing/admins.sqlite \
   --mjolnir-timezone /work/installed/routing/timezones.sqlite > "$STAGING/installed/routing/valhalla.json"
+# Administrative boundaries come from the logical extract. The routing-only
+# input deliberately omits multipolygon/admin relations to keep its graph
+# bounded, but the package still needs a useful admins.sqlite.
 valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json /work/region.osm.pbf
-valhalla_run valhalla_build_tiles -c /work/installed/routing/valhalla.json -j "$THREADS" /work/region.osm.pbf
+valhalla_run valhalla_build_tiles -c /work/installed/routing/valhalla.json -j "$THREADS" /work/routing.osm.pbf
 valhalla_run valhalla_build_extract -c /work/installed/routing/valhalla.json -v
 sed -i 's#/work/installed/routing#/work#g' "$STAGING/installed/routing/valhalla.json"
 tar -czf "$STAGING/artifacts/routing/valhalla-routing.tar.gz" \
@@ -140,7 +151,8 @@ mkdir -p "$STAGING/routing" "$STAGING/search" "$STAGING/map"
 mv "$STAGING/artifacts/routing/valhalla-routing.tar.gz" "$STAGING/routing/"
 mv "$STAGING/artifacts/search/places.sqlite.gz" "$STAGING/search/"
 mv "$STAGING/artifacts/map/$MAP_FILE" "$STAGING/map/"
-rm -rf "$STAGING/artifacts" "$STAGING/installed" "$STAGING/region.osm.pbf" "$STAGING/map.mbtiles"
+rm -rf "$STAGING/artifacts" "$STAGING/installed" "$STAGING/region.osm.pbf" \
+  "$STAGING/routing.osm.pbf" "$STAGING/map.mbtiles"
 python3 "$SCRIPT_DIR/verify-package.py" "$STAGING"
 mv "$STAGING" "$OUTPUT"
 trap - EXIT

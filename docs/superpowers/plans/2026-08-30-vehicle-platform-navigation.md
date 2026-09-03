@@ -1129,10 +1129,19 @@ gate when the explicit build pause is lifted.
 ### Execution checkpoint — enforce the regional routing buffer — 2026-09-03
 
 The package builder now expands the logical region bbox by the requested
-`--routing-buffer-km` before the OSM extract used by Valhalla, search, and PMTiles.
-The previous script only recorded that value in the manifest while extracting the
-unexpanded bbox, which could cut routes at the published edge. Expansion is
-latitude-aware and clamps to world bounds; host tests cover normal EKB geometry and
-world-edge clamping.
+`--routing-buffer-km` for a routing-only extract. The map and search extracts
+remain logical, while the Valhalla input is filtered to highway/ferry and
+restriction data before `complete_ways`, preventing administrative multipolygons
+from expanding the graph to the whole source. The previous script only recorded
+the buffer in the manifest while extracting the unexpanded bbox, which could cut
+routes at the published edge. Expansion is latitude-aware and clamps to world
+bounds; host tests cover normal EKB geometry and world-edge clamping.
+
+The remote EKB pilot package `v0.1.4` was rebuilt with a 20 km routing buffer.
+The package is 154 MB and passed its verifier with 276,841 FTS rows and all
+three component checks. A Valhalla 3.6.3 service smoke against the packaged
+`tiles.tar` returned status `0` and two alternatives; the three route summaries
+were 9.674, 9.483, and 7.694 km. This validates the artifact pipeline and
+alternative generation, not the Android ABI/runtime gate.
 
 No APK/Gradle build was run.

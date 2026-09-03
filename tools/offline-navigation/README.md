@@ -65,9 +65,10 @@ installation.
 
 The current pilot bbox is the EKB agglomeration with a routing buffer:
 `59.10,56.00,61.90,57.55` (west,south,east,north). The builder expands this
-logical bbox by `--routing-buffer-km` before `osmium extract` so routes can
-cross the edge without a graph cut; the manifest coverage remains the
-published logical region and must be checked before release.
+logical bbox by `--routing-buffer-km` for a routing-only extract, keeping
+administrative multipolygons out of the Valhalla input. Map and search use the
+logical extract; the manifest coverage remains the published logical region
+and must be checked before release.
 
 The default Valhalla image, PMTiles converter, and Ubuntu tool image are pinned
 by digest in `build-package.sh`/`Dockerfile`. A release may override them only

@@ -139,7 +139,7 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
             '    -v "$STAGING:/work" -v "$PARENT:/input:ro" \\\n'
             '    "$VALHALLA_IMAGE" "$@"\n'
             '}\n\n'
-            'echo "Extracting logical region with routing buffer"',
+            'echo "Extracting logical region for map and search"',
             script,
         )
         self.assertIn(
@@ -147,7 +147,21 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
             script,
         )
         self.assertIn(
-            'tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=smart',
+            'tools_run osmium tags-filter \\\n'
+            '  "/input/$INPUT_NAME" nwr/highway route=ferry type=restriction \\\n'
+            '  -o /work/routing-source.osm.pbf',
+            script,
+        )
+        self.assertIn(
+            'tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=complete_ways',
+            script,
+        )
+        self.assertIn(
+            'valhalla_run valhalla_build_tiles -c /work/installed/routing/valhalla.json -j "$THREADS" /work/routing.osm.pbf',
+            script,
+        )
+        self.assertIn(
+            'valhalla_run valhalla_build_admins -c /work/installed/routing/valhalla.json /work/region.osm.pbf',
             script,
         )
         self.assertNotIn(
