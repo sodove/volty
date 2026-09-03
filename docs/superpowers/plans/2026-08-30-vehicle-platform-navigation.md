@@ -950,3 +950,16 @@ same request coordinates after it completes. This queues the current region with
 online result, while the existing metered-data policy still turns the queued request into a prompt
 unless the rider enabled the no-prompt setting. A regression test covers the suspended-refresh
 interleaving and confirms that it queues exactly one region after catalog publication.
+
+### Execution checkpoint — upstream AAR release verification — 2026-09-03
+
+The Android bridge now consumes the ready `io.github.rallista:valhalla-mobile:0.6.3` artifact
+directly, together with its version-matched models/config artifacts; Valhalla itself was not
+rebuilt. Reflection was removed from the production path, so R8 renaming cannot break engine
+creation. A clean `:composeApp:assembleRelease --rerun-tasks` completed successfully, and the full
+`:composeApp:testDebugUnitTest --rerun-tasks` suite completed successfully. The signed `0.7.6`
+APK is 79,431,244 bytes and contains only the release ABIs `arm64-v8a` and `armeabi-v7a`.
+
+This verifies packaging and JVM wiring, not native execution on ARM64 hardware. The ARM64
+Valhalla Mobile smoke therefore remains the next release gate; BRouter assets stay present until
+that gate, the configured signed-catalog smoke, and the end-to-end regional package path pass.
