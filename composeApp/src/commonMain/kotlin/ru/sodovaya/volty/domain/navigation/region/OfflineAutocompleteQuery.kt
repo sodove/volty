@@ -37,7 +37,7 @@ object OfflineAutocompleteQueryPolicy {
         rawValue.trim().lowercase().forEach { character ->
             if (character.isLetterOrDigit()) {
                 if (pendingSpace && isNotEmpty()) append(' ')
-                append(character)
+                append(if (character == 'ё') 'е' else character)
                 pendingSpace = false
             } else if (isNotEmpty()) {
                 pendingSpace = true

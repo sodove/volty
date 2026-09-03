@@ -26,6 +26,11 @@ def _values(properties: dict[str, Any], *keys: str) -> list[str]:
     return values
 
 
+def _search_normalize(value: str) -> str:
+    """Keep display text intact while matching Kotlin's Russian token folding."""
+    return value.lower().replace("ё", "е")
+
+
 def _centroid(coordinates: Any) -> tuple[float, float] | None:
     points: list[tuple[float, float]] = []
 
@@ -74,7 +79,7 @@ def _rows(features: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str, float,
         if point is None:
             continue
         display_name = names[0] if names else " ".join(address)
-        search_text = " ".join(dict.fromkeys(names + address))
+        search_text = _search_normalize(" ".join(dict.fromkeys(names + address)))
         osm_id = str(properties.get("id", properties.get("osm_id", "")))
         yield display_name, search_text, point[0], point[1], _kind(properties), osm_id
 

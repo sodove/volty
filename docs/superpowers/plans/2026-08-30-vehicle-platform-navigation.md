@@ -1207,3 +1207,11 @@ fix is available, proximity breaks ties between equally relevant candidates inst
 relevance entirely. This prevents a nearby weak hit from hiding the exact place the rider typed,
 while preserving local ordering for equally good results. Two focused regressions cover both
 rules; a fresh direct x86 JVM compile and four-method run passed. No APK or Gradle build was run.
+
+### Execution checkpoint — Russian ё/е autocomplete folding — 2026-09-03
+
+Offline search now folds Russian `ё` to `е` consistently in Kotlin query normalization and in the
+host-side FTS index generator. The visible OSM display name remains unchanged, while the indexed
+search text allows either spelling to match the same place. Focused Kotlin query/ranking checks
+pass `8/8`; the host tool suite passes `17/17`, Python compilation passes, and a temporary SQLite
+FTS smoke finds `Ёлка` through the `ел*` prefix. No APK or Gradle build was run.

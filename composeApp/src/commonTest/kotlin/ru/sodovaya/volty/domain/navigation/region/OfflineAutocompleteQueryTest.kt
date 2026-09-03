@@ -30,4 +30,13 @@ class OfflineAutocompleteQueryTest {
         assertNull(OfflineAutocompleteQueryPolicy.parse("а"))
         assertEquals(20, OfflineAutocompleteQueryPolicy.parse("ек", limit = 100)?.limit)
     }
+
+    @Test
+    fun russian_yo_and_e_share_the_same_search_tokens() {
+        assertEquals("елка", OfflineAutocompleteQueryPolicy.normalize("Ёлка"))
+        assertEquals(
+            "ел*",
+            OfflineAutocompleteQueryPolicy.parse("ёл")?.ftsMatchExpression,
+        )
+    }
 }

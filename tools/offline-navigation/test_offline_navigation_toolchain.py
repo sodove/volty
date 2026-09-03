@@ -21,6 +21,10 @@ VERIFY_SPEC = importlib.util.spec_from_file_location("verify_package", VERIFY_SC
 assert VERIFY_SPEC is not None and VERIFY_SPEC.loader is not None
 VERIFY_MODULE = importlib.util.module_from_spec(VERIFY_SPEC)
 VERIFY_SPEC.loader.exec_module(VERIFY_MODULE)
+SEARCH_SPEC = importlib.util.spec_from_file_location("build_search", ROOT / "build-search.py")
+assert SEARCH_SPEC is not None and SEARCH_SPEC.loader is not None
+SEARCH_MODULE = importlib.util.module_from_spec(SEARCH_SPEC)
+SEARCH_SPEC.loader.exec_module(SEARCH_MODULE)
 
 
 def complete_config() -> dict[str, object]:
@@ -109,6 +113,19 @@ def write_package(
 
 
 class OfflineNavigationToolchainTest(unittest.TestCase):
+    def test_search_index_folds_russian_yo_without_changing_display_name(self):
+        features = [
+            {
+                "properties": {"name:ru": "Ёлка", "addr:city": "Екатеринбург"},
+                "geometry": {"type": "Point", "coordinates": [60.6, 56.8]},
+            }
+        ]
+
+        rows = list(SEARCH_MODULE._rows(features))
+
+        self.assertEqual("Ёлка", rows[0][0])
+        self.assertEqual("елка екатеринбург", rows[0][1])
+
     def test_routing_bbox_expands_logical_bbox_by_requested_buffer(self):
         bbox = EXPAND_MODULE.expand_bbox(
             EXPAND_MODULE.parse_bbox("59.10,56.00,61.90,57.55"),
