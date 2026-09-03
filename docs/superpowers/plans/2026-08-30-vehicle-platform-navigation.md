@@ -741,3 +741,62 @@ motion. Offline navigation is now in scope, subject to an honest regional-covera
    and license/attribution state.
 5. Run full Android/backend suites, migration check, release build, online and offline emulator
    smoke, stale GPS, provider failures, alternatives, reroute, recreation, and BLE-write scan.
+
+## Requirement amendment — Valhalla Mobile and complete offline MVP (2026-09-03)
+
+The 2026-08-31 offline-boundary section is retracted where it names BRouter as the target engine,
+keeps offline address search out of scope, or defers the offline map. The current product decision
+is the corrected Sol plan: **Valhalla Mobile + a full regional package containing routing, offline
+geocoding, and PMTiles map data**. BRouter remains only a measured fallback if the Valhalla gate
+fails; both engines must not ship in the production app.
+
+The same amendment also retracts the proposed `TransportAccessProfile` enum (`EUC`, scooter,
+bicycle). The app and domain request use one generic `VoltyRide` profile. The four user-visible
+styles are `FAST_WITH_HIGHWAYS`, `FAST_WITHOUT_HIGHWAYS`, `CURVY`, and `MAX_CURVY_TOURING`.
+Speed preference (20–130 km/h) affects costing only; it never grants vehicle access or creates a
+jurisdictional restriction. No type-derived motorway ban is allowed. Real OSM access and safety
+restrictions remain engine data, not a hidden vehicle selector.
+
+### Decision gate before implementation
+
+The target library is currently published as `io.github.rallista:valhalla-mobile:0.6.3`. Its Android
+AAR was inspected on 2026-09-03: 10,455,999 bytes and native libraries for `arm64-v8a`,
+`armeabi-v7a`, `x86`, and `x86_64`. The wrapper exposes local `route`/`routeRaw` calls and config
+factories for a tiles directory or tile extract. See the [Valhalla Mobile README](https://github.com/Rallista/valhalla-mobile)
+and [Valhalla tile specification](https://github.com/valhalla/valhalla-docs/blob/master/tiles.md).
+
+The gate is not passed yet. This checkout has NDK `27.0.12077973`, while the wrapper's Android
+build instructions currently specify NDK `29.0.14206865`; no real Valhalla regional tileset has
+been run through the wrapper in Volty. Before deleting the BRouter prototype, build a throwaway
+ARM64/debug smoke with the published AAR, load a real Yekaterinburg tileset, execute a route, and
+measure alternatives, cold start, peak RSS, native size, and process/lifecycle stability. Debug
+must also exercise x86_64; release must exclude x86 and x86_64. PASS requires a usable first route,
+at least one genuinely distinct alternative on the route corpus, no native crash, and agreed size/
+memory budgets. FAIL keeps BRouter as a separately documented fallback decision, not as an unseen
+second production engine.
+
+### MVP boundary after the gate
+
+MVP includes the regional catalog and downloader from search/route/map/Settings; staged,
+checksum-validated, atomic install with rollback; full offline autocomplete/geocoding; Valhalla
+offline routing; the four styles with progressive diversity filtering; and PMTiles map rendering
+with automatic local/online source selection. The pilot is a logical Yekaterinburg agglomeration
+region with a routing buffer, not a large APK asset.
+
+The manifest is the source of truth for exact download/installed sizes. Provisional pilot budgeting
+is 135–360 MB downloaded and 200–540 MB installed across routing, search, and map components; the UI
+must show only published manifest values. Post-MVP: delta updates, LRU cleanup, seamless multi-region
+routing, advanced scenic signals, traffic, and custom map styles.
+
+### First implementation slices
+
+1. Complete the Valhalla gate without changing the current provider or removing BRouter assets.
+2. Add common contracts and tests for `VoltyRide`, the four styles, coverage, package states,
+   progressive route events, and route diversity.
+3. Build reproducible Yekaterinburg Valhalla/search/PMTiles artifacts and a signed manifest.
+4. Implement the multi-region package repository, resumable downloads, network policy, recovery,
+   and Settings surface.
+5. Add the offline geocoder, PMTiles source selector, and Valhalla route adapter in separate
+   increments; only after each failing test is observed may production behavior be added.
+6. Integrate search/route/map auto-download and online parity, then remove the old bundled BRouter
+   flow only after the end-to-end gate and device smoke pass.
