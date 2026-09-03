@@ -34,8 +34,8 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
-import kotlin.math.abs
 import kotlin.math.ceil
+import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
 
 class OsmNavigationRepository(
     private val client: HttpClient = createNavigationHttpClient(),
@@ -222,21 +222,21 @@ class OsmNavigationRepository(
     }
 
     private fun RoutePlan.aggregateWith(other: RoutePlan, limit: Int): RoutePlan {
-        val alternatives = mutableListOf<RouteAlternative>()
-        (this.alternatives + other.alternatives).forEach { candidate ->
-            if (alternatives.size < limit && alternatives.none { it.isEquivalentTo(candidate) }) {
-                alternatives += candidate
-            }
-        }
         return copy(
-            alternatives = alternatives.mapIndexed { index, route ->
+            alternatives = RouteDiversityPolicy.select(
+                candidates = this.alternatives + other.alternatives,
+                limit = limit,
+            ).mapIndexed { index, route ->
                 route.withDeterministicId(index)
             },
         )
     }
 
     private fun RoutePlan.withDeterministicRouteIds(limit: Int): RoutePlan = copy(
-        alternatives = alternatives.take(limit).mapIndexed { index, route ->
+        alternatives = RouteDiversityPolicy.select(
+            candidates = alternatives,
+            limit = limit,
+        ).mapIndexed { index, route ->
             route.withDeterministicId(index)
         },
     )
@@ -254,33 +254,6 @@ class OsmNavigationRepository(
                 maneuver.copy(id = maneuverId)
             },
         )
-    }
-
-    private fun RouteAlternative.isEquivalentTo(other: RouteAlternative): Boolean {
-        val distanceTolerance = maxOf(
-            ROUTE_DISTANCE_TOLERANCE_METERS,
-            maxOf(distanceMeters, other.distanceMeters) * ROUTE_DISTANCE_TOLERANCE_RATIO,
-        )
-        val durationTolerance = maxOf(
-            ROUTE_DURATION_TOLERANCE_SECONDS.toDouble(),
-            maxOf(durationSeconds, other.durationSeconds).toDouble() * ROUTE_DURATION_TOLERANCE_RATIO,
-        )
-        return abs(distanceMeters - other.distanceMeters) <= distanceTolerance &&
-            abs(durationSeconds.toDouble() - other.durationSeconds.toDouble()) <= durationTolerance &&
-            geometriesEquivalent(geometry, other.geometry)
-    }
-
-    private fun geometriesEquivalent(
-        first: List<GeoCoordinate>,
-        second: List<GeoCoordinate>,
-    ): Boolean = first.all { point -> second.any { it.isWithinRouteToleranceOf(point) } } &&
-        second.all { point -> first.any { it.isWithinRouteToleranceOf(point) } }
-
-    private fun GeoCoordinate.isWithinRouteToleranceOf(other: GeoCoordinate): Boolean {
-        val latitudeDelta = latitude - other.latitude
-        val longitudeDelta = longitude - other.longitude
-        return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta <=
-            ROUTE_GEOMETRY_TOLERANCE_DEGREES * ROUTE_GEOMETRY_TOLERANCE_DEGREES
     }
 
     private fun decodeRouteAlternative(
@@ -600,12 +573,7 @@ class OsmNavigationRepository(
         const val MAX_RESPONSE_CHARS = 2_000_000
         const val MAX_RESPONSE_BYTES = MAX_RESPONSE_CHARS * 4L + 1L
         const val MAX_ALTERNATIVES = 3
-        const val ROUTE_DISTANCE_TOLERANCE_METERS = 25.0
         val WHITESPACE = Regex("\\s+")
-        const val ROUTE_DISTANCE_TOLERANCE_RATIO = 0.02
-        const val ROUTE_DURATION_TOLERANCE_SECONDS = 5L
-        const val ROUTE_DURATION_TOLERANCE_RATIO = 0.05
-        const val ROUTE_GEOMETRY_TOLERANCE_DEGREES = 0.0002
         const val DEFAULT_RETRY_AFTER_SECONDS = 60L
         val SUPPORTED_PHOTON_LANGUAGES = setOf("default", "de", "en", "fr", "it")
         val json = Json {

@@ -1,5 +1,8 @@
 package ru.sodovaya.volty.domain.navigation
 
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.RoutingPreferences
+
 data class GeoCoordinate(
     val latitude: Double,
     val longitude: Double,
@@ -91,6 +94,8 @@ data class RouteRequest(
     val origin: GeoCoordinate,
     val destination: PlaceCandidate,
     val languageTag: String,
+    val style: RouteStyle = RouteStyle.FAST_WITH_HIGHWAYS,
+    val preferences: RoutingPreferences = RoutingPreferences(),
     val alternativesLimit: Int = 3,
 )
 
