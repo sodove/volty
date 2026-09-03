@@ -12,6 +12,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoder
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoderRequest
+import ru.sodovaya.volty.domain.navigation.region.OfflineAutocompleteRankingPolicy
 
 /**
  * Reads the regional FTS4 database produced by tools/offline-navigation.
@@ -77,22 +78,23 @@ class AndroidOfflineFtsGeocoder(
     ): List<PlaceCandidate> {
         val rows = mutableListOf<RankedPlace>()
         val sql = """
-            SELECT rowid, display_name, latitude, longitude, kind, osm_id
+            SELECT rowid, display_name, search_text, latitude, longitude, kind, osm_id
             FROM places
             WHERE places MATCH ?
-            LIMIT ${request.query.limit}
+            LIMIT ${request.query.limit * SEARCH_CANDIDATE_MULTIPLIER}
         """.trimIndent()
         database.rawQuery(sql, arrayOf(request.query.ftsMatchExpression)).use { cursor ->
             while (cursor.moveToNext()) {
                 val title = cursor.getString(1)?.trim().orEmpty()
-                val latitude = cursor.getDouble(2)
-                val longitude = cursor.getDouble(3)
+                val searchableText = cursor.getString(2)?.trim().orEmpty()
+                val latitude = cursor.getDouble(3)
+                val longitude = cursor.getDouble(4)
                 if (title.isBlank() || !latitude.isFinite() || !longitude.isFinite()) continue
                 val coordinate = runCatching { GeoCoordinate(latitude, longitude) }.getOrNull()
                     ?: continue
                 val rowId = cursor.getLong(0)
-                val osmId = cursor.getString(5)?.trim().orEmpty()
-                val kind = cursor.getString(4)?.trim().takeIf { !it.isNullOrBlank() }
+                val osmId = cursor.getString(6)?.trim().orEmpty()
+                val kind = cursor.getString(5)?.trim().takeIf { !it.isNullOrBlank() }
                 rows += RankedPlace(
                     candidate = PlaceCandidate(
                         id = if (osmId.isNotBlank()) "$regionId:$osmId" else "$regionId:$rowId",
@@ -105,13 +107,25 @@ class AndroidOfflineFtsGeocoder(
                         val longitudeDelta = (longitude - near.longitude) * longitudeScale(latitude)
                         latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta
                     },
+                    relevanceScore = OfflineAutocompleteRankingPolicy.score(
+                        query = request.query,
+                        displayName = title,
+                        searchableText = searchableText,
+                    ),
                     rowId = rowId,
                 )
             }
         }
-        return rows
-            .sortedWith(compareBy<RankedPlace> { it.distanceSquared ?: Double.POSITIVE_INFINITY }.thenBy { it.rowId })
-            .map(RankedPlace::candidate)
+        val ordered = if (request.near == null) {
+            rows.sortedWith(compareBy<RankedPlace> { it.relevanceScore }.thenBy { it.rowId })
+        } else {
+            rows.sortedWith(
+                compareBy<RankedPlace> { it.distanceSquared ?: Double.POSITIVE_INFINITY }
+                    .thenBy { it.relevanceScore }
+                    .thenBy { it.rowId },
+            )
+        }
+        return ordered.take(request.query.limit).map(RankedPlace::candidate)
     }
 
     private fun longitudeScale(latitude: Double): Double =
@@ -120,6 +134,7 @@ class AndroidOfflineFtsGeocoder(
     private data class RankedPlace(
         val candidate: PlaceCandidate,
         val distanceSquared: Double?,
+        val relevanceScore: Int,
         val rowId: Long,
     )
 
@@ -127,5 +142,6 @@ class AndroidOfflineFtsGeocoder(
         const val SEARCH_SCHEMA_VERSION = 1
         const val METADATA_SCHEMA_KEY = "schema"
         const val METADATA_REGION_KEY = "region_id"
+        const val SEARCH_CANDIDATE_MULTIPLIER = 8
     }
 }

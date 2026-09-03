@@ -19,18 +19,7 @@ object OfflineAutocompleteQueryPolicy {
     ): OfflineAutocompleteQuery? {
         val boundedLimit = limit.coerceIn(1, MAX_LIMIT)
 
-        val normalized = buildString {
-            var pendingSpace = false
-            rawQuery.trim().lowercase().forEach { character ->
-                if (character.isLetterOrDigit()) {
-                    if (pendingSpace && isNotEmpty()) append(' ')
-                    append(character)
-                    pendingSpace = false
-                } else if (isNotEmpty()) {
-                    pendingSpace = true
-                }
-            }
-        }
+        val normalized = normalize(rawQuery)
         if (normalized.length < MIN_SEARCHABLE_CHARACTERS) return null
 
         val tokens = normalized.split(' ')
@@ -40,5 +29,39 @@ object OfflineAutocompleteQueryPolicy {
             ftsMatchExpression = tokens.joinToString(" AND ") { "$it*" },
             limit = boundedLimit,
         )
+    }
+
+    /** Uses the same Unicode-safe normalization for indexed values and input. */
+    fun normalize(rawValue: String): String = buildString {
+        var pendingSpace = false
+        rawValue.trim().lowercase().forEach { character ->
+            if (character.isLetterOrDigit()) {
+                if (pendingSpace && isNotEmpty()) append(' ')
+                append(character)
+                pendingSpace = false
+            } else if (isNotEmpty()) {
+                pendingSpace = true
+            }
+        }
+    }
+}
+
+/** Stable, bounded relevance ordering for the rows returned by regional FTS. */
+object OfflineAutocompleteRankingPolicy {
+    fun score(
+        query: OfflineAutocompleteQuery,
+        displayName: String,
+        searchableText: String,
+    ): Int {
+        val title = OfflineAutocompleteQueryPolicy.normalize(displayName)
+        val searchable = OfflineAutocompleteQueryPolicy.normalize(searchableText)
+        val titleTokens = title.split(' ').filter(String::isNotBlank)
+        return when {
+            title == query.normalized -> 0
+            title.startsWith(query.normalized) -> 1
+            query.tokens.all { token -> titleTokens.any { it.startsWith(token) } } -> 2
+            searchable.startsWith(query.normalized) -> 3
+            else -> 4
+        }
     }
 }

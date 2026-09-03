@@ -1019,3 +1019,12 @@ validation and the package-store install check remain in place, so a forged or o
 unverified release fails closed before network bytes are committed to staging. Verification errors
 are treated as invalid signatures, and catalog entries without a downloadable release remain valid.
 The common signature-policy regression test passes; no production key or catalog endpoint was added.
+
+### Execution checkpoint — bounded relevance for local autocomplete — 2026-09-03
+
+The regional FTS adapter now reads a bounded candidate window (at most eight times the requested
+limit), scores exact display-name matches and title prefixes ahead of address-only matches, then
+returns the original requested limit. GPS-aware searches still prioritize proximity, using
+relevance only as a stable tie-breaker; location-free searches use relevance first. The ranking and
+normalization rules are pure common code with focused regression tests, while the Android adapter
+continues to bind all query values and never interpolates user text into SQL.
