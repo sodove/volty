@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class OfflineAutocompleteRankingPolicyTest {
@@ -38,5 +39,51 @@ class OfflineAutocompleteRankingPolicyTest {
         )
 
         assertTrue(titlePrefix < addressMatch)
+    }
+
+    @Test
+    fun proximity_does_not_beat_a_stronger_title_match() {
+        val ordered = OfflineAutocompleteRankingPolicy.order(
+            rows = listOf(
+                OfflineAutocompleteRankedRow(
+                    value = "near-address-match",
+                    relevanceScore = 3,
+                    distanceSquared = 0.000001,
+                    stableId = 1,
+                ),
+                OfflineAutocompleteRankedRow(
+                    value = "far-exact-title",
+                    relevanceScore = 0,
+                    distanceSquared = 1.0,
+                    stableId = 2,
+                ),
+            ),
+            preferProximity = true,
+        )
+
+        assertEquals(listOf("far-exact-title", "near-address-match"), ordered)
+    }
+
+    @Test
+    fun proximity_breaks_ties_between_equally_relevant_rows() {
+        val ordered = OfflineAutocompleteRankingPolicy.order(
+            rows = listOf(
+                OfflineAutocompleteRankedRow(
+                    value = "far",
+                    relevanceScore = 1,
+                    distanceSquared = 0.1,
+                    stableId = 1,
+                ),
+                OfflineAutocompleteRankedRow(
+                    value = "near",
+                    relevanceScore = 1,
+                    distanceSquared = 0.01,
+                    stableId = 2,
+                ),
+            ),
+            preferProximity = true,
+        )
+
+        assertEquals(listOf("near", "far"), ordered)
     }
 }

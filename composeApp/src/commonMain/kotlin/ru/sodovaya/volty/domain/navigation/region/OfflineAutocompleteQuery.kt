@@ -48,6 +48,23 @@ object OfflineAutocompleteQueryPolicy {
 
 /** Stable, bounded relevance ordering for the rows returned by regional FTS. */
 object OfflineAutocompleteRankingPolicy {
+    /**
+     * The local index returns a bounded candidate window, so ranking must be
+     * deterministic and happen after FTS matching. Relevance is the primary
+     * signal: GPS proximity only breaks ties between equally good matches.
+     */
+    fun <T> order(
+        rows: Iterable<OfflineAutocompleteRankedRow<T>>,
+        preferProximity: Boolean,
+    ): List<T> = rows.sortedWith(
+        compareBy<OfflineAutocompleteRankedRow<T>> { it.relevanceScore }
+            .thenBy { row ->
+                if (preferProximity) row.distanceSquared ?: Double.POSITIVE_INFINITY
+                else Double.POSITIVE_INFINITY
+            }
+            .thenBy { it.stableId },
+    ).map(OfflineAutocompleteRankedRow<T>::value)
+
     fun score(
         query: OfflineAutocompleteQuery,
         displayName: String,
@@ -65,3 +82,11 @@ object OfflineAutocompleteRankingPolicy {
         }
     }
 }
+
+/** Internal ranking row kept platform-neutral so Android does not own search semantics. */
+data class OfflineAutocompleteRankedRow<T>(
+    val value: T,
+    val relevanceScore: Int,
+    val distanceSquared: Double?,
+    val stableId: Long,
+)

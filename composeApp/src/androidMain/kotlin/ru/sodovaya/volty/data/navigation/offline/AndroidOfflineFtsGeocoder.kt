@@ -13,6 +13,7 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoder
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoderRequest
 import ru.sodovaya.volty.domain.navigation.region.OfflineAutocompleteRankingPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineAutocompleteRankedRow
 
 /**
  * Reads the regional FTS4 database produced by tools/offline-navigation.
@@ -116,16 +117,17 @@ class AndroidOfflineFtsGeocoder(
                 )
             }
         }
-        val ordered = if (request.near == null) {
-            rows.sortedWith(compareBy<RankedPlace> { it.relevanceScore }.thenBy { it.rowId })
-        } else {
-            rows.sortedWith(
-                compareBy<RankedPlace> { it.distanceSquared ?: Double.POSITIVE_INFINITY }
-                    .thenBy { it.relevanceScore }
-                    .thenBy { it.rowId },
-            )
-        }
-        return ordered.take(request.query.limit).map(RankedPlace::candidate)
+        return OfflineAutocompleteRankingPolicy.order(
+            rows = rows.map { row ->
+                OfflineAutocompleteRankedRow(
+                    value = row.candidate,
+                    relevanceScore = row.relevanceScore,
+                    distanceSquared = row.distanceSquared,
+                    stableId = row.rowId,
+                )
+            },
+            preferProximity = request.near != null,
+        ).take(request.query.limit)
     }
 
     private fun longitudeScale(latitude: Double): Double =

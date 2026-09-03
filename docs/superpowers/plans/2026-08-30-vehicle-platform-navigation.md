@@ -1198,3 +1198,12 @@ candidate must not consume one of the three alternative slots. The filter now co
 bounded route geometry tolerance, while genuinely parallel corridors remain distinct. A fresh
 direct x86 JVM compile and five-method route-policy run passed, including a regression with the
 same geometry and deliberately different distance/time. No APK or Gradle build was run.
+
+### Execution checkpoint — relevance-first offline autocomplete — 2026-09-03
+
+The local FTS adapter now uses one platform-neutral ordering policy for both location-aware and
+location-free searches. Exact names and title prefixes outrank address-only matches; when a GPS
+fix is available, proximity breaks ties between equally relevant candidates instead of replacing
+relevance entirely. This prevents a nearby weak hit from hiding the exact place the rider typed,
+while preserving local ordering for equally good results. Two focused regressions cover both
+rules; a fresh direct x86 JVM compile and four-method run passed. No APK or Gradle build was run.
