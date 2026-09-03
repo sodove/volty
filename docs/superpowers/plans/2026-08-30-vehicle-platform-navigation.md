@@ -1184,3 +1184,8 @@ curvature control; Valhalla 3.6.3 cannot guarantee scenic geometry from the four
 The change was compiled on the x86 host without Gradle: main compile `0`, test compile `0`, and
 all five codec test methods passed. It is committed as `f2d6a88e` and pushed to
 `codex/light-navigator`. No APK or production application build was run.
+
+The same host also ran the exact request against the packaged Valhalla 3.6.3 service from
+`v0.1.5`: the status endpoint became ready, `alternates` was present, and three returned trips
+had distinct geometry hashes with lengths 1.834, 1.816, and 3.182 km. The one-shot container and
+temporary extract were removed after the smoke.
