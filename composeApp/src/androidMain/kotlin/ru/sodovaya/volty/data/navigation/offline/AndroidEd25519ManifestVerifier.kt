@@ -4,10 +4,10 @@ import android.util.Base64
 import java.security.KeyFactory
 import java.security.Signature
 import java.security.spec.X509EncodedKeySpec
-import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalog
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogCodec
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCodec
 
@@ -41,6 +41,7 @@ class AndroidEd25519ManifestVerifier(
     }
 
     override fun verify(catalog: OfflineRegionCatalog): Boolean {
+        val key = publicKey ?: return false
         val signature = catalog.signature
         if (signature.keyId != expectedKeyId ||
             signature.algorithm.lowercase() != "ed25519"
@@ -48,7 +49,7 @@ class AndroidEd25519ManifestVerifier(
         return runCatching {
             val encodedSignature = Base64.decode(signature.value, Base64.DEFAULT)
             Signature.getInstance("Ed25519").run {
-                initVerify(publicKey ?: return@run false)
+                initVerify(key)
                 update(OfflineRegionCatalogCodec.signingPayload(catalog).toByteArray(Charsets.UTF_8))
                 verify(encodedSignature)
             }
