@@ -6,11 +6,11 @@ data class OfflineRouteCalculationBudget(
 )
 
 object OfflineRouteCalculationPolicy {
-    private const val FIRST_RESULT_ALTERNATIVES = 1
-    private const val FIRST_RESULT_RUNTIME_MILLIS = 10_000L
+    private const val MAX_ALTERNATIVES = 3
+    private const val ROUTE_RUNTIME_MILLIS = 10_000L
 
-    fun firstResultBudget(): OfflineRouteCalculationBudget = OfflineRouteCalculationBudget(
-        maxAlternatives = FIRST_RESULT_ALTERNATIVES,
-        maxRuntimeMillis = FIRST_RESULT_RUNTIME_MILLIS,
+    fun routeBudget(alternativesLimit: Int): OfflineRouteCalculationBudget = OfflineRouteCalculationBudget(
+        maxAlternatives = alternativesLimit.coerceIn(1, MAX_ALTERNATIVES),
+        maxRuntimeMillis = ROUTE_RUNTIME_MILLIS,
     )
 }

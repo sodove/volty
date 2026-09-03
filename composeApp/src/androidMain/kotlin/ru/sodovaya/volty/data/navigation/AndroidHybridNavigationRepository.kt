@@ -9,6 +9,9 @@ import btools.router.RoutingContext
 import btools.router.RoutingEngine
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -31,8 +34,8 @@ import ru.sodovaya.volty.domain.navigation.RouteRequest
 import ru.sodovaya.volty.domain.navigation.offline.OfflineCoverageResult
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRouteCalculationPolicy
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRoutingPolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
 import kotlin.math.ceil
-import kotlin.math.abs
 import kotlin.math.roundToInt
 
 /**
@@ -85,17 +88,27 @@ class AndroidHybridNavigationRepository(
         packageDirectory: java.io.File,
     ): NavigationResult<RoutePlan> = withContext(Dispatchers.Default) {
         try {
-            val budget = OfflineRouteCalculationPolicy.firstResultBudget()
-            val alternatives = mutableListOf<RouteAlternative>()
-            for (alternativeIndex in 0 until budget.maxAlternatives) {
-                val route = routeWithBRouter(
-                    request = request,
-                    packageDirectory = packageDirectory,
-                    alternativeIndex = alternativeIndex,
-                ) ?: break
-                if (alternatives.none { it.isEquivalentTo(route) }) {
-                    alternatives += route.copy(id = "offline-route-${alternatives.size + 1}")
-                }
+            val budget = OfflineRouteCalculationPolicy.routeBudget(request.alternativesLimit)
+            // BRouter calculates one alternative per RoutingEngine instance. Run the
+            // bounded set concurrently so diversity costs roughly one route latency,
+            // not three sequential route latencies.
+            val candidates = coroutineScope {
+                (0 until budget.maxAlternatives).map { alternativeIndex ->
+                    async {
+                        routeWithBRouter(
+                            request = request,
+                            packageDirectory = packageDirectory,
+                            alternativeIndex = alternativeIndex,
+                            maxRuntimeMillis = budget.maxRuntimeMillis,
+                        )
+                    }
+                }.awaitAll().filterNotNull()
+            }
+            val alternatives = if (candidates.isEmpty()) {
+                emptyList()
+            } else {
+                RouteDiversityPolicy.select(candidates, candidates.size.coerceAtMost(budget.maxAlternatives))
+                    .mapIndexed { index, route -> route.withDeterministicId(index) }
             }
             if (alternatives.isEmpty()) {
                 NavigationResult.Failure(NavigationFailure.NoRoute)
@@ -116,6 +129,7 @@ class AndroidHybridNavigationRepository(
         request: RouteRequest,
         packageDirectory: java.io.File,
         alternativeIndex: Int,
+        maxRuntimeMillis: Long,
     ): RouteAlternative? {
         val routingContext = RoutingContext().apply {
             localFunction = java.io.File(packageDirectory, PROFILE_FILE).absolutePath
@@ -138,7 +152,7 @@ class AndroidHybridNavigationRepository(
         ).apply {
             quite = true
         }
-        engine.doRun(OfflineRouteCalculationPolicy.firstResultBudget().maxRuntimeMillis)
+        engine.doRun(maxRuntimeMillis)
         val foundTrack = engine.getFoundTrack()
         val error = engine.getErrorMessage()
         if (error != null) {
@@ -297,25 +311,19 @@ class AndroidHybridNavigationRepository(
     private fun JsonObject.number(name: String): Double? =
         this[name]?.jsonPrimitive?.doubleOrNull?.takeIf { it.isFinite() && it >= 0.0 }
 
-    private fun RouteAlternative.isEquivalentTo(other: RouteAlternative): Boolean {
-        val distanceTolerance = maxOf(10.0, maxOf(distanceMeters, other.distanceMeters) * 0.02)
-        val durationTolerance = maxOf(15.0, maxOf(durationSeconds, other.durationSeconds) * 0.05)
-        return abs(distanceMeters - other.distanceMeters) <= distanceTolerance &&
-            abs(durationSeconds.toDouble() - other.durationSeconds.toDouble()) <= durationTolerance &&
-            geometriesEquivalent(geometry, other.geometry)
-    }
-
-    private fun geometriesEquivalent(
-        first: List<GeoCoordinate>,
-        second: List<GeoCoordinate>,
-    ): Boolean = first.all { point -> second.any { it.isWithinRouteToleranceOf(point) } } &&
-        second.all { point -> first.any { it.isWithinRouteToleranceOf(point) } }
-
-    private fun GeoCoordinate.isWithinRouteToleranceOf(other: GeoCoordinate): Boolean {
-        val latitudeDelta = latitude - other.latitude
-        val longitudeDelta = longitude - other.longitude
-        return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta <=
-            ROUTE_GEOMETRY_TOLERANCE_DEGREES * ROUTE_GEOMETRY_TOLERANCE_DEGREES
+    private fun RouteAlternative.withDeterministicId(index: Int): RouteAlternative {
+        val routeId = "offline-route-${index + 1}"
+        return copy(
+            id = routeId,
+            maneuvers = maneuvers.mapIndexed { maneuverIndex, maneuver ->
+                val maneuverId = if (maneuverIndex == maneuvers.lastIndex && maneuver.kind == ManeuverKind.ARRIVE) {
+                    "$routeId-arrive"
+                } else {
+                    "$routeId-step-${maneuverIndex + 1}"
+                }
+                maneuver.copy(id = maneuverId)
+            },
+        )
     }
 
     private fun Int.toManeuverKind(): ManeuverKind = when (this) {
@@ -339,7 +347,6 @@ class AndroidHybridNavigationRepository(
         const val TAG = "VoltyOfflineRouting"
         const val BROUTER_LONGITUDE_OFFSET = 180.0
         const val BROUTER_LATITUDE_OFFSET = 90.0
-        const val ROUTE_GEOMETRY_TOLERANCE_DEGREES = 0.0005
         const val PROFILE_FILE = "volty.brf"
     }
 }

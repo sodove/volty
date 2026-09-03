@@ -920,3 +920,25 @@ The ARM64 system image was installed on the remote host, but Android's QEMU2 emu
 ARM64 guest on this x86_64 host; ARM64 hardware or an ARM64 host remains required to close the
 gate. No production Gradle/APK build was run. BRouter stays present and is not removed until the
 ARM64/lifecycle/size gate plus configured signed-catalog smoke are complete.
+
+### Execution checkpoint — BRouter alternatives and ARM64 artifact audit — 2026-09-03
+
+The reported "90% one route" behavior had a concrete local cause: the old BRouter fallback
+always used a `firstResultBudget` with `maxAlternatives = 1`, so its alternative loop could never
+reach indexes 1 or 2. The fallback now honors the requested limit up to three alternatives,
+launches one independent `RoutingEngine` per alternative concurrently, preserves deterministic
+primary-first ordering, and applies the shared route-diversity filter before renumbering route and
+maneuver IDs. A limit of one still performs exactly one calculation.
+
+A throwaway JVM smoke against the bundled EKB `.rd5` confirmed that BRouter alternative indexes
+`0`, `1`, and `2` all return usable tracks (125, 85, and 125 nodes respectively, with distinct
+formatted JSON hashes). Five concurrent three-index runs completed without a routing-engine
+failure, so the parallel adapter is based on observed behavior rather than only API assumptions.
+
+The upstream `io.github.rallista:valhalla-mobile:0.6.3` artifact was also audited rather than
+rebuilding the native library: the AAR contains `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`
+wrapper binaries. The corresponding ARM64 `.so` is present in the Gradle cache and in the fresh
+throwaway gate APK. No Android ARM64 emulator is available on the current Windows or remote
+x86_64 hosts: Android Emulator rejects an ARM64 system image before boot, even with `-no-accel`.
+The ARM64 runtime gate therefore still needs physical ARM64 hardware or an ARM64 host; this does
+not block the BRouter source fix or the existing x86_64 Valhalla smoke.
