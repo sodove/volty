@@ -198,6 +198,11 @@ private fun AndroidMapLibreView(
         runCatching { offlineMapSource.sourceUrl(scene.ownFix?.coordinate) }.getOrNull()
     }
 
+    DisposableEffect(hazeState) {
+        publishMapHazeState(hazeState)
+        onDispose { publishMapHazeState(null) }
+    }
+
     LaunchedEffect(scene.ownFix?.coordinate, offlineRegionStates) {
         offlineMapSource.considerDownload(scene.ownFix?.coordinate)
     }
@@ -438,7 +443,7 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .fillMaxHeight(MAP_BLUR_BAND_FRACTION)
+                .fillMaxHeight(MAP_TOP_BLUR_BAND_FRACTION)
                 .hazeEffect(state = hazeState) {
                     blurRadius = 24.dp
                     inputScale = HazeInputScale.Auto
@@ -452,7 +457,7 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
             modifier = Modifier
                 .align(Alignment.BottomCenter)
                 .fillMaxWidth()
-                .fillMaxHeight(MAP_BLUR_BAND_FRACTION)
+                .fillMaxHeight(MAP_BOTTOM_BLUR_BAND_FRACTION)
                 .hazeEffect(state = hazeState) {
                     blurRadius = 24.dp
                     inputScale = HazeInputScale.Auto
@@ -465,7 +470,8 @@ private fun MapTopBottomBlur(hazeState: HazeState, modifier: Modifier = Modifier
     }
 }
 
-private const val MAP_BLUR_BAND_FRACTION = 0.30f
+private const val MAP_TOP_BLUR_BAND_FRACTION = 0.30f
+private const val MAP_BOTTOM_BLUR_BAND_FRACTION = 0.40f
 
 @Composable
 private fun MapBlurBand(modifier: Modifier) {

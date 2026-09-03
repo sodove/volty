@@ -71,6 +71,9 @@ object LightNavigationDockPolicy {
     /** The only intentional space between the guidance card and the HUD action row. */
     fun guidanceHudGap(): Float = GUIDANCE_HUD_GAP_DP
 
+    /** Keeps the guidance surface compact while preserving room for its touch targets. */
+    fun guidanceCardMinHeight(): Float = GUIDANCE_CARD_MIN_HEIGHT_DP
+
     /** The resized window already ends at the IME; navigation bars are handled by the surface. */
     fun plannerBottomPadding(imeVisible: Boolean): Float = 0f
 
@@ -81,15 +84,15 @@ object LightNavigationDockPolicy {
     fun routeOptionMinHeight(): Float = ROUTE_OPTION_MIN_HEIGHT_DP
 
     private const val GUIDANCE_HUD_GAP_DP = 16f
+    private const val GUIDANCE_CARD_MIN_HEIGHT_DP = 90f
     private const val GUIDANCE_CARD_WIDTH_FRACTION = 1f
     private const val ROUTE_OPTION_MIN_HEIGHT_DP = 52f
     private const val PLANNER_IME_GAP_DP = 8f
 }
 
 object LightNavigationSearchPolicy {
-    /** Two characters are enough to start autocomplete; the provider still debounces input. */
-    const val MIN_QUERY_LENGTH = 2
     const val MAX_VISIBLE_RESULTS = 3
+    const val MIN_QUERY_LENGTH = 3
 
     fun visibleResultRows(resultCount: Int): Int =
         resultCount.coerceIn(0, MAX_VISIBLE_RESULTS)

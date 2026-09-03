@@ -1258,3 +1258,18 @@ is `0.7.6` / version code `28`; `:composeApp:testDebugUnitTest` passed and
 Signature Scheme v2. The single production APK is `79,604,111` bytes and contains only the
 `arm64-v8a` and `armeabi-v7a` native ABIs; x86/x86_64 remain available only to debug/test
 artifacts. The APK was not visually smoke-tested on a device in this checkpoint.
+### Execution checkpoint — integrate offline navigation on the latest Terra visual base — 2026-09-04
+
+The offline-navigation branch had diverged from the visual line at `dabe6b1b` and therefore did
+not contain the later Terra/UI fixes `e5e1f77e`, `18c6e84a`, `9ac7ec33`, and `4c56ae91`. The branch
+was merged with current `main`: the latest navigation glass, IME/map handling, overlay geometry,
+and light ride dashboard are now present together with the regional offline runtime, local FTS,
+Valhalla alternatives, package settings, and automatic downloads. Route profile controls were
+reintroduced into the latest glass planner so the offline route-costing contract remains exposed.
+
+The Android compile passed after resolving the integration seams. The first x86 runtime smoke
+had already exposed that API 34 did not provide the JCA Ed25519 `KeyFactory`; the verifier now
+uses the precompiled Bouncy Castle lightweight Ed25519 API while Valhalla remains the precompiled
+Maven `io.github.rallista:valhalla-mobile:0.6.3` artifact. The signed EKB package survived app
+startup, Settings showed `Готово · 0.1.6`, and local `ekb` autocomplete returned `Ekb-Cars`.
+Full test and release gates remain to run on this integrated tree.

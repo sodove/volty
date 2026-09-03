@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
@@ -100,7 +102,7 @@ import kotlinx.coroutines.launch
 
 internal val LightHudBackground = Color(0xFF07131E)
 
-private data class LightHudPalette(
+internal data class LightHudPalette(
     val text: Color,
     val muted: Color,
     val surface: Color,
@@ -136,7 +138,7 @@ private val BrightLightHudPalette = LightHudPalette(
     pink = Color(0xFFB31B52),
 )
 
-private val LocalLightHudPalette = staticCompositionLocalOf { DarkLightHudPalette }
+internal val LocalLightHudPalette = staticCompositionLocalOf { DarkLightHudPalette }
 
 private fun lightHudTextScale(layoutMode: LightLayoutMode): Float = when (layoutMode) {
     LightLayoutMode.COMPACT -> 1f
@@ -255,10 +257,6 @@ internal fun LightRideDashboard(
 
     CompositionLocalProvider(LocalLightHudPalette provides palette) {
         Box(modifier = modifier.fillMaxSize()) {
-        val navigationDockBottomPadding = if (navigationPanelPlacement == LightNavigationPanelPlacement.MAP_BOTTOM_PANEL) {
-            LightNavigationDockPolicy.bottomPadding(navigationSurface).dp
-        } else 0.dp
-
         Box(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.fillMaxSize()) {
             if (mapLayer == null) LightMapFallback()
@@ -273,7 +271,7 @@ internal fun LightRideDashboard(
         }
 
         Column(
-            modifier = Modifier.fillMaxSize().statusBarsPadding()
+            modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
                 .padding(start = 10.dp, top = 6.dp, end = 10.dp, bottom = 8.dp),
             verticalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -336,7 +334,30 @@ internal fun LightRideDashboard(
                 }
             }
 
-            Spacer(Modifier.weight(lightDashboardMiddleSpacerWeight()))
+            if (navigationSurface == LightNavigationSurface.GUIDANCE_DOCK &&
+                navigationState != null && navigationCallbacks != null
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(lightDashboardMiddleSpacerWeight()),
+                    contentAlignment = Alignment.BottomCenter,
+                ) {
+                    LightNavigationOverlay(
+                        state = navigationState,
+                        callbacks = navigationCallbacks,
+                        units = state.units,
+                        nearby = navigationNearby,
+                        onOpenNearby = openGroupSheet,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = LightNavigationDockPolicy.guidanceHudGap().dp)
+                            .zIndex(2f),
+                    )
+                }
+            } else {
+                Spacer(Modifier.weight(lightDashboardMiddleSpacerWeight()))
+            }
 
             if (nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD) groupRide?.let { liveGroup ->
                 LightGroupRideCard(
@@ -371,21 +392,28 @@ internal fun LightRideDashboard(
         }
 
         if (navigationPanelPlacement == LightNavigationPanelPlacement.MAP_BOTTOM_PANEL &&
-            navigationSurface != LightNavigationSurface.HIDDEN &&
+            navigationSurface == LightNavigationSurface.PLANNER &&
             navigationState != null && navigationCallbacks != null
         ) {
-            LightNavigationOverlay(
-                state = navigationState,
-                callbacks = navigationCallbacks,
-                units = state.units,
-                nearby = navigationNearby,
-                onOpenNearby = openGroupSheet,
+            Box(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
-                    .padding(horizontal = 18.dp)
-                    .padding(bottom = navigationDockBottomPadding)
+                    .fillMaxWidth()
+                    .imePadding()
+                    .navigationBarsPadding()
+                    .padding(horizontal = 10.dp)
+                    .padding(bottom = LightNavigationDockPolicy.plannerImeGap().dp)
                     .zIndex(2f),
-            )
+            ) {
+                LightNavigationOverlay(
+                    state = navigationState,
+                    callbacks = navigationCallbacks,
+                    units = state.units,
+                    nearby = navigationNearby,
+                    onOpenNearby = openGroupSheet,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
         }
 
         if (navigationSurface != LightNavigationSurface.PLANNER) {
@@ -626,7 +654,7 @@ private fun LightTopBar(
 ) {
     Row(
         modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        horizontalArrangement = Arrangement.spacedBy(0.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         LightCircleButton(Icons.Default.Groups, "Nearby", onClick = onNearby)

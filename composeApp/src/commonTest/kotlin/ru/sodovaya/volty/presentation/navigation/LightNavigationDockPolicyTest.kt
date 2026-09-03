@@ -23,6 +23,7 @@ class LightNavigationDockPolicyTest {
     fun `active guidance is anchored by its local HUD gap rather than a screen sized inset`() {
         assertEquals(1f, LightNavigationDockPolicy.guidanceCardWidthFraction())
         assertEquals(16f, LightNavigationDockPolicy.guidanceHudGap())
+        assertEquals(90f, LightNavigationDockPolicy.guidanceCardMinHeight())
         assertEquals(0f, LightNavigationDockPolicy.bottomPadding(LightNavigationSurface.GUIDANCE_DOCK))
     }
 
