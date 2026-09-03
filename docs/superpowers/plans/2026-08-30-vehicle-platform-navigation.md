@@ -1172,3 +1172,15 @@ both the manifest and catalog carried the same non-development key ID. The key
 and temporary signed outputs were deleted on the remote host.
 
 No APK/Gradle build was run.
+
+### Execution checkpoint — offline Valhalla costing contract — 2026-09-03
+
+The common Valhalla codec now emits the supported generic `auto` costing contract: top speed,
+the existing highway-willingness style bias, up to three alternatives, safe engine defaults for
+access/restrictions/oneways/closures, neutral toll/ferry midpoint values, and documented
+`exclude_unpaved` avoidance. It does not emit the unsupported `use_unpaved` key or invent a road
+curvature control; Valhalla 3.6.3 cannot guarantee scenic geometry from the four style names.
+
+The change was compiled on the x86 host without Gradle: main compile `0`, test compile `0`, and
+all five codec test methods passed. It is committed as `f2d6a88e` and pushed to
+`codex/light-navigator`. No APK or production application build was run.
