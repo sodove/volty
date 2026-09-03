@@ -800,3 +800,31 @@ routing, advanced scenic signals, traffic, and custom map styles.
    increments; only after each failing test is observed may production behavior be added.
 6. Integrate search/route/map auto-download and online parity, then remove the old bundled BRouter
    flow only after the end-to-end gate and device smoke pass.
+
+### Execution checkpoint — regional artifact toolchain (2026-09-03)
+
+The first real regional dataset was built on `sodovaya@192.168.1.141`, where Docker and the
+existing `/home/sodovaya/nyxmap/sverdlovsk.osm.pbf` are available. The reproducible tooling now
+lives in `tools/offline-navigation/`; it uses an Ubuntu 24.04 tool image with `osmium-tool`,
+Tilemaker, Tippecanoe, SQLite, the Valhalla Docker image, and the Protomaps MBTiles converter.
+
+Evidence from the EKB pilot build:
+
+- Valhalla built 98 routing tiles and a 63 MiB tile extract from the smart EKB extract. A local
+  service smoke returned three routes in about 13 ms; the same three routes were returned after
+  extracting the packaged routing archive: 2.233 km / 168 s, 3.601 km / 279 s, and 4.342 km / 340 s.
+- The FTS4 index contains 276,841 searchable OSM features. A prefix query for `плот*` returns
+  Russian results with coordinates, so autocomplete no longer needs a complete query or network.
+- PMTiles is zoom 5–14, contains the declared vector layers, and passes the converter's structural
+  verification.
+- The unsigned pilot package is 84.5 MB by manifest download sizes and about 175 MB after
+  installation: routing 24.2/72.2 MB, search 13.5/58.3 MB, map 42.5/42.5 MB (download/installed).
+  The checked-in toolchain does not include these generated artifacts or any signing key.
+
+This checkpoint does not pass the Valhalla Mobile Android gate: the package was tested through the
+Valhalla service, not through the published Android wrapper, and the manifest is deliberately
+`UNSIGNED_DEV`. The build also reports incomplete regional admin polygons and omits timezone and
+elevation data; route graph construction and the packaged route smoke succeed, but admin/timezone
+behavior remains a release-gate item. The next implementation step is the ARM64/x86_64 wrapper
+smoke with this real package, followed by signed catalog/downloader integration. BRouter remains
+untouched until that gate is passed or explicitly failed.

@@ -1,0 +1,9 @@
+*.osm.pbf
+*.geojson
+*.mbtiles
+*.pmtiles
+*.sqlite
+*.tar
+*.gz
+installed/
+artifacts/
