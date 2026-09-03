@@ -46,7 +46,8 @@ class AndroidOfflineMapSource(
             state.status == OfflineRegionPackageStatus.INSTALLING ||
             state.status == OfflineRegionPackageStatus.VERIFYING ||
             state.status == OfflineRegionPackageStatus.DELETING ||
-            state.status == OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL
+            state.status == OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL ||
+            state.status == OfflineRegionPackageStatus.PAUSED
         ) return
         val regionId = state.region.regionId
         val now = System.currentTimeMillis()
