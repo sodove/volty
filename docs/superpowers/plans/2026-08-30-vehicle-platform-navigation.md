@@ -1289,3 +1289,14 @@ HTTPS catalog/key is supplied. The full Valhalla Mobile Android ARM64 gate likew
 the existing ARM64 evidence is Linux service execution under QEMU, not execution of the Android
 native library; BRouter therefore remains available only to debug builds until that external
 device/host gate is passed.
+
+The signed-catalog path then received a real cross-platform regression fix. The publisher's
+catalog canonicalization now omits nullable-default fields inside nested `latestRelease` manifests
+exactly as Android `kotlinx.serialization` does; a regression test reproduced the old invalid
+signature and now passes. With an ephemeral E2E key and a short-lived HTTPS server on the remote
+Docker host, the debug APK fetched the signed EKB `0.1.6` catalog, published `Екатеринбург и
+окрестности` in Settings, automatically downloaded routing/search/map artifacts, and atomically
+installed the complete seven-file package. The local CA trust was a temporary debug smoke aid and
+is not part of the source or release configuration. Backend tests also passed freshly: 45 tests,
+zero failures/errors/skips. A real deployment signing key/HTTPS object host and the Android ARM64
+native Valhalla gate remain the only external release inputs.

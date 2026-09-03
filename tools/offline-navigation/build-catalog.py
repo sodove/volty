@@ -56,22 +56,27 @@ def coverage_covers(coverage: list[float], bounds: list[float]) -> bool:
     )
 
 
-def canonical_payload(manifest: dict[str, Any]) -> bytes:
-    """Match OfflineRegionPackageManifestCodec.signingPayload byte-for-byte."""
+def without_android_nullable_defaults(manifest: dict[str, Any]) -> dict[str, Any]:
+    """Omit fields that Android serialization drops when they are null defaults."""
 
-    unsigned = copy.deepcopy(manifest)
-    unsigned.pop("manifestSignature", None)
-    # Keep this byte-for-byte aligned with the Android codec: nullable fields
-    # whose constructor default is null are omitted while encodeDefaults=false.
-    coverage = unsigned.get("coverage")
+    normalized = copy.deepcopy(manifest)
+    coverage = normalized.get("coverage")
     if isinstance(coverage, dict) and coverage.get("polygonUrl") is None:
         coverage.pop("polygonUrl", None)
-    components = unsigned.get("components")
+    components = normalized.get("components")
     if isinstance(components, dict):
         for component_name in ("search", "map"):
             component = components.get(component_name)
             if isinstance(component, dict) and component.get("compression") is None:
                 component.pop("compression", None)
+    return normalized
+
+
+def canonical_payload(manifest: dict[str, Any]) -> bytes:
+    """Match OfflineRegionPackageManifestCodec.signingPayload byte-for-byte."""
+
+    unsigned = without_android_nullable_defaults(manifest)
+    unsigned.pop("manifestSignature", None)
     return json.dumps(
         unsigned,
         ensure_ascii=False,
@@ -85,6 +90,14 @@ def canonical_catalog_payload(catalog: dict[str, Any]) -> bytes:
 
     unsigned = copy.deepcopy(catalog)
     unsigned.pop("catalogSignature", None)
+    regions = unsigned.get("regions")
+    if isinstance(regions, list):
+        for entry in regions:
+            if not isinstance(entry, dict):
+                continue
+            release = entry.get("latestRelease")
+            if isinstance(release, dict):
+                entry["latestRelease"] = without_android_nullable_defaults(release)
     return json.dumps(
         unsigned,
         ensure_ascii=False,

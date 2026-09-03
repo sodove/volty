@@ -180,6 +180,46 @@ class BuildCatalogTest(unittest.TestCase):
             key.public_key().verify(signature, MODULE.canonical_catalog_payload(signed))
             self.assertEqual("release-key", signed["catalogSignature"]["keyId"])
 
+    def test_catalog_signature_matches_android_nullable_defaults(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, key = self.signed_manifest()
+            manifest["coverage"]["polygonUrl"] = None
+            manifest["components"]["search"]["compression"] = None
+            manifest["components"]["map"]["compression"] = None
+            unsigned_manifest = deepcopy(manifest)
+            unsigned_manifest.pop("manifestSignature", None)
+            manifest["manifestSignature"]["value"] = base64.b64encode(
+                key.sign(MODULE.canonical_payload(unsigned_manifest))
+            ).decode("ascii")
+            spec_path = self.write_spec(root, manifest)
+            catalog = MODULE.build_catalog(
+                spec_path,
+                generated_at="2026-09-03T00:00:00Z",
+                public_key=key.public_key(),
+                expected_key_id="release-key",
+                current_app_version_code=28,
+            )
+
+            signed = MODULE.sign_catalog(catalog, key, "release-key")
+            android_payload = deepcopy(signed)
+            android_payload.pop("catalogSignature", None)
+            release = android_payload["regions"][0]["latestRelease"]
+            release["coverage"].pop("polygonUrl", None)
+            release["components"]["search"].pop("compression", None)
+            release["components"]["map"].pop("compression", None)
+            expected_payload = json.dumps(
+                android_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+
+            key.public_key().verify(
+                base64.b64decode(signed["catalogSignature"]["value"]),
+                expected_payload,
+            )
+
     def test_catalog_signing_rejects_a_development_key_id(self):
         for key_id in ("UNSIGNED_DEV", "UNSIGNED"):
             with self.subTest(key_id=key_id), self.assertRaisesRegex(ValueError, "production key"):
