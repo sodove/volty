@@ -2,9 +2,41 @@ package ru.sodovaya.volty.domain.navigation.region
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertIs
 import kotlin.test.assertTrue
 
 class OfflineRegionPackageManifestTest {
+    @Test
+    fun manifest_codec_reads_the_published_three_component_shape() {
+        val parsed = OfflineRegionPackageManifestCodec.parse(
+            validManifestJson(),
+        )
+
+        val manifest = assertIs<OfflineRegionManifestParseResult.Success>(parsed).manifest
+        assertEquals("ru-sve-yekaterinburg-agglomeration", manifest.regionId)
+        assertEquals("https://cdn.example.test/yekaterinburg/route.valhalla.zst", manifest.components.routing.url)
+        assertEquals("pmtiles", manifest.components.map.format)
+        assertEquals("ed25519", manifest.signature.algorithm)
+    }
+
+    @Test
+    fun manifest_codec_rejects_malformed_or_unknown_json() {
+        assertEquals(
+            OfflineRegionManifestParseError.MALFORMED_MANIFEST,
+            assertIs<OfflineRegionManifestParseResult.Failure>(
+                OfflineRegionPackageManifestCodec.parse("{not-json}"),
+            ).error,
+        )
+        assertEquals(
+            OfflineRegionManifestParseError.MALFORMED_MANIFEST,
+            assertIs<OfflineRegionManifestParseResult.Failure>(
+                OfflineRegionPackageManifestCodec.parse(
+                    validManifestJson().replace("\"schemaVersion\": 2", "\"schemaVersion\": 2, \"future\": true"),
+                ),
+            ).error,
+        )
+    }
+
     @Test
     fun valid_manifest_accepts_the_three_component_release() {
         assertEquals(
@@ -140,5 +172,63 @@ class OfflineRegionPackageManifestTest {
 
     private companion object {
         const val checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+        fun validManifestJson() = """
+            {
+              "schemaVersion": 2,
+              "regionId": "ru-sve-yekaterinburg-agglomeration",
+              "releaseVersion": "2026.09.1",
+              "createdAt": "2026-09-03T00:00:00Z",
+              "source": {
+                "osmReplicationSequence": 1,
+                "osmTimestamp": "2026-09-02T00:00:00Z"
+              },
+              "compatibility": {
+                "minAppVersionCode": 28,
+                "routingEngine": "valhalla",
+                "routingDataVersion": "valhalla-tiles-2026.09.1",
+                "mapSchemaVersion": 1,
+                "searchSchemaVersion": 1
+              },
+              "coverage": {
+                "bbox": [59.55, 56.30, 61.45, 57.25],
+                "routingBufferKm": 30,
+                "polygonUrl": null
+              },
+              "components": {
+                "routing": {
+                  "url": "https://cdn.example.test/yekaterinburg/route.valhalla.zst",
+                  "downloadBytes": 35000000,
+                  "installedBytes": 90000000,
+                  "sha256": "$checksum",
+                  "compression": "zstd"
+                },
+                "search": {
+                  "url": "https://cdn.example.test/yekaterinburg/search.sqlite.zst",
+                  "downloadBytes": 20000000,
+                  "installedBytes": 45000000,
+                  "sha256": "$checksum",
+                  "schemaVersion": 1,
+                  "compression": "zstd"
+                },
+                "map": {
+                  "url": "https://cdn.example.test/yekaterinburg/map.pmtiles",
+                  "downloadBytes": 80000000,
+                  "installedBytes": 95000000,
+                  "sha256": "$checksum",
+                  "format": "pmtiles",
+                  "minZoom": 7,
+                  "maxZoom": 16,
+                  "vectorLayerSchema": 1,
+                  "compression": null
+                }
+              },
+              "manifestSignature": {
+                "keyId": "volty-navigation-2026",
+                "algorithm": "ed25519",
+                "value": "signature"
+              }
+            }
+        """.trimIndent()
     }
 }

@@ -2,6 +2,8 @@ package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
 
 @Serializable
 data class OfflineRegionSource(
@@ -84,6 +86,39 @@ data class OfflineRegionPackageManifest(
     @SerialName("manifestSignature")
     val signature: OfflineRegionManifestSignature,
 )
+
+enum class OfflineRegionManifestParseError {
+    MALFORMED_MANIFEST,
+}
+
+sealed interface OfflineRegionManifestParseResult {
+    data class Success(val manifest: OfflineRegionPackageManifest) : OfflineRegionManifestParseResult
+
+    data class Failure(val error: OfflineRegionManifestParseError) : OfflineRegionManifestParseResult
+}
+
+/** Decodes the signed release envelope without silently accepting a newer/unknown shape. */
+object OfflineRegionPackageManifestCodec {
+    private val json = Json {
+        ignoreUnknownKeys = false
+        explicitNulls = true
+        isLenient = false
+    }
+
+    fun parse(jsonText: String): OfflineRegionManifestParseResult = try {
+        OfflineRegionManifestParseResult.Success(
+            json.decodeFromString<OfflineRegionPackageManifest>(jsonText),
+        )
+    } catch (_: SerializationException) {
+        malformed()
+    } catch (_: IllegalArgumentException) {
+        malformed()
+    }
+
+    private fun malformed() = OfflineRegionManifestParseResult.Failure(
+        OfflineRegionManifestParseError.MALFORMED_MANIFEST,
+    )
+}
 
 enum class OfflineRegionManifestErrorCode {
     UNSUPPORTED_SCHEMA_VERSION,
