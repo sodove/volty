@@ -1215,3 +1215,23 @@ host-side FTS index generator. The visible OSM display name remains unchanged, w
 search text allows either spelling to match the same place. Focused Kotlin query/ranking checks
 pass `8/8`; the host tool suite passes `17/17`, Python compilation passes, and a temporary SQLite
 FTS smoke finds `Ёлка` through the `ел*` prefix. No APK or Gradle build was run.
+
+### Execution checkpoint — rebuilt EKB pilot with folded search index — 2026-09-03
+
+The remote EKB pilot was rebuilt as `v0.1.6` from the original full
+`/home/sodovaya/nyxmap/sverdlovsk.osm.pbf`, so admin data and the existing 20 km routing buffer
+remain intact. The package verifier accepted routing, search, and PMTiles; the search database
+contains 276,841 rows and its compressed archive returns real `ел*` prefix results, including the
+display name `Ёлочка` backed by normalized `search_text`. The manifest reports routing
+102,584,133/198,139,367 bytes, search 14,592,861/58,368,000 bytes, and map 44,570,434/44,570,434
+bytes; compatibility remains `valhalla-3.6.3`, minimum app version code `28`, and coverage
+`59.10,56.00–61.90,57.55` with a 20 km routing buffer. An x86 Valhalla 3.6.3 service smoke on
+the new archive returned status `0` for two EKB routes. This is an unsigned pilot artifact with
+a placeholder CDN URL, not a production catalog release; no APK or Gradle build was run.
+
+### Retraction — clipped PBF is not a package source — 2026-09-03
+
+An intermediate attempt used an already clipped `test-region.osm.pbf` after the full source
+reported an ordering warning. It produced incomplete admin data and Tilemaker later aborted, so
+that input and the sorted temporary copy were removed. The successful `v0.1.6` build uses the
+original full source and is the only current pilot candidate.
