@@ -855,6 +855,10 @@ the real EKB `manifest.unsigned.json` signed it with an ephemeral Ed25519 key, p
 deterministic one-region catalog, and rejected the unsigned input; local `python3 -m py_compile`
 also passes for all four tooling scripts.
 
+The Android package store and catalog repository now receive the installed APK's actual package
+`versionCode` instead of a duplicated literal. This keeps manifest compatibility checks correct
+when the app version is bumped for a release.
+
 ### Execution checkpoint — regional runtime contracts (2026-09-03)
 
 The common/runtime implementation now includes a strict catalog and release download plan,

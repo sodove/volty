@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.di
 
+import android.content.Context
+import android.os.Build
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
 import ru.sodovaya.volty.data.ble.AndroidBleAdapterStateProvider
@@ -54,13 +56,14 @@ val androidModule = module {
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
     single { AndroidOfflineRoutingPackageManager(androidContext()) }
     single { AndroidOfflineNavigationConfig.from(androidContext()) }
+    single(named(APP_VERSION_CODE)) { currentAppVersionCode(androidContext()) }
     single<OfflineRegionManifestVerifier> {
         get<AndroidOfflineNavigationConfig>().verifier()
     }
     single {
         AndroidOfflineRegionPackageStore(
             context = androidContext(),
-            currentAppVersionCode = 28,
+            currentAppVersionCode = get<Int>(named(APP_VERSION_CODE)),
             manifestVerifier = get(),
         )
     }
@@ -68,7 +71,7 @@ val androidModule = module {
         AndroidOfflineRegionPackageRepository(
             context = androidContext(),
             catalogUrl = get<AndroidOfflineNavigationConfig>().catalogUrl,
-            currentAppVersionCode = 28,
+            currentAppVersionCode = get<Int>(named(APP_VERSION_CODE)),
             manifestVerifier = get(),
             packageStore = get(),
             preferences = {
@@ -144,3 +147,14 @@ val androidModule = module {
 
 private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"
 private const val OFFLINE_FIRST_NAVIGATION = "offline-first-navigation"
+private const val APP_VERSION_CODE = "app-version-code"
+
+private fun currentAppVersionCode(context: Context): Int {
+    val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
+    val versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        packageInfo.longVersionCode
+    } else {
+        packageInfo.versionCode.toLong()
+    }
+    return versionCode.coerceIn(0L, Int.MAX_VALUE.toLong()).toInt()
+}
