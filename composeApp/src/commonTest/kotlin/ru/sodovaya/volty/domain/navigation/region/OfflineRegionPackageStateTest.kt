@@ -33,6 +33,18 @@ class OfflineRegionPackageStateTest {
     }
 
     @Test
+    fun downloaded_bytes_are_rejected_without_a_published_release() {
+        assertFailsWith<IllegalArgumentException> {
+            OfflineRegionPackageState(
+                region = region(),
+                latestRelease = null,
+                status = OfflineRegionPackageStatus.DOWNLOADING,
+                downloadedBytes = 1L,
+            )
+        }
+    }
+
+    @Test
     fun downloaded_bytes_cannot_exceed_the_manifest_total() {
         assertFailsWith<IllegalArgumentException> {
             OfflineRegionPackageState(

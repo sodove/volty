@@ -21,6 +21,9 @@ data class OfflineRegionPackageState(
 ) {
     init {
         require(downloadedBytes >= 0L) { "downloadedBytes must not be negative" }
+        require(latestRelease != null || downloadedBytes == 0L) {
+            "downloadedBytes requires a published release"
+        }
         latestRelease?.let { release ->
             require(release.regionId == region.regionId) {
                 "latest release must belong to the catalog region"
