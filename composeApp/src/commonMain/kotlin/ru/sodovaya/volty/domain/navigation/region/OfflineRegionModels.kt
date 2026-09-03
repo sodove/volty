@@ -24,6 +24,7 @@ data class OfflineRegionBounds(
         point.latitude in south..north && point.longitude in west..east
 }
 
+@Serializable
 data class OfflineRegionManifest(
     val regionId: String,
     val displayName: String,

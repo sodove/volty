@@ -116,6 +116,8 @@ object OfflineRegionPackageManifestCodec {
         malformed()
     }
 
+    fun encode(manifest: OfflineRegionPackageManifest): String = json.encodeToString(manifest)
+
     private fun malformed() = OfflineRegionManifestParseResult.Failure(
         OfflineRegionManifestParseError.MALFORMED_MANIFEST,
     )
