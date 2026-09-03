@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.navigation.region
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 
@@ -104,6 +105,26 @@ class OfflineRegionCatalogTest {
         )
 
         assertEquals(OfflineRegionCatalogErrorCode.INVALID_SIGNATURE, errors.single().code)
+    }
+
+    @Test
+    fun catalog_signing_payload_excludes_the_signature_envelope() {
+        val catalog = OfflineRegionCatalog(
+            schemaVersion = 2,
+            generatedAt = "2026-09-03T00:00:00Z",
+            regions = emptyList(),
+            signature = catalogSignature(),
+        )
+
+        val payload = OfflineRegionCatalogCodec.signingPayload(catalog)
+
+        assertFalse(payload.contains("catalogSignature"))
+        assertEquals(
+            payload,
+            OfflineRegionCatalogCodec.signingPayload(
+                catalog.copy(signature = OfflineRegionCatalogSignature("other", "ed25519", "different")),
+            ),
+        )
     }
 
     @Test
