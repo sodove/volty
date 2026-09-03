@@ -114,10 +114,10 @@ class AndroidOfflineRegionArtifactDownloader(
                         part.delete()
                     }
                 }
-                responseCode == HttpURLConnection.HTTP_REQUESTED_RANGE_NOT_SATISFIABLE -> {
+                responseCode == HTTP_REQUESTED_RANGE_NOT_SATISFIABLE -> {
                     throw IOException("Server rejected resume for ${artifact.component}")
                 }
-                responseCode == HttpURLConnection.HTTP_TOO_MANY_REQUESTS -> {
+                responseCode == HTTP_TOO_MANY_REQUESTS -> {
                     throw IOException("Artifact server rate-limited the download")
                 }
                 responseCode >= 500 -> throw IOException("Artifact server unavailable ($responseCode)")
@@ -230,6 +230,8 @@ class AndroidOfflineRegionArtifactDownloader(
     }
 
     private companion object {
+        const val HTTP_REQUESTED_RANGE_NOT_SATISFIABLE = 416
+        const val HTTP_TOO_MANY_REQUESTS = 429
         const val COPY_BUFFER_SIZE = 64 * 1024
         const val DEFAULT_USER_AGENT = "Volty/0.7 offline-region-downloader"
     }

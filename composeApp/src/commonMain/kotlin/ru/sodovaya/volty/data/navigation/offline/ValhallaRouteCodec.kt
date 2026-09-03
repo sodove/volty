@@ -240,11 +240,9 @@ object ValhallaRouteCodec {
         val distanceMeters: Double,
     )
 
-    private companion object {
-        const val MAX_ALTERNATES = 2
-        const val MAX_ROUTES = 3
-        const val NO_ROUTE_ERROR = 171
-    }
+    private const val MAX_ALTERNATES = 2
+    private const val MAX_ROUTES = 3
+    private const val NO_ROUTE_ERROR = 171
 }
 
 private fun RouteStyle.highwayPreference(): Double = when (this) {

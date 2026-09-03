@@ -76,7 +76,7 @@ class AndroidOfflineRegionPackageRepository(
     override suspend fun requestDownload(
         regionId: String,
         trigger: OfflineRegionDownloadTrigger,
-        meteredConfirmed: Boolean = false,
+        meteredConfirmed: Boolean,
     ) {
         val currentJob = currentCoroutineContext()[Job]
         if (currentJob != null) {
