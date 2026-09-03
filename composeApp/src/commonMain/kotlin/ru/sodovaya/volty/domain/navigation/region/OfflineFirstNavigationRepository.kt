@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
@@ -137,11 +138,24 @@ class OfflineFirstNavigationRepository(
         if (network.current() == OfflineNetworkAvailability.OFFLINE) return null
         return synchronized(catalogRefreshLock) {
             if (packages.states.value.isNotEmpty()) return@synchronized null
-            catalogRefreshJob?.let { return@synchronized it }
+            catalogRefreshJob?.takeIf { it.isActive }?.let { return@synchronized it }
             if (catalogRefreshAttempted) return@synchronized null
             catalogRefreshAttempted = true
             downloadScope.launch {
-                runCatching { packages.refreshCatalog() }
+                var refreshed = false
+                try {
+                    packages.refreshCatalog()
+                    refreshed = true
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) {
+                    // A transient catalog/network failure must not permanently
+                    // disable automatic region discovery for this process.
+                } finally {
+                    synchronized(catalogRefreshLock) {
+                        if (!refreshed) catalogRefreshAttempted = false
+                    }
+                }
             }.also { catalogRefreshJob = it }
         }
     }

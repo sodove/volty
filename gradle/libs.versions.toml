@@ -17,6 +17,8 @@ ktor = "3.3.1"
 livekit = "2.25.3"
 haze = "1.7.2"
 valhalla-mobile = "0.6.3"
+valhalla-models = "0.5.2"
+valhalla-models-config = "0.5.2"
 
 [libraries]
 decompose-core = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
@@ -47,6 +49,8 @@ graphics-shapes = { module = "androidx.graphics:graphics-shapes", version.ref = 
 livekit-android = { module = "io.livekit:livekit-android", version.ref = "livekit" }
 haze = { module = "dev.chrisbanes.haze:haze", version.ref = "haze" }
 valhalla-mobile = { module = "io.github.rallista:valhalla-mobile", version.ref = "valhalla-mobile" }
+valhalla-models = { module = "io.github.rallista:valhalla-models", version.ref = "valhalla-models" }
+valhalla-models-config = { module = "io.github.rallista:valhalla-models-config", version.ref = "valhalla-models-config" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

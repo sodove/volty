@@ -5,6 +5,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
+import java.io.IOException
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertIs
@@ -37,6 +38,26 @@ class OfflineFirstNavigationRepositoryTest {
         testScheduler.runCurrent()
 
         assertEquals(listOf("ekb"), packages.downloads)
+    }
+
+    @Test
+    fun failed_catalog_refresh_can_be_retried_for_a_later_request() = runTest {
+        val packages = FakePackages(
+            catalogLoadedOnStart = false,
+            catalogRefreshFailures = 1,
+        )
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+
+        repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+        testScheduler.runCurrent()
+        assertEquals(emptyList(), packages.downloads)
+
+        repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(2, online.searchCalls)
     }
 
     @Test
@@ -122,6 +143,7 @@ class OfflineFirstNavigationRepositoryTest {
         private val status: OfflineRegionPackageStatus = OfflineRegionPackageStatus.NOT_INSTALLED,
         catalogLoadedOnStart: Boolean = true,
         private val catalogRefreshGate: CompletableDeferred<Unit>? = null,
+        private var catalogRefreshFailures: Int = 0,
     ) : OfflineRegionPackageRepository {
         private val region = OfflineRegionManifest(
             "ekb",
@@ -140,6 +162,10 @@ class OfflineFirstNavigationRepositoryTest {
 
         override suspend fun refreshCatalog() {
             catalogRefreshGate?.await()
+            if (catalogRefreshFailures > 0) {
+                catalogRefreshFailures -= 1
+                throw IOException("temporary catalog failure")
+            }
             if (_states.value.isEmpty()) {
                 _states.value = listOf(OfflineRegionPackageState(region, null, status))
             }
