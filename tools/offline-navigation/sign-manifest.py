@@ -19,9 +19,9 @@ def canonical_payload(manifest: dict[str, object]) -> bytes:
 
     unsigned = copy.deepcopy(manifest)
     unsigned.pop("manifestSignature", None)
-    # kotlinx.serialization omits nullable properties whose constructor
-    # default is null when encodeDefaults is false (the current Android
-    # codec configuration). Normalize those three fields before dumping.
+    # These nullable fields have constructor defaults of null. The Android
+    # codec keeps encodeDefaults=false, so encodeToJsonElement omits them
+    # even though explicitNulls is enabled for decoding.
     coverage = unsigned.get("coverage")
     if isinstance(coverage, dict) and coverage.get("polygonUrl") is None:
         coverage.pop("polygonUrl", None)

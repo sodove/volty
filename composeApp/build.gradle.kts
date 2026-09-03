@@ -70,6 +70,7 @@ kotlin {
             implementation(libs.valhalla.mobile)
             implementation(libs.valhalla.models)
             implementation(libs.valhalla.models.config)
+            implementation(libs.bouncycastle)
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.okhttp)
             implementation("org.maplibre.gl:android-sdk:13.0.2")

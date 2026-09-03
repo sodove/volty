@@ -102,6 +102,17 @@ class BuildCatalogTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "routingDataVersion"):
                 MODULE.build_catalog(spec_path, generated_at="2026-09-03T00:00:00Z")
 
+    def test_manifest_payload_matches_android_nullable_defaults(self):
+        manifest = self.valid_manifest()
+        manifest["coverage"]["polygonUrl"] = None
+        manifest["components"]["search"]["compression"] = None
+        manifest["components"]["map"]["compression"] = None
+
+        payload = MODULE.canonical_payload(manifest).decode("utf-8")
+
+        self.assertNotIn('"polygonUrl":null', payload)
+        self.assertNotIn('"compression":null', payload)
+
     def test_verifies_signature_against_the_publisher_key(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

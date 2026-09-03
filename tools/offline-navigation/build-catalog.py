@@ -61,6 +61,8 @@ def canonical_payload(manifest: dict[str, Any]) -> bytes:
 
     unsigned = copy.deepcopy(manifest)
     unsigned.pop("manifestSignature", None)
+    # Keep this byte-for-byte aligned with the Android codec: nullable fields
+    # whose constructor default is null are omitted while encodeDefaults=false.
     coverage = unsigned.get("coverage")
     if isinstance(coverage, dict) and coverage.get("polygonUrl") is None:
         coverage.pop("polygonUrl", None)
