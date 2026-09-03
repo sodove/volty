@@ -14,6 +14,7 @@ shift 2
 
 BBOX="59.10,56.00,61.90,57.55"
 REGION_ID="ekb-agglomeration"
+MAP_FILE="${REGION_ID}.pmtiles"
 ROUTING_BUFFER_KM=20
 BASE_URL="https://cdn.example.invalid/volty/regions"
 RELEASE_VERSION=""
@@ -38,6 +39,8 @@ while [[ $# -gt 0 ]]; do
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
+
+MAP_FILE="${REGION_ID}.pmtiles"
 
 [[ -f "$INPUT" ]] || { echo "Input PBF does not exist: $INPUT" >&2; exit 1; }
 [[ -n "$RELEASE_VERSION" && -n "$MIN_APP_VERSION_CODE" && -n "$OSM_SEQUENCE" && -n "$OSM_TIMESTAMP" ]] || {
@@ -98,9 +101,9 @@ tools_run tilemaker --input /work/region.osm.pbf --output /work/map.mbtiles \
 tools_run sqlite3 /work/map.mbtiles \
   "UPDATE metadata SET value='$BBOX' WHERE name='bounds'; UPDATE metadata SET value='60.605,56.839,9' WHERE name='center';"
 docker run --rm --user "$(id -u):$(id -g)" -v "$STAGING:/work" "$PMTILES_IMAGE" \
-  convert /work/map.mbtiles /work/artifacts/map/ekb.pmtiles
-docker run --rm -v "$STAGING:/work:ro" "$PMTILES_IMAGE" verify /work/artifacts/map/ekb.pmtiles
-cp "$STAGING/artifacts/map/ekb.pmtiles" "$STAGING/installed/map/ekb.pmtiles"
+  convert /work/map.mbtiles "/work/artifacts/map/$MAP_FILE"
+docker run --rm -v "$STAGING:/work:ro" "$PMTILES_IMAGE" verify "/work/artifacts/map/$MAP_FILE"
+cp "$STAGING/artifacts/map/$MAP_FILE" "$STAGING/installed/map/$MAP_FILE"
 
 python3 "$SCRIPT_DIR/build-manifest.py" \
   --output "$STAGING/manifest.unsigned.json" \
@@ -108,7 +111,7 @@ python3 "$SCRIPT_DIR/build-manifest.py" \
   --routing-installed "$STAGING/installed/routing" \
   --search "$STAGING/artifacts/search/places.sqlite.gz" \
   --search-installed "$STAGING/installed/search" \
-  --map "$STAGING/artifacts/map/ekb.pmtiles" \
+  --map "$STAGING/artifacts/map/$MAP_FILE" \
   --map-installed "$STAGING/installed/map" \
   --region-id "$REGION_ID" --release-version "$RELEASE_VERSION" \
   --min-app-version-code "$MIN_APP_VERSION_CODE" --osm-sequence "$OSM_SEQUENCE" \
@@ -118,7 +121,7 @@ python3 "$SCRIPT_DIR/build-manifest.py" \
 mkdir -p "$STAGING/routing" "$STAGING/search" "$STAGING/map"
 mv "$STAGING/artifacts/routing/valhalla-routing.tar.gz" "$STAGING/routing/"
 mv "$STAGING/artifacts/search/places.sqlite.gz" "$STAGING/search/"
-mv "$STAGING/artifacts/map/ekb.pmtiles" "$STAGING/map/"
+mv "$STAGING/artifacts/map/$MAP_FILE" "$STAGING/map/"
 rm -rf "$STAGING/artifacts" "$STAGING/installed" "$STAGING/region.osm.pbf" "$STAGING/map.mbtiles"
 python3 "$SCRIPT_DIR/verify-package.py" "$STAGING"
 mv "$STAGING" "$OUTPUT"

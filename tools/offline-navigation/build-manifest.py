@@ -87,7 +87,7 @@ def main() -> int:
             "map": artifact(
                 args.map,
                 args.map_installed,
-                url=f"{prefix}/map/ekb.pmtiles",
+                url=f"{prefix}/map/{args.region_id}.pmtiles",
                 format="pmtiles",
                 minZoom=5,
                 maxZoom=14,

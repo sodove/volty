@@ -28,10 +28,13 @@ def main() -> int:
     manifest_path = args.package / "manifest.unsigned.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     components = manifest["components"]
+    map_files = list((args.package / "map").glob("*.pmtiles"))
+    if len(map_files) != 1:
+        raise ValueError(f"map: expected exactly one PMTiles file, found {len(map_files)}")
     paths = {
         "routing": args.package / "routing/valhalla-routing.tar.gz",
         "search": args.package / "search/places.sqlite.gz",
-        "map": args.package / "map/ekb.pmtiles",
+        "map": map_files[0],
     }
 
     for name, path in paths.items():

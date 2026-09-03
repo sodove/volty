@@ -836,6 +836,18 @@ behavior remains a release-gate item. The next implementation step is the ARM64/
 smoke with this real package, followed by signed catalog/downloader integration. BRouter remains
 untouched until that gate is passed or explicitly failed.
 
+The release tooling now includes `sign-manifest.py`. It uses an external Ed25519 PEM key for
+regional manifests; the APK's `123.jks` remains Android artifact signing material and is not used
+for package verification. The signer removes the nullable fields omitted by the Kotlinx
+serialization codec, signs the compact UTF-8 payload, verifies the generated signature before the
+atomic write, and never copies the private key into the repository. A real EKB unsigned manifest
+was signed with an ephemeral key and verified with `cryptography`; the Python payload SHA-256 and
+the payload emitted by the actual Kotlin manifest codec both equal
+`91418f9dcba3fea7d480410fdb09fbc901d826a8220d1e951b46b52992440ca9`. The remote Ubuntu tool image
+also now contains `python3-cryptography` and starts successfully. Package scripts derive the
+PMTiles filename from `region_id`, and the verifier rejects packages with zero or multiple map
+archives.
+
 ### Execution checkpoint — regional runtime contracts (2026-09-03)
 
 The common/runtime implementation now includes a strict catalog and release download plan,
