@@ -104,6 +104,9 @@ class AndroidOfflineRegionArtifactDownloader(
             if (offset > 0L) connection.setRequestProperty("Range", "bytes=$offset-")
 
             val responseCode = connection.responseCode
+            if (connection.url.protocol != "https") {
+                throw IOException("Artifact redirect did not remain on HTTPS")
+            }
             when {
                 responseCode == HttpURLConnection.HTTP_PARTIAL && offset > 0L -> Unit
                 responseCode == HttpURLConnection.HTTP_OK -> {

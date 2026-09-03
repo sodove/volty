@@ -53,6 +53,7 @@ enum class OfflineRegionCatalogErrorCode {
     INVALID_GENERATED_AT,
     DUPLICATE_REGION_ID,
     RELEASE_REGION_MISMATCH,
+    REGION_BOUNDS_MISMATCH,
     RELEASE_INVALID,
 }
 
@@ -100,6 +101,12 @@ object OfflineRegionCatalogPolicy {
                         entry.region.regionId,
                     )
                 }
+                if (!release.coverage.bbox.covers(entry.region.bounds)) {
+                    errors += OfflineRegionCatalogValidationError(
+                        OfflineRegionCatalogErrorCode.REGION_BOUNDS_MISMATCH,
+                        entry.region.regionId,
+                    )
+                }
                 OfflineRegionPackageManifestPolicy.validate(release, currentAppVersionCode)
                     .takeIf { it.isNotEmpty() }
                     ?.let {
@@ -111,5 +118,13 @@ object OfflineRegionCatalogPolicy {
             }
         }
         return errors
+    }
+
+    private fun List<Double>.covers(bounds: OfflineRegionBounds): Boolean {
+        if (size != 4) return false
+        return this[0] <= bounds.west &&
+            this[1] <= bounds.south &&
+            this[2] >= bounds.east &&
+            this[3] >= bounds.north
     }
 }

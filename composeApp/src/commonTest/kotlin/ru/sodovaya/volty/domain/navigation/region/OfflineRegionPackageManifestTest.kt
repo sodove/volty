@@ -49,6 +49,26 @@ class OfflineRegionPackageManifestTest {
     }
 
     @Test
+    fun unsigned_development_release_is_not_valid_for_production() {
+        val unsigned = validManifest(
+            signature = OfflineRegionManifestSignature("UNSIGNED_DEV", "ed25519", "UNSIGNED"),
+        )
+
+        assertTrue(
+            OfflineRegionPackageManifestPolicy.validate(unsigned, currentAppVersionCode = 28)
+                .any { it.code == OfflineRegionManifestErrorCode.UNSIGNED_MANIFEST },
+        )
+        assertEquals(
+            emptyList(),
+            OfflineRegionPackageManifestPolicy.validate(
+                unsigned,
+                currentAppVersionCode = 28,
+                allowUnsignedManifest = true,
+            ),
+        )
+    }
+
+    @Test
     fun manifest_reports_incompatible_engine_format_sizes_and_signature() {
         val invalid = validManifest(
             compatibility = validManifest().compatibility.copy(

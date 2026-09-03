@@ -4,6 +4,9 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
 import kotlin.time.Instant
 
 @Serializable
@@ -88,6 +91,11 @@ data class OfflineRegionPackageManifest(
     val signature: OfflineRegionManifestSignature,
 )
 
+/** The platform verifier for the manifest's canonical payload and Ed25519 signature. */
+fun interface OfflineRegionManifestVerifier {
+    fun verify(manifest: OfflineRegionPackageManifest): Boolean
+}
+
 enum class OfflineRegionManifestParseError {
     MALFORMED_MANIFEST,
 }
@@ -118,6 +126,13 @@ object OfflineRegionPackageManifestCodec {
 
     fun encode(manifest: OfflineRegionPackageManifest): String = json.encodeToString(manifest)
 
+    /** Stable UTF-8 payload used by the release Ed25519 signature verifier. */
+    fun signingPayload(manifest: OfflineRegionPackageManifest): String {
+        val unsignedObject = json.encodeToJsonElement(manifest).jsonObject.toMutableMap()
+        unsignedObject.remove("manifestSignature")
+        return json.encodeToString(JsonObject(unsignedObject))
+    }
+
     private fun malformed() = OfflineRegionManifestParseResult.Failure(
         OfflineRegionManifestParseError.MALFORMED_MANIFEST,
     )
@@ -144,6 +159,7 @@ enum class OfflineRegionManifestErrorCode {
     INVALID_MAP_ZOOM,
     INVALID_VECTOR_LAYER_SCHEMA,
     INVALID_SIGNATURE,
+    UNSIGNED_MANIFEST,
 }
 
 data class OfflineRegionManifestValidationError(
@@ -159,6 +175,7 @@ object OfflineRegionPackageManifestPolicy {
     fun validate(
         manifest: OfflineRegionPackageManifest,
         currentAppVersionCode: Int,
+        allowUnsignedManifest: Boolean = false,
     ): List<OfflineRegionManifestValidationError> {
         val errors = mutableListOf<OfflineRegionManifestValidationError>()
         if (manifest.schemaVersion != CURRENT_SCHEMA_VERSION) {
@@ -275,6 +292,11 @@ object OfflineRegionPackageManifestPolicy {
             manifest.signature.value.isBlank()
         ) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_SIGNATURE, manifest.signature.toString())
+        } else if (!allowUnsignedManifest &&
+            manifest.signature.keyId == UNSIGNED_KEY_ID &&
+            manifest.signature.value == UNSIGNED_VALUE
+        ) {
+            errors += error(OfflineRegionManifestErrorCode.UNSIGNED_MANIFEST, manifest.signature.keyId)
         }
         return errors
     }
@@ -320,4 +342,6 @@ object OfflineRegionPackageManifestPolicy {
     private val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
     private val RELEASE_VERSION_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
+    private const val UNSIGNED_KEY_ID = "UNSIGNED_DEV"
+    private const val UNSIGNED_VALUE = "UNSIGNED"
 }

@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionComponent
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCodec
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 
 /**
  * Owns the installed routing/search/map files for regional releases.
@@ -28,6 +29,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCo
 class AndroidOfflineRegionPackageStore(
     context: android.content.Context,
     private val currentAppVersionCode: Int,
+    private val manifestVerifier: OfflineRegionManifestVerifier,
 ) {
     private val root = File(context.applicationContext.filesDir, STORAGE_DIRECTORY)
     private val packages = File(root, PACKAGES_DIRECTORY)
@@ -48,6 +50,7 @@ class AndroidOfflineRegionPackageStore(
     ): InstalledOfflineRegion = synchronized(lock) {
         require(manifest.regionId == plan.regionId) { "manifest and plan region differ" }
         require(manifest.releaseVersion == plan.releaseVersion) { "manifest and plan release differ" }
+        require(manifestVerifier.verify(manifest)) { "regional release signature is invalid" }
         require(downloadedArtifacts.keys == OfflineRegionComponent.entries.toSet()) {
             "a regional package must provide exactly three downloaded artifacts"
         }
@@ -63,9 +66,9 @@ class AndroidOfflineRegionPackageStore(
         try {
             if (!staging.mkdirs()) throw IOException("Could not create regional package staging directory")
             extractPackage(downloadedArtifacts, staging)
-            File(staging, MANIFEST_FILE).writeText(
+            writeSyncedText(
+                File(staging, MANIFEST_FILE),
                 OfflineRegionPackageManifestCodec.encode(manifest),
-                Charsets.UTF_8,
             )
             verifyInstalledPackage(staging, manifest)
 
@@ -188,7 +191,7 @@ class AndroidOfflineRegionPackageStore(
             .replace("/work/tiles", "$rootPath/$ROUTING_DIRECTORY/tiles")
             .replace("/work/admins.sqlite", "$rootPath/$ROUTING_DIRECTORY/admins.sqlite")
             .replace("/work/timezones.sqlite", "$rootPath/$ROUTING_DIRECTORY/timezones.sqlite")
-        config.writeText(rewritten, Charsets.UTF_8)
+        writeSyncedText(config, rewritten)
     }
 
     private fun verifyInstalledPackage(
@@ -221,7 +224,7 @@ class AndroidOfflineRegionPackageStore(
         val pointer = File(active, "$regionId.pointer")
         val temporary = File(active, "$regionId.pointer.tmp-${UUID.randomUUID()}")
         try {
-            temporary.writeText(packageName, Charsets.UTF_8)
+            writeSyncedText(temporary, packageName)
             moveAtomically(temporary, pointer)
         } finally {
             temporary.delete()
@@ -231,13 +234,15 @@ class AndroidOfflineRegionPackageStore(
     private fun readManifest(directory: File): OfflineRegionPackageManifest? {
         val file = File(directory, MANIFEST_FILE)
         if (!file.isFile) return null
-        val parsed = OfflineRegionPackageManifestCodec.parse(file.readText(Charsets.UTF_8))
+        val parsed = runCatching {
+            OfflineRegionPackageManifestCodec.parse(file.readText(Charsets.UTF_8))
+        }.getOrNull() ?: return null
         val manifest = (parsed as? ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestParseResult.Success)
             ?.manifest
             ?: return null
         return manifest.takeIf {
             ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestPolicy
-                .validate(it, currentAppVersionCode).isEmpty()
+                .validate(it, currentAppVersionCode).isEmpty() && manifestVerifier.verify(it)
         }
     }
 
@@ -379,6 +384,13 @@ class AndroidOfflineRegionPackageStore(
             }
         }
         return digest.digest().joinToString("") { (it.toInt() and 0xff).toString(16).padStart(2, '0') }
+    }
+
+    private fun writeSyncedText(file: File, value: String) {
+        FileOutputStream(file).use { output ->
+            output.write(value.toByteArray(Charsets.UTF_8))
+            output.fd.sync()
+        }
     }
 
     private fun ensureDirectories() {

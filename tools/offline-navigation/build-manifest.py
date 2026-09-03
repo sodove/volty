@@ -92,6 +92,7 @@ def main() -> int:
                 minZoom=5,
                 maxZoom=14,
                 vectorLayerSchema=1,
+                compression=None,
             ),
         },
         "manifestSignature": {

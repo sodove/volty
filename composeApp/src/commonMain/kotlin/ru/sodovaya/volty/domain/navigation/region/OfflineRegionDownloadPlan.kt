@@ -53,8 +53,13 @@ object OfflineRegionDownloadPlanFactory {
     fun create(
         manifest: OfflineRegionPackageManifest,
         currentAppVersionCode: Int,
+        allowUnsignedManifest: Boolean = false,
     ): OfflineRegionDownloadPlanResult {
-        val errors = OfflineRegionPackageManifestPolicy.validate(manifest, currentAppVersionCode)
+        val errors = OfflineRegionPackageManifestPolicy.validate(
+            manifest = manifest,
+            currentAppVersionCode = currentAppVersionCode,
+            allowUnsignedManifest = allowUnsignedManifest,
+        )
         if (errors.isNotEmpty()) return OfflineRegionDownloadPlanResult.Rejected(errors)
 
         return OfflineRegionDownloadPlanResult.Ready(

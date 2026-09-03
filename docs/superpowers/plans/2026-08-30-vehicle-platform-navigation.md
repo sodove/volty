@@ -828,3 +828,18 @@ elevation data; route graph construction and the packaged route smoke succeed, b
 behavior remains a release-gate item. The next implementation step is the ARM64/x86_64 wrapper
 smoke with this real package, followed by signed catalog/downloader integration. BRouter remains
 untouched until that gate is passed or explicitly failed.
+
+### Execution checkpoint — regional runtime contracts (2026-09-03)
+
+The common/runtime implementation now includes a strict catalog and release download plan,
+background offline-first selection, FTS4 prefix search, a resumable Android HTTP downloader, and
+atomic Android package installation. Search/route requests continue online while a missing region
+downloads in the background; a ready region is selected locally on the next request. The package
+store extracts all three published components before changing its active pointer and rejects
+unsigned releases through the manifest policy plus an injected Ed25519 verifier.
+
+The Valhalla JSON codec requests up to three alternatives with generic `auto` costing, maps
+polyline6/legs/maneuvers into the existing route contract, and applies the existing geometry
+diversity filter. The Android Valhalla bridge remains intentionally unbound until the published
+AAR is exercised with the real EKB package on ARM64 and x86_64. No BRouter assets were removed,
+no APK/Gradle build was run, and Settings/DI/PMTiles renderer wiring remains after the gate.

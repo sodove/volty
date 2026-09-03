@@ -87,6 +87,26 @@ class OfflineRegionCatalogTest {
         assertEquals(emptyList(), result)
     }
 
+    @Test
+    fun validation_rejects_a_region_that_is_outside_its_release_coverage() {
+        val release = release().copy(
+            coverage = OfflineRegionCoverage(listOf(60.0, 56.5, 61.0, 57.0), 20),
+        )
+        val errors = OfflineRegionCatalogPolicy.validate(
+            OfflineRegionCatalog(
+                schemaVersion = 1,
+                generatedAt = "2026-09-03T00:00:00Z",
+                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), release)),
+            ),
+            currentAppVersionCode = 28,
+        )
+
+        assertEquals(
+            OfflineRegionCatalogErrorCode.REGION_BOUNDS_MISMATCH,
+            errors.single().code,
+        )
+    }
+
     private fun region(regionId: String) = OfflineRegionManifest(
         regionId = regionId,
         displayName = "Екатеринбург",

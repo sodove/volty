@@ -14,6 +14,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
@@ -30,6 +32,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionResumeDecision
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 
 /**
  * Catalog-backed Android implementation for automatic and Settings downloads.
@@ -42,15 +45,21 @@ class AndroidOfflineRegionPackageRepository(
     context: Context,
     private val catalogUrl: String,
     private val currentAppVersionCode: Int,
+    private val manifestVerifier: OfflineRegionManifestVerifier,
     private val preferences: () -> OfflineDownloadPreferences = { OfflineDownloadPreferences() },
     private val userAgent: String = "Volty/0.7 offline-region-repository",
 ) : OfflineRegionPackageRepository {
     private val applicationContext = context.applicationContext
-    private val packageStore = AndroidOfflineRegionPackageStore(applicationContext, currentAppVersionCode)
+    private val packageStore = AndroidOfflineRegionPackageStore(
+        context = applicationContext,
+        currentAppVersionCode = currentAppVersionCode,
+        manifestVerifier = manifestVerifier,
+    )
     private val downloader = AndroidOfflineRegionArtifactDownloader(userAgent = userAgent)
     private val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
     private val _states = MutableStateFlow<List<OfflineRegionPackageState>>(emptyList())
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val regionLocks = ConcurrentHashMap<String, Mutex>()
     private var catalog: OfflineRegionCatalog? = null
 
     override val states: StateFlow<List<OfflineRegionPackageState>> = _states.asStateFlow()
@@ -65,13 +74,24 @@ class AndroidOfflineRegionPackageRepository(
         regionId: String,
         trigger: OfflineRegionDownloadTrigger,
         meteredConfirmed: Boolean = false,
+    ) = regionLocks.computeIfAbsent(regionId) { Mutex() }.withLock {
+        requestDownloadLocked(regionId, trigger, meteredConfirmed)
+    }
+
+    private suspend fun requestDownloadLocked(
+        regionId: String,
+        trigger: OfflineRegionDownloadTrigger,
+        meteredConfirmed: Boolean,
     ) {
         val entry = requireCatalogEntry(regionId)
         val release = entry.latestRelease ?: run {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.INCOMPATIBLE) }
             return
         }
-        val plan = when (val result = OfflineRegionDownloadPlanFactory.create(release, currentAppVersionCode)) {
+        val plan = when (val result = OfflineRegionDownloadPlanFactory.create(
+            manifest = release,
+            currentAppVersionCode = currentAppVersionCode,
+        )) {
             is ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult.Ready -> result.plan
             is ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult.Rejected -> {
                 updateState(regionId) {
@@ -160,8 +180,10 @@ class AndroidOfflineRegionPackageRepository(
     }
 
     override suspend fun pauseDownload(regionId: String) {
-        updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.PAUSED, failure = null) }
-        jobs[regionId]?.cancel()
+        regionLocks.computeIfAbsent(regionId) { Mutex() }.withLock {
+            updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.PAUSED, failure = null) }
+            jobs[regionId]?.cancel()
+        }
     }
 
     override suspend fun resumeDownload(regionId: String) {
@@ -169,15 +191,17 @@ class AndroidOfflineRegionPackageRepository(
     }
 
     override suspend fun deletePackage(regionId: String) {
-        jobs[regionId]?.cancel()
-        packageStore.delete(regionId)
-        updateState(regionId) {
-            it.copy(
-                status = OfflineRegionPackageStatus.NOT_INSTALLED,
-                installedReleaseVersion = null,
-                downloadedBytes = 0L,
-                failure = null,
-            )
+        regionLocks.computeIfAbsent(regionId) { Mutex() }.withLock {
+            jobs[regionId]?.cancel()
+            packageStore.delete(regionId)
+            updateState(regionId) {
+                it.copy(
+                    status = OfflineRegionPackageStatus.NOT_INSTALLED,
+                    installedReleaseVersion = null,
+                    downloadedBytes = 0L,
+                    failure = null,
+                )
+            }
         }
     }
 
