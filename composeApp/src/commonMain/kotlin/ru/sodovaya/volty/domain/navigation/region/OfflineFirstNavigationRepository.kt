@@ -64,7 +64,7 @@ class OfflineFirstNavigationRepository(
             }
             is OfflineRegionAccessDecision.WaitForDownload,
             is OfflineRegionAccessDecision.UseOnlineFallback,
-            is OfflineRegionAccessDecision.RequestMeteredApproval,
+            is OfflineRegionAccessDecision.RequestMeteredApproval
             -> online.search(query, near, languageTag)
             OfflineRegionAccessDecision.UnavailableOffline ->
                 NavigationResult.Failure(NavigationFailure.Offline)
@@ -83,7 +83,7 @@ class OfflineFirstNavigationRepository(
             online.routes(request)
         }
         is OfflineRegionAccessDecision.UseOnlineFallback,
-        is OfflineRegionAccessDecision.RequestMeteredApproval,
+        is OfflineRegionAccessDecision.RequestMeteredApproval
         -> online.routes(request)
         is OfflineRegionAccessDecision.WaitForDownload -> if (
             network.current() == OfflineNetworkAvailability.OFFLINE

@@ -64,7 +64,7 @@ class AndroidOfflineRegionPackageRepository(
     override suspend fun requestDownload(
         regionId: String,
         trigger: OfflineRegionDownloadTrigger,
-        meteredConfirmed: Boolean,
+        meteredConfirmed: Boolean = false,
     ) {
         val entry = requireCatalogEntry(regionId)
         val release = entry.latestRelease ?: run {
@@ -165,7 +165,7 @@ class AndroidOfflineRegionPackageRepository(
     }
 
     override suspend fun resumeDownload(regionId: String) {
-        requestDownload(regionId, OfflineRegionDownloadTrigger.SETTINGS)
+        requestDownload(regionId, OfflineRegionDownloadTrigger.SETTINGS, meteredConfirmed = false)
     }
 
     override suspend fun deletePackage(regionId: String) {

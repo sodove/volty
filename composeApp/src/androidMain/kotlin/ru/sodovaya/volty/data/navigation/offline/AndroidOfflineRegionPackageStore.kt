@@ -91,6 +91,7 @@ class AndroidOfflineRegionPackageStore(
     }
 
     fun active(regionId: String): InstalledOfflineRegion? = synchronized(lock) {
+        require(REGION_ID_PATTERN.matches(regionId)) { "invalid region id" }
         val pointer = File(active, "$regionId.pointer")
         if (!pointer.isFile) return@synchronized null
         val packageName = runCatching { pointer.readText(Charsets.UTF_8).trim() }.getOrNull()
@@ -117,6 +118,7 @@ class AndroidOfflineRegionPackageStore(
     }
 
     fun delete(regionId: String) = synchronized(lock) {
+        require(REGION_ID_PATTERN.matches(regionId)) { "invalid region id" }
         File(active, "$regionId.pointer").delete()
         File(packages, regionId).deleteRecursively()
     }
@@ -404,10 +406,10 @@ class AndroidOfflineRegionPackageStore(
                 InstalledOfflineRegion(
                     manifest = manifest,
                     directory = directory,
-                    routingConfig = File(directory, "$ROUTING_DIRECTORY/$VALHALLA_CONFIG_FILE"),
-                    routingTileExtract = File(directory, "$ROUTING_DIRECTORY/tiles.tar"),
-                    searchDatabase = File(directory, "$SEARCH_DIRECTORY/$SEARCH_DATABASE_FILE"),
-                    mapFile = File(directory, "$MAP_DIRECTORY/$MAP_FILE"),
+                    routingConfig = File(directory, "routing/valhalla.json"),
+                    routingTileExtract = File(directory, "routing/tiles.tar"),
+                    searchDatabase = File(directory, "search/places.sqlite"),
+                    mapFile = File(directory, "map/map.pmtiles"),
                 )
         }
     }
@@ -426,6 +428,7 @@ class AndroidOfflineRegionPackageStore(
         const val MAP_FILE = "map.pmtiles"
         const val TAR_BLOCK_SIZE = 512
         const val COPY_BUFFER_SIZE = 64 * 1024
+        val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
         val PACKAGE_NAME_PATTERN = Regex("[A-Za-z0-9._-]{1,128}")
     }
 }
