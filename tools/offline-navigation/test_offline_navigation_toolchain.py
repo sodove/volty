@@ -2,6 +2,7 @@ import gzip
 import hashlib
 import importlib.util
 import json
+import math
 import sys
 import tarfile
 import tempfile
@@ -11,6 +12,10 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).parent
+EXPAND_SPEC = importlib.util.spec_from_file_location("expand_bbox", ROOT / "expand-bbox.py")
+assert EXPAND_SPEC is not None and EXPAND_SPEC.loader is not None
+EXPAND_MODULE = importlib.util.module_from_spec(EXPAND_SPEC)
+EXPAND_SPEC.loader.exec_module(EXPAND_MODULE)
 VERIFY_SCRIPT = ROOT / "verify-package.py"
 VERIFY_SPEC = importlib.util.spec_from_file_location("verify_package", VERIFY_SCRIPT)
 assert VERIFY_SPEC is not None and VERIFY_SPEC.loader is not None
@@ -104,6 +109,27 @@ def write_package(
 
 
 class OfflineNavigationToolchainTest(unittest.TestCase):
+    def test_routing_bbox_expands_logical_bbox_by_requested_buffer(self):
+        bbox = EXPAND_MODULE.expand_bbox(
+            EXPAND_MODULE.parse_bbox("59.10,56.00,61.90,57.55"),
+            20.0,
+        )
+
+        self.assertLess(bbox[0], 59.10)
+        self.assertLess(bbox[1], 56.00)
+        self.assertGreater(bbox[2], 61.90)
+        self.assertGreater(bbox[3], 57.55)
+
+    def test_routing_bbox_clamps_to_world_bounds(self):
+        bbox = EXPAND_MODULE.expand_bbox(
+            EXPAND_MODULE.parse_bbox("179.9,89.9,180.0,90.0"),
+            20.0,
+        )
+
+        self.assertEqual(180.0, bbox[2])
+        self.assertEqual(90.0, bbox[3])
+        self.assertTrue(all(math.isfinite(value) for value in bbox))
+
     def test_build_package_includes_timezone_database_in_routing_archive(self):
         script = (ROOT / "build-package.sh").read_text(encoding="utf-8")
 
@@ -114,6 +140,14 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
             '    "$VALHALLA_IMAGE" "$@"\n'
             '}\n\n'
             'echo "Extracting logical region with routing buffer"',
+            script,
+        )
+        self.assertIn(
+            'ROUTING_BBOX=$(python3 "$SCRIPT_DIR/expand-bbox.py" "$BBOX" "$ROUTING_BUFFER_KM")',
+            script,
+        )
+        self.assertIn(
+            'tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=smart',
             script,
         )
         self.assertNotIn(

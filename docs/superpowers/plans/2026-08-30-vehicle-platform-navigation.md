@@ -1125,3 +1125,14 @@ deduplication, metered-data approval, retry cooldown, and online-map fallback.
 
 No APK/Gradle build was run; the Kotlin wiring still needs the normal compile/test
 gate when the explicit build pause is lifted.
+
+### Execution checkpoint — enforce the regional routing buffer — 2026-09-03
+
+The package builder now expands the logical region bbox by the requested
+`--routing-buffer-km` before the OSM extract used by Valhalla, search, and PMTiles.
+The previous script only recorded that value in the manifest while extracting the
+unexpanded bbox, which could cut routes at the published edge. Expansion is
+latitude-aware and clamps to world bounds; host tests cover normal EKB geometry and
+world-edge clamping.
+
+No APK/Gradle build was run.

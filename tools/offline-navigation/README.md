@@ -64,8 +64,9 @@ local state; each release manifest is then verified independently before
 installation.
 
 The current pilot bbox is the EKB agglomeration with a routing buffer:
-`59.10,56.00,61.90,57.55` (west,south,east,north). `osmium extract --strategy=smart`
-may include complete ways outside that bbox; the manifest coverage remains the
+`59.10,56.00,61.90,57.55` (west,south,east,north). The builder expands this
+logical bbox by `--routing-buffer-km` before `osmium extract` so routes can
+cross the edge without a graph cut; the manifest coverage remains the
 published logical region and must be checked before release.
 
 The default Valhalla image, PMTiles converter, and Ubuntu tool image are pinned

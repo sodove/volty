@@ -51,9 +51,13 @@ MAP_FILE="${REGION_ID}.pmtiles"
 [[ -n "$RELEASE_VERSION" && -n "$MIN_APP_VERSION_CODE" && -n "$OSM_SEQUENCE" && -n "$OSM_TIMESTAMP" ]] || {
   echo "Release version, app version code, OSM sequence, and OSM timestamp are required" >&2; exit 2;
 }
+[[ "$ROUTING_BUFFER_KM" =~ ^[0-9]+$ ]] || {
+  echo "Routing buffer must be a non-negative integer number of kilometres" >&2; exit 2;
+}
 [[ ! -e "$OUTPUT" ]] || { echo "Refusing to overwrite existing output: $OUTPUT" >&2; exit 1; }
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+ROUTING_BBOX=$(python3 "$SCRIPT_DIR/expand-bbox.py" "$BBOX" "$ROUTING_BUFFER_KM")
 docker build -t "$TOOLS_IMAGE" "$SCRIPT_DIR"
 
 PARENT=$(dirname "$INPUT")
@@ -84,7 +88,8 @@ valhalla_timezone_run() {
 }
 
 echo "Extracting logical region with routing buffer"
-tools_run osmium extract --bbox "$BBOX" --strategy=smart \
+echo "Logical bbox: $BBOX; routing bbox: $ROUTING_BBOX"
+tools_run osmium extract --bbox "$ROUTING_BBOX" --strategy=smart \
   "/input/$INPUT_NAME" -o /work/region.osm.pbf
 
 echo "Building Valhalla routing component"
