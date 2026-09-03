@@ -717,6 +717,7 @@
     <string name="navigation_soc_consumption_unearned">There is not enough measured ride consumption yet.</string>
     <string name="settings_offline_navigation">Offline navigation</string>
     <string name="settings_offline_navigation_subtitle">Download regional routing, search, and map data for use without a connection.</string>
+    <string name="settings_offline_attribution">Map data © OpenStreetMap contributors (openstreetmap.org/copyright) · Valhalla routing · PMTiles map</string>
     <string name="settings_offline_mobile_data">Do not ask before downloading over mobile data</string>
     <string name="settings_offline_refresh">Refresh regions</string>
     <string name="settings_offline_refreshing">Refreshing…</string>

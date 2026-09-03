@@ -715,6 +715,7 @@
     <string name="navigation_soc_consumption_unearned">Пока недостаточно измерений расхода.</string>
     <string name="settings_offline_navigation">Оффлайн-навигация</string>
     <string name="settings_offline_navigation_subtitle">Скачайте маршрутизацию, поиск и карту региона для работы без сети.</string>
+    <string name="settings_offline_attribution">Данные карты © OpenStreetMap contributors (openstreetmap.org/copyright) · маршрутизация Valhalla · карта PMTiles</string>
     <string name="settings_offline_mobile_data">Не спрашивать перед загрузкой через мобильную сеть</string>
     <string name="settings_offline_refresh">Обновить список регионов</string>
     <string name="settings_offline_refreshing">Обновляем…</string>
