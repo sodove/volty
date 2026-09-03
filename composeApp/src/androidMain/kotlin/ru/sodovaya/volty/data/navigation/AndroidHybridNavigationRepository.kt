@@ -34,6 +34,7 @@ import ru.sodovaya.volty.domain.navigation.RouteRequest
 import ru.sodovaya.volty.domain.navigation.offline.OfflineCoverageResult
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRouteCalculationPolicy
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRoutingPolicy
+import ru.sodovaya.volty.domain.navigation.offline.BRouterRouteProfilePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -133,6 +134,9 @@ class AndroidHybridNavigationRepository(
     ): RouteAlternative? {
         val routingContext = RoutingContext().apply {
             localFunction = java.io.File(packageDirectory, PROFILE_FILE).absolutePath
+            keyValues = BRouterRouteProfilePolicy
+                .overrides(request.style, request.preferences)
+                .asKeyValues()
             outputFormat = "json"
             turnInstructionMode = 1
             memoryclass = 64
