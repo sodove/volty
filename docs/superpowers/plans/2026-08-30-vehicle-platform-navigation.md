@@ -1107,3 +1107,9 @@ repository rejects a catalog whose signature does not verify before publishing
 its regions. Existing release-manifest verification remains in place. Focused
 catalog codec/policy coverage still needs to run in the app test suite when
 Gradle builds are allowed again.
+
+The updated publisher was also run against the real remote EKB `v0.1.3`
+manifest with an ephemeral key: it produced a schema-2 one-region catalog and
+the signature/key-ID checks passed. The temporary key and workspace were
+removed after the smoke. The app test suite and Android runtime still need to
+execute this path when the build pause is lifted.
