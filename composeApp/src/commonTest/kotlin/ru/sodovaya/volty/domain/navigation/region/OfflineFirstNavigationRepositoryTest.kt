@@ -181,6 +181,19 @@ class OfflineFirstNavigationRepositoryTest {
         assertEquals(0, online.routeCalls)
     }
 
+    @Test
+    fun waiting_search_in_full_offline_mode_does_not_call_online() = runTest {
+        val packages = FakePackages(status = OfflineRegionPackageStatus.WAITING_FOR_NETWORK)
+        val online = FakeNavigation()
+        val repository = repository(packages, online, network = OfflineNetworkAvailability.OFFLINE)
+
+        val result = repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+
+        assertEquals(NavigationFailure.Offline, assertIs<NavigationResult.Failure>(result).reason)
+        assertEquals(0, online.searchCalls)
+        assertEquals(emptyList(), packages.downloads)
+    }
+
     private fun repository(
         packages: FakePackages,
         online: FakeNavigation,

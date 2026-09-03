@@ -79,8 +79,12 @@ class OfflineFirstNavigationRepository(
                 online.search(query, near, languageTag)
             }
             is OfflineRegionAccessDecision.WaitForDownload -> {
-                retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.SEARCH)
-                online.search(query, near, languageTag)
+                if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+                    NavigationResult.Failure(NavigationFailure.Offline)
+                } else {
+                    retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.SEARCH)
+                    online.search(query, near, languageTag)
+                }
             }
             is OfflineRegionAccessDecision.RequestMeteredApproval ->
                 online.search(query, near, languageTag)
@@ -254,6 +258,7 @@ class OfflineFirstNavigationRepository(
         regionId: String,
         trigger: OfflineRegionDownloadTrigger,
     ) {
+        if (network.current() == OfflineNetworkAvailability.OFFLINE) return
         val status = packages.states.value
             .firstOrNull { it.region.regionId == regionId }
             ?.status
