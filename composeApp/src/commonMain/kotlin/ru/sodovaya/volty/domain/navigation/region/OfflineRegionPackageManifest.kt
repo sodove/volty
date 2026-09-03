@@ -299,10 +299,7 @@ object OfflineRegionPackageManifestPolicy {
             manifest.signature.value.isBlank()
         ) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_SIGNATURE, manifest.signature.toString())
-        } else if (!allowUnsignedManifest &&
-            manifest.signature.keyId == UNSIGNED_KEY_ID &&
-            manifest.signature.value == UNSIGNED_VALUE
-        ) {
+        } else if (!allowUnsignedManifest && manifest.signature.keyId in RESERVED_KEY_IDS) {
             errors += error(OfflineRegionManifestErrorCode.UNSIGNED_MANIFEST, manifest.signature.keyId)
         }
         return errors
@@ -349,6 +346,6 @@ object OfflineRegionPackageManifestPolicy {
     private val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
     private val RELEASE_VERSION_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
-    private const val UNSIGNED_KEY_ID = "UNSIGNED_DEV"
+    private val RESERVED_KEY_IDS = setOf("UNSIGNED_DEV", "UNSIGNED")
     private const val UNSIGNED_VALUE = "UNSIGNED"
 }

@@ -69,6 +69,18 @@ class OfflineRegionPackageManifestTest {
     }
 
     @Test
+    fun reserved_unsigned_key_id_is_not_valid_even_with_a_nonempty_signature() {
+        val reserved = validManifest(
+            signature = OfflineRegionManifestSignature("UNSIGNED", "ed25519", "valid-looking-value"),
+        )
+
+        assertTrue(
+            OfflineRegionPackageManifestPolicy.validate(reserved, currentAppVersionCode = 28)
+                .any { it.code == OfflineRegionManifestErrorCode.UNSIGNED_MANIFEST },
+        )
+    }
+
+    @Test
     fun manifest_reports_incompatible_engine_format_sizes_and_signature() {
         val invalid = validManifest(
             compatibility = validManifest().compatibility.copy(
