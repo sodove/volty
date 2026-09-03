@@ -848,6 +848,13 @@ also now contains `python3-cryptography` and starts successfully. Package script
 PMTiles filename from `region_id`, and the verifier rejects packages with zero or multiple map
 archives.
 
+`build-catalog.py` now assembles the HTTPS-facing catalog from a metadata spec and signed regional
+manifests. It rejects unsigned or non-Ed25519 releases, duplicate/invalid region IDs, mismatched
+manifest IDs, malformed bounds, and logical bounds outside signed coverage. A remote smoke against
+the real EKB `manifest.unsigned.json` signed it with an ephemeral Ed25519 key, produced a
+deterministic one-region catalog, and rejected the unsigned input; local `python3 -m py_compile`
+also passes for all four tooling scripts.
+
 ### Execution checkpoint — regional runtime contracts (2026-09-03)
 
 The common/runtime implementation now includes a strict catalog and release download plan,

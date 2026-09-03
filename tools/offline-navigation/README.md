@@ -29,6 +29,31 @@ payload used by the Android verifier, verifies the signature before publishing,
 and writes only the raw public key when explicitly requested. Private keys and
 signed package artifacts must stay outside git.
 
+Build the HTTPS catalog from signed manifests with a small metadata spec. Paths
+inside the spec are relative to that spec file:
+
+```json
+{
+  "regions": [
+    {
+      "regionId": "ekb-agglomeration",
+      "displayName": "Екатеринбург и окрестности",
+      "bounds": [59.10, 56.00, 61.90, 57.55],
+      "manifest": "ekb-package-v0.1.1/manifest.json"
+    }
+  ]
+}
+```
+
+```bash
+python3 build-catalog.py --spec regions.json --output catalog.json
+```
+
+Only signed manifests are accepted. The builder rejects duplicate regions,
+invalid bounds, mismatched IDs, and logical bounds outside the signed release
+coverage. The catalog itself is served over HTTPS; each release manifest is
+verified independently by the Android public key before installation.
+
 The current pilot bbox is the EKB agglomeration with a routing buffer:
 `59.10,56.00,61.90,57.55` (west,south,east,north). `osmium extract --strategy=smart`
 may include complete ways outside that bbox; the manifest coverage remains the
