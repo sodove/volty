@@ -709,4 +709,22 @@
     <string name="navigation_soc_capacity_unearned">Battery capacity is not known reliably.</string>
     <string name="navigation_soc_telemetry_stale">Battery telemetry is too old.</string>
     <string name="navigation_soc_consumption_unearned">There is not enough measured ride consumption yet.</string>
+    <string name="settings_offline_navigation">Offline navigation</string>
+    <string name="settings_offline_navigation_subtitle">Download regional routing, search, and map data for use without a connection.</string>
+    <string name="settings_offline_mobile_data">Do not ask before downloading over mobile data</string>
+    <string name="settings_offline_refresh">Refresh regions</string>
+    <string name="settings_offline_not_configured">Regional downloads are not configured in this build.</string>
+    <string name="settings_offline_size_line">%1$s download · %2$s on device</string>
+    <string name="settings_offline_download">Download</string>
+    <string name="settings_offline_download_mobile">Download over mobile data</string>
+    <string name="settings_offline_pause">Pause</string>
+    <string name="settings_offline_resume">Resume</string>
+    <string name="settings_offline_delete">Delete</string>
+    <string name="settings_offline_status_ready">Ready · %1$s</string>
+    <string name="settings_offline_status_update">Update available · %1$s</string>
+    <string name="settings_offline_status_downloading">Downloading · %1$s / %2$s</string>
+    <string name="settings_offline_status_paused">Paused · %1$s / %2$s</string>
+    <string name="settings_offline_status_waiting">Waiting for Wi-Fi or mobile approval</string>
+    <string name="settings_offline_status_installing">Installing…</string>
+    <string name="settings_offline_status_failed">Download failed; try again</string>
 </resources>

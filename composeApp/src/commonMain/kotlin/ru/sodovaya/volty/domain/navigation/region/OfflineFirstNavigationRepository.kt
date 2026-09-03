@@ -42,12 +42,15 @@ class OfflineFirstNavigationRepository(
     private val downloadScope: CoroutineScope,
 ) : NavigationRepository {
     private val scheduledDownloads = mutableSetOf<String>()
+    private val catalogRefreshLock = Any()
+    private var catalogRefreshAttempted = false
 
     override suspend fun search(
         query: String,
         near: GeoCoordinate?,
         languageTag: String,
     ): NavigationResult<List<PlaceCandidate>> {
+        ensureCatalog()
         val request = OfflineGeocoderRequestPolicy.create(query, near, languageTag)
         if (request == null || near == null) return online.search(query, near, languageTag)
 
@@ -63,37 +66,64 @@ class OfflineFirstNavigationRepository(
                 online.search(query, near, languageTag)
             }
             is OfflineRegionAccessDecision.WaitForDownload,
-            is OfflineRegionAccessDecision.UseOnlineFallback,
             is OfflineRegionAccessDecision.RequestMeteredApproval
             -> online.search(query, near, languageTag)
+            is OfflineRegionAccessDecision.UseOnlineFallback -> {
+                scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.SEARCH)
+                online.search(query, near, languageTag)
+            }
             OfflineRegionAccessDecision.UnavailableOffline ->
                 NavigationResult.Failure(NavigationFailure.Offline)
         }
     }
 
-    override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> = when (
-        val decision = access(
-            points = listOf(request.origin, request.destination.coordinate),
-            trigger = OfflineRegionDownloadTrigger.ROUTE,
-        )
-    ) {
-        is OfflineRegionAccessDecision.UseOffline -> runtime.routes(decision.regionId, request)
-        is OfflineRegionAccessDecision.StartDownload -> {
-            scheduleDownload(decision.regionId, decision.trigger)
-            online.routes(request)
-        }
-        is OfflineRegionAccessDecision.UseOnlineFallback,
-        is OfflineRegionAccessDecision.RequestMeteredApproval
-        -> online.routes(request)
-        is OfflineRegionAccessDecision.WaitForDownload -> if (
-            network.current() == OfflineNetworkAvailability.OFFLINE
+    override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
+        ensureCatalog()
+        return when (
+            val decision = access(
+                points = listOf(request.origin, request.destination.coordinate),
+                trigger = OfflineRegionDownloadTrigger.ROUTE,
+            )
         ) {
-            NavigationResult.Failure(NavigationFailure.Offline)
-        } else {
-            online.routes(request)
+            is OfflineRegionAccessDecision.UseOffline -> runtime.routes(decision.regionId, request)
+            is OfflineRegionAccessDecision.StartDownload -> {
+                scheduleDownload(decision.regionId, decision.trigger)
+                online.routes(request)
+            }
+            is OfflineRegionAccessDecision.RequestMeteredApproval
+            -> online.routes(request)
+            is OfflineRegionAccessDecision.UseOnlineFallback -> {
+                scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.ROUTE)
+                online.routes(request)
+            }
+            is OfflineRegionAccessDecision.WaitForDownload -> if (
+                network.current() == OfflineNetworkAvailability.OFFLINE
+            ) {
+                NavigationResult.Failure(NavigationFailure.Offline)
+            } else {
+                online.routes(request)
+            }
+            OfflineRegionAccessDecision.UnavailableOffline ->
+                NavigationResult.Failure(NavigationFailure.Offline)
         }
-        OfflineRegionAccessDecision.UnavailableOffline ->
-            NavigationResult.Failure(NavigationFailure.Offline)
+    }
+
+    /**
+     * Application startup refreshes the catalog in the background. This
+     * second guard closes the small race where the first search/route arrives
+     * before startup refresh finishes. The request never waits for the catalog
+     * network timeout; it continues through the online path immediately.
+     */
+    private fun ensureCatalog() {
+        if (packages.states.value.isNotEmpty() || catalogRefreshAttempted) return
+        if (network.current() == OfflineNetworkAvailability.OFFLINE) return
+        synchronized(catalogRefreshLock) {
+            if (packages.states.value.isNotEmpty() || catalogRefreshAttempted) return
+            catalogRefreshAttempted = true
+            downloadScope.launch {
+                runCatching { packages.refreshCatalog() }
+            }
+        }
     }
 
     private fun access(
@@ -123,6 +153,15 @@ class OfflineFirstNavigationRepository(
             } finally {
                 synchronized(scheduledDownloads) { scheduledDownloads.remove(regionId) }
             }
+        }
+    }
+
+    private fun scheduleMissingRegionDownload(
+        decision: OfflineRegionAccessDecision.UseOnlineFallback,
+        trigger: OfflineRegionDownloadTrigger,
+    ) {
+        decision.missingRegionIds.firstOrNull()?.let { regionId ->
+            scheduleDownload(regionId, trigger)
         }
     }
 }

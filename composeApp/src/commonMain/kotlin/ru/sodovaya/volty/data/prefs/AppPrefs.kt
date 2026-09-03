@@ -69,6 +69,11 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         .map { VoiceMicrophoneSource.fromPersisted(it[Keys.VOICE_MICROPHONE_SOURCE]) }
         .stateIn(scope, SharingStarted.Eagerly, VoiceMicrophoneSource.AUTO)
 
+    /** Allow automatic offline-region downloads over mobile data without a prompt. */
+    val offlineSkipMeteredConfirmation: StateFlow<Boolean> = store.data
+        .map { it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] ?: false }
+        .stateIn(scope, SharingStarted.Eagerly, false)
+
     // --- The audible alarm's three switches (F §4). All default **true**: the
     // alarm is the feature a rider depends on when they are not looking at the
     // screen, so a fresh install must warn them without being configured first.
@@ -133,6 +138,9 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setVoiceMicrophoneSource(source: VoiceMicrophoneSource) = store.edit {
         it[Keys.VOICE_MICROPHONE_SOURCE] = source.name
     }
+    suspend fun setOfflineSkipMeteredConfirmation(skip: Boolean) = store.edit {
+        it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] = skip
+    }
     suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
     suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
@@ -150,6 +158,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
         val FAULT_DISPLAY_DURATION_SEC = intPreferencesKey("fault_display_duration_sec")
         val VOICE_MICROPHONE_SOURCE = stringPreferencesKey("voice_microphone_source")
+        val OFFLINE_SKIP_METERED_CONFIRMATION =
+            booleanPreferencesKey("offline_skip_metered_confirmation")
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")

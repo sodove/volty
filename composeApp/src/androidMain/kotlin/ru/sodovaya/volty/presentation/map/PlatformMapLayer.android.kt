@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -75,6 +76,9 @@ import org.maplibre.android.style.layers.PropertyFactory.textHaloWidth
 import org.maplibre.android.style.layers.PropertyFactory.textIgnorePlacement
 import org.maplibre.android.style.layers.PropertyFactory.textSize
 import org.maplibre.android.style.sources.GeoJsonSource
+import org.koin.compose.koinInject
+import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapSource
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
@@ -186,16 +190,34 @@ private fun AndroidMapLibreView(
     val cameraSmoother = remember(cacheKey) { RideMapCameraSmoother() }
     val hazeState = rememberHazeState()
     val mapView = remember(context, cacheKey) { MapViewCache.obtain(cacheKey, context) }
+    val offlineMapSource: AndroidOfflineMapSource = koinInject()
+    val offlineRegions: OfflineRegionPackageRepository = koinInject()
+    val offlineRegionStates by offlineRegions.states.collectAsState()
+    val offlineSourceUrl = remember(scene.ownFix?.coordinate, offlineRegionStates) {
+        runCatching { offlineMapSource.sourceUrl(scene.ownFix?.coordinate) }.getOrNull()
+    }
 
-    LaunchedEffect(map, darkTheme) {
+    LaunchedEffect(scene.ownFix?.coordinate, offlineRegionStates) {
+        offlineMapSource.considerDownload(scene.ownFix?.coordinate)
+    }
+
+    LaunchedEffect(map, darkTheme, offlineSourceUrl) {
         val readyMap = map ?: return@LaunchedEffect
         val targetStyleUrl = if (darkTheme) DARK_MAP_STYLE_URL else LIGHT_MAP_STYLE_URL
-        if (readyMap.style?.uri == targetStyleUrl && readyMap.style?.isFullyLoaded == true) {
+        if (offlineSourceUrl == null &&
+            readyMap.style?.uri == targetStyleUrl &&
+            readyMap.style?.isFullyLoaded == true
+        ) {
             styleReady = true
             return@LaunchedEffect
         }
         styleReady = false
-        readyMap.setStyle(Style.Builder().fromUri(targetStyleUrl)) { style ->
+        val builder = if (offlineSourceUrl != null) {
+            Style.Builder().fromJson(offlineStyleJson(offlineSourceUrl, darkTheme))
+        } else {
+            Style.Builder().fromUri(targetStyleUrl)
+        }
+        readyMap.setStyle(builder) { style ->
             configureStyle(style, darkTheme)
             lastCameraSequence = Long.MIN_VALUE
             styleReady = true
@@ -539,6 +561,36 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
             ),
         )
     }
+}
+
+/** A small label-free fallback style whose only network input is the local PMTiles server. */
+private fun offlineStyleJson(tileUrl: String, darkTheme: Boolean): String {
+    val background = if (darkTheme) "#07131E" else "#EEF3F5"
+    val landuse = if (darkTheme) "#10232B" else "#E4ECEA"
+    val water = if (darkTheme) "#12384A" else "#B9DDEB"
+    val roads = if (darkTheme) "#9AAAB3" else "#7A858B"
+    val buildings = if (darkTheme) "#344952" else "#D0D7D9"
+    return """
+        {
+          "version": 8,
+          "sources": {
+            "openmaptiles": {
+              "type": "vector",
+              "tiles": ["$tileUrl"],
+              "minzoom": 5,
+              "maxzoom": 14
+            }
+          },
+          "layers": [
+            {"id":"background","type":"background","paint":{"background-color":"$background"}},
+            {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.8}},
+            {"id":"water","type":"fill","source":"openmaptiles","source-layer":"water","paint":{"fill-color":"$water"}},
+            {"id":"waterway","type":"line","source":"openmaptiles","source-layer":"waterway","paint":{"line-color":"$water","line-width":1.5}},
+            {"id":"roads","type":"line","source":"openmaptiles","source-layer":"transportation","paint":{"line-color":"$roads","line-width":1.4,"line-opacity":0.9}},
+            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.75}}
+          ]
+        }
+    """.trimIndent()
 }
 
 private fun addLineSourceAndLayer(

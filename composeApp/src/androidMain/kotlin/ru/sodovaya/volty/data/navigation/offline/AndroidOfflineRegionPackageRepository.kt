@@ -15,6 +15,9 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
@@ -25,6 +28,7 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogEntry
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanFactory
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
@@ -44,24 +48,26 @@ class AndroidOfflineRegionPackageRepository(
     private val catalogUrl: String,
     private val currentAppVersionCode: Int,
     private val manifestVerifier: OfflineRegionManifestVerifier,
+    private val packageStore: AndroidOfflineRegionPackageStore,
     private val preferences: () -> OfflineDownloadPreferences = { OfflineDownloadPreferences() },
     private val userAgent: String = "Volty/0.7 offline-region-repository",
 ) : OfflineRegionPackageRepository {
     private val applicationContext = context.applicationContext
-    private val packageStore = AndroidOfflineRegionPackageStore(
-        context = applicationContext,
-        currentAppVersionCode = currentAppVersionCode,
-        manifestVerifier = manifestVerifier,
-    )
     private val downloader = AndroidOfflineRegionArtifactDownloader(userAgent = userAgent)
     private val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
     private val _states = MutableStateFlow<List<OfflineRegionPackageState>>(emptyList())
     private val jobs = ConcurrentHashMap<String, Job>()
+    private val catalogRefreshMutex = Mutex()
+    @Volatile
     private var catalog: OfflineRegionCatalog? = null
 
     override val states: StateFlow<List<OfflineRegionPackageState>> = _states.asStateFlow()
 
-    override suspend fun refreshCatalog() {
+    init {
+        _states.value = packageStore.installedRegions().map(::stateForInstalled)
+    }
+
+    override suspend fun refreshCatalog() = catalogRefreshMutex.withLock {
         val loaded = fetchCatalog()
         catalog = loaded
         publishStates()
@@ -245,7 +251,37 @@ class AndroidOfflineRegionPackageRepository(
 
     private fun publishStates() {
         val loaded = catalog ?: return
-        _states.value = loaded.regions.map { entry -> stateFor(entry) }
+        val catalogIds = loaded.regions.mapTo(mutableSetOf()) { it.region.regionId }
+        val localOnly = packageStore.installedRegions()
+            .filter { it.manifest.regionId !in catalogIds }
+            .map(::stateForInstalled)
+        _states.value = loaded.regions.map(::stateFor) + localOnly
+    }
+
+    private fun stateForInstalled(
+        installed: AndroidOfflineRegionPackageStore.InstalledOfflineRegion,
+    ): OfflineRegionPackageState {
+        val manifest = installed.manifest
+        val bbox = manifest.coverage.bbox
+        val region = OfflineRegionManifest(
+            regionId = manifest.regionId,
+            displayName = manifest.regionId,
+            bounds = ru.sodovaya.volty.domain.navigation.region.OfflineRegionBounds(
+                south = bbox[1],
+                west = bbox[0],
+                north = bbox[3],
+                east = bbox[2],
+            ),
+        )
+        return OfflineRegionPackageState(
+            region = region,
+            latestRelease = manifest,
+            status = OfflineRegionPackageStatus.READY,
+            installedReleaseVersion = manifest.releaseVersion,
+            downloadedBytes = manifest.components.routing.downloadBytes +
+                manifest.components.search.downloadBytes +
+                manifest.components.map.downloadBytes,
+        )
     }
 
     private fun stateFor(entry: OfflineRegionCatalogEntry): OfflineRegionPackageState {
@@ -299,8 +335,10 @@ class AndroidOfflineRegionPackageRepository(
         regionId: String,
         transform: (OfflineRegionPackageState) -> OfflineRegionPackageState,
     ) {
-        _states.value = _states.value.map { state ->
-            if (state.region.regionId == regionId) transform(state) else state
+        _states.update { states ->
+            states.map { state ->
+                if (state.region.regionId == regionId) transform(state) else state
+            }
         }
     }
 

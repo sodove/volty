@@ -9,6 +9,9 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.util.UnitSystem
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -30,6 +33,13 @@ interface SettingsComponent {
     fun onDefaultDashboardStyleChanged(style: DashboardStyle)
     fun onFaultDisplayDurationChanged(seconds: Int)
     fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
+    fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
+    fun onRefreshOfflineRegions()
+    fun onDownloadOfflineRegion(regionId: String)
+    fun onConfirmMeteredOfflineRegion(regionId: String)
+    fun onPauseOfflineRegion(regionId: String)
+    fun onResumeOfflineRegion(regionId: String)
+    fun onDeleteOfflineRegion(regionId: String)
     fun onEditVehicle(id: String)
     fun onDeleteVehicle(id: String)
     fun onAddBattery()
@@ -45,6 +55,8 @@ interface SettingsComponent {
         val defaultDashboardStyle: DashboardStyle = DashboardStyle.LIGHT,
         val faultDisplayDurationSec: Int = 60,
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
+        val offlineSkipMeteredConfirmation: Boolean = false,
+        val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val vehicles: List<Vehicle> = emptyList()
     )
 }
@@ -53,6 +65,7 @@ class DefaultSettingsComponent(
     componentContext: ComponentContext,
     private val appPrefs: AppPrefs,
     private val vehicleRepository: VehicleRepository,
+    private val offlineRegionsRepository: OfflineRegionPackageRepository,
     private val logExporter: LogExporter,
     private val onEditVehicleRequested: (String) -> Unit,
     private val onAddBatteryRequested: () -> Unit,
@@ -70,6 +83,7 @@ class DefaultSettingsComponent(
             defaultDashboardStyle = appPrefs.defaultDashboardStyle.value,
             faultDisplayDurationSec = appPrefs.faultDisplayDurationSec.value,
             voiceMicrophoneSource = appPrefs.voiceMicrophoneSource.value,
+            offlineSkipMeteredConfirmation = appPrefs.offlineSkipMeteredConfirmation.value,
         )
     )
     override val state: StateFlow<SettingsComponent.State> = _state.asStateFlow()
@@ -90,6 +104,8 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
         scope.launch { appPrefs.voiceMicrophoneSource.collect { v -> _state.update { it.copy(voiceMicrophoneSource = v) } } }
+        scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
+        scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
     }
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
@@ -100,6 +116,39 @@ class DefaultSettingsComponent(
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
+    override fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean) {
+        scope.launch { appPrefs.setOfflineSkipMeteredConfirmation(enabled) }
+    }
+    override fun onRefreshOfflineRegions() {
+        scope.launch { runCatching { offlineRegionsRepository.refreshCatalog() } }
+    }
+    override fun onDownloadOfflineRegion(regionId: String) {
+        scope.launch {
+            runCatching {
+                offlineRegionsRepository.requestDownload(regionId, OfflineRegionDownloadTrigger.SETTINGS)
+            }
+        }
+    }
+    override fun onConfirmMeteredOfflineRegion(regionId: String) {
+        scope.launch {
+            runCatching {
+                offlineRegionsRepository.requestDownload(
+                    regionId,
+                    OfflineRegionDownloadTrigger.SETTINGS,
+                    meteredConfirmed = true,
+                )
+            }
+        }
+    }
+    override fun onPauseOfflineRegion(regionId: String) {
+        scope.launch { runCatching { offlineRegionsRepository.pauseDownload(regionId) } }
+    }
+    override fun onResumeOfflineRegion(regionId: String) {
+        scope.launch { runCatching { offlineRegionsRepository.resumeDownload(regionId) } }
+    }
+    override fun onDeleteOfflineRegion(regionId: String) {
+        scope.launch { runCatching { offlineRegionsRepository.deletePackage(regionId) } }
+    }
     override fun onEditVehicle(id: String) { onEditVehicleRequested(id) }
     override fun onDeleteVehicle(id: String) { scope.launch { vehicleRepository.delete(id) } }
     override fun onAddBattery() { onAddBatteryRequested() }

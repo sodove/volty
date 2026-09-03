@@ -13,6 +13,7 @@ import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
@@ -776,6 +777,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
+                    offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
                     logExporter = get(),
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {

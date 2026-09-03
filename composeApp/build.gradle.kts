@@ -2,6 +2,9 @@ import java.util.Properties
 
 val appVersionCode = 28
 val appVersionName = "0.7.6"
+val offlineCatalogUrl = providers.gradleProperty("voltyOfflineCatalogUrl").orNull.orEmpty()
+val offlineManifestKeyId = providers.gradleProperty("voltyOfflineManifestKeyId").orNull.orEmpty()
+val offlineManifestPublicKey = providers.gradleProperty("voltyOfflineManifestPublicKey").orNull.orEmpty()
 
 plugins {
     alias(libs.plugins.kotlin.multiplatform)
@@ -133,6 +136,9 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
+        manifestPlaceholders["voltyOfflineCatalogUrl"] = offlineCatalogUrl
+        manifestPlaceholders["voltyOfflineManifestKeyId"] = offlineManifestKeyId
+        manifestPlaceholders["voltyOfflineManifestPublicKey"] = offlineManifestPublicKey
     }
 
     compileOptions {

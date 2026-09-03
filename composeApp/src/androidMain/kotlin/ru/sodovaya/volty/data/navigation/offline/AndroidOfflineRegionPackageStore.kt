@@ -120,6 +120,13 @@ class AndroidOfflineRegionPackageStore(
             .orEmpty()
     }
 
+    /**
+     * Returns verified active packages so offline mode can recover before the
+     * network catalog has been refreshed after a process restart.
+     */
+    fun installedRegions(): List<InstalledOfflineRegion> =
+        installedRegionIds().mapNotNull(::active)
+
     fun delete(regionId: String) = synchronized(lock) {
         require(REGION_ID_PATTERN.matches(regionId)) { "invalid region id" }
         File(active, "$regionId.pointer").delete()

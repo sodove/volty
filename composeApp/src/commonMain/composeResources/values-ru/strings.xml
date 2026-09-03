@@ -707,4 +707,22 @@
     <string name="navigation_soc_capacity_unearned">Ёмкость батареи не подтверждена.</string>
     <string name="navigation_soc_telemetry_stale">Телеметрия батареи устарела.</string>
     <string name="navigation_soc_consumption_unearned">Пока недостаточно измерений расхода.</string>
+    <string name="settings_offline_navigation">Оффлайн-навигация</string>
+    <string name="settings_offline_navigation_subtitle">Скачайте маршрутизацию, поиск и карту региона для работы без сети.</string>
+    <string name="settings_offline_mobile_data">Не спрашивать перед загрузкой через мобильную сеть</string>
+    <string name="settings_offline_refresh">Обновить список регионов</string>
+    <string name="settings_offline_not_configured">Загрузка регионов не настроена в этой сборке.</string>
+    <string name="settings_offline_size_line">Скачивание: %1$s · На устройстве: %2$s</string>
+    <string name="settings_offline_download">Скачать</string>
+    <string name="settings_offline_download_mobile">Скачать через мобильную сеть</string>
+    <string name="settings_offline_pause">Пауза</string>
+    <string name="settings_offline_resume">Продолжить</string>
+    <string name="settings_offline_delete">Удалить</string>
+    <string name="settings_offline_status_ready">Готово · %1$s</string>
+    <string name="settings_offline_status_update">Доступно обновление · %1$s</string>
+    <string name="settings_offline_status_downloading">Скачивание · %1$s / %2$s</string>
+    <string name="settings_offline_status_paused">Пауза · %1$s / %2$s</string>
+    <string name="settings_offline_status_waiting">Ждём Wi‑Fi или разрешения мобильной сети</string>
+    <string name="settings_offline_status_installing">Устанавливаем…</string>
+    <string name="settings_offline_status_failed">Не удалось скачать; повторите попытку</string>
 </resources>

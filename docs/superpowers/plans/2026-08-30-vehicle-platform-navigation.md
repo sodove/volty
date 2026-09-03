@@ -852,3 +852,36 @@ diversity filter. The Android bridge now creates the version-matched AAR config 
 remains intentionally unbound until the ARM64 gate is complete. No BRouter assets were removed,
 no APK/Gradle application build was run, and Settings/DI/PMTiles renderer wiring remains after
 the gate.
+
+### Execution checkpoint — offline source wiring and latency guard — 2026-09-03
+
+The regional repository is now wired behind build-time catalog/key metadata: a build without the
+configured HTTPS catalog remains on the existing online/BRouter path, while a configured build
+can refresh the signed catalog, expose region lifecycle actions in Settings, and use one shared
+package store for search, route, and map. Mobile-data downloads remain approval-gated unless the
+user enables the Settings switch. Search/route fallback on metered data now queues that region for
+later approval instead of silently losing the automatic download request.
+
+The repository also reconstructs verified installed package states from the active local
+manifests before a catalog refresh. Therefore a previously downloaded region remains usable after
+a process restart with no network; a later catalog refresh supplies its canonical display name
+and release metadata and retains local-only verified packages rather than hiding them.
+
+The first-request catalog refresh is genuinely asynchronous: it is launched in the background and
+never makes search or route construction wait for the catalog's network timeout. Automatic map
+downloads have a retry cooldown, so repeated GPS updates cannot create a retry storm after a
+network failure or an offline transition.
+
+PMTiles is served through a loopback-only local vector-tile endpoint because MapLibre Android
+13.0.2 exposes no native PMTiles protocol callback. A real 44,572,316-byte EKB archive was read
+through that endpoint: a z10 tile returned 611,182 bytes and TileJSON was valid. Cleartext is
+explicitly permitted only for `127.0.0.1`/`localhost`; all other traffic remains HTTPS-only. The
+initial offline style is deliberately label-free until glyph assets and the final map style are
+selected; routing/search/map package mechanics are still independent of that presentation step.
+
+The published Valhalla Mobile AAR passed five fresh x86_64 cold-start/route/close cycles against
+the real EKB routing extract, each returning three trips and `alternates` without a native crash.
+The ARM64 system image was installed on the remote host, but Android's QEMU2 emulator refuses an
+ARM64 guest on this x86_64 host; ARM64 hardware or an ARM64 host remains required to close the
+gate. No production Gradle/APK build was run. BRouter stays present and is not removed until the
+ARM64/lifecycle/size gate plus configured signed-catalog smoke are complete.

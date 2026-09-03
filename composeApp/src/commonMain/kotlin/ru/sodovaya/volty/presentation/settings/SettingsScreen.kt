@@ -17,6 +17,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -49,6 +54,8 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
@@ -87,6 +94,24 @@ import volty.composeapp.generated.resources.settings_voice_microphone_auto
 import volty.composeapp.generated.resources.settings_voice_microphone_headset
 import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
+import volty.composeapp.generated.resources.settings_offline_navigation
+import volty.composeapp.generated.resources.settings_offline_navigation_subtitle
+import volty.composeapp.generated.resources.settings_offline_mobile_data
+import volty.composeapp.generated.resources.settings_offline_refresh
+import volty.composeapp.generated.resources.settings_offline_not_configured
+import volty.composeapp.generated.resources.settings_offline_size_line
+import volty.composeapp.generated.resources.settings_offline_download
+import volty.composeapp.generated.resources.settings_offline_download_mobile
+import volty.composeapp.generated.resources.settings_offline_pause
+import volty.composeapp.generated.resources.settings_offline_resume
+import volty.composeapp.generated.resources.settings_offline_delete
+import volty.composeapp.generated.resources.settings_offline_status_ready
+import volty.composeapp.generated.resources.settings_offline_status_update
+import volty.composeapp.generated.resources.settings_offline_status_downloading
+import volty.composeapp.generated.resources.settings_offline_status_paused
+import volty.composeapp.generated.resources.settings_offline_status_waiting
+import volty.composeapp.generated.resources.settings_offline_status_installing
+import volty.composeapp.generated.resources.settings_offline_status_failed
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -246,6 +271,51 @@ fun SettingsScreen(component: SettingsComponent) {
 
             HorizontalDivider()
 
+            // OFFLINE NAVIGATION REGIONS
+            SectionLabel(stringResource(Res.string.settings_offline_navigation))
+            Text(
+                stringResource(Res.string.settings_offline_navigation_subtitle),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(Res.string.settings_offline_mobile_data),
+                    modifier = Modifier.weight(1f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Switch(
+                    checked = state.offlineSkipMeteredConfirmation,
+                    onCheckedChange = component::onOfflineSkipMeteredConfirmationChanged,
+                )
+            }
+            TextButton(
+                onClick = component::onRefreshOfflineRegions,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(stringResource(Res.string.settings_offline_refresh))
+            }
+            if (state.offlineRegions.isEmpty()) {
+                Text(
+                    stringResource(Res.string.settings_offline_not_configured),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                state.offlineRegions.forEach { region ->
+                    OfflineRegionRow(region, component)
+                }
+            }
+
+            HorizontalDivider()
+
             SectionLabel(stringResource(Res.string.settings_my_batteries))
             state.vehicles.forEach { v ->
                 VehicleRow(
@@ -305,6 +375,122 @@ fun SettingsScreen(component: SettingsComponent) {
             )
         }
     }
+}
+
+@Composable
+private fun OfflineRegionRow(
+    region: OfflineRegionPackageState,
+    component: SettingsComponent,
+) {
+    val release = region.latestRelease
+    val version = region.installedReleaseVersion ?: release?.releaseVersion ?: "—"
+    val action: (() -> Unit)?
+    val actionIcon: androidx.compose.ui.graphics.vector.ImageVector?
+    val actionText: String
+    when (region.status) {
+        OfflineRegionPackageStatus.READY -> {
+            action = { component.onDeleteOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.Delete
+            actionText = stringResource(Res.string.settings_offline_delete)
+        }
+        OfflineRegionPackageStatus.DOWNLOADING,
+        OfflineRegionPackageStatus.INSTALLING,
+        OfflineRegionPackageStatus.VERIFYING,
+        OfflineRegionPackageStatus.DELETING -> {
+            action = if (region.status == OfflineRegionPackageStatus.DOWNLOADING) {
+                { component.onPauseOfflineRegion(region.region.regionId) }
+            } else null
+            actionIcon = if (action != null) Icons.Default.Pause else null
+            actionText = stringResource(Res.string.settings_offline_pause)
+        }
+        OfflineRegionPackageStatus.PAUSED,
+        OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
+        OfflineRegionPackageStatus.QUEUED -> {
+            action = { component.onResumeOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.PlayArrow
+            actionText = stringResource(Res.string.settings_offline_resume)
+        }
+        OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL -> {
+            action = { component.onConfirmMeteredOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.Download
+            actionText = stringResource(Res.string.settings_offline_download_mobile)
+        }
+        OfflineRegionPackageStatus.NOT_INSTALLED,
+        OfflineRegionPackageStatus.UPDATE_AVAILABLE,
+        OfflineRegionPackageStatus.FAILED -> {
+            action = { component.onDownloadOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.Download
+            actionText = stringResource(Res.string.settings_offline_download)
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(region.region.displayName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            offlineRegionStatusText(region, version),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (release != null) {
+            Text(
+                stringResource(
+                    Res.string.settings_offline_size_line,
+                    formatOfflineBytes(region.totalDownloadBytes),
+                    formatOfflineBytes(region.totalInstalledBytes),
+                ),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (action != null && actionIcon != null) {
+            TextButton(onClick = action) {
+                Icon(actionIcon, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(actionText)
+            }
+        }
+    }
+}
+
+@Composable
+private fun offlineRegionStatusText(
+    region: OfflineRegionPackageState,
+    version: String,
+): String = when (region.status) {
+    OfflineRegionPackageStatus.READY -> stringResource(Res.string.settings_offline_status_ready, version)
+    OfflineRegionPackageStatus.UPDATE_AVAILABLE -> stringResource(Res.string.settings_offline_status_update, version)
+    OfflineRegionPackageStatus.DOWNLOADING -> stringResource(
+        Res.string.settings_offline_status_downloading,
+        formatOfflineBytes(region.downloadedBytes),
+        formatOfflineBytes(region.totalDownloadBytes),
+    )
+    OfflineRegionPackageStatus.PAUSED -> stringResource(
+        Res.string.settings_offline_status_paused,
+        formatOfflineBytes(region.downloadedBytes),
+        formatOfflineBytes(region.totalDownloadBytes),
+    )
+    OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
+    OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
+    OfflineRegionPackageStatus.QUEUED -> stringResource(Res.string.settings_offline_status_waiting)
+    OfflineRegionPackageStatus.INSTALLING,
+    OfflineRegionPackageStatus.VERIFYING,
+    OfflineRegionPackageStatus.DELETING -> stringResource(Res.string.settings_offline_status_installing)
+    OfflineRegionPackageStatus.FAILED -> stringResource(Res.string.settings_offline_status_failed)
+    OfflineRegionPackageStatus.NOT_INSTALLED -> version
+}
+
+private fun formatOfflineBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable

@@ -46,6 +46,24 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun metered_missing_region_stays_online_and_enters_download_queue_for_confirmation() = runTest {
+        val packages = FakePackages()
+        val online = FakeNavigation()
+        val repository = repository(
+            packages,
+            online,
+            network = OfflineNetworkAvailability.METERED,
+        )
+
+        val result = repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+        testScheduler.runCurrent()
+
+        assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result)
+        assertEquals(1, online.searchCalls)
+        assertEquals(listOf("ekb"), packages.downloads)
+    }
+
+    @Test
     fun missing_region_in_full_offline_mode_does_not_call_online() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
