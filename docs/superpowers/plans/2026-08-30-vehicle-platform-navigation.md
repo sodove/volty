@@ -817,9 +817,13 @@ Evidence from the EKB pilot build:
   Russian results with coordinates, so autocomplete no longer needs a complete query or network.
 - PMTiles is zoom 5–14, contains the declared vector layers, and passes the converter's structural
   verification.
-- The unsigned pilot package is 84.5 MB by manifest download sizes and about 175 MB after
-  installation: routing 24.2/72.2 MB, search 13.5/58.3 MB, map 42.5/42.5 MB (download/installed).
-  The checked-in toolchain does not include these generated artifacts or any signing key.
+- Release `0.1.1` was rebuilt on the remote Docker host after syncing the current manifest tool:
+  84,089,008 bytes downloaded (about 80.2 MiB) and about 175 MB after installation: routing
+  25,339,889/72,191,286 bytes, search 14,176,803/58,347,520 bytes, and map
+  44,572,316/44,572,316 bytes (download/installed). The package passes the component verifier,
+  the FTS4 smoke still finds `Плотинка`, and the packaged Valhalla smoke still returns three
+  route trips. The checked-in toolchain does not include these generated artifacts or any
+  signing key.
 
 This checkpoint does not pass the Valhalla Mobile Android gate: the package was tested through the
 Valhalla service, not through the published Android wrapper, and the manifest is deliberately
