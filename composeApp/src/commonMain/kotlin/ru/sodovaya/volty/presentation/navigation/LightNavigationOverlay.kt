@@ -361,7 +361,7 @@ private fun PlanningContent(model: NavigationUiModel, callbacks: LightNavigation
 
 internal fun shouldShowNavigationNoResults(model: NavigationUiModel): Boolean =
     model.destination == null &&
-        model.query.trim().length >= 3 &&
+        model.query.trim().length >= LightNavigationSearchPolicy.MIN_QUERY_LENGTH &&
         !model.requestInFlight &&
         model.searchResults.isEmpty() &&
         model.failureBanner == null

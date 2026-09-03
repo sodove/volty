@@ -135,7 +135,7 @@ class DefaultLightNavigationComponent(
         awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.QueryChanged(query))
-        if (query.trim().length < MIN_SEARCH_LENGTH) return
+        if (query.trim().length < LightNavigationSearchPolicy.MIN_QUERY_LENGTH) return
         scheduleSearch(query)
     }
 
@@ -185,7 +185,7 @@ class DefaultLightNavigationComponent(
                 if (phase.requestInFlight) return
                 if (phase.destination != null) {
                     requestRouteIfPossible()
-                } else if (phase.query.trim().length >= MIN_SEARCH_LENGTH) {
+                } else if (phase.query.trim().length >= LightNavigationSearchPolicy.MIN_QUERY_LENGTH) {
                     searchJob?.cancel()
                     scheduleSearch(phase.query)
                 }
@@ -650,7 +650,6 @@ class DefaultLightNavigationComponent(
     private fun Boolean?.orFalse(): Boolean = this == true
 
     private companion object {
-        const val MIN_SEARCH_LENGTH = 3
         const val SEARCH_DEBOUNCE_MILLIS = 350L
         const val MAX_LOCATION_AGE_MILLIS = 5_000L
         const val MAX_LOCATION_ACCURACY_METERS = 50.0

@@ -87,6 +87,8 @@ object LightNavigationDockPolicy {
 }
 
 object LightNavigationSearchPolicy {
+    /** Two characters are enough to start autocomplete; the provider still debounces input. */
+    const val MIN_QUERY_LENGTH = 2
     const val MAX_VISIBLE_RESULTS = 3
 
     fun visibleResultRows(resultCount: Int): Int =

@@ -117,8 +117,6 @@ sealed interface NavigationAction {
 
 /** Pure state machine for the retained planner and navigation scene. */
 object NavigationReducer {
-    private const val MIN_SEARCH_LENGTH = 3
-
     fun reduce(state: LightNavigationState, action: NavigationAction): LightNavigationState = when (action) {
         NavigationAction.PlannerRequested -> if (state.phase is NavigationPhase.Idle) {
             state.copy(phase = emptyPlanning())
@@ -132,7 +130,7 @@ object NavigationReducer {
                     query = action.query,
                     searchResults = emptyList(),
                     destination = null,
-                    requestInFlight = action.query.trim().length >= MIN_SEARCH_LENGTH,
+                    requestInFlight = action.query.trim().length >= LightNavigationSearchPolicy.MIN_QUERY_LENGTH,
                     failure = null,
                 ),
                 requestGeneration = nextGeneration(state),

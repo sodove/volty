@@ -39,24 +39,20 @@ class LightNavigationComponentPlanningTest {
     fun tearDown() = Dispatchers.resetMain()
 
     @Test
-    fun `short query does not issue search and a valid query is debounced once`() = runTest(dispatcher) {
+    fun `two character query is debounced once`() = runTest(dispatcher) {
         Dispatchers.setMain(dispatcher)
         val navigation = FakeNavigationRepository()
         val component = component(navigation)
 
         component.onPlannerRequested()
         component.onQueryChanged("ab")
-        advanceTimeBy(500L)
+        advanceTimeBy(349L)
         assertTrue(navigation.searches.isEmpty())
 
-        component.onQueryChanged("abc")
-        advanceTimeBy(349L)
-        runCurrent()
-        assertTrue(navigation.searches.isEmpty())
         advanceTimeBy(1L)
         advanceUntilIdle()
 
-        assertEquals(listOf("abc"), navigation.searches)
+        assertEquals(listOf("ab"), navigation.searches)
         assertEquals(listOf(place), assertIs<NavigationPhase.Planning>(component.state.value.phase).searchResults)
         component.close()
     }
