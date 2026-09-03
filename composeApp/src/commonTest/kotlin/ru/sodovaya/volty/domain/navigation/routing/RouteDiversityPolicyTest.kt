@@ -36,6 +36,23 @@ class RouteDiversityPolicyTest {
     }
 
     @Test
+    fun nearby_parallel_corridors_are_not_collapsed_into_the_primary_route() {
+        val primary = route(
+            "primary",
+            listOf(point(56.80, 60.50), point(56.805, 60.505), point(56.81, 60.51)),
+        )
+        val parallel = route(
+            "parallel",
+            listOf(point(56.80, 60.50), point(56.80545, 60.505), point(56.81, 60.51)),
+        )
+
+        assertEquals(
+            listOf("primary", "parallel"),
+            RouteDiversityPolicy.select(listOf(primary, parallel), limit = 3).map { it.id },
+        )
+    }
+
+    @Test
     fun selection_is_stable_and_never_returns_more_than_three_routes() {
         val routes = (1..5).map { index ->
             route(

@@ -865,6 +865,12 @@ the Valhalla `auto` costing request and reused for reroutes; no EUC/scooter/bicy
 type-derived motorway rule was added. RED coverage checks reducer state, UI mapping, and the
 component's actual request payload. Both Russian and fallback English strings are present.
 
+The direct OSM fallback now starts its two route-provider requests concurrently whenever more than
+one alternative is requested, then aggregates their responses in deterministic primary-first
+order. A 35 m corridor tolerance keeps genuinely parallel roads instead of collapsing them as
+duplicates, while the exact-duplicate and limit-one behaviors remain unchanged. This shortens the
+slow-provider path without fabricating alternatives when both public routers return the same road.
+
 ### Execution checkpoint — regional runtime contracts (2026-09-03)
 
 The common/runtime implementation now includes a strict catalog and release download plan,

@@ -14,6 +14,9 @@ import io.ktor.http.isSuccess
 import io.ktor.util.date.GMTDate
 import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -70,54 +73,41 @@ class OsmNavigationRepository(
         val language = requestLanguage(request.languageTag)
         val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
         var lastFailure: NavigationFailure = NavigationFailure.Offline
-        var primaryPlan: RoutePlan? = null
 
         return try {
-            for (endpoint in OSRM_URLS) {
-                val result = try {
-                    routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    NavigationResult.Failure(NavigationFailure.Offline)
-                }
+            val endpoints = OSRM_URLS.take(if (limit == 1) 1 else OSRM_URLS.size)
+            val results = coroutineScope {
+                endpoints.map { endpoint ->
+                    async {
+                        try {
+                            routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
+                        } catch (cancelled: CancellationException) {
+                            throw cancelled
+                        } catch (_: Exception) {
+                            NavigationResult.Failure(NavigationFailure.Offline)
+                        }
+                    }
+                }.awaitAll()
+            }
 
+            var combinedPlan: RoutePlan? = null
+            for (result in results) {
                 when (result) {
                     is NavigationResult.Success -> {
-                        val previousPrimary = primaryPlan
-                        if (previousPrimary == null) {
-                            primaryPlan = result.value
-                            if (result.value.alternatives.size >= limit) {
-                                return NavigationResult.Success(result.value.withDeterministicRouteIds(limit))
-                            }
-                        } else {
-                            return NavigationResult.Success(
-                                previousPrimary.aggregateWith(result.value, limit),
-                            )
-                        }
+                        combinedPlan = combinedPlan?.aggregateWith(result.value, limit) ?: result.value
                     }
                     is NavigationResult.Failure -> {
                         lastFailure = result.reason
-                        val successfulPrimary = primaryPlan
-                        if (successfulPrimary != null) {
-                            return NavigationResult.Success(successfulPrimary.withDeterministicRouteIds(limit))
-                        }
-                        if (result.reason !is NavigationFailure.Offline &&
-                            result.reason !is NavigationFailure.ProviderUnavailable &&
-                            result.reason !is NavigationFailure.RateLimited
-                        ) {
-                            return result
-                        }
                     }
                 }
             }
-            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
+
+            combinedPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
                 ?: NavigationResult.Failure(lastFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (error: Exception) {
-            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
-                ?: NavigationResult.Failure(lastFailure)
+        } catch (_: Exception) {
+            NavigationResult.Failure(lastFailure)
         }
     }
 
