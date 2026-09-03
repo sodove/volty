@@ -1300,3 +1300,18 @@ installed the complete seven-file package. The local CA trust was a temporary de
 is not part of the source or release configuration. Backend tests also passed freshly: 45 tests,
 zero failures/errors/skips. A real deployment signing key/HTTPS object host and the Android ARM64
 native Valhalla gate remain the only external release inputs.
+
+### Execution checkpoint — production build 30 installed on Pixel 7 — 2026-09-04
+
+The Android build number was raised from `28` to `30` while keeping the user-facing version name
+`0.7.6`. A fresh production-gate build ran all 63 actionable Gradle tasks and passed
+`verifyProductionReleaseOmitsBRouter`. The signed APK is 80,718,105 bytes, has only the release
+ABIs `arm64-v8a` and `armeabi-v7a`, and contains no `btools/`, `btools.`, or `RoutingEngine` dex
+markers. Its SHA-256 is
+`75C25AC04593147515571C423198138AC42D66EA0A4B5E9463CFB75AC31051D5D`.
+
+The APK was installed successfully on the connected Pixel 7 (`versionCode=30`, `versionName=0.7.6`)
+and launched without a fresh `FATAL EXCEPTION` in logcat. This was a device launch smoke only:
+the build used the previously documented smoke catalog URL/key because deployment credentials and
+the real HTTPS object host are still not present, so this APK is not a distributable regional-data
+release.
