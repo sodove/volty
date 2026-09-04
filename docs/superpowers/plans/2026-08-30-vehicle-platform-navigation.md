@@ -1544,3 +1544,12 @@ profiles; the public service has no motorcycle endpoint. Two car providers can s
 parallel for alternatives, while bike/foot attempts are not mixed with car routes in one result.
 The existing motorway/trunk exclusion remains active for low-speed, curvy, and no-highway requests.
 Focused OSRM tests pass, including bicycle selection and bike-to-foot fallback. No APK was built.
+
+### Execution checkpoint — live online profile endpoint smoke — 2026-09-04
+
+The public FOSSGIS endpoints were checked on a redacted EKB test corridor with the same route
+shape used by the adapter. `routed-bike`, `routed-foot`, and `routed-car` each returned `Ok` and
+one route; the first maneuver modes were respectively `cycling`, `walking`, and `driving`. The
+returned distances/durations were distinct, confirming that the low-speed fallback is backed by
+different routing graphs rather than a URL-only label. No query coordinates were recorded and no
+APK was built.
