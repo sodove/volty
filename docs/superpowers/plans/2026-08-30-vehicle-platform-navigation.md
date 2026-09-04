@@ -1533,3 +1533,14 @@ value, while new edits always create a vehicle-scoped value. No UI transport-typ
 introduced. Common tests cover restoring a vehicle's values, isolating two vehicles, switching
 vehicles while the planner is retained, and persistence across `AppPrefs` instances. The full
 debug unit-test suite passes 2,416/2,416 with zero failures, errors, or skips; no APK was built.
+
+### Execution checkpoint — profile-aware online fallback — 2026-09-04
+
+The direct OSRM fallback now follows the same internal profile order as the offline planner while
+keeping alternatives within one costing. At 20–30 km/h it tries the public FOSSGIS bicycle graph,
+then foot, then the car graph only after a provider/no-route failure. Above 30 km/h the public car
+graph is used as the closest available road-access equivalent for the internal motorcycle/generic
+profiles; the public service has no motorcycle endpoint. Two car providers can still be queried in
+parallel for alternatives, while bike/foot attempts are not mixed with car routes in one result.
+The existing motorway/trunk exclusion remains active for low-speed, curvy, and no-highway requests.
+Focused OSRM tests pass, including bicycle selection and bike-to-foot fallback. No APK was built.

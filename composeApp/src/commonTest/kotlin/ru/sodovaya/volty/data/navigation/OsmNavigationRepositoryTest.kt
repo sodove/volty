@@ -196,7 +196,7 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
-    fun low_speed_routes_exclude_motorways_and_trunks_even_in_fast_style() = runTest {
+    fun low_speed_routes_use_bicycle_router_and_exclude_motorways_and_trunks() = runTest {
         val requests = mutableListOf<HttpRequestData>()
         val repository = repository(requests) { osrmResponseWithRoutes() }
 
@@ -207,7 +207,37 @@ class OsmNavigationRepositoryTest {
         )
 
         assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(
+            "/routed-bike/route/v1/driving/60.6057,56.8389;60.63,56.83",
+            requests.single().url.encodedPath,
+        )
         assertEquals("motorway,trunk", requests.single().url.parameters["exclude"])
+    }
+
+    @Test
+    fun low_speed_route_falls_back_to_foot_then_car_only_after_profile_failure() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            when {
+                request.url.encodedPath.startsWith("/routed-bike/") ->
+                    respond("{\"code\":\"NoRoute\",\"routes\":[]}", HttpStatusCode.UnprocessableEntity, jsonHeaders())
+                request.url.encodedPath.startsWith("/routed-foot/") ->
+                    respond(osrmResponseWithRoutes(), headers = jsonHeaders())
+                else -> error("car profile must not be queried after foot succeeds")
+            }
+        }))
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 1).copy(
+                preferences = RoutingPreferences(declaredTopSpeedKph = 20),
+            ),
+        )
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(2, requests.size)
+        assertTrue(requests[0].url.encodedPath.startsWith("/routed-bike/"))
+        assertTrue(requests[1].url.encodedPath.startsWith("/routed-foot/"))
     }
 
     @Test

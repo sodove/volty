@@ -39,6 +39,7 @@ import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 import ru.sodovaya.volty.domain.navigation.routing.RouteAlternativePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfile
 import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import kotlin.math.ceil
@@ -78,41 +79,66 @@ class OsmNavigationRepository(
         var lastFailure: NavigationFailure = NavigationFailure.Offline
 
         return try {
-            val endpoints = OSRM_URLS.take(if (limit == 1) 1 else OSRM_URLS.size)
-            val results = coroutineScope {
-                endpoints.map { endpoint ->
-                    async {
-                        try {
-                            routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
-                        } catch (cancelled: CancellationException) {
-                            throw cancelled
-                        } catch (_: Exception) {
-                            NavigationResult.Failure(NavigationFailure.Offline)
+            /*
+             * Keep alternatives within one costing. Public OSRM instances do
+             * not expose a motorcycle profile, so motorcycle deliberately
+             * maps to the car road graph here; low-speed requests can still
+             * fall through bike -> foot -> car if a profile cannot route.
+             */
+            val endpointAttempts = RouteProfilePolicy.profilesFor(request)
+                .map(::endpointsFor)
+                .distinct()
+
+            for (candidateEndpoints in endpointAttempts) {
+                val endpoints = candidateEndpoints.take(if (limit == 1) 1 else candidateEndpoints.size)
+                val results = coroutineScope {
+                    endpoints.map { endpoint ->
+                        async {
+                            try {
+                                routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                NavigationResult.Failure(NavigationFailure.Offline)
+                            }
+                        }
+                    }.awaitAll()
+                }
+
+                var combinedPlan: RoutePlan? = null
+                for (result in results) {
+                    when (result) {
+                        is NavigationResult.Success -> {
+                            combinedPlan = combinedPlan?.aggregateWith(result.value, limit) ?: result.value
+                        }
+                        is NavigationResult.Failure -> {
+                            lastFailure = result.reason
                         }
                     }
-                }.awaitAll()
-            }
+                }
 
-            var combinedPlan: RoutePlan? = null
-            for (result in results) {
-                when (result) {
-                    is NavigationResult.Success -> {
-                        combinedPlan = combinedPlan?.aggregateWith(result.value, limit) ?: result.value
-                    }
-                    is NavigationResult.Failure -> {
-                        lastFailure = result.reason
-                    }
+                if (combinedPlan != null) {
+                    return NavigationResult.Success(
+                        combinedPlan.withDeterministicRouteIds(request, limit),
+                    )
                 }
             }
 
-            combinedPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(request, limit)) }
-                ?: NavigationResult.Failure(lastFailure)
+            NavigationResult.Failure(lastFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             NavigationResult.Failure(lastFailure)
         }
     }
+
+    private fun endpointsFor(profile: RouteProfile): List<String> =
+        when (profile) {
+            RouteProfile.BICYCLE -> listOf(OSRM_BICYCLE_URL)
+            RouteProfile.PEDESTRIAN -> listOf(OSRM_FOOT_URL)
+            RouteProfile.MOTORCYCLE,
+            RouteProfile.GENERIC -> OSRM_CAR_URLS
+        }
 
     private suspend fun routeFromEndpoint(
         endpoint: String,
@@ -571,7 +597,11 @@ class OsmNavigationRepository(
 
     private companion object {
         const val PHOTON_URL = "https://photon.komoot.io/api/"
-        val OSRM_URLS = listOf(
+        const val OSRM_BICYCLE_URL =
+            "https://routing.openstreetmap.de/routed-bike/route/v1/driving"
+        const val OSRM_FOOT_URL =
+            "https://routing.openstreetmap.de/routed-foot/route/v1/driving"
+        val OSRM_CAR_URLS = listOf(
             "https://routing.openstreetmap.de/routed-car/route/v1/driving",
             "https://router.project-osrm.org/route/v1/driving",
         )
