@@ -1583,3 +1583,16 @@ itself: the route responses still require field/corpus checks for access, surfac
 vehicle-ETA compatibility. The temporary service used a copied config with the missing
 `auto_pedestrian` service limit restored; the checked-in config, package, and old containers were
 not modified. No APK was built or installed.
+
+### Execution checkpoint — regional service config normalization — 2026-09-04
+
+The pinned Valhalla 3.6.3 image's `valhalla_build_config` output was compared
+with its service startup behavior. The generated config omitted
+`service_limits.auto_pedestrian`, while the service failed before `/status` with
+`No such node (service_limits.auto_pedestrian.max_locations)`. The regional
+toolchain now runs an idempotent normalizer after config generation, adding the
+required distance/location/matrix limits and preserving any existing block. Focused
+toolchain coverage passes 21/21, Python compilation and shell syntax checks pass,
+and a temporary service with the normalized config reaches `/status` and returns a
+three-trip route response; no package
+or checked-in runtime data was changed and no APK was built.

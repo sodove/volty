@@ -25,6 +25,13 @@ SEARCH_SPEC = importlib.util.spec_from_file_location("build_search", ROOT / "bui
 assert SEARCH_SPEC is not None and SEARCH_SPEC.loader is not None
 SEARCH_MODULE = importlib.util.module_from_spec(SEARCH_SPEC)
 SEARCH_SPEC.loader.exec_module(SEARCH_MODULE)
+CONFIG_SPEC = importlib.util.spec_from_file_location(
+    "normalize_valhalla_config",
+    ROOT / "normalize-valhalla-config.py",
+)
+assert CONFIG_SPEC is not None and CONFIG_SPEC.loader is not None
+CONFIG_MODULE = importlib.util.module_from_spec(CONFIG_SPEC)
+CONFIG_SPEC.loader.exec_module(CONFIG_MODULE)
 
 
 def complete_config() -> dict[str, object]:
@@ -113,6 +120,44 @@ def write_package(
 
 
 class OfflineNavigationToolchainTest(unittest.TestCase):
+    def test_normalizer_adds_auto_pedestrian_service_limit(self):
+        config = {
+            "service_limits": {
+                "auto": {
+                    "max_distance": 5000000.0,
+                    "max_locations": 20,
+                    "max_matrix_distance": 400000.0,
+                    "max_matrix_location_pairs": 2500,
+                },
+            },
+        }
+
+        changed = CONFIG_MODULE.ensure_auto_pedestrian_limit(config)
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            {
+                "max_distance": 5000000.0,
+                "max_locations": 20,
+                "max_matrix_distance": 400000.0,
+                "max_matrix_location_pairs": 2500,
+            },
+            config["service_limits"]["auto_pedestrian"],
+        )
+
+    def test_normalizer_does_not_overwrite_existing_limit(self):
+        existing = {
+            "max_distance": 123.0,
+            "max_matrix_distance": 456.0,
+            "max_matrix_location_pairs": 7,
+        }
+        config = {"service_limits": {"auto_pedestrian": existing.copy()}}
+
+        changed = CONFIG_MODULE.ensure_auto_pedestrian_limit(config)
+
+        self.assertFalse(changed)
+        self.assertEqual(existing, config["service_limits"]["auto_pedestrian"])
+
     def test_search_index_folds_russian_yo_without_changing_display_name(self):
         features = [
             {
@@ -189,6 +234,11 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
         self.assertIn(
             'valhalla_timezone_run valhalla_build_timezones > "$STAGING/installed/routing/timezones.sqlite"\n'
             "valhalla_run valhalla_build_config",
+            script,
+        )
+        self.assertIn(
+            'python3 "$SCRIPT_DIR/normalize-valhalla-config.py" \\\n'
+            '  "$STAGING/installed/routing/valhalla.json"',
             script,
         )
         self.assertIn(

@@ -93,6 +93,14 @@ the ordinary Docker network. `verify-package.py` rejects a routing archive that
 is missing any required database/archive or that does not reference those files
 from `valhalla.json`.
 
+After `valhalla_build_config`, the build runs
+`normalize-valhalla-config.py`. The pinned Valhalla 3.6.3 service expects the
+`service_limits.auto_pedestrian` block even though its config generator may omit
+it; the normalizer adds the required distance/location/matrix limits without replacing
+an existing value. This keeps a package usable by the host-side service smoke
+and does not affect the Android AAR, which creates its own config through
+`ValhallaConfigFactory`.
+
 The app consumes the already-built Android `io.github.rallista:valhalla-mobile:0.6.3`
 AAR. The pinned amd64 Valhalla 3.6.3 image below is only the host-side tile
 compiler used to turn OSM data into the regional extract; it does not rebuild

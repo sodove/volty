@@ -107,6 +107,8 @@ valhalla_run valhalla_build_config \
   --mjolnir-tile-extract /work/installed/routing/tiles.tar \
   --mjolnir-admin /work/installed/routing/admins.sqlite \
   --mjolnir-timezone /work/installed/routing/timezones.sqlite > "$STAGING/installed/routing/valhalla.json"
+python3 "$SCRIPT_DIR/normalize-valhalla-config.py" \
+  "$STAGING/installed/routing/valhalla.json"
 # Administrative boundaries come from the source PBF rather than either
 # clipped extract. The routing-only input deliberately omits multipolygon/admin
 # relations to keep its graph bounded, while a smart logical extract can leave
