@@ -1596,3 +1596,17 @@ toolchain coverage passes 21/21, Python compilation and shell syntax checks pass
 and a temporary service with the normalized config reaches `/status` and returns a
 three-trip route response; no package
 or checked-in runtime data was changed and no APK was built.
+
+### Execution checkpoint — rebuilt EKB package with normalized config — 2026-09-04
+
+The remote Docker toolchain was synchronized with the checked-in normalizer and rebuilt as a new
+`ekb-package-v0.1.7`; the existing `v0.1.6` package and source PBF were not overwritten. The new
+unsigned manifest requires app version code 30 and reports 102,586,976 bytes routing /
+198,139,538 bytes installed, 14,592,861 / 58,368,000 bytes search, and 44,573,148 bytes PMTiles.
+The package verifier accepted all three components and 276,841 FTS rows.
+
+The packaged `valhalla.json` contains the normalized `auto_pedestrian` block. After extracting
+the routing archive, a temporary pinned 3.6.3 service reached `/status` and returned three route
+trips (`24.321`, `26.420`, and `28.261` km) from the route corpus. This closes the regional
+artifact/config regression on the host; the artifact remains an unsigned pilot with a placeholder
+CDN URL and is not a production catalog release. No APK was built or installed.
