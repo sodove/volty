@@ -1619,3 +1619,8 @@ release `0.1.7` was emitted, and its catalog key ID matched the manifest key ID.
 with the original unsigned manifest was rejected with the expected non-zero result and the
 `unsigned manifest cannot enter catalog` error. Keys, signed outputs, and specs were removed after
 the smoke; this is publisher evidence only, not a distributable release. No APK was built.
+
+The same signed package was also rejected when the consuming app version was set to `29` and when
+the expected routing data version was changed to `valhalla-3.8.3`; both compatibility checks
+returned non-zero with the specific newer-app/mismatched-engine errors. The publisher therefore
+fails closed on both catalog compatibility dimensions before publication.
