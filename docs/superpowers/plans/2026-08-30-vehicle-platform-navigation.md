@@ -1567,3 +1567,19 @@ release variant selects Valhalla/OfflineFirst, while debug keeps BRouter compati
 offline runtime is explicitly enabled for a local smoke. The generated release config was checked
 without assembling an APK (`VOLTY_OFFLINE_RUNTIME_ENABLED=true`); debug remains `false` by default.
 The full debug unit suite then passed with exactly 2,417 tests and zero failures, errors, or skips.
+
+### Execution checkpoint — repeatable iterative production alternatives — 2026-09-04
+
+The exact production costing options were rerun against the pinned Valhalla 3.6.3 EKB extract
+through the same sequential `avoid_locations` strategy used by the offline runtime. On the
+redacted long corridor, `CURVY` at 50 km/h returned three unique geometry hashes in 557/661/643 ms
+with lengths 24.050/28.161/25.982 km; at 90 km/h it returned three unique hashes in 531/500/593 ms
+with lengths 27.862/32.381/24.518 km. The 20 km/h bicycle primary also produced three unique
+iterative candidates in 602/708/752 ms (25.962/29.132/33.126 km), all with `has_highway=false`.
+
+This is evidence that the production alternative path is fast enough on the host and does not
+collapse to one route on this corridor. It does not promote trails or pedestrian routing by
+itself: the route responses still require field/corpus checks for access, surface, steps, and
+vehicle-ETA compatibility. The temporary service used a copied config with the missing
+`auto_pedestrian` service limit restored; the checked-in config, package, and old containers were
+not modified. No APK was built or installed.
