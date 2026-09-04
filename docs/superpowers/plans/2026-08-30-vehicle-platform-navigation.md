@@ -1532,7 +1532,7 @@ legacy global preference key is still read as a migration fallback for vehicles 
 value, while new edits always create a vehicle-scoped value. No UI transport-type selector was
 introduced. Common tests cover restoring a vehicle's values, isolating two vehicles, switching
 vehicles while the planner is retained, and persistence across `AppPrefs` instances. The full
-debug unit-test suite passes 2,416/2,416 with zero failures, errors, or skips; no APK was built.
+debug unit-test suite passes 2,417/2,417 with zero failures, errors, or skips; no APK was built.
 
 ### Execution checkpoint — profile-aware online fallback — 2026-09-04
 
