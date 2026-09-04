@@ -1624,3 +1624,13 @@ The same signed package was also rejected when the consuming app version was set
 the expected routing data version was changed to `valhalla-3.8.3`; both compatibility checks
 returned non-zero with the specific newer-app/mismatched-engine errors. The publisher therefore
 fails closed on both catalog compatibility dimensions before publication.
+
+### Execution checkpoint — migration and backend verification — 2026-09-04
+
+The migration verifier initially hit a Windows-only SQLiteJDBC extraction failure because the
+SQLDelight worker inherited `C:\WINDOWS` as its native-library temporary directory. Inspection of
+`sqlite-jdbc 3.51.0.0` confirmed that it uses the dedicated `org.sqlite.tmpdir` property. Rerunning
+with an isolated workspace temp directory and the existing pre-extracted native library made
+`:composeApp:verifyCommonMainVoltyDatabaseMigration` pass (`BUILD SUCCESSFUL`, one task executed)
+without touching system files. A fresh `backend test` rerun also passed (`BUILD SUCCESSFUL`, five
+tasks executed). No APK was built or installed.
