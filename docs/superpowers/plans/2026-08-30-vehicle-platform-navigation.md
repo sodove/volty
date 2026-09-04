@@ -1625,6 +1625,18 @@ the expected routing data version was changed to `valhalla-3.8.3`; both compatib
 returned non-zero with the specific newer-app/mismatched-engine errors. The publisher therefore
 fails closed on both catalog compatibility dimensions before publication.
 
+### Execution checkpoint — ARM64 native smoke environment — 2026-09-04
+
+The local Android SDK now has the official command-line tools and an Android 14 Google APIs
+`arm64-v8a` system image. A separate `Volty_ARM64_API34` AVD was created; the existing
+`Pixel_3a_API_34_extension_level_7_x86_64` AVD was not changed. Android Emulator 37.2.1 rejects
+the ARM64 AVD before boot because this x86_64 host cannot run an ARM64 guest. Installing QEMU
+11.1 and attempting a generic `virt` boot proved that the ARM64 kernel and init can start, but
+the Android image then aborts because generic virtio disks do not reproduce the emulator's
+dynamic-partition layout (`metadata` is missing). This is not an APK/native smoke pass: the
+full ARM64 Android gate still requires an ARM64 host/device or a supported Android ARM guest.
+No APK was built or installed, and the user's phone was not touched.
+
 ### Execution checkpoint — migration and backend verification — 2026-09-04
 
 The migration verifier initially hit a Windows-only SQLiteJDBC extraction failure because the
