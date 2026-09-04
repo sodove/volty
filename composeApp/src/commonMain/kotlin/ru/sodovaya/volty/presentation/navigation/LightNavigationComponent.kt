@@ -16,7 +16,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.location.LocationConsumer
 import ru.sodovaya.volty.domain.location.RideLocationFix
@@ -34,6 +38,7 @@ import ru.sodovaya.volty.domain.navigation.RouteProgressEngine
 import ru.sodovaya.volty.domain.navigation.RouteProgressUpdate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import kotlin.math.max
 import kotlin.time.Clock
@@ -66,6 +71,8 @@ class DefaultLightNavigationComponent(
     private val navigationRepository: NavigationRepository,
     private val locationRepository: RideLocationRepository,
     private val energySource: NavigationEnergySource? = null,
+    private val navigationPreferences: NavigationPreferencesStore? = null,
+    private val activeVehicleId: StateFlow<String?>? = null,
     private val languageTag: String = "ru-RU",
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val nowEpochMillis: () -> Long = {
@@ -90,6 +97,9 @@ class DefaultLightNavigationComponent(
     private val progressEngine = RouteProgressEngine()
     private var rerouteJob: Job? = null
     private var lastRerouteEpisodeId: Long? = null
+    private var routeStyleChangedByUser = false
+    private var topSpeedChangedByUser = false
+    private var currentVehicleId: String? = activeVehicleId?.value
     private var closed = false
 
     init {
@@ -113,6 +123,38 @@ class DefaultLightNavigationComponent(
             scope.launch {
                 source.evidence.collect { evidence ->
                     refreshArrivalSoc(evidence)
+                }
+            }
+        }
+        navigationPreferences?.let { preferences ->
+            val vehicleIds: Flow<String?> = activeVehicleId ?: flowOf(null)
+            scope.launch {
+                vehicleIds.collectLatest { vehicleId ->
+                    currentVehicleId = vehicleId
+                    routeStyleChangedByUser = false
+                    topSpeedChangedByUser = false
+                    coroutineScope {
+                        launch {
+                            preferences.routeStyleFor(vehicleId).collect { style ->
+                                if (!closed && !routeStyleChangedByUser) {
+                                    _state.update { current -> current.copy(routeStyle = style) }
+                                }
+                            }
+                        }
+                        launch {
+                            preferences.topSpeedKphFor(vehicleId).collect { speedKph ->
+                                if (!closed && !topSpeedChangedByUser) {
+                                    _state.update { current ->
+                                        current.copy(
+                                            routingPreferences = current.routingPreferences.copy(
+                                                declaredTopSpeedKph = speedKph.coerceIn(20, 130),
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -156,12 +198,41 @@ class DefaultLightNavigationComponent(
 
     override fun onRouteStyleChanged(style: RouteStyle) {
         if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        routeStyleChangedByUser = true
         reduce(NavigationAction.RouteStyleChanged(style))
+        navigationPreferences?.let { preferences ->
+            val vehicleId = currentVehicleId
+            scope.launch {
+                try {
+                    preferences.setRouteStyle(vehicleId, style)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    // A persistence failure must not make the planner unusable.
+                }
+            }
+        }
     }
 
     override fun onTopSpeedChanged(speedKph: Int) {
         if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        topSpeedChangedByUser = true
         reduce(NavigationAction.TopSpeedChanged(speedKph))
+        navigationPreferences?.let { preferences ->
+            val vehicleId = currentVehicleId
+            scope.launch {
+                try {
+                    preferences.setTopSpeedKph(
+                        vehicleId,
+                        speedKph.coerceIn(20, 130),
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    // A persistence failure must not make the planner unusable.
+                }
+            }
+        }
     }
 
     override fun onAlternativeSelected(routeId: String) {

@@ -12,15 +12,18 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
+import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.util.UnitSystem
 
-class AppPrefs(private val store: DataStore<Preferences>) {
+class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreferencesStore {
 
     private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
 
@@ -73,6 +76,30 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     val offlineSkipMeteredConfirmation: StateFlow<Boolean> = store.data
         .map { it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] ?: false }
         .stateIn(scope, SharingStarted.Eagerly, false)
+
+    override fun routeStyleFor(vehicleId: String?): Flow<RouteStyle> = store.data
+        .map { preferences ->
+            persistedRouteStyle(
+                preferences[routeStyleKey(vehicleId)]
+                    ?: preferences[Keys.NAVIGATION_ROUTE_STYLE],
+            )
+        }
+
+    override fun topSpeedKphFor(vehicleId: String?): Flow<Int> = store.data
+        .map { preferences ->
+            (preferences[topSpeedKey(vehicleId)]
+                ?: preferences[Keys.NAVIGATION_TOP_SPEED_KPH]
+                ?: DEFAULT_NAVIGATION_TOP_SPEED_KPH)
+                .coerceIn(MIN_NAVIGATION_TOP_SPEED_KPH, MAX_NAVIGATION_TOP_SPEED_KPH)
+        }
+
+    /** Compatibility/default view for callers that do not have a vehicle yet. */
+    val routeStyle: StateFlow<RouteStyle> = routeStyleFor(null)
+        .stateIn(scope, SharingStarted.Eagerly, RouteStyle.FAST_WITH_HIGHWAYS)
+
+    /** Compatibility/default view for callers that do not have a vehicle yet. */
+    val topSpeedKph: StateFlow<Int> = topSpeedKphFor(null)
+        .stateIn(scope, SharingStarted.Eagerly, DEFAULT_NAVIGATION_TOP_SPEED_KPH)
 
     // --- The audible alarm's three switches (F §4). All default **true**: the
     // alarm is the feature a rider depends on when they are not looking at the
@@ -141,6 +168,32 @@ class AppPrefs(private val store: DataStore<Preferences>) {
     suspend fun setOfflineSkipMeteredConfirmation(skip: Boolean) = store.edit {
         it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] = skip
     }
+    override suspend fun setRouteStyle(vehicleId: String?, style: RouteStyle) {
+        store.edit { it[routeStyleKey(vehicleId)] = style.name }
+    }
+    override suspend fun setTopSpeedKph(vehicleId: String?, speedKph: Int) {
+        store.edit {
+            it[topSpeedKey(vehicleId)] = speedKph.coerceIn(
+                MIN_NAVIGATION_TOP_SPEED_KPH,
+                MAX_NAVIGATION_TOP_SPEED_KPH,
+            )
+        }
+    }
+
+    suspend fun setRouteStyle(style: RouteStyle) = setRouteStyle(null, style)
+    suspend fun setTopSpeedKph(speedKph: Int) = setTopSpeedKph(null, speedKph)
+
+    private fun routeStyleKey(vehicleId: String?) = if (vehicleId.isNullOrBlank()) {
+        Keys.NAVIGATION_ROUTE_STYLE
+    } else {
+        stringPreferencesKey("navigation_route_style_vehicle_$vehicleId")
+    }
+
+    private fun topSpeedKey(vehicleId: String?) = if (vehicleId.isNullOrBlank()) {
+        Keys.NAVIGATION_TOP_SPEED_KPH
+    } else {
+        intPreferencesKey("navigation_top_speed_kph_vehicle_$vehicleId")
+    }
     suspend fun setAlarmEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_ENABLED] = enabled }
     suspend fun setAlarmToneEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_TONE_ENABLED] = enabled }
     suspend fun setAlarmVibrationEnabled(enabled: Boolean) = store.edit { it[Keys.ALARM_VIBRATION_ENABLED] = enabled }
@@ -160,6 +213,8 @@ class AppPrefs(private val store: DataStore<Preferences>) {
         val VOICE_MICROPHONE_SOURCE = stringPreferencesKey("voice_microphone_source")
         val OFFLINE_SKIP_METERED_CONFIRMATION =
             booleanPreferencesKey("offline_skip_metered_confirmation")
+        val NAVIGATION_ROUTE_STYLE = stringPreferencesKey("navigation_route_style")
+        val NAVIGATION_TOP_SPEED_KPH = intPreferencesKey("navigation_top_speed_kph")
         val ALARM_ENABLED = booleanPreferencesKey("alarm_enabled")
         val ALARM_TONE_ENABLED = booleanPreferencesKey("alarm_tone_enabled")
         val ALARM_VIBRATION_ENABLED = booleanPreferencesKey("alarm_vibration_enabled")
@@ -168,3 +223,10 @@ class AppPrefs(private val store: DataStore<Preferences>) {
 }
 
 private const val DEFAULT_FAULT_DISPLAY_DURATION_SEC = 60
+private const val DEFAULT_NAVIGATION_TOP_SPEED_KPH = 50
+private const val MIN_NAVIGATION_TOP_SPEED_KPH = 20
+private const val MAX_NAVIGATION_TOP_SPEED_KPH = 130
+
+private fun persistedRouteStyle(value: String?): RouteStyle =
+    value?.let { runCatching { RouteStyle.valueOf(it) }.getOrNull() }
+        ?: RouteStyle.FAST_WITH_HIGHWAYS

@@ -1521,3 +1521,15 @@ in the decoder: a true or missing highway verdict is rejected for low-speed, cur
 no-highway requests, allowing the profile fallback to run instead of exposing an unsafe route.
 
 The smoke ran through the remote Docker Valhalla service only; no APK was built or installed.
+
+### Execution checkpoint — vehicle-scoped navigation preferences — 2026-09-04
+
+The planner's route style and declared top speed are now persisted in DataStore under the active
+vehicle id. The retained navigation component observes the active vehicle and swaps to that
+vehicle's saved values immediately; changing a profile or speed writes it back to the same key.
+Destination text, search results, route alternatives, and an active route remain transient. A
+legacy global preference key is still read as a migration fallback for vehicles with no dedicated
+value, while new edits always create a vehicle-scoped value. No UI transport-type selector was
+introduced. Common tests cover restoring a vehicle's values, isolating two vehicles, switching
+vehicles while the planner is retained, and persistence across `AppPrefs` instances. The full
+debug unit-test suite passes 2,416/2,416 with zero failures, errors, or skips; no APK was built.

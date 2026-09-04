@@ -6,6 +6,8 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -31,6 +33,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class LightNavigationComponentPlanningTest {
@@ -136,6 +139,83 @@ class LightNavigationComponentPlanningTest {
         assertEquals(120, request.preferences.declaredTopSpeedKph)
         component.close()
     }
+
+    @Test
+    fun `navigation restores the last route style and speed from persistent preferences`() =
+        runTest(dispatcher) {
+            Dispatchers.setMain(dispatcher)
+            val navigation = FakeNavigationRepository()
+            val preferences = FakeNavigationPreferencesStore(
+                initial = mapOf(
+                    "vehicle-a" to NavigationPreferenceValues(
+                        style = RouteStyle.CURVY,
+                        speedKph = 80,
+                    ),
+                ),
+            )
+            val component = component(
+                navigation,
+                appPreferences = preferences,
+                activeVehicleId = MutableStateFlow("vehicle-a"),
+            )
+
+            advanceUntilIdle()
+
+            assertEquals(RouteStyle.CURVY, component.state.value.routeStyle)
+            assertEquals(80, component.state.value.routingPreferences.declaredTopSpeedKph)
+            component.close()
+        }
+
+    @Test
+    fun `navigation persists route style and speed changes`() = runTest(dispatcher) {
+        Dispatchers.setMain(dispatcher)
+        val navigation = FakeNavigationRepository()
+        val preferences = FakeNavigationPreferencesStore()
+        val component = component(
+            navigation,
+            appPreferences = preferences,
+            activeVehicleId = MutableStateFlow("vehicle-a"),
+        )
+
+        component.onPlannerRequested()
+        component.onRouteStyleChanged(RouteStyle.MAX_CURVY_TOURING)
+        component.onTopSpeedChanged(35)
+        advanceUntilIdle()
+
+        assertEquals(RouteStyle.MAX_CURVY_TOURING, preferences.savedStyle("vehicle-a"))
+        assertEquals(35, preferences.savedSpeed("vehicle-a"))
+        component.close()
+    }
+
+    @Test
+    fun `switching the active vehicle restores that vehicle's navigation options`() =
+        runTest(dispatcher) {
+            Dispatchers.setMain(dispatcher)
+            val navigation = FakeNavigationRepository()
+            val activeVehicleId = MutableStateFlow<String?>("vehicle-a")
+            val preferences = FakeNavigationPreferencesStore(
+                initial = mapOf(
+                    "vehicle-a" to NavigationPreferenceValues(RouteStyle.CURVY, 80),
+                    "vehicle-b" to NavigationPreferenceValues(RouteStyle.FAST_WITHOUT_HIGHWAYS, 30),
+                ),
+            )
+            val component = component(
+                navigation,
+                appPreferences = preferences,
+                activeVehicleId = activeVehicleId,
+            )
+
+            advanceUntilIdle()
+            assertEquals(RouteStyle.CURVY, component.state.value.routeStyle)
+            assertEquals(80, component.state.value.routingPreferences.declaredTopSpeedKph)
+
+            activeVehicleId.value = "vehicle-b"
+            advanceUntilIdle()
+
+            assertEquals(RouteStyle.FAST_WITHOUT_HIGHWAYS, component.state.value.routeStyle)
+            assertEquals(30, component.state.value.routingPreferences.declaredTopSpeedKph)
+            component.close()
+        }
 
     @Test
     fun `route request started before the first fix retries once when a fix appears`() = runTest(dispatcher) {
@@ -249,12 +329,48 @@ class LightNavigationComponentPlanningTest {
         navigation: FakeNavigationRepository,
         location: FakeLocationRepository = FakeLocationRepository(),
         now: Long = 10_000L,
+        appPreferences: NavigationPreferencesStore? = null,
+        activeVehicleId: MutableStateFlow<String?>? = null,
     ) = DefaultLightNavigationComponent(
         componentContext = DefaultComponentContext(LifecycleRegistry()),
         navigationRepository = navigation,
         locationRepository = location,
+        navigationPreferences = appPreferences,
+        activeVehicleId = activeVehicleId,
         dispatcher = dispatcher,
         nowEpochMillis = { now },
+    )
+
+    private class FakeNavigationPreferencesStore(
+        initial: Map<String?, NavigationPreferenceValues> = emptyMap(),
+    ) : NavigationPreferencesStore {
+        private val styles = initial.mapValuesTo(mutableMapOf()) { MutableStateFlow(it.value.style) }
+        private val speeds = initial.mapValuesTo(mutableMapOf()) { MutableStateFlow(it.value.speedKph) }
+
+        override fun routeStyleFor(vehicleId: String?): Flow<RouteStyle> =
+            styles.getOrPut(vehicleId) { MutableStateFlow(RouteStyle.FAST_WITH_HIGHWAYS) }
+
+        override fun topSpeedKphFor(vehicleId: String?): Flow<Int> =
+            speeds.getOrPut(vehicleId) { MutableStateFlow(50) }
+
+        override suspend fun setRouteStyle(vehicleId: String?, style: RouteStyle) {
+            (routeStyleFor(vehicleId) as MutableStateFlow).value = style
+        }
+
+        override suspend fun setTopSpeedKph(vehicleId: String?, speedKph: Int) {
+            (topSpeedKphFor(vehicleId) as MutableStateFlow).value = speedKph
+        }
+
+        fun savedStyle(vehicleId: String?): RouteStyle =
+            (routeStyleFor(vehicleId) as StateFlow<RouteStyle>).value
+
+        fun savedSpeed(vehicleId: String?): Int =
+            (topSpeedKphFor(vehicleId) as StateFlow<Int>).value
+    }
+
+    private data class NavigationPreferenceValues(
+        val style: RouteStyle,
+        val speedKph: Int,
     )
 
     private class FakeNavigationRepository(
