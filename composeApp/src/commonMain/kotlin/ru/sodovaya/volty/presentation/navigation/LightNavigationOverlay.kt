@@ -12,7 +12,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -30,7 +30,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Navigation
 import androidx.compose.material.icons.filled.Refresh
@@ -40,7 +43,8 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -55,6 +59,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -65,6 +72,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -113,11 +121,14 @@ import volty.composeapp.generated.resources.navigation_route_loading
 import volty.composeapp.generated.resources.navigation_route_offline
 import volty.composeapp.generated.resources.navigation_route_option
 import volty.composeapp.generated.resources.navigation_route_profile
+import volty.composeapp.generated.resources.navigation_route_profile_selector
 import volty.composeapp.generated.resources.navigation_route_style_curvy
 import volty.composeapp.generated.resources.navigation_route_style_fast_highways
 import volty.composeapp.generated.resources.navigation_route_style_fast_without_highways
 import volty.composeapp.generated.resources.navigation_route_style_max_curvy_touring
 import volty.composeapp.generated.resources.navigation_route_top_speed
+import volty.composeapp.generated.resources.navigation_route_top_speed_label
+import volty.composeapp.generated.resources.navigation_route_top_speed_value
 import volty.composeapp.generated.resources.navigation_rerouting
 import volty.composeapp.generated.resources.navigation_search_hint
 import volty.composeapp.generated.resources.navigation_search_offline
@@ -383,40 +394,106 @@ private fun RoutingOptions(
     model: NavigationUiModel,
     callbacks: LightNavigationCallbacks,
 ) {
+    var routeStyleMenuExpanded by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(
-            stringResource(Res.string.navigation_route_profile),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
-        )
-        FlowRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            verticalArrangement = Arrangement.spacedBy(4.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            RouteStyle.entries.forEach { style ->
-                FilterChip(
-                    selected = model.routeStyle == style,
-                    enabled = !model.requestInFlight,
-                    onClick = { callbacks.onRouteStyleChanged(style) },
-                    label = { Text(style.label()) },
+            Text(
+                stringResource(Res.string.navigation_route_profile),
+                modifier = Modifier.weight(0.8f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+            Box(modifier = Modifier.weight(1.8f)) {
+                val selectorDescription = stringResource(
+                    Res.string.navigation_route_profile_selector,
+                    model.routeStyle.label(),
                 )
+                OutlinedButton(
+                    onClick = { routeStyleMenuExpanded = true },
+                    enabled = !model.requestInFlight,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = selectorDescription },
+                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                ) {
+                    Text(
+                        model.routeStyle.label(),
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(
+                        imageVector = if (routeStyleMenuExpanded) {
+                            Icons.Default.KeyboardArrowUp
+                        } else {
+                            Icons.Default.KeyboardArrowDown
+                        },
+                        contentDescription = null,
+                    )
+                }
+                DropdownMenu(
+                    expanded = routeStyleMenuExpanded,
+                    onDismissRequest = { routeStyleMenuExpanded = false },
+                ) {
+                    RouteStyle.entries.forEach { style ->
+                        DropdownMenuItem(
+                            modifier = Modifier.semantics {
+                                selected = model.routeStyle == style
+                            },
+                            text = { Text(style.label()) },
+                            trailingIcon = if (model.routeStyle == style) {
+                                {
+                                    Icon(Icons.Default.Check, contentDescription = null)
+                                }
+                            } else null,
+                            onClick = {
+                                routeStyleMenuExpanded = false
+                                callbacks.onRouteStyleChanged(style)
+                            },
+                        )
+                    }
+                }
             }
         }
-        Text(
-            stringResource(Res.string.navigation_route_top_speed, model.topSpeedKph),
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            fontSize = 13.sp,
-        )
-        Slider(
-            value = model.topSpeedKph.toFloat(),
-            onValueChange = { callbacks.onTopSpeedChanged(it.toInt()) },
-            valueRange = 20f..130f,
-            steps = 10,
-            enabled = !model.requestInFlight,
-        )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            val topSpeedDescription = stringResource(
+                Res.string.navigation_route_top_speed,
+                model.topSpeedKph,
+            )
+            Text(
+                stringResource(Res.string.navigation_route_top_speed_label),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                fontSize = 13.sp,
+            )
+            Slider(
+                value = model.topSpeedKph.toFloat(),
+                onValueChange = { callbacks.onTopSpeedChanged(it.toInt()) },
+                modifier = Modifier
+                    .weight(1f)
+                    .semantics { contentDescription = topSpeedDescription },
+                valueRange = 20f..130f,
+                steps = 10,
+                enabled = !model.requestInFlight,
+            )
+            Text(
+                stringResource(Res.string.navigation_route_top_speed_value, model.topSpeedKph),
+                color = MaterialTheme.colorScheme.onSurface,
+                fontSize = 13.sp,
+                fontWeight = FontWeight.SemiBold,
+            )
+        }
     }
 }
 

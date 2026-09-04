@@ -35,6 +35,7 @@ import ru.sodovaya.volty.domain.navigation.offline.OfflineCoverageResult
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRouteCalculationPolicy
 import ru.sodovaya.volty.domain.navigation.offline.OfflineRoutingPolicy
 import ru.sodovaya.volty.domain.navigation.offline.BRouterRouteProfilePolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteAlternativePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
 import kotlin.math.ceil
 import kotlin.math.roundToInt
@@ -109,7 +110,14 @@ class AndroidHybridNavigationRepository(
             val alternatives = if (candidates.isEmpty()) {
                 emptyList()
             } else {
-                RouteDiversityPolicy.select(candidates, candidates.size.coerceAtMost(budget.maxAlternatives))
+                RouteAlternativePolicy.orderForStyle(
+                    candidates = RouteDiversityPolicy.select(
+                        candidates,
+                        candidates.size.coerceAtMost(budget.maxAlternatives),
+                    ),
+                    style = request.style,
+                    limit = budget.maxAlternatives,
+                )
                     .mapIndexed { index, route -> route.withDeterministicId(index) }
             }
             if (alternatives.isEmpty()) {

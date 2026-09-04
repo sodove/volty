@@ -64,6 +64,7 @@ class NavigationProviderTest {
                 destination = GeoCoordinateDto(56.81, 60.61),
                 languageTag = "ru-RU",
                 alternativesLimit = 3,
+                routingProfile = NavigationRoutingProfile.MOTORCYCLE,
             ),
         )
 
@@ -71,7 +72,7 @@ class NavigationProviderTest {
         val request = requireNotNull(requestData)
         assertEquals("56.8,60.6", request.url.parameters.getAll("point")?.first())
         assertEquals("56.81,60.61", request.url.parameters.getAll("point")?.last())
-        assertEquals("personal-mobility", request.url.parameters["profile"])
+        assertEquals("personal-mobility-motorcycle", request.url.parameters["profile"])
         assertEquals("ru-RU", request.url.parameters["locale"])
         assertEquals("false", request.url.parameters["points_encoded"])
         assertEquals("alternative_route", request.url.parameters["algorithm"])
@@ -112,6 +113,9 @@ class NavigationProviderTest {
         navigationEnabled = true,
         graphHopperApiKey = "test-key",
         navigationProfileId = "personal-mobility",
+        navigationMotorcycleProfileId = "personal-mobility-motorcycle",
+        navigationBicycleProfileId = "personal-mobility-bicycle",
+        navigationPedestrianProfileId = "personal-mobility-pedestrian",
     )
 
     private fun routeFixture() = """

@@ -71,6 +71,40 @@ class RouteDiversityPolicyTest {
     }
 
     @Test
+    fun a_real_branch_roughly_twenty_five_metres_away_is_retained() {
+        val primary = route(
+            "primary",
+            listOf(point(56.80, 60.50), point(56.805, 60.505), point(56.81, 60.51)),
+        )
+        val branch = route(
+            "branch",
+            listOf(point(56.80, 60.50), point(56.80522, 60.505), point(56.81, 60.51)),
+        )
+
+        assertEquals(
+            listOf("primary", "branch"),
+            RouteDiversityPolicy.select(listOf(primary, branch), limit = 3).map { it.id },
+        )
+    }
+
+    @Test
+    fun small_polyline_drift_on_the_same_corridor_is_still_collapsed() {
+        val primary = route(
+            "primary",
+            listOf(point(56.80, 60.50), point(56.805, 60.505), point(56.81, 60.51)),
+        )
+        val drifted = route(
+            "drifted",
+            listOf(point(56.80005, 60.50002), point(56.80505, 60.50502), point(56.81005, 60.51002)),
+        )
+
+        assertEquals(
+            listOf("primary"),
+            RouteDiversityPolicy.select(listOf(primary, drifted), limit = 3).map { it.id },
+        )
+    }
+
+    @Test
     fun selection_is_stable_and_never_returns_more_than_three_routes() {
         val routes = (1..5).map { index ->
             route(

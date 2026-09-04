@@ -1315,3 +1315,209 @@ and launched without a fresh `FATAL EXCEPTION` in logcat. This was a device laun
 the build used the previously documented smoke catalog URL/key because deployment credentials and
 the real HTTPS object host are still not present, so this APK is not a distributable regional-data
 release.
+
+## Requirement amendment — experimental Valhalla costings and route diversity (2026-09-04)
+
+The generic `auto` costing remains the only user-visible and default production policy. The
+experimental Valhalla costings are now explicitly part of the plan as **candidate probes**, not as
+transport selectors: `pedestrian` for low-speed experiments, `bicycle` for cycleway/road-access
+comparison, and `motorcycle` for trail/track comparison including `use_trails`. They must not add
+`vehicle`, `profile`, EUC, scooter, bicycle, or jurisdiction fields to the domain request or UI.
+
+The probes are allowed to run only behind the routing experiment policy and must never silently
+replace the generic route. Every probe result is tagged internally with its costing and compared
+against the generic candidate before it can be promoted. Until the gate passes, the app keeps the
+generic route as the safe answer and may show the probe only in a debug/diagnostic build or test
+fixture.
+
+### Experimental matrix
+
+1. **Low-speed pedestrian probe.** Sweep `top_speed` values 20, 25, and 30 km/h. Use Valhalla
+   `pedestrian` with the declared speed mapped to `walking_speed`, then inspect footway, path,
+   steps, access, surface, distance, ETA, and route geometry. A result is not promotable if it
+   introduces steps/access violations or if its ETA is presented as a vehicle ETA. The initial
+   promotion candidate is a hybrid generic route only when it demonstrably improves the corridor
+   for low-speed personal EVs without changing the route contract.
+2. **Bicycle probe.** Sweep `use_roads` from trail-oriented through road-oriented values and
+   compare cycleways, footways, access restrictions, surfaces, hills, distance, ETA, and geometry
+   against `auto`. Keep it experimental because bicycle costing changes both access semantics and
+   ETA; it is not a silent fallback for the generic profile.
+3. **Motorcycle probe.** Sweep `use_trails` and `use_tracks` for `CURVY` and
+   `MAX_CURVY_TOURING`, while keeping the generic route's access/safety contract visible. Record
+   whether the regional graph actually contains usable trail branches. `use_trails` must not be
+   treated as evidence that every trail is suitable for the rider.
+4. **Generic curvy route.** Keep `auto` as the baseline and generate alternatives as separate
+   requests with interior `avoid_locations`. Score returned geometry by heading change per
+   kilometre after resampling, enforce a bounded detour budget, and reject candidates that are
+   only small parallel-line noise. A named `CURVY` style is successful only when the selected
+   geometry is measurably bendier than the fastest eligible candidate; it must not claim scenery
+   from a highway-bias flag alone.
+
+### Promotion and rollback gate
+
+- [ ] Record each request's costing/options, wall time, distance, ETA, geometry hash, access/surface
+  observations, steps, and route-diversity score in a redacted local experiment report.
+- [ ] Require at least one repeatable beneficial low-speed corridor result and one repeatable
+  genuinely different curvy/touring route in the EKB corpus; one corridor where a flag has no
+  effect is useful negative evidence and is recorded rather than hidden.
+- [ ] Verify that the generic route remains available when a probe fails, times out, returns no
+  route, or produces a worse/unsafe candidate. Secondary probe failures must never fail the whole
+  route request.
+- [ ] Add common tests for costing JSON, low-speed thresholds, candidate tagging, detour limits,
+  geometry scoring, and fallback ordering; add Android/debug smoke coverage against the packaged
+  Valhalla extract before enabling any probe outside diagnostics.
+- [ ] Promote only the smallest proven policy behind a feature flag with an immediate disable
+  path. Do not remove the generic `auto` path or expose a transport/profile selector in settings.
+
+### Current evidence and implementation order
+
+The codec already has explicit encoders for `auto`, `pedestrian`, `bicycle`, and `motorcycle`, and
+the offline runtime already uses iterative generic candidates plus geometry ordering. Initial
+Valhalla 3.6.3 EKB probes showed that bicycle costing changed the corridor, pedestrian costing
+produced a distinct path, and motorcycle `use_trails` did not change the tested urban corridor.
+These are observations, not promotion decisions. The next implementation slice is the experiment
+policy and result metadata, followed by the EKB matrix and a device smoke; only then may a proven
+low-speed probe be considered for the generic route planner.
+
+### Execution checkpoint — Valhalla experimental costing matrix — 2026-09-04
+
+The first redacted EKB matrix was rerun against the pinned Valhalla 3.6.3 service. On the tested
+long urban corridor, generic `auto` returned the same 24.213 km / 3090.460 s geometry for
+`use_highways` values 0.0, 0.15, 0.4, and 1.0, and also for the tested `use_tracks` /
+`use_living_streets` values. This is negative evidence for that corridor, not a reason to invent
+curvature semantics. The motorcycle probe likewise returned the same 24.236 km / 3097.812 s
+geometry for `use_trails` values 0.0, 0.35, 0.7, and 1.0; the graph exposed no useful trail branch
+there.
+
+Bicycle costing did change the route: `use_roads` values 0.0, 0.35, 0.7, and 1.0 returned
+25.962, 24.948, 23.949, and 24.156 km respectively, with distinct geometry hashes. Pedestrian
+costing also changed the route: walking speeds 20 and 25 returned 23.557 km / 4459.303 s and
+23.572 km / 3611.406 s. These timings are costing-specific and must not be shown as generic
+vehicle ETAs; access, steps, and surfaces still need explicit inspection before promotion.
+
+The generic iterative alternative strategy returned three distinct candidates in about two
+seconds: 24.213, 26.925, and 38.864 km, using 0, 8, and 8 interior avoid points. The common
+`ValhallaExperimentPolicy` and `ValhallaRouteCandidate` metadata wrapper now encode the explicit
+experiment boundary and promotion gate; its focused test class passes 5/5. The online OSRM fallback
+now applies the same provider-independent geometric ordering for `CURVY` candidates after diversity
+filtering. The complete debug unit-test suite passes 2407/2407 with zero failures, errors, or skips.
+No experimental costing is wired into the default runtime yet, and no promotion decision has been made.
+
+### Execution checkpoint — multi-corridor experiment repeatability — 2026-09-04
+
+The matrix was repeated on two additional redacted EKB corridors. Bicycle costing changed the
+geometry on all three corridors (`use_roads` 0.0/0.7/1.0): the returned distances were
+25.962/23.949/24.156 km, 27.657/26.094/26.876 km, and 27.950/26.866/26.809 km. Pedestrian
+costing also returned a distinct route on each corridor; at walking speeds 20/25 its distances
+were 23.557/23.572 km, 22.249/22.249 km, and 25.837/25.826 km. The equal-distance pair on the
+second corridor is useful evidence that changing the costing does not guarantee a different
+geometry.
+
+Motorcycle `use_trails` changed the geometry on the two additional corridors (including a
+27.861 km / 5625.511 s result on the east-northwest corridor), while the original urban corridor
+remained unchanged. This supports keeping motorcycle probes diagnostic-only: trail preference
+can affect the graph, but it does not establish that the resulting trail is suitable or faster.
+The repeated data is recorded as aggregate corridor labels and geometry hashes only; no precise
+origin/destination coordinates are added to the plan.
+
+### Execution checkpoint — experimental costing wire compatibility and route-corpus smoke — 2026-09-04
+
+The encoder compatibility pass found and fixed a real Valhalla option-name bug before any
+experimental profile could be enabled. An earlier revision of this checkpoint incorrectly
+claimed that pinned `motorcycle` used singular `use_highway`, based on the current API-reference
+page. The actual pinned Valhalla 3.6.3 parser reads plural `use_highways` (see the
+[pinned motorcycle costing source](https://github.com/valhalla/valhalla/blob/3.6.3/src/sif/motorcyclecost.cc));
+the encoder and regression now use that spelling. The earlier singular-key route smoke therefore
+did not prove the option was honored: the unknown key was ignored and the default remained in
+effect.
+
+A short EKB route-corpus smoke against the pinned Valhalla 3.6.3 service returned the expected
+mode/type pairs: generic `auto` → `drive/car`, `motorcycle` → `drive/motorcycle`, `bicycle` →
+`bicycle/hybrid`, and `pedestrian` → `pedestrian/foot`. Bicycle and pedestrian produced distinct
+geometry from generic on this corridor; motorcycle matched generic there. `rough`, `toll`, and
+`ferry` were all zero in this smoke, so this is protocol/metadata evidence only, not proof that
+the candidate is safe for every road surface or access rule. The temporary service and config
+were removed after the smoke; package/image sources were untouched.
+
+The promotion gate remains open: no experimental costing is wired into the default runtime,
+and no candidate is promoted until the access/surface/steps/ETA checks and Android/debug smoke
+criteria below are complete.
+
+### Execution checkpoint — route evidence boundary — 2026-09-04
+
+Added an internal `ValhallaRouteEvidence` decoder for the maneuver-level facts that the route
+response actually carries: normalized `travel_mode`/`travel_type`, rough, toll, ferry, and
+unknown-mode detection. An earlier synthetic `gate` field was removed: the pinned route serializer
+does not emit it, so ordinary route responses cannot be used to claim gate evidence. The decoder
+deliberately remains outside `RouteAlternative` and the UI. Missing or unknown travel modes are
+marked unknown instead of being treated as safe. The decoder does not invent surface, access, or
+steps verdicts: those remain explicit corpus/trace inputs to the promotion assessment, because the
+ordinary route response does not expose a reliable combined verdict for them.
+
+The promotion assessment now requires the unknown-mode bit to be false in addition to the existing
+distinctness, steps, access, ETA, and detour checks. Thus evidence can be carried forward for
+diagnostics without making an experimental route eligible through an omitted provider field.
+
+### Retraction — pinned Valhalla maneuver enum and evidence boundary — 2026-09-04
+
+The first codec fixture used maneuver type `2` as arrival, which masked an incorrect mapping. The
+pinned [Valhalla 3.6.3 directions enum](https://github.com/valhalla/valhalla/blob/3.6.3/proto/directions.proto)
+defines `1..3` as start variants and `4..6` as destination variants. The decoder now follows that
+enum, with regression coverage for the turn, U-turn, roundabout, merge, ramp, ferry, and transit
+ranges that are represented by the app's smaller maneuver vocabulary. This is a decoder
+compatibility correction only; it does not promote an experimental costing or change the default
+generic runtime.
+
+### Requirement amendment — production adaptive routing profiles — 2026-09-04
+
+The earlier diagnostic-only boundary is superseded. `pedestrian`, `bicycle`, and `motorcycle`
+are now production Valhalla engine profiles selected automatically from route style and the
+rider's declared top speed. They remain internal routing semantics, not a vehicle-type selector:
+the request and UI still do not gain EUC, scooter, bicycle, jurisdiction, or transport fields.
+
+The production matrix is deliberately speed-aware:
+
+| Request | Primary profile | Profile fallback | Highway rule |
+|---|---|---|---|
+| Any style, 20–30 km/h | `bicycle` | `pedestrian`, then generic | highway bias is hard-zeroed for every costing, including generic fallback |
+| `CURVY`/touring, 31–60 km/h | `motorcycle` | `bicycle`, then generic | motorcycle highway preference is 0.15/0.0; trails/tracks are stronger in the 31–60 band |
+| Fast styles, 31–130 km/h | `motorcycle` | generic | `FAST` may use highways; `FAST_WITHOUT_HIGHWAYS` excludes them |
+| `CURVY`/touring, 61–130 km/h | `motorcycle` | generic | highways stay strongly disfavored; adventure bias is reduced for high-speed safety |
+
+The offline Valhalla runtime now routes with the primary profile and generates its bounded,
+geometry-diverse alternatives using that same costing. It tries the profile fallback only when
+the selected profile returns no route/provider failure; this keeps the normal path fast while
+making pedestrian/bicycle/motorcycle real production behavior rather than background probes.
+The OSRM online fallback hard-excludes `motorway,trunk` for low-speed and highway-avoiding
+requests. The HTTP/backend contract carries `routingProfile`; GraphHopper has one explicit
+mapping per profile and refuses a missing mapping instead of silently substituting generic.
+
+Valhalla option tuning is also speed-aware: low-speed `motorcycle` fallback has zero highway,
+trail, and track preference; bicycle uses zero road preference up to 30 km/h; curvy motorcycle
+uses `use_trails/use_tracks` 0.55/0.40 in the 31–60 band and 0.35/0.25 above it, while maximum
+touring uses 0.8/0.75 and 0.6/0.5 respectively. These are routing-cost inputs, not claims that
+every trail is suitable; route access/surface/steps still need field validation.
+
+Common tests cover the profile matrix, speed boundary at 30/60, low-speed highway hardening,
+curvy adventure scaling, OSRM exclusion, HTTP wire profile, and GraphHopper mappings. No APK
+build is part of this amendment.
+
+### Execution checkpoint — production profile route-corpus smoke — 2026-09-04
+
+The current EKB Valhalla 3.6.3 extract was queried with the exact production costing options on
+one redacted long urban corridor. The low-speed primary `bicycle` profile returned
+`has_highway=false` at both 20 and 30 km/h, with `travel_mode=bicycle` and
+`travel_type=hybrid`. The `pedestrian` fallback at 25 km/h returned `has_highway=false` with
+`travel_mode=pedestrian` and `travel_type=foot`. Generic `auto` with the low-speed hardening
+also returned `has_highway=false` at 20 and 30 km/h.
+
+The 50 and 90 km/h `motorcycle` curvy profiles returned `drive/motorcycle` and
+`has_highway=false`. Iterative avoidance produced three distinct geometry hashes for both
+curvy speed bands; the route lengths were 24.050/28.161/25.982 km at 50 km/h and
+27.862/32.381/24.518 km at 90 km/h. The latter is provider evidence that alternatives are
+actually being generated, while the style-specific motorcycle options still do not guarantee
+a different primary shape on every corridor. The route-level `has_highway` gate is now enforced
+in the decoder: a true or missing highway verdict is rejected for low-speed, curvy/touring, and
+no-highway requests, allowing the profile fallback to run instead of exposing an unsafe route.
+
+The smoke ran through the remote Docker Valhalla service only; no APK was built or installed.

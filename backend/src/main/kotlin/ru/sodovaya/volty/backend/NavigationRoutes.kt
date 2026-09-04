@@ -66,11 +66,13 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
     validateCoordinate(body.origin)
     validatePlace(body.destination)
     val languageTag = validateLanguageTag(body.languageTag)
+    val routingProfile = NavigationRoutingProfile.parse(body.routingProfile)
+        ?: throw invalidNavigation("routingProfile is invalid")
     if (body.alternativesLimit !in 1..3) throw invalidNavigation("alternativesLimit must be between 1 and 3")
     if (!dependencies.config.navigationEnabled || dependencies.config.navigationProvider == "disabled") {
         throw navigationUnavailable()
     }
-    if (dependencies.config.navigationProfileId?.trim().isNullOrEmpty()) throw navigationUnavailable()
+    if (dependencies.config.navigationProfileIdFor(routingProfile).isNullOrEmpty()) throw navigationUnavailable()
     val ip = call.request.local.remoteHost
     val now = Instant.now().toEpochMilli()
     if (!dependencies.navigationRouteLimiter.allow(ip, now / 1_000L)) {
@@ -81,6 +83,7 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
         destination = GeoCoordinateDto(body.destination.latitude, body.destination.longitude),
         languageTag = languageTag,
         alternativesLimit = body.alternativesLimit,
+        routingProfile = routingProfile,
     )
     val key = dependencies.routeCacheKey(providerRequest)
     val result: ProviderResult<NavigationRouteResponse> = dependencies.navigationRouteCache.get(key, now)
@@ -201,4 +204,5 @@ private fun AppDependencies.routeCacheKey(request: ProviderRouteRequest): String
     request.destination.longitude,
     request.languageTag,
     request.alternativesLimit,
+    request.routingProfile.wireName,
 ).joinToString("|")

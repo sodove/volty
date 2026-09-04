@@ -29,10 +29,20 @@ data class AppConfig(
     val navigationProvider: String = "disabled",
     val graphHopperApiKey: String? = null,
     val navigationProfileId: String? = null,
+    val navigationMotorcycleProfileId: String? = null,
+    val navigationBicycleProfileId: String? = null,
+    val navigationPedestrianProfileId: String? = null,
     val navigationConnectTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     val navigationRequestTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     val navigationEnabled: Boolean = false,
 ) {
+    fun navigationProfileIdFor(profile: NavigationRoutingProfile): String? = when (profile) {
+        NavigationRoutingProfile.GENERIC -> navigationProfileId
+        NavigationRoutingProfile.MOTORCYCLE -> navigationMotorcycleProfileId
+        NavigationRoutingProfile.BICYCLE -> navigationBicycleProfileId
+        NavigationRoutingProfile.PEDESTRIAN -> navigationPedestrianProfileId
+    }?.trim()?.takeIf(String::isNotEmpty)
+
     fun liveKitConfigOrNull(): LiveKitConfig? = if (voiceProvider == "livekit") {
         LiveKitConfig(
             serverUrl = checkNotNull(liveKitUrl),
@@ -77,11 +87,17 @@ data class AppConfig(
                 }
             } ?: (navigationProvider != "disabled")
             val navigationProfileId = env["VOLTY_NAV_PROFILE"]?.trim()?.takeIf(String::isNotEmpty)
+            val navigationMotorcycleProfileId = env["VOLTY_NAV_PROFILE_MOTORCYCLE"]?.trim()?.takeIf(String::isNotEmpty)
+            val navigationBicycleProfileId = env["VOLTY_NAV_PROFILE_BICYCLE"]?.trim()?.takeIf(String::isNotEmpty)
+            val navigationPedestrianProfileId = env["VOLTY_NAV_PROFILE_PEDESTRIAN"]?.trim()?.takeIf(String::isNotEmpty)
             val graphHopperApiKey = env["GRAPHHOPPER_API_KEY"]?.trim()?.takeIf(String::isNotEmpty)
             if (navigationProvider == "graphhopper") {
                 val missing = buildList {
                     if (graphHopperApiKey == null) add("GRAPHHOPPER_API_KEY")
                     if (navigationProfileId == null) add("VOLTY_NAV_PROFILE")
+                    if (navigationMotorcycleProfileId == null) add("VOLTY_NAV_PROFILE_MOTORCYCLE")
+                    if (navigationBicycleProfileId == null) add("VOLTY_NAV_PROFILE_BICYCLE")
+                    if (navigationPedestrianProfileId == null) add("VOLTY_NAV_PROFILE_PEDESTRIAN")
                 }
                 require(missing.isEmpty()) {
                     "VOLTY_NAV_PROVIDER=graphhopper requires ${missing.joinToString(", ")}"
@@ -117,6 +133,9 @@ data class AppConfig(
                 navigationProvider = navigationProvider,
                 graphHopperApiKey = graphHopperApiKey,
                 navigationProfileId = navigationProfileId,
+                navigationMotorcycleProfileId = navigationMotorcycleProfileId,
+                navigationBicycleProfileId = navigationBicycleProfileId,
+                navigationPedestrianProfileId = navigationPedestrianProfileId,
                 navigationConnectTimeoutMillis = navigationConnectTimeoutMillis,
                 navigationRequestTimeoutMillis = navigationRequestTimeoutMillis,
                 navigationEnabled = navigationEnabled,
@@ -148,6 +167,10 @@ data class AppConfig(
             corsOrigins = setOf("https://volty.sodove.ru"),
             navigationProvider = "disabled",
             navigationEnabled = false,
+            navigationProfileId = "personal-mobility",
+            navigationMotorcycleProfileId = "personal-mobility-motorcycle",
+            navigationBicycleProfileId = "personal-mobility-bicycle",
+            navigationPedestrianProfileId = "personal-mobility-pedestrian",
         )
 
         const val DEFAULT_VOICE_TOKEN_TTL_SECONDS = 24L * 60 * 60

@@ -2,6 +2,19 @@
 
 Base URL: `https://volty.sodove.ru/v1`. JSON uses the same camelCase names and uppercase enum values as `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/domain/social`. Bearer access tokens are short-lived; refresh tokens are opaque, one-time rotating credentials.
 
+## Navigation
+
+`POST /navigation/routes` accepts `routingProfile` with one of `generic`, `motorcycle`,
+`bicycle`, or `pedestrian`. The Android client selects this profile from route style and top
+speed: bicycle is primary up to 30 km/h, pedestrian is a low-speed curvy fallback, motorcycle
+is primary above 30 km/h, and generic is the final fallback. The legacy `profile` field is
+unrelated to routing and remains ignored for compatibility.
+
+When GraphHopper is enabled, `VOLTY_NAV_PROFILE`, `VOLTY_NAV_PROFILE_MOTORCYCLE`,
+`VOLTY_NAV_PROFILE_BICYCLE`, and `VOLTY_NAV_PROFILE_PEDESTRIAN` must all point to configured
+GraphHopper profiles. A missing selected mapping returns an explicit unavailable response rather
+than silently substituting generic.
+
 ## Authentication and account
 
 | Method | Path | Body / result |

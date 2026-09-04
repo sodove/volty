@@ -47,7 +47,7 @@ class GraphHopperNavigationProvider(
                 header(HttpHeaders.UserAgent, USER_AGENT)
                 parameter("point", "${request.origin.latitude},${request.origin.longitude}")
                 parameter("point", "${request.destination.latitude},${request.destination.longitude}")
-                parameter("profile", requireNotNull(config.navigationProfileId))
+                parameter("profile", requireNotNull(config.navigationProfileIdFor(request.routingProfile)))
                 parameter("locale", request.languageTag)
                 parameter("instructions", "true")
                 parameter("calc_points", "true")

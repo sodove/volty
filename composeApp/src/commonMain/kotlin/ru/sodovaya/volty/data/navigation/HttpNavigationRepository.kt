@@ -28,6 +28,7 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
 
 class HttpNavigationRepository(
     private val client: HttpClient = HttpClient(),
@@ -122,6 +123,7 @@ class HttpNavigationRepository(
         ),
         languageTag = languageTag,
         alternativesLimit = alternativesLimit,
+        routingProfile = RouteProfilePolicy.profilesFor(this).first().wireName,
     )
 
     private fun decodeRoutePlan(wire: NavigationRouteResponseWire): RoutePlan {
@@ -199,6 +201,7 @@ class HttpNavigationRepository(
         val destination: NavigationPlaceWire,
         val languageTag: String,
         val alternativesLimit: Int,
+        val routingProfile: String,
     )
 
     @Serializable

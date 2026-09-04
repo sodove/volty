@@ -27,6 +27,8 @@ import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.RoutingPreferences
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -174,6 +176,38 @@ class OsmNavigationRepositoryTest {
         val second = plan.alternatives[1]
         assertEquals(ManeuverKind.ARRIVE, second.maneuvers.last().kind)
         assertEquals(second.geometry.lastIndex, second.maneuvers.last().shapeIndex)
+    }
+
+    @Test
+    fun curvy_style_orders_online_candidates_by_real_geometry() = runTest {
+        val repository = repository {
+            osrmResponse(
+                osrmRoute(10_000.0, 600.0, 60.617, 56.8344, "straight"),
+                osrmRoute(11_000.0, 660.0, 60.612, 56.847, "bendy"),
+            )
+        }
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 2).copy(style = RouteStyle.CURVY),
+        )
+
+        val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
+        assertEquals(listOf("bendy", "straight"), plan.alternatives.map { it.maneuvers.first().streetName })
+    }
+
+    @Test
+    fun low_speed_routes_exclude_motorways_and_trunks_even_in_fast_style() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = repository(requests) { osrmResponseWithRoutes() }
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 1).copy(
+                preferences = RoutingPreferences(declaredTopSpeedKph = 20),
+            ),
+        )
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals("motorway,trunk", requests.single().url.parameters["exclude"])
     }
 
     @Test

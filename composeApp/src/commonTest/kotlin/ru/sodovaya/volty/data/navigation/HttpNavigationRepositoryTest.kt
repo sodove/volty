@@ -56,6 +56,7 @@ class HttpNavigationRepositoryTest {
         assertEquals(3, (plan as ru.sodovaya.volty.domain.navigation.RoutePlan).alternatives.size)
         val body = (requests.single().body as TextContent).text
         assertTrue(!body.contains("\"profile\""))
+        assertTrue(body.contains("\"routingProfile\":\"motorcycle\""))
         assertTrue(body.contains("\"alternativesLimit\":3"))
         assertTrue(body.contains("\"latitude\":56.8"))
         assertEquals(ContentType.Application.Json, requests.single().body.contentType)

@@ -37,8 +37,11 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
-import kotlin.math.ceil
+import ru.sodovaya.volty.domain.navigation.routing.RouteAlternativePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import kotlin.math.ceil
 
 class OsmNavigationRepository(
     private val client: HttpClient = createNavigationHttpClient(),
@@ -102,7 +105,7 @@ class OsmNavigationRepository(
                 }
             }
 
-            combinedPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
+            combinedPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(request, limit)) }
                 ?: NavigationResult.Failure(lastFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
@@ -128,6 +131,7 @@ class OsmNavigationRepository(
             parameter("geometries", "geojson")
             parameter("steps", true)
             parameter("alternatives", true)
+            onlineExcludedHighwayClasses(request)?.let { parameter("exclude", it) }
             header(HttpHeaders.AcceptLanguage, acceptLanguage)
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
@@ -139,6 +143,14 @@ class OsmNavigationRepository(
         throw cancelled
     } catch (_: Exception) {
         NavigationResult.Failure(NavigationFailure.Offline)
+    }
+
+    private fun onlineExcludedHighwayClasses(request: RouteRequest): String? {
+        return if (RouteProfilePolicy.requiresHighwayFreeRoute(request)) {
+            "motorway,trunk"
+        } else {
+            null
+        }
     }
 
     private fun decodePhoton(body: String): List<PlaceCandidate> {
@@ -222,9 +234,13 @@ class OsmNavigationRepository(
         )
     }
 
-    private fun RoutePlan.withDeterministicRouteIds(limit: Int): RoutePlan = copy(
-        alternatives = RouteDiversityPolicy.select(
-            candidates = alternatives,
+    private fun RoutePlan.withDeterministicRouteIds(request: RouteRequest, limit: Int): RoutePlan = copy(
+        alternatives = RouteAlternativePolicy.orderForStyle(
+            candidates = RouteDiversityPolicy.select(
+                candidates = alternatives,
+                limit = limit,
+            ),
+            style = request.style,
             limit = limit,
         ).mapIndexed { index, route ->
             route.withDeterministicId(index)

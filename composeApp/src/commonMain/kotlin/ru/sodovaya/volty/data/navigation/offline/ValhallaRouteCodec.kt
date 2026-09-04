@@ -5,6 +5,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
@@ -20,39 +21,40 @@ import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 
 /** Valhalla JSON boundary shared by the Android wrapper and host-side fixtures. */
 object ValhallaRouteCodec {
     private val json = Json { ignoreUnknownKeys = true; isLenient = false }
 
-    fun encodeRequest(request: RouteRequest): String = buildJsonObject {
+    fun encodeRequest(request: RouteRequest): String = encodeRequest(
+        request = request,
+        alternativesLimit = request.alternativesLimit,
+    )
+
+    /** Encodes one deliberately small candidate request for iterative routing. */
+    fun encodeRequest(
+        request: RouteRequest,
+        alternativesLimit: Int,
+        avoidLocations: List<GeoCoordinate> = emptyList(),
+        costing: ValhallaCosting = ValhallaCosting.AUTO,
+    ): String = buildJsonObject {
         put("locations", buildJsonArray {
             add(location(request.origin))
             add(location(request.destination.coordinate))
         })
         // This is an engine costing name, not a Volty transport/profile selector.
-        put("costing", "auto")
-        put("alternates", (request.alternativesLimit - 1).coerceIn(0, MAX_ALTERNATES))
+        put("costing", costing.wireName)
+        put("alternates", (alternativesLimit - 1).coerceIn(0, MAX_ALTERNATES))
         put("costing_options", buildJsonObject {
-            put("auto", buildJsonObject {
-                put("top_speed", request.preferences.declaredTopSpeedKph)
-                put("use_highways", request.style.highwayPreference())
-                // Valhalla 3.6.3 has no road-curvature signal. Keep the
-                // generic style contract honest: styles tune highway
-                // willingness, while actual diversity comes from alternates
-                // and the geometry policy rather than fake scenic knobs.
-                put("use_distance", 0.0)
-                put("shortest", false)
-                put("ignore_restrictions", false)
-                put("ignore_access", false)
-                put("ignore_oneways", false)
-                put("ignore_closures", false)
-                put("use_tolls", if (request.preferences.avoidTolls) 0.0 else 0.5)
-                put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
-                put("exclude_unpaved", request.preferences.avoidUnpaved)
-            })
+            put(costing.wireName, costing.options(request))
         })
+        if (avoidLocations.isNotEmpty()) {
+            put("avoid_locations", buildJsonArray {
+                avoidLocations.forEach { add(avoidLocation(it)) }
+            })
+        }
         put("directions_options", buildJsonObject {
             put("units", "kilometers")
             put("language", request.languageTag)
@@ -79,7 +81,19 @@ object ValhallaRouteCodec {
                 add(alternateObject["trip"]?.jsonObject ?: alternateObject)
             }
         }
-        val candidates = tripObjects.mapIndexedNotNull { index, trip ->
+        val safeTripObjects = if (RouteProfilePolicy.requiresHighwayFreeRoute(request)) {
+            // use_highways is a soft factor. The response summary is the
+            // provider's actual route-level highway verdict, so fail closed
+            // when it is true or absent for a request that forbids highways.
+            tripObjects.filter { trip ->
+                trip["summary"]?.jsonObject?.get("has_highway")
+                    ?.jsonPrimitive?.booleanOrNull == false
+            }
+        } else {
+            tripObjects
+        }
+        if (safeTripObjects.isEmpty()) return NavigationResult.Failure(NavigationFailure.NoRoute)
+        val candidates = safeTripObjects.mapIndexedNotNull { index, trip ->
             decodeAlternative(trip, request.languageTag, "offline-route-${index + 1}")
         }
         if (candidates.isEmpty()) return NavigationResult.Failure(NavigationFailure.MalformedResponse)
@@ -88,6 +102,65 @@ object ValhallaRouteCodec {
             limit = request.alternativesLimit.coerceIn(1, MAX_ROUTES),
         )
         NavigationResult.Success(RoutePlan(request.destination, selected))
+    } catch (_: SerializationException) {
+        NavigationResult.Failure(NavigationFailure.MalformedResponse)
+    } catch (_: IllegalArgumentException) {
+        NavigationResult.Failure(NavigationFailure.MalformedResponse)
+    }
+
+    /**
+     * Decodes provider facts needed for route safety and profile auditing.
+     *
+     * The regular [RouteAlternative] intentionally does not grow Valhalla fields. In particular,
+     * a normal route response exposes `rough`, `toll`, `ferry`, `travel_mode`, and `travel_type`
+     * on maneuvers, but it does not provide a reliable surface/access/steps verdict. Those latter
+     * checks must come from a separate corpus/trace inspection instead of being guessed here.
+     */
+    fun decodeRouteEvidence(body: String): NavigationResult<ValhallaRouteEvidence> = try {
+        val root = json.parseToJsonElement(body).jsonObject
+        if (root["trip"] == null) {
+            val error = root["error"]?.jsonPrimitive?.content.orEmpty().lowercase()
+            return if (error.contains("no route") || root["error_code"]?.jsonPrimitive?.intOrNull == NO_ROUTE_ERROR) {
+                NavigationResult.Failure(NavigationFailure.NoRoute)
+            } else {
+                NavigationResult.Failure(NavigationFailure.MalformedResponse)
+            }
+        }
+        val maneuvers = root["trip"]?.jsonObject?.get("legs")?.jsonArray.orEmpty()
+            .flatMap { it.jsonObject["maneuvers"]?.jsonArray.orEmpty() }
+            .map { it.jsonObject }
+        if (maneuvers.isEmpty()) return NavigationResult.Failure(NavigationFailure.MalformedResponse)
+
+        val travelModes = mutableSetOf<String>()
+        val travelTypes = mutableSetOf<String>()
+        var hasUnknownTravelModes = false
+        maneuvers.forEach { maneuver ->
+            val mode = maneuver["travel_mode"]?.jsonPrimitive?.content
+                ?.trim()
+                ?.lowercase()
+                ?.takeIf { it.isNotEmpty() }
+            if (mode == null || mode !in KNOWN_TRAVEL_MODES) {
+                hasUnknownTravelModes = true
+            } else {
+                travelModes += mode
+            }
+            maneuver["travel_type"]?.jsonPrimitive?.content
+                ?.trim()
+                ?.lowercase()
+                ?.takeIf { it.isNotEmpty() }
+                ?.let(travelTypes::add)
+        }
+        NavigationResult.Success(
+            ValhallaRouteEvidence(
+                travelModes = travelModes,
+                travelTypes = travelTypes,
+                hasRoughSegments = maneuvers.any { it["rough"]?.jsonPrimitive?.booleanOrNull == true },
+                hasTollSegments = maneuvers.any { it["toll"]?.jsonPrimitive?.booleanOrNull == true },
+                hasFerrySegments = maneuvers.any { it["ferry"]?.jsonPrimitive?.booleanOrNull == true },
+                maneuverCount = maneuvers.size,
+                hasUnknownTravelModes = hasUnknownTravelModes,
+            ),
+        )
     } catch (_: SerializationException) {
         NavigationResult.Failure(NavigationFailure.MalformedResponse)
     } catch (_: IllegalArgumentException) {
@@ -191,6 +264,11 @@ object ValhallaRouteCodec {
         put("type", "break")
     }
 
+    private fun avoidLocation(point: GeoCoordinate) = buildJsonObject {
+        put("lat", point.latitude)
+        put("lon", point.longitude)
+    }
+
     private fun JsonObject.number(name: String): Double? =
         this[name]?.jsonPrimitive?.doubleOrNull?.takeIf { it.isFinite() }
 
@@ -200,17 +278,20 @@ object ValhallaRouteCodec {
             ?: localized(kind, languageTag)
 
     private fun Int.toManeuverKind(): ManeuverKind = when (this) {
-        1 -> ManeuverKind.DEPART
-        2 -> ManeuverKind.ARRIVE
-        3, 12, 13, 15, 16, 17, 18 -> ManeuverKind.STRAIGHT
-        4, 11 -> ManeuverKind.SLIGHT_RIGHT
-        5, 10 -> ManeuverKind.RIGHT
-        6 -> ManeuverKind.SHARP_RIGHT
-        7, 8 -> ManeuverKind.U_TURN
-        9 -> ManeuverKind.SHARP_LEFT
-        14 -> ManeuverKind.LEFT
-        19 -> ManeuverKind.SLIGHT_LEFT
-        24, 25, 26, 27 -> ManeuverKind.ROUNDABOUT
+        // Pinned Valhalla 3.6.3 directions.proto. Types 2 and 3 are
+        // start-right/start-left, not arrival; arrival is 4..6.
+        1, 2, 3 -> ManeuverKind.DEPART
+        4, 5, 6 -> ManeuverKind.ARRIVE
+        7, 8, 17, 22, 25, 28, 29 -> ManeuverKind.STRAIGHT
+        9 -> ManeuverKind.SLIGHT_RIGHT
+        10, 18, 20, 37 -> ManeuverKind.RIGHT
+        11 -> ManeuverKind.SHARP_RIGHT
+        12, 13 -> ManeuverKind.U_TURN
+        14 -> ManeuverKind.SHARP_LEFT
+        15 -> ManeuverKind.LEFT
+        16, 19, 21, 24, 38 -> ManeuverKind.SLIGHT_LEFT
+        23 -> ManeuverKind.SLIGHT_RIGHT
+        26, 27 -> ManeuverKind.ROUNDABOUT
         else -> ManeuverKind.UNKNOWN
     }
 
@@ -253,11 +334,124 @@ object ValhallaRouteCodec {
     private const val MAX_ALTERNATES = 2
     private const val MAX_ROUTES = 3
     private const val NO_ROUTE_ERROR = 171
+    private val KNOWN_TRAVEL_MODES = setOf("drive", "pedestrian", "bicycle", "transit")
+}
+
+/** Provider evidence kept outside the rider-facing route model and UI. */
+data class ValhallaRouteEvidence(
+    val travelModes: Set<String>,
+    val travelTypes: Set<String>,
+    val hasRoughSegments: Boolean,
+    val hasTollSegments: Boolean,
+    val hasFerrySegments: Boolean,
+    val maneuverCount: Int,
+    val hasUnknownTravelModes: Boolean,
+)
+
+enum class ValhallaCosting(val wireName: String) {
+    AUTO("auto"),
+    MOTORCYCLE("motorcycle"),
+    BICYCLE("bicycle"),
+    PEDESTRIAN("pedestrian"),
 }
 
 private fun RouteStyle.highwayPreference(): Double = when (this) {
     RouteStyle.FAST_WITH_HIGHWAYS -> 1.0
     RouteStyle.FAST_WITHOUT_HIGHWAYS -> 0.0
-    RouteStyle.CURVY -> 0.4
-    RouteStyle.MAX_CURVY_TOURING -> 0.15
+    RouteStyle.CURVY -> 0.15
+    RouteStyle.MAX_CURVY_TOURING -> 0.0
+}
+
+private fun RouteRequest.highwayPreference(): Double = if (
+    preferences.declaredTopSpeedKph <= RouteProfilePolicy.LOW_SPEED_MAX_KPH
+) {
+    // A 20–30 km/h rider must never inherit auto's highway bias, including
+    // when a specialised costing fails and generic auto is retried.
+    0.0
+} else {
+    style.highwayPreference()
+}
+
+private fun RouteStyle.trackPreference(): Double = when (this) {
+    RouteStyle.FAST_WITH_HIGHWAYS,
+    RouteStyle.FAST_WITHOUT_HIGHWAYS,
+    -> 0.0
+    RouteStyle.CURVY -> 0.35
+    RouteStyle.MAX_CURVY_TOURING -> 0.8
+}
+
+private fun RouteStyle.livingStreetPreference(): Double = when (this) {
+    RouteStyle.FAST_WITH_HIGHWAYS -> 0.0
+    RouteStyle.FAST_WITHOUT_HIGHWAYS -> 0.25
+    RouteStyle.CURVY -> 0.45
+    RouteStyle.MAX_CURVY_TOURING -> 0.65
+}
+
+private fun ValhallaCosting.options(request: RouteRequest): JsonObject = when (this) {
+    ValhallaCosting.AUTO -> buildJsonObject {
+        put("top_speed", request.preferences.declaredTopSpeedKph)
+        put("use_highways", request.highwayPreference())
+        put("use_tracks", request.style.trackPreference())
+        put("use_living_streets", request.style.livingStreetPreference())
+        // Valhalla 3.6.3 has no road-curvature signal. Keep the generic style
+        // contract honest: styles tune highway willingness, while actual
+        // diversity comes from iterative avoidance and geometry scoring.
+        put("use_distance", 0.0)
+        put("shortest", false)
+        put("ignore_restrictions", false)
+        put("ignore_access", false)
+        put("ignore_oneways", false)
+        put("ignore_closures", false)
+        put("use_tolls", if (request.preferences.avoidTolls) 0.0 else 0.5)
+        put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
+        put("exclude_unpaved", request.preferences.avoidUnpaved)
+    }
+    ValhallaCosting.MOTORCYCLE -> buildJsonObject {
+        put("top_speed", request.preferences.declaredTopSpeedKph)
+        // The pinned Valhalla 3.6.3 motorcycle costing parses the plural key.
+        put("use_highways", request.highwayPreference())
+        put("use_trails", request.motorcycleTrailsPreference())
+        put("use_tracks", request.motorcycleTracksPreference())
+        put("use_tolls", if (request.preferences.avoidTolls) 0.0 else 0.5)
+        put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
+        put("exclude_unpaved", request.preferences.avoidUnpaved)
+    }
+    ValhallaCosting.BICYCLE -> buildJsonObject {
+        put("cycling_speed", request.preferences.declaredTopSpeedKph.coerceIn(5, 60))
+        put("bicycle_type", "Hybrid")
+        put("use_roads", request.bicycleRoadPreference())
+        put("use_hills", 0.5)
+        put("avoid_bad_surfaces", if (request.preferences.avoidUnpaved) 1.0 else 0.25)
+        put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
+    }
+    ValhallaCosting.PEDESTRIAN -> buildJsonObject {
+        put("walking_speed", request.preferences.declaredTopSpeedKph.coerceIn(5, 25))
+        put("walkway_factor", 0.65)
+        put("alley_factor", 2.0)
+        put("driveway_factor", 5.0)
+        put("step_penalty", 180)
+        put("use_ferry", if (request.preferences.avoidFerries) 0.0 else 0.5)
+    }
+}
+
+private fun RouteRequest.motorcycleTrailsPreference(): Double = when {
+    preferences.declaredTopSpeedKph <= RouteProfilePolicy.LOW_SPEED_MAX_KPH -> 0.0
+    style == RouteStyle.MAX_CURVY_TOURING -> if (preferences.declaredTopSpeedKph <= 60) 0.8 else 0.6
+    style == RouteStyle.CURVY -> if (preferences.declaredTopSpeedKph <= 60) 0.55 else 0.35
+    else -> 0.0
+}
+
+private fun RouteRequest.motorcycleTracksPreference(): Double = when {
+    preferences.declaredTopSpeedKph <= RouteProfilePolicy.LOW_SPEED_MAX_KPH -> 0.0
+    style == RouteStyle.MAX_CURVY_TOURING -> if (preferences.declaredTopSpeedKph <= 60) 0.75 else 0.5
+    style == RouteStyle.CURVY -> if (preferences.declaredTopSpeedKph <= 60) 0.4 else 0.25
+    else -> 0.0
+}
+
+private fun RouteRequest.bicycleRoadPreference(): Double = when {
+    preferences.declaredTopSpeedKph <= RouteProfilePolicy.LOW_SPEED_MAX_KPH -> 0.0
+    style == RouteStyle.FAST_WITH_HIGHWAYS -> 1.0
+    style == RouteStyle.FAST_WITHOUT_HIGHWAYS -> 0.15
+    style == RouteStyle.CURVY -> 0.1
+    else -> 0.0
 }

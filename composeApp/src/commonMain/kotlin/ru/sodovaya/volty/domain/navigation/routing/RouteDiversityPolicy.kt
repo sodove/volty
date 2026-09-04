@@ -10,9 +10,10 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
  */
 object RouteDiversityPolicy {
     private const val MAX_ALTERNATIVES = 3
-    // Roughly 35–40 m on the latitude axis. A 70–80 m corridor tolerance was
-    // collapsing genuinely parallel urban roads into one route.
-    private const val GEOMETRY_TOLERANCE_DEGREES = 0.00035
+    // A route polyline can move a few metres between engine versions, but a
+    // 20–30 m parallel road is already a meaningful branch to the rider.
+    private const val GEOMETRY_TOLERANCE_METERS = 18.0
+    private const val METERS_PER_DEGREE = 111_320.0
 
     fun select(
         candidates: List<RouteAlternative>,
@@ -50,9 +51,11 @@ object RouteDiversityPolicy {
     }
 
     private fun GeoCoordinate.isWithinToleranceOf(other: GeoCoordinate): Boolean {
-        val latitudeDelta = latitude - other.latitude
-        val longitudeDelta = longitude - other.longitude
-        return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta <=
-            GEOMETRY_TOLERANCE_DEGREES * GEOMETRY_TOLERANCE_DEGREES
+        val meanLatitudeRadians = Math.toRadians((latitude + other.latitude) / 2.0)
+        val latitudeDeltaMeters = (latitude - other.latitude) * METERS_PER_DEGREE
+        val longitudeDeltaMeters = (longitude - other.longitude) * METERS_PER_DEGREE *
+            kotlin.math.cos(meanLatitudeRadians)
+        return latitudeDeltaMeters * latitudeDeltaMeters + longitudeDeltaMeters * longitudeDeltaMeters <=
+            GEOMETRY_TOLERANCE_METERS * GEOMETRY_TOLERANCE_METERS
     }
 }
