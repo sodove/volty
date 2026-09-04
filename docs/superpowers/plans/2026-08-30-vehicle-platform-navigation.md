@@ -1646,3 +1646,17 @@ with an isolated workspace temp directory and the existing pre-extracted native 
 `:composeApp:verifyCommonMainVoltyDatabaseMigration` pass (`BUILD SUCCESSFUL`, one task executed)
 without touching system files. A fresh `backend test` rerun also passed (`BUILD SUCCESSFUL`, five
 tasks executed). No APK was built or installed.
+
+### Execution checkpoint — fresh x86_64 debug APK smoke — 2026-09-04
+
+After the explicit build pause was lifted, a fresh `volty-0.7.6-debug.apk` was assembled from the
+current tree (`46` actionable tasks). The artifact reports app version code `30` and contains
+`arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64` libraries. It was installed only on the existing
+`emulator-5554` with `adb install -r`, preserving its data; no physical device was addressed.
+
+The emulator smoke opened the app, entered the demo dashboard and navigator, opened the compact
+profile menu with all four styles, selected `Извилистый`, changed the speed control to 20 km/h,
+and restarted the process without a crash. The focused UI tree exposed the expected profile/speed
+semantics and logcat contained no `FATAL EXCEPTION` or `AndroidRuntime` entries. This is a fresh
+x86_64 UI/runtime check; it does not close the ARM64 native gate or prove a real network/offline
+route request. The APK was not installed on the user's phone.
