@@ -1553,3 +1553,7 @@ one route; the first maneuver modes were respectively `cycling`, `walking`, and 
 returned distances/durations were distinct, confirming that the low-speed fallback is backed by
 different routing graphs rather than a URL-only label. No query coordinates were recorded and no
 APK was built.
+
+The same live request with `alternatives=true` returned two routes from each of the bike, foot,
+and car graphs on that corridor. The adapter therefore keeps the provider's native alternatives
+for the selected costing; it does not need to mix profile types merely to inflate the count.
