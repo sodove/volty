@@ -194,6 +194,9 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = true
+            // The release runtime is always the Valhalla/OfflineFirst path.
+            // BRouter is retained only as a debug compatibility fallback.
+            buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", "true")
             if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -202,6 +205,7 @@ android {
         }
         getByName("debug") {
             isMinifyEnabled = false
+            buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", offlineRuntimeEnabled.toString())
             if (hasReleaseKeystore) signingConfig = signingConfigs.getByName("release")
         }
     }
@@ -212,7 +216,6 @@ android {
         targetSdk = 36
         versionCode = appVersionCode
         versionName = appVersionName
-        buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", offlineRuntimeEnabled.toString())
         manifestPlaceholders["voltyOfflineCatalogUrl"] = offlineCatalogUrl
         manifestPlaceholders["voltyOfflineManifestKeyId"] = offlineManifestKeyId
         manifestPlaceholders["voltyOfflineManifestPublicKey"] = offlineManifestPublicKey

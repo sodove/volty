@@ -1557,3 +1557,13 @@ APK was built.
 The same live request with `alternatives=true` returned two routes from each of the bike, foot,
 and car graphs on that corridor. The adapter therefore keeps the provider's native alternatives
 for the selected costing; it does not need to mix profile types merely to inflate the count.
+
+### Execution checkpoint — release runtime variant wiring — 2026-09-04
+
+The release BuildConfig had a subtle configuration leak: the offline-runtime flag was previously
+declared in `defaultConfig`, so a plain release invocation without the production catalog gate
+could select the debug-era BRouter repository. The flag is now declared per build type: every
+release variant selects Valhalla/OfflineFirst, while debug keeps BRouter compatibility unless the
+offline runtime is explicitly enabled for a local smoke. The generated release config was checked
+without assembling an APK (`VOLTY_OFFLINE_RUNTIME_ENABLED=true`); debug remains `false` by default.
+The full debug unit suite then passed with exactly 2,417 tests and zero failures, errors, or skips.
