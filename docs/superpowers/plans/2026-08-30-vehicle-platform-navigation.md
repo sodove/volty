@@ -1610,3 +1610,12 @@ the routing archive, a temporary pinned 3.6.3 service reached `/status` and retu
 trips (`24.321`, `26.420`, and `28.261` km) from the route corpus. This closes the regional
 artifact/config regression on the host; the artifact remains an unsigned pilot with a placeholder
 CDN URL and is not a production catalog release. No APK was built or installed.
+
+### Execution checkpoint — signed catalog publisher on EKB `v0.1.7` — 2026-09-04
+
+The new package was passed through the publisher with an ephemeral Ed25519 key and the real
+version-code/data-version gates: the manifest was signed, a schema-2 catalog with one region and
+release `0.1.7` was emitted, and its catalog key ID matched the manifest key ID. A separate run
+with the original unsigned manifest was rejected with the expected non-zero result and the
+`unsigned manifest cannot enter catalog` error. Keys, signed outputs, and specs were removed after
+the smoke; this is publisher evidence only, not a distributable release. No APK was built.
