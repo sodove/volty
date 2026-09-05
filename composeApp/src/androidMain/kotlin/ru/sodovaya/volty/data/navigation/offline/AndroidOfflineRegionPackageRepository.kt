@@ -9,6 +9,9 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -24,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import ru.sodovaya.volty.data.navigation.HttpOfflineRegionAcquisition
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalog
@@ -63,6 +67,18 @@ class AndroidOfflineRegionPackageRepository(
 ) : OfflineRegionPackageRepository {
     private val applicationContext = context.applicationContext
     private val downloader = AndroidOfflineRegionArtifactDownloader(userAgent = userAgent)
+    private val acquisition = HttpOfflineRegionAcquisition(
+        client = HttpClient(OkHttp) {
+            followRedirects = false
+            install(HttpTimeout) {
+                connectTimeoutMillis = 10_000L
+                requestTimeoutMillis = 15_000L
+                socketTimeoutMillis = 15_000L
+            }
+        },
+        catalogUrl = catalogUrl,
+        userAgent = userAgent,
+    )
     private val connectivity = applicationContext.getSystemService(ConnectivityManager::class.java)
     private val _states = MutableStateFlow<List<OfflineRegionPackageState>>(emptyList())
     private val jobs = ConcurrentHashMap<String, Job>()
@@ -148,32 +164,7 @@ class AndroidOfflineRegionPackageRepository(
             }
         }
 
-        when (
-            val decision = OfflineRegionDownloadPolicy.decide(
-                network = networkAvailability(),
-                trigger = trigger,
-                preferences = preferences(),
-                meteredConfirmed = meteredConfirmed,
-            )
-        ) {
-            ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.Allowed -> Unit
-            ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.RequiresMeteredConfirmation -> {
-                updateState(regionId) {
-                    it.copy(
-                        latestRelease = release,
-                        status = OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
-                        failure = null,
-                    )
-                }
-                return
-            }
-            is ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.Blocked -> {
-                updateState(regionId) {
-                    it.copy(latestRelease = release, status = OfflineRegionPackageStatus.WAITING_FOR_NETWORK, failure = null)
-                }
-                return
-            }
-        }
+        if (!downloadAllowed(regionId, release, trigger, meteredConfirmed)) return
 
         val staging = packageStore.createDownloadStaging(regionId, release.releaseVersion)
         val stagedBytes = packageStore.stagedDownloadBytes(staging, plan)
@@ -187,6 +178,13 @@ class AndroidOfflineRegionPackageRepository(
         }
         var installationFailed = false
         try {
+            // The signed catalog advertises available releases even when the
+            // server has not cached their artifacts yet. Keep online navigation
+            // running while it acquires this exact release, then use the existing
+            // checksum-verified component download and atomic installation.
+            acquisition.ensureReady(regionId, release.releaseVersion)
+            // Preparation can take minutes: re-read connectivity and preferences before transferring bytes.
+            if (!downloadAllowed(regionId, release, trigger, meteredConfirmed)) return
             val artifacts = downloader.download(plan, staging) { downloadedBytes ->
                 updateState(regionId) { state ->
                     state.copy(
@@ -248,6 +246,42 @@ class AndroidOfflineRegionPackageRepository(
         } catch (_: Exception) {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.UNKNOWN) }
         }
+    }
+
+    private fun downloadAllowed(
+        regionId: String,
+        release: ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest,
+        trigger: OfflineRegionDownloadTrigger,
+        meteredConfirmed: Boolean,
+    ): Boolean {
+        when (
+            val decision = OfflineRegionDownloadPolicy.decide(
+                network = networkAvailability(),
+                trigger = trigger,
+                preferences = preferences(),
+                meteredConfirmed = meteredConfirmed,
+            )
+        ) {
+            ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.Allowed -> Unit
+            ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.RequiresMeteredConfirmation -> {
+                updateState(regionId) {
+                    it.copy(
+                        latestRelease = release,
+                        status = OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,
+                        failure = null,
+                    )
+                }
+                return false
+            }
+            is ru.sodovaya.volty.domain.navigation.region.OfflineDownloadDecision.Blocked -> {
+                updateState(regionId) {
+                    it.copy(latestRelease = release, status = OfflineRegionPackageStatus.WAITING_FOR_NETWORK, failure = null)
+                }
+                return false
+            }
+        }
+
+        return true
     }
 
     override suspend fun pauseDownload(regionId: String) {

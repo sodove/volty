@@ -85,11 +85,32 @@ object OfflineRegionAccessPolicy {
             }
         }
 
+        // A route can cross regional package boundaries. There is no safe
+        // single-package offline route in that case yet, but every catalog
+        // region covering one endpoint should still be eligible for the
+        // automatic download path. This lets the next request benefit from
+        // the data without pretending that two independent graphs can be
+        // stitched locally.
+        val missingEndpointRegionIds = if (matching.isEmpty()) {
+            points
+                .flatMap { point ->
+                    packages.filter { it.manifest.bounds.contains(point) }
+                }
+                .groupBy { it.manifest.regionId }
+                .values
+                .map { entries -> entries.minBy { it.status.priority() } }
+                .filterNot { it.status.isUsableOffline() }
+                .map { it.manifest.regionId }
+                .distinct()
+        } else {
+            emptyList()
+        }
+
         return if (network == OfflineNetworkAvailability.OFFLINE) {
             OfflineRegionAccessDecision.UnavailableOffline
         } else {
             OfflineRegionAccessDecision.UseOnlineFallback(
-                missingRegionIds = matching.map { it.manifest.regionId },
+                missingRegionIds = missingEndpointRegionIds,
             )
         }
     }

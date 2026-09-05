@@ -1,5 +1,12 @@
 # Offline navigation package tooling
 
+The backend now acquires these pipeline outputs automatically through a private
+package service. `package_validation.py` owns trust and bounded validation;
+`package_cache.py` owns atomic publication and lifecycle; `package-service.py`
+exposes its private HTTP/CLI interface. See [backend/OFFLINE.md](../../backend/OFFLINE.md)
+for catalog/artifact origins, public API, limits, Compose setup and operator ingest.
+No map generation is triggered by client acquisition requests.
+
 This directory contains the reproducible regional-artifact toolchain. It is
 intentionally separate from the Android build: the APK does not contain a
 large regional dataset.

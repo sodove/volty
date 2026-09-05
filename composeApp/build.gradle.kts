@@ -25,24 +25,33 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
         val apkFile = apk.get().asFile
         require(apkFile.isFile) { "Release APK was not produced: ${apkFile.absolutePath}" }
 
-        val dexMarkers = ZipFile(apkFile).use { archive ->
-            archive.entries().asSequence()
-                .filter { it.name.endsWith(".dex") }
-                .flatMap { entry ->
-                    val bytes = archive.getInputStream(entry).use { it.readBytes() }
-                    val text = bytes.toString(Charsets.ISO_8859_1)
-                    forbiddenMarkers.get().filter(text::contains).asSequence()
+        val (dexMarkers, assetMarkers) = ZipFile(apkFile).use { archive ->
+            archive.entries().asSequence().toList()
+                .let { entries ->
+                    val dexMarkers = entries
+                        .filter { it.name.endsWith(".dex") }
+                        .flatMap { entry ->
+                            val bytes = archive.getInputStream(entry).use { it.readBytes() }
+                            val text = bytes.toString(Charsets.ISO_8859_1)
+                            forbiddenMarkers.get().filter(text::contains).asSequence()
+                        }
+                        .toSet()
+                    val assetMarkers = entries
+                        .filter { it.name.startsWith("assets/offline-routing/") }
+                        .map { it.name }
+                        .toSet()
+                    dexMarkers to assetMarkers
                 }
-                .toSet()
         }
-        require(dexMarkers.isEmpty()) {
-            "Production APK still contains the debug-only BRouter runtime: $dexMarkers"
+        require(dexMarkers.isEmpty() && assetMarkers.isEmpty()) {
+            "Production APK still contains the debug-only BRouter payload: " +
+                "dex=$dexMarkers assets=$assetMarkers"
         }
     }
 }
 
-val appVersionCode = 30
-val appVersionName = "0.7.6"
+val appVersionCode = 31
+val appVersionName = "0.7.7"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -203,6 +212,14 @@ android {
                 "proguard-rules.pro"
             )
         }
+        create("releaseX86") {
+            // A production-equivalent variant for native Valhalla smoke tests
+            // on an x86_64 host. It deliberately keeps the release application
+            // id/signing/runtime and differs only in ABI packaging.
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+            buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", "true")
+        }
         getByName("debug") {
             isMinifyEnabled = false
             buildConfigField("boolean", "VOLTY_OFFLINE_RUNTIME_ENABLED", offlineRuntimeEnabled.toString())
@@ -249,6 +266,13 @@ if (productionReleaseGate) {
         apk.set(productionApk)
         forbiddenMarkers.set(listOf("btools/", "btools.", "RoutingEngine"))
         dependsOn("assembleRelease")
+    }
+    val productionX86Apk = layout.buildDirectory
+        .file("outputs/apk/releaseX86/volty-$appVersionName-releaseX86.apk")
+    tasks.register<VerifyProductionReleaseTask>("verifyProductionReleaseX86OmitsBRouter") {
+        apk.set(productionX86Apk)
+        forbiddenMarkers.set(listOf("btools/", "btools.", "RoutingEngine"))
+        dependsOn("assembleReleaseX86")
     }
 }
 

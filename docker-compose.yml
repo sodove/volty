@@ -31,7 +31,11 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET:-}
       VOLTY_VOICE_TOKEN_TTL_SECONDS: ${VOLTY_VOICE_TOKEN_TTL_SECONDS:-86400}
       VOLTY_PUBLIC_IP: ${VOLTY_PUBLIC_IP:-}
+      VOLTY_OFFLINE_ROOT: ${VOLTY_OFFLINE_ROOT:-/opt/volty/offline}
+      VOLTY_OFFLINE_MANAGER_URL: ${VOLTY_OFFLINE_MANAGER_URL:-}
       PORT: 8080
+    volumes:
+      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/opt/volty/offline:ro
     depends_on:
       db:
         condition: service_healthy
@@ -42,6 +46,67 @@ services:
       interval: 15s
       timeout: 5s
       retries: 6
+
+  offline:
+    profiles: [offline]
+    build:
+      context: ./tools/offline-navigation
+      dockerfile: Dockerfile.service
+    restart: unless-stopped
+    environment:
+      VOLTY_OFFLINE_ROOT: /data/offline
+      VOLTY_OFFLINE_UPSTREAM_CATALOG_URL: ${VOLTY_OFFLINE_UPSTREAM_CATALOG_URL:-}
+      VOLTY_OFFLINE_ARTIFACT_BASE_URL: ${VOLTY_OFFLINE_ARTIFACT_BASE_URL:-}
+      VOLTY_OFFLINE_PUBLIC_BASE_URL: ${VOLTY_OFFLINE_PUBLIC_BASE_URL:-https://volty.sodove.ru/offline/regions}
+      VOLTY_OFFLINE_PUBLIC_KEY: ${VOLTY_OFFLINE_PUBLIC_KEY:-}
+      VOLTY_OFFLINE_KEY_ID: ${VOLTY_OFFLINE_KEY_ID:-}
+      VOLTY_OFFLINE_INGEST_ROOT: /ingest
+    volumes:
+      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/data/offline
+      - ${VOLTY_OFFLINE_INGEST_HOST_DIR:-/srv/volty/offline-ingest}:/ingest:ro
+    # No host port: control endpoints are accessible only on the Compose network.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  offline-worker:
+    profiles: [offline]
+    build:
+      context: ./tools/offline-navigation
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    command: ["--config", "/etc/volty/production.json", "--queue", "/data/staging/jobs.json"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/data/offline
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/srv/volty/offline-production/staging}:/data/staging
+      - ${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/srv/volty/offline-production/sources}:/data/sources
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/srv/volty/offline-production/production.json}:/etc/volty/production.json:ro
+      - ${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/srv/volty/offline-production/secrets/signing-key.pem}:/run/secrets/volty-offline-signing-key.pem:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${VOLTY_DOCKER_GID:-999}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  offline-scheduler:
+    profiles: [offline]
+    build:
+      context: ./tools/offline-navigation
+      dockerfile: Dockerfile.worker
+    restart: unless-stopped
+    entrypoint: ["python", "-m", "production.scheduler"]
+    command: ["--config", "/etc/volty/production.json", "--queue", "/data/staging/jobs.json"]
+    environment:
+      PYTHONUNBUFFERED: "1"
+    volumes:
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/srv/volty/offline-production/staging}:/data/staging
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/srv/volty/offline-production/production.json}:/etc/volty/production.json:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
 
   livekit:
     image: livekit/livekit-server:v1.13.5

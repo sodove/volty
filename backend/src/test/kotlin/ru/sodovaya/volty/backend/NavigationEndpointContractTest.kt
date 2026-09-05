@@ -90,10 +90,7 @@ class NavigationEndpointContractTest {
 
     private fun testDependencies(provider: NavigationProvider) = AppDependencies(
         config = AppConfig.forTests().copy(
-            navigationProvider = "graphhopper",
             navigationEnabled = true,
-            graphHopperApiKey = "test-key",
-            navigationProfileId = "personal-mobility",
         ),
         store = object : BackendStore {},
         testMode = true,

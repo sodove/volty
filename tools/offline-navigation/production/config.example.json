@@ -1,0 +1,14 @@
+{
+  "publicRoot": "/data/offline",
+  "stagingRoot": "/data/staging",
+  "sourceRoot": "/data/sources",
+  "signingKey": "/run/secrets/volty-offline-signing-key.pem",
+  "publicBaseUrl": "https://volty.sodove.ru/offline/regions",
+  "keyId": "REPLACE_WITH_EXISTING_PRODUCTION_KEY_ID",
+  "minAppVersionCode": 1,
+  "pollSeconds": 30,
+  "maxDownloadBytes": 1073741824,
+  "maxRuntimeSeconds": 86400,
+  "buildScript": "/app/build-package.sh",
+  "regions": []
+}

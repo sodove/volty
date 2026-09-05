@@ -182,6 +182,30 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun cross_region_route_queues_every_known_missing_endpoint_region() = runTest {
+        val packages = FakePackages(
+            regionIds = listOf("ekb", "tyumen"),
+            boundsByRegion = mapOf(
+                "ekb" to OfflineRegionBounds(56.0, 60.0, 57.0, 61.0),
+                "tyumen" to OfflineRegionBounds(57.0, 61.0, 58.0, 62.0),
+            ),
+        )
+        val online = FakeNavigation()
+        val repository = repository(packages, online)
+        val request = RouteRequest(
+            origin = GeoCoordinate(56.80, 60.60),
+            destination = PlaceCandidate("tyumen-dest", "Тюмень", null, GeoCoordinate(57.20, 61.20)),
+            languageTag = "ru-RU",
+        )
+
+        repository.routes(request)
+        testScheduler.runCurrent()
+
+        assertEquals(listOf("ekb", "tyumen"), packages.downloads)
+        assertEquals(1, online.routeCalls)
+    }
+
+    @Test
     fun waiting_search_in_full_offline_mode_does_not_call_online() = runTest {
         val packages = FakePackages(status = OfflineRegionPackageStatus.WAITING_FOR_NETWORK)
         val online = FakeNavigation()
@@ -220,6 +244,7 @@ class OfflineFirstNavigationRepositoryTest {
         private val catalogRefreshGate: CompletableDeferred<Unit>? = null,
         private var catalogRefreshFailures: Int = 0,
         private val regionIds: List<String> = listOf("ekb"),
+        private val boundsByRegion: Map<String, OfflineRegionBounds> = emptyMap(),
     ) : OfflineRegionPackageRepository {
         private val _states = MutableStateFlow(
             if (catalogLoadedOnStart) {
@@ -228,7 +253,7 @@ class OfflineFirstNavigationRepositoryTest {
                         OfflineRegionManifest(
                             regionId,
                             regionId,
-                            OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
+                            boundsByRegion[regionId] ?: OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
                         ),
                         null,
                         status,
@@ -255,7 +280,7 @@ class OfflineFirstNavigationRepositoryTest {
                         OfflineRegionManifest(
                             regionId,
                             regionId,
-                            OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
+                            boundsByRegion[regionId] ?: OfflineRegionBounds(56.0, 59.0, 57.5, 62.0),
                         ),
                         null,
                         status,

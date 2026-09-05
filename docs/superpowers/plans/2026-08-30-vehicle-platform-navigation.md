@@ -1489,8 +1489,9 @@ geometry-diverse alternatives using that same costing. It tries the profile fall
 the selected profile returns no route/provider failure; this keeps the normal path fast while
 making pedestrian/bicycle/motorcycle real production behavior rather than background probes.
 The OSRM online fallback hard-excludes `motorway,trunk` for low-speed and highway-avoiding
-requests. The HTTP/backend contract carries `routingProfile`; GraphHopper has one explicit
-mapping per profile and refuses a missing mapping instead of silently substituting generic.
+requests. The HTTP/backend contract carries `routingProfile`; the former hosted-provider mapping
+has been removed. A future self-hosted Valhalla adapter must keep explicit profile mapping and
+refuse an unavailable profile instead of silently substituting generic.
 
 Valhalla option tuning is also speed-aware: low-speed `motorcycle` fallback has zero highway,
 trail, and track preference; bicycle uses zero road preference up to 30 km/h; curvy motorcycle
@@ -1499,8 +1500,17 @@ touring uses 0.8/0.75 and 0.6/0.5 respectively. These are routing-cost inputs, n
 every trail is suitable; route access/surface/steps still need field validation.
 
 Common tests cover the profile matrix, speed boundary at 30/60, low-speed highway hardening,
-curvy adventure scaling, OSRM exclusion, HTTP wire profile, and GraphHopper mappings. No APK
-build is part of this amendment.
+curvy adventure scaling, OSRM exclusion, and the provider-neutral HTTP wire profile. No APK build
+is part of this amendment.
+
+### Retraction — hosted third-party routing provider (2026-09-04)
+
+The earlier hosted-provider path is retracted. No third-party routing account, API key, provider
+container, or provider-specific deployment configuration belongs in Volty. The app continues to
+use its direct Photon/OSRM online repository, while the backend navigation endpoints remain a
+provider-neutral seam that is explicitly unavailable until a self-hosted Valhalla adapter is
+implemented and field-validated. The existing adapter and its provider-specific tests were
+removed rather than left as a dormant production option.
 
 ### Execution checkpoint — production profile route-corpus smoke — 2026-09-04
 
@@ -1660,3 +1670,43 @@ and restarted the process without a crash. The focused UI tree exposed the expec
 semantics and logcat contained no `FATAL EXCEPTION` or `AndroidRuntime` entries. This is a fresh
 x86_64 UI/runtime check; it does not close the ARM64 native gate or prove a real network/offline
 route request. The APK was not installed on the user's phone.
+
+### Execution checkpoint — release BRouter payload removal and x86 Android Valhalla smoke — 2026-09-04
+
+The release packaging gap is closed locally. The four legacy BRouter payload files
+(`E60_N55.rd5`, `lookups.dat`, `manifest.json`, and `volty.brf`) now belong only to the debug
+source set; both the regular `release` and the production-equivalent `releaseX86` variants are
+checked by a Gradle gate for the absence of BRouter DEX markers and `assets/offline-routing/*`.
+The regular release remains ARM-only. `releaseX86` inherits release signing/minification and the
+Valhalla/OfflineFirst runtime, but retains x86/x86_64 libraries solely for emulator smoke.
+
+The final clean ARM-only `release` APK is version code `30` / `0.7.6`, v2-signed, and is
+`68,650,933` bytes. The clean production-equivalent `releaseX86` APK is `147,581,716` bytes
+and contains all four ABIs; the corresponding pre-cleanup ARM-only release was `80,734,537`
+bytes, so moving BRouter payloads out of release removed `12,083,604` bytes from the
+distributable artifact. These final clean APKs were rebuilt without any smoke URL, key ID, or
+public key; the earlier temporary-key `releaseX86` artifact remains the separate x86 E2E smoke
+evidence and is not distributable.
+On `emulator-5554`, a signed temporary copy of the EKB package was installed into app-private
+storage without clearing app data. The APK's local FTS returned `Ekaterinburg EXPO`; the route
+request loaded the Valhalla tile extract in-process and returned three alternatives (`16.6`,
+`23.3`, and `20.9` km). This closes the Android x86 native/runtime/package path, but it is a
+smoke build with an ephemeral key and temporary catalog URL, not a distributable release.
+The ARM64 native gate, real catalog/key publication, cross-region route stitching, and field
+validation of access/surface/steps remain open.
+
+### Execution checkpoint — cross-region download discovery — 2026-09-04
+
+The offline access policy now reports every known catalog region that covers an endpoint when no
+single package covers the whole route. `OfflineFirstNavigationRepository` queues all such missing
+regions, with its existing Wi-Fi/mobile confirmation policy and duplicate-download guard. A route
+that crosses two independent package graphs still stays online (or returns typed offline failure);
+the app does not pretend that separate Valhalla extracts can be stitched. A common regression test
+covers both endpoint regions and verifies that both downloads are queued. Producing a genuinely
+cross-region routing graph remains a package/backend task.
+
+The post-change full debug suite completed with exactly `2,419` tests and zero failures, errors, or
+skips; the BRouter packaging gates passed on the release-equivalent smoke build, and the final
+clean APKs were independently scanned for the same forbidden assets, DEX markers, and smoke
+configuration. The temporary-key `releaseX86` artifact was installed with `adb install -r` on
+`emulator-5554` only, preserving app data; the physical phone was not addressed.

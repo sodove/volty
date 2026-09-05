@@ -251,6 +251,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     routing {
+        installOfflineRegionRoutes(dependencies)
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
             route("/v1") {
             installNavigationRoutes(dependencies)

@@ -273,7 +273,7 @@ class OfflineFirstNavigationRepository(
         decision: OfflineRegionAccessDecision.UseOnlineFallback,
         trigger: OfflineRegionDownloadTrigger,
     ) {
-        decision.missingRegionIds.firstOrNull()?.let { regionId ->
+        decision.missingRegionIds.distinct().forEach { regionId ->
             scheduleDownload(regionId, trigger)
         }
     }

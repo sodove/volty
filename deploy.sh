@@ -95,6 +95,14 @@ write_env_value() {
   mv "$temp_file" "$ENV_FILE"
 }
 
+remove_env_key() {
+  local key="$1"
+  local temp_file
+  temp_file="$(mktemp)"
+  awk -F= -v key="$key" '$1 != key { print }' "$ENV_FILE" >"$temp_file"
+  mv "$temp_file" "$ENV_FILE"
+}
+
 is_placeholder_value() {
   local value="${1-}"
   case "$value" in
@@ -236,6 +244,113 @@ ensure_non_secret_defaults() {
   if [ -z "$current_ttl" ]; then
     write_env_value "VOLTY_VOICE_TOKEN_TTL_SECONDS" "300"
   fi
+
+  local current_navigation_provider
+  current_navigation_provider="$(read_env_value "VOLTY_NAV_PROVIDER")"
+  if [ -z "$current_navigation_provider" ]; then
+    write_env_value "VOLTY_NAV_PROVIDER" "disabled"
+  elif [ "$current_navigation_provider" != "disabled" ]; then
+    write_env_value "VOLTY_NAV_PROVIDER" "disabled"
+    log "Reset unsupported online navigation provider to disabled"
+  fi
+
+  local retired_navigation_key
+  for retired_navigation_key in \
+    "GRAPHHOPPER_API_KEY" \
+    "VOLTY_NAV_PROFILE" \
+    "VOLTY_NAV_PROFILE_MOTORCYCLE" \
+    "VOLTY_NAV_PROFILE_BICYCLE" \
+    "VOLTY_NAV_PROFILE_PEDESTRIAN" \
+    "VOLTY_NAV_CONNECT_TIMEOUT_MILLIS" \
+    "VOLTY_NAV_REQUEST_TIMEOUT_MILLIS"; do
+    if [ -n "$(read_env_value "$retired_navigation_key")" ]; then
+      remove_env_key "$retired_navigation_key"
+      log "Removed retired navigation setting $retired_navigation_key"
+    fi
+  done
+
+  local current_navigation_enabled
+  current_navigation_enabled="$(read_env_value "VOLTY_NAVIGATION_ENABLED")"
+  if [ -z "$current_navigation_enabled" ] || [ "$current_navigation_enabled" != "false" ]; then
+    write_env_value "VOLTY_NAVIGATION_ENABLED" "false"
+    log "Set VOLTY_NAVIGATION_ENABLED=false"
+  fi
+
+  local current_offline_host_dir
+  current_offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
+  if [ -z "$current_offline_host_dir" ]; then
+    write_env_value "VOLTY_OFFLINE_HOST_DIR" "/srv/volty/offline"
+  fi
+
+  local current_offline_root
+  current_offline_root="$(read_env_value "VOLTY_OFFLINE_ROOT")"
+  if [ -z "$current_offline_root" ]; then
+    write_env_value "VOLTY_OFFLINE_ROOT" "/opt/volty/offline"
+  fi
+}
+
+ensure_offline_storage() {
+  local offline_host_dir
+  offline_host_dir="${VOLTY_OFFLINE_HOST_DIR-}"
+  if [ -z "$offline_host_dir" ]; then
+    offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
+  fi
+  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  case "$offline_host_dir" in
+    ""|"/"|"/srv"|"/var"|"/opt"|"/home"|"/root") fail "VOLTY_OFFLINE_HOST_DIR must name a dedicated child directory" ;;
+    /*) ;;
+    *) fail "VOLTY_OFFLINE_HOST_DIR must be an absolute host path" ;;
+  esac
+  mkdir -p "$offline_host_dir/regions" "$offline_host_dir/releases"
+  chmod 755 "$offline_host_dir" "$offline_host_dir/regions" "$offline_host_dir/releases"
+  log "Offline storage ready at $offline_host_dir"
+}
+
+configure_offline_manager() {
+  local upstream="${VOLTY_OFFLINE_UPSTREAM_CATALOG_URL:-$(read_env_value VOLTY_OFFLINE_UPSTREAM_CATALOG_URL)}"
+  [ -n "$upstream" ] || return 0
+  local key value
+  for key in VOLTY_OFFLINE_ARTIFACT_BASE_URL VOLTY_OFFLINE_PUBLIC_KEY VOLTY_OFFLINE_KEY_ID; do
+    value="${!key:-}"
+    value="${value:-$(read_env_value "$key")}"
+    [ -n "$value" ] || fail "$key is required when automatic offline acquisition is enabled"
+  done
+  if [ -z "${VOLTY_OFFLINE_MANAGER_URL:-$(read_env_value VOLTY_OFFLINE_MANAGER_URL)}" ]; then
+    write_env_value VOLTY_OFFLINE_MANAGER_URL http://offline:8091
+  fi
+  COMPOSE_CMD+=(--profile offline)
+  local offline_host_dir="${VOLTY_OFFLINE_HOST_DIR:-$(read_env_value VOLTY_OFFLINE_HOST_DIR)}"
+  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  # Dedicated cache directories only; the worker runs as UID/GID 10001.
+  # ensure_offline_storage has already validated this absolute child directory.
+  install -d -m 755 -o 10001 -g 10001 "$offline_host_dir" "$offline_host_dir/releases" "$offline_host_dir/.staging"
+  log "Automatic offline acquisition enabled from the configured signed catalog"
+}
+
+verify_local_http() {
+  require_command curl
+  local app_host_port
+  app_host_port="${VOLTY_APP_HOST_PORT-}"
+  if [ -z "$app_host_port" ]; then
+    app_host_port="$(read_env_value "VOLTY_APP_HOST_PORT")"
+  fi
+  app_host_port="${app_host_port:-18080}"
+  curl --silent --show-error --fail --max-time 10 "http://127.0.0.1:${app_host_port}/health" >/dev/null \
+    || fail "Ktor health endpoint is not reachable on 127.0.0.1:${app_host_port}"
+
+  local offline_host_dir
+  offline_host_dir="${VOLTY_OFFLINE_HOST_DIR-}"
+  if [ -z "$offline_host_dir" ]; then
+    offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
+  fi
+  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  if [ -f "$offline_host_dir/catalog.json" ]; then
+    curl --silent --show-error --fail --max-time 10 "http://127.0.0.1:${app_host_port}/offline/catalog.json" >/dev/null \
+      || fail "Offline catalog is not reachable through Ktor"
+    log "Ktor offline catalog is reachable"
+  else
+    log "Offline catalog is not cached yet; configure the signed upstream catalog for automatic acquisition"
+  fi
 }
 
 wait_for_service_status() {
@@ -273,13 +388,18 @@ main() {
   ensure_generated_secret "LIVEKIT_API_SECRET" 48
   ensure_public_ip
   ensure_non_secret_defaults
+  ensure_offline_storage
+  configure_offline_manager
 
   log "Starting Docker Compose deployment"
-  "${COMPOSE_CMD[@]}" up -d --remove-orphans --build
+  # Scope updates to this Compose file; unrelated services in the existing
+  # project are not orphans owned by this deployment.
+  "${COMPOSE_CMD[@]}" up -d --build
 
   wait_for_service_status "db" "healthy" 180
   wait_for_service_status "app" "healthy" 240
   wait_for_service_status "livekit" "running" 120
+  verify_local_http
 
   log "Deployment status"
   "${COMPOSE_CMD[@]}" ps

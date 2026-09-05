@@ -19,6 +19,26 @@ keystore.properties
 /composeApp/release/
 /composeApp/build
 /dumper/build
+
+# Local build/tooling output and Python bytecode.
+/backend/build
+/.gradle-user
+/.codex
+/.codex-tmp
+__pycache__/
+*.pyc
+
+# Emulator inspection captures kept outside the repository history.
+/emulator-*.png
+/emulator-*.xml
+/after-*.png
+/after-*.xml
+/current-*.xml
+/debug-*.xml
+/nav-*.png
+/nav-*.xml
+/window.xml
+/x86-releaseX86-*.png
 .superpowers/
 
 # Kotlin compiler daemon error dumps — build noise, never source.

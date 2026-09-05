@@ -148,25 +148,62 @@ class OfflineRegionAccessPolicyTest {
         )
     }
 
-    private fun packageSnapshot(status: OfflineRegionPackageStatus) = OfflineRegionPackageSnapshot(
+    @Test
+    fun route_spanning_known_regions_reports_each_missing_endpoint_region() {
+        val decision = OfflineRegionAccessPolicy.decide(
+            points = spanningRoutePoints,
+            packages = listOf(
+                packageSnapshot(
+                    regionId = "ekb",
+                    status = OfflineRegionPackageStatus.NOT_INSTALLED,
+                    bounds = OfflineRegionBounds(56.0, 60.0, 57.0, 61.0),
+                ),
+                packageSnapshot(
+                    regionId = "tyumen",
+                    status = OfflineRegionPackageStatus.NOT_INSTALLED,
+                    bounds = OfflineRegionBounds(57.0, 61.0, 58.0, 62.0),
+                ),
+            ),
+            network = OfflineNetworkAvailability.UNMETERED,
+            trigger = OfflineRegionDownloadTrigger.ROUTE,
+            preferences = OfflineDownloadPreferences(),
+            allowOnlineFallback = true,
+        )
+
+        assertEquals(
+            OfflineRegionAccessDecision.UseOnlineFallback(listOf("ekb", "tyumen")),
+            decision,
+        )
+    }
+
+    private fun packageSnapshot(
+        status: OfflineRegionPackageStatus,
+        regionId: String = DEFAULT_REGION_ID,
+        bounds: OfflineRegionBounds = OfflineRegionBounds(
+            south = 56.0,
+            west = 60.0,
+            north = 57.0,
+            east = 61.0,
+        ),
+    ) = OfflineRegionPackageSnapshot(
         manifest = OfflineRegionManifest(
             regionId = regionId,
             displayName = "Екатеринбург",
-            bounds = OfflineRegionBounds(
-                south = 56.0,
-                west = 60.0,
-                north = 57.0,
-                east = 61.0,
-            ),
+            bounds = bounds,
         ),
         status = status,
     )
 
     private companion object {
         const val regionId = "ru-sve-yekaterinburg-agglomeration"
+        const val DEFAULT_REGION_ID = regionId
         val routePoints = listOf(
             GeoCoordinate(latitude = 56.80, longitude = 60.60),
             GeoCoordinate(latitude = 56.84, longitude = 60.64),
+        )
+        val spanningRoutePoints = listOf(
+            GeoCoordinate(latitude = 56.80, longitude = 60.60),
+            GeoCoordinate(latitude = 57.20, longitude = 61.20),
         )
     }
 }

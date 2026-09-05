@@ -10,10 +10,9 @@ speed: bicycle is primary up to 30 km/h, pedestrian is a low-speed curvy fallbac
 is primary above 30 km/h, and generic is the final fallback. The legacy `profile` field is
 unrelated to routing and remains ignored for compatibility.
 
-When GraphHopper is enabled, `VOLTY_NAV_PROFILE`, `VOLTY_NAV_PROFILE_MOTORCYCLE`,
-`VOLTY_NAV_PROFILE_BICYCLE`, and `VOLTY_NAV_PROFILE_PEDESTRIAN` must all point to configured
-GraphHopper profiles. A missing selected mapping returns an explicit unavailable response rather
-than silently substituting generic.
+The hosted navigation provider is currently disabled. The endpoint keeps the provider-neutral
+contract and returns `503 navigation_unavailable` until the self-hosted Valhalla adapter is
+deployed. It never silently substitutes a third-party provider or a car/bicycle profile.
 
 ## Authentication and account
 
@@ -86,3 +85,7 @@ When voice is disabled or not fully configured it returns `available:false` with
 ```
 
 The LiveKit JWT carries the opaque Volty user id as `sub`, the Volty display name as `name`, and `video` grants for the exact room, `roomJoin`, `canPublish`, `canPublishSources:["microphone"]`, and `canSubscribe`. `/voice/leave` remains idempotent cleanup and always returns `{left:true}`.
+# Offline region delivery
+
+See [OFFLINE.md](OFFLINE.md) for the signed catalog, coverage lookup, versioned
+ensure/status API, artifacts, worker administration and configuration.

@@ -27,22 +27,10 @@ data class AppConfig(
     val voiceTokenTtlSeconds: Long = DEFAULT_VOICE_TOKEN_TTL_SECONDS,
     val publicIp: String? = null,
     val navigationProvider: String = "disabled",
-    val graphHopperApiKey: String? = null,
-    val navigationProfileId: String? = null,
-    val navigationMotorcycleProfileId: String? = null,
-    val navigationBicycleProfileId: String? = null,
-    val navigationPedestrianProfileId: String? = null,
-    val navigationConnectTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
-    val navigationRequestTimeoutMillis: Long = DEFAULT_NAVIGATION_TIMEOUT_MILLIS,
     val navigationEnabled: Boolean = false,
+    val offlineFilesRoot: String? = null,
+    val offlineManagerUrl: String? = null,
 ) {
-    fun navigationProfileIdFor(profile: NavigationRoutingProfile): String? = when (profile) {
-        NavigationRoutingProfile.GENERIC -> navigationProfileId
-        NavigationRoutingProfile.MOTORCYCLE -> navigationMotorcycleProfileId
-        NavigationRoutingProfile.BICYCLE -> navigationBicycleProfileId
-        NavigationRoutingProfile.PEDESTRIAN -> navigationPedestrianProfileId
-    }?.trim()?.takeIf(String::isNotEmpty)
-
     fun liveKitConfigOrNull(): LiveKitConfig? = if (voiceProvider == "livekit") {
         LiveKitConfig(
             serverUrl = checkNotNull(liveKitUrl),
@@ -60,9 +48,7 @@ data class AppConfig(
         "accessTtlSeconds=$accessTtlSeconds, refreshTtlSeconds=$refreshTtlSeconds, " +
         "maxShareTtlMillis=$maxShareTtlMillis, corsOrigins=$corsOrigins, " +
         "voiceProvider=$voiceProvider, voiceConfigured=${liveKitConfigOrNull() != null}, " +
-        "navigationProvider=$navigationProvider, navigationProfileId=$navigationProfileId, " +
-        "navigationConnectTimeoutMillis=$navigationConnectTimeoutMillis, " +
-        "navigationRequestTimeoutMillis=$navigationRequestTimeoutMillis, " +
+        "navigationProvider=$navigationProvider, " +
         "navigationEnabled=$navigationEnabled)"
 
     companion object {
@@ -76,8 +62,8 @@ data class AppConfig(
                 ?.lowercase()
                 ?.ifEmpty { "disabled" }
                 ?: "disabled"
-            require(navigationProvider in setOf("disabled", "graphhopper")) {
-                "VOLTY_NAV_PROVIDER must be one of: disabled, graphhopper"
+            require(navigationProvider == "disabled") {
+                "VOLTY_NAV_PROVIDER must be disabled until a supported provider is installed"
             }
             val navigationEnabled = env["VOLTY_NAVIGATION_ENABLED"]?.trim()?.lowercase()?.let { value ->
                 when (value) {
@@ -85,34 +71,7 @@ data class AppConfig(
                     "false" -> false
                     else -> error("VOLTY_NAVIGATION_ENABLED must be true or false")
                 }
-            } ?: (navigationProvider != "disabled")
-            val navigationProfileId = env["VOLTY_NAV_PROFILE"]?.trim()?.takeIf(String::isNotEmpty)
-            val navigationMotorcycleProfileId = env["VOLTY_NAV_PROFILE_MOTORCYCLE"]?.trim()?.takeIf(String::isNotEmpty)
-            val navigationBicycleProfileId = env["VOLTY_NAV_PROFILE_BICYCLE"]?.trim()?.takeIf(String::isNotEmpty)
-            val navigationPedestrianProfileId = env["VOLTY_NAV_PROFILE_PEDESTRIAN"]?.trim()?.takeIf(String::isNotEmpty)
-            val graphHopperApiKey = env["GRAPHHOPPER_API_KEY"]?.trim()?.takeIf(String::isNotEmpty)
-            if (navigationProvider == "graphhopper") {
-                val missing = buildList {
-                    if (graphHopperApiKey == null) add("GRAPHHOPPER_API_KEY")
-                    if (navigationProfileId == null) add("VOLTY_NAV_PROFILE")
-                    if (navigationMotorcycleProfileId == null) add("VOLTY_NAV_PROFILE_MOTORCYCLE")
-                    if (navigationBicycleProfileId == null) add("VOLTY_NAV_PROFILE_BICYCLE")
-                    if (navigationPedestrianProfileId == null) add("VOLTY_NAV_PROFILE_PEDESTRIAN")
-                }
-                require(missing.isEmpty()) {
-                    "VOLTY_NAV_PROVIDER=graphhopper requires ${missing.joinToString(", ")}"
-                }
-            }
-            val navigationConnectTimeoutMillis = env["VOLTY_NAV_CONNECT_TIMEOUT_MILLIS"]?.toLongOrNull()
-                ?: DEFAULT_NAVIGATION_TIMEOUT_MILLIS
-            val navigationRequestTimeoutMillis = env["VOLTY_NAV_REQUEST_TIMEOUT_MILLIS"]?.toLongOrNull()
-                ?: DEFAULT_NAVIGATION_TIMEOUT_MILLIS
-            require(navigationConnectTimeoutMillis in MIN_NAVIGATION_TIMEOUT_MILLIS..MAX_NAVIGATION_TIMEOUT_MILLIS) {
-                "VOLTY_NAV_CONNECT_TIMEOUT_MILLIS is outside the allowed range"
-            }
-            require(navigationRequestTimeoutMillis in MIN_NAVIGATION_TIMEOUT_MILLIS..MAX_NAVIGATION_TIMEOUT_MILLIS) {
-                "VOLTY_NAV_REQUEST_TIMEOUT_MILLIS is outside the allowed range"
-            }
+            } ?: false
 
             val config = AppConfig(
                 databaseUrl = env["VOLTY_DATABASE_URL"] ?: "jdbc:postgresql://localhost:5432/volty",
@@ -131,14 +90,15 @@ data class AppConfig(
                 voiceTokenTtlSeconds = env["VOLTY_VOICE_TOKEN_TTL_SECONDS"]?.toLongOrNull() ?: DEFAULT_VOICE_TOKEN_TTL_SECONDS,
                 publicIp = env["VOLTY_PUBLIC_IP"]?.trim()?.takeIf(String::isNotEmpty),
                 navigationProvider = navigationProvider,
-                graphHopperApiKey = graphHopperApiKey,
-                navigationProfileId = navigationProfileId,
-                navigationMotorcycleProfileId = navigationMotorcycleProfileId,
-                navigationBicycleProfileId = navigationBicycleProfileId,
-                navigationPedestrianProfileId = navigationPedestrianProfileId,
-                navigationConnectTimeoutMillis = navigationConnectTimeoutMillis,
-                navigationRequestTimeoutMillis = navigationRequestTimeoutMillis,
                 navigationEnabled = navigationEnabled,
+                offlineFilesRoot = env["VOLTY_OFFLINE_ROOT"]?.trim()?.takeIf(String::isNotEmpty),
+                offlineManagerUrl = env["VOLTY_OFFLINE_MANAGER_URL"]?.trim()?.takeIf(String::isNotEmpty)?.also { value ->
+                    val uri = java.net.URI(value)
+                    require(uri.scheme in setOf("http", "https") && uri.host != null &&
+                        uri.userInfo == null && uri.query == null && uri.fragment == null && uri.path in setOf("", "/")) {
+                        "VOLTY_OFFLINE_MANAGER_URL must be an HTTP(S) service origin"
+                    }
+                },
             )
 
             if (provider == "livekit") {
@@ -167,18 +127,11 @@ data class AppConfig(
             corsOrigins = setOf("https://volty.sodove.ru"),
             navigationProvider = "disabled",
             navigationEnabled = false,
-            navigationProfileId = "personal-mobility",
-            navigationMotorcycleProfileId = "personal-mobility-motorcycle",
-            navigationBicycleProfileId = "personal-mobility-bicycle",
-            navigationPedestrianProfileId = "personal-mobility-pedestrian",
         )
 
         const val DEFAULT_VOICE_TOKEN_TTL_SECONDS = 24L * 60 * 60
         const val MIN_VOICE_TOKEN_TTL_SECONDS = 30L
         const val MAX_VOICE_TOKEN_TTL_SECONDS = 24L * 60 * 60
-        const val DEFAULT_NAVIGATION_TIMEOUT_MILLIS = 5_000L
-        const val MIN_NAVIGATION_TIMEOUT_MILLIS = 1_000L
-        const val MAX_NAVIGATION_TIMEOUT_MILLIS = 10_000L
     }
 }
 

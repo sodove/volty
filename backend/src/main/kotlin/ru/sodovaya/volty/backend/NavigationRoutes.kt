@@ -69,10 +69,9 @@ internal suspend fun handleNavigationRoutes(call: ApplicationCall, dependencies:
     val routingProfile = NavigationRoutingProfile.parse(body.routingProfile)
         ?: throw invalidNavigation("routingProfile is invalid")
     if (body.alternativesLimit !in 1..3) throw invalidNavigation("alternativesLimit must be between 1 and 3")
-    if (!dependencies.config.navigationEnabled || dependencies.config.navigationProvider == "disabled") {
+    if (!dependencies.config.navigationEnabled) {
         throw navigationUnavailable()
     }
-    if (dependencies.config.navigationProfileIdFor(routingProfile).isNullOrEmpty()) throw navigationUnavailable()
     val ip = call.request.local.remoteHost
     val now = Instant.now().toEpochMilli()
     if (!dependencies.navigationRouteLimiter.allow(ip, now / 1_000L)) {

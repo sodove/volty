@@ -19,11 +19,8 @@ class DisabledNavigationProvider : NavigationProvider {
         ProviderResult.Unavailable
 }
 
-fun navigationProviderFor(config: AppConfig): NavigationProvider = when {
-    !config.navigationEnabled || config.navigationProvider == "disabled" -> DisabledNavigationProvider()
-    config.navigationProvider == "graphhopper" -> GraphHopperNavigationProvider(config)
-    else -> DisabledNavigationProvider()
-}
+fun navigationProviderFor(@Suppress("UNUSED_PARAMETER") config: AppConfig): NavigationProvider =
+    DisabledNavigationProvider()
 
 fun Route.installNavigationRoutes(dependencies: AppDependencies) {
     route("navigation") {

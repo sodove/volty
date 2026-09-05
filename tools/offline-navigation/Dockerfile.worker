@@ -1,0 +1,14 @@
+FROM python:3.12-slim@sha256:78387bc3881b8273120a12ebe6c1ab22b018ccc2c9adf565ae1ac9b536e184ea
+ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1
+RUN pip install --no-cache-dir 'cryptography==46.0.7' \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates docker.io coreutils \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --uid 10001 --create-home volty
+WORKDIR /app
+COPY build-package.sh expand-bbox.py normalize-valhalla-config.py build-manifest.py verify-package.py build-search.py config.json process.lua ./
+COPY production /app/production
+RUN mkdir -p /data/offline /data/staging /data/sources \
+    && chown -R volty:volty /app /data
+USER volty
+ENTRYPOINT ["python", "-m", "production.worker"]
