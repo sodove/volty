@@ -7,10 +7,18 @@ import io.ktor.server.application.call
 import io.ktor.server.response.header
 import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondOutputStream
+import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
 import io.ktor.server.routing.post
 import io.ktor.server.routing.route
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -18,6 +26,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
 import java.time.Instant
+import kotlin.math.abs
 
 private val offlineId = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
@@ -29,7 +38,7 @@ fun Route.installOfflineRegionRoutes(dependencies: AppDependencies) {
             val lat = call.request.queryParameters["lat"]?.toDoubleOrNull()
             val lon = call.request.queryParameters["lon"]?.toDoubleOrNull()
             require(lat != null && lat.isFinite() && lat in -90.0..90.0 && lon != null && lon.isFinite() && lon in -180.0..180.0) { "Valid lat and lon are required" }
-            call.offlineResponse(dependencies, "/resolve?lat=$lat&lon=$lon")
+            call.offlineResolve(dependencies, lat, lon)
         }
         post("/regions/{id}/ensure") {
             val key = "offline:${call.request.local.remoteHost}"
@@ -52,6 +61,64 @@ fun Route.installOfflineRegionRoutes(dependencies: AppDependencies) {
             call.offlineResponse(dependencies, "/regions/$id/$version/$artifact")
         }
     }
+}
+
+private data class StaticOfflineCandidate(
+    val regionId: String,
+    val releaseVersion: String,
+    val area: Double,
+)
+
+private suspend fun ApplicationCall.offlineResolve(dependencies: AppDependencies, latitude: Double, longitude: Double) {
+    val manager = dependencies.config.offlineManagerUrl
+    if (manager != null) {
+        offlineResponse(dependencies, "/resolve?lat=$latitude&lon=$longitude")
+        return
+    }
+
+    val root = dependencies.config.offlineFilesRoot?.let(::File)?.canonicalFile
+        ?: throw ApiException(HttpStatusCode.NotFound, "offline_unavailable", "Offline distribution is not configured")
+    val catalog = File(root, "catalog.json").canonicalFile
+    if (!catalog.toPath().startsWith(root.toPath()) || !catalog.isFile) {
+        throw ApiException(HttpStatusCode.NotFound, "offline_unavailable", "Offline distribution is not configured")
+    }
+    val document = try {
+        Json.parseToJsonElement(catalog.readText()).jsonObject
+    } catch (_: Exception) {
+        throw ApiException(HttpStatusCode.ServiceUnavailable, "offline_unavailable", "Offline catalog is unavailable")
+    }
+    val candidates = document["regions"]?.jsonArray.orEmpty().mapNotNull { entry ->
+        val region = entry.jsonObject["region"]?.jsonObject ?: return@mapNotNull null
+        val release = entry.jsonObject["latestRelease"]?.jsonObject ?: return@mapNotNull null
+        val regionId = region["regionId"]?.jsonPrimitive?.content ?: return@mapNotNull null
+        val releaseVersion = release["releaseVersion"]?.jsonPrimitive?.content ?: return@mapNotNull null
+        val bounds = region["bounds"]?.jsonObject ?: return@mapNotNull null
+        val south = bounds["south"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: return@mapNotNull null
+        val west = bounds["west"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: return@mapNotNull null
+        val north = bounds["north"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: return@mapNotNull null
+        val east = bounds["east"]?.jsonPrimitive?.content?.toDoubleOrNull() ?: return@mapNotNull null
+        if (south > latitude || latitude > north || west > longitude || longitude > east) return@mapNotNull null
+        StaticOfflineCandidate(regionId, releaseVersion, abs(north - south) * abs(east - west))
+    }
+    val selected = candidates.minWithOrNull(compareBy<StaticOfflineCandidate> { it.area }.thenBy { it.regionId })
+    val ready = selected?.let {
+        File(root, "regions/${it.regionId}/${it.releaseVersion}/.ready.json").isFile
+    } == true
+    val response = buildJsonObject {
+        put("status", when {
+            selected == null -> "unsupported"
+            ready -> "ready"
+            else -> "available"
+        })
+        if (selected == null) {
+            put("regionId", JsonNull)
+            put("releaseVersion", JsonNull)
+        } else {
+            put("regionId", selected.regionId)
+            put("releaseVersion", selected.releaseVersion)
+        }
+    }
+    respondText(response.toString(), ContentType.Application.Json)
 }
 
 private fun ApplicationCall.offlineParameter(name: String): String =
