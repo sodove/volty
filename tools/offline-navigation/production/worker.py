@@ -147,7 +147,7 @@ class Worker:
             if region is None:
                 continue
             bbox = [float(v) for v in region.bbox.split(",")] if region.bbox else manifest["coverage"]["bbox"]
-            entries.append({"regionId": region.id, "displayName": region.id, "bounds":
+            entries.append({"regionId": region.id, "displayName": region.display_name or region.id, "bounds":
                             bbox,
                             "manifest": str(manifest_path)})
         spec = self.config.staging_root / "catalog-spec.json"
