@@ -287,7 +287,8 @@ def enqueue_inventory(inventory: dict, queue_path: Path) -> list[str]:
         if key in existing:
             continue
         job_id = f"{region['regionId']}-{fingerprint[:12]}"
-        jobs.append({"id": job_id, "regionId": region["regionId"], "sourceUrl": region["sourceUrls"][0],
+        jobs.append({"id": job_id, "regionId": region["regionId"], "sourceId": region["sourceIds"][0],
+                     "sourceUrl": region["sourceUrls"][0],
                      "bbox": ",".join(str(value) for value in region["logicalBbox"]),
                      "fingerprint": fingerprint, "state": "queued"})
         existing.add(key)
@@ -314,7 +315,8 @@ def production_config_from_inventory(inventory: dict) -> dict:
             "keyId": "REPLACE_WITH_PROVISIONED_ED25519_KEY_ID", "minAppVersionCode": 31,
             "pollSeconds": 30, "maxDownloadBytes": 1 * 1024 * 1024 * 1024,
             "maxRuntimeSeconds": 86400, "buildScript": "/app/build-package.sh",
-            "regions": [{"id": item["regionId"], "sourceUrl": item["sourceUrls"][0],
+            "regions": [{"id": item["regionId"], "sourceId": item["sourceIds"][0],
+                         "sourceUrl": item["sourceUrls"][0],
                          "bbox": ",".join(str(value) for value in item["logicalBbox"])}
                         for item in regions if len(item.get("sourceUrls", [])) == 1]}
 

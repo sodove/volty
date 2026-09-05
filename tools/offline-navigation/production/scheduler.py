@@ -67,8 +67,9 @@ class Scheduler:
             if key in existing:
                 continue
             job_id = f"{region.id}-{period}-{fingerprint[:12]}"
-            jobs.append({"id": job_id, "regionId": region.id, "sourceUrl": region.source_url,
-                         "bbox": region.bbox, "period": period, "fingerprint": fingerprint,
+            jobs.append({"id": job_id, "regionId": region.id, "sourceId": region.source_id or region.id,
+                         "sourceUrl": region.source_url, "bbox": region.bbox, "period": period,
+                         "fingerprint": fingerprint,
                          "state": "queued"})
             existing.add(key)
             issued.append(job_id)

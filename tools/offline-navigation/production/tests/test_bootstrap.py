@@ -52,6 +52,7 @@ class BootstrapTest(unittest.TestCase):
             self.assertEqual([], second)
             state = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
             self.assertEqual(4, len(state["jobs"]))
+            self.assertEqual({"russia"}, {job["sourceId"] for job in state["jobs"]})
 
 
 if __name__ == "__main__":

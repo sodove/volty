@@ -55,9 +55,9 @@ python3 -m production.bootstrap enqueue \
   --production-config /home/sodovaya/volty/offline-production/production.json
 ```
 
-The scheduler writes durable queue entries to the staging volume. For each
-planned region, source metadata must be recorded at
-`<sourceRoot>/<regionId>.source.json`:
+The scheduler writes durable queue entries to the staging volume. The queue
+deduplicates the downloaded PBF by `sourceId`; record metadata once per
+distinct public extract at `<sourceRoot>/<sourceId>.source.json`:
 
 ```json
 {"osmSequence": 123, "osmTimestamp": "2026-09-05T00:00:00Z", "geometryHash": "sha256-of-the-accepted-source-geometry"}

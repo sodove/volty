@@ -7,6 +7,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import shutil
 import signal
 import subprocess
@@ -56,7 +57,10 @@ class Worker:
         job["state"] = "running"
         job["attempt"] = int(job.get("attempt", 0)) + 1
         self._write(state)
-        metadata_path = self.config.source_root / f"{job['regionId']}.source.json"
+        source_id = job.get("sourceId") or job["regionId"]
+        if not isinstance(source_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9._-]{0,63}", source_id):
+            return self._fail(state, job, "source_id_invalid")
+        metadata_path = self.config.source_root / f"{source_id}.source.json"
         if not metadata_path.is_file():
             return self._fail(state, job, "source_metadata_required")
         try:
@@ -76,10 +80,10 @@ class Worker:
         package = attempt / "package"
         try:
             attempt.mkdir(parents=True, exist_ok=False)
-            snapshot = fetch_snapshot(job["regionId"], job["sourceUrl"], self.config.source_root,
+            snapshot = fetch_snapshot(source_id, job["sourceUrl"], self.config.source_root,
                                       max_bytes=self.config.max_download_bytes, osm_timestamp=timestamp,
                                       replication_sequence=sequence, geometry_hash=geometry_hash)
-            args = ["bash", str(self.config.build_script), str(self.config.source_root / f"{job['regionId']}.osm.pbf"),
+            args = ["bash", str(self.config.build_script), str(self.config.source_root / f"{source_id}.osm.pbf"),
                     str(package), "--region-id", job["regionId"], "--release-version", job["id"],
                     "--min-app-version-code", str(self.config.min_app_version_code), "--osm-sequence", str(sequence),
                     "--osm-timestamp", timestamp, "--base-url", self.config.public_base_url]
