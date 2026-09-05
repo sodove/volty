@@ -88,6 +88,7 @@ services:
       - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:ro
       - ${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/home/sodovaya/volty/offline-production/secrets/signing-key.pem}:/run/secrets/volty-offline-signing-key.pem:ro
       - ${VOLTY_OFFLINE_REPO_HOST_DIR:-/home/sodovaya/volty}/tools/offline-navigation:${VOLTY_OFFLINE_REPO_HOST_DIR:-/home/sodovaya/volty}/tools/offline-navigation:ro
+      - ${VOLTY_DOCKER_CLI_HOST:-/usr/bin/docker}:/usr/local/bin/docker:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${VOLTY_DOCKER_GID:-999}"

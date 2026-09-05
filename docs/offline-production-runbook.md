@@ -23,8 +23,9 @@ never stored in the checkout.
 4. Set `VOLTY_OFFLINE_HOST_DIR`, staging/source paths, config/key paths, and
    normal application secrets in `.env`. Keep the signing key outside every
    data root. The worker requires a Docker socket group id in
-   `VOLTY_DOCKER_GID` when the host does not use the default `999`. Set the
-   worker UID/GID to the owner of the dedicated directories.
+   `VOLTY_DOCKER_GID` when the host does not use the default `999`, and
+   `VOLTY_DOCKER_CLI_HOST` if the host Docker CLI is not `/usr/bin/docker`.
+   Set the worker UID/GID to the owner of the dedicated directories.
 
 ## Start and operate
 
