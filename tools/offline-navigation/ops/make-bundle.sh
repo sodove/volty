@@ -12,6 +12,7 @@ mkdir -p "$(dirname -- "$OUTPUT")"
 tar -czf "$OUTPUT" -C "$ROOT" \
   --exclude='backend/.gradle' --exclude='backend/.kotlin' --exclude='backend/build' \
   --exclude='tools/offline-navigation/__pycache__' --exclude='tools/offline-navigation/production/tests' \
+  --exclude='tools/offline-navigation/work' \
   --exclude='*.pbf' --exclude='*.osm.pbf' --exclude='*.tar.gz' --exclude='*.pmtiles' \
   --exclude='.env' --exclude='*.jks' --exclude='*.keystore' --exclude='keystore.properties' \
   --exclude='*.apk' --exclude='*.aab' --exclude='.git' \
