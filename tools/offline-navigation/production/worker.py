@@ -117,6 +117,10 @@ class Worker:
             raise ValueError("immutable_release_conflict")
         temporary = destination.with_name("." + destination.name + ".publishing")
         shutil.copytree(package, temporary)
+        # The builder produces an unsigned manifest inside the package and the
+        # signer writes the verified manifest alongside the package. Publish
+        # only the signed manifest; never expose the unsigned one.
+        shutil.copy2(signed, temporary / "manifest.json")
         manifest_bytes = (temporary / "manifest.json").read_bytes()
         (temporary / ".ready.json").write_text(json.dumps({
             "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest()
