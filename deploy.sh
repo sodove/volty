@@ -279,7 +279,7 @@ ensure_non_secret_defaults() {
   local current_offline_host_dir
   current_offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
   if [ -z "$current_offline_host_dir" ]; then
-    write_env_value "VOLTY_OFFLINE_HOST_DIR" "/srv/volty/offline"
+    write_env_value "VOLTY_OFFLINE_HOST_DIR" "/home/sodovaya/volty/offline"
   fi
 
   local current_offline_root
@@ -295,7 +295,7 @@ ensure_offline_storage() {
   if [ -z "$offline_host_dir" ]; then
     offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
   fi
-  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  offline_host_dir="${offline_host_dir:-/home/sodovaya/volty/offline}"
   case "$offline_host_dir" in
     ""|"/"|"/srv"|"/var"|"/opt"|"/home"|"/root") fail "VOLTY_OFFLINE_HOST_DIR must name a dedicated child directory" ;;
     /*) ;;
@@ -320,7 +320,7 @@ configure_offline_manager() {
   fi
   COMPOSE_CMD+=(--profile offline)
   local offline_host_dir="${VOLTY_OFFLINE_HOST_DIR:-$(read_env_value VOLTY_OFFLINE_HOST_DIR)}"
-  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  offline_host_dir="${offline_host_dir:-/home/sodovaya/volty/offline}"
   # Dedicated cache directories only; the worker runs as UID/GID 10001.
   # ensure_offline_storage has already validated this absolute child directory.
   install -d -m 755 -o 10001 -g 10001 "$offline_host_dir" "$offline_host_dir/releases" "$offline_host_dir/.staging"
@@ -343,7 +343,7 @@ verify_local_http() {
   if [ -z "$offline_host_dir" ]; then
     offline_host_dir="$(read_env_value "VOLTY_OFFLINE_HOST_DIR")"
   fi
-  offline_host_dir="${offline_host_dir:-/srv/volty/offline}"
+  offline_host_dir="${offline_host_dir:-/home/sodovaya/volty/offline}"
   if [ -f "$offline_host_dir/catalog.json" ]; then
     curl --silent --show-error --fail --max-time 10 "http://127.0.0.1:${app_host_port}/offline/catalog.json" >/dev/null \
       || fail "Offline catalog is not reachable through Ktor"

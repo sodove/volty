@@ -57,9 +57,9 @@ the public Ktor API. The worker has no host port in Compose.
 | `VOLTY_OFFLINE_PUBLIC_BASE_URL` | Prefix signed into component URLs, usually `https://volty.sodove.ru/offline/regions` |
 | `VOLTY_OFFLINE_PUBLIC_KEY` | Base64 raw 32-byte Ed25519 public key, matching the Android trust anchor |
 | `VOLTY_OFFLINE_KEY_ID` | Expected catalog and manifest signing key ID |
-| `VOLTY_OFFLINE_HOST_DIR` | Dedicated persistent host store, default `/srv/volty/offline` |
+| `VOLTY_OFFLINE_HOST_DIR` | Dedicated persistent host store, default `/home/sodovaya/volty/offline` |
 | `VOLTY_OFFLINE_ROOT` | Legacy Ktor read-only store path; worker uses `/data/offline` in Compose |
-| `VOLTY_OFFLINE_INGEST_HOST_DIR` | Optional read-only pipeline ingress, default `/srv/volty/offline-ingest` |
+| `VOLTY_OFFLINE_INGEST_HOST_DIR` | Optional read-only pipeline ingress, default `/home/sodovaya/volty/offline-ingest` |
 | `VOLTY_OFFLINE_INGEST_ROOT` | Worker ingress path, `/ingest` in Compose |
 
 Signed public URLs are not rewritten. The upstream origin serves the same artifact

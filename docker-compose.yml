@@ -35,7 +35,7 @@ services:
       VOLTY_OFFLINE_MANAGER_URL: ${VOLTY_OFFLINE_MANAGER_URL:-}
       PORT: 8080
     volumes:
-      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/opt/volty/offline:ro
+      - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:/opt/volty/offline:ro
     depends_on:
       db:
         condition: service_healthy
@@ -62,8 +62,8 @@ services:
       VOLTY_OFFLINE_KEY_ID: ${VOLTY_OFFLINE_KEY_ID:-}
       VOLTY_OFFLINE_INGEST_ROOT: /ingest
     volumes:
-      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/data/offline
-      - ${VOLTY_OFFLINE_INGEST_HOST_DIR:-/srv/volty/offline-ingest}:/ingest:ro
+      - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:/data/offline
+      - ${VOLTY_OFFLINE_INGEST_HOST_DIR:-/home/sodovaya/volty/offline-ingest}:/ingest:ro
     # No host port: control endpoints are accessible only on the Compose network.
     security_opt:
       - no-new-privileges:true
@@ -79,11 +79,11 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - ${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}:/data/offline
-      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/srv/volty/offline-production/staging}:/data/staging
-      - ${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/srv/volty/offline-production/sources}:/data/sources
-      - ${VOLTY_OFFLINE_CONFIG_HOST:-/srv/volty/offline-production/production.json}:/etc/volty/production.json:ro
-      - ${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/srv/volty/offline-production/secrets/signing-key.pem}:/run/secrets/volty-offline-signing-key.pem:ro
+      - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:/data/offline
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:/data/staging
+      - ${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}:/data/sources
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:/etc/volty/production.json:ro
+      - ${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/home/sodovaya/volty/offline-production/secrets/signing-key.pem}:/run/secrets/volty-offline-signing-key.pem:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${VOLTY_DOCKER_GID:-999}"
@@ -102,8 +102,8 @@ services:
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/srv/volty/offline-production/staging}:/data/staging
-      - ${VOLTY_OFFLINE_CONFIG_HOST:-/srv/volty/offline-production/production.json}:/etc/volty/production.json:ro
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:/data/staging
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:/etc/volty/production.json:ro
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

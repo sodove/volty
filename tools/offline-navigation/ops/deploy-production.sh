@@ -15,11 +15,11 @@ set -a
 . "$ENV_FILE"
 set +a
 
-OFFLINE_ROOT="${VOLTY_OFFLINE_HOST_DIR:-/srv/volty/offline}"
-STAGING_ROOT="${VOLTY_OFFLINE_STAGING_HOST_DIR:-/srv/volty/offline-production/staging}"
-SOURCE_ROOT="${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/srv/volty/offline-production/sources}"
-CONFIG_PATH="${VOLTY_OFFLINE_CONFIG_HOST:-/srv/volty/offline-production/production.json}"
-KEY_PATH="${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/srv/volty/offline-production/secrets/signing-key.pem}"
+OFFLINE_ROOT="${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}"
+STAGING_ROOT="${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}"
+SOURCE_ROOT="${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}"
+CONFIG_PATH="${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}"
+KEY_PATH="${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/home/sodovaya/volty/offline-production/secrets/signing-key.pem}"
 
 for root in "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT"; do
   case "$root" in

@@ -55,7 +55,7 @@ This bundle schedules only the canonical regions explicitly present in
 an arbitrary foreign region from an Android request.
 
 ```sh
-bash tools/offline-navigation/ops/backup.sh /path/to/.env /srv/volty/backups
+bash tools/offline-navigation/ops/backup.sh /path/to/.env /home/sodovaya/volty/backups
 ```
 
 The backup is a local protected copy and is not disaster recovery until copied
