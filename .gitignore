@@ -46,3 +46,8 @@ __pycache__/
 
 # Offline bootstrap downloads and generated queue state.
 /tools/offline-navigation/work/
+
+# VPS-only offline data, queue state, and secret mounts.
+/offline/
+/offline-ingest/
+/offline-production/
