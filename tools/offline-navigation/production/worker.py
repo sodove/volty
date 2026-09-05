@@ -125,6 +125,13 @@ class Worker:
         (temporary / ".ready.json").write_text(json.dumps({
             "manifestSha256": hashlib.sha256(manifest_bytes).hexdigest()
         }) + "\n", encoding="utf-8")
+        # The worker deliberately runs as an unprivileged UID, while the app
+        # container uses a different UID. Public artifacts must therefore be
+        # traversable/readable by the app without making staging or secrets
+        # world-readable.
+        for path in temporary.rglob("*"):
+            path.chmod(0o755 if path.is_dir() else 0o644)
+        temporary.chmod(0o755)
         os.replace(temporary, destination)
         self._write_catalog()
 
