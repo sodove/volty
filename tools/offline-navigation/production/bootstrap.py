@@ -279,12 +279,22 @@ def enqueue_inventory(inventory: dict, queue_path: Path) -> list[str]:
         raise BootstrapError("queue file is malformed")
     existing = {(job.get("regionId"), job.get("fingerprint")) for job in jobs if isinstance(job, dict)}
     issued = []
+    changed = False
     for region in regions:
         if len(region.get("sourceIds", [])) != 1 or len(region.get("sourceUrls", [])) != 1:
             raise BootstrapError(f"{region.get('regionId')}: exactly one covering PBF source is required")
         fingerprint = _fingerprint(region)
         key = (region["regionId"], fingerprint)
         if key in existing:
+            for job in jobs:
+                if not isinstance(job, dict) or (job.get("regionId"), job.get("fingerprint")) != key:
+                    continue
+                source_id = region["sourceIds"][0]
+                if job.get("sourceId") is None:
+                    job["sourceId"] = source_id
+                    changed = True
+                elif job.get("sourceId") != source_id:
+                    raise BootstrapError(f"{region['regionId']}: existing job sourceId conflicts with inventory")
             continue
         job_id = f"{region['regionId']}-{fingerprint[:12]}"
         jobs.append({"id": job_id, "regionId": region["regionId"], "sourceId": region["sourceIds"][0],
@@ -293,7 +303,7 @@ def enqueue_inventory(inventory: dict, queue_path: Path) -> list[str]:
                      "fingerprint": fingerprint, "state": "queued"})
         existing.add(key)
         issued.append(job_id)
-    if issued:
+    if issued or changed:
         queue_path.parent.mkdir(parents=True, exist_ok=True)
         temporary = queue_path.with_suffix(queue_path.suffix + ".tmp")
         temporary.write_text(json.dumps(state, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")

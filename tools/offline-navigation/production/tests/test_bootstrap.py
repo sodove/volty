@@ -53,6 +53,12 @@ class BootstrapTest(unittest.TestCase):
             state = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
             self.assertEqual(4, len(state["jobs"]))
             self.assertEqual({"russia"}, {job["sourceId"] for job in state["jobs"]})
+            for job in state["jobs"]:
+                job.pop("sourceId")
+            (root / "jobs.json").write_text(json.dumps(state), encoding="utf-8")
+            self.assertEqual([], enqueue_inventory(inventory, root / "jobs.json"))
+            migrated = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
+            self.assertEqual({"russia"}, {job["sourceId"] for job in migrated["jobs"]})
 
 
 if __name__ == "__main__":
