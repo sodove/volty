@@ -75,15 +75,19 @@ services:
       context: ./tools/offline-navigation
       dockerfile: Dockerfile.worker
     restart: unless-stopped
-    command: ["--config", "/etc/volty/production.json", "--queue", "/data/staging/jobs.json"]
+    command: ["--config", "${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}", "--queue", "${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}/jobs.json"]
+    user: "${VOLTY_OFFLINE_RUN_UID:-1000}:${VOLTY_OFFLINE_RUN_GID:-1000}"
     environment:
       PYTHONUNBUFFERED: "1"
+      VOLTY_OFFLINE_BUILD_TEMP_ROOT: ${VOLTY_OFFLINE_BUILD_HOST_DIR:-/home/sodovaya/volty/offline-production/work}
     volumes:
-      - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:/data/offline
-      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:/data/staging
-      - ${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}:/data/sources
-      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:/etc/volty/production.json:ro
+      - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}
+      - ${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}:${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}
+      - ${VOLTY_OFFLINE_BUILD_HOST_DIR:-/home/sodovaya/volty/offline-production/work}:${VOLTY_OFFLINE_BUILD_HOST_DIR:-/home/sodovaya/volty/offline-production/work}
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:ro
       - ${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/home/sodovaya/volty/offline-production/secrets/signing-key.pem}:/run/secrets/volty-offline-signing-key.pem:ro
+      - ${VOLTY_OFFLINE_REPO_HOST_DIR:-/home/sodovaya/volty}/tools/offline-navigation:${VOLTY_OFFLINE_REPO_HOST_DIR:-/home/sodovaya/volty}/tools/offline-navigation:ro
       - /var/run/docker.sock:/var/run/docker.sock
     group_add:
       - "${VOLTY_DOCKER_GID:-999}"
@@ -98,12 +102,13 @@ services:
       dockerfile: Dockerfile.worker
     restart: unless-stopped
     entrypoint: ["python", "-m", "production.scheduler"]
-    command: ["--config", "/etc/volty/production.json", "--queue", "/data/staging/jobs.json"]
+    command: ["--config", "${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}", "--queue", "${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}/jobs.json"]
+    user: "${VOLTY_OFFLINE_RUN_UID:-1000}:${VOLTY_OFFLINE_RUN_GID:-1000}"
     environment:
       PYTHONUNBUFFERED: "1"
     volumes:
-      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:/data/staging
-      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:/etc/volty/production.json:ro
+      - ${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}:${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}
+      - ${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}:ro
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]

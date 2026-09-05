@@ -1,8 +1,9 @@
 # Volty offline production bundle
 
 This bundle is copyable to the existing VPS, but it does not invent a catalog,
-signing key, source metadata, or geographic coverage. It fails before starting
-the worker until those inputs are present.
+source metadata, or geographic coverage. It fails before starting the worker
+until those inputs are present. The signing key is an external secret and is
+never stored in the checkout.
 
 ## Install
 
@@ -12,16 +13,18 @@ the worker until those inputs are present.
 2. Create the three dedicated host directories from `.env`. Generate the
    inventory from the public Geofabrik index; do not manually enumerate the
    Russian regions or copy a generated queue from a laptop. The command is
-   shown below and produces the container-path `production.json` used by the
-   worker and scheduler. Replace its explicit key placeholder only after the
-   real Ed25519 key has been provisioned.
+   shown below and produces a host-visible `production.json` so the worker's
+   Docker-socket build can mount the same source, staging, and build paths as
+   the VPS host. Replace its explicit key placeholder only after the real
+   Ed25519 key has been provisioned.
 3. Place the existing Ed25519 signing key at
    `VOLTY_OFFLINE_SIGNING_KEY_HOST` with mode `0600` and verify its key id/public
    key matches the already installed client. Never rotate it silently.
 4. Set `VOLTY_OFFLINE_HOST_DIR`, staging/source paths, config/key paths, and
    normal application secrets in `.env`. Keep the signing key outside every
    data root. The worker requires a Docker socket group id in
-   `VOLTY_DOCKER_GID` when the host does not use the default `999`.
+   `VOLTY_DOCKER_GID` when the host does not use the default `999`. Set the
+   worker UID/GID to the owner of the dedicated directories.
 
 ## Start and operate
 
@@ -52,7 +55,8 @@ python3 -m production.bootstrap plan \
 python3 -m production.bootstrap enqueue \
   --inventory /home/sodovaya/volty/offline-production/inventory.json \
   --queue /home/sodovaya/volty/offline-production/staging/jobs.json \
-  --production-config /home/sodovaya/volty/offline-production/production.json
+  --production-config /home/sodovaya/volty/offline-production/production.json \
+  --runtime-root /home/sodovaya/volty
 ```
 
 The scheduler writes durable queue entries to the staging volume. The queue
@@ -64,10 +68,11 @@ distinct public extract at `<sourceRoot>/<sourceId>.source.json`:
 ```
 
 The worker downloads the configured public PBF with HTTPS/SSRF checks, runs the
-existing pinned build pipeline in a unique attempt directory, verifies every
-component, signs the manifest with the external key, and atomically publishes
-the release plus `catalog.json`. Missing metadata is a failed job, never a
-fabricated timestamp. A failed attempt never becomes ready.
+existing pinned build pipeline in a host-visible unique attempt directory,
+verifies every component, signs the manifest with the external key, and
+atomically publishes the release plus `catalog.json`. Missing metadata is a
+failed job, never a fabricated timestamp. A failed attempt never becomes
+ready.
 
 This bundle schedules only the canonical regions explicitly present in
 `production.json`; it does not claim schema-3 anonymous discovery or generate
@@ -84,12 +89,12 @@ DB and v3 publisher workflow once those components are deployed.
 
 ## Current blockers
 
-The checkout is synchronized on the VPS at `/home/sodovaya/volty` and the
-existing app health check passed. The server `.env` was preserved, but the
-offline profile is intentionally not started yet: it still needs a provisioned
-Ed25519 signing key/key id and one real source-metadata record per queued
-region. Those values must come from the trusted release/source process; this
-repository does not fabricate them.
+The checkout is synchronized on the VPS at `/home/sodovaya/volty`, the existing
+app health check passed, and the Ed25519 signing key is provisioned outside Git.
+The remaining operational gate is one real source-metadata record per queued
+source plus a successful regional build/publication. Those values must come
+from the trusted release/source process; this repository does not fabricate
+them.
 
 Full Russia package builds, four foreign cold builds, schema-3 discovery,
 native offline APK smoke, restore, and rollback remain unverified. Do not call

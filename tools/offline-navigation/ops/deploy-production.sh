@@ -18,10 +18,11 @@ set +a
 OFFLINE_ROOT="${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}"
 STAGING_ROOT="${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}"
 SOURCE_ROOT="${VOLTY_OFFLINE_SOURCE_HOST_DIR:-/home/sodovaya/volty/offline-production/sources}"
+BUILD_ROOT="${VOLTY_OFFLINE_BUILD_HOST_DIR:-/home/sodovaya/volty/offline-production/work}"
 CONFIG_PATH="${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}"
 KEY_PATH="${VOLTY_OFFLINE_SIGNING_KEY_HOST:-/home/sodovaya/volty/offline-production/secrets/signing-key.pem}"
 
-for root in "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT"; do
+for root in "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT" "$BUILD_ROOT"; do
   case "$root" in
     /|/srv|/var|/opt|/home|/root) fail 'offline roots must be dedicated child directories' ;;
     /*) ;;
@@ -33,7 +34,7 @@ done
 mode="$(stat -c '%a' "$KEY_PATH" 2>/dev/null || stat -f '%Lp' "$KEY_PATH")"
 case "$mode" in 600|400|640|440) ;; *) fail "signing key must be mode 0600/0400/0640/0440" ;; esac
 
-install -d -m 755 "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT"
+install -d -m 755 "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT" "$BUILD_ROOT"
 compose=(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" --profile offline)
 "${compose[@]}" config --quiet
 "${compose[@]}" build app offline-worker offline-scheduler

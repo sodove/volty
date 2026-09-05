@@ -311,7 +311,7 @@ def enqueue_inventory(inventory: dict, queue_path: Path) -> list[str]:
     return issued
 
 
-def production_config_from_inventory(inventory: dict) -> dict:
+def production_config_from_inventory(inventory: dict, runtime_root: str | None = None) -> dict:
     regions = inventory.get("regions")
     if not isinstance(regions, list) or not regions:
         raise BootstrapError("inventory has no regions")
@@ -319,12 +319,24 @@ def production_config_from_inventory(inventory: dict) -> dict:
                if len(item.get("sourceIds", [])) != 1 or len(item.get("sourceUrls", [])) != 1]
     if invalid:
         raise BootstrapError("regions need one covering PBF source: " + ", ".join(invalid[:5]))
-    return {"publicRoot": "/data/offline", "stagingRoot": "/data/staging", "sourceRoot": "/data/sources",
-            "signingKey": "/run/secrets/volty-offline-signing-key.pem",
+    if runtime_root:
+        root = Path(runtime_root).resolve()
+        public_root = root / "offline"
+        staging_root = root / "offline-production" / "staging"
+        source_root = root / "offline-production" / "sources"
+        build_script = root / "tools" / "offline-navigation" / "build-package.sh"
+    else:
+        public_root = Path("/data/offline")
+        staging_root = Path("/data/staging")
+        source_root = Path("/data/sources")
+        build_script = Path("/app/build-package.sh")
+    signing_key = Path("/run/secrets/volty-offline-signing-key.pem")
+    return {"publicRoot": str(public_root), "stagingRoot": str(staging_root), "sourceRoot": str(source_root),
+            "signingKey": str(signing_key),
             "publicBaseUrl": "https://volty.sodove.ru/offline/regions",
             "keyId": "REPLACE_WITH_PROVISIONED_ED25519_KEY_ID", "minAppVersionCode": 31,
-            "pollSeconds": 30, "maxDownloadBytes": 1 * 1024 * 1024 * 1024,
-            "maxRuntimeSeconds": 86400, "buildScript": "/app/build-package.sh",
+            "pollSeconds": 30, "maxDownloadBytes": 8 * 1024 * 1024 * 1024,
+            "maxRuntimeSeconds": 86400, "buildScript": str(build_script),
             "regions": [{"id": item["regionId"], "sourceId": item["sourceIds"][0],
                          "sourceUrl": item["sourceUrls"][0],
                          "bbox": ",".join(str(value) for value in item["logicalBbox"])}
@@ -343,6 +355,7 @@ def main() -> int:
     enqueue.add_argument("--inventory", type=Path, required=True)
     enqueue.add_argument("--queue", type=Path, required=True)
     enqueue.add_argument("--production-config", type=Path)
+    enqueue.add_argument("--runtime-root", help="host-visible checkout root for Docker-in-Docker builds")
     status = subparsers.add_parser("status")
     status.add_argument("--inventory", type=Path, required=True)
     status.add_argument("--queue", type=Path)
@@ -364,7 +377,7 @@ def main() -> int:
         issued = enqueue_inventory(inventory, args.queue)
         if args.production_config:
             args.production_config.parent.mkdir(parents=True, exist_ok=True)
-            args.production_config.write_text(json.dumps(production_config_from_inventory(inventory),
+            args.production_config.write_text(json.dumps(production_config_from_inventory(inventory, args.runtime_root),
                                                          sort_keys=True, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         print(f"enqueued {len(issued)} regions")
         return 0

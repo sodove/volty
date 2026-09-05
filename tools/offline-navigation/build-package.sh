@@ -62,7 +62,14 @@ docker build -t "$TOOLS_IMAGE" "$SCRIPT_DIR"
 
 PARENT=$(dirname "$INPUT")
 INPUT_NAME=$(basename "$INPUT")
-STAGING=$(mktemp -d)
+BUILD_TEMP_ROOT="${VOLTY_OFFLINE_BUILD_TEMP_ROOT:-}"
+if [[ -n "$BUILD_TEMP_ROOT" ]]; then
+  [[ "$BUILD_TEMP_ROOT" = /* ]] || { echo "Build temp root must be absolute: $BUILD_TEMP_ROOT" >&2; exit 2; }
+  mkdir -p "$BUILD_TEMP_ROOT"
+  STAGING=$(mktemp -d "$BUILD_TEMP_ROOT/attempt.XXXXXX")
+else
+  STAGING=$(mktemp -d)
+fi
 cleanup() { rm -rf "$STAGING"; }
 trap cleanup EXIT
 mkdir -p "$STAGING/installed/routing/tiles" "$STAGING/installed/search" "$STAGING/installed/map" \
