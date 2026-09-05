@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.backend
 
 import io.ktor.client.request.get
+import io.ktor.client.request.header
 import io.ktor.client.statement.bodyAsText
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.testing.testApplication
@@ -42,6 +43,7 @@ class OfflineFilesRouteTest {
             val release = root.resolve("regions/ekb/v1")
             Files.createDirectories(release)
             Files.writeString(release.resolve(".ready.json"), "{}")
+            Files.writeString(release.resolve("manifest.json"), "abcdef")
             Files.writeString(
                 root.resolve("catalog.json"),
                 """
@@ -63,6 +65,13 @@ class OfflineFilesRouteTest {
             assertEquals(HttpStatusCode.OK, response.status)
             assertTrue(response.bodyAsText().contains("\"status\":\"ready\""))
             assertTrue(response.bodyAsText().contains("\"regionId\":\"ekb\""))
+
+            val ranged = client.get("/offline/regions/ekb/v1/manifest.json") {
+                header("Range", "bytes=1-3")
+            }
+            assertEquals(HttpStatusCode.PartialContent, ranged.status)
+            assertEquals("bytes 1-3/6", ranged.headers["Content-Range"])
+            assertEquals("bcd", ranged.bodyAsText())
         } finally {
             Files.walk(root).sorted(Comparator.reverseOrder()).forEach(Files::deleteIfExists)
         }

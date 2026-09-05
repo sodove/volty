@@ -5,7 +5,6 @@ import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
 import io.ktor.server.response.header
-import io.ktor.server.response.respondFile
 import io.ktor.server.response.respondOutputStream
 import io.ktor.server.response.respondText
 import io.ktor.server.routing.Route
@@ -22,6 +21,7 @@ import kotlinx.serialization.json.put
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.io.FileInputStream
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URI
@@ -138,7 +138,7 @@ private suspend fun ApplicationCall.offlineResponse(dependencies: AppDependencie
         if (method == "GET" && '?' !in path && root != null && file != null &&
             file.toPath().startsWith(root.toPath()) && file.isFile) {
             response.header("Cache-Control", if (path == "/catalog.json") "no-cache" else "public, max-age=86400, immutable")
-            respondFile(file)
+            respondStaticFile(file, path.endsWith("manifest.json"))
             return
         }
         throw ApiException(HttpStatusCode.NotFound, "offline_unavailable", "Offline distribution is not configured")
@@ -170,5 +170,69 @@ private suspend fun ApplicationCall.offlineResponse(dependencies: AppDependencie
     } catch (failure: Throwable) {
         connection.disconnect()
         throw failure
+    }
+}
+
+private data class StaticByteRange(val start: Long, val end: Long)
+
+private fun parseStaticRange(header: String?, length: Long): StaticByteRange? {
+    if (length <= 0L) return null
+    if (header == null) return StaticByteRange(0L, length - 1L)
+    val match = Regex("bytes=(\\d*)-(\\d*)").matchEntire(header.trim()) ?: return null
+    val startText = match.groupValues[1]
+    val endText = match.groupValues[2]
+    if (startText.isEmpty() && endText.isEmpty()) return null
+    return if (startText.isEmpty()) {
+        val suffixLength = endText.toLongOrNull() ?: return null
+        if (suffixLength <= 0L) return null
+        StaticByteRange((length - suffixLength).coerceAtLeast(0L), length - 1L)
+    } else {
+        val start = startText.toLongOrNull() ?: return null
+        if (start >= length) return null
+        val end = endText.toLongOrNull()?.coerceAtMost(length - 1L) ?: (length - 1L)
+        if (start > end) return null
+        StaticByteRange(start, end)
+    }
+}
+
+private suspend fun ApplicationCall.respondStaticFile(file: File, json: Boolean) {
+    val length = file.length()
+    val range = parseStaticRange(request.headers["Range"], length)
+    if (range == null) {
+        response.header("Content-Range", "bytes */$length")
+        respondOutputStream(ContentType.Application.OctetStream, HttpStatusCode.RequestedRangeNotSatisfiable, contentLength = 0L) {}
+        return
+    }
+    val partial = request.headers["Range"] != null
+    val contentLength = range.end - range.start + 1L
+    response.header("Accept-Ranges", "bytes")
+    if (partial) response.header("Content-Range", "bytes ${range.start}-${range.end}/$length")
+    val contentType = if (json) ContentType.Application.Json else ContentType.Application.OctetStream
+    respondOutputStream(
+        contentType,
+        if (partial) HttpStatusCode.PartialContent else HttpStatusCode.OK,
+        contentLength = contentLength,
+    ) {
+        FileInputStream(file).use { input ->
+            var skipped = 0L
+            while (skipped < range.start) {
+                val count = input.skip(range.start - skipped)
+                if (count > 0L) {
+                    skipped += count
+                } else if (input.read() >= 0) {
+                    skipped++
+                } else {
+                    return@respondOutputStream
+                }
+            }
+            val buffer = ByteArray(64 * 1024)
+            var remaining = contentLength
+            while (remaining > 0L) {
+                val read = input.read(buffer, 0, minOf(buffer.size.toLong(), remaining).toInt())
+                if (read < 0) break
+                write(buffer, 0, read)
+                remaining -= read
+            }
+        }
     }
 }
