@@ -43,3 +43,6 @@ __pycache__/
 
 # Kotlin compiler daemon error dumps — build noise, never source.
 .kotlin/
+
+# Offline bootstrap downloads and generated queue state.
+/tools/offline-navigation/work/

@@ -9,10 +9,12 @@ the worker until those inputs are present.
 1. Copy the repository files (including `tools/offline-navigation`) to the
    existing deployment checkout. Do not copy `.env`, private keys, PBF files,
    packages, APKs, Gradle/build directories, or generated emulator captures.
-2. Copy `tools/offline-navigation/production/config.example.json` to the host
-   path in `VOLTY_OFFLINE_CONFIG_HOST`, edit it with the real canonical regions,
-   HTTPS public source URLs, measured bbox values, existing `keyId`, and the
-   installed app version. Keep the container paths in that JSON unchanged.
+2. Create the three dedicated host directories from `.env`. Generate the
+   inventory from the public Geofabrik index; do not manually enumerate the
+   Russian regions or copy a generated queue from a laptop. The command is
+   shown below and produces the container-path `production.json` used by the
+   worker and scheduler. Replace its explicit key placeholder only after the
+   real Ed25519 key has been provisioned.
 3. Place the existing Ed25519 signing key at
    `VOLTY_OFFLINE_SIGNING_KEY_HOST` with mode `0600` and verify its key id/public
    key matches the already installed client. Never rotate it silently.
@@ -37,8 +39,25 @@ the two builder services, and updates only `offline-worker`, `offline-scheduler`
 then `app`. It does not use `--remove-orphans` and does not
 restart the database or voice service.
 
+The bootstrap creates the region inventory from the public Geofabrik index; do
+not hand-write thousands of regions. On the VPS, run it from the checkout
+before enabling the offline profile (it needs only Python and HTTPS):
+
+```sh
+cd /home/sodovaya/volty/tools/offline-navigation
+install -d -m 755 /home/sodovaya/volty/offline-production/{staging,sources,secrets}
+python3 -m production.bootstrap plan \
+  --source-id russia \
+  --output /home/sodovaya/volty/offline-production/inventory.json
+python3 -m production.bootstrap enqueue \
+  --inventory /home/sodovaya/volty/offline-production/inventory.json \
+  --queue /home/sodovaya/volty/offline-production/staging/jobs.json \
+  --production-config /home/sodovaya/volty/offline-production/production.json
+```
+
 The scheduler writes durable queue entries to the staging volume. For each
-region, place source metadata at `<sourceRoot>/<regionId>.source.json`:
+planned region, source metadata must be recorded at
+`<sourceRoot>/<regionId>.source.json`:
 
 ```json
 {"osmSequence": 123, "osmTimestamp": "2026-09-05T00:00:00Z", "geometryHash": "sha256-of-the-accepted-source-geometry"}
@@ -65,8 +84,13 @@ DB and v3 publisher workflow once those components are deployed.
 
 ## Current blockers
 
-This bundle has not been deployed to the VPS in this session: SSH returned
-`Permission denied (publickey,password)`. Full Russia coverage, real source
-snapshots, four foreign cold builds, native offline APK smoke, restore, and
-rollback therefore remain unverified. Do not call the system production-ready
-until those gates have fresh evidence.
+The checkout is synchronized on the VPS at `/home/sodovaya/volty` and the
+existing app health check passed. The server `.env` was preserved, but the
+offline profile is intentionally not started yet: it still needs a provisioned
+Ed25519 signing key/key id and one real source-metadata record per queued
+region. Those values must come from the trusted release/source process; this
+repository does not fabricate them.
+
+Full Russia package builds, four foreign cold builds, schema-3 discovery,
+native offline APK smoke, restore, and rollback remain unverified. Do not call
+the system production-ready until those gates have fresh evidence.
