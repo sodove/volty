@@ -374,7 +374,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 states = state.offlineRegions,
                 query = offlineRegionQuery,
             )
-            if (state.offlineRegions.isEmpty()) {
+            if (state.offlineRegions.isEmpty() && !state.offlineCatalogError) {
                 Text(
                     stringResource(Res.string.settings_offline_not_configured),
                     fontSize = 12.sp,

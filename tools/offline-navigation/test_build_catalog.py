@@ -226,10 +226,63 @@ class BuildCatalogTest(unittest.TestCase):
             signed = MODULE.sign_catalog(catalog, key, "release-key")
             android_payload = deepcopy(signed)
             android_payload.pop("catalogSignature", None)
-            release = android_payload["regions"][0]["latestRelease"]
-            release["coverage"].pop("polygonUrl", None)
-            release["components"]["search"].pop("compression", None)
-            release["components"]["map"].pop("compression", None)
+            for entry in android_payload["regions"]:
+                release = entry.get("latestRelease")
+                if release is None:
+                    entry.pop("latestRelease", None)
+                    continue
+                release["coverage"].pop("polygonUrl", None)
+                release["components"]["search"].pop("compression", None)
+                release["components"]["map"].pop("compression", None)
+            expected_payload = json.dumps(
+                android_payload,
+                ensure_ascii=False,
+                separators=(",", ":"),
+                allow_nan=False,
+            ).encode("utf-8")
+
+            key.public_key().verify(
+                base64.b64decode(signed["catalogSignature"]["value"]),
+                expected_payload,
+            )
+
+    def test_catalog_signature_matches_android_nullable_defaults_for_on_demand_entries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, key = self.signed_manifest()
+            spec_path = root / "regions.json"
+            spec_path.write_text(json.dumps({
+                "regions": [
+                    {
+                        "regionId": "ekb-agglomeration",
+                        "displayName": "Yekaterinburg",
+                        "bounds": [59.10, 56.00, 61.90, 57.55],
+                        "manifest": str(root / "manifest.json"),
+                    },
+                    {
+                        "regionId": "g1-146-241",
+                        "displayName": "Регион 146–241",
+                        "bounds": [60.0, 56.8, 61.0, 57.2],
+                        "onDemand": {"enabled": True},
+                    },
+                ],
+            }, ensure_ascii=False), encoding="utf-8")
+            (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            catalog = MODULE.build_catalog(
+                spec_path,
+                generated_at="2026-09-03T00:00:00Z",
+                public_key=key.public_key(),
+                expected_key_id="release-key",
+                current_app_version_code=28,
+            )
+            signed = MODULE.sign_catalog(catalog, key, "release-key")
+            android_payload = deepcopy(signed)
+            android_payload.pop("catalogSignature", None)
+            android_payload["regions"][0]["latestRelease"]["coverage"].pop("polygonUrl", None)
+            android_payload["regions"][0]["latestRelease"]["components"]["search"].pop("compression", None)
+            android_payload["regions"][0]["latestRelease"]["components"]["map"].pop("compression", None)
+            android_payload["regions"][1].pop("latestRelease", None)
             expected_payload = json.dumps(
                 android_payload,
                 ensure_ascii=False,

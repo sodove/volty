@@ -143,6 +143,27 @@ class OfflineRegionCatalogTest {
     }
 
     @Test
+    fun catalog_signing_payload_omits_default_null_release_for_on_demand_region() {
+        val catalog = OfflineRegionCatalog(
+            schemaVersion = 2,
+            generatedAt = "2026-09-03T00:00:00Z",
+            regions = listOf(
+                OfflineRegionCatalogEntry(
+                    region = region("g1-146-241"),
+                    latestRelease = null,
+                    onDemand = OfflineRegionOnDemand(enabled = true),
+                ),
+            ),
+            signature = catalogSignature(),
+        )
+
+        val payload = OfflineRegionCatalogCodec.signingPayload(catalog)
+
+        assertFalse(payload.contains("\"latestRelease\""))
+        assertFalse(payload.contains("\"onDemand\":{\"enabled\":false}"))
+    }
+
+    @Test
     fun signature_policy_rejects_unverified_latest_releases_before_download() {
         val catalog = OfflineRegionCatalog(
             schemaVersion = 2,

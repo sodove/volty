@@ -98,6 +98,10 @@ def canonical_catalog_payload(catalog: dict[str, Any]) -> bytes:
             release = entry.get("latestRelease")
             if isinstance(release, dict):
                 entry["latestRelease"] = without_android_nullable_defaults(release)
+            elif release is None:
+                # latestRelease has a Kotlin default of null and is omitted
+                # by OfflineRegionCatalogCodec when encodeDefaults is false.
+                entry.pop("latestRelease", None)
     return json.dumps(
         unsigned,
         ensure_ascii=False,

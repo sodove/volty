@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -371,6 +372,12 @@ class AndroidOfflineRegionPackageRepository(
             )
             if (unverified.isNotEmpty()) throw IOException("Catalog contains unverified releases")
             loaded
+        } catch (failure: Exception) {
+            // Keep the Settings error intentionally generic, but leave enough
+            // local diagnostics to distinguish transport, parsing, policy and
+            // signature failures when a release cannot refresh its catalog.
+            Log.e(TAG, "Offline catalog refresh failed: ${failure.message ?: failure::class.simpleName}", failure)
+            throw failure
         } finally {
             connection.disconnect()
         }
@@ -558,6 +565,7 @@ class AndroidOfflineRegionPackageRepository(
         this == OfflineRegionPackageStatus.VERIFYING || this == OfflineRegionPackageStatus.INSTALLING
 
     private companion object {
+        const val TAG = "VoltyOffline"
         const val MAX_CATALOG_BYTES = 4L * 1024L * 1024L
         const val COPY_BUFFER_SIZE = 16 * 1024
         const val CATALOG_CONNECT_TIMEOUT_MILLIS = 10_000
