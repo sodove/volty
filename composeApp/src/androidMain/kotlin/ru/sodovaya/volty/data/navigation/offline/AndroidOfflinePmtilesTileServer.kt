@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.navigation.offline
 
 import android.content.res.AssetManager
+import android.util.Log
 import java.io.BufferedReader
 import java.io.ByteArrayInputStream
 import java.io.BufferedOutputStream
@@ -40,7 +41,10 @@ class AndroidOfflinePmtilesTileServer(
     fun sourceUrl(file: File): String = synchronized(lock) {
         val canonicalPath = file.canonicalPath
         if (server == null) {
-            server = ServerSocket(0, 8, InetAddress.getLoopbackAddress()).also { socket ->
+            // MapLibre receives an IPv4 URL below. Android emulators can
+            // return the IPv6 loopback (::1) from getLoopbackAddress(),
+            // which leaves 127.0.0.1 refusing every tile request.
+            server = ServerSocket(0, 8, InetAddress.getByName("127.0.0.1")).also { socket ->
                 executor.execute { acceptLoop(socket) }
             }
         }
@@ -117,7 +121,14 @@ class AndroidOfflinePmtilesTileServer(
                 HttpResponse(404, "", ByteArray(0), false)
             }
         }
-        respond(socket, response.code, response.contentType, response.body, response.gzip)
+        try {
+            respond(socket, response.code, response.contentType, response.body, response.gzip)
+        } catch (error: IOException) {
+            // MapLibre routinely cancels a tile request after a camera move.
+            // The peer closes the loopback socket while the response is being
+            // flushed; never let that expected race terminate the process.
+            Log.w(TAG, "Offline tile response was cancelled", error)
+        }
     }
 
     private fun serveGlyph(encodedFontStack: String, range: String): HttpResponse {
@@ -174,6 +185,7 @@ class AndroidOfflinePmtilesTileServer(
     )
 
     private companion object {
+        const val TAG = "VoltyOfflinePmtiles"
         const val REQUEST_TIMEOUT_MILLIS = 5_000
         const val MAX_REQUEST_LINE = 8_192
         const val MAX_GLYPH_BYTES = 4 * 1024 * 1024

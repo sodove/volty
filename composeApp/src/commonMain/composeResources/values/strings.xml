@@ -726,6 +726,10 @@
     <string name="settings_offline_refreshing">Refreshing…</string>
     <string name="settings_offline_catalog_failed">Could not refresh regions; try again.</string>
     <string name="settings_offline_not_configured">Regional downloads are not configured in this build.</string>
+    <string name="settings_offline_add_region">Add region</string>
+    <string name="settings_offline_prepare">Prepare offline</string>
+    <string name="settings_offline_preparing">Preparing region…</string>
+    <string name="settings_offline_no_region_match">Region not found</string>
     <string name="settings_offline_size_line">%1$s download · %2$s on device</string>
     <string name="settings_offline_download">Download</string>
     <string name="settings_offline_download_mobile">Download over mobile data</string>
@@ -740,6 +744,7 @@
     <string name="settings_offline_status_waiting_network">Waiting for a connection</string>
     <string name="settings_offline_status_metered">Waiting for mobile-data approval</string>
     <string name="settings_offline_status_queued">Queued for download</string>
+    <string name="settings_offline_status_preparing">Preparing regional data</string>
     <string name="settings_offline_status_installing">Installing…</string>
     <string name="settings_offline_status_deleting">Removing…</string>
     <string name="settings_offline_status_failed">Download failed; try again</string>

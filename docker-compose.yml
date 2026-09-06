@@ -61,6 +61,7 @@ services:
       VOLTY_OFFLINE_PUBLIC_KEY: ${VOLTY_OFFLINE_PUBLIC_KEY:-}
       VOLTY_OFFLINE_KEY_ID: ${VOLTY_OFFLINE_KEY_ID:-}
       VOLTY_OFFLINE_INGEST_ROOT: /ingest
+      VOLTY_OFFLINE_BUILDER_URL: ${VOLTY_OFFLINE_BUILDER_URL:-http://offline-worker:8092}
     volumes:
       - ${VOLTY_OFFLINE_HOST_DIR:-/home/sodovaya/volty/offline}:/data/offline
       - ${VOLTY_OFFLINE_INGEST_HOST_DIR:-/home/sodovaya/volty/offline-ingest}:/ingest:ro
@@ -75,7 +76,7 @@ services:
       context: ./tools/offline-navigation
       dockerfile: Dockerfile.worker
     restart: unless-stopped
-    command: ["--config", "${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}", "--queue", "${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}/jobs.json"]
+    command: ["--config", "${VOLTY_OFFLINE_CONFIG_HOST:-/home/sodovaya/volty/offline-production/production.json}", "--queue", "${VOLTY_OFFLINE_STAGING_HOST_DIR:-/home/sodovaya/volty/offline-production/staging}/jobs.json", "--control-host", "0.0.0.0", "--control-port", "8092", "--on-demand-only"]
     user: "${VOLTY_OFFLINE_RUN_UID:-1000}:${VOLTY_OFFLINE_RUN_GID:-1000}"
     environment:
       PYTHONUNBUFFERED: "1"

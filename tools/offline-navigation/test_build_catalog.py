@@ -180,6 +180,28 @@ class BuildCatalogTest(unittest.TestCase):
             key.public_key().verify(signature, MODULE.canonical_catalog_payload(signed))
             self.assertEqual("release-key", signed["catalogSignature"]["keyId"])
 
+    def test_allows_a_signed_catalog_entry_without_a_release_when_on_demand(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spec_path = root / "regions.json"
+            spec_path.write_text(json.dumps({
+                "regions": [{
+                    "regionId": "g1-146-241",
+                    "displayName": "Регион 146–241",
+                    "bounds": [60.0, 56.0, 61.0, 57.0],
+                    "onDemand": {"enabled": True},
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+
+            catalog = MODULE.build_catalog(
+                spec_path,
+                generated_at="2026-09-03T00:00:00Z",
+            )
+
+            entry = catalog["regions"][0]
+            self.assertIsNone(entry["latestRelease"])
+            self.assertEqual({"enabled": True}, entry["onDemand"])
+
     def test_catalog_signature_matches_android_nullable_defaults(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

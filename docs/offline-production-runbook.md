@@ -1,9 +1,10 @@
 # Volty offline production bundle
 
-This bundle is copyable to the existing VPS, but it does not invent a catalog,
-source metadata, or geographic coverage. It fails before starting the worker
-until those inputs are present. The signing key is an external secret and is
-never stored in the checkout.
+This bundle is copyable to the existing VPS, but it does not invent source
+metadata or geographic coverage. The worker can publish bounded on-demand
+catalog entries without metadata, while a requested build stays unavailable
+until its trusted source metadata is provisioned. The signing key is an
+external secret and is never stored in the checkout.
 
 ## Install
 
@@ -29,9 +30,8 @@ never stored in the checkout.
 
 ## Start and operate
 
-From the checkout root (leave `VOLTY_OFFLINE_MANAGER_URL` empty for this local
-publisher/static-catalog mode; the optional legacy relay service is a separate
-deployment mode):
+From the checkout root, set `VOLTY_OFFLINE_MANAGER_URL=http://offline:8091`
+and run the on-demand deployment:
 
 ```sh
 bash tools/offline-navigation/ops/deploy-production.sh /path/to/.env
@@ -39,9 +39,18 @@ bash tools/offline-navigation/ops/status.sh /path/to/.env
 ```
 
 The deploy script validates Compose without printing resolved secrets, builds
-the two builder services, and updates only `offline-worker`, `offline-scheduler`,
-then `app`. It does not use `--remove-orphans` and does not
-restart the database or voice service.
+the offline delivery and worker services, and updates only the package service,
+on-demand worker, and application. It does not use `--remove-orphans`, does
+not start the scheduler, and does not restart the database or voice service.
+
+The worker exposes its build-control endpoint only on the internal Compose
+network at `http://offline-worker:8092`. It starts in `--on-demand-only` mode
+and ignores legacy queued jobs left by the old publisher. The package service
+uses it when a catalog entry has `onDemand.enabled=true` and no
+`latestRelease`. The endpoint accepts only a configured region id; source URLs,
+paths, timestamps, and keys never come from the phone. The scheduler remains a
+separate service and is intentionally not started by the manual deployment
+command.
 
 The bootstrap creates the region inventory from the public Geofabrik index; do
 not hand-write thousands of regions. On the VPS, run it from the checkout

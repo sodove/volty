@@ -91,6 +91,31 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual("failed", jobs[0]["state"])
             self.assertEqual("source_metadata_required", jobs[0]["reason"])
 
+    def test_on_demand_only_worker_leaves_legacy_jobs_queued(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "publicRoot": str(root / "public"),
+                "stagingRoot": str(root / "staging"),
+                "sourceRoot": str(root / "sources"),
+                "signingKey": str(root / "keys" / "signing-key.pem"),
+                "regions": [{"id": "region", "sourceId": "russia",
+                             "sourceUrl": "https://download.example/region.pbf"}],
+            }), encoding="utf-8")
+            config = load_config(config_path)
+            queue = root / "queue.json"
+            queue.write_text(json.dumps({"jobs": [
+                {"id": "legacy", "regionId": "region", "state": "queued"},
+                {"id": "requested", "regionId": "region", "onDemand": True, "state": "queued"},
+            ]}), encoding="utf-8")
+
+            self.assertFalse(Worker(config, queue).run_once(on_demand_only=True))
+            jobs = json.loads(queue.read_text(encoding="utf-8"))["jobs"]
+            self.assertEqual("queued", jobs[0]["state"])
+            self.assertEqual("failed", jobs[1]["state"])
+            self.assertEqual("source_metadata_required", jobs[1]["reason"])
+
 
 if __name__ == "__main__":
     unittest.main()

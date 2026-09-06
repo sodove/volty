@@ -42,6 +42,7 @@ class OfflineRegionModelsTest {
         assertEquals(
             listOf(
                 OfflineRegionPackageStatus.NOT_INSTALLED,
+                OfflineRegionPackageStatus.PREPARING,
                 OfflineRegionPackageStatus.QUEUED,
                 OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
                 OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL,

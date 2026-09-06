@@ -40,6 +40,7 @@ def https_url(value):
 
 class Config:
     def __init__(self, *, root, catalog_url, artifact_base_url, public_base_url, public_key, key_id,
+                 builder_url=None,
                  max_download_bytes=8*1024**3, max_expanded_bytes=24*1024**3,
                  max_cache_bytes=64*1024**3, min_free_bytes=1024**3, workers=2, max_pending=8,
                  max_catalog_bytes=4*1024**2, prune_grace_seconds=7*86400,
@@ -50,6 +51,9 @@ class Config:
         self.catalog_url = https_url(catalog_url)
         self.artifact_base_url = https_url(artifact_base_url)
         self.public_base_url = https_url(public_base_url)
+        self.builder_url = str(builder_url).rstrip('/') if builder_url else None
+        if self.builder_url and not self.builder_url.startswith(('http://', 'https://')):
+            raise ValueError('invalid_builder_url')
         self.public_key = Ed25519PublicKey.from_public_bytes(base64.b64decode(public_key, validate=True))
         if not key_id or key_id in ('UNSIGNED', 'UNSIGNED_DEV'):
             raise ValueError('production_key_required')
@@ -80,6 +84,7 @@ class Config:
             if value is not None:
                 values[name] = int(value)
         values['ingest_root'] = os.environ.get('VOLTY_OFFLINE_INGEST_ROOT') or None
+        values['builder_url'] = os.environ.get('VOLTY_OFFLINE_BUILDER_URL') or None
         return cls(**values)
 
 

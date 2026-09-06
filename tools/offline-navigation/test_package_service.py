@@ -153,6 +153,27 @@ class PackageServiceTest(unittest.TestCase):
             manager.refresh()
         self.assertEqual(original, manager.catalog_bytes())
 
+    def test_worker_catalog_changes_are_visible_without_remote_refresh(self):
+        manager = self.manager()
+        manager.refresh()
+        catalog = json.loads(self.catalog_bytes)
+        catalog['generatedAt'] = '2026-09-06T00:00:00Z'
+        catalog['regions'].append({
+            'region': {
+                'regionId': 'ekb-east',
+                'displayName': 'Восток',
+                'bounds': {'south': 56.5, 'west': 61.0, 'north': 57.0, 'east': 62.0},
+            },
+            'latestRelease': None,
+            'onDemand': {'enabled': True},
+        })
+        updated = json.dumps(catalog_tools.sign_catalog(catalog, self.key, 'release-key'),
+                             ensure_ascii=False).encode()
+        (self.root / 'cache' / 'catalog.json').write_bytes(updated)
+
+        self.assertEqual(updated, manager.catalog_bytes())
+        self.assertEqual('ekb-east', manager.resolve(56.8, 61.5)['regionId'])
+
     def test_duplicate_ensure_does_not_publish_partial_files(self):
         manager = self.manager()
         manager.refresh()

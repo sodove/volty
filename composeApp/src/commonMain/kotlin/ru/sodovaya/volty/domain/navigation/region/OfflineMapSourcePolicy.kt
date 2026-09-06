@@ -92,7 +92,7 @@ object OfflineMapSourcePolicy {
         OfflineRegionPackageStatus.READY || this == OfflineRegionPackageStatus.UPDATE_AVAILABLE
 
     private fun OfflineRegionPackageStatus.isDownloadInProgress(): Boolean = this ==
-        OfflineRegionPackageStatus.QUEUED || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
+        OfflineRegionPackageStatus.PREPARING || this == OfflineRegionPackageStatus.QUEUED || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
         this == OfflineRegionPackageStatus.DOWNLOADING || this == OfflineRegionPackageStatus.VERIFYING ||
         this == OfflineRegionPackageStatus.INSTALLING ||
         this == OfflineRegionPackageStatus.DELETING

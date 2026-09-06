@@ -24,6 +24,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
@@ -52,7 +53,7 @@ class HttpNavigationRepository(
         }
         response.toResult { body ->
             val places = json.decodeFromString<List<NavigationPlaceWire>>(body)
-            places.map(::decodePlace)
+            PlaceCandidateDeduplicationPolicy.deduplicate(places.map(::decodePlace), limit = 8)
         }
     } catch (cancelled: CancellationException) {
         throw cancelled

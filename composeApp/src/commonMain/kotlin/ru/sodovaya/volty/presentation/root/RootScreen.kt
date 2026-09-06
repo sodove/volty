@@ -173,9 +173,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         NavigationMapRenderPolicy.scene(
             state = navigationState,
             ownFix = ownFix,
-            trail = trail,
+            trail = trail.toList(),
             participantMarkers = socialLiveState.markers,
-            cameraSequence = navigationState.phase.hashCode().toLong(),
+            cameraSequence = navigationState.requestGeneration,
             recenterSequence = mapRecenterRequest,
         )
     } else {

@@ -101,10 +101,10 @@ def load_config(path: Path) -> ProductionConfig:
         source_id = item.get("sourceId")
         if source_id is not None and (not isinstance(source_id, str) or not _ID.fullmatch(source_id)):
             raise ConfigError(f"{region_id}: sourceId is invalid")
-        display_name = item.get("displayName", region_id)
-        if not isinstance(display_name, str) or not display_name.strip():
+        display_name = item.get("displayName")
+        if display_name is not None and (not isinstance(display_name, str) or not display_name.strip()):
             raise ConfigError(f"{region_id}: displayName must be a non-empty string")
-        regions.append(RegionJob(region_id, url, bbox, source_id, display_name.strip()))
+        regions.append(RegionJob(region_id, url, bbox, source_id, display_name.strip() if display_name else None))
 
     def positive_int(key: str, default: int) -> int:
         value = raw.get(key, default)

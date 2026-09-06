@@ -37,8 +37,8 @@ case "$mode" in 600|400|640|440) ;; *) fail "signing key must be mode 0600/0400/
 install -d -m 755 "$OFFLINE_ROOT" "$STAGING_ROOT" "$SOURCE_ROOT" "$BUILD_ROOT"
 compose=(docker compose --env-file "$ENV_FILE" -f "$ROOT/docker-compose.yml" --profile offline)
 "${compose[@]}" config --quiet
-"${compose[@]}" build app offline-worker offline-scheduler
-"${compose[@]}" up -d --no-deps offline-worker offline-scheduler
+"${compose[@]}" build app offline offline-worker
+"${compose[@]}" up -d --no-deps offline offline-worker
 "${compose[@]}" up -d --no-deps app
 "${compose[@]}" ps
 printf '[offline-deploy] services updated; verify with tools/offline-navigation/ops/status.sh\n'

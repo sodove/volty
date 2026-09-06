@@ -57,7 +57,7 @@ class OfflineRegionCatalogTest {
                 schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
                 regions = listOf(
-                    OfflineRegionCatalogEntry(region, null),
+                    OfflineRegionCatalogEntry(region, null, OfflineRegionOnDemand(true)),
                     OfflineRegionCatalogEntry(
                         region("ru-sve-ekb"),
                         release(regionId = "ru-sve-other"),
@@ -83,13 +83,28 @@ class OfflineRegionCatalogTest {
             OfflineRegionCatalog(
                 schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
-                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null)),
+                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null, OfflineRegionOnDemand(true))),
                 signature = catalogSignature(),
             ),
             currentAppVersionCode = 28,
         )
 
         assertEquals(emptyList(), result)
+    }
+
+    @Test
+    fun validation_rejects_an_unbuilt_entry_without_on_demand_capability() {
+        val errors = OfflineRegionCatalogPolicy.validate(
+            OfflineRegionCatalog(
+                schemaVersion = 2,
+                generatedAt = "2026-09-03T00:00:00Z",
+                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null)),
+                signature = catalogSignature(),
+            ),
+            currentAppVersionCode = 31,
+        )
+
+        assertEquals(OfflineRegionCatalogErrorCode.INVALID_ON_DEMAND_ENTRY, errors.single().code)
     }
 
     @Test

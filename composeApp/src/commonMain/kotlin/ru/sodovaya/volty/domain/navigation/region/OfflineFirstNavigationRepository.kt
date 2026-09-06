@@ -12,6 +12,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
@@ -222,16 +223,27 @@ class OfflineFirstNavigationRepository(
                 async { runtime.search(regionId, request) }
             }.awaitAll()
         }
-        val candidates = LinkedHashMap<String, PlaceCandidate>()
+        val candidates = mutableListOf<PlaceCandidate>()
         results.forEach { result ->
             if (result is NavigationResult.Success) {
-                result.value.forEach { candidate ->
-                    candidates.putIfAbsent(candidate.id, candidate)
-                }
+                // Provider IDs and coordinates are only locally meaningful to
+                // one regional index. Deduplicate inside each index first;
+                // otherwise the same-named place in two cities can disappear
+                // when the regional result sets are combined.
+                candidates += PlaceCandidateDeduplicationPolicy.deduplicate(
+                    result.value,
+                    request.query.limit,
+                )
             }
         }
         if (candidates.isNotEmpty() || results.any { it is NavigationResult.Success }) {
-            return NavigationResult.Success(candidates.values.take(request.query.limit))
+            return NavigationResult.Success(
+                PlaceCandidateDeduplicationPolicy.deduplicate(
+                    candidates,
+                    request.query.limit,
+                    mergeSameTitle = false,
+                ),
+            )
         }
         return results.filterIsInstance<NavigationResult.Failure>().firstOrNull()
             ?: NavigationResult.Failure(NavigationFailure.Offline)

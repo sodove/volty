@@ -25,6 +25,7 @@ data class OfflineRegionPackageState(
     val region: OfflineRegionManifest,
     val latestRelease: OfflineRegionPackageManifest?,
     val status: OfflineRegionPackageStatus,
+    val onDemand: Boolean = false,
     val installedReleaseVersion: String? = null,
     val downloadedBytes: Long = 0L,
     val failure: OfflineRegionPackageFailure? = null,

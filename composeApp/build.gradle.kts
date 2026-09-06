@@ -51,7 +51,7 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
 }
 
 val appVersionCode = 31
-val appVersionName = "0.7.7"
+val appVersionName = "0.7.8"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")

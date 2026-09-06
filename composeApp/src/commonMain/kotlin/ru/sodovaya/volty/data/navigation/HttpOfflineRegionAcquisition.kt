@@ -69,13 +69,59 @@ class HttpOfflineRegionAcquisition(
         }
     }
 
-    private suspend fun request(regionId: String, releaseVersion: String, action: String): AcquisitionStatus? {
+    /** Starts an on-demand build and returns only after the signed release exists. */
+    suspend fun ensurePrepared(regionId: String): String {
+        if (endpoint == null) {
+            fail(OfflineRegionPackageFailure.INCOMPATIBLE, "On-demand region preparation is unavailable")
+        }
+        try {
+            val release = withTimeoutOrNull<String>(maxWaitMillis) {
+                var action = "ensure"
+                var releaseVersion: String? = null
+                while (releaseVersion == null) {
+                    val response = request(regionId, null, action, allowStaticFallback = false)
+                        ?: fail(OfflineRegionPackageFailure.NETWORK, "On-demand builder did not respond")
+                    if (response.regionId != regionId) {
+                        fail(OfflineRegionPackageFailure.INCOMPATIBLE, "Acquisition region does not match the request")
+                    }
+                    when (response.status) {
+                        "ready" -> releaseVersion = response.releaseVersion
+                            ?.takeIf { it.isNotBlank() }
+                            ?: fail(OfflineRegionPackageFailure.NETWORK, "Builder returned no release version")
+                        "unavailable" -> fail(OfflineRegionPackageFailure.INCOMPATIBLE, "Regional package is unavailable")
+                        "failed" -> fail(OfflineRegionPackageFailure.NETWORK, "Server could not prepare the regional package")
+                        "queued", "building", "downloading", "preparing" -> Unit
+                        else -> fail(OfflineRegionPackageFailure.NETWORK, "Unknown acquisition state")
+                    }
+                    delay((response.retryAfterSeconds ?: 5).coerceIn(1, 30) * 1_000L)
+                    action = "status"
+                }
+                releaseVersion
+            }
+            return release ?: fail(OfflineRegionPackageFailure.NETWORK, "Regional package preparation timed out")
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: OfflineRegionPackageFailureException) {
+            throw failure
+        } catch (error: Exception) {
+            throw OfflineRegionPackageFailureException(
+                OfflineRegionPackageFailure.NETWORK, "Regional package preparation failed", error,
+            )
+        }
+    }
+
+    private suspend fun request(
+        regionId: String,
+        releaseVersion: String?,
+        action: String,
+        allowStaticFallback: Boolean = true,
+    ): AcquisitionStatus? {
         val catalog = requireNotNull(endpoint)
         val url = URLBuilder(catalog).apply {
             encodedPath = catalog.encodedPath.removeSuffix("catalog.json") +
                 "regions/${regionId.encodeURLParameter()}/$action"
             parameters.clear()
-            parameters.append("releaseVersion", releaseVersion)
+            releaseVersion?.let { parameters.append("releaseVersion", it) }
             fragment = ""
         }.buildString()
         return client.prepareRequest(url) {
@@ -88,7 +134,7 @@ class HttpOfflineRegionAcquisition(
             val bytes = response.bodyAsChannel().readRemaining(MAX_RESPONSE_BYTES + 1).readByteArray()
             if (bytes.size > MAX_RESPONSE_BYTES) fail(OfflineRegionPackageFailure.NETWORK, "Acquisition response is too large")
             val parsed = runCatching { json.decodeFromString<AcquisitionStatus>(bytes.decodeToString()) }.getOrNull()
-            if (action == "ensure" && response.status.value in setOf(404, 405)) {
+            if (allowStaticFallback && action == "ensure" && response.status.value in setOf(404, 405)) {
                 if (parsed?.status == "unavailable") return@execute parsed
                 return@execute null
             }

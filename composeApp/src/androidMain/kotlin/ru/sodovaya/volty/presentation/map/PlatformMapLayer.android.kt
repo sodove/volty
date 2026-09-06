@@ -53,6 +53,7 @@ import org.maplibre.android.maps.MapView
 import org.maplibre.android.maps.Style
 import org.maplibre.android.style.expressions.Expression
 import org.maplibre.android.style.layers.CircleLayer
+import org.maplibre.android.style.layers.FillLayer
 import org.maplibre.android.style.layers.FillExtrusionLayer
 import org.maplibre.android.style.layers.LineLayer
 import org.maplibre.android.style.layers.SymbolLayer
@@ -64,6 +65,8 @@ import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionBase
 import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionColor
 import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionHeight
 import org.maplibre.android.style.layers.PropertyFactory.fillExtrusionOpacity
+import org.maplibre.android.style.layers.PropertyFactory.fillColor
+import org.maplibre.android.style.layers.PropertyFactory.fillOpacity
 import org.maplibre.android.style.layers.PropertyFactory.lineCap
 import org.maplibre.android.style.layers.PropertyFactory.lineColor
 import org.maplibre.android.style.layers.PropertyFactory.lineOpacity
@@ -108,6 +111,9 @@ private const val DESTINATION_LAYER_ID = "volty-destination-layer"
 private const val BUILDINGS_LAYER_ID = "volty-buildings-3d"
 private const val RU_CITIES_SOURCE_ID = "volty-ru-cities-source"
 private const val RU_CITIES_LAYER_ID = "volty-ru-cities-layer"
+private const val WORLD_OVERVIEW_SOURCE_ID = "volty-world-overview-source"
+private const val WORLD_OVERVIEW_FILL_LAYER_ID = "volty-world-overview-fill"
+private const val WORLD_OVERVIEW_LINE_LAYER_ID = "volty-world-overview-line"
 private const val MAX_TRAIL_POINTS = 240
 
 /** Keeps the native GL surface and its loaded style alive between tab changes. */
@@ -274,6 +280,14 @@ private fun AndroidMapLibreView(
         if (!styleReady) return@LaunchedEffect
         val request = latestScene.value.cameraRequest ?: return@LaunchedEffect
         if (request.sequence == lastCameraSequence) return@LaunchedEffect
+        if (request is MapCameraRequest.FitAlternatives) {
+            var frames = 0
+            while ((readyMap.width <= 0 || readyMap.height <= 0) && frames < 120) {
+                withFrameNanos { }
+                frames += 1
+            }
+            if (readyMap.width <= 0 || readyMap.height <= 0) return@LaunchedEffect
+        }
         when (request) {
             is MapCameraRequest.FitAlternatives -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.Recenter -> recenter(readyMap, request.fix)
@@ -287,7 +301,7 @@ private fun AndroidMapLibreView(
         if (!styleReady) return@LaunchedEffect
         var lastFrameNanos = Long.MIN_VALUE
         var lastFixKey: FixRenderKey? = null
-        var lastTrail: List<NavigationTrailPoint> = emptyList()
+        var lastTrail: List<NavigationTrailPoint>? = null
         while (isActive) {
             val frameNanos = withFrameNanos { it }
             val previousFrameNanos = lastFrameNanos
@@ -305,7 +319,7 @@ private fun AndroidMapLibreView(
             }
             if (current.trail != lastTrail) {
                 updateTrailGeoJson(readyMap, current.trail, System.currentTimeMillis())
-                lastTrail = current.trail
+                lastTrail = current.trail.toList()
             }
 
             val nowMillis = System.currentTimeMillis()
@@ -401,7 +415,16 @@ private fun fitAlternatives(map: MapLibreMap, points: List<GeoCoordinate>) {
     val latLngs = points.map { LatLng(it.latitude, it.longitude) }
     if (latLngs.isEmpty()) return
     if (latLngs.size == 1) {
-        map.moveCamera(CameraUpdateFactory.newLatLngZoom(latLngs.single(), 15.0))
+        map.moveCamera(
+            CameraUpdateFactory.newCameraPosition(
+                CameraPosition.Builder(map.cameraPosition)
+                    .target(latLngs.single())
+                    .zoom(15.0)
+                    .tilt(0.0)
+                    .bearing(0.0)
+                    .build(),
+            ),
+        )
         return
     }
     val boundsBuilder = LatLngBounds.Builder()
@@ -411,18 +434,24 @@ private fun fitAlternatives(map: MapLibreMap, points: List<GeoCoordinate>) {
     // occupy the top and bottom edges of the native map view. Flattening the
     // camera also prevents the retained ride tilt from projecting a long route
     // underneath the dashboard chrome.
-    val horizontalPadding = (map.width * 0.06f).toInt().coerceAtLeast(48)
-    val topPadding = (map.height * 0.14f).toInt().coerceAtLeast(96)
-    val bottomPadding = (map.height * 0.28f).toInt().coerceAtLeast(180)
+    val padding = RoutePreviewCameraPolicy.paddingFor(map.width.toInt(), map.height.toInt())
     map.moveCamera(
         CameraUpdateFactory.newLatLngBounds(
             bounds,
             0.0,
             0.0,
-            horizontalPadding,
-            topPadding,
-            horizontalPadding,
-            bottomPadding,
+            padding.left,
+            padding.top,
+            padding.right,
+            padding.bottom,
+        ),
+    )
+    map.moveCamera(
+        CameraUpdateFactory.newCameraPosition(
+            CameraPosition.Builder(map.cameraPosition)
+                .tilt(0.0)
+                .bearing(0.0)
+                .build(),
         ),
     )
 }
@@ -479,17 +508,60 @@ private fun MapBlurBand(modifier: Modifier) {
 }
 
 private fun configureStyle(style: Style, darkTheme: Boolean) {
+    if (style.getSource(WORLD_OVERVIEW_SOURCE_ID) == null) {
+        style.addSource(GeoJsonSource(WORLD_OVERVIEW_SOURCE_ID, WORLD_OVERVIEW_GEOJSON))
+    }
+    if (style.getLayer(WORLD_OVERVIEW_FILL_LAYER_ID) == null) {
+        style.addLayer(
+            FillLayer(WORLD_OVERVIEW_FILL_LAYER_ID, WORLD_OVERVIEW_SOURCE_ID).withProperties(
+                fillColor(Color.parseColor(if (darkTheme) "#102A35" else "#D9E5E3")),
+                fillOpacity(0.42f),
+            ),
+        )
+    }
+    if (style.getLayer(WORLD_OVERVIEW_LINE_LAYER_ID) == null) {
+        style.addLayer(
+            LineLayer(WORLD_OVERVIEW_LINE_LAYER_ID, WORLD_OVERVIEW_SOURCE_ID).withProperties(
+                lineColor(Color.parseColor(if (darkTheme) "#2B5662" else "#AABFC0")),
+                lineOpacity(0.55f),
+                lineWidth(0.8f),
+            ),
+        )
+    }
+    style.getLayer(WORLD_OVERVIEW_FILL_LAYER_ID)?.setMinZoom(0f)
+    style.getLayer(WORLD_OVERVIEW_FILL_LAYER_ID)?.setMaxZoom(4.5f)
+    style.getLayer(WORLD_OVERVIEW_LINE_LAYER_ID)?.setMinZoom(0f)
+    style.getLayer(WORLD_OVERVIEW_LINE_LAYER_ID)?.setMaxZoom(4.5f)
     if (style.getLayer(BUILDINGS_LAYER_ID) == null) {
         val buildings = FillExtrusionLayer(BUILDINGS_LAYER_ID, "openmaptiles")
             .withSourceLayer("building")
             .withProperties(
                 fillExtrusionColor(Color.parseColor(if (darkTheme) "#31424B" else "#D5DCE0")),
-                fillExtrusionHeight(Expression.get("render_height")),
-                fillExtrusionBase(Expression.get("render_min_height")),
+                fillExtrusionHeight(
+                    Expression.switchCase(
+                        Expression.has("render_height"),
+                        Expression.get("render_height"),
+                        Expression.literal(3.0),
+                    ),
+                ),
+                fillExtrusionBase(
+                    Expression.switchCase(
+                        Expression.has("render_min_height"),
+                        Expression.get("render_min_height"),
+                        Expression.literal(0.0),
+                    ),
+                ),
                 fillExtrusionOpacity(0.82f),
             )
         buildings.setMinZoom(13f)
         style.addLayer(buildings)
+    }
+    // The remote style contains dense city/country labels intended for a
+    // normal city viewport. At globe scale they turn into an unreadable pile;
+    // the bundled land silhouettes above keep geographic context until the
+    // detailed regional tiles become visible again.
+    style.getLayers().filterIsInstance<SymbolLayer>().forEach { layer ->
+        layer.setMinZoom(5f)
     }
     if (style.getSource(RU_CITIES_SOURCE_ID) == null) {
         style.addSource(
@@ -604,10 +676,11 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
             {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.8}},
             {"id":"water","type":"fill","source":"openmaptiles","source-layer":"water","paint":{"fill-color":"$water"}},
             {"id":"waterway","type":"line","source":"openmaptiles","source-layer":"waterway","paint":{"line-color":"$water","line-width":1.5}},
-            {"id":"roads","type":"line","source":"openmaptiles","source-layer":"transportation","paint":{"line-color":"$roads","line-width":1.4,"line-opacity":0.9}},
-            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.75}},
+            {"id":"roads-major","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":["in",["get","class"],"motorway","trunk","primary","secondary"],"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],5,0.8,12,2.6,14,4.5],"line-opacity":0.88}},
+            {"id":"roads-local","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":11,"filter":["in",["get","class"],"tertiary","minor","service","path"],"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],11,0.45,14,1.8],"line-opacity":0.68}},
+            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.58}},
             {"id":"place-labels","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":5,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],5,10,14,17],"text-max-width":8,"symbol-sort-key":["get","rank"]},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
-            {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":10,"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],10,9,14,13],"text-max-angle":30,"text-max-width":8,"text-padding":2},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
+            {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":11,"filter":["in",["get","class"],"motorway","trunk","primary","secondary","tertiary"],"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],11,8,14,12],"text-max-angle":30,"text-max-width":8,"text-padding":2},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
             {"id":"poi-labels","type":"symbol","source":"openmaptiles","source-layer":"poi","minzoom":13,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":10,"text-max-width":7,"text-offset":[0,0.8],"text-anchor":"top"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}}
           ]
         }
