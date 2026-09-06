@@ -659,6 +659,7 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
     val background = if (darkTheme) "#07131E" else "#EEF3F5"
     val landuse = if (darkTheme) "#10232B" else "#E4ECEA"
     val water = if (darkTheme) "#12384A" else "#B9DDEB"
+    val roadArea = if (darkTheme) "#18333D" else "#D5DDE0"
     val roadCasing = if (darkTheme) "#0A202A" else "#D2DADD"
     val roads = if (darkTheme) "#89A5AF" else "#66757D"
     val localRoads = if (darkTheme) "#6D8B96" else "#7A858B"
@@ -666,15 +667,30 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
     val buildings = if (darkTheme) "#223C47" else "#D0D7D9"
     val label = if (darkTheme) "#E8F0F4" else "#1C2730"
     val halo = if (darkTheme) "#07131E" else "#FFFFFF"
-    val majorRoadClasses = listOf("motorway", "trunk", "primary", "secondary")
-    val localRoadClasses = listOf("tertiary", "minor", "service", "living_street")
+    val majorRoadClasses = listOf("trunk", "primary", "secondary", "tertiary")
+    val localRoadClasses = listOf("minor", "service", "living_street")
     val smallRoadClasses = listOf("track", "path", "footway", "cycleway", "pedestrian", "steps")
-    val majorFilter = OfflineMapStylePolicy.roadClassFilterJson(majorRoadClasses)
-    val localFilter = OfflineMapStylePolicy.roadClassFilterJson(localRoadClasses)
-    val smallFilter = OfflineMapStylePolicy.roadClassFilterJson(smallRoadClasses)
+    val lineGeometryFilter = "[\"match\",[\"geometry-type\"],[\"LineString\",\"MultiLineString\"],true,false]"
+    val polygonGeometryFilter = "[\"match\",[\"geometry-type\"],[\"Polygon\",\"MultiPolygon\"],true,false]"
+    fun lineClassFilter(classes: List<String>): String =
+        "[\"all\",$lineGeometryFilter,${OfflineMapStylePolicy.roadClassFilterJson(classes)}]"
+
+    val majorFilter = lineClassFilter(majorRoadClasses)
+    val localFilter = lineClassFilter(localRoadClasses)
+    val smallFilter = lineClassFilter(smallRoadClasses)
+    val motorwayLineFilter = lineClassFilter(listOf("motorway"))
     val roadLabelFilter = OfflineMapStylePolicy.roadClassFilterJson(
-        majorRoadClasses + localRoadClasses,
+        listOf("motorway") + majorRoadClasses + localRoadClasses,
     )
+    val pierAreaFilter = "[\"all\",$polygonGeometryFilter,[\"==\",[\"get\",\"class\"],\"pier\"]]"
+    val pierLineFilter = "[\"all\",$lineGeometryFilter,[\"==\",[\"get\",\"class\"],\"pier\"]]"
+    val placeGeometryFilter = "[\"match\",[\"geometry-type\"],[\"Point\",\"MultiPoint\"],true,false]"
+    val cityFilter = "[\"all\",$placeGeometryFilter,[\"==\",[\"get\",\"class\"],\"city\"]]"
+    val largeCityFilter = "[\"all\",$cityFilter,[\"<=\",[\"get\",\"rank\"],3]]"
+    val townFilter = "[\"all\",$placeGeometryFilter,[\"==\",[\"get\",\"class\"],\"town\"]]"
+    val villageFilter = "[\"all\",$placeGeometryFilter,[\"==\",[\"get\",\"class\"],\"village\"]]"
+    val smallPlaceFilter = "[\"all\",$placeGeometryFilter,[\"match\",[\"get\",\"class\"],[\"hamlet\",\"neighbourhood\",\"isolated_dwelling\"],true,false]]"
+    val placeText = "[\"get\",\"name\"]"
     return """
         {
           "version": 8,
@@ -689,15 +705,25 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
           "glyphs":"$glyphsUrl",
           "layers": [
             {"id":"background","type":"background","paint":{"background-color":"$background"}},
-            {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.10}},
+            {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","minzoom":8,"filter":$polygonGeometryFilter,"paint":{"fill-color":"$landuse","fill-opacity":0.18}},
             {"id":"water","type":"fill","source":"openmaptiles","source-layer":"water","paint":{"fill-color":"$water"}},
             {"id":"waterway","type":"line","source":"openmaptiles","source-layer":"waterway","paint":{"line-color":"$water","line-width":1.5}},
-            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.58}},
-            {"id":"roads-major-casing","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":$majorFilter,"paint":{"line-color":"$roadCasing","line-width":["interpolate",["linear"],["zoom"],5,1.4,12,4.8,14,7.0],"line-opacity":0.95,"line-cap":"round","line-join":"round"}},
-            {"id":"roads-major","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":$majorFilter,"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],5,0.7,12,2.5,14,4.0],"line-opacity":0.92,"line-cap":"round","line-join":"round"}},
-            {"id":"roads-local","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":10,"filter":$localFilter,"paint":{"line-color":"$localRoads","line-width":["interpolate",["linear"],["zoom"],10,0.35,14,1.65],"line-opacity":0.78,"line-cap":"round","line-join":"round"}},
-            {"id":"roads-small","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":13,"filter":$smallFilter,"paint":{"line-color":"$footways","line-width":["interpolate",["linear"],["zoom"],13,0.25,14,0.8],"line-opacity":0.58,"line-cap":"round","line-join":"round"}},
-            {"id":"place-labels","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":5,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],5,10,14,17],"text-max-width":8,"symbol-sort-key":["get","rank"]},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
+            {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":12,"filter":$polygonGeometryFilter,"paint":{"fill-color":"$buildings","fill-opacity":0.56}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[0]}","type":"fill","source":"openmaptiles","source-layer":"transportation","filter":$pierAreaFilter,"paint":{"fill-color":"$roadArea","fill-opacity":0.85}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[1]}","type":"line","source":"openmaptiles","source-layer":"transportation","filter":$pierLineFilter,"paint":{"line-color":"$roadArea","line-width":["interpolate",["linear"],["zoom"],8,0.8,14,3.0],"line-opacity":0.85,"line-cap":"round","line-join":"round"}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[2]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":10,"filter":$smallFilter,"paint":{"line-color":"$footways","line-width":["interpolate",["linear"],["zoom"],10,0.35,14,1.25],"line-opacity":0.65,"line-cap":"round","line-join":"round"}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[3]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":8,"filter":$localFilter,"paint":{"line-color":"$localRoads","line-width":["interpolate",["exponential",1.35],["zoom"],8,0.45,12,1.4,14,2.1],"line-opacity":0.84,"line-cap":"round","line-join":"round"}},
+            {"id":"highway_major_subtle","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":6,"maxzoom":11,"filter":$majorFilter,"paint":{"line-color":"$localRoads","line-width":["interpolate",["linear"],["zoom"],6,0.5,11,2.4],"line-opacity":0.72,"line-cap":"round","line-join":"round"}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[4]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":10,"filter":$majorFilter,"paint":{"line-color":"$roadCasing","line-width":["interpolate",["exponential",1.25],["zoom"],10,2.2,12,4.6,14,7.2],"line-opacity":0.96,"line-cap":"butt","line-join":"miter"}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[5]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":10,"filter":$majorFilter,"paint":{"line-color":"$roads","line-width":["interpolate",["exponential",1.25],["zoom"],10,1.0,12,2.6,14,4.2],"line-opacity":0.96,"line-cap":"round","line-join":"round"}},
+            {"id":"highway_motorway_subtle","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"maxzoom":7,"filter":$motorwayLineFilter,"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],5,0.8,7,2.0],"line-opacity":0.72}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[6]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":6,"filter":$motorwayLineFilter,"paint":{"line-color":"$roadCasing","line-width":["interpolate",["exponential",1.25],["zoom"],6,1.8,10,4.8,14,9.0],"line-opacity":0.98,"line-cap":"butt","line-join":"miter"}},
+            {"id":"${OfflineMapStylePolicy.roadLayerIds[7]}","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":6,"filter":$motorwayLineFilter,"paint":{"line-color":"$roads","line-width":["interpolate",["exponential",1.25],["zoom"],6,0.8,10,2.8,14,5.5],"line-opacity":0.98,"line-cap":"round","line-join":"round"}},
+            {"id":"place-city-large","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":5,"maxzoom":12,"filter":$largeCityFilter,"layout":{"text-field":$placeText,"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],5,12,12,16],"text-max-width":8,"text-anchor":"center"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
+            {"id":"place-city","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":7,"maxzoom":14,"filter":$cityFilter,"layout":{"text-field":$placeText,"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],7,10,14,15],"text-max-width":8,"text-anchor":"center"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
+            {"id":"place-town","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":6,"maxzoom":14,"filter":$townFilter,"layout":{"text-field":$placeText,"text-font":["Noto Sans Regular"],"text-size":11,"text-max-width":8,"text-anchor":"center"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
+            {"id":"place-village","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":8,"maxzoom":14,"filter":$villageFilter,"layout":{"text-field":$placeText,"text-font":["Noto Sans Regular"],"text-size":10,"text-max-width":8,"text-anchor":"center"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
+            {"id":"place-small","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":11,"maxzoom":15,"filter":$smallPlaceFilter,"layout":{"text-field":$placeText,"text-font":["Noto Sans Regular"],"text-size":9,"text-max-width":8,"text-anchor":"center"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.0}},
             {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":10,"filter":$roadLabelFilter,"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],10,8,14,12],"text-max-angle":30,"text-max-width":8,"text-padding":3},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
             {"id":"poi-labels","type":"symbol","source":"openmaptiles","source-layer":"poi","minzoom":13,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":10,"text-max-width":7,"text-offset":[0,0.8],"text-anchor":"top"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}}
           ]

@@ -21,6 +21,18 @@ internal object OfflineMapStylePolicy {
         "steps",
     )
 
+    /** Layer order mirrored by the online OpenFreeMap style. */
+    val roadLayerIds: List<String> = listOf(
+        "road_area_pier",
+        "road_pier",
+        "highway_path",
+        "highway_minor",
+        "highway_major_casing",
+        "highway_major_inner",
+        "highway_motorway_casing",
+        "highway_motorway_inner",
+    )
+
     fun roadClassFilterJson(classes: List<String>): String =
         "[\"in\",[\"get\",\"class\"],[\"literal\",[${classes.joinToString(",") { "\"$it\"" }}]]]"
 

@@ -55,4 +55,21 @@ class OfflineMapStylePolicyTest {
             OfflineMapStylePolicy.roadClassFilterJson(listOf("motorway", "trunk")),
         )
     }
+
+    @Test
+    fun `offline style keeps the visual road hierarchy from the online map`() {
+        assertEquals(
+            listOf(
+                "road_area_pier",
+                "road_pier",
+                "highway_path",
+                "highway_minor",
+                "highway_major_casing",
+                "highway_major_inner",
+                "highway_motorway_casing",
+                "highway_motorway_inner",
+            ),
+            OfflineMapStylePolicy.roadLayerIds,
+        )
+    }
 }
