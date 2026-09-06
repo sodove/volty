@@ -118,6 +118,7 @@ class AndroidOfflineRegionPackageRepository(
         val loaded = fetchCatalog()
         catalog = loaded
         publishStates()
+        Log.i(TAG, "Offline catalog loaded: ${loaded.regions.size} regions")
     }
 
     override suspend fun requestDownload(
