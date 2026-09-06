@@ -53,6 +53,7 @@ services:
       context: ./tools/offline-navigation
       dockerfile: Dockerfile.service
     restart: unless-stopped
+    user: "${VOLTY_OFFLINE_RUN_UID:-1000}:${VOLTY_OFFLINE_RUN_GID:-1000}"
     environment:
       VOLTY_OFFLINE_ROOT: /data/offline
       VOLTY_OFFLINE_UPSTREAM_CATALOG_URL: ${VOLTY_OFFLINE_UPSTREAM_CATALOG_URL:-}
