@@ -139,6 +139,28 @@ class PackageServiceTest(unittest.TestCase):
         self.assertEqual('ready', self.finish(manager)['status'])
         self.assertEqual('ready', manager.resolve(56.8, 60.6)['status'])
 
+    def test_worker_published_release_is_available_after_service_start(self):
+        publication = self.config.root / 'regions' / 'ekb-agglomeration' / '0.1.2'
+        publication.mkdir(parents=True)
+        for name, data in self.artifacts.items():
+            suffix = {'routing': 'routing/valhalla-routing.tar.gz',
+                      'search': 'search/places.sqlite.gz',
+                      'map': 'map/ekb-agglomeration.pmtiles'}[name]
+            path = publication / suffix
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        manifest_bytes = json.dumps(self.manifest, ensure_ascii=False, separators=(',', ':')).encode()
+        (publication / 'manifest.json').write_bytes(manifest_bytes)
+        (publication / '.ready.json').write_text(
+            json.dumps({'manifestSha256': hashlib.sha256(manifest_bytes).hexdigest()}),
+        )
+
+        manager = self.manager()
+        manager.refresh()
+        self.assertEqual('ready', manager.status('ekb-agglomeration')['status'])
+        with manager.open_artifact('ekb-agglomeration', '0.1.2', 'map/ekb-agglomeration.pmtiles') as stream:
+            self.assertEqual(self.artifacts['map'], stream.read())
+
     def test_catalog_and_manifest_tampering_preserve_previous_catalog(self):
         manager = self.manager()
         manager.refresh()
@@ -329,7 +351,7 @@ class PackageServiceTest(unittest.TestCase):
         manager.refresh()
         manager.ensure('ekb-agglomeration')
         self.assertEqual('ready', self.finish(manager)['status'])
-        marker = self.config.root / 'releases/ekb-agglomeration/0.1.2/.ready.json'
+        marker = self.config.root / 'regions/ekb-agglomeration/0.1.2/.ready.json'
         import os
         os.utime(marker, (1, 1))
         self.assertEqual(0, manager.prune()['removedReleases'])

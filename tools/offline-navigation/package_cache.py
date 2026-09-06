@@ -53,7 +53,12 @@ class PackageManager:
         self._catalog_time = None
         self._catalog_mtime_ns = None
         self._closed = False
-        self.releases = self.root / 'releases'
+        # Worker publications and public artifact URLs use
+        # <root>/regions/<region>/<release>. The package service must index
+        # that same directory; keeping a second `releases` tree makes a
+        # successfully built package look unavailable to clients after a
+        # service restart.
+        self.releases = self.root / 'regions'
         self.staging = self.root / '.staging'
         self.releases.mkdir(exist_ok=True)
         self.staging.mkdir(exist_ok=True)
