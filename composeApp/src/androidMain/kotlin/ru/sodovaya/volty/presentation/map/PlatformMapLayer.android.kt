@@ -515,7 +515,7 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
         style.addLayer(
             FillLayer(WORLD_OVERVIEW_FILL_LAYER_ID, WORLD_OVERVIEW_SOURCE_ID).withProperties(
                 fillColor(Color.parseColor(if (darkTheme) "#102A35" else "#D9E5E3")),
-                fillOpacity(0.42f),
+                fillOpacity(0.16f),
             ),
         )
     }
@@ -523,8 +523,8 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
         style.addLayer(
             LineLayer(WORLD_OVERVIEW_LINE_LAYER_ID, WORLD_OVERVIEW_SOURCE_ID).withProperties(
                 lineColor(Color.parseColor(if (darkTheme) "#2B5662" else "#AABFC0")),
-                lineOpacity(0.55f),
-                lineWidth(0.8f),
+                lineOpacity(0.38f),
+                lineWidth(0.65f),
             ),
         )
     }
@@ -538,10 +538,13 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
             .withProperties(
                 fillExtrusionColor(Color.parseColor(if (darkTheme) "#31424B" else "#D5DCE0")),
                 fillExtrusionHeight(
-                    Expression.switchCase(
-                        Expression.has("render_height"),
-                        Expression.get("render_height"),
-                        Expression.literal(3.0),
+                    Expression.min(
+                        Expression.literal(OfflineMapStylePolicy.maxBuildingExtrusionHeightMeters),
+                        Expression.switchCase(
+                            Expression.has("render_height"),
+                            Expression.get("render_height"),
+                            Expression.literal(3.0),
+                        ),
                     ),
                 ),
                 fillExtrusionBase(
@@ -551,10 +554,11 @@ private fun configureStyle(style: Style, darkTheme: Boolean) {
                         Expression.literal(0.0),
                     ),
                 ),
-                fillExtrusionOpacity(0.82f),
+                fillExtrusionOpacity(0.68f),
             )
         buildings.setMinZoom(13f)
-        style.addLayer(buildings)
+        val anchor = OfflineMapStylePolicy.buildingAnchor(style.getLayers().map { it.id })
+        if (anchor == null) style.addLayer(buildings) else style.addLayerBelow(buildings, anchor)
     }
     // The remote style contains dense city/country labels intended for a
     // normal city viewport. At globe scale they turn into an unreadable pile;
@@ -655,10 +659,22 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
     val background = if (darkTheme) "#07131E" else "#EEF3F5"
     val landuse = if (darkTheme) "#10232B" else "#E4ECEA"
     val water = if (darkTheme) "#12384A" else "#B9DDEB"
-    val roads = if (darkTheme) "#9AAAB3" else "#7A858B"
-    val buildings = if (darkTheme) "#344952" else "#D0D7D9"
+    val roadCasing = if (darkTheme) "#0A202A" else "#D2DADD"
+    val roads = if (darkTheme) "#89A5AF" else "#66757D"
+    val localRoads = if (darkTheme) "#6D8B96" else "#7A858B"
+    val footways = if (darkTheme) "#46636D" else "#9AA4A8"
+    val buildings = if (darkTheme) "#223C47" else "#D0D7D9"
     val label = if (darkTheme) "#E8F0F4" else "#1C2730"
     val halo = if (darkTheme) "#07131E" else "#FFFFFF"
+    val majorRoadClasses = listOf("motorway", "trunk", "primary", "secondary")
+    val localRoadClasses = listOf("tertiary", "minor", "service", "living_street")
+    val smallRoadClasses = listOf("track", "path", "footway", "cycleway", "pedestrian", "steps")
+    val majorFilter = OfflineMapStylePolicy.roadClassFilterJson(majorRoadClasses)
+    val localFilter = OfflineMapStylePolicy.roadClassFilterJson(localRoadClasses)
+    val smallFilter = OfflineMapStylePolicy.roadClassFilterJson(smallRoadClasses)
+    val roadLabelFilter = OfflineMapStylePolicy.roadClassFilterJson(
+        majorRoadClasses + localRoadClasses,
+    )
     return """
         {
           "version": 8,
@@ -673,14 +689,16 @@ private fun offlineStyleJson(tileUrl: String, glyphsUrl: String, darkTheme: Bool
           "glyphs":"$glyphsUrl",
           "layers": [
             {"id":"background","type":"background","paint":{"background-color":"$background"}},
-            {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.8}},
+            {"id":"landuse","type":"fill","source":"openmaptiles","source-layer":"landuse","paint":{"fill-color":"$landuse","fill-opacity":0.10}},
             {"id":"water","type":"fill","source":"openmaptiles","source-layer":"water","paint":{"fill-color":"$water"}},
             {"id":"waterway","type":"line","source":"openmaptiles","source-layer":"waterway","paint":{"line-color":"$water","line-width":1.5}},
-            {"id":"roads-major","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":["in",["get","class"],"motorway","trunk","primary","secondary"],"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],5,0.8,12,2.6,14,4.5],"line-opacity":0.88}},
-            {"id":"roads-local","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":11,"filter":["in",["get","class"],"tertiary","minor","service","path"],"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],11,0.45,14,1.8],"line-opacity":0.68}},
             {"id":"buildings","type":"fill","source":"openmaptiles","source-layer":"building","minzoom":13,"paint":{"fill-color":"$buildings","fill-opacity":0.58}},
+            {"id":"roads-major-casing","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":$majorFilter,"paint":{"line-color":"$roadCasing","line-width":["interpolate",["linear"],["zoom"],5,1.4,12,4.8,14,7.0],"line-opacity":0.95,"line-cap":"round","line-join":"round"}},
+            {"id":"roads-major","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":5,"filter":$majorFilter,"paint":{"line-color":"$roads","line-width":["interpolate",["linear"],["zoom"],5,0.7,12,2.5,14,4.0],"line-opacity":0.92,"line-cap":"round","line-join":"round"}},
+            {"id":"roads-local","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":10,"filter":$localFilter,"paint":{"line-color":"$localRoads","line-width":["interpolate",["linear"],["zoom"],10,0.35,14,1.65],"line-opacity":0.78,"line-cap":"round","line-join":"round"}},
+            {"id":"roads-small","type":"line","source":"openmaptiles","source-layer":"transportation","minzoom":13,"filter":$smallFilter,"paint":{"line-color":"$footways","line-width":["interpolate",["linear"],["zoom"],13,0.25,14,0.8],"line-opacity":0.58,"line-cap":"round","line-join":"round"}},
             {"id":"place-labels","type":"symbol","source":"openmaptiles","source-layer":"place","minzoom":5,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],5,10,14,17],"text-max-width":8,"symbol-sort-key":["get","rank"]},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.5}},
-            {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":11,"filter":["in",["get","class"],"motorway","trunk","primary","secondary","tertiary"],"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],11,8,14,12],"text-max-angle":30,"text-max-width":8,"text-padding":2},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
+            {"id":"road-labels","type":"symbol","source":"openmaptiles","source-layer":"transportation_name","minzoom":10,"filter":$roadLabelFilter,"layout":{"symbol-placement":"line","text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":["interpolate",["linear"],["zoom"],10,8,14,12],"text-max-angle":30,"text-max-width":8,"text-padding":3},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}},
             {"id":"poi-labels","type":"symbol","source":"openmaptiles","source-layer":"poi","minzoom":13,"layout":{"text-field":["get","name"],"text-font":["Noto Sans Regular"],"text-size":10,"text-max-width":7,"text-offset":[0,0.8],"text-anchor":"top"},"paint":{"text-color":"$label","text-halo-color":"$halo","text-halo-width":1.25}}
           ]
         }
