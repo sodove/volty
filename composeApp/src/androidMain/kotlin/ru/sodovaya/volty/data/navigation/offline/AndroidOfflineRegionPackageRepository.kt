@@ -119,6 +119,7 @@ class AndroidOfflineRegionPackageRepository(
         catalog = loaded
         publishStates()
         Log.i(TAG, "Offline catalog loaded: ${loaded.regions.size} regions")
+        Unit
     }
 
     override suspend fun requestDownload(
