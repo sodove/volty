@@ -29,6 +29,13 @@ data class OfflineRegionCatalogSignature(
 data class OfflineRegionCatalogEntry(
     val region: OfflineRegionManifest,
     val latestRelease: OfflineRegionPackageManifest? = null,
+    val onDemand: OfflineRegionOnDemand? = null,
+)
+
+/** Whether the server can prepare a package for this region on demand. */
+@Serializable
+data class OfflineRegionOnDemand(
+    val enabled: Boolean,
 )
 
 enum class OfflineRegionCatalogParseError {

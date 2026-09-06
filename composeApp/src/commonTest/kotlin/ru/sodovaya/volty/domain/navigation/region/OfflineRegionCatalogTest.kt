@@ -21,7 +21,8 @@ class OfflineRegionCatalogTest {
                   "displayName": "Екатеринбург",
                   "bounds": {"south": 56.0, "west": 59.0, "north": 57.5, "east": 62.0}
                 },
-                "latestRelease": ${releaseJson()}
+                "latestRelease": ${releaseJson()},
+                "onDemand": {"enabled": true}
               }]
             }
             """.trimIndent(),
@@ -30,6 +31,7 @@ class OfflineRegionCatalogTest {
         val catalog = assertIs<OfflineRegionCatalogParseResult.Success>(result).catalog
         assertEquals("ru-sve-ekb", catalog.regions.single().region.regionId)
         assertEquals("2026.09.1", catalog.regions.single().latestRelease?.releaseVersion)
+        assertEquals(true, catalog.regions.single().onDemand?.enabled)
     }
 
     @Test
