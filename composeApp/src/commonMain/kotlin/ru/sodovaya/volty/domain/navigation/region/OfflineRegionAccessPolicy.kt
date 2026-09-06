@@ -119,7 +119,7 @@ object OfflineRegionAccessPolicy {
         OfflineRegionPackageStatus.READY || this == OfflineRegionPackageStatus.UPDATE_AVAILABLE
 
     private fun OfflineRegionPackageStatus.isDownloadInProgress(): Boolean = this ==
-        OfflineRegionPackageStatus.QUEUED || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
+        OfflineRegionPackageStatus.PREPARING || this == OfflineRegionPackageStatus.QUEUED || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
         this == OfflineRegionPackageStatus.DOWNLOADING || this == OfflineRegionPackageStatus.PAUSED ||
         this == OfflineRegionPackageStatus.VERIFYING || this == OfflineRegionPackageStatus.INSTALLING ||
         this == OfflineRegionPackageStatus.DELETING
@@ -130,7 +130,7 @@ object OfflineRegionAccessPolicy {
 
     private fun OfflineRegionPackageStatus.priority(): Int = when {
         isUsableOffline() -> 0
-        this == OfflineRegionPackageStatus.QUEUED ||
+        this == OfflineRegionPackageStatus.PREPARING || this == OfflineRegionPackageStatus.QUEUED ||
             this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
             this == OfflineRegionPackageStatus.DOWNLOADING ||
             this == OfflineRegionPackageStatus.PAUSED ||

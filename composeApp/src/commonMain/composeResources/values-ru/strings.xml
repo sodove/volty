@@ -724,6 +724,10 @@
     <string name="settings_offline_refreshing">Обновляем…</string>
     <string name="settings_offline_catalog_failed">Не удалось обновить список регионов; попробуйте ещё раз.</string>
     <string name="settings_offline_not_configured">Загрузка регионов не настроена в этой сборке.</string>
+    <string name="settings_offline_add_region">Добавить регион</string>
+    <string name="settings_offline_prepare">Подготовить оффлайн</string>
+    <string name="settings_offline_preparing">Готовим регион…</string>
+    <string name="settings_offline_no_region_match">Регион не найден</string>
     <string name="settings_offline_size_line">Скачивание: %1$s · На устройстве: %2$s</string>
     <string name="settings_offline_download">Скачать</string>
     <string name="settings_offline_download_mobile">Скачать через мобильную сеть</string>
@@ -738,6 +742,7 @@
     <string name="settings_offline_status_waiting_network">Ждём подключения к сети</string>
     <string name="settings_offline_status_metered">Ждём разрешения на мобильный трафик</string>
     <string name="settings_offline_status_queued">В очереди на загрузку</string>
+    <string name="settings_offline_status_preparing">Готовим данные региона</string>
     <string name="settings_offline_status_installing">Устанавливаем…</string>
     <string name="settings_offline_status_deleting">Удаляем…</string>
     <string name="settings_offline_status_failed">Не удалось скачать; повторите попытку</string>

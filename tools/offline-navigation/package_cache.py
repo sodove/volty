@@ -11,6 +11,8 @@ import shutil
 import tempfile
 import threading
 import time
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 from cryptography.exceptions import InvalidSignature
 from package_validation import (
     Config, LOG, atomic_bytes, catalog_tools, package_tools, copy_bounded,
@@ -49,8 +51,14 @@ class PackageManager:
         self._identities = json.loads(identities.read_bytes()) if identities.exists() else {}
         self._catalog = None
         self._catalog_time = None
+        self._catalog_mtime_ns = None
         self._closed = False
-        self.releases = self.root / 'releases'
+        # Worker publications and public artifact URLs use
+        # <root>/regions/<region>/<release>. The package service must index
+        # that same directory; keeping a second `releases` tree makes a
+        # successfully built package look unavailable to clients after a
+        # service restart.
+        self.releases = self.root / 'regions'
         self.staging = self.root / '.staging'
         self.releases.mkdir(exist_ok=True)
         self.staging.mkdir(exist_ok=True)
@@ -67,9 +75,11 @@ class PackageManager:
                 self._catalog = data
                 for entry in self._entries.values():
                     manifest = entry['latestRelease']
-                    self._identities.setdefault(self._identity_key(manifest), self._fingerprint(manifest))
+                    if manifest is not None:
+                        self._identities.setdefault(self._identity_key(manifest), self._fingerprint(manifest))
             except (ValueError, OSError):
                 LOG.exception('Discarding invalid cached catalog')
+        self._catalog_mtime_ns = self._catalog_file_mtime(self.root / 'catalog.json')
         for marker in self.releases.glob('*/*/.ready.json'):
             try:
                 path = marker.parent
@@ -154,58 +164,102 @@ class PackageManager:
             raise ValueError('catalog_regions')
         result = {}
         for entry in entries:
-            region, manifest = entry['region'], entry['latestRelease']
-            self._validate_manifest(manifest)
-            region_id = manifest['regionId']
-            if region['regionId'] != region_id or region_id in result or not region.get('displayName'):
+            region, manifest = entry['region'], entry.get('latestRelease')
+            region_id = region.get('regionId') if isinstance(region, dict) else None
+            if not isinstance(region_id, str) or region_id in result or not region.get('displayName'):
                 raise ValueError('catalog_region_identity')
             bounds = region['bounds']
             box = catalog_tools.finite_bbox([bounds[k] for k in ('west', 'south', 'east', 'north')], 'bounds')
+            on_demand = entry.get('onDemand', {'enabled': False})
+            if not isinstance(on_demand, dict) or not isinstance(on_demand.get('enabled', False), bool):
+                raise ValueError('catalog_on_demand')
+            if manifest is None:
+                if not on_demand['enabled']:
+                    raise ValueError('catalog_release_missing')
+                result[region_id] = entry
+                continue
+            self._validate_manifest(manifest)
+            if manifest['regionId'] != region_id:
+                raise ValueError('catalog_region_identity')
             if not catalog_tools.coverage_covers(manifest['coverage']['bbox'], box):
                 raise ValueError('catalog_coverage')
             result[region_id] = entry
         return result, timestamp
 
+    @staticmethod
+    def _catalog_file_mtime(path):
+        try:
+            return path.stat().st_mtime_ns
+        except OSError:
+            return None
+
+    def _install_catalog(self, data, persist=False, observed_mtime=None):
+        try:
+            entries, timestamp = self._validate_catalog(data)
+        except (KeyError, TypeError, UnicodeError) as error:
+            raise ValueError('invalid_catalog') from error
+        with self._lock:
+            if self._catalog_time and timestamp < self._catalog_time:
+                raise ValueError('catalog_rollback')
+            identities = dict(self._identities)
+            for region_id, entry in entries.items():
+                manifest = entry['latestRelease']
+                if manifest is None:
+                    continue
+                identity = self._identity_key(manifest)
+                fingerprint = self._fingerprint(manifest)
+                if identity in identities and identities[identity] != fingerprint:
+                    raise ValueError('immutable_release_conflict')
+                identities[identity] = fingerprint
+                key = (region_id, manifest['releaseVersion'])
+                previous = self._ready.get(key)
+                current = self._entries.get(region_id, {}).get('latestRelease')
+                if current and current['releaseVersion'] == key[1]:
+                    previous = current
+                if previous and catalog_tools.canonical_payload(previous) != catalog_tools.canonical_payload(manifest):
+                    raise ValueError('immutable_release_conflict')
+            for region_id, old in self._entries.items():
+                old_release = old.get('latestRelease')
+                if old_release is None:
+                    continue
+                old_version = old_release['releaseVersion']
+                if entries.get(region_id, {}).get('latestRelease', {}).get('releaseVersion') != old_version:
+                    marker = self.releases / region_id / old_version / '.ready.json'
+                    if marker.exists():
+                        os.utime(marker, None)  # grace begins when no longer advertised
+            if persist:
+                atomic_bytes(self.root / '.release-identities.json', json.dumps(identities).encode())
+                atomic_bytes(self.root / 'catalog.json', data)
+            self._identities = identities
+            self._entries, self._catalog, self._catalog_time = entries, data, timestamp
+            self._catalog_mtime_ns = observed_mtime or self._catalog_file_mtime(self.root / 'catalog.json')
+        return {'status': 'ready', 'regions': len(entries)}
+
+    def _reload_catalog_file_if_changed(self):
+        path = self.root / 'catalog.json'
+        mtime = self._catalog_file_mtime(path)
+        if mtime is None or mtime == self._catalog_mtime_ns:
+            return
+        with self._refresh_lock:
+            mtime = self._catalog_file_mtime(path)
+            if mtime is None or mtime == self._catalog_mtime_ns:
+                return
+            try:
+                self._install_catalog(path.read_bytes(), observed_mtime=mtime)
+            except (OSError, ValueError):
+                # Keep serving the last verified catalog until the writer
+                # publishes a valid signed replacement.
+                LOG.exception('Ignoring invalid local catalog update')
+                self._catalog_mtime_ns = mtime
+
     def refresh(self):
         with self._refresh_lock:
             buffer = io.BytesIO()
             self._fetch(self.config.catalog_url, buffer, self.config.max_catalog_bytes)
-            data = buffer.getvalue()
-            try:
-                entries, timestamp = self._validate_catalog(data)
-            except (KeyError, TypeError, UnicodeError) as error:
-                raise ValueError('invalid_catalog') from error
-            with self._lock:
-                if self._catalog_time and timestamp < self._catalog_time:
-                    raise ValueError('catalog_rollback')
-                identities = dict(self._identities)
-                for region_id, entry in entries.items():
-                    manifest = entry['latestRelease']
-                    identity = self._identity_key(manifest)
-                    fingerprint = self._fingerprint(manifest)
-                    if identity in identities and identities[identity] != fingerprint:
-                        raise ValueError('immutable_release_conflict')
-                    identities[identity] = fingerprint
-                    key = (region_id, manifest['releaseVersion'])
-                    previous = self._ready.get(key)
-                    current = self._entries.get(region_id, {}).get('latestRelease')
-                    if current and current['releaseVersion'] == key[1]:
-                        previous = current
-                    if previous and catalog_tools.canonical_payload(previous) != catalog_tools.canonical_payload(manifest):
-                        raise ValueError('immutable_release_conflict')
-                for region_id, old in self._entries.items():
-                    old_version = old['latestRelease']['releaseVersion']
-                    if entries.get(region_id, {}).get('latestRelease', {}).get('releaseVersion') != old_version:
-                        marker = self.releases / region_id / old_version / '.ready.json'
-                        if marker.exists():
-                            os.utime(marker, None)  # grace begins when no longer advertised
-                atomic_bytes(self.root / '.release-identities.json', json.dumps(identities).encode())
-                self._identities = identities
-                atomic_bytes(self.root / 'catalog.json', data)
-                self._entries, self._catalog, self._catalog_time = entries, data, timestamp
-            return {'status': 'ready', 'regions': len(entries)}
+            return self._install_catalog(buffer.getvalue(), persist=True)
 
     def catalog_bytes(self):
+        self._reload_catalog_file_if_changed()
         with self._lock:
             if self._catalog is None:
                 raise ValueError('catalog_unavailable')
@@ -214,8 +268,10 @@ class PackageManager:
     def resolve(self, latitude, longitude):
         if not math.isfinite(latitude) or not math.isfinite(longitude) or not -90 <= latitude <= 90 or not -180 <= longitude <= 180:
             raise ValueError('invalid_coordinates')
+        self._reload_catalog_file_if_changed()
         with self._lock:
-            self.catalog_bytes()
+            if self._catalog is None:
+                raise ValueError('catalog_unavailable')
             candidates = []
             for region_id, entry in self._entries.items():
                 box = entry['region']['bounds']
@@ -224,21 +280,27 @@ class PackageManager:
             if not candidates:
                 return {'status': 'unsupported', 'regionId': None, 'releaseVersion': None}
             region_id = min(candidates)[1]
-            release = self._entries[region_id]['latestRelease']['releaseVersion']
+            release = self._entries[region_id].get('latestRelease')
+            if release is None:
+                return {'status': 'available', 'regionId': region_id, 'releaseVersion': None}
+            release = release['releaseVersion']
             return {'status': 'ready' if (region_id, release) in self._ready else 'available',
                     'regionId': region_id, 'releaseVersion': release}
 
     def status(self, region_id, release_version=None):
         with self._lock:
             entry = self._entries.get(region_id)
-            release = release_version or (entry['latestRelease']['releaseVersion'] if entry else None)
+            latest = entry.get('latestRelease') if entry else None
+            release = release_version or (latest['releaseVersion'] if latest else None)
+            if entry and latest is None and self.config.builder_url:
+                return self._builder_status(region_id)
             state = {'status': 'unavailable', 'regionId': region_id, 'releaseVersion': release}
             key = (region_id, release)
             if key in self._ready:
                 state['status'] = 'ready'
             elif key in self._states:
                 state.update(self._states[key])
-            elif entry and entry['latestRelease']['releaseVersion'] == release:
+            elif entry and latest and latest['releaseVersion'] == release:
                 state.update(errorCode='not_acquired')
             else:
                 state.update(errorCode='release_unavailable')
@@ -255,7 +317,16 @@ class PackageManager:
             if state['status'] in ('ready', 'queued', 'downloading') or state.get('errorCode') == 'release_unavailable':
                 return state
             entry = self._entries.get(region_id)
-            if not entry or (release_version and entry['latestRelease']['releaseVersion'] != release_version):
+            if not entry:
+                return {'status': 'unavailable', 'regionId': region_id, 'releaseVersion': release_version,
+                        'errorCode': 'release_unavailable'}
+            latest = entry.get('latestRelease')
+            if latest is None:
+                if release_version is not None or not entry.get('onDemand', {}).get('enabled', False):
+                    return {'status': 'unavailable', 'regionId': region_id, 'releaseVersion': release_version,
+                            'errorCode': 'release_unavailable'}
+                return self._builder_request(region_id)
+            if release_version and latest['releaseVersion'] != release_version:
                 return {'status': 'unavailable', 'regionId': region_id, 'releaseVersion': release_version,
                         'errorCode': 'release_unavailable'}
             pending = [k for k, v in self._states.items() if v['status'] in ('queued', 'downloading')]
@@ -273,6 +344,33 @@ class PackageManager:
             self._states[key] = {'status': 'queued', 'retryAfterSeconds': 2, '_reserved': needed}
             self._pool.submit(self._acquire, manifest, local)
             return {k: v for k, v in self.status(*key).items() if not k.startswith('_')}
+
+    def _builder_request(self, region_id):
+        return self._builder_call('POST', region_id)
+
+    def _builder_status(self, region_id):
+        return self._builder_call('GET', region_id)
+
+    def _builder_call(self, method, region_id):
+        if not self.config.builder_url:
+            return {'status': 'unavailable', 'regionId': region_id, 'releaseVersion': None,
+                    'errorCode': 'builder_not_configured'}
+        url = f'{self.config.builder_url}/internal/builds/{quote(region_id, safe="")}'
+        try:
+            with urlopen(Request(url, method=method, headers={'Accept': 'application/json'}), timeout=10) as response:
+                value = json.loads(response.read(16384))
+        except Exception:
+            return {'status': 'failed', 'regionId': region_id, 'releaseVersion': None,
+                    'errorCode': 'builder_unavailable', 'retryAfterSeconds': 30}
+        if not isinstance(value, dict) or value.get('regionId') != region_id:
+            return {'status': 'failed', 'regionId': region_id, 'releaseVersion': None,
+                    'errorCode': 'builder_malformed_response', 'retryAfterSeconds': 30}
+        if value.get('status') == 'ready':
+            try:
+                self.refresh()
+            except Exception:
+                pass
+        return value
 
     def _verify_files(self, directory, manifest, structures=True):
         for name, suffix in self._suffixes(manifest).items():
@@ -388,7 +486,11 @@ class PackageManager:
     def prune(self):
         removed = 0
         with self._lock:
-            active = {(region, entry['latestRelease']['releaseVersion']) for region, entry in self._entries.items()}
+            active = set()
+            for region, entry in self._entries.items():
+                release = entry.get('latestRelease')
+                if isinstance(release, dict) and release.get('releaseVersion'):
+                    active.add((region, release['releaseVersion']))
             for key in list(self._ready):
                 path = self.releases / key[0] / key[1]
                 if key in active or time.time() - (path / '.ready.json').stat().st_mtime < self.config.prune_grace_seconds:

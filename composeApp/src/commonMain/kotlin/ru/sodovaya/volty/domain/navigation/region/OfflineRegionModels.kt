@@ -38,6 +38,7 @@ data class OfflineRegionManifest(
 
 enum class OfflineRegionPackageStatus {
     NOT_INSTALLED,
+    PREPARING,
     QUEUED,
     WAITING_FOR_NETWORK,
     AWAITING_METERED_APPROVAL,

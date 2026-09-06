@@ -4,6 +4,12 @@
 
 node_keys = { "amenity", "historic", "leisure", "name", "place", "shop", "tourism" }
 
+local function numeric_tag(value, fallback)
+    local number = tonumber(value)
+    if number == nil or number < 0 then return fallback end
+    return number
+end
+
 function node_function(node)
     local name = node:Find("name:ru")
     if name == "" then name = node:Find("name") end
@@ -77,6 +83,13 @@ function way_function(way)
 
     if building ~= "" then
         way:Layer("building", true)
+        local height = numeric_tag(way:Find("height"), 0)
+        local levels = numeric_tag(way:Find("building:levels"), 0)
+        if height <= 0 and levels > 0 then height = levels * 3.2 end
+        if height <= 0 then height = 3.0 end
+        local minHeight = numeric_tag(way:Find("min_height"), 0)
+        way:AttributeNumeric("render_height", math.min(height, 300.0))
+        way:AttributeNumeric("render_min_height", math.min(minHeight, math.min(height, 300.0)))
     end
 
     if landuse ~= "" then

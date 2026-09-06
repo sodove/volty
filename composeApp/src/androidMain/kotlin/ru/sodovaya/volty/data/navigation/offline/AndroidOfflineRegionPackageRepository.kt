@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.os.SystemClock
+import android.util.Log
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
@@ -117,6 +118,8 @@ class AndroidOfflineRegionPackageRepository(
         val loaded = fetchCatalog()
         catalog = loaded
         publishStates()
+        Log.i(TAG, "Offline catalog loaded: ${loaded.regions.size} regions")
+        Unit
     }
 
     override suspend fun requestDownload(
@@ -141,20 +144,47 @@ class AndroidOfflineRegionPackageRepository(
         trigger: OfflineRegionDownloadTrigger,
         meteredConfirmed: Boolean,
     ) {
-        val entry = requireCatalogEntry(regionId)
-        val release = entry.latestRelease ?: run {
+        var entry = requireCatalogEntry(regionId)
+        var release = entry.latestRelease
+        if (release == null) {
+            if (!entry.onDemand.enabled) {
+                updateState(regionId) {
+                    it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.INCOMPATIBLE)
+                }
+                return
+            }
+            updateState(regionId) {
+                it.copy(status = OfflineRegionPackageStatus.PREPARING, downloadedBytes = 0L, failure = null)
+            }
+            try {
+                acquisition.ensurePrepared(regionId)
+                refreshCatalog()
+                entry = requireCatalogEntry(regionId)
+                release = entry.latestRelease
+            } catch (cancelled: CancellationException) {
+                updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.PAUSED, failure = OfflineRegionPackageFailure.CANCELLED) }
+                throw cancelled
+            } catch (failure: OfflineRegionPackageFailureException) {
+                updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = failure.category) }
+                return
+            } catch (_: Exception) {
+                updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.NETWORK) }
+                return
+            }
+        }
+        val preparedRelease = release ?: run {
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.FAILED, failure = OfflineRegionPackageFailure.INCOMPATIBLE) }
             return
         }
         val plan = when (val result = OfflineRegionDownloadPlanFactory.create(
-            manifest = release,
+            manifest = preparedRelease,
             currentAppVersionCode = currentAppVersionCode,
         )) {
             is ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult.Ready -> result.plan
             is ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult.Rejected -> {
                 updateState(regionId) {
                     it.copy(
-                        latestRelease = release,
+                        latestRelease = preparedRelease,
                         status = OfflineRegionPackageStatus.FAILED,
                         downloadedBytes = 0L,
                         failure = OfflineRegionPackageFailure.INCOMPATIBLE,
@@ -164,13 +194,13 @@ class AndroidOfflineRegionPackageRepository(
             }
         }
 
-        if (!downloadAllowed(regionId, release, trigger, meteredConfirmed)) return
+        if (!downloadAllowed(regionId, preparedRelease, trigger, meteredConfirmed)) return
 
-        val staging = packageStore.createDownloadStaging(regionId, release.releaseVersion)
+        val staging = packageStore.createDownloadStaging(regionId, preparedRelease.releaseVersion)
         val stagedBytes = packageStore.stagedDownloadBytes(staging, plan)
         updateState(regionId) {
             it.copy(
-                latestRelease = release,
+                latestRelease = preparedRelease,
                 status = OfflineRegionPackageStatus.DOWNLOADING,
                 downloadedBytes = stagedBytes,
                 failure = null,
@@ -182,13 +212,13 @@ class AndroidOfflineRegionPackageRepository(
             // server has not cached their artifacts yet. Keep online navigation
             // running while it acquires this exact release, then use the existing
             // checksum-verified component download and atomic installation.
-            acquisition.ensureReady(regionId, release.releaseVersion)
+            acquisition.ensureReady(regionId, preparedRelease.releaseVersion)
             // Preparation can take minutes: re-read connectivity and preferences before transferring bytes.
-            if (!downloadAllowed(regionId, release, trigger, meteredConfirmed)) return
+            if (!downloadAllowed(regionId, preparedRelease, trigger, meteredConfirmed)) return
             val artifacts = downloader.download(plan, staging) { downloadedBytes ->
                 updateState(regionId) { state ->
                     state.copy(
-                        latestRelease = release,
+                        latestRelease = preparedRelease,
                         status = OfflineRegionPackageStatus.DOWNLOADING,
                         downloadedBytes = downloadedBytes,
                     )
@@ -196,7 +226,7 @@ class AndroidOfflineRegionPackageRepository(
             }
             updateState(regionId) { it.copy(status = OfflineRegionPackageStatus.INSTALLING) }
             try {
-                packageStore.install(release, plan, artifacts)
+                packageStore.install(preparedRelease, plan, artifacts)
             } catch (cancelled: CancellationException) {
                 installationFailed = true
                 packageStore.discardDownloadStaging(staging)
@@ -208,9 +238,9 @@ class AndroidOfflineRegionPackageRepository(
             }
             updateState(regionId) {
                 it.copy(
-                    latestRelease = release,
+                    latestRelease = preparedRelease,
                     status = OfflineRegionPackageStatus.READY,
-                    installedReleaseVersion = release.releaseVersion,
+                    installedReleaseVersion = preparedRelease.releaseVersion,
                     downloadedBytes = plan.totalDownloadBytes,
                     failure = null,
                 )
@@ -344,6 +374,12 @@ class AndroidOfflineRegionPackageRepository(
             )
             if (unverified.isNotEmpty()) throw IOException("Catalog contains unverified releases")
             loaded
+        } catch (failure: Exception) {
+            // Keep the Settings error intentionally generic, but leave enough
+            // local diagnostics to distinguish transport, parsing, policy and
+            // signature failures when a release cannot refresh its catalog.
+            Log.e(TAG, "Offline catalog refresh failed: ${failure.message ?: failure::class.simpleName}", failure)
+            throw failure
         } finally {
             connection.disconnect()
         }
@@ -449,6 +485,7 @@ class AndroidOfflineRegionPackageRepository(
         return OfflineRegionPackageState(
             region = entry.region,
             latestRelease = latest,
+            onDemand = entry.onDemand.enabled,
             status = when {
                 installed == null && stagedBytes > 0L -> OfflineRegionPackageStatus.PAUSED
                 installed == null -> OfflineRegionPackageStatus.NOT_INSTALLED
@@ -536,11 +573,12 @@ class AndroidOfflineRegionPackageRepository(
     }
 
     private fun OfflineRegionPackageStatus.isTransient(): Boolean = this ==
-        OfflineRegionPackageStatus.QUEUED || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
+        OfflineRegionPackageStatus.PREPARING || OfflineRegionPackageStatus.QUEUED == this || this == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
         this == OfflineRegionPackageStatus.DOWNLOADING || this == OfflineRegionPackageStatus.PAUSED ||
         this == OfflineRegionPackageStatus.VERIFYING || this == OfflineRegionPackageStatus.INSTALLING
 
     private companion object {
+        const val TAG = "VoltyOffline"
         const val MAX_CATALOG_BYTES = 4L * 1024L * 1024L
         const val COPY_BUFFER_SIZE = 16 * 1024
         const val CATALOG_CONNECT_TIMEOUT_MILLIS = 10_000

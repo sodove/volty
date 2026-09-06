@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.filled.Download
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
@@ -38,6 +40,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -109,9 +112,12 @@ import volty.composeapp.generated.resources.settings_offline_refresh
 import volty.composeapp.generated.resources.settings_offline_refreshing
 import volty.composeapp.generated.resources.settings_offline_catalog_failed
 import volty.composeapp.generated.resources.settings_offline_not_configured
+import volty.composeapp.generated.resources.settings_offline_add_region
+import volty.composeapp.generated.resources.settings_offline_no_region_match
 import volty.composeapp.generated.resources.settings_offline_size_line
 import volty.composeapp.generated.resources.settings_offline_download
 import volty.composeapp.generated.resources.settings_offline_download_mobile
+import volty.composeapp.generated.resources.settings_offline_prepare
 import volty.composeapp.generated.resources.settings_offline_pause
 import volty.composeapp.generated.resources.settings_offline_resume
 import volty.composeapp.generated.resources.settings_offline_delete
@@ -122,6 +128,7 @@ import volty.composeapp.generated.resources.settings_offline_status_paused
 import volty.composeapp.generated.resources.settings_offline_status_waiting_network
 import volty.composeapp.generated.resources.settings_offline_status_metered
 import volty.composeapp.generated.resources.settings_offline_status_queued
+import volty.composeapp.generated.resources.settings_offline_status_preparing
 import volty.composeapp.generated.resources.settings_offline_status_installing
 import volty.composeapp.generated.resources.settings_offline_status_failed
 import volty.composeapp.generated.resources.settings_offline_status_deleting
@@ -134,6 +141,7 @@ fun SettingsScreen(component: SettingsComponent) {
     val state by component.state.collectAsState()
     var pendingDelete by remember { mutableStateOf<Vehicle?>(null) }
     var pendingOfflineDelete by remember { mutableStateOf<OfflineRegionPackageState?>(null) }
+    var offlineRegionQuery by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -155,6 +163,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            SettingsCard {
             // THEME
             SectionLabel(stringResource(Res.string.settings_theme))
             val themes = listOf("system", "light", "dark")
@@ -186,8 +195,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 Switch(checked = state.dynamicColor, onCheckedChange = component::onDynamicColorChanged)
             }
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // SCAN TIMEOUT
             SectionLabel(stringResource(Res.string.settings_scan_timeout))
             Text(stringResource(Res.string.settings_seconds, state.scanTimeoutSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -208,8 +219,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 steps = 9
             )
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // UNITS
             SectionLabel(stringResource(Res.string.settings_units))
             val unitSystems = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL)
@@ -227,6 +240,8 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
+            SettingsCard {
             // NEARBY VOICE MICROPHONE
             SectionLabel(stringResource(Res.string.settings_voice_microphone))
             Text(
@@ -254,6 +269,8 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
+            SettingsCard {
             // DASHBOARD STYLE (app default)
             SectionLabel(stringResource(Res.string.settings_dashboard_style))
             val dashboardStyles = DashboardStyle.entries
@@ -285,8 +302,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 steps = 9
             )
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // OFFLINE NAVIGATION REGIONS
             SectionLabel(stringResource(Res.string.settings_offline_navigation))
             Text(
@@ -343,14 +362,32 @@ fun SettingsScreen(component: SettingsComponent) {
                     color = MaterialTheme.colorScheme.error,
                 )
             }
-            if (state.offlineRegions.isEmpty()) {
+            OutlinedTextField(
+                value = offlineRegionQuery,
+                onValueChange = { offlineRegionQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text(stringResource(Res.string.settings_offline_add_region)) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            )
+            val visibleOfflineRegions = OfflineRegionListPolicy.filterAndOrder(
+                states = state.offlineRegions,
+                query = offlineRegionQuery,
+            )
+            if (state.offlineRegions.isEmpty() && !state.offlineCatalogError) {
                 Text(
                     stringResource(Res.string.settings_offline_not_configured),
                     fontSize = 12.sp,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+            } else if (visibleOfflineRegions.isEmpty()) {
+                Text(
+                    stringResource(Res.string.settings_offline_no_region_match),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
             } else {
-                state.offlineRegions.forEach { region ->
+                visibleOfflineRegions.forEach { region ->
                     OfflineRegionRow(
                         region = region,
                         component = component,
@@ -359,8 +396,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             SectionLabel(stringResource(Res.string.settings_my_batteries))
             state.vehicles.forEach { v ->
                 VehicleRow(
@@ -373,8 +412,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 Text(stringResource(Res.string.settings_add_new_battery))
             }
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // DIAGNOSTICS
             SectionLabel(stringResource(Res.string.settings_diagnostics))
             Row(
@@ -402,6 +443,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
             Spacer(Modifier.height(24.dp))
         }
 
@@ -466,6 +508,7 @@ private fun OfflineRegionRow(
             actionText = stringResource(Res.string.settings_offline_delete)
         }
         OfflineRegionPackageStatus.DOWNLOADING,
+        OfflineRegionPackageStatus.PREPARING,
         OfflineRegionPackageStatus.INSTALLING,
         OfflineRegionPackageStatus.VERIFYING,
         OfflineRegionPackageStatus.DELETING -> {
@@ -492,7 +535,13 @@ private fun OfflineRegionRow(
         OfflineRegionPackageStatus.FAILED -> {
             action = { component.onDownloadOfflineRegion(region.region.regionId) }
             actionIcon = Icons.Default.Download
-            actionText = stringResource(Res.string.settings_offline_download)
+            actionText = if (region.status == OfflineRegionPackageStatus.NOT_INSTALLED &&
+                region.onDemand && release == null
+            ) {
+                stringResource(Res.string.settings_offline_prepare)
+            } else {
+                stringResource(Res.string.settings_offline_download)
+            }
         }
     }
 
@@ -554,6 +603,8 @@ private fun offlineRegionStatusText(
         stringResource(Res.string.settings_offline_status_metered)
     OfflineRegionPackageStatus.QUEUED ->
         stringResource(Res.string.settings_offline_status_queued)
+    OfflineRegionPackageStatus.PREPARING ->
+        stringResource(Res.string.settings_offline_status_preparing)
     OfflineRegionPackageStatus.INSTALLING,
     OfflineRegionPackageStatus.VERIFYING,
     OfflineRegionPackageStatus.DELETING -> stringResource(Res.string.settings_offline_status_deleting)
@@ -584,6 +635,19 @@ private fun SectionLabel(text: String) {
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
     )
 }
 

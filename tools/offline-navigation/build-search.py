@@ -13,6 +13,7 @@ import json
 import re
 import sqlite3
 import sys
+from math import cos, radians, sqrt
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -58,7 +59,66 @@ def _kind(properties: dict[str, Any]) -> str:
     return "feature"
 
 
-def _rows(features: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str, float, float, str, str]]:
+Row = tuple[str, str, float, float, str, str]
+
+
+def _name_normalize(value: str) -> str:
+    value = re.sub(r"[^\w\s]+", " ", value.lower().replace("ё", "е"), flags=re.UNICODE)
+    return " ".join(value.split())
+
+
+def _distance_meters(left: Row, right: Row) -> float:
+    latitude = radians((left[2] + right[2]) / 2.0)
+    north = radians(right[2] - left[2]) * 6_371_000.0
+    east = radians(right[3] - left[3]) * 6_371_000.0 * cos(latitude)
+    return sqrt(north * north + east * east)
+
+
+def _row_quality(row: Row) -> tuple[int, int, int]:
+    semantic = {"shop:mall": 30, "amenity:food_court": 20}.get(row[4], 0)
+    return semantic, len(row[1]), len(row[0])
+
+
+def _deduplicate_rows(rows: Iterable[Row]) -> list[Row]:
+    result: list[Row] = []
+    identity_index: dict[str, int] = {}
+    spatial_index: dict[tuple[str, int, int], list[int]] = {}
+
+    def cell(row: Row) -> tuple[int, int]:
+        latitude = radians(row[2])
+        return (
+            int((radians(row[3]) * 6_371_000.0 * cos(latitude)) // 50.0),
+            int((radians(row[2]) * 6_371_000.0) // 50.0),
+        )
+
+    for row in rows:
+        name = _name_normalize(row[0])
+        x, y = cell(row)
+        candidate_indices: set[int] = set()
+        if row[5] in identity_index:
+            candidate_indices.add(identity_index[row[5]])
+        if name:
+            for dx in (-1, 0, 1):
+                for dy in (-1, 0, 1):
+                    candidate_indices.update(spatial_index.get((name, x + dx, y + dy), ()))
+        duplicate_index = next((index for index in candidate_indices
+                                if (row[5] and result[index][5] == row[5]) or
+                                   (name and name == _name_normalize(result[index][0]) and
+                                    _distance_meters(row, result[index]) <= 50.0)), None)
+        if duplicate_index is None:
+            duplicate_index = len(result)
+            result.append(row)
+        elif _row_quality(row) > _row_quality(result[duplicate_index]):
+            result[duplicate_index] = row
+        if row[5]:
+            identity_index[row[5]] = duplicate_index
+        if name:
+            spatial_index.setdefault((name, x, y), []).append(duplicate_index)
+    return result
+
+
+def _rows(features: Iterable[dict[str, Any]]) -> Iterable[Row]:
+    raw_rows: list[Row] = []
     for feature in features:
         properties = feature.get("properties")
         geometry = feature.get("geometry")
@@ -81,7 +141,8 @@ def _rows(features: Iterable[dict[str, Any]]) -> Iterable[tuple[str, str, float,
         display_name = names[0] if names else " ".join(address)
         search_text = _search_normalize(" ".join(dict.fromkeys(names + address)))
         osm_id = str(properties.get("id", properties.get("osm_id", "")))
-        yield display_name, search_text, point[0], point[1], _kind(properties), osm_id
+        raw_rows.append((display_name, search_text, point[0], point[1], _kind(properties), osm_id))
+    yield from _deduplicate_rows(raw_rows)
 
 
 def main() -> int:

@@ -98,6 +98,10 @@ def canonical_catalog_payload(catalog: dict[str, Any]) -> bytes:
             release = entry.get("latestRelease")
             if isinstance(release, dict):
                 entry["latestRelease"] = without_android_nullable_defaults(release)
+            elif release is None:
+                # latestRelease has a Kotlin default of null and is omitted
+                # by OfflineRegionCatalogCodec when encodeDefaults is false.
+                entry.pop("latestRelease", None)
     return json.dumps(
         unsigned,
         ensure_ascii=False,
@@ -340,40 +344,48 @@ def build_catalog(
             raise ValueError(f"{spec_path}: duplicate regionId {region_id}")
         seen.add(region_id)
 
+        on_demand = entry.get("onDemand", {"enabled": False})
+        if not isinstance(on_demand, dict) or not isinstance(on_demand.get("enabled", False), bool):
+            raise ValueError(f"{spec_path}: regions[{index}].onDemand.enabled must be boolean")
         manifest_value = entry.get("manifest")
-        if not isinstance(manifest_value, str) or not manifest_value.strip():
-            raise ValueError(f"{spec_path}: regions[{index}].manifest is required")
-        manifest_path = Path(manifest_value)
-        if not manifest_path.is_absolute():
-            manifest_path = spec_path.parent / manifest_path
-        manifest = signed_manifest(
-            manifest_path,
-            region_id,
-            expected_routing_data_version,
-            public_key=public_key,
-            expected_key_id=expected_key_id,
-            current_app_version_code=current_app_version_code,
-        )
-        coverage = finite_bbox(manifest["coverage"]["bbox"], f"{region_id}: coverage.bbox")
+        manifest = None
+        if manifest_value is not None:
+            if not isinstance(manifest_value, str) or not manifest_value.strip():
+                raise ValueError(f"{spec_path}: regions[{index}].manifest is invalid")
+            manifest_path = Path(manifest_value)
+            if not manifest_path.is_absolute():
+                manifest_path = spec_path.parent / manifest_path
+            manifest = signed_manifest(
+                manifest_path,
+                region_id,
+                expected_routing_data_version,
+                public_key=public_key,
+                expected_key_id=expected_key_id,
+                current_app_version_code=current_app_version_code,
+            )
+        elif not on_demand["enabled"]:
+            raise ValueError(f"{spec_path}: regions[{index}].manifest is required unless onDemand is enabled")
+        coverage = finite_bbox(manifest["coverage"]["bbox"], f"{region_id}: coverage.bbox") if manifest else None
         bounds = finite_bbox(entry.get("bounds", coverage), f"{region_id}: bounds")
-        if not coverage_covers(coverage, bounds):
+        if coverage is not None and not coverage_covers(coverage, bounds):
             raise ValueError(f"{region_id}: logical bounds exceed signed release coverage")
 
-        catalog_entries.append(
-            {
-                "region": {
-                    "regionId": region_id,
-                    "displayName": display_name,
-                    "bounds": {
-                        "south": bounds[1],
-                        "west": bounds[0],
-                        "north": bounds[3],
-                        "east": bounds[2],
-                    },
+        catalog_entry = {
+            "region": {
+                "regionId": region_id,
+                "displayName": display_name,
+                "bounds": {
+                    "south": bounds[1],
+                    "west": bounds[0],
+                    "north": bounds[3],
+                    "east": bounds[2],
                 },
-                "latestRelease": manifest,
-            }
-        )
+            },
+            "latestRelease": manifest,
+        }
+        if on_demand["enabled"]:
+            catalog_entry["onDemand"] = {"enabled": True}
+        catalog_entries.append(catalog_entry)
 
     return {
         "schemaVersion": 2,

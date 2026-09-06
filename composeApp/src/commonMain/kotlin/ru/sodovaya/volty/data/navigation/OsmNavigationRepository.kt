@@ -33,6 +33,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
@@ -66,7 +67,9 @@ class OsmNavigationRepository(
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
         val body = response.readBoundedBody()
-        response.toResult(body) { text -> decodePhoton(text) }
+        response.toResult(body) { text ->
+            PlaceCandidateDeduplicationPolicy.deduplicate(decodePhoton(text), limit = 8)
+        }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {

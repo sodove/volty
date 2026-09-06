@@ -29,13 +29,12 @@ data class OfflineRegionCatalogSignature(
 data class OfflineRegionCatalogEntry(
     val region: OfflineRegionManifest,
     val latestRelease: OfflineRegionPackageManifest? = null,
-    val onDemand: OfflineRegionOnDemand? = null,
+    val onDemand: OfflineRegionOnDemand = OfflineRegionOnDemand(),
 )
 
-/** Whether the server can prepare a package for this region on demand. */
 @Serializable
 data class OfflineRegionOnDemand(
-    val enabled: Boolean,
+    val enabled: Boolean = false,
 )
 
 enum class OfflineRegionCatalogParseError {
@@ -83,6 +82,7 @@ enum class OfflineRegionCatalogErrorCode {
     RELEASE_REGION_MISMATCH,
     REGION_BOUNDS_MISMATCH,
     RELEASE_INVALID,
+    INVALID_ON_DEMAND_ENTRY,
 }
 
 data class OfflineRegionCatalogValidationError(
@@ -133,6 +133,12 @@ object OfflineRegionCatalogPolicy {
         }
 
         catalog.regions.forEach { entry ->
+            if (entry.latestRelease == null && !entry.onDemand.enabled) {
+                errors += OfflineRegionCatalogValidationError(
+                    OfflineRegionCatalogErrorCode.INVALID_ON_DEMAND_ENTRY,
+                    entry.region.regionId,
+                )
+            }
             entry.latestRelease?.let { release ->
                 if (release.regionId != entry.region.regionId) {
                     errors += OfflineRegionCatalogValidationError(

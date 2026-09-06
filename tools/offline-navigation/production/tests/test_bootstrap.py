@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from production.bootstrap import enqueue_inventory, plan_inventory
+from production.bootstrap import enqueue_inventory, plan_inventory, production_config_from_inventory
 
 
 class BootstrapTest(unittest.TestCase):
@@ -59,6 +59,25 @@ class BootstrapTest(unittest.TestCase):
             self.assertEqual([], enqueue_inventory(inventory, root / "jobs.json"))
             migrated = json.loads((root / "jobs.json").read_text(encoding="utf-8"))
             self.assertEqual({"russia"}, {job["sourceId"] for job in migrated["jobs"]})
+
+    def test_production_config_uses_host_visible_paths_for_docker_builder(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            inventory = {
+                "regions": [{
+                    "regionId": "g1-146-240",
+                    "sourceIds": ["russia"],
+                    "sourceUrls": ["https://download.example/russia.osm.pbf"],
+                    "logicalBbox": [60, 56, 61, 57],
+                }],
+            }
+            config = production_config_from_inventory(inventory, str(root))
+            self.assertEqual(str(root / "offline"), config["publicRoot"])
+            self.assertEqual(str(root / "offline-production" / "staging"), config["stagingRoot"])
+            self.assertEqual(str(root / "offline-production" / "sources"), config["sourceRoot"])
+            self.assertEqual(str(root / "tools" / "offline-navigation" / "build-package.sh"), config["buildScript"])
+            self.assertEqual(str(Path("/run/secrets/volty-offline-signing-key.pem")), config["signingKey"])
+            self.assertEqual(8 * 1024 * 1024 * 1024, config["maxDownloadBytes"])
 
 
 if __name__ == "__main__":

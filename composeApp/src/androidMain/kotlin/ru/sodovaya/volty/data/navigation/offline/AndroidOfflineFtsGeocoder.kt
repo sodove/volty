@@ -10,6 +10,7 @@ import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoder
 import ru.sodovaya.volty.domain.navigation.region.OfflineGeocoderRequest
 import ru.sodovaya.volty.domain.navigation.region.OfflineAutocompleteRankingPolicy
@@ -117,7 +118,7 @@ class AndroidOfflineFtsGeocoder(
                 )
             }
         }
-        return OfflineAutocompleteRankingPolicy.order(
+        val ordered = OfflineAutocompleteRankingPolicy.order(
             rows = rows.map { row ->
                 OfflineAutocompleteRankedRow(
                     value = row.candidate,
@@ -127,7 +128,8 @@ class AndroidOfflineFtsGeocoder(
                 )
             },
             preferProximity = request.near != null,
-        ).take(request.query.limit)
+        )
+        return PlaceCandidateDeduplicationPolicy.deduplicate(ordered, request.query.limit)
     }
 
     private fun longitudeScale(latitude: Double): Double =

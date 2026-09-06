@@ -31,7 +31,7 @@ class OfflineRegionCatalogTest {
         val catalog = assertIs<OfflineRegionCatalogParseResult.Success>(result).catalog
         assertEquals("ru-sve-ekb", catalog.regions.single().region.regionId)
         assertEquals("2026.09.1", catalog.regions.single().latestRelease?.releaseVersion)
-        assertEquals(true, catalog.regions.single().onDemand?.enabled)
+        assertEquals(true, catalog.regions.single().onDemand.enabled)
     }
 
     @Test
@@ -59,7 +59,7 @@ class OfflineRegionCatalogTest {
                 schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
                 regions = listOf(
-                    OfflineRegionCatalogEntry(region, null),
+                    OfflineRegionCatalogEntry(region, null, OfflineRegionOnDemand(true)),
                     OfflineRegionCatalogEntry(
                         region("ru-sve-ekb"),
                         release(regionId = "ru-sve-other"),
@@ -85,13 +85,28 @@ class OfflineRegionCatalogTest {
             OfflineRegionCatalog(
                 schemaVersion = 2,
                 generatedAt = "2026-09-03T00:00:00Z",
-                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null)),
+                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null, OfflineRegionOnDemand(true))),
                 signature = catalogSignature(),
             ),
             currentAppVersionCode = 28,
         )
 
         assertEquals(emptyList(), result)
+    }
+
+    @Test
+    fun validation_rejects_an_unbuilt_entry_without_on_demand_capability() {
+        val errors = OfflineRegionCatalogPolicy.validate(
+            OfflineRegionCatalog(
+                schemaVersion = 2,
+                generatedAt = "2026-09-03T00:00:00Z",
+                regions = listOf(OfflineRegionCatalogEntry(region("ru-sve-ekb"), null)),
+                signature = catalogSignature(),
+            ),
+            currentAppVersionCode = 31,
+        )
+
+        assertEquals(OfflineRegionCatalogErrorCode.INVALID_ON_DEMAND_ENTRY, errors.single().code)
     }
 
     @Test
@@ -127,6 +142,27 @@ class OfflineRegionCatalogTest {
                 catalog.copy(signature = OfflineRegionCatalogSignature("other", "ed25519", "different")),
             ),
         )
+    }
+
+    @Test
+    fun catalog_signing_payload_omits_default_null_release_for_on_demand_region() {
+        val catalog = OfflineRegionCatalog(
+            schemaVersion = 2,
+            generatedAt = "2026-09-03T00:00:00Z",
+            regions = listOf(
+                OfflineRegionCatalogEntry(
+                    region = region("g1-146-241"),
+                    latestRelease = null,
+                    onDemand = OfflineRegionOnDemand(enabled = true),
+                ),
+            ),
+            signature = catalogSignature(),
+        )
+
+        val payload = OfflineRegionCatalogCodec.signingPayload(catalog)
+
+        assertFalse(payload.contains("\"latestRelease\""))
+        assertFalse(payload.contains("\"onDemand\":{\"enabled\":false}"))
     }
 
     @Test

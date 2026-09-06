@@ -37,7 +37,8 @@ python3 -m production.bootstrap plan \
 python3 -m production.bootstrap enqueue \
   --inventory "$INVENTORY_PATH" \
   --queue "$QUEUE_PATH" \
-  --production-config "$CONFIG_PATH"
+  --production-config "$CONFIG_PATH" \
+  --runtime-root "$ROOT"
 printf '[offline-bootstrap] inventory=%s queue=%s config=%s\n' \
   "$INVENTORY_PATH" "$QUEUE_PATH" "$CONFIG_PATH"
 printf '%s\n' '[offline-bootstrap] Next: provision the trusted signing key/keyId and real source metadata; deploy-production.sh will refuse to start before that.'
