@@ -15,6 +15,8 @@ import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.RoutingPreferences
 import ru.sodovaya.volty.util.UnitSystem
 
 class LightNavigationUiMapperTest {
@@ -26,7 +28,7 @@ class LightNavigationUiMapperTest {
     )
 
     @Test
-    fun `planning exposes search without a vehicle profile choice`() {
+    fun `planning exposes search and route profile options`() {
         val state = LightNavigationState(
             phase = NavigationPhase.Planning(
                 query = "набережная",
@@ -35,12 +37,16 @@ class LightNavigationUiMapperTest {
                 requestInFlight = false,
                 failure = null,
             ),
+            routeStyle = RouteStyle.CURVY,
+            routingPreferences = RoutingPreferences(declaredTopSpeedKph = 120),
         )
 
         val ui = LightNavigationUiMapper.map(state, UnitSystem.METRIC)
 
         assertEquals(NavigationUiPhase.PLANNING, ui.phase)
         assertEquals(listOf(destination), ui.searchResults)
+        assertEquals(RouteStyle.CURVY, ui.routeStyle)
+        assertEquals(120, ui.topSpeedKph)
         assertFalse(ui.canStart)
         assertFalse(shouldShowNavigationNoResults(ui))
     }

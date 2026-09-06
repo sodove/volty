@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.mutablePreferencesOf
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.util.UnitSystem
 import kotlinx.coroutines.flow.Flow
@@ -61,5 +62,26 @@ class SettingsUnitsTest {
             VoiceMicrophoneSource.HEADSET,
             prefs.voiceMicrophoneSource.first { it == VoiceMicrophoneSource.HEADSET },
         )
+    }
+
+    @Test
+    fun choosing_navigation_options_persists_across_app_prefs_instances() = runTest {
+        val store = FakePreferencesDataStore(mutablePreferencesOf())
+        val prefs = AppPrefs(store)
+
+        prefs.setRouteStyle("vehicle-a", RouteStyle.MAX_CURVY_TOURING)
+        prefs.setTopSpeedKph("vehicle-a", 35)
+
+        val reloaded = AppPrefs(store)
+        assertEquals(
+            RouteStyle.MAX_CURVY_TOURING,
+            reloaded.routeStyleFor("vehicle-a").first { it == RouteStyle.MAX_CURVY_TOURING },
+        )
+        assertEquals(35, reloaded.topSpeedKphFor("vehicle-a").first { it == 35 })
+        assertEquals(
+            RouteStyle.FAST_WITH_HIGHWAYS,
+            reloaded.routeStyleFor("vehicle-b").first(),
+        )
+        assertEquals(50, reloaded.topSpeedKphFor("vehicle-b").first())
     }
 }

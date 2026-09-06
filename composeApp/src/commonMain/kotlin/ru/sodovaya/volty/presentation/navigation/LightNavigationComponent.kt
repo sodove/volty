@@ -16,7 +16,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.location.LocationConsumer
 import ru.sodovaya.volty.domain.location.RideLocationFix
@@ -34,6 +38,8 @@ import ru.sodovaya.volty.domain.navigation.RouteProgressEngine
 import ru.sodovaya.volty.domain.navigation.RouteProgressUpdate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import kotlin.math.max
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -46,6 +52,8 @@ interface LightNavigationComponent {
     fun onPlannerRequested()
     fun onQueryChanged(query: String)
     fun onPlaceSelected(place: PlaceCandidate)
+    fun onRouteStyleChanged(style: RouteStyle)
+    fun onTopSpeedChanged(speedKph: Int)
     fun onAlternativeSelected(routeId: String)
     fun onStartNavigation()
     fun onRetry()
@@ -63,6 +71,8 @@ class DefaultLightNavigationComponent(
     private val navigationRepository: NavigationRepository,
     private val locationRepository: RideLocationRepository,
     private val energySource: NavigationEnergySource? = null,
+    private val navigationPreferences: NavigationPreferencesStore? = null,
+    private val activeVehicleId: StateFlow<String?>? = null,
     private val languageTag: String = "ru-RU",
     private val dispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
     private val nowEpochMillis: () -> Long = {
@@ -87,6 +97,9 @@ class DefaultLightNavigationComponent(
     private val progressEngine = RouteProgressEngine()
     private var rerouteJob: Job? = null
     private var lastRerouteEpisodeId: Long? = null
+    private var routeStyleChangedByUser = false
+    private var topSpeedChangedByUser = false
+    private var currentVehicleId: String? = activeVehicleId?.value
     private var closed = false
 
     init {
@@ -113,6 +126,38 @@ class DefaultLightNavigationComponent(
                 }
             }
         }
+        navigationPreferences?.let { preferences ->
+            val vehicleIds: Flow<String?> = activeVehicleId ?: flowOf(null)
+            scope.launch {
+                vehicleIds.collectLatest { vehicleId ->
+                    currentVehicleId = vehicleId
+                    routeStyleChangedByUser = false
+                    topSpeedChangedByUser = false
+                    coroutineScope {
+                        launch {
+                            preferences.routeStyleFor(vehicleId).collect { style ->
+                                if (!closed && !routeStyleChangedByUser) {
+                                    _state.update { current -> current.copy(routeStyle = style) }
+                                }
+                            }
+                        }
+                        launch {
+                            preferences.topSpeedKphFor(vehicleId).collect { speedKph ->
+                                if (!closed && !topSpeedChangedByUser) {
+                                    _state.update { current ->
+                                        current.copy(
+                                            routingPreferences = current.routingPreferences.copy(
+                                                declaredTopSpeedKph = speedKph.coerceIn(20, 130),
+                                            ),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     override fun onPlannerRequested() {
@@ -135,7 +180,7 @@ class DefaultLightNavigationComponent(
         awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.QueryChanged(query))
-        if (query.trim().length < MIN_SEARCH_LENGTH) return
+        if (query.trim().length < LightNavigationSearchPolicy.MIN_QUERY_LENGTH) return
         scheduleSearch(query)
     }
 
@@ -149,6 +194,45 @@ class DefaultLightNavigationComponent(
         awaitingRouteOrigin = false
         releaseNavigationDemand()
         reduce(NavigationAction.PlaceSelected(place))
+    }
+
+    override fun onRouteStyleChanged(style: RouteStyle) {
+        if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        routeStyleChangedByUser = true
+        reduce(NavigationAction.RouteStyleChanged(style))
+        navigationPreferences?.let { preferences ->
+            val vehicleId = currentVehicleId
+            scope.launch {
+                try {
+                    preferences.setRouteStyle(vehicleId, style)
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    // A persistence failure must not make the planner unusable.
+                }
+            }
+        }
+    }
+
+    override fun onTopSpeedChanged(speedKph: Int) {
+        if (closed || _state.value.phase !is NavigationPhase.Planning) return
+        topSpeedChangedByUser = true
+        reduce(NavigationAction.TopSpeedChanged(speedKph))
+        navigationPreferences?.let { preferences ->
+            val vehicleId = currentVehicleId
+            scope.launch {
+                try {
+                    preferences.setTopSpeedKph(
+                        vehicleId,
+                        speedKph.coerceIn(20, 130),
+                    )
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Throwable) {
+                    // A persistence failure must not make the planner unusable.
+                }
+            }
+        }
     }
 
     override fun onAlternativeSelected(routeId: String) {
@@ -185,7 +269,7 @@ class DefaultLightNavigationComponent(
                 if (phase.requestInFlight) return
                 if (phase.destination != null) {
                     requestRouteIfPossible()
-                } else if (phase.query.trim().length >= MIN_SEARCH_LENGTH) {
+                } else if (phase.query.trim().length >= LightNavigationSearchPolicy.MIN_QUERY_LENGTH) {
                     searchJob?.cancel()
                     scheduleSearch(phase.query)
                 }
@@ -312,6 +396,8 @@ class DefaultLightNavigationComponent(
         }
         awaitingRouteOrigin = false
         val requestGeneration = _state.value.requestGeneration
+        val routeStyle = _state.value.routeStyle
+        val routingPreferences = _state.value.routingPreferences
         reduce(NavigationAction.RouteRequestStarted(requestGeneration))
         if (!(_state.value.phase as? NavigationPhase.Planning)?.requestInFlight.orFalse()) return
 
@@ -325,6 +411,8 @@ class DefaultLightNavigationComponent(
                         origin = origin.coordinate,
                         destination = destination,
                         languageTag = languageTag,
+                        style = routeStyle,
+                        preferences = routingPreferences,
                     ),
                 )
             } catch (error: CancellationException) {
@@ -464,11 +552,14 @@ class DefaultLightNavigationComponent(
                 )
             }
             val result = try {
+                val currentState = _state.value
                 navigationRepository.routes(
                     RouteRequest(
                         origin = origin,
                         destination = plan.destination,
                         languageTag = languageTag,
+                        style = currentState.routeStyle,
+                        preferences = currentState.routingPreferences,
                     ),
                 )
             } catch (error: CancellationException) {
@@ -650,7 +741,6 @@ class DefaultLightNavigationComponent(
     private fun Boolean?.orFalse(): Boolean = this == true
 
     private companion object {
-        const val MIN_SEARCH_LENGTH = 3
         const val SEARCH_DEBOUNCE_MILLIS = 350L
         const val MAX_LOCATION_AGE_MILLIS = 5_000L
         const val MAX_LOCATION_ACCURACY_METERS = 50.0

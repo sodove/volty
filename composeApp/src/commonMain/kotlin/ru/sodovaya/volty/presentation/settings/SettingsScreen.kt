@@ -5,6 +5,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,8 +18,15 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Pause
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -32,6 +40,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
@@ -49,6 +58,9 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
@@ -72,6 +84,12 @@ import volty.composeapp.generated.resources.settings_delete_title
 import volty.composeapp.generated.resources.settings_dynamic_color
 import volty.composeapp.generated.resources.settings_dynamic_color_subtitle
 import volty.composeapp.generated.resources.settings_my_batteries
+import volty.composeapp.generated.resources.settings_offline_attribution
+import volty.composeapp.generated.resources.settings_offline_status_failed_cancelled
+import volty.composeapp.generated.resources.settings_offline_status_failed_checksum
+import volty.composeapp.generated.resources.settings_offline_status_failed_incompatible
+import volty.composeapp.generated.resources.settings_offline_status_failed_network
+import volty.composeapp.generated.resources.settings_offline_status_failed_storage
 import volty.composeapp.generated.resources.settings_scan_timeout
 import volty.composeapp.generated.resources.settings_seconds
 import volty.composeapp.generated.resources.settings_theme
@@ -87,12 +105,43 @@ import volty.composeapp.generated.resources.settings_voice_microphone_auto
 import volty.composeapp.generated.resources.settings_voice_microphone_headset
 import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
+import volty.composeapp.generated.resources.settings_offline_navigation
+import volty.composeapp.generated.resources.settings_offline_navigation_subtitle
+import volty.composeapp.generated.resources.settings_offline_mobile_data
+import volty.composeapp.generated.resources.settings_offline_refresh
+import volty.composeapp.generated.resources.settings_offline_refreshing
+import volty.composeapp.generated.resources.settings_offline_catalog_failed
+import volty.composeapp.generated.resources.settings_offline_not_configured
+import volty.composeapp.generated.resources.settings_offline_add_region
+import volty.composeapp.generated.resources.settings_offline_no_region_match
+import volty.composeapp.generated.resources.settings_offline_size_line
+import volty.composeapp.generated.resources.settings_offline_download
+import volty.composeapp.generated.resources.settings_offline_download_mobile
+import volty.composeapp.generated.resources.settings_offline_prepare
+import volty.composeapp.generated.resources.settings_offline_pause
+import volty.composeapp.generated.resources.settings_offline_resume
+import volty.composeapp.generated.resources.settings_offline_delete
+import volty.composeapp.generated.resources.settings_offline_status_ready
+import volty.composeapp.generated.resources.settings_offline_status_update
+import volty.composeapp.generated.resources.settings_offline_status_downloading
+import volty.composeapp.generated.resources.settings_offline_status_paused
+import volty.composeapp.generated.resources.settings_offline_status_waiting_network
+import volty.composeapp.generated.resources.settings_offline_status_metered
+import volty.composeapp.generated.resources.settings_offline_status_queued
+import volty.composeapp.generated.resources.settings_offline_status_preparing
+import volty.composeapp.generated.resources.settings_offline_status_installing
+import volty.composeapp.generated.resources.settings_offline_status_failed
+import volty.composeapp.generated.resources.settings_offline_status_deleting
+import volty.composeapp.generated.resources.settings_offline_delete_title
+import volty.composeapp.generated.resources.settings_offline_delete_text
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(component: SettingsComponent) {
     val state by component.state.collectAsState()
     var pendingDelete by remember { mutableStateOf<Vehicle?>(null) }
+    var pendingOfflineDelete by remember { mutableStateOf<OfflineRegionPackageState?>(null) }
+    var offlineRegionQuery by remember { mutableStateOf("") }
 
     Scaffold(
         topBar = {
@@ -114,6 +163,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            SettingsCard {
             // THEME
             SectionLabel(stringResource(Res.string.settings_theme))
             val themes = listOf("system", "light", "dark")
@@ -145,8 +195,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 Switch(checked = state.dynamicColor, onCheckedChange = component::onDynamicColorChanged)
             }
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // SCAN TIMEOUT
             SectionLabel(stringResource(Res.string.settings_scan_timeout))
             Text(stringResource(Res.string.settings_seconds, state.scanTimeoutSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -167,8 +219,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 steps = 9
             )
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // UNITS
             SectionLabel(stringResource(Res.string.settings_units))
             val unitSystems = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL)
@@ -186,6 +240,8 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
+            SettingsCard {
             // NEARBY VOICE MICROPHONE
             SectionLabel(stringResource(Res.string.settings_voice_microphone))
             Text(
@@ -213,6 +269,8 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
+            SettingsCard {
             // DASHBOARD STYLE (app default)
             SectionLabel(stringResource(Res.string.settings_dashboard_style))
             val dashboardStyles = DashboardStyle.entries
@@ -244,8 +302,104 @@ fun SettingsScreen(component: SettingsComponent) {
                 steps = 9
             )
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
+            // OFFLINE NAVIGATION REGIONS
+            SectionLabel(stringResource(Res.string.settings_offline_navigation))
+            Text(
+                stringResource(Res.string.settings_offline_navigation_subtitle),
+                fontSize = 12.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                stringResource(Res.string.settings_offline_attribution),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    stringResource(Res.string.settings_offline_mobile_data),
+                    modifier = Modifier.weight(1f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                )
+                Switch(
+                    checked = state.offlineSkipMeteredConfirmation,
+                    onCheckedChange = component::onOfflineSkipMeteredConfirmationChanged,
+                )
+            }
+            TextButton(
+                onClick = component::onRefreshOfflineRegions,
+                enabled = !state.offlineCatalogRefreshing,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                if (state.offlineCatalogRefreshing) {
+                    CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                } else {
+                    Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                }
+                Spacer(Modifier.size(6.dp))
+                Text(
+                    stringResource(
+                        if (state.offlineCatalogRefreshing) {
+                            Res.string.settings_offline_refreshing
+                        } else {
+                            Res.string.settings_offline_refresh
+                        }
+                    )
+                )
+            }
+            if (state.offlineCatalogError) {
+                Text(
+                    stringResource(Res.string.settings_offline_catalog_failed),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.error,
+                )
+            }
+            OutlinedTextField(
+                value = offlineRegionQuery,
+                onValueChange = { offlineRegionQuery = it },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                label = { Text(stringResource(Res.string.settings_offline_add_region)) },
+                leadingIcon = { Icon(Icons.Default.Search, contentDescription = null) },
+            )
+            val visibleOfflineRegions = OfflineRegionListPolicy.filterAndOrder(
+                states = state.offlineRegions,
+                query = offlineRegionQuery,
+            )
+            if (state.offlineRegions.isEmpty()) {
+                Text(
+                    stringResource(Res.string.settings_offline_not_configured),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else if (visibleOfflineRegions.isEmpty()) {
+                Text(
+                    stringResource(Res.string.settings_offline_no_region_match),
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            } else {
+                visibleOfflineRegions.forEach { region ->
+                    OfflineRegionRow(
+                        region = region,
+                        component = component,
+                        onDeleteRequest = { pendingOfflineDelete = region },
+                    )
+                }
+            }
+
+            }
+            HorizontalDivider()
+
+            SettingsCard {
             SectionLabel(stringResource(Res.string.settings_my_batteries))
             state.vehicles.forEach { v ->
                 VehicleRow(
@@ -258,8 +412,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 Text(stringResource(Res.string.settings_add_new_battery))
             }
 
+            }
             HorizontalDivider()
 
+            SettingsCard {
             // DIAGNOSTICS
             SectionLabel(stringResource(Res.string.settings_diagnostics))
             Row(
@@ -287,6 +443,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 }
             }
 
+            }
             Spacer(Modifier.height(24.dp))
         }
 
@@ -304,7 +461,170 @@ fun SettingsScreen(component: SettingsComponent) {
                 text = { Text(stringResource(Res.string.settings_delete_text)) }
             )
         }
+        pendingOfflineDelete?.let { region ->
+            AlertDialog(
+                onDismissRequest = { pendingOfflineDelete = null },
+                confirmButton = {
+                    TextButton(onClick = {
+                        component.onDeleteOfflineRegion(region.region.regionId)
+                        pendingOfflineDelete = null
+                    }) {
+                        Text(
+                            stringResource(Res.string.settings_offline_delete),
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { pendingOfflineDelete = null }) {
+                        Text(stringResource(Res.string.action_cancel))
+                    }
+                },
+                title = { Text(stringResource(Res.string.settings_offline_delete_title, region.region.displayName)) },
+                text = { Text(stringResource(Res.string.settings_offline_delete_text)) },
+            )
+        }
     }
+}
+
+@Composable
+private fun OfflineRegionRow(
+    region: OfflineRegionPackageState,
+    component: SettingsComponent,
+    onDeleteRequest: () -> Unit,
+) {
+    val release = region.latestRelease
+    val version = when (region.status) {
+        OfflineRegionPackageStatus.UPDATE_AVAILABLE -> release?.releaseVersion
+        else -> region.installedReleaseVersion ?: release?.releaseVersion
+    } ?: "—"
+    val action: (() -> Unit)?
+    val actionIcon: androidx.compose.ui.graphics.vector.ImageVector?
+    val actionText: String
+    when (region.status) {
+        OfflineRegionPackageStatus.READY -> {
+            action = onDeleteRequest
+            actionIcon = Icons.Default.Delete
+            actionText = stringResource(Res.string.settings_offline_delete)
+        }
+        OfflineRegionPackageStatus.DOWNLOADING,
+        OfflineRegionPackageStatus.PREPARING,
+        OfflineRegionPackageStatus.INSTALLING,
+        OfflineRegionPackageStatus.VERIFYING,
+        OfflineRegionPackageStatus.DELETING -> {
+            action = if (region.status == OfflineRegionPackageStatus.DOWNLOADING) {
+                { component.onPauseOfflineRegion(region.region.regionId) }
+            } else null
+            actionIcon = if (action != null) Icons.Default.Pause else null
+            actionText = stringResource(Res.string.settings_offline_pause)
+        }
+        OfflineRegionPackageStatus.PAUSED,
+        OfflineRegionPackageStatus.WAITING_FOR_NETWORK,
+        OfflineRegionPackageStatus.QUEUED -> {
+            action = { component.onResumeOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.PlayArrow
+            actionText = stringResource(Res.string.settings_offline_resume)
+        }
+        OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL -> {
+            action = { component.onConfirmMeteredOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.Download
+            actionText = stringResource(Res.string.settings_offline_download_mobile)
+        }
+        OfflineRegionPackageStatus.NOT_INSTALLED,
+        OfflineRegionPackageStatus.UPDATE_AVAILABLE,
+        OfflineRegionPackageStatus.FAILED -> {
+            action = { component.onDownloadOfflineRegion(region.region.regionId) }
+            actionIcon = Icons.Default.Download
+            actionText = if (region.status == OfflineRegionPackageStatus.NOT_INSTALLED &&
+                region.onDemand && release == null
+            ) {
+                stringResource(Res.string.settings_offline_prepare)
+            } else {
+                stringResource(Res.string.settings_offline_download)
+            }
+        }
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        Text(region.region.displayName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(
+            offlineRegionStatusText(region, version),
+            fontSize = 11.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (release != null) {
+            Text(
+                stringResource(
+                    Res.string.settings_offline_size_line,
+                    formatOfflineBytes(region.totalDownloadBytes),
+                    formatOfflineBytes(region.totalInstalledBytes),
+                ),
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (action != null && actionIcon != null) {
+            TextButton(onClick = action) {
+                Icon(actionIcon, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.size(6.dp))
+                Text(actionText)
+            }
+        }
+    }
+}
+
+@Composable
+private fun offlineRegionStatusText(
+    region: OfflineRegionPackageState,
+    version: String,
+): String = when (region.status) {
+    OfflineRegionPackageStatus.READY -> stringResource(Res.string.settings_offline_status_ready, version)
+    OfflineRegionPackageStatus.UPDATE_AVAILABLE -> stringResource(Res.string.settings_offline_status_update, version)
+    OfflineRegionPackageStatus.DOWNLOADING -> stringResource(
+        Res.string.settings_offline_status_downloading,
+        formatOfflineBytes(region.downloadedBytes),
+        formatOfflineBytes(region.totalDownloadBytes),
+    )
+    OfflineRegionPackageStatus.PAUSED -> stringResource(
+        Res.string.settings_offline_status_paused,
+        formatOfflineBytes(region.downloadedBytes),
+        formatOfflineBytes(region.totalDownloadBytes),
+    )
+    OfflineRegionPackageStatus.WAITING_FOR_NETWORK ->
+        stringResource(Res.string.settings_offline_status_waiting_network)
+    OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL ->
+        stringResource(Res.string.settings_offline_status_metered)
+    OfflineRegionPackageStatus.QUEUED ->
+        stringResource(Res.string.settings_offline_status_queued)
+    OfflineRegionPackageStatus.PREPARING ->
+        stringResource(Res.string.settings_offline_status_preparing)
+    OfflineRegionPackageStatus.INSTALLING,
+    OfflineRegionPackageStatus.VERIFYING,
+    OfflineRegionPackageStatus.DELETING -> stringResource(Res.string.settings_offline_status_deleting)
+    OfflineRegionPackageStatus.FAILED -> when (region.failure) {
+        OfflineRegionPackageFailure.NETWORK -> stringResource(Res.string.settings_offline_status_failed_network)
+        OfflineRegionPackageFailure.STORAGE -> stringResource(Res.string.settings_offline_status_failed_storage)
+        OfflineRegionPackageFailure.CHECKSUM -> stringResource(Res.string.settings_offline_status_failed_checksum)
+        OfflineRegionPackageFailure.INCOMPATIBLE -> stringResource(Res.string.settings_offline_status_failed_incompatible)
+        OfflineRegionPackageFailure.CANCELLED -> stringResource(Res.string.settings_offline_status_failed_cancelled)
+        OfflineRegionPackageFailure.UNKNOWN,
+        null -> stringResource(Res.string.settings_offline_status_failed)
+    }
+    OfflineRegionPackageStatus.NOT_INSTALLED -> version
+}
+
+private fun formatOfflineBytes(bytes: Long): String = when {
+    bytes >= 1024L * 1024L * 1024L -> "%.1f GB".format(bytes / (1024.0 * 1024.0 * 1024.0))
+    bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
+    bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
+    else -> "$bytes B"
 }
 
 @Composable
@@ -315,6 +635,19 @@ private fun SectionLabel(text: String) {
         fontWeight = FontWeight.SemiBold,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
         modifier = Modifier.padding(top = 8.dp)
+    )
+}
+
+@Composable
+private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+            .padding(horizontal = 14.dp, vertical = 10.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
     )
 }
 

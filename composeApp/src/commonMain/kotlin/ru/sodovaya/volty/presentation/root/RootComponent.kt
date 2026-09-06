@@ -13,6 +13,7 @@ import com.arkivanov.decompose.value.MutableValue
 import com.arkivanov.decompose.value.Value
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.model.DemoProfile
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.model.bmsAddressOrNull
@@ -70,9 +71,12 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import org.koin.core.component.KoinComponent
@@ -383,16 +387,26 @@ class DefaultRootComponent(
     private val socialLiveSession: SocialLiveSession = RootSocialLiveSession(get())
     override val socialLiveState: StateFlow<SocialLiveState> = socialLiveSession.state
 
+    // Lightweight scope for cold-start async work (DB reads) and the active
+    // vehicle key consumed by the retained navigation component.
+    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val navigationVehicleId: StateFlow<String?> = bmsRepository.activeVehicle
+        .map { it?.id }
+        .stateIn(
+            scope,
+            SharingStarted.Eagerly,
+            bmsRepository.activeVehicle.value?.id,
+        )
+
     override val navigation: LightNavigationComponent = DefaultLightNavigationComponent(
         componentContext = componentContext,
         navigationRepository = get(),
         locationRepository = locationRepository,
         energySource = get(),
+        navigationPreferences = get<AppPrefs>(),
+        activeVehicleId = navigationVehicleId,
     )
 
-    // Lightweight scope for cold-start async work (DB reads). Previously these
-    // ran via runBlocking on the UI thread — risky on slow devices.
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
     private var lastNavigationVehicleId: String? = bmsRepository.activeVehicle.value?.id
 
     private val _rideAvailable =
@@ -776,6 +790,7 @@ class DefaultRootComponent(
                     componentContext = context,
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
+                    offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
                     logExporter = get(),
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {

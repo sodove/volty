@@ -15,6 +15,7 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 
 class NavigationReducerTest {
     private val place = PlaceCandidate(
@@ -80,6 +81,26 @@ class NavigationReducerTest {
             NavigationAction.RouteRequestStarted(selected.requestGeneration),
         )
         assertTrue(assertIs<NavigationPhase.Planning>(started.phase).requestInFlight)
+    }
+
+    @Test
+    fun `routing profile and top speed are retained as planning options`() {
+        val planning = NavigationReducer.reduce(
+            LightNavigationState(),
+            NavigationAction.PlannerRequested,
+        )
+
+        val styled = NavigationReducer.reduce(
+            planning,
+            NavigationAction.RouteStyleChanged(RouteStyle.MAX_CURVY_TOURING),
+        )
+        val fast = NavigationReducer.reduce(
+            styled,
+            NavigationAction.TopSpeedChanged(130),
+        )
+
+        assertEquals(RouteStyle.MAX_CURVY_TOURING, fast.routeStyle)
+        assertEquals(130, fast.routingPreferences.declaredTopSpeedKph)
     }
 
     @Test

@@ -24,10 +24,12 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
 
 class HttpNavigationRepository(
     private val client: HttpClient = HttpClient(),
@@ -51,7 +53,7 @@ class HttpNavigationRepository(
         }
         response.toResult { body ->
             val places = json.decodeFromString<List<NavigationPlaceWire>>(body)
-            places.map(::decodePlace)
+            PlaceCandidateDeduplicationPolicy.deduplicate(places.map(::decodePlace), limit = 8)
         }
     } catch (cancelled: CancellationException) {
         throw cancelled
@@ -122,6 +124,7 @@ class HttpNavigationRepository(
         ),
         languageTag = languageTag,
         alternativesLimit = alternativesLimit,
+        routingProfile = RouteProfilePolicy.profilesFor(this).first().wireName,
     )
 
     private fun decodeRoutePlan(wire: NavigationRouteResponseWire): RoutePlan {
@@ -199,6 +202,7 @@ class HttpNavigationRepository(
         val destination: NavigationPlaceWire,
         val languageTag: String,
         val alternativesLimit: Int,
+        val routingProfile: String,
     )
 
     @Serializable

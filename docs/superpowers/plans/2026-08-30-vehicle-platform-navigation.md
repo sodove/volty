@@ -107,6 +107,14 @@ The backend boundary also permits:
 
 [Valhalla turn-by-turn](https://valhalla.github.io/valhalla/api/turn-by-turn/overview/) returns route shape and maneuvers and supports customizable costing. [OSRM](https://project-osrm.org/docs/v5.24.0/api/) supports alternatives, steps, and GeoJSON, but profiles are prepared statically and it has no geocoder, so it is a poorer initial fit for three explicit personal-EV policies. The public [Nominatim usage policy](https://operations.osmfoundation.org/policies/nominatim/) forbids client-side autocomplete, caps use at one request per second, and asks apps to proxy/cache and remain switchable; therefore public Nominatim is not the MVP geocoder. No provider name appears in Compose state or strings.
 
+The regional offline Valhalla path keeps one transport-agnostic `auto` costing. Valhalla 3.6.3
+does not expose a road-curvature signal, so the named touring styles may adjust highway
+willingness but must not promise scenic or curvy geometry. Route diversity comes from requesting
+up to three alternatives and accepting only genuinely distinct geometry. Neutral toll/ferry
+preferences use the engine midpoint; avoidance uses the documented zero value. Unpaved avoidance
+uses `exclude_unpaved`; unsupported `use_unpaved` and invented curvature penalties are forbidden.
+Access, one-way, closure, and restriction handling stays at the engine's safe defaults.
+
 ### Transport, privacy, and resilience rules
 
 - App → Volty backend uses `/v1/navigation/search` and `/v1/navigation/routes`; the app never calls GraphHopper directly.
@@ -741,3 +749,964 @@ motion. Offline navigation is now in scope, subject to an honest regional-covera
    and license/attribution state.
 5. Run full Android/backend suites, migration check, release build, online and offline emulator
    smoke, stale GPS, provider failures, alternatives, reroute, recreation, and BLE-write scan.
+
+## Requirement amendment — Valhalla Mobile and complete offline MVP (2026-09-03)
+
+The 2026-08-31 offline-boundary section is retracted where it names BRouter as the target engine,
+keeps offline address search out of scope, or defers the offline map. The current product decision
+is the corrected Sol plan: **Valhalla Mobile + a full regional package containing routing, offline
+geocoding, and PMTiles map data**. BRouter remains only a measured fallback if the Valhalla gate
+fails; both engines must not ship in the production app.
+
+The same amendment also retracts the proposed `TransportAccessProfile` enum (`EUC`, scooter,
+bicycle). The app and domain request use one generic `VoltyRide` profile. The four user-visible
+styles are `FAST_WITH_HIGHWAYS`, `FAST_WITHOUT_HIGHWAYS`, `CURVY`, and `MAX_CURVY_TOURING`.
+Speed preference (20–130 km/h) affects costing only; it never grants vehicle access or creates a
+jurisdictional restriction. No type-derived motorway ban is allowed. Real OSM access and safety
+restrictions remain engine data, not a hidden vehicle selector.
+
+### Decision gate before implementation
+
+The target library is currently published as `io.github.rallista:valhalla-mobile:0.6.3`. Its Android
+AAR was inspected on 2026-09-03: 10,455,999 bytes and native libraries for `arm64-v8a`,
+`armeabi-v7a`, `x86`, and `x86_64`. The wrapper exposes local `route`/`routeRaw` calls and config
+factories for a tiles directory or tile extract. See the [Valhalla Mobile README](https://github.com/Rallista/valhalla-mobile)
+and [Valhalla tile specification](https://github.com/valhalla/valhalla-docs/blob/master/tiles.md).
+
+The full gate is not passed yet: ARM64 hardware/emulation and the final process/lifecycle check
+remain open. The x86_64 debug subgate was exercised on 2026-09-03 with the real EKB `tiles.tar`
+from `ekb-package-v0.1.1`: the published AAR loaded in 239 ms, returned three route trips (with
+the `alternates` field present) in 171 ms, and produced a 20,133-byte response without a native
+crash. The throwaway APK was 43,689,550 bytes and the post-route emulator sample was 101,987 KiB
+PSS / 172,572 KiB RSS; these are measurements for the gate, not release budgets. Before deleting
+the BRouter prototype, exercise the same package through ARM64, repeat a cold start and multiple
+route/close cycles, and measure peak memory/native size and lifecycle stability. Debug must also
+exercise x86_64; release must exclude x86 and x86_64. PASS requires a usable first route, at least
+one genuinely distinct alternative on the route corpus, no native crash, and agreed size/memory
+budgets. FAIL keeps BRouter as a separately documented fallback decision, not as an unseen second
+production engine.
+
+### MVP boundary after the gate
+
+MVP includes the regional catalog and downloader from search/route/map/Settings; staged,
+checksum-validated, atomic install with rollback; full offline autocomplete/geocoding; Valhalla
+offline routing; the four styles with progressive diversity filtering; and PMTiles map rendering
+with automatic local/online source selection. The pilot is a logical Yekaterinburg agglomeration
+region with a routing buffer, not a large APK asset.
+
+The manifest is the source of truth for exact download/installed sizes. Provisional pilot budgeting
+is 135–360 MB downloaded and 200–540 MB installed across routing, search, and map components; the UI
+must show only published manifest values. Post-MVP: delta updates, LRU cleanup, seamless multi-region
+routing, advanced scenic signals, traffic, and custom map styles.
+
+### First implementation slices
+
+1. Complete the Valhalla gate without changing the current provider or removing BRouter assets.
+2. Add common contracts and tests for `VoltyRide`, the four styles, coverage, package states,
+   progressive route events, and route diversity.
+3. Build reproducible Yekaterinburg Valhalla/search/PMTiles artifacts and a signed manifest.
+4. Implement the multi-region package repository, resumable downloads, network policy, recovery,
+   and Settings surface.
+5. Add the offline geocoder, PMTiles source selector, and Valhalla route adapter in separate
+   increments; only after each failing test is observed may production behavior be added.
+6. Integrate search/route/map auto-download and online parity, then remove the old bundled BRouter
+   flow only after the end-to-end gate and device smoke pass.
+
+### Execution checkpoint — regional artifact toolchain (2026-09-03)
+
+The first real regional dataset was built on `sodovaya@192.168.1.141`, where Docker and the
+existing `/home/sodovaya/nyxmap/sverdlovsk.osm.pbf` are available. The reproducible tooling now
+lives in `tools/offline-navigation/`; it uses an Ubuntu 24.04 tool image with `osmium-tool`,
+Tilemaker, Tippecanoe, SQLite, the Valhalla Docker image, and the Protomaps MBTiles converter.
+
+Evidence from the EKB pilot build:
+
+- Valhalla built 98 routing tiles and a 63 MiB tile extract from the smart EKB extract. A local
+  service smoke returned three routes in about 13 ms; the same three routes were returned after
+  extracting the packaged routing archive: 2.233 km / 168 s, 3.601 km / 279 s, and 4.342 km / 340 s.
+- The FTS4 index contains 276,841 searchable OSM features. A prefix query for `плот*` returns
+  Russian results with coordinates, so autocomplete no longer needs a complete query or network.
+- PMTiles is zoom 5–14, contains the declared vector layers, and passes the converter's structural
+  verification.
+- Release `0.1.1` was rebuilt on the remote Docker host after syncing the current manifest tool:
+  84,089,008 bytes downloaded (about 80.2 MiB) and about 175 MB after installation: routing
+  25,339,889/72,191,286 bytes, search 14,176,803/58,347,520 bytes, and map
+  44,572,316/44,572,316 bytes (download/installed). The package passes the component verifier,
+  the FTS4 smoke still finds `Плотинка`, and the packaged Valhalla smoke still returns three
+  route trips. The checked-in toolchain does not include these generated artifacts or any
+  signing key.
+
+This checkpoint does not pass the Valhalla Mobile Android gate: the package was tested through the
+Valhalla service, not through the published Android wrapper, and the manifest is deliberately
+`UNSIGNED_DEV`. The build also reports incomplete regional admin polygons and omits timezone and
+elevation data; route graph construction and the packaged route smoke succeed, but admin/timezone
+behavior remains a release-gate item. The next implementation step is the ARM64/x86_64 wrapper
+smoke with this real package, followed by signed catalog/downloader integration. BRouter remains
+untouched until that gate is passed or explicitly failed.
+
+The release tooling now includes `sign-manifest.py`. It uses an external Ed25519 PEM key for
+regional manifests; the APK's `123.jks` remains Android artifact signing material and is not used
+for package verification. The signer removes the nullable fields omitted by the Kotlinx
+serialization codec, signs the compact UTF-8 payload, verifies the generated signature before the
+atomic write, and never copies the private key into the repository. A real EKB unsigned manifest
+was signed with an ephemeral key and verified with `cryptography`; the Python payload SHA-256 and
+the payload emitted by the actual Kotlin manifest codec both equal
+`91418f9dcba3fea7d480410fdb09fbc901d826a8220d1e951b46b52992440ca9`. The remote Ubuntu tool image
+also now contains `python3-cryptography` and starts successfully. Package scripts derive the
+PMTiles filename from `region_id`, and the verifier rejects packages with zero or multiple map
+archives.
+
+`build-catalog.py` now assembles the HTTPS-facing catalog from a metadata spec and signed regional
+manifests. It rejects unsigned or non-Ed25519 releases, duplicate/invalid region IDs, mismatched
+manifest IDs, malformed bounds, and logical bounds outside signed coverage. A remote smoke against
+the real EKB `manifest.unsigned.json` signed it with an ephemeral Ed25519 key, produced a
+deterministic one-region catalog, and rejected the unsigned input; local `python3 -m py_compile`
+also passes for all four tooling scripts.
+
+The Android package store and catalog repository now receive the installed APK's actual package
+`versionCode` instead of a duplicated literal. This keeps manifest compatibility checks correct
+when the app version is bumped for a release.
+
+The planner now exposes the four generic route styles (`fast`, `fast without highways`, `curvy`,
+and `maximum curvy touring`) plus a 20–130 km/h speed slider. The selected values are carried into
+the Valhalla `auto` costing request and reused for reroutes; no EUC/scooter/bicycle selector or
+type-derived motorway rule was added. RED coverage checks reducer state, UI mapping, and the
+component's actual request payload. Both Russian and fallback English strings are present.
+
+The direct OSM fallback now starts its two route-provider requests concurrently whenever more than
+one alternative is requested, then aggregates their responses in deterministic primary-first
+order. A 35 m corridor tolerance keeps genuinely parallel roads instead of collapsing them as
+duplicates, while the exact-duplicate and limit-one behaviors remain unchanged. This shortens the
+slow-provider path without fabricating alternatives when both public routers return the same road.
+
+### Execution checkpoint — regional runtime contracts (2026-09-03)
+
+The common/runtime implementation now includes a strict catalog and release download plan,
+background offline-first selection, FTS4 prefix search, a resumable Android HTTP downloader, and
+atomic Android package installation. Search/route requests continue online while a missing region
+downloads in the background; a ready region is selected locally on the next request. The package
+store extracts all three published components before changing its active pointer and rejects
+unsigned releases through the manifest policy plus an injected Ed25519 verifier.
+
+The Valhalla JSON codec requests up to three alternatives with generic `auto` costing, maps
+polyline6/legs/maneuvers into the existing route contract, and applies the existing geometry
+diversity filter. The Android bridge now creates the version-matched AAR config through
+`ValhallaConfigFactory.usingTileExtract(...)` and closes each native engine after a request; it
+remains intentionally unbound until the ARM64 gate is complete. No BRouter assets were removed,
+no APK/Gradle application build was run, and Settings/DI/PMTiles renderer wiring remains after
+the gate.
+
+### Execution checkpoint — offline source wiring and latency guard — 2026-09-03
+
+The regional repository is now wired behind build-time catalog/key metadata: a build without the
+configured HTTPS catalog remains on the existing online/BRouter path, while a configured build
+can refresh the signed catalog, expose region lifecycle actions in Settings, and use one shared
+package store for search, route, and map. Mobile-data downloads remain approval-gated unless the
+user enables the Settings switch. Search/route fallback on metered data now queues that region for
+later approval instead of silently losing the automatic download request.
+
+The repository also reconstructs verified installed package states from the active local
+manifests before a catalog refresh. Therefore a previously downloaded region remains usable after
+a process restart with no network; a later catalog refresh supplies its canonical display name
+and release metadata and retains local-only verified packages rather than hiding them.
+
+The first-request catalog refresh is genuinely asynchronous: it is launched in the background and
+never makes search or route construction wait for the catalog's network timeout. Automatic map
+downloads have a retry cooldown, so repeated GPS updates cannot create a retry storm after a
+network failure or an offline transition.
+
+PMTiles is served through a loopback-only local vector-tile endpoint because MapLibre Android
+13.0.2 exposes no native PMTiles protocol callback. A real 44,572,316-byte EKB archive was read
+through that endpoint: a z10 tile returned 611,182 bytes and TileJSON was valid. Cleartext is
+explicitly permitted only for `127.0.0.1`/`localhost`; all other traffic remains HTTPS-only. The
+initial offline style is deliberately label-free until glyph assets and the final map style are
+selected; routing/search/map package mechanics are still independent of that presentation step.
+
+The published Valhalla Mobile AAR passed five fresh x86_64 cold-start/route/close cycles against
+the real EKB routing extract, each returning three trips and `alternates` without a native crash.
+The ARM64 system image was installed on the remote host, but Android's QEMU2 emulator refuses an
+ARM64 guest on this x86_64 host; ARM64 hardware or an ARM64 host remains required to close the
+gate. No production Gradle/APK build was run. BRouter stays present and is not removed until the
+ARM64/lifecycle/size gate plus configured signed-catalog smoke are complete.
+
+### Execution checkpoint — BRouter alternatives and ARM64 artifact audit — 2026-09-03
+
+The reported "90% one route" behavior had a concrete local cause: the old BRouter fallback
+always used a `firstResultBudget` with `maxAlternatives = 1`, so its alternative loop could never
+reach indexes 1 or 2. The fallback now honors the requested limit up to three alternatives,
+launches one independent `RoutingEngine` per alternative concurrently, preserves deterministic
+primary-first ordering, and applies the shared route-diversity filter before renumbering route and
+maneuver IDs. A limit of one still performs exactly one calculation.
+
+A throwaway JVM smoke against the bundled EKB `.rd5` confirmed that BRouter alternative indexes
+`0`, `1`, and `2` all return usable tracks (125, 85, and 125 nodes respectively, with distinct
+formatted JSON hashes). Five concurrent three-index runs completed without a routing-engine
+failure, so the parallel adapter is based on observed behavior rather than only API assumptions.
+
+The upstream `io.github.rallista:valhalla-mobile:0.6.3` artifact was also audited rather than
+rebuilding the native library: the AAR contains `arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64`
+wrapper binaries. The corresponding ARM64 `.so` is present in the Gradle cache and in the fresh
+throwaway gate APK. No Android ARM64 emulator is available on the current Windows or remote
+x86_64 hosts: Android Emulator rejects an ARM64 system image before boot, even with `-no-accel`.
+The ARM64 runtime gate therefore still needs physical ARM64 hardware or an ARM64 host; this does
+not block the BRouter source fix or the existing x86_64 Valhalla smoke.
+
+The asynchronous catalog boundary had one more race: a first search/route could fall back online
+while the catalog was still loading, observe no region entries, and lose the automatic download
+request permanently. The offline-first repository now retains the refresh job and re-evaluates the
+same request coordinates after it completes. This queues the current region without delaying the
+online result, while the existing metered-data policy still turns the queued request into a prompt
+unless the rider enabled the no-prompt setting. A regression test covers the suspended-refresh
+interleaving and confirms that it queues exactly one region after catalog publication.
+
+### Execution checkpoint — upstream AAR release verification — 2026-09-03
+
+The Android bridge now consumes the ready `io.github.rallista:valhalla-mobile:0.6.3` artifact
+directly, together with its version-matched models/config artifacts; Valhalla itself was not
+rebuilt. Reflection was removed from the production path, so R8 renaming cannot break engine
+creation. A clean `:composeApp:assembleRelease --rerun-tasks` completed successfully, and the full
+`:composeApp:testDebugUnitTest --rerun-tasks` suite completed successfully. The signed `0.7.6`
+APK is 79,431,244 bytes and contains only the release ABIs `arm64-v8a` and `armeabi-v7a`.
+
+This verifies packaging and JVM wiring, not native execution on ARM64 hardware. The ARM64
+Valhalla Mobile smoke therefore remains the next release gate; BRouter assets stay present until
+that gate, the configured signed-catalog smoke, and the end-to-end regional package path pass.
+
+### Retraction — routing artifact version alignment — 2026-09-03
+
+The earlier regional-artifact checkpoint described the pilot routing data as Valhalla 3.8.3. That
+was the service-container version used for the first data smoke, not the engine shipped in the
+ready `valhalla-mobile:0.6.3` AAR. The upstream mobile tag points at Valhalla 3.6.3, so the 3.8.3
+regional artifact is not a release candidate for this APK. The artifact toolchain now defaults to
+the pinned amd64 Valhalla 3.6.3 image and records `valhalla-3.6.3` in new manifests. The old
+3.8.3 package remains a diagnostic artifact only and must not enter the signed catalog.
+
+### Execution checkpoint — matching EKB regional candidate — 2026-09-03
+
+The pilot package was rebuilt on `sodovaya@192.168.1.141` as
+`/home/sodovaya/volty-navigation-build/ekb-package-v0.1.2` with the pinned Valhalla 3.6.3
+tile compiler and the ready mobile engine's declared routing-data version. The app runtime is
+the already-built `io.github.rallista:valhalla-mobile:0.6.3` Android AAR; the Docker image only
+compiles regional OSM data and does not rebuild that mobile library. The package verifier accepted
+all three components and 276,841 FTS4 rows; the Valhalla 3.6.3 service smoke returned three trip
+branches including alternatives. The manifest reports 82,401,294 bytes downloaded and
+173,498,489 bytes installed: routing 23,657,305/70,583,783, search 14,176,803/58,347,520, and
+PMTiles 44,567,186/44,567,186.
+
+An ephemeral Ed25519 key was used only to exercise the signer and catalog builder; its private
+key, signed manifest, and catalog were deleted. This proves the publishing mechanics, not a
+production release: the real catalog still requires the deployment signing key and HTTPS object
+storage. The package itself remains outside git.
+
+### Execution checkpoint — routing format fail-closed gate — 2026-09-03
+
+The regional compatibility policy now requires the exact `valhalla-3.6.3` tile format consumed by
+the ready `valhalla-mobile:0.6.3` Android AAR, rather than accepting any non-empty routing version.
+The check is used by the common download-plan/catalog path and by the Android package store both
+when installing and when reconstructing an active package after restart. The publisher CLI applies
+the same default and exposes `--routing-data-version` for a deliberate, reviewed engine upgrade;
+its mismatch regression test and Python 3 compile check pass. A direct store install cannot create
+a `READY` package for an incompatible core even if a future caller bypasses the repository.
+
+### Execution checkpoint — location-independent offline autocomplete — 2026-09-03
+
+Offline autocomplete no longer requires a current GPS fix. When the query is valid and at least one
+regional package is `READY` or `UPDATE_AVAILABLE`, the repository queries every distinct installed
+region's local FTS index concurrently, merges results in deterministic region order, removes duplicate
+candidate IDs, and applies the requested result limit. With a location, the existing coverage-based
+single-region path remains in place for fast proximity ranking. If no region is installed, the
+location-free request keeps the existing online fallback while connected and returns the typed offline
+failure without a network call when fully offline. A common repository test covers two installed
+regions, concurrent fan-out, deterministic merge, deduplication, and the zero-online-call contract.
+
+### Execution checkpoint — verify catalog releases before download — 2026-09-03
+
+The Android catalog repository now applies the injected Ed25519 verifier to every advertised
+`latestRelease` before publishing the catalog or allowing any component download. Structural
+validation and the package-store install check remain in place, so a forged or otherwise
+unverified release fails closed before network bytes are committed to staging. Verification errors
+are treated as invalid signatures, and catalog entries without a downloadable release remain valid.
+The common signature-policy regression test passes; no production key or catalog endpoint was added.
+
+### Execution checkpoint — bounded relevance for local autocomplete — 2026-09-03
+
+The regional FTS adapter now reads a bounded candidate window (at most eight times the requested
+limit), scores exact display-name matches and title prefixes ahead of address-only matches, then
+returns the original requested limit. GPS-aware searches still prioritize proximity, using
+relevance only as a stable tie-breaker; location-free searches use relevance first. The ranking and
+normalization rules are pure common code with focused regression tests, while the Android adapter
+continues to bind all query values and never interpolates user text into SQL.
+
+### Execution checkpoint — ARM64 Valhalla package smoke under QEMU — 2026-09-03
+
+The EKB `v0.1.2` routing archive was mounted into the multi-architecture Valhalla image on the
+remote x86_64 host after installing the ARM64 binfmt handler. The ARM64 image loaded all 110 tiles,
+reported ready in two seconds, and returned a successful route with one alternative. This verifies
+that the regional tile format is readable and routable by the ARM64 Valhalla service under QEMU;
+it is not an Android ARM64 `.so` execution test. Physical ARM64 hardware or an ARM64 host is still
+required for the Valhalla Mobile Android gate, along with lifecycle, size/memory, and configured
+signed-catalog end-to-end checks.
+
+### Execution checkpoint — timezone-complete package and recovery hardening — 2026-09-03
+
+The host artifact toolchain now generates the timezone database with the pinned
+Valhalla image's `valhalla_build_timezones` helper, packages it alongside
+`tiles.tar`, `admins.sqlite`, and `valhalla.json`, and verifies both the required
+files and their config references before a package can be accepted. The EKB
+candidate was rebuilt remotely as `ekb-package-v0.1.3`; the manifest reports
+158,268,225 bytes downloaded and 293,311,018 bytes installed across routing,
+search, and PMTiles. The external verifier found 276,841 FTS4 rows and all four
+routing entries.
+
+The exact Valhalla 3.6.3 ARM64 service image loaded all 110 tiles under QEMU and
+returned a route with one alternative. This is still Linux service evidence, not
+execution of the Android `valhalla-mobile` ARM64 `.so`; the Android hardware/host
+gate remains open. The Android package store now rejects incomplete routing data,
+removes failed-install download staging so it cannot loop at 100%, and garbage
+collects unreferenced published packages after restart or pointer publication.
+Host tool tests pass; no APK/Gradle build, production signature, HTTPS catalog, or
+device Android ARM64 smoke was performed.
+
+### Execution checkpoint — automatic download UX and network recovery — 2026-09-03
+
+The regional package lifecycle now retries `WAITING_FOR_NETWORK`/queued automatic downloads
+when Android reports connectivity, while a rider-selected `PAUSED` download is never resumed by
+a later search or route request. The offline-first repository also retries catalog discovery when
+verified local packages exist but the catalog has not loaded, so one failed startup refresh no
+longer hides new regions forever.
+
+Metered automatic downloads are now visible as a root-level confirmation dialog, including when
+the rider is on the map or planner rather than Settings; confirming continues the same resumable
+download, and dismissing leaves it available in Settings. Settings now shows catalog refresh
+progress/errors, asks before deleting a ready region, displays the advertised update version, and
+distinguishes network wait, mobile approval, queue, and deletion states. Failed states render the
+recorded failure category. No APK/Gradle build was run; the changed Kotlin/UI paths still require
+the normal compile/test gate once application builds are allowed.
+
+### Execution checkpoint — release validation and catalog recovery — 2026-09-03
+
+The regional publisher now verifies each signed manifest independently with the
+expected Ed25519 public key and key ID before adding it to a catalog. It applies
+the Android-compatible schema, app-version, Valhalla engine/data-version,
+artifact/HTTPS, PMTiles, search, and coverage gates instead of checking only
+that a non-empty signature field exists. The CLI requires the public key, key
+ID, and consuming app version; focused host tests cover a valid signature, a
+wrong signature, a newer-app manifest, and a routing-version mismatch.
+
+The Android package path now preserves failure categories: checksum corruption,
+invalid/incomplete regional archives, and incompatible manifests are no longer
+reported as network failures; unclassified I/O during installation is reported
+as storage failure. If startup catalog discovery fails before any region is
+published, Android retries it once connectivity returns with a 30-second
+cooldown, so automatic regional download does not depend on opening Settings.
+Host tool tests and Python compilation pass. No APK/Gradle build was run.
+
+The Gradle script now has an explicit `voltyProductionRelease=true` gate. It
+fails closed when a production invocation lacks a real release keystore, an
+HTTPS catalog URL, a non-development manifest key ID, or a valid Base64 raw
+Ed25519 public key. The default developer build behavior remains unchanged;
+this gate was inspected but not executed because application builds are still
+paused.
+
+The catalog envelope is now signed with the same external Ed25519 key as its
+release manifests. The publisher verifies that the signing and verification
+keys match, emits schema version 2 with `catalogSignature`, and the Android
+repository rejects a catalog whose signature does not verify before publishing
+its regions. Existing release-manifest verification remains in place. Focused
+catalog codec/policy coverage still needs to run in the app test suite when
+Gradle builds are allowed again.
+
+The updated publisher was also run against the real remote EKB `v0.1.3`
+manifest with an ephemeral key: it produced a schema-2 one-region catalog and
+the signature/key-ID checks passed. The temporary key and workspace were
+removed after the smoke. The app test suite and Android runtime still need to
+execute this path when the build pause is lifted.
+
+### Execution checkpoint — process-scoped current-region download — 2026-09-03
+
+Automatic map package discovery is now observed from the process application scope,
+not only from `PlatformMapLayer`. An already-owned location fix is combined with
+catalog state, so a region is reconsidered both when the rider moves and when the
+verified catalog arrives after startup. The observer does not request location
+permission or create a location demand; it preserves the existing map source's
+deduplication, metered-data approval, retry cooldown, and online-map fallback.
+
+No APK/Gradle build was run; the Kotlin wiring still needs the normal compile/test
+gate when the explicit build pause is lifted.
+
+### Execution checkpoint — enforce the regional routing buffer — 2026-09-03
+
+The package builder now expands the logical region bbox by the requested
+`--routing-buffer-km` for a routing-only extract. The map and search extracts
+remain logical, while the Valhalla input is filtered to highway/ferry and
+restriction data before `complete_ways`, preventing administrative multipolygons
+from expanding the graph to the whole source. The previous script only recorded
+the buffer in the manifest while extracting the unexpanded bbox, which could cut
+routes at the published edge. Expansion is latitude-aware and clamps to world
+bounds; host tests cover normal EKB geometry and world-edge clamping.
+
+The remote EKB pilot package `v0.1.4` was rebuilt with a 20 km routing buffer.
+The package is 154 MB and passed its verifier with 276,841 FTS rows and all
+three component checks. A Valhalla 3.6.3 service smoke against the packaged
+`tiles.tar` returned status `0` and two alternatives; the three route summaries
+were 9.674, 9.483, and 7.694 km. This validates the artifact pipeline and
+alternative generation, not the Android ABI/runtime gate.
+
+The build log exposed that a clipped logical extract can leave administrative
+boundary relations incomplete (`0` rows inserted). The builder is therefore
+adjusted to derive `admins.sqlite` from the source PBF while keeping the
+routing graph on the filtered, buffered extract; this keeps admin context out
+of the graph-size problem and is validated by the next package rebuild.
+
+The follow-up `v0.1.5` package passed the same verifier with one admin area,
+276,841 FTS rows, 161,325,985 downloaded bytes, and 301,050,211 installed
+bytes. Search prefix `плот*` still returns Russian place results, and the
+packaged Valhalla service again returned three distinct route summaries
+(9.674, 9.483, and 7.694 km) with status `0`. The package remains an unsigned
+pilot artifact with a placeholder CDN URL; it is not a production catalog
+release.
+
+As a separate publisher smoke, that manifest was signed with a throwaway
+Ed25519 key and accepted by `build-catalog.py` as a one-region schema-2 catalog;
+both the manifest and catalog carried the same non-development key ID. The key
+and temporary signed outputs were deleted on the remote host.
+
+No APK/Gradle build was run.
+
+### Execution checkpoint — offline Valhalla costing contract — 2026-09-03
+
+The common Valhalla codec now emits the supported generic `auto` costing contract: top speed,
+the existing highway-willingness style bias, up to three alternatives, safe engine defaults for
+access/restrictions/oneways/closures, neutral toll/ferry midpoint values, and documented
+`exclude_unpaved` avoidance. It does not emit the unsupported `use_unpaved` key or invent a road
+curvature control; Valhalla 3.6.3 cannot guarantee scenic geometry from the four style names.
+
+The change was compiled on the x86 host without Gradle: main compile `0`, test compile `0`, and
+all five codec test methods passed. It is committed as `f2d6a88e` and pushed to
+`codex/light-navigator`. No APK or production application build was run.
+
+The same host also ran the exact request against the packaged Valhalla 3.6.3 service from
+`v0.1.5`: the status endpoint became ready, `alternates` was present, and three returned trips
+had distinct geometry hashes with lengths 1.834, 1.816, and 3.182 km. The one-shot container and
+temporary extract were removed after the smoke.
+
+### Execution checkpoint — geometry-only route deduplication — 2026-09-03
+
+The shared alternative filter no longer treats distance or duration as route identity. A provider
+can return the same road sequence with different metrics after costing/style changes; such a
+candidate must not consume one of the three alternative slots. The filter now compares only the
+bounded route geometry tolerance, while genuinely parallel corridors remain distinct. A fresh
+direct x86 JVM compile and five-method route-policy run passed, including a regression with the
+same geometry and deliberately different distance/time. No APK or Gradle build was run.
+
+### Execution checkpoint — relevance-first offline autocomplete — 2026-09-03
+
+The local FTS adapter now uses one platform-neutral ordering policy for both location-aware and
+location-free searches. Exact names and title prefixes outrank address-only matches; when a GPS
+fix is available, proximity breaks ties between equally relevant candidates instead of replacing
+relevance entirely. This prevents a nearby weak hit from hiding the exact place the rider typed,
+while preserving local ordering for equally good results. Two focused regressions cover both
+rules; a fresh direct x86 JVM compile and four-method run passed. No APK or Gradle build was run.
+
+### Execution checkpoint — Russian ё/е autocomplete folding — 2026-09-03
+
+Offline search now folds Russian `ё` to `е` consistently in Kotlin query normalization and in the
+host-side FTS index generator. The visible OSM display name remains unchanged, while the indexed
+search text allows either spelling to match the same place. Focused Kotlin query/ranking checks
+pass `8/8`; the host tool suite passes `17/17`, Python compilation passes, and a temporary SQLite
+FTS smoke finds `Ёлка` through the `ел*` prefix. No APK or Gradle build was run.
+
+### Execution checkpoint — rebuilt EKB pilot with folded search index — 2026-09-03
+
+The remote EKB pilot was rebuilt as `v0.1.6` from the original full
+`/home/sodovaya/nyxmap/sverdlovsk.osm.pbf`, so admin data and the existing 20 km routing buffer
+remain intact. The package verifier accepted routing, search, and PMTiles; the search database
+contains 276,841 rows and its compressed archive returns real `ел*` prefix results, including the
+display name `Ёлочка` backed by normalized `search_text`. The manifest reports routing
+102,584,133/198,139,367 bytes, search 14,592,861/58,368,000 bytes, and map 44,570,434/44,570,434
+bytes; compatibility remains `valhalla-3.6.3`, minimum app version code `28`, and coverage
+`59.10,56.00–61.90,57.55` with a 20 km routing buffer. An x86 Valhalla 3.6.3 service smoke on
+the new archive returned status `0` for two EKB routes. This is an unsigned pilot artifact with
+a placeholder CDN URL, not a production catalog release; no APK or Gradle build was run.
+
+### Retraction — clipped PBF is not a package source — 2026-09-03
+
+An intermediate attempt used an already clipped `test-region.osm.pbf` after the full source
+reported an ordering warning. It produced incomplete admin data and Tilemaker later aborted, so
+that input and the sorted temporary copy were removed. The successful `v0.1.6` build uses the
+original full source and is the only current pilot candidate.
+
+### Execution checkpoint — offline map glyphs and regional labels — 2026-09-03
+
+The offline MapLibre style now renders labels from the PMTiles `place`, `transportation_name`,
+and `poi` layers. Because MapLibre Native Android 13.0.2 does not provide usable local-font
+fallback when the style omits glyphs, the app ships three generated Noto Sans Regular glyph
+ranges (Latin/common punctuation, Cyrillic, and general punctuation) totaling 252,923 bytes.
+The loopback PMTiles server serves only the fixed font stack and those fixed ranges from APK
+assets; unsupported font/range/path requests return 404, and the glyph response is bounded.
+The generator is checked in and reproduced the asset SHA-256 values on the remote Linux host.
+JSON style validation, Node syntax validation, and a direct Android-server Kotlin compile passed.
+The actual MapLibre visual smoke remains pending because it needs a device/emulator; it is not a
+unit-test claim.
+
+### Execution checkpoint — release APK with offline map labels — 2026-09-03
+
+The release build includes the loopback glyph server and Noto glyph assets while continuing to use
+the precompiled Maven `io.github.rallista:valhalla-mobile:0.6.3` dependency. The current release
+is `0.7.6` / version code `28`; `:composeApp:testDebugUnitTest` passed and
+`:composeApp:assembleRelease` completed successfully. `apksigner` verified the APK with APK
+Signature Scheme v2. The single production APK is `79,604,111` bytes and contains only the
+`arm64-v8a` and `armeabi-v7a` native ABIs; x86/x86_64 remain available only to debug/test
+artifacts. The APK was not visually smoke-tested on a device in this checkpoint.
+### Execution checkpoint — integrate offline navigation on the latest Terra visual base — 2026-09-04
+
+The offline-navigation branch had diverged from the visual line at `dabe6b1b` and therefore did
+not contain the later Terra/UI fixes `e5e1f77e`, `18c6e84a`, `9ac7ec33`, and `4c56ae91`. The branch
+was merged with current `main`: the latest navigation glass, IME/map handling, overlay geometry,
+and light ride dashboard are now present together with the regional offline runtime, local FTS,
+Valhalla alternatives, package settings, and automatic downloads. Route profile controls were
+reintroduced into the latest glass planner so the offline route-costing contract remains exposed.
+
+The Android compile passed after resolving the integration seams. The first x86 runtime smoke
+had already exposed that API 34 did not provide the JCA Ed25519 `KeyFactory`; the verifier now
+uses the precompiled Bouncy Castle lightweight Ed25519 API while Valhalla remains the precompiled
+Maven `io.github.rallista:valhalla-mobile:0.6.3` artifact. The signed EKB package survived app
+startup, Settings showed `Готово · 0.1.6`, and local `ekb` autocomplete returned `Ekb-Cars`.
+The integrated tree now also has fresh verification evidence: the full Android unit suite is
+`2393` tests with zero failures, errors, or skips; the common database migration task and the
+18-case offline-navigation host-tool suite pass; and the x86 emulator can use the installed EKB
+package with Wi-Fi and mobile data disabled. In that offline smoke, `ekb` returned local FTS
+results, Valhalla returned three route choices (`2.1`, `3.6`, and `4.2 km`), and starting the
+selected route rendered a real localized maneuver (`Поверните налево на улица 8 Марта`). The
+latest Terra planner surface, route chips, glass card, and Settings region lifecycle were
+visually checked on the emulator.
+
+The production packaging gate was run with a deliberately fake catalog URL/key only as a build
+smoke: the signed `0.7.6` APK is `80,718,109` bytes, contains only `arm64-v8a` and
+`armeabi-v7a`, and its dex files contain no `btools/`, `btools.`, or `RoutingEngine` markers.
+The gate is configuration-cache clean. This artifact is not distributable until the real signed
+HTTPS catalog/key is supplied. The full Valhalla Mobile Android ARM64 gate likewise remains open:
+the existing ARM64 evidence is Linux service execution under QEMU, not execution of the Android
+native library; BRouter therefore remains available only to debug builds until that external
+device/host gate is passed.
+
+The signed-catalog path then received a real cross-platform regression fix. The publisher's
+catalog canonicalization now omits nullable-default fields inside nested `latestRelease` manifests
+exactly as Android `kotlinx.serialization` does; a regression test reproduced the old invalid
+signature and now passes. With an ephemeral E2E key and a short-lived HTTPS server on the remote
+Docker host, the debug APK fetched the signed EKB `0.1.6` catalog, published `Екатеринбург и
+окрестности` in Settings, automatically downloaded routing/search/map artifacts, and atomically
+installed the complete seven-file package. The local CA trust was a temporary debug smoke aid and
+is not part of the source or release configuration. Backend tests also passed freshly: 45 tests,
+zero failures/errors/skips. A real deployment signing key/HTTPS object host and the Android ARM64
+native Valhalla gate remain the only external release inputs.
+
+### Execution checkpoint — production build 30 installed on Pixel 7 — 2026-09-04
+
+The Android build number was raised from `28` to `30` while keeping the user-facing version name
+`0.7.6`. A fresh production-gate build ran all 63 actionable Gradle tasks and passed
+`verifyProductionReleaseOmitsBRouter`. The signed APK is 80,718,105 bytes, has only the release
+ABIs `arm64-v8a` and `armeabi-v7a`, and contains no `btools/`, `btools.`, or `RoutingEngine` dex
+markers. Its SHA-256 is
+`75C25AC04593147515571C423198138AC42D66EA0A4B5E9463CFB75AC31051D5D`.
+
+The APK was installed successfully on the connected Pixel 7 (`versionCode=30`, `versionName=0.7.6`)
+and launched without a fresh `FATAL EXCEPTION` in logcat. This was a device launch smoke only:
+the build used the previously documented smoke catalog URL/key because deployment credentials and
+the real HTTPS object host are still not present, so this APK is not a distributable regional-data
+release.
+
+## Requirement amendment — experimental Valhalla costings and route diversity (2026-09-04)
+
+The generic `auto` costing remains the only user-visible and default production policy. The
+experimental Valhalla costings are now explicitly part of the plan as **candidate probes**, not as
+transport selectors: `pedestrian` for low-speed experiments, `bicycle` for cycleway/road-access
+comparison, and `motorcycle` for trail/track comparison including `use_trails`. They must not add
+`vehicle`, `profile`, EUC, scooter, bicycle, or jurisdiction fields to the domain request or UI.
+
+The probes are allowed to run only behind the routing experiment policy and must never silently
+replace the generic route. Every probe result is tagged internally with its costing and compared
+against the generic candidate before it can be promoted. Until the gate passes, the app keeps the
+generic route as the safe answer and may show the probe only in a debug/diagnostic build or test
+fixture.
+
+### Experimental matrix
+
+1. **Low-speed pedestrian probe.** Sweep `top_speed` values 20, 25, and 30 km/h. Use Valhalla
+   `pedestrian` with the declared speed mapped to `walking_speed`, then inspect footway, path,
+   steps, access, surface, distance, ETA, and route geometry. A result is not promotable if it
+   introduces steps/access violations or if its ETA is presented as a vehicle ETA. The initial
+   promotion candidate is a hybrid generic route only when it demonstrably improves the corridor
+   for low-speed personal EVs without changing the route contract.
+2. **Bicycle probe.** Sweep `use_roads` from trail-oriented through road-oriented values and
+   compare cycleways, footways, access restrictions, surfaces, hills, distance, ETA, and geometry
+   against `auto`. Keep it experimental because bicycle costing changes both access semantics and
+   ETA; it is not a silent fallback for the generic profile.
+3. **Motorcycle probe.** Sweep `use_trails` and `use_tracks` for `CURVY` and
+   `MAX_CURVY_TOURING`, while keeping the generic route's access/safety contract visible. Record
+   whether the regional graph actually contains usable trail branches. `use_trails` must not be
+   treated as evidence that every trail is suitable for the rider.
+4. **Generic curvy route.** Keep `auto` as the baseline and generate alternatives as separate
+   requests with interior `avoid_locations`. Score returned geometry by heading change per
+   kilometre after resampling, enforce a bounded detour budget, and reject candidates that are
+   only small parallel-line noise. A named `CURVY` style is successful only when the selected
+   geometry is measurably bendier than the fastest eligible candidate; it must not claim scenery
+   from a highway-bias flag alone.
+
+### Promotion and rollback gate
+
+- [ ] Record each request's costing/options, wall time, distance, ETA, geometry hash, access/surface
+  observations, steps, and route-diversity score in a redacted local experiment report.
+- [ ] Require at least one repeatable beneficial low-speed corridor result and one repeatable
+  genuinely different curvy/touring route in the EKB corpus; one corridor where a flag has no
+  effect is useful negative evidence and is recorded rather than hidden.
+- [ ] Verify that the generic route remains available when a probe fails, times out, returns no
+  route, or produces a worse/unsafe candidate. Secondary probe failures must never fail the whole
+  route request.
+- [ ] Add common tests for costing JSON, low-speed thresholds, candidate tagging, detour limits,
+  geometry scoring, and fallback ordering; add Android/debug smoke coverage against the packaged
+  Valhalla extract before enabling any probe outside diagnostics.
+- [ ] Promote only the smallest proven policy behind a feature flag with an immediate disable
+  path. Do not remove the generic `auto` path or expose a transport/profile selector in settings.
+
+### Current evidence and implementation order
+
+The codec already has explicit encoders for `auto`, `pedestrian`, `bicycle`, and `motorcycle`, and
+the offline runtime already uses iterative generic candidates plus geometry ordering. Initial
+Valhalla 3.6.3 EKB probes showed that bicycle costing changed the corridor, pedestrian costing
+produced a distinct path, and motorcycle `use_trails` did not change the tested urban corridor.
+These are observations, not promotion decisions. The next implementation slice is the experiment
+policy and result metadata, followed by the EKB matrix and a device smoke; only then may a proven
+low-speed probe be considered for the generic route planner.
+
+### Execution checkpoint — Valhalla experimental costing matrix — 2026-09-04
+
+The first redacted EKB matrix was rerun against the pinned Valhalla 3.6.3 service. On the tested
+long urban corridor, generic `auto` returned the same 24.213 km / 3090.460 s geometry for
+`use_highways` values 0.0, 0.15, 0.4, and 1.0, and also for the tested `use_tracks` /
+`use_living_streets` values. This is negative evidence for that corridor, not a reason to invent
+curvature semantics. The motorcycle probe likewise returned the same 24.236 km / 3097.812 s
+geometry for `use_trails` values 0.0, 0.35, 0.7, and 1.0; the graph exposed no useful trail branch
+there.
+
+Bicycle costing did change the route: `use_roads` values 0.0, 0.35, 0.7, and 1.0 returned
+25.962, 24.948, 23.949, and 24.156 km respectively, with distinct geometry hashes. Pedestrian
+costing also changed the route: walking speeds 20 and 25 returned 23.557 km / 4459.303 s and
+23.572 km / 3611.406 s. These timings are costing-specific and must not be shown as generic
+vehicle ETAs; access, steps, and surfaces still need explicit inspection before promotion.
+
+The generic iterative alternative strategy returned three distinct candidates in about two
+seconds: 24.213, 26.925, and 38.864 km, using 0, 8, and 8 interior avoid points. The common
+`ValhallaExperimentPolicy` and `ValhallaRouteCandidate` metadata wrapper now encode the explicit
+experiment boundary and promotion gate; its focused test class passes 5/5. The online OSRM fallback
+now applies the same provider-independent geometric ordering for `CURVY` candidates after diversity
+filtering. The complete debug unit-test suite passes 2407/2407 with zero failures, errors, or skips.
+No experimental costing is wired into the default runtime yet, and no promotion decision has been made.
+
+### Execution checkpoint — multi-corridor experiment repeatability — 2026-09-04
+
+The matrix was repeated on two additional redacted EKB corridors. Bicycle costing changed the
+geometry on all three corridors (`use_roads` 0.0/0.7/1.0): the returned distances were
+25.962/23.949/24.156 km, 27.657/26.094/26.876 km, and 27.950/26.866/26.809 km. Pedestrian
+costing also returned a distinct route on each corridor; at walking speeds 20/25 its distances
+were 23.557/23.572 km, 22.249/22.249 km, and 25.837/25.826 km. The equal-distance pair on the
+second corridor is useful evidence that changing the costing does not guarantee a different
+geometry.
+
+Motorcycle `use_trails` changed the geometry on the two additional corridors (including a
+27.861 km / 5625.511 s result on the east-northwest corridor), while the original urban corridor
+remained unchanged. This supports keeping motorcycle probes diagnostic-only: trail preference
+can affect the graph, but it does not establish that the resulting trail is suitable or faster.
+The repeated data is recorded as aggregate corridor labels and geometry hashes only; no precise
+origin/destination coordinates are added to the plan.
+
+### Execution checkpoint — experimental costing wire compatibility and route-corpus smoke — 2026-09-04
+
+The encoder compatibility pass found and fixed a real Valhalla option-name bug before any
+experimental profile could be enabled. An earlier revision of this checkpoint incorrectly
+claimed that pinned `motorcycle` used singular `use_highway`, based on the current API-reference
+page. The actual pinned Valhalla 3.6.3 parser reads plural `use_highways` (see the
+[pinned motorcycle costing source](https://github.com/valhalla/valhalla/blob/3.6.3/src/sif/motorcyclecost.cc));
+the encoder and regression now use that spelling. The earlier singular-key route smoke therefore
+did not prove the option was honored: the unknown key was ignored and the default remained in
+effect.
+
+A short EKB route-corpus smoke against the pinned Valhalla 3.6.3 service returned the expected
+mode/type pairs: generic `auto` → `drive/car`, `motorcycle` → `drive/motorcycle`, `bicycle` →
+`bicycle/hybrid`, and `pedestrian` → `pedestrian/foot`. Bicycle and pedestrian produced distinct
+geometry from generic on this corridor; motorcycle matched generic there. `rough`, `toll`, and
+`ferry` were all zero in this smoke, so this is protocol/metadata evidence only, not proof that
+the candidate is safe for every road surface or access rule. The temporary service and config
+were removed after the smoke; package/image sources were untouched.
+
+The promotion gate remains open: no experimental costing is wired into the default runtime,
+and no candidate is promoted until the access/surface/steps/ETA checks and Android/debug smoke
+criteria below are complete.
+
+### Execution checkpoint — route evidence boundary — 2026-09-04
+
+Added an internal `ValhallaRouteEvidence` decoder for the maneuver-level facts that the route
+response actually carries: normalized `travel_mode`/`travel_type`, rough, toll, ferry, and
+unknown-mode detection. An earlier synthetic `gate` field was removed: the pinned route serializer
+does not emit it, so ordinary route responses cannot be used to claim gate evidence. The decoder
+deliberately remains outside `RouteAlternative` and the UI. Missing or unknown travel modes are
+marked unknown instead of being treated as safe. The decoder does not invent surface, access, or
+steps verdicts: those remain explicit corpus/trace inputs to the promotion assessment, because the
+ordinary route response does not expose a reliable combined verdict for them.
+
+The promotion assessment now requires the unknown-mode bit to be false in addition to the existing
+distinctness, steps, access, ETA, and detour checks. Thus evidence can be carried forward for
+diagnostics without making an experimental route eligible through an omitted provider field.
+
+### Retraction — pinned Valhalla maneuver enum and evidence boundary — 2026-09-04
+
+The first codec fixture used maneuver type `2` as arrival, which masked an incorrect mapping. The
+pinned [Valhalla 3.6.3 directions enum](https://github.com/valhalla/valhalla/blob/3.6.3/proto/directions.proto)
+defines `1..3` as start variants and `4..6` as destination variants. The decoder now follows that
+enum, with regression coverage for the turn, U-turn, roundabout, merge, ramp, ferry, and transit
+ranges that are represented by the app's smaller maneuver vocabulary. This is a decoder
+compatibility correction only; it does not promote an experimental costing or change the default
+generic runtime.
+
+### Requirement amendment — production adaptive routing profiles — 2026-09-04
+
+The earlier diagnostic-only boundary is superseded. `pedestrian`, `bicycle`, and `motorcycle`
+are now production Valhalla engine profiles selected automatically from route style and the
+rider's declared top speed. They remain internal routing semantics, not a vehicle-type selector:
+the request and UI still do not gain EUC, scooter, bicycle, jurisdiction, or transport fields.
+
+The production matrix is deliberately speed-aware:
+
+| Request | Primary profile | Profile fallback | Highway rule |
+|---|---|---|---|
+| Any style, 20–30 km/h | `bicycle` | `pedestrian`, then generic | highway bias is hard-zeroed for every costing, including generic fallback |
+| `CURVY`/touring, 31–60 km/h | `motorcycle` | `bicycle`, then generic | motorcycle highway preference is 0.15/0.0; trails/tracks are stronger in the 31–60 band |
+| Fast styles, 31–130 km/h | `motorcycle` | generic | `FAST` may use highways; `FAST_WITHOUT_HIGHWAYS` excludes them |
+| `CURVY`/touring, 61–130 km/h | `motorcycle` | generic | highways stay strongly disfavored; adventure bias is reduced for high-speed safety |
+
+The offline Valhalla runtime now routes with the primary profile and generates its bounded,
+geometry-diverse alternatives using that same costing. It tries the profile fallback only when
+the selected profile returns no route/provider failure; this keeps the normal path fast while
+making pedestrian/bicycle/motorcycle real production behavior rather than background probes.
+The OSRM online fallback hard-excludes `motorway,trunk` for low-speed and highway-avoiding
+requests. The HTTP/backend contract carries `routingProfile`; the former hosted-provider mapping
+has been removed. A future self-hosted Valhalla adapter must keep explicit profile mapping and
+refuse an unavailable profile instead of silently substituting generic.
+
+Valhalla option tuning is also speed-aware: low-speed `motorcycle` fallback has zero highway,
+trail, and track preference; bicycle uses zero road preference up to 30 km/h; curvy motorcycle
+uses `use_trails/use_tracks` 0.55/0.40 in the 31–60 band and 0.35/0.25 above it, while maximum
+touring uses 0.8/0.75 and 0.6/0.5 respectively. These are routing-cost inputs, not claims that
+every trail is suitable; route access/surface/steps still need field validation.
+
+Common tests cover the profile matrix, speed boundary at 30/60, low-speed highway hardening,
+curvy adventure scaling, OSRM exclusion, and the provider-neutral HTTP wire profile. No APK build
+is part of this amendment.
+
+### Retraction — hosted third-party routing provider (2026-09-04)
+
+The earlier hosted-provider path is retracted. No third-party routing account, API key, provider
+container, or provider-specific deployment configuration belongs in Volty. The app continues to
+use its direct Photon/OSRM online repository, while the backend navigation endpoints remain a
+provider-neutral seam that is explicitly unavailable until a self-hosted Valhalla adapter is
+implemented and field-validated. The existing adapter and its provider-specific tests were
+removed rather than left as a dormant production option.
+
+### Execution checkpoint — production profile route-corpus smoke — 2026-09-04
+
+The current EKB Valhalla 3.6.3 extract was queried with the exact production costing options on
+one redacted long urban corridor. The low-speed primary `bicycle` profile returned
+`has_highway=false` at both 20 and 30 km/h, with `travel_mode=bicycle` and
+`travel_type=hybrid`. The `pedestrian` fallback at 25 km/h returned `has_highway=false` with
+`travel_mode=pedestrian` and `travel_type=foot`. Generic `auto` with the low-speed hardening
+also returned `has_highway=false` at 20 and 30 km/h.
+
+The 50 and 90 km/h `motorcycle` curvy profiles returned `drive/motorcycle` and
+`has_highway=false`. Iterative avoidance produced three distinct geometry hashes for both
+curvy speed bands; the route lengths were 24.050/28.161/25.982 km at 50 km/h and
+27.862/32.381/24.518 km at 90 km/h. The latter is provider evidence that alternatives are
+actually being generated, while the style-specific motorcycle options still do not guarantee
+a different primary shape on every corridor. The route-level `has_highway` gate is now enforced
+in the decoder: a true or missing highway verdict is rejected for low-speed, curvy/touring, and
+no-highway requests, allowing the profile fallback to run instead of exposing an unsafe route.
+
+The smoke ran through the remote Docker Valhalla service only; no APK was built or installed.
+
+### Execution checkpoint — vehicle-scoped navigation preferences — 2026-09-04
+
+The planner's route style and declared top speed are now persisted in DataStore under the active
+vehicle id. The retained navigation component observes the active vehicle and swaps to that
+vehicle's saved values immediately; changing a profile or speed writes it back to the same key.
+Destination text, search results, route alternatives, and an active route remain transient. A
+legacy global preference key is still read as a migration fallback for vehicles with no dedicated
+value, while new edits always create a vehicle-scoped value. No UI transport-type selector was
+introduced. Common tests cover restoring a vehicle's values, isolating two vehicles, switching
+vehicles while the planner is retained, and persistence across `AppPrefs` instances. The full
+debug unit-test suite passes 2,417/2,417 with zero failures, errors, or skips; no APK was built.
+
+### Execution checkpoint — profile-aware online fallback — 2026-09-04
+
+The direct OSRM fallback now follows the same internal profile order as the offline planner while
+keeping alternatives within one costing. At 20–30 km/h it tries the public FOSSGIS bicycle graph,
+then foot, then the car graph only after a provider/no-route failure. Above 30 km/h the public car
+graph is used as the closest available road-access equivalent for the internal motorcycle/generic
+profiles; the public service has no motorcycle endpoint. Two car providers can still be queried in
+parallel for alternatives, while bike/foot attempts are not mixed with car routes in one result.
+The existing motorway/trunk exclusion remains active for low-speed, curvy, and no-highway requests.
+Focused OSRM tests pass, including bicycle selection and bike-to-foot fallback. No APK was built.
+
+### Execution checkpoint — live online profile endpoint smoke — 2026-09-04
+
+The public FOSSGIS endpoints were checked on a redacted EKB test corridor with the same route
+shape used by the adapter. `routed-bike`, `routed-foot`, and `routed-car` each returned `Ok` and
+one route; the first maneuver modes were respectively `cycling`, `walking`, and `driving`. The
+returned distances/durations were distinct, confirming that the low-speed fallback is backed by
+different routing graphs rather than a URL-only label. No query coordinates were recorded and no
+APK was built.
+
+The same live request with `alternatives=true` returned two routes from each of the bike, foot,
+and car graphs on that corridor. The adapter therefore keeps the provider's native alternatives
+for the selected costing; it does not need to mix profile types merely to inflate the count.
+
+### Execution checkpoint — release runtime variant wiring — 2026-09-04
+
+The release BuildConfig had a subtle configuration leak: the offline-runtime flag was previously
+declared in `defaultConfig`, so a plain release invocation without the production catalog gate
+could select the debug-era BRouter repository. The flag is now declared per build type: every
+release variant selects Valhalla/OfflineFirst, while debug keeps BRouter compatibility unless the
+offline runtime is explicitly enabled for a local smoke. The generated release config was checked
+without assembling an APK (`VOLTY_OFFLINE_RUNTIME_ENABLED=true`); debug remains `false` by default.
+The full debug unit suite then passed with exactly 2,417 tests and zero failures, errors, or skips.
+
+### Execution checkpoint — repeatable iterative production alternatives — 2026-09-04
+
+The exact production costing options were rerun against the pinned Valhalla 3.6.3 EKB extract
+through the same sequential `avoid_locations` strategy used by the offline runtime. On the
+redacted long corridor, `CURVY` at 50 km/h returned three unique geometry hashes in 557/661/643 ms
+with lengths 24.050/28.161/25.982 km; at 90 km/h it returned three unique hashes in 531/500/593 ms
+with lengths 27.862/32.381/24.518 km. The 20 km/h bicycle primary also produced three unique
+iterative candidates in 602/708/752 ms (25.962/29.132/33.126 km), all with `has_highway=false`.
+
+This is evidence that the production alternative path is fast enough on the host and does not
+collapse to one route on this corridor. It does not promote trails or pedestrian routing by
+itself: the route responses still require field/corpus checks for access, surface, steps, and
+vehicle-ETA compatibility. The temporary service used a copied config with the missing
+`auto_pedestrian` service limit restored; the checked-in config, package, and old containers were
+not modified. No APK was built or installed.
+
+### Execution checkpoint — regional service config normalization — 2026-09-04
+
+The pinned Valhalla 3.6.3 image's `valhalla_build_config` output was compared
+with its service startup behavior. The generated config omitted
+`service_limits.auto_pedestrian`, while the service failed before `/status` with
+`No such node (service_limits.auto_pedestrian.max_locations)`. The regional
+toolchain now runs an idempotent normalizer after config generation, adding the
+required distance/location/matrix limits and preserving any existing block. Focused
+toolchain coverage passes 21/21, Python compilation and shell syntax checks pass,
+and a temporary service with the normalized config reaches `/status` and returns a
+three-trip route response; no package
+or checked-in runtime data was changed and no APK was built.
+
+### Execution checkpoint — rebuilt EKB package with normalized config — 2026-09-04
+
+The remote Docker toolchain was synchronized with the checked-in normalizer and rebuilt as a new
+`ekb-package-v0.1.7`; the existing `v0.1.6` package and source PBF were not overwritten. The new
+unsigned manifest requires app version code 30 and reports 102,586,976 bytes routing /
+198,139,538 bytes installed, 14,592,861 / 58,368,000 bytes search, and 44,573,148 bytes PMTiles.
+The package verifier accepted all three components and 276,841 FTS rows.
+
+The packaged `valhalla.json` contains the normalized `auto_pedestrian` block. After extracting
+the routing archive, a temporary pinned 3.6.3 service reached `/status` and returned three route
+trips (`24.321`, `26.420`, and `28.261` km) from the route corpus. This closes the regional
+artifact/config regression on the host; the artifact remains an unsigned pilot with a placeholder
+CDN URL and is not a production catalog release. No APK was built or installed.
+
+### Execution checkpoint — signed catalog publisher on EKB `v0.1.7` — 2026-09-04
+
+The new package was passed through the publisher with an ephemeral Ed25519 key and the real
+version-code/data-version gates: the manifest was signed, a schema-2 catalog with one region and
+release `0.1.7` was emitted, and its catalog key ID matched the manifest key ID. A separate run
+with the original unsigned manifest was rejected with the expected non-zero result and the
+`unsigned manifest cannot enter catalog` error. Keys, signed outputs, and specs were removed after
+the smoke; this is publisher evidence only, not a distributable release. No APK was built.
+
+The same signed package was also rejected when the consuming app version was set to `29` and when
+the expected routing data version was changed to `valhalla-3.8.3`; both compatibility checks
+returned non-zero with the specific newer-app/mismatched-engine errors. The publisher therefore
+fails closed on both catalog compatibility dimensions before publication.
+
+### Execution checkpoint — ARM64 native smoke environment — 2026-09-04
+
+The local Android SDK now has the official command-line tools and an Android 14 Google APIs
+`arm64-v8a` system image. A separate `Volty_ARM64_API34` AVD was created; the existing
+`Pixel_3a_API_34_extension_level_7_x86_64` AVD was not changed. Android Emulator 37.2.1 rejects
+the ARM64 AVD before boot because this x86_64 host cannot run an ARM64 guest. Installing QEMU
+11.1 and attempting a generic `virt` boot proved that the ARM64 kernel and init can start, but
+the Android image then aborts because generic virtio disks do not reproduce the emulator's
+dynamic-partition layout (`metadata` is missing). This is not an APK/native smoke pass: the
+full ARM64 Android gate still requires an ARM64 host/device or a supported Android ARM guest.
+No APK was built or installed, and the user's phone was not touched.
+
+### Execution checkpoint — migration and backend verification — 2026-09-04
+
+The migration verifier initially hit a Windows-only SQLiteJDBC extraction failure because the
+SQLDelight worker inherited `C:\WINDOWS` as its native-library temporary directory. Inspection of
+`sqlite-jdbc 3.51.0.0` confirmed that it uses the dedicated `org.sqlite.tmpdir` property. Rerunning
+with an isolated workspace temp directory and the existing pre-extracted native library made
+`:composeApp:verifyCommonMainVoltyDatabaseMigration` pass (`BUILD SUCCESSFUL`, one task executed)
+without touching system files. A fresh `backend test` rerun also passed (`BUILD SUCCESSFUL`, five
+tasks executed). No APK was built or installed.
+
+### Execution checkpoint — fresh x86_64 debug APK smoke — 2026-09-04
+
+After the explicit build pause was lifted, a fresh `volty-0.7.6-debug.apk` was assembled from the
+current tree (`46` actionable tasks). The artifact reports app version code `30` and contains
+`arm64-v8a`, `armeabi-v7a`, `x86`, and `x86_64` libraries. It was installed only on the existing
+`emulator-5554` with `adb install -r`, preserving its data; no physical device was addressed.
+
+The emulator smoke opened the app, entered the demo dashboard and navigator, opened the compact
+profile menu with all four styles, selected `Извилистый`, changed the speed control to 20 km/h,
+and restarted the process without a crash. The focused UI tree exposed the expected profile/speed
+semantics and logcat contained no `FATAL EXCEPTION` or `AndroidRuntime` entries. This is a fresh
+x86_64 UI/runtime check; it does not close the ARM64 native gate or prove a real network/offline
+route request. The APK was not installed on the user's phone.
+
+### Execution checkpoint — release BRouter payload removal and x86 Android Valhalla smoke — 2026-09-04
+
+The release packaging gap is closed locally. The four legacy BRouter payload files
+(`E60_N55.rd5`, `lookups.dat`, `manifest.json`, and `volty.brf`) now belong only to the debug
+source set; both the regular `release` and the production-equivalent `releaseX86` variants are
+checked by a Gradle gate for the absence of BRouter DEX markers and `assets/offline-routing/*`.
+The regular release remains ARM-only. `releaseX86` inherits release signing/minification and the
+Valhalla/OfflineFirst runtime, but retains x86/x86_64 libraries solely for emulator smoke.
+
+The final clean ARM-only `release` APK is version code `30` / `0.7.6`, v2-signed, and is
+`68,650,933` bytes. The clean production-equivalent `releaseX86` APK is `147,581,716` bytes
+and contains all four ABIs; the corresponding pre-cleanup ARM-only release was `80,734,537`
+bytes, so moving BRouter payloads out of release removed `12,083,604` bytes from the
+distributable artifact. These final clean APKs were rebuilt without any smoke URL, key ID, or
+public key; the earlier temporary-key `releaseX86` artifact remains the separate x86 E2E smoke
+evidence and is not distributable.
+On `emulator-5554`, a signed temporary copy of the EKB package was installed into app-private
+storage without clearing app data. The APK's local FTS returned `Ekaterinburg EXPO`; the route
+request loaded the Valhalla tile extract in-process and returned three alternatives (`16.6`,
+`23.3`, and `20.9` km). This closes the Android x86 native/runtime/package path, but it is a
+smoke build with an ephemeral key and temporary catalog URL, not a distributable release.
+The ARM64 native gate, real catalog/key publication, cross-region route stitching, and field
+validation of access/surface/steps remain open.
+
+### Execution checkpoint — cross-region download discovery — 2026-09-04
+
+The offline access policy now reports every known catalog region that covers an endpoint when no
+single package covers the whole route. `OfflineFirstNavigationRepository` queues all such missing
+regions, with its existing Wi-Fi/mobile confirmation policy and duplicate-download guard. A route
+that crosses two independent package graphs still stays online (or returns typed offline failure);
+the app does not pretend that separate Valhalla extracts can be stitched. A common regression test
+covers both endpoint regions and verifies that both downloads are queued. Producing a genuinely
+cross-region routing graph remains a package/backend task.
+
+The post-change full debug suite completed with exactly `2,419` tests and zero failures, errors, or
+skips; the BRouter packaging gates passed on the release-equivalent smoke build, and the final
+clean APKs were independently scanned for the same forbidden assets, DEX markers, and smoke
+configuration. The temporary-key `releaseX86` artifact was installed with `adb install -r` on
+`emulator-5554` only, preserving app data; the physical phone was not addressed.

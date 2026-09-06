@@ -14,8 +14,11 @@ import io.ktor.http.headersOf
 import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.ManeuverKind
@@ -24,6 +27,8 @@ import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.RoutingPreferences
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
@@ -130,7 +135,7 @@ class OsmNavigationRepositoryTest {
         val result = repository.routes(testRequest(alternativesLimit = 2))
 
         val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
-        val request = requests.single()
+        val request = requests.first()
         assertEquals(HttpMethod.Get, request.method)
         assertEquals("routing.openstreetmap.de", request.url.host)
         assertEquals(
@@ -143,6 +148,7 @@ class OsmNavigationRepositoryTest {
         assertEquals("true", request.url.parameters["alternatives"])
         assertEquals("ru-RU,ru", request.headers[HttpHeaders.AcceptLanguage])
         assertEquals(2, plan.alternatives.size)
+        assertEquals(2, requests.size)
 
         val first = plan.alternatives.first()
         assertEquals(6, first.geometry.size)
@@ -173,6 +179,68 @@ class OsmNavigationRepositoryTest {
     }
 
     @Test
+    fun curvy_style_orders_online_candidates_by_real_geometry() = runTest {
+        val repository = repository {
+            osrmResponse(
+                osrmRoute(10_000.0, 600.0, 60.617, 56.8344, "straight"),
+                osrmRoute(11_000.0, 660.0, 60.612, 56.847, "bendy"),
+            )
+        }
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 2).copy(style = RouteStyle.CURVY),
+        )
+
+        val plan = assertIs<NavigationResult.Success<RoutePlan>>(result).value
+        assertEquals(listOf("bendy", "straight"), plan.alternatives.map { it.maneuvers.first().streetName })
+    }
+
+    @Test
+    fun low_speed_routes_use_bicycle_router_and_exclude_motorways_and_trunks() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = repository(requests) { osrmResponseWithRoutes() }
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 1).copy(
+                preferences = RoutingPreferences(declaredTopSpeedKph = 20),
+            ),
+        )
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(
+            "/routed-bike/route/v1/driving/60.6057,56.8389;60.63,56.83",
+            requests.single().url.encodedPath,
+        )
+        assertEquals("motorway,trunk", requests.single().url.parameters["exclude"])
+    }
+
+    @Test
+    fun low_speed_route_falls_back_to_foot_then_car_only_after_profile_failure() = runTest {
+        val requests = mutableListOf<HttpRequestData>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            requests += request
+            when {
+                request.url.encodedPath.startsWith("/routed-bike/") ->
+                    respond("{\"code\":\"NoRoute\",\"routes\":[]}", HttpStatusCode.UnprocessableEntity, jsonHeaders())
+                request.url.encodedPath.startsWith("/routed-foot/") ->
+                    respond(osrmResponseWithRoutes(), headers = jsonHeaders())
+                else -> error("car profile must not be queried after foot succeeds")
+            }
+        }))
+
+        val result = repository.routes(
+            testRequest(alternativesLimit = 1).copy(
+                preferences = RoutingPreferences(declaredTopSpeedKph = 20),
+            ),
+        )
+
+        assertIs<NavigationResult.Success<RoutePlan>>(result)
+        assertEquals(2, requests.size)
+        assertTrue(requests[0].url.encodedPath.startsWith("/routed-bike/"))
+        assertTrue(requests[1].url.encodedPath.startsWith("/routed-foot/"))
+    }
+
+    @Test
     fun routes_fall_back_to_osrm_demo_after_primary_transport_failure() = runTest {
         val requests = mutableListOf<HttpRequestData>()
         val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
@@ -187,9 +255,39 @@ class OsmNavigationRepositoryTest {
 
         assertIs<NavigationResult.Success<RoutePlan>>(result)
         assertEquals(
-            listOf("routing.openstreetmap.de", "router.project-osrm.org"),
-            requests.map { it.url.host },
+            setOf("routing.openstreetmap.de", "router.project-osrm.org"),
+            requests.map { it.url.host }.toSet(),
         )
+        assertEquals(2, requests.size)
+    }
+
+    @Test
+    fun routes_start_both_providers_in_parallel_when_more_than_one_route_is_requested() = runTest {
+        val primaryStarted = CompletableDeferred<Unit>()
+        val fallbackStarted = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+            if (request.url.host == "routing.openstreetmap.de") {
+                primaryStarted.complete(Unit)
+            } else {
+                fallbackStarted.complete(Unit)
+            }
+            release.await()
+            respond(
+                osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary")),
+                headers = jsonHeaders(),
+            )
+        }))
+        val routeJob = async { repository.routes(testRequest()) }
+
+        try {
+            primaryStarted.await()
+            withTimeout(1_000L) { fallbackStarted.await() }
+        } finally {
+            release.complete(Unit)
+        }
+
+        assertIs<NavigationResult.Success<RoutePlan>>(routeJob.await())
     }
 
     @Test
@@ -212,9 +310,10 @@ class OsmNavigationRepositoryTest {
 
         assertIs<NavigationResult.Success<RoutePlan>>(result)
         assertEquals(
-            listOf("routing.openstreetmap.de", "router.project-osrm.org"),
-            requests.map { it.url.host },
+            setOf("routing.openstreetmap.de", "router.project-osrm.org"),
+            requests.map { it.url.host }.toSet(),
         )
+        assertEquals(2, requests.size)
     }
 
     @Test

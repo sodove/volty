@@ -15,11 +15,26 @@ data class ProviderSearchRequest(
     val limit: Int,
 )
 
+enum class NavigationRoutingProfile(val wireName: String) {
+    GENERIC("generic"),
+    MOTORCYCLE("motorcycle"),
+    BICYCLE("bicycle"),
+    PEDESTRIAN("pedestrian"),
+    ;
+
+    companion object {
+        fun parse(value: String): NavigationRoutingProfile? = entries.firstOrNull {
+            it.wireName == value.trim().lowercase()
+        }
+    }
+}
+
 data class ProviderRouteRequest(
     val origin: GeoCoordinateDto,
     val destination: GeoCoordinateDto,
     val languageTag: String,
     val alternativesLimit: Int,
+    val routingProfile: NavigationRoutingProfile = NavigationRoutingProfile.GENERIC,
 )
 
 @Serializable
@@ -63,6 +78,7 @@ data class NavigationRouteRequestDto(
     val destination: NavigationPlaceDto,
     // Accepted only to keep older app builds wire-compatible; it is ignored.
     val profile: String? = null,
+    val routingProfile: String = NavigationRoutingProfile.GENERIC.wireName,
     val languageTag: String,
     val alternativesLimit: Int = 3,
 )

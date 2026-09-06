@@ -6,6 +6,8 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RoutePlan
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
+import ru.sodovaya.volty.domain.navigation.routing.RoutingPreferences
 import ru.sodovaya.volty.presentation.map.RideMapFollowState
 
 enum class LocationUiStatus {
@@ -60,12 +62,16 @@ data class LightNavigationState(
     val arrivalSoc: ArrivalSocEstimate = ArrivalSocEstimate.Unknown(ArrivalSocUnknownReason.NO_ROUTE),
     val followState: RideMapFollowState = RideMapFollowState(),
     val requestGeneration: Long = 0L,
+    val routeStyle: RouteStyle = RouteStyle.FAST_WITH_HIGHWAYS,
+    val routingPreferences: RoutingPreferences = RoutingPreferences(),
 )
 
 sealed interface NavigationAction {
     data object PlannerRequested : NavigationAction
     data class QueryChanged(val query: String) : NavigationAction
     data class PlaceSelected(val place: PlaceCandidate) : NavigationAction
+    data class RouteStyleChanged(val style: RouteStyle) : NavigationAction
+    data class TopSpeedChanged(val speedKph: Int) : NavigationAction
 
     data class SearchStarted(val requestGeneration: Long) : NavigationAction
     data class SearchLoaded(
@@ -117,8 +123,6 @@ sealed interface NavigationAction {
 
 /** Pure state machine for the retained planner and navigation scene. */
 object NavigationReducer {
-    private const val MIN_SEARCH_LENGTH = 3
-
     fun reduce(state: LightNavigationState, action: NavigationAction): LightNavigationState = when (action) {
         NavigationAction.PlannerRequested -> if (state.phase is NavigationPhase.Idle) {
             state.copy(phase = emptyPlanning())
@@ -132,7 +136,7 @@ object NavigationReducer {
                     query = action.query,
                     searchResults = emptyList(),
                     destination = null,
-                    requestInFlight = action.query.trim().length >= MIN_SEARCH_LENGTH,
+                    requestInFlight = action.query.trim().length >= LightNavigationSearchPolicy.MIN_QUERY_LENGTH,
                     failure = null,
                 ),
                 requestGeneration = nextGeneration(state),
@@ -152,6 +156,22 @@ object NavigationReducer {
                 arrivalSoc = unknownArrivalSoc(),
             )
             else -> state
+        }
+
+        is NavigationAction.RouteStyleChanged -> if (state.phase is NavigationPhase.Planning) {
+            state.copy(routeStyle = action.style)
+        } else {
+            state
+        }
+
+        is NavigationAction.TopSpeedChanged -> if (state.phase is NavigationPhase.Planning) {
+            state.copy(
+                routingPreferences = state.routingPreferences.copy(
+                    declaredTopSpeedKph = action.speedKph.coerceIn(20, 130),
+                ),
+            )
+        } else {
+            state
         }
 
         is NavigationAction.SearchStarted -> if (isCurrent(state, action.requestGeneration)) {

@@ -1,0 +1,207 @@
+package ru.sodovaya.volty.domain.navigation.region
+
+import kotlinx.serialization.SerialName
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.encodeToJsonElement
+import kotlinx.serialization.json.jsonObject
+import kotlin.time.Instant
+
+@Serializable
+data class OfflineRegionCatalog(
+    val schemaVersion: Int,
+    val generatedAt: String,
+    val regions: List<OfflineRegionCatalogEntry>,
+    @SerialName("catalogSignature")
+    val signature: OfflineRegionCatalogSignature,
+)
+
+@Serializable
+data class OfflineRegionCatalogSignature(
+    val keyId: String,
+    val algorithm: String,
+    val value: String,
+)
+
+@Serializable
+data class OfflineRegionCatalogEntry(
+    val region: OfflineRegionManifest,
+    val latestRelease: OfflineRegionPackageManifest? = null,
+    val onDemand: OfflineRegionOnDemand = OfflineRegionOnDemand(),
+)
+
+@Serializable
+data class OfflineRegionOnDemand(
+    val enabled: Boolean = false,
+)
+
+enum class OfflineRegionCatalogParseError {
+    MALFORMED_CATALOG,
+}
+
+sealed interface OfflineRegionCatalogParseResult {
+    data class Success(val catalog: OfflineRegionCatalog) : OfflineRegionCatalogParseResult
+
+    data class Failure(val error: OfflineRegionCatalogParseError) : OfflineRegionCatalogParseResult
+}
+
+object OfflineRegionCatalogCodec {
+    private val json = Json {
+        ignoreUnknownKeys = false
+        explicitNulls = true
+        isLenient = false
+    }
+
+    fun parse(jsonText: String): OfflineRegionCatalogParseResult = try {
+        OfflineRegionCatalogParseResult.Success(
+            json.decodeFromString<OfflineRegionCatalog>(jsonText),
+        )
+    } catch (_: SerializationException) {
+        OfflineRegionCatalogParseResult.Failure(OfflineRegionCatalogParseError.MALFORMED_CATALOG)
+    } catch (_: IllegalArgumentException) {
+        OfflineRegionCatalogParseResult.Failure(OfflineRegionCatalogParseError.MALFORMED_CATALOG)
+    }
+
+    fun encode(catalog: OfflineRegionCatalog): String = json.encodeToString(catalog)
+
+    /** Stable UTF-8 payload used by the catalog Ed25519 signature verifier. */
+    fun signingPayload(catalog: OfflineRegionCatalog): String {
+        val unsignedObject = json.encodeToJsonElement(catalog).jsonObject.toMutableMap()
+        unsignedObject.remove("catalogSignature")
+        return json.encodeToString(JsonObject(unsignedObject))
+    }
+}
+
+enum class OfflineRegionCatalogErrorCode {
+    UNSUPPORTED_SCHEMA_VERSION,
+    INVALID_GENERATED_AT,
+    INVALID_SIGNATURE,
+    DUPLICATE_REGION_ID,
+    RELEASE_REGION_MISMATCH,
+    REGION_BOUNDS_MISMATCH,
+    RELEASE_INVALID,
+    INVALID_ON_DEMAND_ENTRY,
+}
+
+data class OfflineRegionCatalogValidationError(
+    val code: OfflineRegionCatalogErrorCode,
+    val detail: String,
+)
+
+object OfflineRegionCatalogPolicy {
+    const val CURRENT_SCHEMA_VERSION: Int = 2
+
+    fun validate(
+        catalog: OfflineRegionCatalog,
+        currentAppVersionCode: Int,
+    ): List<OfflineRegionCatalogValidationError> {
+        val errors = mutableListOf<OfflineRegionCatalogValidationError>()
+        if (catalog.schemaVersion != CURRENT_SCHEMA_VERSION) {
+            errors += OfflineRegionCatalogValidationError(
+                OfflineRegionCatalogErrorCode.UNSUPPORTED_SCHEMA_VERSION,
+                catalog.schemaVersion.toString(),
+            )
+        }
+        if (runCatching { Instant.parse(catalog.generatedAt) }.isFailure) {
+            errors += OfflineRegionCatalogValidationError(
+                OfflineRegionCatalogErrorCode.INVALID_GENERATED_AT,
+                catalog.generatedAt,
+            )
+        }
+        if (catalog.signature.keyId.isBlank() ||
+            catalog.signature.algorithm.lowercase() != "ed25519" ||
+            catalog.signature.value.isBlank() ||
+            catalog.signature.keyId in RESERVED_KEY_IDS ||
+            catalog.signature.value == UNSIGNED_VALUE
+        ) {
+            errors += OfflineRegionCatalogValidationError(
+                OfflineRegionCatalogErrorCode.INVALID_SIGNATURE,
+                catalog.signature.keyId,
+            )
+        }
+
+        val duplicateIds = catalog.regions.groupingBy { it.region.regionId }.eachCount()
+            .filterValues { it > 1 }
+            .keys
+        duplicateIds.forEach { regionId ->
+            errors += OfflineRegionCatalogValidationError(
+                OfflineRegionCatalogErrorCode.DUPLICATE_REGION_ID,
+                regionId,
+            )
+        }
+
+        catalog.regions.forEach { entry ->
+            if (entry.latestRelease == null && !entry.onDemand.enabled) {
+                errors += OfflineRegionCatalogValidationError(
+                    OfflineRegionCatalogErrorCode.INVALID_ON_DEMAND_ENTRY,
+                    entry.region.regionId,
+                )
+            }
+            entry.latestRelease?.let { release ->
+                if (release.regionId != entry.region.regionId) {
+                    errors += OfflineRegionCatalogValidationError(
+                        OfflineRegionCatalogErrorCode.RELEASE_REGION_MISMATCH,
+                        entry.region.regionId,
+                    )
+                }
+                if (!release.coverage.bbox.covers(entry.region.bounds)) {
+                    errors += OfflineRegionCatalogValidationError(
+                        OfflineRegionCatalogErrorCode.REGION_BOUNDS_MISMATCH,
+                        entry.region.regionId,
+                    )
+                }
+                OfflineRegionPackageManifestPolicy.validate(release, currentAppVersionCode)
+                    .takeIf { it.isNotEmpty() }
+                    ?.let {
+                        errors += OfflineRegionCatalogValidationError(
+                            OfflineRegionCatalogErrorCode.RELEASE_INVALID,
+                            entry.region.regionId,
+                        )
+                    }
+            }
+        }
+        return errors
+    }
+
+    private fun List<Double>.covers(bounds: OfflineRegionBounds): Boolean {
+        if (size != 4) return false
+        return this[0] <= bounds.west &&
+            this[1] <= bounds.south &&
+            this[2] >= bounds.east &&
+            this[3] >= bounds.north
+    }
+
+    private val RESERVED_KEY_IDS = setOf("UNSIGNED_DEV", "UNSIGNED")
+    private const val UNSIGNED_VALUE = "UNSIGNED"
+}
+
+/** Platform-provided verifier for the catalog envelope itself. */
+fun interface OfflineRegionCatalogVerifier {
+    fun verify(catalog: OfflineRegionCatalog): Boolean
+}
+
+/**
+ * Cryptographic gate for releases advertised by a catalog.
+ *
+ * Structural catalog validation is deliberately separate from signature
+ * verification because the verifier is platform-provided. Callers must run
+ * this gate before downloading any advertised artifact.
+ */
+object OfflineRegionCatalogSignaturePolicy {
+    fun isVerified(
+        catalog: OfflineRegionCatalog,
+        verifier: OfflineRegionCatalogVerifier,
+    ): Boolean = runCatching { verifier.verify(catalog) }.getOrDefault(false)
+
+    fun unverifiedReleaseIds(
+        catalog: OfflineRegionCatalog,
+        verifier: OfflineRegionManifestVerifier,
+    ): List<String> = catalog.regions.mapNotNull { entry ->
+        val release = entry.latestRelease ?: return@mapNotNull null
+        entry.region.regionId.takeUnless {
+            runCatching { verifier.verify(release) }.getOrDefault(false)
+        }
+    }
+}

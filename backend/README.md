@@ -2,6 +2,15 @@
 
 This is a standalone Ktor/JVM service. It is separate from the Android Gradle project and has no Redis dependency. The public API origin is `https://volty.sodove.ru`.
 
+Offline navigation files are served by the same Ktor process at `/offline/`.
+Docker mounts `VOLTY_OFFLINE_HOST_DIR` read-only at `VOLTY_OFFLINE_ROOT`; the
+native nginx proxy needs no special location while it forwards the existing
+`volty.sodove.ru` vhost to the app. Publish a verified package and catalog with
+`bash deploy-offline.sh --package <package> --catalog <catalog>` after the
+backend stack is running. The catalog is replaced last, so a failed publish
+does not advertise a partial release. Component URLs must be signed for the
+configured `VOLTY_OFFLINE_PUBLIC_BASE_URL` prefix.
+
 ## Local development
 
 From the repository root:
@@ -80,3 +89,9 @@ curl.exe -H "Authorization: Bearer <access-token>" https://volty.sodove.ru/v1/vo
 ```
 
 This Windows host can verify config, token issuance, and packaging. Real media connectivity still requires a public VPS plus two real Android devices on separate networks.
+# Automatic offline region delivery
+
+The optional private package service verifies and acquires signed Valhalla, FTS4
+and PMTiles regional releases from the release pipeline. Ktor exposes the existing
+`/offline/catalog.json` contract plus coverage lookup and acquisition status.
+See [OFFLINE.md](OFFLINE.md) for setup and lifecycle details.

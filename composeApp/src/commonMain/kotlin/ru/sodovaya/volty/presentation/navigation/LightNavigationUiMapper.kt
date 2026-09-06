@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
 import ru.sodovaya.volty.domain.navigation.RouteGuidance
 import ru.sodovaya.volty.domain.navigation.RoutePlan
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
 
@@ -93,6 +94,8 @@ data class NavigationUiModel(
     val canStart: Boolean,
     val canRetry: Boolean,
     val canStop: Boolean,
+    val routeStyle: RouteStyle,
+    val topSpeedKph: Int,
 )
 
 object LightNavigationUiMapper {
@@ -146,6 +149,8 @@ object LightNavigationUiMapper {
                 else -> false
             },
             canStop = phase !is NavigationPhase.Idle,
+            routeStyle = state.routeStyle,
+            topSpeedKph = state.routingPreferences.declaredTopSpeedKph,
         )
     }
 

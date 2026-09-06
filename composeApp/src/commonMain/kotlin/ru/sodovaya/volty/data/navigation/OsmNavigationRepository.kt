@@ -14,6 +14,9 @@ import io.ktor.http.isSuccess
 import io.ktor.util.date.GMTDate
 import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
@@ -30,11 +33,16 @@ import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationResult
 import ru.sodovaya.volty.domain.navigation.PlaceCandidate
+import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RouteAlternative
 import ru.sodovaya.volty.domain.navigation.RouteManeuver
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
-import kotlin.math.abs
+import ru.sodovaya.volty.domain.navigation.routing.RouteAlternativePolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfile
+import ru.sodovaya.volty.domain.navigation.routing.RouteProfilePolicy
+import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import kotlin.math.ceil
 
 class OsmNavigationRepository(
@@ -59,7 +67,9 @@ class OsmNavigationRepository(
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
         val body = response.readBoundedBody()
-        response.toResult(body) { text -> decodePhoton(text) }
+        response.toResult(body) { text ->
+            PlaceCandidateDeduplicationPolicy.deduplicate(decodePhoton(text), limit = 8)
+        }
     } catch (cancelled: CancellationException) {
         throw cancelled
     } catch (_: Exception) {
@@ -70,56 +80,68 @@ class OsmNavigationRepository(
         val language = requestLanguage(request.languageTag)
         val limit = request.alternativesLimit.coerceIn(1, MAX_ALTERNATIVES)
         var lastFailure: NavigationFailure = NavigationFailure.Offline
-        var primaryPlan: RoutePlan? = null
 
         return try {
-            for (endpoint in OSRM_URLS) {
-                val result = try {
-                    routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    NavigationResult.Failure(NavigationFailure.Offline)
+            /*
+             * Keep alternatives within one costing. Public OSRM instances do
+             * not expose a motorcycle profile, so motorcycle deliberately
+             * maps to the car road graph here; low-speed requests can still
+             * fall through bike -> foot -> car if a profile cannot route.
+             */
+            val endpointAttempts = RouteProfilePolicy.profilesFor(request)
+                .map(::endpointsFor)
+                .distinct()
+
+            for (candidateEndpoints in endpointAttempts) {
+                val endpoints = candidateEndpoints.take(if (limit == 1) 1 else candidateEndpoints.size)
+                val results = coroutineScope {
+                    endpoints.map { endpoint ->
+                        async {
+                            try {
+                                routeFromEndpoint(endpoint, request, language.acceptLanguage, limit)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                NavigationResult.Failure(NavigationFailure.Offline)
+                            }
+                        }
+                    }.awaitAll()
                 }
 
-                when (result) {
-                    is NavigationResult.Success -> {
-                        val previousPrimary = primaryPlan
-                        if (previousPrimary == null) {
-                            primaryPlan = result.value
-                            if (result.value.alternatives.size >= limit) {
-                                return NavigationResult.Success(result.value.withDeterministicRouteIds(limit))
-                            }
-                        } else {
-                            return NavigationResult.Success(
-                                previousPrimary.aggregateWith(result.value, limit),
-                            )
+                var combinedPlan: RoutePlan? = null
+                for (result in results) {
+                    when (result) {
+                        is NavigationResult.Success -> {
+                            combinedPlan = combinedPlan?.aggregateWith(result.value, limit) ?: result.value
                         }
-                    }
-                    is NavigationResult.Failure -> {
-                        lastFailure = result.reason
-                        val successfulPrimary = primaryPlan
-                        if (successfulPrimary != null) {
-                            return NavigationResult.Success(successfulPrimary.withDeterministicRouteIds(limit))
-                        }
-                        if (result.reason !is NavigationFailure.Offline &&
-                            result.reason !is NavigationFailure.ProviderUnavailable &&
-                            result.reason !is NavigationFailure.RateLimited
-                        ) {
-                            return result
+                        is NavigationResult.Failure -> {
+                            lastFailure = result.reason
                         }
                     }
                 }
+
+                if (combinedPlan != null) {
+                    return NavigationResult.Success(
+                        combinedPlan.withDeterministicRouteIds(request, limit),
+                    )
+                }
             }
-            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
-                ?: NavigationResult.Failure(lastFailure)
+
+            NavigationResult.Failure(lastFailure)
         } catch (cancelled: CancellationException) {
             throw cancelled
-        } catch (error: Exception) {
-            primaryPlan?.let { NavigationResult.Success(it.withDeterministicRouteIds(limit)) }
-                ?: NavigationResult.Failure(lastFailure)
+        } catch (_: Exception) {
+            NavigationResult.Failure(lastFailure)
         }
     }
+
+    private fun endpointsFor(profile: RouteProfile): List<String> =
+        when (profile) {
+            RouteProfile.BICYCLE -> listOf(OSRM_BICYCLE_URL)
+            RouteProfile.PEDESTRIAN -> listOf(OSRM_FOOT_URL)
+            RouteProfile.MOTORCYCLE,
+            RouteProfile.GENERIC -> OSRM_CAR_URLS
+        }
 
     private suspend fun routeFromEndpoint(
         endpoint: String,
@@ -138,6 +160,7 @@ class OsmNavigationRepository(
             parameter("geometries", "geojson")
             parameter("steps", true)
             parameter("alternatives", true)
+            onlineExcludedHighwayClasses(request)?.let { parameter("exclude", it) }
             header(HttpHeaders.AcceptLanguage, acceptLanguage)
             header(HttpHeaders.UserAgent, USER_AGENT)
         }
@@ -149,6 +172,14 @@ class OsmNavigationRepository(
         throw cancelled
     } catch (_: Exception) {
         NavigationResult.Failure(NavigationFailure.Offline)
+    }
+
+    private fun onlineExcludedHighwayClasses(request: RouteRequest): String? {
+        return if (RouteProfilePolicy.requiresHighwayFreeRoute(request)) {
+            "motorway,trunk"
+        } else {
+            null
+        }
     }
 
     private fun decodePhoton(body: String): List<PlaceCandidate> {
@@ -222,21 +253,25 @@ class OsmNavigationRepository(
     }
 
     private fun RoutePlan.aggregateWith(other: RoutePlan, limit: Int): RoutePlan {
-        val alternatives = mutableListOf<RouteAlternative>()
-        (this.alternatives + other.alternatives).forEach { candidate ->
-            if (alternatives.size < limit && alternatives.none { it.isEquivalentTo(candidate) }) {
-                alternatives += candidate
-            }
-        }
         return copy(
-            alternatives = alternatives.mapIndexed { index, route ->
+            alternatives = RouteDiversityPolicy.select(
+                candidates = this.alternatives + other.alternatives,
+                limit = limit,
+            ).mapIndexed { index, route ->
                 route.withDeterministicId(index)
             },
         )
     }
 
-    private fun RoutePlan.withDeterministicRouteIds(limit: Int): RoutePlan = copy(
-        alternatives = alternatives.take(limit).mapIndexed { index, route ->
+    private fun RoutePlan.withDeterministicRouteIds(request: RouteRequest, limit: Int): RoutePlan = copy(
+        alternatives = RouteAlternativePolicy.orderForStyle(
+            candidates = RouteDiversityPolicy.select(
+                candidates = alternatives,
+                limit = limit,
+            ),
+            style = request.style,
+            limit = limit,
+        ).mapIndexed { index, route ->
             route.withDeterministicId(index)
         },
     )
@@ -254,33 +289,6 @@ class OsmNavigationRepository(
                 maneuver.copy(id = maneuverId)
             },
         )
-    }
-
-    private fun RouteAlternative.isEquivalentTo(other: RouteAlternative): Boolean {
-        val distanceTolerance = maxOf(
-            ROUTE_DISTANCE_TOLERANCE_METERS,
-            maxOf(distanceMeters, other.distanceMeters) * ROUTE_DISTANCE_TOLERANCE_RATIO,
-        )
-        val durationTolerance = maxOf(
-            ROUTE_DURATION_TOLERANCE_SECONDS.toDouble(),
-            maxOf(durationSeconds, other.durationSeconds).toDouble() * ROUTE_DURATION_TOLERANCE_RATIO,
-        )
-        return abs(distanceMeters - other.distanceMeters) <= distanceTolerance &&
-            abs(durationSeconds.toDouble() - other.durationSeconds.toDouble()) <= durationTolerance &&
-            geometriesEquivalent(geometry, other.geometry)
-    }
-
-    private fun geometriesEquivalent(
-        first: List<GeoCoordinate>,
-        second: List<GeoCoordinate>,
-    ): Boolean = first.all { point -> second.any { it.isWithinRouteToleranceOf(point) } } &&
-        second.all { point -> first.any { it.isWithinRouteToleranceOf(point) } }
-
-    private fun GeoCoordinate.isWithinRouteToleranceOf(other: GeoCoordinate): Boolean {
-        val latitudeDelta = latitude - other.latitude
-        val longitudeDelta = longitude - other.longitude
-        return latitudeDelta * latitudeDelta + longitudeDelta * longitudeDelta <=
-            ROUTE_GEOMETRY_TOLERANCE_DEGREES * ROUTE_GEOMETRY_TOLERANCE_DEGREES
     }
 
     private fun decodeRouteAlternative(
@@ -592,7 +600,11 @@ class OsmNavigationRepository(
 
     private companion object {
         const val PHOTON_URL = "https://photon.komoot.io/api/"
-        val OSRM_URLS = listOf(
+        const val OSRM_BICYCLE_URL =
+            "https://routing.openstreetmap.de/routed-bike/route/v1/driving"
+        const val OSRM_FOOT_URL =
+            "https://routing.openstreetmap.de/routed-foot/route/v1/driving"
+        val OSRM_CAR_URLS = listOf(
             "https://routing.openstreetmap.de/routed-car/route/v1/driving",
             "https://router.project-osrm.org/route/v1/driving",
         )
@@ -600,12 +612,7 @@ class OsmNavigationRepository(
         const val MAX_RESPONSE_CHARS = 2_000_000
         const val MAX_RESPONSE_BYTES = MAX_RESPONSE_CHARS * 4L + 1L
         const val MAX_ALTERNATIVES = 3
-        const val ROUTE_DISTANCE_TOLERANCE_METERS = 25.0
         val WHITESPACE = Regex("\\s+")
-        const val ROUTE_DISTANCE_TOLERANCE_RATIO = 0.02
-        const val ROUTE_DURATION_TOLERANCE_SECONDS = 5L
-        const val ROUTE_DURATION_TOLERANCE_RATIO = 0.05
-        const val ROUTE_GEOMETRY_TOLERANCE_DEGREES = 0.0002
         const val DEFAULT_RETRY_AFTER_SECONDS = 60L
         val SUPPORTED_PHOTON_LANGUAGES = setOf("default", "de", "en", "fr", "it")
         val json = Json {
