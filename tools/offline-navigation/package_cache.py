@@ -481,7 +481,11 @@ class PackageManager:
     def prune(self):
         removed = 0
         with self._lock:
-            active = {(region, entry['latestRelease']['releaseVersion']) for region, entry in self._entries.items()}
+            active = set()
+            for region, entry in self._entries.items():
+                release = entry.get('latestRelease')
+                if isinstance(release, dict) and release.get('releaseVersion'):
+                    active.add((region, release['releaseVersion']))
             for key in list(self._ready):
                 path = self.releases / key[0] / key[1]
                 if key in active or time.time() - (path / '.ready.json').stat().st_mtime < self.config.prune_grace_seconds:

@@ -174,6 +174,28 @@ class PackageServiceTest(unittest.TestCase):
         self.assertEqual(updated, manager.catalog_bytes())
         self.assertEqual('ekb-east', manager.resolve(56.8, 61.5)['regionId'])
 
+    def test_prune_accepts_on_demand_entries_without_release(self):
+        manager = self.manager()
+        manager.refresh()
+        catalog = json.loads(self.catalog_bytes)
+        catalog['generatedAt'] = '2026-09-06T00:00:00Z'
+        catalog['regions'].append({
+            'region': {
+                'regionId': 'ekb-east',
+                'displayName': 'Восток',
+                'bounds': {'south': 56.5, 'west': 61.0, 'north': 57.0, 'east': 62.0},
+            },
+            'latestRelease': None,
+            'onDemand': {'enabled': True},
+        })
+        self.catalog_bytes = json.dumps(
+            catalog_tools.sign_catalog(catalog, self.key, 'release-key'),
+            ensure_ascii=False,
+        ).encode()
+        manager.refresh()
+
+        self.assertEqual({'status': 'ready', 'removedReleases': 0}, manager.prune())
+
     def test_duplicate_ensure_does_not_publish_partial_files(self):
         manager = self.manager()
         manager.refresh()
