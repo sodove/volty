@@ -200,14 +200,37 @@ class DefaultOfflineRegionPreparationCoordinator(
             OfflineRegionDownloadTrigger.SETTINGS
         }
         if (network != null) {
-            when (OfflineRegionDownloadPolicy.decide(network.current(), downloadTrigger, preferences(), meteredConfirmed)) {
-                OfflineDownloadDecision.Allowed -> Unit
-                else -> {
+            val initialDecision = OfflineRegionDownloadPolicy.decide(
+                network.current(),
+                downloadTrigger,
+                preferences(),
+                meteredConfirmed,
+            )
+            if (initialDecision != OfflineDownloadDecision.Allowed) {
+                // Publish the waiting request and re-check while holding the
+                // same mutex used by the connectivity collector. If the
+                // network became usable after the first decision but before
+                // this publication, the second check consumes that transition
+                // locally instead of relying on a callback that may already
+                // have observed an empty pending set.
+                val stillBlocked = stateMutex.withLock {
+                    pending[key] = PendingPreparation(key, style, trigger, meteredConfirmed)
+                    val currentDecision = OfflineRegionDownloadPolicy.decide(
+                        network.current(),
+                        downloadTrigger,
+                        preferences(),
+                        meteredConfirmed,
+                    )
+                    if (currentDecision == OfflineDownloadDecision.Allowed) {
+                        pending.remove(key)
+                        false
+                    } else {
+                        true
+                    }
+                }
+                if (stillBlocked) {
                     // Let the package repository expose the waiting/approval
                     // state, but never activate a native map transfer first.
-                    stateMutex.withLock {
-                        pending[key] = PendingPreparation(key, style, trigger, meteredConfirmed)
-                    }
                     packages.requestDownload(packageState.region.regionId, downloadTrigger, meteredConfirmed)
                     return@supervisorScope
                 }

@@ -179,6 +179,24 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
+    fun recovery_between_policy_check_and_pending_publication_is_not_lost() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val network = FakeNetwork(
+            initial = OfflineNetworkAvailability.OFFLINE,
+            recoverAfterFirstRead = true,
+        )
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+        runCurrent()
+
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        advanceUntilIdle()
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(1, packages.requestCalls)
+    }
+
+    @Test
     fun duplicate_allowed_network_transitions_do_not_start_duplicate_map_jobs() = runTest {
         val map = FakeMapManager(CompletableDeferred())
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
@@ -213,10 +231,22 @@ class OfflineRegionPreparationCoordinatorTest {
             network = network,
         )
 
-    private class FakeNetwork(initial: OfflineNetworkAvailability) : OfflineNetworkStatus {
+    private class FakeNetwork(
+        initial: OfflineNetworkAvailability,
+        private val recoverAfterFirstRead: Boolean = false,
+    ) : OfflineNetworkStatus {
         var availability = initial
         override val changes = MutableSharedFlow<OfflineNetworkAvailability>(extraBufferCapacity = 4)
-        override fun current(): OfflineNetworkAvailability = availability
+        private var reads = 0
+        override fun current(): OfflineNetworkAvailability {
+            val observed = availability
+            reads++
+            if (recoverAfterFirstRead && reads == 1) {
+                availability = OfflineNetworkAvailability.UNMETERED
+                changes.tryEmit(OfflineNetworkAvailability.UNMETERED)
+            }
+            return observed
+        }
     }
 
     private class FakeMapManager(
