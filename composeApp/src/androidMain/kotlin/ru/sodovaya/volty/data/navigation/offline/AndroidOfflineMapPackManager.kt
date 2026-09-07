@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.navigation.offline
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -26,6 +27,7 @@ import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackKey
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import java.util.concurrent.atomic.AtomicReference
 
 interface OfflineMapPackManager {
     val states: StateFlow<List<OfflineMapPackState>>
@@ -143,21 +145,57 @@ class AndroidOfflineMapPackManager internal constructor(
             // over cancellation so the retained entry cannot disagree with MapLibre.
             entry.lifecycle = PackLifecycle.DELETING
             entry.observerGeneration += 1
-            withContext(NonCancellable) {
-                try {
-                    entry.pack.delete()
-                    if (packs[key] === entry) {
-                        packs.remove(key)
-                        removeState(key)
-                    }
-                } catch (error: Throwable) {
-                    if (packs[key] === entry) {
-                        entry.lifecycle = PackLifecycle.ACTIVE
-                        attachObserverLocked(entry)
-                        update(key, OfflineMapPackState.Failed(error.failureCode()))
-                    }
+            val issued = AtomicReference<SdkOfflinePackDeletion?>()
+            try {
+                entry.pack.invokeDelete { deletion ->
+                    check(issued.compareAndSet(null, deletion))
                 }
+            } catch (cancelled: CancellationException) {
+                val deletion = issued.get()
+                if (deletion == null) {
+                    withContext(NonCancellable) { restoreCancelledDeleteAdmissionLocked(entry) }
+                } else {
+                    withContext(NonCancellable) { reconcileDeleteLocked(entry, deletion) }
+                }
+                throw cancelled
+            } catch (error: Throwable) {
+                val deletion = issued.get()
+                if (deletion == null) {
+                    restoreFailedDeleteAdmissionLocked(entry, error)
+                } else {
+                    withContext(NonCancellable) { reconcileDeleteLocked(entry, deletion) }
+                }
+                return@withLock
             }
+            val deletion = checkNotNull(issued.get()) { "SDK delete returned without issuing" }
+            withContext(NonCancellable) { reconcileDeleteLocked(entry, deletion) }
+        }
+    }
+
+    private suspend fun reconcileDeleteLocked(entry: PackEntry, deletion: SdkOfflinePackDeletion) {
+        try {
+            deletion.awaitCompletion()
+            if (packs[entry.key] === entry) {
+                packs.remove(entry.key)
+                removeState(entry.key)
+            }
+        } catch (error: Throwable) {
+            restoreFailedDeleteAdmissionLocked(entry, error)
+        }
+    }
+
+    private suspend fun restoreCancelledDeleteAdmissionLocked(entry: PackEntry) {
+        if (packs[entry.key] === entry) {
+            entry.lifecycle = PackLifecycle.ACTIVE
+            attachObserverLocked(entry)
+        }
+    }
+
+    private suspend fun restoreFailedDeleteAdmissionLocked(entry: PackEntry, error: Throwable) {
+        if (packs[entry.key] === entry) {
+            entry.lifecycle = PackLifecycle.ACTIVE
+            attachObserverLocked(entry)
+            update(entry.key, OfflineMapPackState.Failed(error.failureCode()))
         }
     }
 
@@ -388,7 +426,11 @@ internal interface SdkOfflinePack {
     suspend fun resume()
     suspend fun pause()
     suspend fun invalidate()
-    suspend fun delete()
+    suspend fun invokeDelete(onInvoked: (SdkOfflinePackDeletion) -> Unit)
+}
+
+internal interface SdkOfflinePackDeletion {
+    suspend fun awaitCompletion()
 }
 
 internal interface SdkOfflinePackClient {
@@ -503,18 +545,20 @@ private class MapLibreSdkOfflinePack(
         }
     }
 
-    override suspend fun delete() = withContext(mainDispatcher) {
-        suspendCancellableCoroutine { continuation ->
-            region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
-                override fun onDelete() {
-                    if (continuation.isActive) continuation.resume(Unit)
-                }
+    override suspend fun invokeDelete(onInvoked: (SdkOfflinePackDeletion) -> Unit) = withContext(mainDispatcher) {
+        val completion = CompletableDeferred<Unit>()
+        region.delete(object : OfflineRegion.OfflineRegionDeleteCallback {
+            override fun onDelete() {
+                completion.complete(Unit)
+            }
 
-                override fun onError(error: String) {
-                    if (continuation.isActive) continuation.resumeWithException(IllegalStateException(error))
-                }
-            })
-        }
+            override fun onError(error: String) {
+                completion.completeExceptionally(IllegalStateException(error))
+            }
+        })
+        onInvoked(object : SdkOfflinePackDeletion {
+            override suspend fun awaitCompletion() = completion.await()
+        })
     }
 
     private fun OfflineRegionStatus.toSdkStatus() = SdkOfflinePackStatus(

@@ -224,6 +224,22 @@ class AndroidOfflineMapPackManagerTest {
     }
 
     @Test
+    fun cancellation_while_native_delete_admission_is_queued_does_not_call_sdk_delete() = runTest {
+        val client = FakeOfflinePackClient()
+        val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
+        manager.prepare(DEFINITION)
+        client.pack.deleteAdmissionGate = CompletableDeferred()
+
+        val deletion = launch(start = CoroutineStart.UNDISPATCHED) { manager.delete(DEFINITION.key) }
+        deletion.cancel()
+        client.pack.deleteAdmissionGate!!.complete(Unit)
+        deletion.join()
+
+        assertEquals(0, client.pack.deleteCount)
+        assertTrue(client.pack.currentObserver != null)
+    }
+
+    @Test
     fun failed_delete_reattaches_observer_and_a_retry_can_remove_the_pack() = runTest {
         val client = FakeOfflinePackClient()
         val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
@@ -281,6 +297,7 @@ class AndroidOfflineMapPackManagerTest {
         var resumeCount = 0
         var pauseCount = 0
         var deleteCount = 0
+        var deleteAdmissionGate: CompletableDeferred<Unit>? = null
         var deleteGate: CompletableDeferred<Result<Unit>>? = null
         var pauseGate: CompletableDeferred<Unit>? = null
 
@@ -306,11 +323,17 @@ class AndroidOfflineMapPackManagerTest {
             operationLog += "invalidate"
         }
 
-        override suspend fun delete() {
+        override suspend fun invokeDelete(onInvoked: (SdkOfflinePackDeletion) -> Unit) {
+            operationLog += "delete-admission"
+            deleteAdmissionGate?.await()
             operationLog += "delete-start"
             deleteCount += 1
-            deleteGate?.await()?.getOrThrow()
-            operationLog += "delete-end"
+            onInvoked(object : SdkOfflinePackDeletion {
+                override suspend fun awaitCompletion() {
+                    deleteGate?.await()?.getOrThrow()
+                    operationLog += "delete-end"
+                }
+            })
         }
 
         fun emitStatus(status: SdkOfflinePackStatus) = currentObserver!!.onStatus(status)
