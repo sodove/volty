@@ -196,24 +196,6 @@ def validate_search(path, unpacked, limit, region_id):
     return size
 
 
-def validate_pmtiles(path):
-    with path.open('rb') as source:
-        header = source.read(127)
-    size = path.stat().st_size
-    if len(header) != 127 or header[:8] != b'PMTiles\x03':
-        raise ValueError('pmtiles_header')
-    for start in (8, 24, 40, 56):
-        offset = int.from_bytes(header[start:start+8], 'little')
-        length = int.from_bytes(header[start+8:start+16], 'little')
-        if offset + length > size or (length and offset < 127):
-            raise ValueError('pmtiles_bounds')
-    # An earlier implementation treated byte 102 as maxZoom; it is the first
-    # longitude byte. Match AndroidOfflinePmtilesTileServer.readHeader (100/101).
-    if int.from_bytes(header[16:24], 'little') == 0 or not 0 <= header[100] <= header[101] <= 24:
-        raise ValueError('pmtiles_header')
-    return size
-
-
 def atomic_bytes(path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile(dir=path.parent, delete=False) as target:

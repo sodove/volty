@@ -99,7 +99,9 @@ class Worker:
             args = ["bash", str(self.config.build_script), str(self.config.source_root / f"{source_id}.osm.pbf"),
                     str(package), "--region-id", job["regionId"], "--release-version", job["id"],
                     "--min-app-version-code", str(self.config.min_app_version_code), "--osm-sequence", str(sequence),
-                    "--osm-timestamp", timestamp, "--base-url", self.config.public_base_url]
+                    "--osm-timestamp", timestamp, "--source-id", source_id,
+                    "--source-url", snapshot.url, "--source-sha256", snapshot.sha256,
+                    "--base-url", self.config.public_base_url]
             if job.get("bbox"):
                 args += ["--bbox", job["bbox"]]
             subprocess.run(args, cwd=self.config.build_script.parent, check=True, timeout=self.config.max_runtime_seconds)
@@ -146,6 +148,7 @@ class Worker:
             job = {
                 "id": request_id,
                 "requestId": request_id,
+                "kind": "navigation",
                 "regionId": region.id,
                 "sourceId": source_id,
                 "sourceUrl": region.source_url,

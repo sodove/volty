@@ -11,7 +11,7 @@ import time
 from urllib.parse import parse_qs, urlsplit, urlencode
 from urllib.request import Request
 from package_cache import PackageManager
-from package_validation import Config, LOG, NoRedirect, https_url, validate_routing, validate_search, validate_pmtiles
+from package_validation import Config, LOG, NoRedirect, https_url, validate_routing, validate_search
 
 def make_server(manager, host='0.0.0.0', port=8091):
     class Handler(BaseHTTPRequestHandler):

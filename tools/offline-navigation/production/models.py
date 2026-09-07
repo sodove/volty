@@ -24,7 +24,7 @@ class SourceSnapshot:
     sha256: str
     size_bytes: int
     osm_timestamp: str
-    replication_sequence: int | None
+    replication_sequence: int
     geometry_hash: str
     fetched_at: str
 

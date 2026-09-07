@@ -40,8 +40,7 @@ class PackageServiceTest(unittest.TestCase):
         self.artifacts = self.make_artifacts()
         for name, data in self.artifacts.items():
             component = self.manifest['components'][name]
-            suffix = {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz',
-                      'map': 'map/ekb-agglomeration.pmtiles'}[name]
+            suffix = {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz'}[name]
             component.update(url='https://public.test/offline/regions/ekb-agglomeration/0.1.2/' + suffix,
                              downloadBytes=len(data), sha256=hashlib.sha256(data).hexdigest())
         self.sign()
@@ -77,16 +76,7 @@ class PackageServiceTest(unittest.TestCase):
         connection.close()
         search = database.read_bytes()
         self.manifest['components']['search']['installedBytes'] = len(search)
-        header = bytearray(127)
-        header[:8] = b'PMTiles\x03'
-        header[8:16] = (127).to_bytes(8, 'little')
-        header[16:24] = (1).to_bytes(8, 'little')
-        header[97:102] = bytes([1, 1, 1, 5, 14])
-        for offset, coordinate in ((102, 59.1), (106, 56.0), (110, 61.9), (114, 57.55)):
-            header[offset:offset+4] = round(coordinate * 10_000_000).to_bytes(4, 'little', signed=True)
-        map_data = bytes(header) + b'\x00'
-        self.manifest['components']['map']['installedBytes'] = len(map_data)
-        return {'routing': buffer.getvalue(), 'search': gzip.compress(search), 'map': map_data}
+        return {'routing': buffer.getvalue(), 'search': gzip.compress(search)}
 
     def sign(self):
         self.manifest['manifestSignature']['value'] = base64.b64encode(
@@ -109,7 +99,7 @@ class PackageServiceTest(unittest.TestCase):
                 if not self.gate.wait(5):
                     raise TimeoutError('test gate')
             self.assertTrue(url.startswith('https://origin.test/regions/ekb-agglomeration/0.1.2/'))
-            name = 'routing' if '/routing/' in url else 'search' if '/search/' in url else 'map'
+            name = 'routing' if '/routing/' in url else 'search'
             data = self.artifacts[name]
         if len(data) > limit:
             raise ValueError('download_limit')
@@ -144,8 +134,7 @@ class PackageServiceTest(unittest.TestCase):
         publication.mkdir(parents=True)
         for name, data in self.artifacts.items():
             suffix = {'routing': 'routing/valhalla-routing.tar.gz',
-                      'search': 'search/places.sqlite.gz',
-                      'map': 'map/ekb-agglomeration.pmtiles'}[name]
+                      'search': 'search/places.sqlite.gz'}[name]
             path = publication / suffix
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(data)
@@ -158,8 +147,8 @@ class PackageServiceTest(unittest.TestCase):
         manager = self.manager()
         manager.refresh()
         self.assertEqual('ready', manager.status('ekb-agglomeration')['status'])
-        with manager.open_artifact('ekb-agglomeration', '0.1.2', 'map/ekb-agglomeration.pmtiles') as stream:
-            self.assertEqual(self.artifacts['map'], stream.read())
+        with manager.open_artifact('ekb-agglomeration', '0.1.2', 'search/places.sqlite.gz') as stream:
+            self.assertEqual(self.artifacts['search'], stream.read())
 
     def test_catalog_and_manifest_tampering_preserve_previous_catalog(self):
         manager = self.manager()
@@ -169,7 +158,7 @@ class PackageServiceTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             manager.refresh()
         self.assertEqual(original, manager.catalog_bytes())
-        self.manifest['components']['map']['sha256'] = '0' * 64
+        self.manifest['components']['search']['sha256'] = '0' * 64
         self.catalog_bytes = self.make_catalog()  # catalog signed, nested manifest is not
         with self.assertRaises(ValueError):
             manager.refresh()
@@ -227,23 +216,23 @@ class PackageServiceTest(unittest.TestCase):
         for _ in range(20):
             manager.ensure('ekb-agglomeration')
         with self.assertRaises(FileNotFoundError):
-            manager.open_artifact('ekb-agglomeration', '0.1.2', 'map/ekb-agglomeration.pmtiles')
+            manager.open_artifact('ekb-agglomeration', '0.1.2', 'search/places.sqlite.gz')
         self.gate.set()
         self.assertEqual('ready', self.finish(manager)['status'])
-        self.assertEqual(3, len(self.downloads))
+        self.assertEqual(2, len(self.downloads))
 
     def test_hash_mismatch_never_becomes_ready_and_retry_can_succeed(self):
         manager = self.manager()
         manager.refresh()
-        original = self.artifacts['map']
-        self.artifacts['map'] = b'X' * len(original)
+        original = self.artifacts['search']
+        self.artifacts['search'] = b'X' * len(original)
         manager.ensure('ekb-agglomeration')
         failed = self.finish(manager)
         self.assertEqual('failed', failed['status'])
         self.assertEqual('artifact_checksum', failed['errorCode'])
         with self.assertRaises(FileNotFoundError):
             manager.open_artifact('ekb-agglomeration', '0.1.2', 'manifest.json')
-        self.artifacts['map'] = original
+        self.artifacts['search'] = original
         manager.ensure('ekb-agglomeration')
         self.assertEqual('ready', self.finish(manager)['status'])
 
@@ -263,9 +252,9 @@ class PackageServiceTest(unittest.TestCase):
 
     def test_public_url_escape_is_rejected_even_when_signed(self):
         manager = self.manager()
-        for url in ['https://evil.test/map.pmtiles', 'https://public.test/offline/regions/../secret',
-                    self.manifest['components']['map']['url'] + '?token=secret']:
-            self.manifest['components']['map']['url'] = url
+        for url in ['https://evil.test/search.sqlite.gz', 'https://public.test/offline/regions/../secret',
+                    self.manifest['components']['search']['url'] + '?token=secret']:
+            self.manifest['components']['search']['url'] = url
             self.sign()
             self.catalog_bytes = self.make_catalog()
             with self.assertRaises(ValueError):
@@ -295,17 +284,17 @@ class PackageServiceTest(unittest.TestCase):
         self.addCleanup(server.shutdown)
         client = http.client.HTTPConnection(*server.server_address, timeout=3)
         self.addCleanup(client.close)
-        client.request('GET', '/regions/ekb-agglomeration/0.1.2/map/ekb-agglomeration.pmtiles', headers={'Range': 'bytes=0-7'})
+        client.request('GET', '/regions/ekb-agglomeration/0.1.2/search/places.sqlite.gz', headers={'Range': 'bytes=0-7'})
         response = client.getresponse()
         self.assertEqual(206, response.status)
-        self.assertEqual('bytes 0-7/128', response.getheader('Content-Range'))
-        self.assertEqual('"' + self.manifest['components']['map']['sha256'] + '"', response.getheader('ETag'))
-        self.assertEqual(b'PMTiles\x03', response.read())
-        client.request('GET', '/regions/ekb-agglomeration/0.1.2/map/ekb-agglomeration.pmtiles',
+        self.assertEqual(f'bytes 0-7/{len(self.artifacts["search"])}', response.getheader('Content-Range'))
+        self.assertEqual('"' + self.manifest['components']['search']['sha256'] + '"', response.getheader('ETag'))
+        self.assertEqual(self.artifacts['search'][:8], response.read())
+        client.request('GET', '/regions/ekb-agglomeration/0.1.2/search/places.sqlite.gz',
                        headers={'Range': 'bytes=0-7', 'If-Range': '"stale"'})
         response = client.getresponse()
         self.assertEqual(200, response.status)
-        self.assertEqual(self.artifacts['map'], response.read())
+        self.assertEqual(self.artifacts['search'], response.read())
         client.request('POST', '/regions/unknown/ensure')
         response = client.getresponse()
         self.assertEqual(404, response.status)
@@ -324,8 +313,7 @@ class PackageServiceTest(unittest.TestCase):
         self.config.ingest_root = ingest_root
         manager = self.manager()
         manager.refresh()
-        for name, suffix in {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz',
-                             'map': 'map/ekb-agglomeration.pmtiles'}.items():
+        for name, suffix in {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz'}.items():
             path = ingest_root / 'ekb-agglomeration/0.1.2' / suffix
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(self.artifacts[name])
@@ -333,18 +321,16 @@ class PackageServiceTest(unittest.TestCase):
         self.assertEqual('ready', self.finish(manager)['status'])
         self.assertEqual([], self.downloads)
 
-    def test_bad_search_structure_and_pmtiles_header_are_not_published(self):
+    def test_bad_search_structure_is_not_published(self):
         manager = self.manager()
         manager.refresh()
-        for name, bad in [('search', gzip.compress(b'not sqlite')), ('map', b'not pmtiles')]:
+        for name, bad in [('search', gzip.compress(b'not sqlite'))]:
             with self.subTest(name=name):
                 path = self.root / ('bad-' + name)
                 path.write_bytes(bad)
                 with self.assertRaises((ValueError, sqlite3.DatabaseError)):
                     if name == 'search':
                         service.validate_search(path, self.root / 'bad.sqlite', 1000, 'ekb-agglomeration')
-                    else:
-                        service.validate_pmtiles(path)
 
     def test_prune_preserves_active_and_recently_retired_releases(self):
         manager = self.manager()
@@ -406,7 +392,7 @@ class PackageServiceTest(unittest.TestCase):
     def test_catalog_cannot_change_content_of_an_existing_release(self):
         manager = self.manager()
         manager.refresh()
-        self.manifest['components']['map']['sha256'] = '0' * 64
+        self.manifest['components']['search']['sha256'] = '0' * 64
         self.sign()
         self.catalog_bytes = self.make_catalog()
         with self.assertRaisesRegex(ValueError, 'immutable_release_conflict'):
@@ -423,7 +409,7 @@ class PackageServiceTest(unittest.TestCase):
     def test_failed_retired_release_request_does_not_start_new_version(self):
         manager = self.manager()
         manager.refresh()
-        self.artifacts['map'] = b'X' * len(self.artifacts['map'])
+        self.artifacts['search'] = b'X' * len(self.artifacts['search'])
         manager.ensure('ekb-agglomeration')
         self.assertEqual('failed', self.finish(manager)['status'])
         self.manifest['releaseVersion'] = '0.1.3'
@@ -444,7 +430,7 @@ class PackageServiceTest(unittest.TestCase):
         manager.refresh()
         manager.close()
         restarted = self.manager()
-        self.manifest['components']['map']['sha256'] = '0' * 64
+        self.manifest['components']['search']['sha256'] = '0' * 64
         self.sign()
         self.catalog_bytes = self.make_catalog()
         with self.assertRaisesRegex(ValueError, 'immutable_release_conflict'):

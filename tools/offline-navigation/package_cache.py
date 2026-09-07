@@ -16,7 +16,7 @@ from urllib.request import Request, urlopen
 from cryptography.exceptions import InvalidSignature
 from package_validation import (
     Config, LOG, atomic_bytes, catalog_tools, package_tools, copy_bounded,
-    fetch_https, sync_directory, validate_pmtiles, validate_routing, validate_search,
+    fetch_https, sync_directory, validate_routing, validate_search,
 )
 
 class PackageManager:
@@ -123,8 +123,7 @@ class PackageManager:
 
     def _suffixes(self, manifest):
         region, release = manifest['regionId'], manifest['releaseVersion']
-        expected = {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz',
-                    'map': 'map/' + region + '.pmtiles'}
+        expected = {'routing': 'routing/valhalla-routing.tar.gz', 'search': 'search/places.sqlite.gz'}
         for name, suffix in expected.items():
             if manifest['components'][name]['url'] != f'{self.config.public_base_url}/{region}/{release}/{suffix}':
                 raise ValueError('artifact_url_not_public_endpoint')
@@ -136,7 +135,7 @@ class PackageManager:
         self._signature(manifest, 'manifestSignature', catalog_tools.canonical_payload)
         self._suffixes(manifest)
         components = manifest['components']
-        if components['routing'].get('compression') != 'gzip' or components['search'].get('compression') != 'gzip' or components['map'].get('compression') is not None:
+        if components['routing'].get('compression') != 'gzip' or components['search'].get('compression') != 'gzip':
             raise ValueError('unsupported_compression')
         if sum(c['downloadBytes'] for c in components.values()) > self.config.max_download_bytes:
             raise ValueError('package_download_limit')
@@ -389,8 +388,6 @@ class PackageManager:
                         actual = validate_routing(path, work / 'routing', limit)
                     elif name == 'search':
                         actual = validate_search(path, work / 'places.sqlite', limit, manifest['regionId'])
-                    else:
-                        actual = validate_pmtiles(path)
                     if actual != limit:
                         raise ValueError('installed_size_mismatch')
 
@@ -441,8 +438,8 @@ class PackageManager:
             if code not in {'artifact_checksum', 'artifact_size', 'installed_size_mismatch', 'expansion_limit',
                             'unsafe_routing_archive', 'missing_routing_file', 'routing_config_limit',
                             'missing_routing_reference', 'search_requires_fts4', 'search_schema',
-                            'search_metadata', 'search_empty', 'search_corrupt', 'pmtiles_header',
-                            'pmtiles_bounds', 'ingest_link_forbidden', 'ingest_path_forbidden',
+                            'search_metadata', 'search_empty', 'search_corrupt',
+                            'ingest_link_forbidden', 'ingest_path_forbidden',
                             'download_limit', 'incomplete_download', 'redirect_forbidden',
                             'upstream_unavailable', 'unverified_release_exists'}:
                 code = 'invalid_package'

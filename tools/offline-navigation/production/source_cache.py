@@ -52,7 +52,8 @@ def fetch_snapshot(source_id: str, url: str, cache_root: Path, *, max_bytes: int
                    osm_timestamp: str, replication_sequence: int | None,
                    geometry_hash: str) -> SourceSnapshot:
     validate_public_url(url)
-    if not osm_timestamp or not geometry_hash:
+    if (not osm_timestamp or not geometry_hash or isinstance(replication_sequence, bool) or
+            not isinstance(replication_sequence, int) or replication_sequence < 0):
         raise SourceError("source_metadata_required")
     cache_root = cache_root.resolve()
     cache_root.mkdir(parents=True, exist_ok=True)
@@ -60,7 +61,9 @@ def fetch_snapshot(source_id: str, url: str, cache_root: Path, *, max_bytes: int
     metadata = cache_root / f"{source_id}.json"
     if final.is_file() and metadata.is_file():
         snapshot = SourceSnapshot(**_from_json(metadata))
-        if snapshot.url != url or snapshot.osm_timestamp != osm_timestamp or snapshot.geometry_hash != geometry_hash:
+        if (snapshot.url != url or snapshot.osm_timestamp != osm_timestamp or
+                snapshot.replication_sequence != replication_sequence or
+                snapshot.geometry_hash != geometry_hash):
             raise SourceError("immutable_source_metadata_conflict")
         return snapshot
 
@@ -110,6 +113,6 @@ def _from_json(path: Path) -> dict:
     return {
         "source_id": value["sourceId"], "url": value["url"], "sha256": value["sha256"],
         "size_bytes": value["sizeBytes"], "osm_timestamp": value["osmTimestamp"],
-        "replication_sequence": value.get("replicationSequence"),
+        "replication_sequence": value["replicationSequence"],
         "geometry_hash": value["geometryHash"], "fetched_at": value["fetchedAt"],
     }

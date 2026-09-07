@@ -20,9 +20,8 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 EXPECTED_ROUTING_DATA_VERSION = "valhalla-3.6.3"
-EXPECTED_SCHEMA_VERSION = 2
+EXPECTED_SCHEMA_VERSION = 3
 EXPECTED_ROUTING_ENGINE = "valhalla"
-EXPECTED_MAP_FORMAT = "pmtiles"
 SHA256_PATTERN = re.compile(r"[0-9a-fA-F]{64}")
 REGION_ID_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{0,63}")
 RELEASE_VERSION_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
@@ -65,7 +64,7 @@ def without_android_nullable_defaults(manifest: dict[str, Any]) -> dict[str, Any
         coverage.pop("polygonUrl", None)
     components = normalized.get("components")
     if isinstance(components, dict):
-        for component_name in ("search", "map"):
+        for component_name in ("search",):
             component = components.get(component_name)
             if isinstance(component, dict) and component.get("compression") is None:
                 component.pop("compression", None)
@@ -180,6 +179,16 @@ def validate_manifest_compatibility(
         raise ValueError(f"{manifest_path}: source must be an object")
     non_negative_int(source.get("osmReplicationSequence"), f"{manifest_path}: source.osmReplicationSequence")
     validate_timestamp(source.get("osmTimestamp"), f"{manifest_path}: source.osmTimestamp")
+    if not isinstance(source.get("sourceId"), str) or not REGION_ID_PATTERN.fullmatch(source["sourceId"]):
+        raise ValueError(f"{manifest_path}: source.sourceId is required")
+    source_url = source.get("sourceUrl")
+    parsed_source_url = urlparse(source_url) if isinstance(source_url, str) else None
+    if (parsed_source_url is None or parsed_source_url.scheme != "https" or not parsed_source_url.hostname or
+            parsed_source_url.username or parsed_source_url.password or parsed_source_url.query or
+            parsed_source_url.fragment or "\\" in source_url):
+        raise ValueError(f"{manifest_path}: source.sourceUrl must be HTTPS")
+    if not isinstance(source.get("sourceSha256"), str) or not SHA256_PATTERN.fullmatch(source["sourceSha256"]):
+        raise ValueError(f"{manifest_path}: source.sourceSha256 must be a SHA-256 hex digest")
 
     compatibility = manifest.get("compatibility")
     if not isinstance(compatibility, dict):
@@ -194,8 +203,6 @@ def validate_manifest_compatibility(
         raise ValueError(f"{manifest_path}: unsupported routingEngine")
     if compatibility.get("routingDataVersion") != expected_routing_data_version:
         raise ValueError(f"{manifest_path}: routingDataVersion does not match the mobile engine")
-    if non_negative_int(compatibility.get("mapSchemaVersion"), f"{manifest_path}: mapSchemaVersion") < 1:
-        raise ValueError(f"{manifest_path}: mapSchemaVersion is unsupported")
     if non_negative_int(compatibility.get("searchSchemaVersion"), f"{manifest_path}: searchSchemaVersion") < 1:
         raise ValueError(f"{manifest_path}: searchSchemaVersion is unsupported")
 
@@ -212,22 +219,14 @@ def validate_manifest_compatibility(
         raise ValueError(f"{manifest_path}: components must be an object")
     routing = components.get("routing")
     search = components.get("search")
-    map_component = components.get("map")
+    if set(components) != {"routing", "search"}:
+        raise ValueError(f"{manifest_path}: v3 components must contain exactly routing and search")
     validate_artifact(routing, f"{manifest_path}: components.routing")
     validate_artifact(search, f"{manifest_path}: components.search")
-    validate_artifact(map_component, f"{manifest_path}: components.map")
     if not isinstance(routing.get("compression"), str) or not routing["compression"].strip():
         raise ValueError(f"{manifest_path}: routing compression is required")
     if non_negative_int(search.get("schemaVersion"), f"{manifest_path}: search.schemaVersion") < 1:
         raise ValueError(f"{manifest_path}: search schema is unsupported")
-    if str(map_component.get("format", "")).lower() != EXPECTED_MAP_FORMAT:
-        raise ValueError(f"{manifest_path}: map format is unsupported")
-    min_zoom = non_negative_int(map_component.get("minZoom"), f"{manifest_path}: map.minZoom")
-    max_zoom = non_negative_int(map_component.get("maxZoom"), f"{manifest_path}: map.maxZoom")
-    if max_zoom > 24 or min_zoom > max_zoom:
-        raise ValueError(f"{manifest_path}: map zoom range is invalid")
-    if non_negative_int(map_component.get("vectorLayerSchema"), f"{manifest_path}: map.vectorLayerSchema") < 1:
-        raise ValueError(f"{manifest_path}: vector layer schema is unsupported")
     return coverage
 
 

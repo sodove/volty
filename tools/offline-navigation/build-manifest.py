@@ -8,6 +8,7 @@ import hashlib
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 def artifact(path: Path, installed_root: Path, **extra: object) -> dict[str, object]:
@@ -32,8 +33,9 @@ def main() -> int:
     parser.add_argument("--routing-installed", type=Path, required=True)
     parser.add_argument("--search", type=Path, required=True)
     parser.add_argument("--search-installed", type=Path, required=True)
-    parser.add_argument("--map", type=Path, required=True)
-    parser.add_argument("--map-installed", type=Path, required=True)
+    parser.add_argument("--source-id", required=True)
+    parser.add_argument("--source-url", required=True)
+    parser.add_argument("--source-sha256", required=True)
     parser.add_argument("--region-id", required=True)
     parser.add_argument("--release-version", required=True)
     parser.add_argument("--min-app-version-code", type=int, required=True)
@@ -55,20 +57,29 @@ def main() -> int:
 
     created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
     prefix = f"{args.base_url.rstrip('/')}/{args.region_id}/{args.release_version}"
+    source_url = urlparse(args.source_url)
+    if (source_url.scheme != "https" or not source_url.hostname or source_url.username or
+            source_url.password or source_url.query or source_url.fragment or "\\" in args.source_url):
+        raise ValueError("source URL must be HTTPS")
+    if len(args.source_sha256) != 64 or any(c not in "0123456789abcdefABCDEF" for c in args.source_sha256):
+        raise ValueError("source SHA-256 must be a 64-character hex digest")
+
     manifest = {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "regionId": args.region_id,
         "releaseVersion": args.release_version,
         "createdAt": created_at,
         "source": {
             "osmReplicationSequence": args.osm_sequence,
             "osmTimestamp": args.osm_timestamp,
+            "sourceId": args.source_id,
+            "sourceUrl": args.source_url,
+            "sourceSha256": args.source_sha256.lower(),
         },
         "compatibility": {
             "minAppVersionCode": args.min_app_version_code,
             "routingEngine": "valhalla",
             "routingDataVersion": args.routing_data_version,
-            "mapSchemaVersion": 1,
             "searchSchemaVersion": 1,
         },
         "coverage": {
@@ -88,16 +99,6 @@ def main() -> int:
                 url=f"{prefix}/search/places.sqlite.gz",
                 schemaVersion=1,
                 compression="gzip",
-            ),
-            "map": artifact(
-                args.map,
-                args.map_installed,
-                url=f"{prefix}/map/{args.region_id}.pmtiles",
-                format="pmtiles",
-                minZoom=5,
-                maxZoom=14,
-                vectorLayerSchema=1,
-                compression=None,
             ),
         },
         "manifestSignature": {

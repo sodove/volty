@@ -10,6 +10,7 @@ import json
 import sqlite3
 import tarfile
 import tempfile
+from urllib.parse import urlparse
 from pathlib import Path
 
 
@@ -110,14 +111,30 @@ def main() -> int:
 
     manifest_path = args.package / "manifest.unsigned.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    components = manifest["components"]
-    map_files = list((args.package / "map").glob("*.pmtiles"))
-    if len(map_files) != 1:
-        raise ValueError(f"map: expected exactly one PMTiles file, found {len(map_files)}")
+    if manifest.get("schemaVersion") != 3:
+        raise ValueError("unsupported schemaVersion; only navigation manifest v3 is accepted")
+    components = manifest.get("components")
+    if not isinstance(components, dict) or set(components) != {"routing", "search"}:
+        raise ValueError("v3 package components must be exactly routing and search; map is not supported")
+    if (args.package / "map").exists() or (args.package / "map.mbtiles").exists():
+        raise ValueError("v3 package must not contain map artifacts")
+    source = manifest.get("source")
+    source_url = source.get("sourceUrl") if isinstance(source, dict) else None
+    source_sha = source.get("sourceSha256") if isinstance(source, dict) else None
+    source_sequence = source.get("osmReplicationSequence") if isinstance(source, dict) else None
+    source_timestamp = source.get("osmTimestamp") if isinstance(source, dict) else None
+    parsed_source_url = urlparse(source_url) if isinstance(source_url, str) else None
+    if (not isinstance(source, dict) or not isinstance(source.get("sourceId"), str) or not source["sourceId"] or
+            parsed_source_url is None or parsed_source_url.scheme != "https" or not parsed_source_url.hostname or
+            parsed_source_url.username or parsed_source_url.password or parsed_source_url.query or parsed_source_url.fragment or
+            "\\" in source_url or
+            not isinstance(source_sha, str) or len(source_sha) != 64 or any(c not in "0123456789abcdefABCDEF" for c in source_sha) or
+            isinstance(source_sequence, bool) or not isinstance(source_sequence, int) or source_sequence < 0 or
+            not isinstance(source_timestamp, str) or not source_timestamp):
+        raise ValueError("source provenance requires sourceId, sourceUrl, sourceSha256, osmTimestamp, and osmReplicationSequence")
     paths = {
         "routing": args.package / "routing/valhalla-routing.tar.gz",
         "search": args.package / "search/places.sqlite.gz",
-        "map": map_files[0],
     }
 
     for name, path in paths.items():

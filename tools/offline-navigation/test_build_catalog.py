@@ -46,19 +46,21 @@ class BuildCatalogTest(unittest.TestCase):
             "sha256": "0" * 64,
         }
         return {
-            "schemaVersion": 2,
+            "schemaVersion": 3,
             "regionId": "ekb-agglomeration",
             "releaseVersion": "0.1.2",
             "createdAt": "2026-09-03T00:00:00Z",
             "source": {
                 "osmReplicationSequence": 1,
                 "osmTimestamp": "2026-09-03T00:00:00Z",
+                "sourceId": "geofabrik-russia",
+                "sourceUrl": "https://download.geofabrik.de/russia.osm.pbf",
+                "sourceSha256": "a" * 64,
             },
             "compatibility": {
                 "minAppVersionCode": 28,
                 "routingEngine": "valhalla",
                 "routingDataVersion": routing_data_version,
-                "mapSchemaVersion": 1,
                 "searchSchemaVersion": 1,
             },
             "coverage": {
@@ -68,13 +70,6 @@ class BuildCatalogTest(unittest.TestCase):
             "components": {
                 "routing": {**artifact, "compression": "gzip"},
                 "search": {**artifact, "schemaVersion": 1},
-                "map": {
-                    **artifact,
-                    "format": "pmtiles",
-                    "minZoom": 5,
-                    "maxZoom": 14,
-                    "vectorLayerSchema": 1,
-                },
             },
             "manifestSignature": {
                 "keyId": "release-key",
@@ -102,11 +97,28 @@ class BuildCatalogTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "routingDataVersion"):
                 MODULE.build_catalog(spec_path, generated_at="2026-09-03T00:00:00Z")
 
+    def test_v3_source_provenance_requires_url_digest_timestamp_and_sequence(self):
+        for field in ("sourceUrl", "sourceSha256", "osmTimestamp", "osmReplicationSequence"):
+            with self.subTest(field=field):
+                manifest = self.valid_manifest()
+                manifest["source"].pop(field)
+                with self.assertRaises(ValueError):
+                    MODULE.validate_manifest_compatibility(
+                        manifest, Path("manifest.json"), MODULE.EXPECTED_ROUTING_DATA_VERSION, None,
+                    )
+
+    def test_v3_rejects_a_map_component(self):
+        manifest = self.valid_manifest()
+        manifest["components"]["map"] = deepcopy(manifest["components"]["search"])
+        with self.assertRaisesRegex(ValueError, "exactly routing and search"):
+            MODULE.validate_manifest_compatibility(
+                manifest, Path("manifest.json"), MODULE.EXPECTED_ROUTING_DATA_VERSION, None,
+            )
+
     def test_manifest_payload_matches_android_nullable_defaults(self):
         manifest = self.valid_manifest()
         manifest["coverage"]["polygonUrl"] = None
         manifest["components"]["search"]["compression"] = None
-        manifest["components"]["map"]["compression"] = None
 
         payload = MODULE.canonical_payload(manifest).decode("utf-8")
 
@@ -208,7 +220,6 @@ class BuildCatalogTest(unittest.TestCase):
             manifest, key = self.signed_manifest()
             manifest["coverage"]["polygonUrl"] = None
             manifest["components"]["search"]["compression"] = None
-            manifest["components"]["map"]["compression"] = None
             unsigned_manifest = deepcopy(manifest)
             unsigned_manifest.pop("manifestSignature", None)
             manifest["manifestSignature"]["value"] = base64.b64encode(
@@ -233,7 +244,6 @@ class BuildCatalogTest(unittest.TestCase):
                     continue
                 release["coverage"].pop("polygonUrl", None)
                 release["components"]["search"].pop("compression", None)
-                release["components"]["map"].pop("compression", None)
             expected_payload = json.dumps(
                 android_payload,
                 ensure_ascii=False,
@@ -281,7 +291,6 @@ class BuildCatalogTest(unittest.TestCase):
             android_payload.pop("catalogSignature", None)
             android_payload["regions"][0]["latestRelease"]["coverage"].pop("polygonUrl", None)
             android_payload["regions"][0]["latestRelease"]["components"]["search"].pop("compression", None)
-            android_payload["regions"][0]["latestRelease"]["components"]["map"].pop("compression", None)
             android_payload["regions"][1].pop("latestRelease", None)
             expected_payload = json.dumps(
                 android_payload,

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 usage() {
-  echo "Usage: $0 INPUT.osm.pbf OUTPUT_DIR --release-version VERSION --min-app-version-code CODE --osm-sequence N --osm-timestamp ISO-8601 [options]" >&2
+  echo "Usage: $0 INPUT.osm.pbf OUTPUT_DIR --release-version VERSION --min-app-version-code CODE --osm-sequence N --osm-timestamp ISO-8601 --source-url URL --source-sha256 DIGEST [options]" >&2
   echo "Options: --bbox west,south,east,north --region-id ID --routing-buffer-km N --routing-data-version VERSION --base-url URL" >&2
 }
 
@@ -14,7 +14,7 @@ shift 2
 
 BBOX="59.10,56.00,61.90,57.55"
 REGION_ID="ekb-agglomeration"
-MAP_FILE="${REGION_ID}.pmtiles"
+SOURCE_ID=""
 ROUTING_BUFFER_KM=20
 BASE_URL="https://cdn.example.invalid/volty/regions"
 RELEASE_VERSION=""
@@ -27,13 +27,15 @@ TOOLS_IMAGE="${TOOLS_IMAGE:-volty/offline-tools:20260903}"
 # it must match the engine's tile format, but it does not build the AAR.
 VALHALLA_IMAGE="${VALHALLA_IMAGE:-ghcr.io/valhalla/valhalla@sha256:0cf1520c6a38b8a7e13a1931541e0ab6e9e42b64b4ca014293b6b8373d493160}"
 ROUTING_DATA_VERSION="${ROUTING_DATA_VERSION:-valhalla-3.6.3}"
-PMTILES_IMAGE="${PMTILES_IMAGE:-protomaps/go-pmtiles@sha256:a52c195560a656b8309311a7d591b90eb2c5ae55ec9111f26049371d86a22a69}"
 THREADS="${THREADS:-6}"
+SOURCE_URL=""
+SOURCE_SHA256=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --bbox) BBOX="$2"; shift 2 ;;
     --region-id) REGION_ID="$2"; shift 2 ;;
+    --source-id) SOURCE_ID="$2"; shift 2 ;;
     --routing-buffer-km) ROUTING_BUFFER_KM="$2"; shift 2 ;;
     --base-url) BASE_URL="$2"; shift 2 ;;
     --release-version) RELEASE_VERSION="$2"; shift 2 ;;
@@ -41,16 +43,18 @@ while [[ $# -gt 0 ]]; do
     --routing-data-version) ROUTING_DATA_VERSION="$2"; shift 2 ;;
     --osm-sequence) OSM_SEQUENCE="$2"; shift 2 ;;
     --osm-timestamp) OSM_TIMESTAMP="$2"; shift 2 ;;
+    --source-url) SOURCE_URL="$2"; shift 2 ;;
+    --source-sha256) SOURCE_SHA256="$2"; shift 2 ;;
     *) echo "Unknown option: $1" >&2; usage; exit 2 ;;
   esac
 done
 
-MAP_FILE="${REGION_ID}.pmtiles"
-
 [[ -f "$INPUT" ]] || { echo "Input PBF does not exist: $INPUT" >&2; exit 1; }
-[[ -n "$RELEASE_VERSION" && -n "$MIN_APP_VERSION_CODE" && -n "$OSM_SEQUENCE" && -n "$OSM_TIMESTAMP" ]] || {
-  echo "Release version, app version code, OSM sequence, and OSM timestamp are required" >&2; exit 2;
+[[ -n "$SOURCE_ID" ]] || SOURCE_ID="$REGION_ID"
+[[ -n "$RELEASE_VERSION" && -n "$MIN_APP_VERSION_CODE" && -n "$OSM_SEQUENCE" && -n "$OSM_TIMESTAMP" && -n "$SOURCE_URL" && -n "$SOURCE_SHA256" ]] || {
+  echo "Release version, app version code, OSM sequence, OSM timestamp, source URL, and source SHA-256 are required" >&2; exit 2;
 }
+[[ "$SOURCE_SHA256" =~ ^[0-9a-fA-F]{64}$ ]] || { echo "Source SHA-256 must be a 64-character hex digest" >&2; exit 2; }
 [[ "$ROUTING_BUFFER_KM" =~ ^[0-9]+$ ]] || {
   echo "Routing buffer must be a non-negative integer number of kilometres" >&2; exit 2;
 }
@@ -72,8 +76,8 @@ else
 fi
 cleanup() { rm -rf "$STAGING"; }
 trap cleanup EXIT
-mkdir -p "$STAGING/installed/routing/tiles" "$STAGING/installed/search" "$STAGING/installed/map" \
-  "$STAGING/artifacts/routing" "$STAGING/artifacts/search" "$STAGING/artifacts/map" \
+mkdir -p "$STAGING/installed/routing/tiles" "$STAGING/installed/search" \
+  "$STAGING/artifacts/routing" "$STAGING/artifacts/search" \
   "$STAGING/search"
 
 tools_run() {
@@ -94,7 +98,10 @@ valhalla_timezone_run() {
     "$VALHALLA_IMAGE" "$@"
 }
 
-echo "Extracting logical region for map and search"
+# Geofabrik is the explicit raw OSM input for navigation artifacts. It is not
+# an OpenFreeMap basemap source; the Android client obtains basemap resources
+# directly from the OFM endpoint.
+echo "Extracting logical region for search and routing"
 tools_run osmium extract --bbox "$BBOX" --strategy=smart \
   "/input/$INPUT_NAME" -o /work/region.osm.pbf
 
@@ -135,36 +142,24 @@ tools_run env REGION_ID="$REGION_ID" bash -lc 'set -e; osmium tags-filter /work/
 gzip -9 -c "$STAGING/installed/search/places.sqlite" > "$STAGING/artifacts/search/places.sqlite.gz"
 rm -rf "$STAGING/search"
 
-echo "Building PMTiles map component"
-tools_run tilemaker --input /work/region.osm.pbf --output /work/map.mbtiles \
-  --config /tooling/config.json --process /tooling/process.lua --threads "$THREADS"
-tools_run sqlite3 /work/map.mbtiles \
-  "UPDATE metadata SET value='$BBOX' WHERE name='bounds'; UPDATE metadata SET value='60.605,56.839,9' WHERE name='center';"
-docker run --rm --user "$(id -u):$(id -g)" -v "$STAGING:/work" "$PMTILES_IMAGE" \
-  convert /work/map.mbtiles "/work/artifacts/map/$MAP_FILE"
-docker run --rm -v "$STAGING:/work:ro" "$PMTILES_IMAGE" verify "/work/artifacts/map/$MAP_FILE"
-cp "$STAGING/artifacts/map/$MAP_FILE" "$STAGING/installed/map/$MAP_FILE"
-
 python3 "$SCRIPT_DIR/build-manifest.py" \
   --output "$STAGING/manifest.unsigned.json" \
   --routing "$STAGING/artifacts/routing/valhalla-routing.tar.gz" \
   --routing-installed "$STAGING/installed/routing" \
   --search "$STAGING/artifacts/search/places.sqlite.gz" \
   --search-installed "$STAGING/installed/search" \
-  --map "$STAGING/artifacts/map/$MAP_FILE" \
-  --map-installed "$STAGING/installed/map" \
+  --source-id "$SOURCE_ID" --source-url "$SOURCE_URL" --source-sha256 "$SOURCE_SHA256" \
   --region-id "$REGION_ID" --release-version "$RELEASE_VERSION" \
   --min-app-version-code "$MIN_APP_VERSION_CODE" --osm-sequence "$OSM_SEQUENCE" \
   --routing-data-version "$ROUTING_DATA_VERSION" --osm-timestamp "$OSM_TIMESTAMP" \
   --bbox "$BBOX" --routing-buffer-km "$ROUTING_BUFFER_KM" \
   --base-url "$BASE_URL"
 
-mkdir -p "$STAGING/routing" "$STAGING/search" "$STAGING/map"
+mkdir -p "$STAGING/routing" "$STAGING/search"
 mv "$STAGING/artifacts/routing/valhalla-routing.tar.gz" "$STAGING/routing/"
 mv "$STAGING/artifacts/search/places.sqlite.gz" "$STAGING/search/"
-mv "$STAGING/artifacts/map/$MAP_FILE" "$STAGING/map/"
 rm -rf "$STAGING/artifacts" "$STAGING/installed" "$STAGING/region.osm.pbf" \
-  "$STAGING/routing.osm.pbf" "$STAGING/map.mbtiles"
+  "$STAGING/routing.osm.pbf"
 python3 "$SCRIPT_DIR/verify-package.py" "$STAGING"
 mv "$STAGING" "$OUTPUT"
 trap - EXIT

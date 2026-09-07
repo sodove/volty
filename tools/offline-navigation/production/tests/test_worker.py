@@ -13,6 +13,36 @@ from production.worker import Worker
 
 
 class WorkerTest(unittest.TestCase):
+    def test_request_build_schedules_one_navigation_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "publicRoot": str(root / "public"),
+                "stagingRoot": str(root / "staging"),
+                "sourceRoot": str(root / "sources"),
+                "signingKey": str(root / "keys" / "signing-key.pem"),
+                "regions": [{"id": "region", "sourceId": "russia",
+                             "sourceUrl": "https://download.example/region.pbf"}],
+            }), encoding="utf-8")
+            config = load_config(config_path)
+            config.source_root.mkdir(parents=True)
+            (config.source_root / "russia.source.json").write_text(json.dumps({
+                "osmSequence": 42,
+                "osmTimestamp": "2026-09-07T00:00:00Z",
+                "geometryHash": "a" * 64,
+            }), encoding="utf-8")
+            worker = Worker(config, root / "queue.json")
+
+            first = worker.request_build("region")
+            second = worker.request_build("region")
+
+            self.assertEqual("queued", first["status"])
+            self.assertEqual(first["requestId"], second["requestId"])
+            jobs = json.loads((root / "queue.json").read_text(encoding="utf-8"))["jobs"]
+            self.assertEqual(1, len(jobs))
+            self.assertEqual("navigation", jobs[0]["kind"])
+
     def test_region_display_name_is_loaded_from_config(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -6,7 +6,7 @@ RUN pip install --no-cache-dir 'cryptography==46.0.7' \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --uid 10001 --create-home volty
 WORKDIR /app
-COPY build-package.sh expand-bbox.py normalize-valhalla-config.py build-manifest.py verify-package.py build-search.py build-catalog.py sign-manifest.py config.json process.lua ./
+COPY build-package.sh expand-bbox.py normalize-valhalla-config.py build-manifest.py verify-package.py build-search.py build-catalog.py sign-manifest.py ./
 COPY production /app/production
 RUN mkdir -p /data/offline /data/staging /data/sources \
     && chown -R volty:volty /app /data

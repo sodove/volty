@@ -76,10 +76,8 @@ def write_package(
 ) -> None:
     routing = root / "routing/valhalla-routing.tar.gz"
     search = root / "search/places.sqlite.gz"
-    map_file = root / "map/test.pmtiles"
     routing.parent.mkdir(parents=True)
     search.parent.mkdir(parents=True)
-    map_file.parent.mkdir(parents=True)
 
     write_routing_archive(
         routing,
@@ -97,8 +95,6 @@ def write_package(
         connection.close()
     with gzip.open(search, "wb") as compressed:
         compressed.write(database.read_bytes())
-    map_file.write_bytes(b"pmtiles")
-
     def component(path: Path) -> dict[str, object]:
         return {
             "downloadBytes": path.stat().st_size,
@@ -108,10 +104,17 @@ def write_package(
     (root / "manifest.unsigned.json").write_text(
         json.dumps(
             {
+                "schemaVersion": 3,
+                "source": {
+                    "osmReplicationSequence": 1,
+                    "osmTimestamp": "2026-09-07T00:00:00Z",
+                    "sourceId": "test-source",
+                    "sourceUrl": "https://download.example/test.osm.pbf",
+                    "sourceSha256": "a" * 64,
+                },
                 "components": {
                     "routing": component(routing),
                     "search": component(search),
-                    "map": component(map_file),
                 }
             }
         ),
@@ -120,6 +123,66 @@ def write_package(
 
 
 class OfflineNavigationToolchainTest(unittest.TestCase):
+    def test_build_package_is_navigation_only(self):
+        script = (ROOT / "build-package.sh").read_text(encoding="utf-8")
+
+        self.assertNotIn("tilemaker", script)
+        self.assertNotIn("map.mbtiles", script)
+        self.assertNotIn("PMTILES_IMAGE", script)
+        self.assertNotIn('mkdir -p "$STAGING/map"', script)
+
+    def test_v3_verifier_rejects_map_component_in_new_package(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            write_package(root, config=complete_config(), include_timezone=True)
+            map_file = root / "map/test.pmtiles"
+            map_file.parent.mkdir()
+            map_file.write_bytes(b"legacy-map")
+            manifest_path = root / "manifest.unsigned.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["components"]["map"] = {
+                "downloadBytes": map_file.stat().st_size,
+                "installedBytes": map_file.stat().st_size,
+                "sha256": hashlib.sha256(map_file.read_bytes()).hexdigest(),
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+            with patch.object(sys, "argv", [str(VERIFY_SCRIPT), str(root)]):
+                with self.assertRaisesRegex(ValueError, "map"):
+                    VERIFY_MODULE.main()
+
+    def test_v3_manifest_includes_complete_source_provenance(self):
+        script = ROOT / "build-manifest.py"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            routing = root / "routing.tar.gz"
+            routing.write_bytes(b"routing")
+            search = root / "search.sqlite.gz"
+            search.write_bytes(b"search")
+            routing_installed = root / "routing-installed"
+            search_installed = root / "search-installed"
+            routing_installed.mkdir()
+            search_installed.mkdir()
+            with patch.object(sys, "argv", [
+                str(script), "--output", str(root / "manifest.json"),
+                "--routing", str(routing), "--routing-installed", str(routing_installed),
+                "--search", str(search), "--search-installed", str(search_installed),
+                "--region-id", "region", "--release-version", "release",
+                "--min-app-version-code", "1", "--osm-sequence", "1",
+                "--osm-timestamp", "2026-09-07T00:00:00Z", "--bbox", "0,0,1,1",
+                "--source-id", "region-source",
+                "--source-url", "https://download.geofabrik.de/region.osm.pbf",
+                "--source-sha256", "a" * 64,
+            ]):
+                import runpy
+                with self.assertRaises(SystemExit) as exit_info:
+                    runpy.run_path(str(script), run_name="__main__")
+                self.assertEqual(0, exit_info.exception.code)
+            manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(3, manifest["schemaVersion"])
+            self.assertEqual("https://download.geofabrik.de/region.osm.pbf", manifest["source"]["sourceUrl"])
+            self.assertEqual("a" * 64, manifest["source"]["sourceSha256"])
+
     def test_normalizer_adds_auto_pedestrian_service_limit(self):
         config = {
             "service_limits": {
@@ -200,10 +263,10 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
             '  docker run --rm --network host --workdir /work --user "$(id -u):$(id -g)" \\\n'
             '    -v "$STAGING:/work" -v "$PARENT:/input:ro" \\\n'
             '    "$VALHALLA_IMAGE" "$@"\n'
-            '}\n\n'
-            'echo "Extracting logical region for map and search"',
+            '}',
             script,
         )
+        self.assertIn('echo "Extracting logical region for search and routing"', script)
         self.assertIn(
             'ROUTING_BBOX=$(python3 "$SCRIPT_DIR/expand-bbox.py" "$BBOX" "$ROUTING_BUFFER_KM")',
             script,
