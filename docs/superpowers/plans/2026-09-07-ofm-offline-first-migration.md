@@ -153,7 +153,7 @@ git commit -m "feat: add native MapLibre offline packs"
 - Modify: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/RootScreen.kt`
 - Create or modify: `composeApp/src/androidMain/kotlin/ru/sodovaya/volty/presentation/map/LegacyBuildingLayer.android.kt`
 - Create: `composeApp/src/commonTest/kotlin/ru/sodovaya/volty/presentation/map/MapRenderSourcePolicyTest.kt`
-- Delete after the spike: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/map/OfflineMapStylePolicy.kt`, `composeApp/src/androidMain/assets/offline-map-styles/*`
+- Stop referencing after the spike; physical deletion is owned by Task 8: `composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/map/OfflineMapStylePolicy.kt`, `composeApp/src/androidMain/assets/offline-map-styles/*`
 
 **Interfaces:**
 - `MapRenderSourcePolicy.styleUrl(darkTheme): String` returns only the two OFM URLs.
@@ -449,4 +449,3 @@ approved fallback only if MapLibre 13.0.2 cannot satisfy local-first behavior:
 This branch is not part of the default execution path. The native MapLibre
 pack is the required first implementation because it is the only option that
 removes the custom map server and preserves the public OFM resource contract.
-
