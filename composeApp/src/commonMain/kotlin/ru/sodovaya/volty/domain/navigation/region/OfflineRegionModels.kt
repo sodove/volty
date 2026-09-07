@@ -12,10 +12,10 @@ data class OfflineRegionBounds(
     val east: Double,
 ) {
     init {
-        require(south in -90.0..90.0) { "south must be a valid latitude" }
-        require(north in -90.0..90.0) { "north must be a valid latitude" }
-        require(west in -180.0..180.0) { "west must be a valid longitude" }
-        require(east in -180.0..180.0) { "east must be a valid longitude" }
+        require(south.isFinite() && south in -90.0..90.0) { "south must be a valid latitude" }
+        require(north.isFinite() && north in -90.0..90.0) { "north must be a valid latitude" }
+        require(west.isFinite() && west in -180.0..180.0) { "west must be a valid longitude" }
+        require(east.isFinite() && east in -180.0..180.0) { "east must be a valid longitude" }
         require(south <= north) { "south must not be north of north" }
         require(west <= east) { "west must not be east of east" }
     }
