@@ -1,14 +1,17 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackDefinition
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackKey
@@ -25,15 +28,18 @@ interface OfflineRegionPreparationStore {
 }
 
 class InMemoryOfflineRegionPreparationStore : OfflineRegionPreparationStore {
+    private val lock = Any()
     private val completed = mutableSetOf<String>()
     private val styles = mutableMapOf<String, OfflineMapStyleVariant>()
     override fun completed(regionId: String, style: OfflineMapStyleVariant, revision: String?): Boolean =
-        key(regionId, style, revision) in completed
+        synchronized(lock) { key(regionId, style, revision) in completed }
     override fun markCompleted(regionId: String, style: OfflineMapStyleVariant, revision: String?) {
-        completed += key(regionId, style, revision)
-        styles[regionId] = style
+        synchronized(lock) {
+            completed += key(regionId, style, revision)
+            styles[regionId] = style
+        }
     }
-    override fun lastCompletedStyle(regionId: String): OfflineMapStyleVariant? = styles[regionId]
+    override fun lastCompletedStyle(regionId: String): OfflineMapStyleVariant? = synchronized(lock) { styles[regionId] }
     private fun key(regionId: String, style: OfflineMapStyleVariant, revision: String?) = "$regionId|${style.name}|${revision.orEmpty()}"
 }
 
@@ -46,9 +52,12 @@ class DefaultOfflineRegionPreparationCoordinator(
     private val network: OfflineNetworkStatus? = null,
     private val preferences: () -> OfflineDownloadPreferences = { OfflineDownloadPreferences() },
 ) : OfflineRegionPreparationCoordinator {
+    private val stateMutex = Mutex()
     private val jobs = mutableMapOf<PreparationKey, Job>()
     private val requested = mutableSetOf<PreparationKey>()
+    private val pending = mutableMapOf<PreparationKey, PendingPreparation>()
     private val navigationRequested = mutableSetOf<String>()
+    private val pausedRegions = mutableSetOf<String>()
     private val definitions = mutableMapOf<PreparationKey, OfflineMapPackDefinition>()
     private val activeStyles = mutableMapOf<String, OfflineMapStyleVariant>()
     private val _states = MutableStateFlow<List<OfflineRegionPreparationState>>(emptyList())
@@ -60,6 +69,11 @@ class DefaultOfflineRegionPreparationCoordinator(
         }
         scope.launch {
             mapPacks.states.collect { publish(packages.states.value) }
+        }
+        scope.launch {
+            network?.changes?.collect { availability ->
+                if (availability != OfflineNetworkAvailability.OFFLINE) retryPending()
+            }
         }
     }
 
@@ -84,19 +98,46 @@ class DefaultOfflineRegionPreparationCoordinator(
     }
 
     override suspend fun pause(regionId: String) {
-        jobs.filterKeys { it.regionId == regionId }.values.toList().forEach { it.cancel() }
+        val (activeJobs, definitionsToPause) = stateMutex.withLock {
+            pausedRegions += regionId
+            val active = jobs.filterKeys { it.regionId == regionId }.values.toList()
+            requested.removeAll { it.regionId == regionId }
+            pending.keys.removeAll { it.regionId == regionId }
+            navigationRequested.remove(regionId)
+            jobs.keys.filter { it.regionId == regionId }.forEach(jobs::remove)
+            val definitionsToPause = definitions.filterKeys { it.regionId == regionId }.values.toList()
+            definitions.keys.filter { it.regionId == regionId }
+                .forEach(this@DefaultOfflineRegionPreparationCoordinator.definitions::remove)
+            active to definitionsToPause
+        }
+        activeJobs.forEach { it.cancelAndJoin() }
         packages.pauseDownload(regionId)
-        definitions.filterKeys { it.regionId == regionId }.values.forEach { mapPacks.pause(it.key) }
+        definitionsToPause.forEach { mapPacks.pause(it.key) }
     }
 
     override suspend fun retry(regionId: String) {
         val state = packages.states.value.firstOrNull { it.region.regionId == regionId } ?: return
+        val style = stateMutex.withLock {
+            pausedRegions.remove(regionId)
+            activeStyles[regionId] ?: OfflineMapStyleVariant.BRIGHT
+        }
         prepare(
             state,
-            activeStyles[regionId] ?: OfflineMapStyleVariant.BRIGHT,
+            style,
             OfflinePreparationTrigger.SETTINGS,
             force = true,
         )
+    }
+
+    override suspend fun retryPending() {
+        val requests = stateMutex.withLock { pending.values.toList() }
+        requests.forEach { request ->
+            val stillPending = stateMutex.withLock { pending[request.key] == request }
+            if (!stillPending) return@forEach
+            packages.states.value.firstOrNull { it.region.regionId == request.key.regionId }?.let { state ->
+                prepare(state, request.style, request.trigger, force = true, meteredConfirmed = request.meteredConfirmed)
+            }
+        }
     }
 
     private suspend fun prepare(
@@ -107,24 +148,29 @@ class DefaultOfflineRegionPreparationCoordinator(
         meteredConfirmed: Boolean = false,
     ) {
         val key = PreparationKey(packageState.region.regionId, style)
-        activeStyles[packageState.region.regionId] = style
         val retryFailed = packageState.status == OfflineRegionPackageStatus.FAILED ||
-            mapPacks.state(OfflineMapPackKey(
-                packageState.region.regionId,
-                style,
-                "https://tiles.openfreemap.org/styles/${style.name.lowercase()}",
-            )) is OfflineMapPackState.Failed
-        val effectiveForce = force || retryFailed
-        synchronized(jobs) {
-            if (!effectiveForce && (jobs[key]?.isActive == true || key in requested)) return
-            if (effectiveForce) {
-                requested.remove(key)
-                navigationRequested.remove(packageState.region.regionId)
+            mapPacks.state(mapKey(packageState.region.regionId, style)) is OfflineMapPackState.Failed
+        val effectiveForce = stateMutex.withLock {
+            if (packageState.region.regionId in pausedRegions && !force) return@withLock null
+            activeStyles[packageState.region.regionId] = style
+            force || retryFailed || key in pending
+        } ?: return
+        val job = stateMutex.withLock {
+            if (jobs[key]?.isCompleted == false) null
+            else if (!effectiveForce && key in requested) null
+            else {
+                if (effectiveForce) {
+                    requested.remove(key)
+                    navigationRequested.remove(packageState.region.regionId)
+                }
+                requested += key
+                scope.launch(start = CoroutineStart.LAZY) {
+                    runPreparation(packageState, style, trigger, effectiveForce, meteredConfirmed)
+                }.also { jobs[key] = it }
             }
-            requested += key
-            jobs[key] = scope.launch { runPreparation(packageState, style, trigger, effectiveForce, meteredConfirmed) }
-        }
-        jobs[key]?.join()
+        } ?: return
+        job.start()
+        job.join()
     }
 
     private suspend fun runPreparation(
@@ -146,11 +192,15 @@ class DefaultOfflineRegionPreparationCoordinator(
                 else -> {
                     // Let the package repository expose the waiting/approval
                     // state, but never activate a native map transfer first.
+                    stateMutex.withLock {
+                        pending[key] = PendingPreparation(key, style, trigger, meteredConfirmed)
+                    }
                     packages.requestDownload(packageState.region.regionId, downloadTrigger, meteredConfirmed)
                     return@supervisorScope
                 }
             }
         }
+        stateMutex.withLock { pending.remove(key) }
         val metadata = packageState.region.mapPack
         val revision = metadata?.ofmStyleRevision
         if (!force && store.completed(packageState.region.regionId, style, revision)) return@supervisorScope
@@ -165,13 +215,13 @@ class DefaultOfflineRegionPreparationCoordinator(
                 maxZoom = metadata.maxZoom,
             )
         }
-        definitions[key] = definition
+        stateMutex.withLock { definitions[key] = definition }
         val mapJob = launch { mapPacks.prepare(definition) }
         val navigationJob = launch {
             if (packageState.status != OfflineRegionPackageStatus.READY &&
                 packageState.status != OfflineRegionPackageStatus.UPDATE_AVAILABLE
             ) {
-                val shouldRequest = synchronized(jobs) {
+                val shouldRequest = stateMutex.withLock {
                     if (navigationRequested.contains(packageState.region.regionId)) false
                     else {
                         navigationRequested += packageState.region.regionId
@@ -198,9 +248,9 @@ class DefaultOfflineRegionPreparationCoordinator(
     private suspend fun kotlinx.coroutines.flow.Flow<List<OfflineRegionPackageState>>.collectAndPublish() =
         collect { publish(it) }
 
-    private fun publish(packageStates: List<OfflineRegionPackageState>) {
+    private suspend fun publish(packageStates: List<OfflineRegionPackageState>) {
         val next = packageStates.map { state ->
-            val style = activeStyles[state.region.regionId]
+            val style = stateMutex.withLock { activeStyles[state.region.regionId] }
                 ?: store.lastCompletedStyle(state.region.regionId)
                 ?: OfflineMapStyleVariant.BRIGHT
             val key = OfflineMapPackKey(state.region.regionId, style, "https://tiles.openfreemap.org/styles/${style.name.lowercase()}")
@@ -242,4 +292,17 @@ class DefaultOfflineRegionPreparationCoordinator(
     }
 
     private data class PreparationKey(val regionId: String, val style: OfflineMapStyleVariant)
+
+    private data class PendingPreparation(
+        val key: PreparationKey,
+        val style: OfflineMapStyleVariant,
+        val trigger: OfflinePreparationTrigger,
+        val meteredConfirmed: Boolean,
+    )
+
+    private fun mapKey(regionId: String, style: OfflineMapStyleVariant) = OfflineMapPackKey(
+        regionId,
+        style,
+        "https://tiles.openfreemap.org/styles/${style.name.lowercase()}",
+    )
 }

@@ -1,8 +1,14 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackDefinition
 import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackKey
@@ -85,20 +91,89 @@ class OfflineRegionPreparationCoordinatorTest {
         assertTrue(packages.requestCalls >= 2)
     }
 
+    @Test
+    fun concurrent_first_map_opens_are_serialized_and_idempotent() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val coordinator = coordinator(map, packages, backgroundScope)
+
+        coroutineScope {
+            repeat(20) {
+                launch {
+                    coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+                }
+            }
+        }
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(1, packages.requestCalls)
+    }
+
+    @Test
+    fun blocked_first_map_open_retries_when_network_becomes_validated() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val network = FakeNetwork(OfflineNetworkAvailability.OFFLINE)
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+        runCurrent()
+
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        assertEquals(0, map.prepareCalls)
+        assertEquals(1, packages.requestCalls)
+
+        network.availability = OfflineNetworkAvailability.UNMETERED
+        network.changes.emit(OfflineNetworkAvailability.UNMETERED)
+        runCurrent()
+        advanceUntilIdle()
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(2, packages.requestCalls)
+    }
+
+    @Test
+    fun duplicate_allowed_network_transitions_do_not_start_duplicate_map_jobs() = runTest {
+        val map = FakeMapManager(CompletableDeferred())
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val network = FakeNetwork(OfflineNetworkAvailability.OFFLINE)
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        runCurrent()
+        network.availability = OfflineNetworkAvailability.UNMETERED
+        val first = launch { coordinator.retryPending() }
+        val second = launch { coordinator.retryPending() }
+        runCurrent()
+
+        assertEquals(1, map.prepareCalls)
+        map.prepareGate!!.complete(Unit)
+        first.join()
+        second.join()
+        advanceUntilIdle()
+    }
+
     private fun coordinator(
         map: FakeMapManager,
         packages: FakePackages,
         scope: kotlinx.coroutines.CoroutineScope,
         networkAvailability: OfflineNetworkAvailability? = null,
+        network: OfflineNetworkStatus? = networkAvailability?.let { availability -> OfflineNetworkStatus { availability } },
     ): DefaultOfflineRegionPreparationCoordinator =
         DefaultOfflineRegionPreparationCoordinator(
             mapPacks = map,
             packages = packages,
             scope = scope,
-            network = networkAvailability?.let { availability -> OfflineNetworkStatus { availability } },
+            network = network,
         )
 
-    private class FakeMapManager : OfflineMapPackManager {
+    private class FakeNetwork(initial: OfflineNetworkAvailability) : OfflineNetworkStatus {
+        var availability = initial
+        override val changes = MutableSharedFlow<OfflineNetworkAvailability>(extraBufferCapacity = 4)
+        override fun current(): OfflineNetworkAvailability = availability
+    }
+
+    private class FakeMapManager(
+        val prepareGate: CompletableDeferred<Unit>? = null,
+    ) : OfflineMapPackManager {
         private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
         override val states = _states
         private val byKey = mutableMapOf<OfflineMapPackKey, OfflineMapPackState>()
@@ -107,6 +182,7 @@ class OfflineRegionPreparationCoordinatorTest {
         override fun state(key: OfflineMapPackKey): OfflineMapPackState? = byKey[key]
         override suspend fun prepare(definition: OfflineMapPackDefinition) {
             prepareCalls++
+            prepareGate?.await()
             byKey[definition.key] = OfflineMapPackState.Ready
             _states.value = byKey.values.toList()
         }

@@ -93,12 +93,22 @@ class AndroidOfflineRegionPackageRepository(
 
     private val connectivityCallback = object : ConnectivityManager.NetworkCallback() {
         override fun onAvailable(network: Network) {
-            retryWaitingDownloads()
-            retryCatalogIfNeeded()
+            val capabilities = connectivity?.getNetworkCapabilities(network) ?: return
+            if (offlineNetworkAvailability(
+                    hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+                    isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+                    isMetered = connectivity?.isActiveNetworkMetered == true,
+                ) != OfflineNetworkAvailability.OFFLINE
+            ) {
+                retryWaitingDownloads()
+                retryCatalogIfNeeded()
+            }
         }
 
         override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
+            if (capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) &&
+                capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            ) {
                 retryWaitingDownloads()
                 retryCatalogIfNeeded()
             }
@@ -527,14 +537,11 @@ class AndroidOfflineRegionPackageRepository(
         val network = connectivity?.activeNetwork ?: return OfflineNetworkAvailability.OFFLINE
         val capabilities = connectivity?.getNetworkCapabilities(network)
             ?: return OfflineNetworkAvailability.OFFLINE
-        if (!capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)) {
-            return OfflineNetworkAvailability.OFFLINE
-        }
-        return if (connectivity?.isActiveNetworkMetered == true) {
-            OfflineNetworkAvailability.METERED
-        } else {
-            OfflineNetworkAvailability.UNMETERED
-        }
+        return offlineNetworkAvailability(
+            hasInternet = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET),
+            isValidated = capabilities.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            isMetered = connectivity?.isActiveNetworkMetered == true,
+        )
     }
 
     /** Wake automatic downloads as soon as Android reports that connectivity returned. */

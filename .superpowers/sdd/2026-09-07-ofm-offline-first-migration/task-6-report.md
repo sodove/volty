@@ -22,3 +22,26 @@ package state.
 `.\gradlew.bat :composeApp:testDebugUnitTest --tests '*OfflineRegionPreparationCoordinatorTest' --no-build-cache --rerun-tasks --max-workers=1`
 
 Passed: 5 tests, 0 failures. Full device smoke was not run in this task.
+
+## Fix round 1
+
+Addressed the review's three Important findings:
+
+- Coordinator jobs, pending requests, styles, definitions, and request markers are protected by one
+  `Mutex`; pause snapshots and clears state before cancellation, and duplicate retries share one
+  keyed job. The in-memory completion store is synchronized as well.
+- Android network status and package-repository wake-up paths require both `INTERNET` and
+  `VALIDATED`; an INTERNET-only capability is classified as offline.
+- A blocked first-map request is retained as pending and retried on a non-offline network change,
+  with stale/duplicate retry snapshots ignored.
+
+Added deterministic coverage for concurrent first opens, offline-to-validated retry, duplicate
+allowed-network transitions, and INTERNET-without-VALIDATED classification.
+
+Verification command:
+
+`.\gradlew.bat :composeApp:testDebugUnitTest --tests '*OfflineRegionPreparationCoordinatorTest' --tests '*AndroidOfflineNetworkStatusTest' --no-build-cache --rerun-tasks --max-workers=1`
+
+The focused suite passed after setting `ANDROID_HOME` to the installed Android SDK. SQLDelight
+still logs its known Windows `C:\WINDOWS\sqlite-*.dll.lck` access warning; it does not fail the
+test task. Full device smoke was not run.
