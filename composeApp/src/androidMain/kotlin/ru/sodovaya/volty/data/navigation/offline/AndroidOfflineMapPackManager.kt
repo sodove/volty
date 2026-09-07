@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.navigation.offline
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -51,7 +52,7 @@ class AndroidOfflineMapPackManager internal constructor(
     )
 
     private val operationMutex = Mutex()
-    private val packs = linkedMapOf<OfflineMapPackKey, SdkOfflinePack>()
+    private val packs = linkedMapOf<OfflineMapPackKey, PackEntry>()
     private val stateByKey = linkedMapOf<OfflineMapPackKey, OfflineMapPackState>()
     private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
     override val states: StateFlow<List<OfflineMapPackState>> = _states
@@ -71,11 +72,12 @@ class AndroidOfflineMapPackManager internal constructor(
                 loadPacksLocked()
                 val existing = packs[definition.key]
                 if (existing != null) {
-                    if (state(definition.key) !is OfflineMapPackState.Ready &&
-                        state(definition.key) !is OfflineMapPackState.Preparing
-                    ) {
+                    if (!existing.complete && !existing.downloadActive) {
                         update(definition.key, OfflineMapPackState.Preparing)
-                        existing.resume()
+                        attachObserverLocked(existing)
+                        client.setTileLimit(existing.tileLimit.toLong())
+                        existing.pack.resume()
+                        existing.downloadActive = true
                     }
                     return
                 }
@@ -83,46 +85,73 @@ class AndroidOfflineMapPackManager internal constructor(
                 update(definition.key, OfflineMapPackState.Preparing)
                 client.setTileLimit(definition.tileLimit.toLong())
                 val created = client.createPack(definition.toSdkDefinition(pixelRatio), store.encode(definition))
-                packs[definition.key] = created
-                observe(definition.key, created)
+                val entry = PackEntry(definition.key, created, definition.tileLimit)
+                packs[definition.key] = entry
+                attachObserverLocked(entry)
                 created.resume()
+                entry.downloadActive = true
             } catch (error: Throwable) {
                 update(definition.key, OfflineMapPackState.Failed(error.failureCode()))
             }
         }
     }
 
-    override suspend fun pause(key: OfflineMapPackKey) = operate(key) { it.pause() }
-
-    override suspend fun resume(key: OfflineMapPackKey) = operate(key) { pack ->
-        update(key, OfflineMapPackState.Preparing)
-        pack.resume()
+    override suspend fun pause(key: OfflineMapPackKey) = operate(key) { entry ->
+        entry.pack.pause()
+        entry.downloadActive = false
+        rotateObserverLocked(entry)
+        val current = state(key)
+        if (current !is OfflineMapPackState.Ready && current !is OfflineMapPackState.Failed) {
+            update(key, OfflineMapPackState.Preparing)
+        }
     }
 
-    override suspend fun invalidate(key: OfflineMapPackKey) = operate(key) { pack ->
-        pack.invalidate()
+    override suspend fun resume(key: OfflineMapPackKey) = operate(key) { entry ->
+        if (entry.complete) return@operate
+        update(key, OfflineMapPackState.Preparing)
+        attachObserverLocked(entry)
+        client.setTileLimit(entry.tileLimit.toLong())
+        entry.pack.resume()
+        entry.downloadActive = true
+    }
+
+    override suspend fun invalidate(key: OfflineMapPackKey) = operate(key) { entry ->
+        entry.pack.invalidate()
+        entry.complete = false
+        entry.downloadActive = false
         update(key, OfflineMapPackState.Preparing)
     }
 
     override suspend fun delete(key: OfflineMapPackKey) {
-        operationMutex.withLock {
-            try {
+        withContext(NonCancellable) {
+            operationMutex.withLock {
                 loadPacksLocked()
-                val pack = packs[key] ?: return
-                pack.delete()
-                packs.remove(key)
-                removeState(key)
-            } catch (error: Throwable) {
-                update(key, OfflineMapPackState.Failed(error.failureCode()))
+                val entry = packs[key] ?: return@withLock
+                entry.lifecycle = PackLifecycle.DELETING
+                entry.observerGeneration += 1
+                entry.pack.setObserver(null)
+                try {
+                    entry.pack.delete()
+                    if (packs[key] === entry) {
+                        packs.remove(key)
+                        removeState(key)
+                    }
+                } catch (error: Throwable) {
+                    if (packs[key] === entry) {
+                        entry.lifecycle = PackLifecycle.ACTIVE
+                        attachObserverLocked(entry)
+                        update(key, OfflineMapPackState.Failed(error.failureCode()))
+                    }
+                }
             }
         }
     }
 
-    private suspend fun operate(key: OfflineMapPackKey, action: suspend (SdkOfflinePack) -> Unit) {
+    private suspend fun operate(key: OfflineMapPackKey, action: suspend (PackEntry) -> Unit) {
         operationMutex.withLock {
             try {
                 loadPacksLocked()
-                packs[key]?.let { action(it) }
+                packs[key]?.takeIf { it.lifecycle == PackLifecycle.ACTIVE }?.let { action(it) }
             } catch (error: Throwable) {
                 update(key, OfflineMapPackState.Failed(error.failureCode()))
             }
@@ -133,37 +162,84 @@ class AndroidOfflineMapPackManager internal constructor(
         if (loaded) return
         client.listPacks().sortedBy(SdkOfflinePack::id).forEach { pack ->
             val metadata = store.decode(pack.metadata) ?: return@forEach
-            if (packs.putIfAbsent(metadata.key, pack) == null) {
-                observe(metadata.key, pack)
-                pack.status()?.let { onStatus(metadata.key, pack, it) }
-                    ?: update(metadata.key, OfflineMapPackState.Preparing)
+            if (metadata.key !in packs) {
+                val entry = PackEntry(metadata.key, pack, metadata.tileLimit)
+                packs[metadata.key] = entry
+                attachObserverLocked(entry)
+                val status = pack.status()
+                if (status == null) {
+                    update(metadata.key, OfflineMapPackState.Preparing)
+                } else {
+                    entry.downloadActive = status.isActive
+                    entry.complete = status.isComplete
+                    publishStatusLocked(entry, status)
+                }
             }
         }
         loaded = true
     }
 
-    private suspend fun observe(key: OfflineMapPackKey, pack: SdkOfflinePack) {
-        pack.setObserver(object : SdkOfflinePackObserver {
-            override fun onStatus(status: SdkOfflinePackStatus) = onStatus(key, pack, status)
+    private suspend fun attachObserverLocked(entry: PackEntry) {
+        entry.observerGeneration += 1
+        val generation = entry.observerGeneration
+        entry.pack.setObserver(object : SdkOfflinePackObserver {
+            override fun onStatus(status: SdkOfflinePackStatus) {
+                dispatchCallback(entry, generation) { current ->
+                    if (state(current.key) !is OfflineMapPackState.Failed) {
+                        current.downloadActive = status.isActive
+                        current.complete = status.isComplete
+                        publishStatusLocked(current, status)
+                        if (status.isComplete && status.isActive) {
+                            current.pack.pause()
+                            current.downloadActive = false
+                            rotateObserverLocked(current)
+                        }
+                    }
+                }
+            }
 
             override fun onError(reason: String, message: String) {
-                fail(key, pack, "$reason $message".failureCode())
+                dispatchCallback(entry, generation) { current ->
+                    failLocked(current, "$reason $message".failureCode())
+                }
             }
 
             override fun onTileLimitExceeded() {
-                fail(key, pack, TILE_LIMIT_FAILURE)
+                dispatchCallback(entry, generation) { current ->
+                    failLocked(current, TILE_LIMIT_FAILURE)
+                }
             }
         })
     }
 
-    private fun onStatus(key: OfflineMapPackKey, pack: SdkOfflinePack, status: SdkOfflinePackStatus) {
-        if (state(key) is OfflineMapPackState.Failed) return
+    private fun dispatchCallback(
+        entry: PackEntry,
+        generation: Long,
+        action: suspend (PackEntry) -> Unit,
+    ) {
+        scope.launch {
+            operationMutex.withLock {
+                val current = packs[entry.key]
+                if (current === entry &&
+                    current.lifecycle == PackLifecycle.ACTIVE &&
+                    current.observerGeneration == generation
+                ) {
+                    action(current)
+                }
+            }
+        }
+    }
+
+    private suspend fun rotateObserverLocked(entry: PackEntry) {
+        if (entry.lifecycle == PackLifecycle.ACTIVE) attachObserverLocked(entry)
+    }
+
+    private fun publishStatusLocked(entry: PackEntry, status: SdkOfflinePackStatus) {
         if (status.isComplete) {
-            update(key, OfflineMapPackState.Ready)
-            scope.launch { runCatching { pack.pause() } }
+            update(entry.key, OfflineMapPackState.Ready)
         } else if (status.isActive) {
             update(
-                key,
+                entry.key,
                 OfflineMapPackState.Downloading(
                     completedResources = status.completedResources,
                     completedTiles = status.completedTiles,
@@ -171,13 +247,17 @@ class AndroidOfflineMapPackManager internal constructor(
                 ),
             )
         } else {
-            update(key, OfflineMapPackState.Preparing)
+            update(entry.key, OfflineMapPackState.Preparing)
         }
     }
 
-    private fun fail(key: OfflineMapPackKey, pack: SdkOfflinePack, code: String) {
-        update(key, OfflineMapPackState.Failed(code))
-        scope.launch { runCatching { pack.pause() } }
+    private suspend fun failLocked(entry: PackEntry, code: String) {
+        update(entry.key, OfflineMapPackState.Failed(code))
+        if (entry.downloadActive) {
+            runCatching { entry.pack.pause() }
+            entry.downloadActive = false
+            rotateObserverLocked(entry)
+        }
     }
 
     private fun state(key: OfflineMapPackKey): OfflineMapPackState? = synchronized(stateByKey) {
@@ -226,6 +306,21 @@ class AndroidOfflineMapPackManager internal constructor(
     private companion object {
         const val TILE_LIMIT_FAILURE = "tile_limit"
     }
+
+    private data class PackEntry(
+        val key: OfflineMapPackKey,
+        val pack: SdkOfflinePack,
+        val tileLimit: Int,
+        var downloadActive: Boolean = false,
+        var complete: Boolean = false,
+        var observerGeneration: Long = 0,
+        var lifecycle: PackLifecycle = PackLifecycle.ACTIVE,
+    )
+
+    private enum class PackLifecycle {
+        ACTIVE,
+        DELETING,
+    }
 }
 
 internal data class SdkOfflinePackStatus(
@@ -246,7 +341,7 @@ internal interface SdkOfflinePackObserver {
 internal interface SdkOfflinePack {
     val id: Long
     val metadata: ByteArray
-    suspend fun setObserver(observer: SdkOfflinePackObserver)
+    suspend fun setObserver(observer: SdkOfflinePackObserver?)
     suspend fun status(): SdkOfflinePackStatus?
     suspend fun resume()
     suspend fun pause()
@@ -310,18 +405,20 @@ private class MapLibreSdkOfflinePack(
     override val id: Long get() = region.id
     override val metadata: ByteArray get() = region.metadata
 
-    override suspend fun setObserver(observer: SdkOfflinePackObserver) = withContext(mainDispatcher) {
-        region.setObserver(object : OfflineRegion.OfflineRegionObserver {
-            override fun onStatusChanged(status: OfflineRegionStatus) {
-                observer.onStatus(status.toSdkStatus())
-            }
+    override suspend fun setObserver(observer: SdkOfflinePackObserver?) = withContext(mainDispatcher) {
+        region.setObserver(observer?.let {
+            object : OfflineRegion.OfflineRegionObserver {
+                override fun onStatusChanged(status: OfflineRegionStatus) {
+                    it.onStatus(status.toSdkStatus())
+                }
 
-            override fun onError(error: OfflineRegionError) {
-                observer.onError(error.reason, error.message)
-            }
+                override fun onError(error: OfflineRegionError) {
+                    it.onError(error.reason, error.message)
+                }
 
-            override fun mapboxTileCountLimitExceeded(limit: Long) {
-                observer.onTileLimitExceeded()
+                override fun mapboxTileCountLimitExceeded(limit: Long) {
+                    it.onTileLimitExceeded()
+                }
             }
         })
     }

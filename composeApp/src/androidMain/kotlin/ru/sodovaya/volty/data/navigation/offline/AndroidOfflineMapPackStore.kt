@@ -27,22 +27,29 @@ class AndroidOfflineMapPackStore(
                 bounds = definition.bounds,
                 minZoom = definition.minZoom,
                 maxZoom = definition.maxZoom,
+                tileLimit = definition.tileLimit,
                 ofmRevision = ofmRevision,
             ),
         ).encodeToByteArray()
 
     fun decode(bytes: ByteArray): OfflineMapPackMetadata? = runCatching {
         val stored = json.decodeFromString<StoredMetadata>(bytes.decodeToString())
-        require(stored.schemaVersion == METADATA_SCHEMA_VERSION)
+        require(stored.schemaVersion in LEGACY_SCHEMA_VERSION..METADATA_SCHEMA_VERSION)
         val style = OfflineMapStyleVariant.valueOf(stored.styleVariant)
+        val tileLimit = when (stored.schemaVersion) {
+            LEGACY_SCHEMA_VERSION -> stored.tileLimit ?: LEGACY_TILE_LIMIT
+            else -> requireNotNull(stored.tileLimit)
+        }
         require(stored.regionId.isNotBlank())
         require(stored.styleUrl.isNotBlank())
         require(stored.minZoom >= 0 && stored.maxZoom >= stored.minZoom)
+        require(tileLimit > 0)
         OfflineMapPackMetadata(
             key = OfflineMapPackKey(stored.regionId, style, stored.styleUrl),
             bounds = stored.bounds,
             minZoom = stored.minZoom,
             maxZoom = stored.maxZoom,
+            tileLimit = tileLimit,
             ofmRevision = stored.ofmRevision,
         )
     }.getOrNull()
@@ -56,11 +63,14 @@ class AndroidOfflineMapPackStore(
         val bounds: OfflineRegionBounds,
         val minZoom: Int,
         val maxZoom: Int,
+        val tileLimit: Int? = null,
         val ofmRevision: String?,
     )
 
     private companion object {
-        const val METADATA_SCHEMA_VERSION = 1
+        const val LEGACY_SCHEMA_VERSION = 1
+        const val METADATA_SCHEMA_VERSION = 2
+        const val LEGACY_TILE_LIMIT = 30_000
     }
 }
 
@@ -69,6 +79,7 @@ data class OfflineMapPackMetadata(
     val bounds: OfflineRegionBounds,
     val minZoom: Int,
     val maxZoom: Int,
+    val tileLimit: Int,
     val ofmRevision: String?,
 ) {
     val regionId: String get() = key.regionId
