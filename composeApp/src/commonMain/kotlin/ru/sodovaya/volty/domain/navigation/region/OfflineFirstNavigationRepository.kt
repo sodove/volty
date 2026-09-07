@@ -55,7 +55,7 @@ class OfflineFirstNavigationRepository(
         languageTag: String,
     ): NavigationResult<List<PlaceCandidate>> {
         val request = OfflineGeocoderRequestPolicy.create(query, near, languageTag)
-            ?: return online.search(query, near, languageTag)
+            ?: return onlineOrOfflineSearch(query, near, languageTag)
         if (near == null) return searchInstalledRegions(request, query, languageTag)
 
         val localRegion = installedRegionCovering(listOf(near))

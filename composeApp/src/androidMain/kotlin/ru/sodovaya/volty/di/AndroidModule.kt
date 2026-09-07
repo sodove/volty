@@ -152,6 +152,7 @@ val androidModule = module {
             AndroidHybridNavigationRepository(
                 online = get<OsmNavigationRepository>(),
                 packageManager = get(),
+                network = get(),
                 context = androidContext(),
             )
         }

@@ -225,6 +225,18 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
+    fun short_search_in_full_offline_mode_does_not_call_online() = runTest {
+        val packages = FakePackages()
+        val online = FakeNavigation()
+        val repository = repository(packages, online, network = OfflineNetworkAvailability.OFFLINE)
+
+        val result = repository.search("a", near = null, languageTag = "ru-RU")
+
+        assertEquals(NavigationFailure.Offline, assertIs<NavigationResult.Failure>(result).reason)
+        assertEquals(0, online.searchCalls)
+    }
+
+    @Test
     fun cross_region_route_queues_every_known_missing_endpoint_region() = runTest {
         val packages = FakePackages(
             regionIds = listOf("ekb", "tyumen"),

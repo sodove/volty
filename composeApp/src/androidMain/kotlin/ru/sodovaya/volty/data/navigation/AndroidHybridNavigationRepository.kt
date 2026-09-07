@@ -37,6 +37,8 @@ import ru.sodovaya.volty.domain.navigation.offline.OfflineRoutingPolicy
 import ru.sodovaya.volty.domain.navigation.offline.BRouterRouteProfilePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteAlternativePolicy
 import ru.sodovaya.volty.domain.navigation.routing.RouteDiversityPolicy
+import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkStatus
+import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
 import kotlin.math.ceil
 import kotlin.math.roundToInt
 
@@ -50,6 +52,7 @@ import kotlin.math.roundToInt
 class AndroidHybridNavigationRepository(
     private val online: NavigationRepository,
     private val packageManager: AndroidOfflineRoutingPackageManager,
+    private val network: OfflineNetworkStatus,
     @Suppress("UNUSED_PARAMETER") context: Context,
 ) : NavigationRepository {
     override suspend fun search(
@@ -57,7 +60,9 @@ class AndroidHybridNavigationRepository(
         near: GeoCoordinate?,
         languageTag: String,
     ): NavigationResult<List<ru.sodovaya.volty.domain.navigation.PlaceCandidate>> =
-        online.search(query, near, languageTag)
+        onlineOrOfflineNavigation(network) {
+            online.search(query, near, languageTag)
+        }
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
         val manifest = packageManager.activeManifest
@@ -74,7 +79,7 @@ class AndroidHybridNavigationRepository(
                 is NavigationResult.Failure -> if (!local.reason.isRetryableLocal()) return local
             }
         }
-        return online.routes(request)
+        return onlineOrOfflineNavigation(network) { online.routes(request) }
     }
 
     private suspend fun routeOffline(
@@ -362,4 +367,14 @@ class AndroidHybridNavigationRepository(
         const val BROUTER_LATITUDE_OFFSET = 90.0
         const val PROFILE_FILE = "volty.brf"
     }
+}
+
+/** Never enter a network adapter unless Android reports validated connectivity. */
+internal suspend fun <T> onlineOrOfflineNavigation(
+    network: OfflineNetworkStatus,
+    online: suspend () -> NavigationResult<T>,
+): NavigationResult<T> = if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+    NavigationResult.Failure(NavigationFailure.Offline)
+} else {
+    online()
 }
