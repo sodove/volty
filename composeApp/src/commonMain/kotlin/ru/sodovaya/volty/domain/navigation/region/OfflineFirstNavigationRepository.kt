@@ -1,12 +1,11 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.emptyFlow
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
@@ -16,7 +15,7 @@ import ru.sodovaya.volty.domain.navigation.PlaceCandidateDeduplicationPolicy
 import ru.sodovaya.volty.domain.navigation.RoutePlan
 import ru.sodovaya.volty.domain.navigation.RouteRequest
 
-/** Platform bridge for the installed Valhalla/search/map files of one region. */
+/** Platform bridge for the installed Valhalla/search files of one region. */
 interface OfflineRegionRuntime {
     suspend fun search(
         regionId: String,
@@ -29,174 +28,88 @@ interface OfflineRegionRuntime {
     ): NavigationResult<RoutePlan>
 }
 
-/** Reports the current connectivity class without making the domain Android-aware. */
+/** Reports validated connectivity without making the domain Android-aware. */
 fun interface OfflineNetworkStatus {
     fun current(): OfflineNetworkAvailability
+
+    val changes: Flow<OfflineNetworkAvailability>
+        get() = emptyFlow()
 }
 
 /**
- * Chooses installed regional data first and keeps online parity while a missing
- * region downloads in the background. Search, route, and map callers can share
- * the same package repository and therefore cannot start duplicate downloads.
+ * Resolves installed regional search/routing data before using the online
+ * adapter. Requests never acquire a package or refresh a catalog: preparation
+ * is owned by the coordinator and explicit Settings actions.
  */
 class OfflineFirstNavigationRepository(
     private val online: NavigationRepository,
     private val packages: OfflineRegionPackageRepository,
     private val runtime: OfflineRegionRuntime,
     private val network: OfflineNetworkStatus,
-    private val preferences: () -> OfflineDownloadPreferences,
-    private val downloadScope: CoroutineScope,
+    @Suppress("UNUSED_PARAMETER") private val preferences: () -> OfflineDownloadPreferences,
+    @Suppress("UNUSED_PARAMETER") private val downloadScope: CoroutineScope,
 ) : NavigationRepository {
-    private val scheduledDownloads = mutableSetOf<String>()
-    private val catalogRefreshLock = Any()
-    private var catalogRefreshAttempted = false
-    private var catalogRefreshJob: Job? = null
-
     override suspend fun search(
         query: String,
         near: GeoCoordinate?,
         languageTag: String,
     ): NavigationResult<List<PlaceCandidate>> {
-        val catalogRefresh = ensureCatalog()
         val request = OfflineGeocoderRequestPolicy.create(query, near, languageTag)
-        if (request == null) return online.search(query, near, languageTag)
-        if (near == null) {
-            return searchInstalledRegions(
-                request = request,
-                rawQuery = query,
-                languageTag = languageTag,
-            )
-        }
+            ?: return online.search(query, near, languageTag)
+        if (near == null) return searchInstalledRegions(request, query, languageTag)
 
-        return when (
-            val decision = access(
-                points = listOf(near),
-                trigger = OfflineRegionDownloadTrigger.SEARCH,
-            )
-        ) {
-            is OfflineRegionAccessDecision.UseOffline -> runtime.search(decision.regionId, request)
-            is OfflineRegionAccessDecision.StartDownload -> {
-                scheduleDownload(decision.regionId, decision.trigger)
-                online.search(query, near, languageTag)
-            }
-            is OfflineRegionAccessDecision.WaitForDownload -> {
-                if (network.current() == OfflineNetworkAvailability.OFFLINE) {
-                    NavigationResult.Failure(NavigationFailure.Offline)
-                } else {
-                    retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.SEARCH)
-                    online.search(query, near, languageTag)
+        val localRegion = installedRegionCovering(listOf(near))
+            ?: return onlineOrOfflineSearch(query, near, languageTag)
+        return when (val local = runtime.search(localRegion.region.regionId, request)) {
+            is NavigationResult.Success -> {
+                when (OfflineResourceFallbackPolicy.decide(
+                    localCoverage = true,
+                    network = network.current(),
+                    localFailure = if (local.value.isEmpty()) LocalFailure.Empty else LocalFailure.None,
+                    resource = OfflineResourceKind.SEARCH,
+                )) {
+                    OfflineResourceDecision.UseOnline -> online.search(query, near, languageTag)
+                    OfflineResourceDecision.UseLocal,
+                    OfflineResourceDecision.Unavailable -> local
                 }
             }
-            is OfflineRegionAccessDecision.RequestMeteredApproval ->
-                online.search(query, near, languageTag)
-            is OfflineRegionAccessDecision.UseOnlineFallback -> {
-                if (decision.missingRegionIds.isEmpty()) {
-                    scheduleDownloadAfterCatalogRefresh(
-                        refreshJob = catalogRefresh,
-                        points = listOf(near),
-                        trigger = OfflineRegionDownloadTrigger.SEARCH,
-                    )
-                } else {
-                    scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.SEARCH)
+            is NavigationResult.Failure -> {
+                when (OfflineResourceFallbackPolicy.decide(
+                    localCoverage = true,
+                    network = network.current(),
+                    localFailure = local.reason.toLocalFailure(),
+                    resource = OfflineResourceKind.SEARCH,
+                )) {
+                    OfflineResourceDecision.UseOnline -> online.search(query, near, languageTag)
+                    OfflineResourceDecision.UseLocal,
+                    OfflineResourceDecision.Unavailable -> local
                 }
-                online.search(query, near, languageTag)
             }
-            OfflineRegionAccessDecision.UnavailableOffline ->
-                NavigationResult.Failure(NavigationFailure.Offline)
         }
     }
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
-        val catalogRefresh = ensureCatalog()
-        return when (
-            val decision = access(
-                points = listOf(request.origin, request.destination.coordinate),
-                trigger = OfflineRegionDownloadTrigger.ROUTE,
-            )
-        ) {
-            is OfflineRegionAccessDecision.UseOffline -> runtime.routes(decision.regionId, request)
-            is OfflineRegionAccessDecision.StartDownload -> {
-                scheduleDownload(decision.regionId, decision.trigger)
-                online.routes(request)
+        val localRegion = installedRegionCovering(
+            listOf(request.origin, request.destination.coordinate),
+        ) ?: return onlineOrOfflineRoute(request)
+
+        return when (val local = runtime.routes(localRegion.region.regionId, request)) {
+            is NavigationResult.Success -> local
+            is NavigationResult.Failure -> when (OfflineResourceFallbackPolicy.decide(
+                localCoverage = true,
+                network = network.current(),
+                localFailure = local.reason.toLocalFailure(),
+                resource = OfflineResourceKind.ROUTING,
+            )) {
+                // A local graph authoritatively says that this corridor has no
+                // route. Do not mask that with an unbounded online retry.
+                OfflineResourceDecision.UseLocal,
+                OfflineResourceDecision.Unavailable -> local
+                OfflineResourceDecision.UseOnline -> online.routes(request)
             }
-            is OfflineRegionAccessDecision.RequestMeteredApproval -> online.routes(request)
-            is OfflineRegionAccessDecision.UseOnlineFallback -> {
-                if (decision.missingRegionIds.isEmpty()) {
-                    scheduleDownloadAfterCatalogRefresh(
-                        refreshJob = catalogRefresh,
-                        points = listOf(request.origin, request.destination.coordinate),
-                        trigger = OfflineRegionDownloadTrigger.ROUTE,
-                    )
-                } else {
-                    scheduleMissingRegionDownload(decision, OfflineRegionDownloadTrigger.ROUTE)
-                }
-                online.routes(request)
-            }
-            is OfflineRegionAccessDecision.WaitForDownload -> {
-                retryWaitingDownload(decision.regionId, OfflineRegionDownloadTrigger.ROUTE)
-                if (network.current() == OfflineNetworkAvailability.OFFLINE) {
-                    NavigationResult.Failure(NavigationFailure.Offline)
-                } else {
-                    online.routes(request)
-                }
-            }
-            OfflineRegionAccessDecision.UnavailableOffline ->
-                NavigationResult.Failure(NavigationFailure.Offline)
         }
     }
 
-    /**
-     * Application startup refreshes the catalog in the background. This
-     * second guard closes the small race where the first search/route arrives
-     * before startup refresh finishes. The request never waits for the catalog
-     * network timeout; it continues through the online path immediately.
-     */
-    private fun ensureCatalog(): Job? {
-        if (packages.isCatalogLoaded()) return null
-        if (network.current() == OfflineNetworkAvailability.OFFLINE) return null
-        return synchronized(catalogRefreshLock) {
-            if (packages.isCatalogLoaded()) return@synchronized null
-            catalogRefreshJob?.takeIf { it.isActive }?.let { return@synchronized it }
-            if (catalogRefreshAttempted) return@synchronized null
-            catalogRefreshAttempted = true
-            downloadScope.launch {
-                var refreshed = false
-                try {
-                    packages.refreshCatalog()
-                    refreshed = true
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) {
-                    // A transient catalog/network failure must not permanently
-                    // disable automatic region discovery for this process.
-                } finally {
-                    synchronized(catalogRefreshLock) {
-                        if (!refreshed) catalogRefreshAttempted = false
-                    }
-                }
-            }.also { catalogRefreshJob = it }
-        }
-    }
-
-    private fun access(
-        points: List<GeoCoordinate>,
-        trigger: OfflineRegionDownloadTrigger,
-    ): OfflineRegionAccessDecision = OfflineRegionAccessPolicy.decide(
-        points = points,
-        packages = packages.states.value.map { state ->
-            OfflineRegionPackageSnapshot(state.region, state.status)
-        },
-        network = network.current(),
-        trigger = trigger,
-        preferences = preferences(),
-        allowOnlineFallback = true,
-    )
-
-    /**
-     * A location is helpful for ranking but is not a prerequisite for local
-     * autocomplete. Search every ready regional index concurrently when the
-     * caller has no current fix, then keep deterministic first-seen results.
-     */
     private suspend fun searchInstalledRegions(
         request: OfflineGeocoderRequest,
         rawQuery: String,
@@ -210,33 +123,16 @@ class OfflineFirstNavigationRepository(
             .distinct()
             .sorted()
             .toList()
-        if (regionIds.isEmpty()) {
-            return if (network.current() == OfflineNetworkAvailability.OFFLINE) {
-                NavigationResult.Failure(NavigationFailure.Offline)
-            } else {
-                online.search(rawQuery, null, languageTag)
-            }
-        }
+        if (regionIds.isEmpty()) return onlineOrOfflineSearch(rawQuery, null, languageTag)
 
         val results = coroutineScope {
-            regionIds.map { regionId ->
-                async { runtime.search(regionId, request) }
-            }.awaitAll()
+            regionIds.map { regionId -> async { runtime.search(regionId, request) } }.awaitAll()
         }
-        val candidates = mutableListOf<PlaceCandidate>()
-        results.forEach { result ->
-            if (result is NavigationResult.Success) {
-                // Provider IDs and coordinates are only locally meaningful to
-                // one regional index. Deduplicate inside each index first;
-                // otherwise the same-named place in two cities can disappear
-                // when the regional result sets are combined.
-                candidates += PlaceCandidateDeduplicationPolicy.deduplicate(
-                    result.value,
-                    request.query.limit,
-                )
+        val candidates = results.filterIsInstance<NavigationResult.Success<List<PlaceCandidate>>>()
+            .flatMap { result ->
+                PlaceCandidateDeduplicationPolicy.deduplicate(result.value, request.query.limit)
             }
-        }
-        if (candidates.isNotEmpty() || results.any { it is NavigationResult.Success }) {
+        if (candidates.isNotEmpty()) {
             return NavigationResult.Success(
                 PlaceCandidateDeduplicationPolicy.deduplicate(
                     candidates,
@@ -245,68 +141,61 @@ class OfflineFirstNavigationRepository(
                 ),
             )
         }
+        // No local match is a valid empty answer while offline; with a
+        // validated network the online provider may know a newer place.
+        if (network.current() != OfflineNetworkAvailability.OFFLINE) {
+            return online.search(rawQuery, null, languageTag)
+        }
+        if (results.all { it is NavigationResult.Success }) {
+            return NavigationResult.Success(emptyList())
+        }
         return results.filterIsInstance<NavigationResult.Failure>().firstOrNull()
             ?: NavigationResult.Failure(NavigationFailure.Offline)
     }
 
-    private fun scheduleDownload(
-        regionId: String,
-        trigger: OfflineRegionDownloadTrigger,
-    ) {
-        synchronized(scheduledDownloads) {
-            if (!scheduledDownloads.add(regionId)) return
+    private suspend fun onlineOrOfflineSearch(
+        query: String,
+        near: GeoCoordinate?,
+        languageTag: String,
+    ): NavigationResult<List<PlaceCandidate>> =
+        if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+            NavigationResult.Failure(NavigationFailure.Offline)
+        } else {
+            online.search(query, near, languageTag)
         }
-        downloadScope.launch {
-            try {
-                packages.requestDownload(regionId, trigger)
-            } finally {
-                synchronized(scheduledDownloads) { scheduledDownloads.remove(regionId) }
+
+    private suspend fun onlineOrOfflineRoute(
+        request: RouteRequest,
+    ): NavigationResult<RoutePlan> =
+        if (network.current() == OfflineNetworkAvailability.OFFLINE) {
+            NavigationResult.Failure(NavigationFailure.Offline)
+        } else {
+            online.routes(request)
+        }
+
+    private fun installedRegionCovering(points: List<GeoCoordinate>): OfflineRegionPackageState? =
+        packages.states.value
+            .asSequence()
+            .filter { state ->
+                (state.status == OfflineRegionPackageStatus.READY ||
+                    state.status == OfflineRegionPackageStatus.UPDATE_AVAILABLE) &&
+                    points.all(state.region.bounds::contains)
             }
-        }
+            .sortedBy { it.region.regionId }
+            .firstOrNull()
+
+    private fun NavigationFailure.isRetryableLocal(): Boolean = when (this) {
+        NavigationFailure.Offline,
+        NavigationFailure.ProviderUnavailable,
+        NavigationFailure.MalformedResponse -> true
+        NavigationFailure.NoRoute,
+        is NavigationFailure.RateLimited,
+        is NavigationFailure.InvalidRequest -> false
     }
 
-    /** Retry only downloads that were waiting for connectivity; a rider's explicit pause wins. */
-    private fun retryWaitingDownload(
-        regionId: String,
-        trigger: OfflineRegionDownloadTrigger,
-    ) {
-        if (network.current() == OfflineNetworkAvailability.OFFLINE) return
-        val status = packages.states.value
-            .firstOrNull { it.region.regionId == regionId }
-            ?.status
-        if (status == OfflineRegionPackageStatus.WAITING_FOR_NETWORK ||
-            status == OfflineRegionPackageStatus.QUEUED
-        ) {
-            scheduleDownload(regionId, trigger)
-        }
-    }
-
-    private fun scheduleMissingRegionDownload(
-        decision: OfflineRegionAccessDecision.UseOnlineFallback,
-        trigger: OfflineRegionDownloadTrigger,
-    ) {
-        decision.missingRegionIds.distinct().forEach { regionId ->
-            scheduleDownload(regionId, trigger)
-        }
-    }
-
-    private fun scheduleDownloadAfterCatalogRefresh(
-        refreshJob: Job?,
-        points: List<GeoCoordinate>,
-        trigger: OfflineRegionDownloadTrigger,
-    ) {
-        refreshJob ?: return
-        downloadScope.launch {
-            refreshJob.join()
-            when (val decision = access(points, trigger)) {
-                is OfflineRegionAccessDecision.StartDownload ->
-                    scheduleDownload(decision.regionId, decision.trigger)
-
-                is OfflineRegionAccessDecision.UseOnlineFallback ->
-                    scheduleMissingRegionDownload(decision, trigger)
-
-                else -> Unit
-            }
-        }
+    private fun NavigationFailure.toLocalFailure(): LocalFailure = when {
+        this == NavigationFailure.NoRoute -> LocalFailure.NoRoute
+        isRetryableLocal() -> LocalFailure.Retryable
+        else -> LocalFailure.None
     }
 }

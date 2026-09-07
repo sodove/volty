@@ -50,10 +50,8 @@ import kotlin.math.roundToInt
 class AndroidHybridNavigationRepository(
     private val online: NavigationRepository,
     private val packageManager: AndroidOfflineRoutingPackageManager,
-    context: Context,
+    @Suppress("UNUSED_PARAMETER") context: Context,
 ) : NavigationRepository {
-    private val applicationContext = context.applicationContext
-
     override suspend fun search(
         query: String,
         near: GeoCoordinate?,
@@ -62,7 +60,6 @@ class AndroidHybridNavigationRepository(
         online.search(query, near, languageTag)
 
     override suspend fun routes(request: RouteRequest): NavigationResult<RoutePlan> {
-        withContext(Dispatchers.IO) { ensureBundledPackage() }
         val manifest = packageManager.activeManifest
         val packageDirectory = packageManager.activePackageDirectory
         if (manifest != null && packageDirectory != null &&
@@ -74,16 +71,10 @@ class AndroidHybridNavigationRepository(
         ) {
             when (val local = routeOffline(request, packageDirectory)) {
                 is NavigationResult.Success -> return local
-                is NavigationResult.Failure -> Unit
+                is NavigationResult.Failure -> if (!local.reason.isRetryableLocal()) return local
             }
         }
         return online.routes(request)
-    }
-
-    private fun ensureBundledPackage() {
-        runCatching {
-            packageManager.installBundledAssets(applicationContext.assets)
-        }
     }
 
     private suspend fun routeOffline(
@@ -355,6 +346,15 @@ class AndroidHybridNavigationRepository(
     }
 
     private fun Double.toMicroDegrees(): Int = (this * 1_000_000.0).roundToInt()
+
+    private fun NavigationFailure.isRetryableLocal(): Boolean = when (this) {
+        NavigationFailure.Offline,
+        NavigationFailure.ProviderUnavailable -> true
+        NavigationFailure.NoRoute,
+        NavigationFailure.MalformedResponse,
+        is NavigationFailure.RateLimited,
+        is NavigationFailure.InvalidRequest -> false
+    }
 
     private companion object {
         const val TAG = "VoltyOfflineRouting"

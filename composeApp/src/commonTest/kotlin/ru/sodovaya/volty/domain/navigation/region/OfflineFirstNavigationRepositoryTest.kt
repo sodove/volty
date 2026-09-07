@@ -37,7 +37,7 @@ class OfflineFirstNavigationRepositoryTest {
         refreshGate.complete(Unit)
         testScheduler.runCurrent()
 
-        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
     }
 
     @Test
@@ -56,7 +56,7 @@ class OfflineFirstNavigationRepositoryTest {
         repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
         testScheduler.runCurrent()
 
-        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
         assertEquals(2, online.searchCalls)
     }
 
@@ -74,11 +74,11 @@ class OfflineFirstNavigationRepositoryTest {
         repository.routes(routeRequest())
         testScheduler.runCurrent()
 
-        assertEquals(2, packages.catalogRefreshCalls)
+        assertEquals(0, packages.catalogRefreshCalls)
     }
 
     @Test
-    fun missing_region_starts_one_background_download_and_keeps_online_search_available() = runTest {
+    fun missing_region_keeps_online_search_available_without_starting_download() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
         val repository = repository(packages, online)
@@ -88,7 +88,7 @@ class OfflineFirstNavigationRepositoryTest {
 
         assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result)
         assertEquals(1, online.searchCalls)
-        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
     }
 
     @Test
@@ -104,6 +104,49 @@ class OfflineFirstNavigationRepositoryTest {
         assertIs<NavigationResult.Success<RoutePlan>>(result)
         assertEquals(1, runtime.routeCalls)
         assertEquals(0, online.routeCalls)
+    }
+
+    @Test
+    fun empty_local_search_uses_online_without_requesting_a_download() = runTest {
+        val packages = FakePackages(OfflineRegionPackageStatus.READY)
+        val online = FakeNavigation()
+        val runtime = FakeRuntime(searchResult = NavigationResult.Success(emptyList()))
+        val repository = repository(packages, online, runtime)
+
+        repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
+
+        assertEquals(1, online.searchCalls)
+        assertEquals(emptyList(), packages.downloads)
+    }
+
+    @Test
+    fun local_no_route_is_final_even_when_online_is_available() = runTest {
+        val packages = FakePackages(OfflineRegionPackageStatus.READY)
+        val online = FakeNavigation()
+        val runtime = FakeRuntime(
+            routeResult = NavigationResult.Failure(NavigationFailure.NoRoute),
+        )
+        val repository = repository(packages, online, runtime)
+
+        val result = repository.routes(routeRequest())
+
+        assertEquals(NavigationFailure.NoRoute, assertIs<NavigationResult.Failure>(result).reason)
+        assertEquals(0, online.routeCalls)
+    }
+
+    @Test
+    fun retryable_local_route_failure_uses_online_without_requesting_a_download() = runTest {
+        val packages = FakePackages(OfflineRegionPackageStatus.READY)
+        val online = FakeNavigation()
+        val runtime = FakeRuntime(
+            routeResult = NavigationResult.Failure(NavigationFailure.ProviderUnavailable),
+        )
+        val repository = repository(packages, online, runtime)
+
+        repository.routes(routeRequest())
+
+        assertEquals(1, online.routeCalls)
+        assertEquals(emptyList(), packages.downloads)
     }
 
     @Test
@@ -128,7 +171,7 @@ class OfflineFirstNavigationRepositoryTest {
     }
 
     @Test
-    fun metered_missing_region_stays_online_and_enters_download_queue_for_confirmation() = runTest {
+    fun metered_missing_region_stays_online_without_entering_download_queue() = runTest {
         val packages = FakePackages()
         val online = FakeNavigation()
         val repository = repository(
@@ -142,7 +185,7 @@ class OfflineFirstNavigationRepositoryTest {
 
         assertIs<NavigationResult.Success<List<PlaceCandidate>>>(result)
         assertEquals(1, online.searchCalls)
-        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
     }
 
     @Test
@@ -154,7 +197,7 @@ class OfflineFirstNavigationRepositoryTest {
         repository.search("Плотинка", GeoCoordinate(56.84, 60.61), "ru-RU")
         testScheduler.runCurrent()
 
-        assertEquals(listOf("ekb"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
     }
 
     @Test
@@ -201,7 +244,7 @@ class OfflineFirstNavigationRepositoryTest {
         repository.routes(request)
         testScheduler.runCurrent()
 
-        assertEquals(listOf("ekb", "tyumen"), packages.downloads)
+        assertEquals(emptyList(), packages.downloads)
         assertEquals(1, online.routeCalls)
     }
 
@@ -315,11 +358,14 @@ class OfflineFirstNavigationRepositoryTest {
         }
     }
 
-    private class FakeRuntime : OfflineRegionRuntime {
+    private class FakeRuntime(
+        private val searchResult: NavigationResult<List<PlaceCandidate>>? = null,
+        private val routeResult: NavigationResult<RoutePlan>? = null,
+    ) : OfflineRegionRuntime {
         var routeCalls = 0
         val searchRegions = mutableListOf<String>()
         override suspend fun search(regionId: String, request: OfflineGeocoderRequest): NavigationResult<List<PlaceCandidate>> =
-            NavigationResult.Success(
+            searchResult ?: NavigationResult.Success(
                 listOf(
                     PlaceCandidate(
                         id = "$regionId:place",
@@ -337,7 +383,7 @@ class OfflineFirstNavigationRepositoryTest {
             ).also { searchRegions += regionId }
         override suspend fun routes(regionId: String, request: RouteRequest): NavigationResult<RoutePlan> {
             routeCalls++
-            return NavigationResult.Success(RoutePlan(request.destination, listOf(route())))
+            return routeResult ?: NavigationResult.Success(RoutePlan(request.destination, listOf(route())))
         }
         private fun route() = ru.sodovaya.volty.domain.navigation.RouteAlternative(
             "offline", 100.0, 10L,

@@ -32,13 +32,7 @@ class OfflineRegionAccessPolicyTest {
             preferences = OfflineDownloadPreferences(),
         )
 
-        assertEquals(
-            OfflineRegionAccessDecision.StartDownload(
-                regionId = regionId,
-                trigger = OfflineRegionDownloadTrigger.SEARCH,
-            ),
-            decision,
-        )
+        assertEquals(OfflineRegionAccessDecision.UseOnlineFallback(emptyList()), decision)
     }
 
     @Test
@@ -77,10 +71,7 @@ class OfflineRegionAccessPolicyTest {
             preferences = OfflineDownloadPreferences(),
         )
 
-        assertEquals(
-            OfflineRegionAccessDecision.WaitForDownload(regionId),
-            decision,
-        )
+        assertEquals(OfflineRegionAccessDecision.UseOnlineFallback(emptyList()), decision)
     }
 
     @Test
@@ -109,10 +100,7 @@ class OfflineRegionAccessPolicyTest {
             preferences = OfflineDownloadPreferences(skipMeteredConfirmation = true),
         )
 
-        assertEquals(
-            OfflineRegionAccessDecision.StartDownload(regionId, OfflineRegionDownloadTrigger.ROUTE),
-            decision,
-        )
+        assertEquals(OfflineRegionAccessDecision.UseOnlineFallback(emptyList()), decision)
     }
 
     @Test
@@ -170,10 +158,7 @@ class OfflineRegionAccessPolicyTest {
             allowOnlineFallback = true,
         )
 
-        assertEquals(
-            OfflineRegionAccessDecision.UseOnlineFallback(listOf("ekb", "tyumen")),
-            decision,
-        )
+        assertEquals(OfflineRegionAccessDecision.UseOnlineFallback(emptyList()), decision)
     }
 
     private fun packageSnapshot(

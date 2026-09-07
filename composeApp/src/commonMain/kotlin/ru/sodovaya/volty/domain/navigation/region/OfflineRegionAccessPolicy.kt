@@ -52,6 +52,20 @@ object OfflineRegionAccessPolicy {
         val usable = matching.firstOrNull { it.status.isUsableOffline() }
         if (usable != null) return OfflineRegionAccessDecision.UseOffline(usable.manifest.regionId)
 
+        // Search and routing requests are read-only. They must never turn a
+        // miss into a background package acquisition; preparation is explicit
+        // in Settings/coordinator. Keep the legacy download decisions for the
+        // map preparation trigger only.
+        if (trigger == OfflineRegionDownloadTrigger.SEARCH ||
+            trigger == OfflineRegionDownloadTrigger.ROUTE
+        ) {
+            return if (network == OfflineNetworkAvailability.OFFLINE) {
+                OfflineRegionAccessDecision.UnavailableOffline
+            } else {
+                OfflineRegionAccessDecision.UseOnlineFallback(emptyList())
+            }
+        }
+
         val operationInProgress = matching.firstOrNull { it.status.isDownloadInProgress() }
         if (operationInProgress != null) {
             return OfflineRegionAccessDecision.WaitForDownload(operationInProgress.manifest.regionId)

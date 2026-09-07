@@ -32,8 +32,11 @@ class AndroidOfflineFtsGeocoder(
         request: OfflineGeocoderRequest,
     ): NavigationResult<List<PlaceCandidate>> = withContext(Dispatchers.IO) {
         try {
+            // Keep local absence typed as an unavailable local result. The
+            // caller decides whether a validated online retry is allowed;
+            // this adapter never queues or downloads a replacement database.
             if (!databaseFile.isFile || databaseFile.length() <= 0L) {
-                return@withContext NavigationResult.Failure(NavigationFailure.Offline)
+                return@withContext unavailable()
             }
             val database = SQLiteDatabase.openDatabase(
                 databaseFile.absolutePath,
@@ -134,6 +137,9 @@ class AndroidOfflineFtsGeocoder(
 
     private fun longitudeScale(latitude: Double): Double =
         kotlin.math.cos(Math.toRadians(latitude)).coerceAtLeast(0.1)
+
+    private fun unavailable(): NavigationResult<List<PlaceCandidate>> =
+        NavigationResult.Failure(NavigationFailure.Offline)
 
     private data class RankedPlace(
         val candidate: PlaceCandidate,
