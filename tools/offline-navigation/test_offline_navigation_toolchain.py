@@ -12,6 +12,74 @@ from unittest.mock import patch
 
 
 ROOT = Path(__file__).parent
+REPOSITORY_ROOT = ROOT.parent.parent
+
+# Task 8 removes these files only after the Android/device acceptance gate. The
+# guard below deliberately excludes this exact, temporary compatibility set so
+# that it can prove the live Kotlin/worker graph is clean without pretending
+# that the deferred files have already been deleted.
+DEFERRED_LEGACY_MAP_PATHS = frozenset(
+    {
+        "composeApp/src/androidMain/kotlin/ru/sodovaya/volty/data/navigation/offline/AndroidOfflineMapSource.kt",
+        "composeApp/src/androidMain/kotlin/ru/sodovaya/volty/data/navigation/offline/AndroidOfflinePmtilesTileServer.kt",
+        "composeApp/src/commonMain/kotlin/ru/sodovaya/volty/presentation/map/OfflineMapStylePolicy.kt",
+        "tools/offline-navigation/process.lua",
+    }
+)
+DEFERRED_LEGACY_MAP_DIRECTORIES = frozenset(
+    {
+        "composeApp/src/androidMain/assets/offline-map-styles",
+        "composeApp/src/androidMain/assets/offline-map-glyphs",
+    }
+)
+FORBIDDEN_LIVE_MAP_REFERENCES = (
+    "AndroidOfflineMapSource",
+    "AndroidOfflinePmtilesTileServer",
+    "OfflineMapStylePolicy",
+    "tilemaker",
+    "process.lua",
+    "map.mbtiles",
+    "components.map",
+)
+
+
+def _is_deferred_legacy_map_path(path: Path) -> bool:
+    relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+    return relative in DEFERRED_LEGACY_MAP_PATHS or any(
+        relative == directory or relative.startswith(f"{directory}/")
+        for directory in DEFERRED_LEGACY_MAP_DIRECTORIES
+    )
+
+
+def _live_production_source_files() -> list[Path]:
+    roots = (
+        REPOSITORY_ROOT / "composeApp/src/androidMain/kotlin",
+        REPOSITORY_ROOT / "composeApp/src/commonMain/kotlin",
+        ROOT / "production",
+    )
+    suffixes = {".kt", ".kts", ".py", ".sh"}
+    return sorted(
+        path
+        for source_root in roots
+        if source_root.exists()
+        for path in source_root.rglob("*")
+        if path.is_file()
+        and path.suffix in suffixes
+        and not _is_deferred_legacy_map_path(path)
+    )
+
+
+def _live_map_reference_hits() -> list[str]:
+    hits: list[str] = []
+    for path in _live_production_source_files():
+        text = path.read_text(encoding="utf-8")
+        relative = path.relative_to(REPOSITORY_ROOT).as_posix()
+        for forbidden in FORBIDDEN_LIVE_MAP_REFERENCES:
+            if forbidden in text:
+                hits.append(f"{relative}: {forbidden}")
+    return hits
+
+
 EXPAND_SPEC = importlib.util.spec_from_file_location("expand_bbox", ROOT / "expand-bbox.py")
 assert EXPAND_SPEC is not None and EXPAND_SPEC.loader is not None
 EXPAND_MODULE = importlib.util.module_from_spec(EXPAND_SPEC)
@@ -123,6 +191,16 @@ def write_package(
 
 
 class OfflineNavigationToolchainTest(unittest.TestCase):
+    def test_live_kotlin_and_worker_have_no_legacy_map_pipeline_references(self):
+        hits = _live_map_reference_hits()
+
+        self.assertEqual(
+            [],
+            hits,
+            "live production sources reference the deferred map pipeline: "
+            + "; ".join(hits),
+        )
+
     def test_build_package_is_navigation_only(self):
         script = (ROOT / "build-package.sh").read_text(encoding="utf-8")
 

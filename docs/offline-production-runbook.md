@@ -1,10 +1,12 @@
 # Volty offline production bundle
 
 This bundle is copyable to the existing VPS, but it does not invent source
-metadata or geographic coverage. The worker can publish bounded on-demand
-catalog entries without metadata, while a requested build stays unavailable
-until its trusted source metadata is provisioned. The signing key is an
-external secret and is never stored in the checkout.
+metadata or geographic coverage. The worker publishes navigation-only v3
+releases: Valhalla routing and SQLite FTS4 search. OpenFreeMap (OFM) basemap
+packs are a client-side MapLibre resource, downloaded by the Android app from
+the canonical OFM style endpoint for the selected region; they are not built,
+stored, or served by this backend. The signing key is an external secret and
+is never stored in the checkout.
 
 ## Install
 
@@ -77,16 +79,26 @@ distinct public extract at `<sourceRoot>/<sourceId>.source.json`:
 {"osmSequence": 123, "osmTimestamp": "2026-09-05T00:00:00Z", "geometryHash": "sha256-of-the-accepted-source-geometry"}
 ```
 
-The worker downloads the configured public PBF with HTTPS/SSRF checks, runs the
-existing pinned build pipeline in a host-visible unique attempt directory,
-verifies every component, signs the manifest with the external key, and
-atomically publishes the release plus `catalog.json`. Missing metadata is a
-failed job, never a fabricated timestamp. A failed attempt never becomes
-ready.
+The worker downloads the configured public Geofabrik PBF with HTTPS/SSRF
+checks, runs the existing pinned navigation-only build pipeline in a
+host-visible unique attempt directory, verifies routing and search, signs the
+v3 manifest with the external key, and atomically publishes the release plus
+`catalog.json`. Missing metadata is a failed job, never a fabricated
+timestamp. A failed attempt never becomes ready. Geofabrik is an explicit raw
+OSM input for navigation artifacts only; it is not the OFM basemap source.
 
 This bundle schedules only the canonical regions explicitly present in
 `production.json`; it does not claim schema-3 anonymous discovery or generate
 an arbitrary foreign region from an Android request.
+
+## Migration note
+
+The v3 contract has no map component: only routing and search are published by
+this backend. Legacy PMTiles packages and old client-side map assets are
+ignored by the v3 installer and are not deleted by this migration. Physical
+cleanup remains gated on the Task 9 Android/device acceptance, so an old
+package directory must never be treated as evidence that the backend still
+serves a map artifact.
 
 ```sh
 bash tools/offline-navigation/ops/backup.sh /path/to/.env /home/sodovaya/volty/backups

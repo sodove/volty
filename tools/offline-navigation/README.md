@@ -11,15 +11,23 @@ This directory contains the reproducible regional-artifact toolchain. It is
 intentionally separate from the Android build: the APK does not contain a
 large regional dataset.
 
-The build host needs Docker and an OSM `.osm.pbf` source. The expected output
-components are:
+The build host needs Docker and an OSM `.osm.pbf` source. The backend build is
+navigation-only; its expected output components are:
 
 - `routing/valhalla-routing.tar.gz` — Valhalla tile extract, admin data, and
   engine config;
 - `search/places.sqlite.gz` — compressed SQLite FTS4 offline geocoder;
-- `map/<region-id>.pmtiles` — PMTiles vector map;
 - `manifest.unsigned.json` — sizes and SHA-256 checksums for signing by the
   release pipeline.
+
+Basemap data is deliberately not produced by this toolchain. The Android
+client uses the canonical OpenFreeMap (OFM) Bright or Dark style with
+MapLibre's native offline pack manager. A pack is keyed by the catalog region
+bounds and style URI and is stored in the app's MapLibre resource database;
+there is no backend `map` component and no PMTiles artifact in a v3 release.
+The client may use the online OFM endpoint for missing local resources while a
+validated network is available, and shows no basemap data for an uncovered
+area when the device is offline.
 
 Sign a package outside the repository with an external unencrypted Ed25519 PEM
 key (the APK's `123.jks` is a different key and is not used here):
@@ -62,35 +70,27 @@ python3 build-catalog.py --spec regions.json --output catalog.json \
 
 Only signed manifests are accepted. The publisher verifies every manifest
 against the expected Ed25519 public key and key ID, then applies the same
-schema, Valhalla engine/data version, app-version, artifact, HTTPS, map, and
-search compatibility gates used by the Android package policy. It also rejects
+schema, Valhalla engine/data version, app-version, routing, HTTPS, and search
+compatibility gates used by the Android package policy. It also rejects
 duplicate regions, invalid bounds, mismatched IDs, and logical bounds outside
 the signed release coverage. The resulting catalog is signed with the same
 key, and the app verifies that signature before publishing catalog regions into
 local state; each release manifest is then verified independently before
-installation.
+installation. The region bounds are also the input to the client-side OFM
+MapLibre pack; they do not describe a backend map artifact.
 
 The current pilot bbox is the EKB agglomeration with a routing buffer:
 `59.10,56.00,61.90,57.55` (west,south,east,north). The builder expands this
 logical bbox by `--routing-buffer-km` for a routing-only extract, keeping
-administrative multipolygons out of the Valhalla input. Map and search use the
-logical extract; the manifest coverage remains the published logical region
-and must be checked before release.
+administrative multipolygons out of the Valhalla input. Search uses the logical
+extract; the manifest coverage remains the published logical region and must
+be checked before release. The same logical bounds are passed independently to
+the Android OFM MapLibre pack manager.
 
-The default Valhalla image, PMTiles converter, and Ubuntu tool image are pinned
-by digest in `build-package.sh`/`Dockerfile`. A release may override them only
-with an explicitly reviewed digest. Do not commit downloaded tiles or signing
-keys to this repository.
-
-The Android offline map style also ships three small Noto Sans Regular glyph
-ranges for local Russian labels. They can be regenerated with `fontnik` 0.7.7:
-
-```text
-npm install --prefix /tmp/volty-fontnik fontnik@0.7.7
-node tools/offline-navigation/build-glyphs.js \
-  /path/to/NotoSans-Regular.ttf \
-  composeApp/src/androidMain/assets/offline-map-glyphs
-```
+The default Valhalla image and Ubuntu tool image are pinned by digest in
+`build-package.sh`/`Dockerfile`. A release may override them only with an
+explicitly reviewed digest. Do not commit downloaded OSM extracts, map tiles,
+or signing keys to this repository.
 
 The routing build also runs the pinned image's `valhalla_build_timezones` helper
 and includes the generated `timezones.sqlite` in the routing archive. That one
@@ -109,9 +109,9 @@ and does not affect the Android AAR, which creates its own config through
 `ValhallaConfigFactory`.
 
 The app consumes the already-built Android `io.github.rallista:valhalla-mobile:0.6.3`
-AAR. The pinned amd64 Valhalla 3.6.3 image below is only the host-side tile
+AAR. The pinned amd64 Valhalla 3.6.3 image below is only the host-side routing
 compiler used to turn OSM data into the regional extract; it does not rebuild
-the mobile runtime. If the mobile engine changes, pass an explicit
+the mobile runtime or an OFM basemap. If the mobile engine changes, pass an explicit
 `--routing-data-version` and reviewed `VALHALLA_IMAGE` together so the manifest
 cannot silently describe data built by another engine version.
 
