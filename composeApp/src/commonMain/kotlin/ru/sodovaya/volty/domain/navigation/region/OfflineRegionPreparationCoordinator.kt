@@ -132,6 +132,16 @@ class DefaultOfflineRegionPreparationCoordinator(
     override suspend fun retryPending() {
         val requests = stateMutex.withLock { pending.values.toList() }
         requests.forEach { request ->
+            // A connectivity callback can arrive while the first-open job is
+            // still waiting for the repository to record its waiting state.
+            // Do not consume that callback by trying to start a second job:
+            // wait for the keyed attempt to finish, then replay the pending
+            // request against the now-current network state.
+            val activeJob = stateMutex.withLock {
+                if (pending[request.key] != request) null
+                else jobs[request.key]?.takeUnless { it.isCompleted }
+            }
+            activeJob?.join()
             val stillPending = stateMutex.withLock { pending[request.key] == request }
             if (!stillPending) return@forEach
             packages.states.value.firstOrNull { it.region.regionId == request.key.regionId }?.let { state ->
@@ -153,7 +163,10 @@ class DefaultOfflineRegionPreparationCoordinator(
         val effectiveForce = stateMutex.withLock {
             if (packageState.region.regionId in pausedRegions && !force) return@withLock null
             activeStyles[packageState.region.regionId] = style
-            force || retryFailed || key in pending
+            // Being pending is the idempotent representation of an already
+            // requested offline attempt. Only an explicit retry/recovery may
+            // force a new keyed job; ordinary first-open effects must coalesce.
+            force || retryFailed
         } ?: return
         val job = stateMutex.withLock {
             if (jobs[key]?.isCompleted == false) null

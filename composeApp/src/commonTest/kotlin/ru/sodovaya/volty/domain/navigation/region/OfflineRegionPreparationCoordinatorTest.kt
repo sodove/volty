@@ -131,6 +131,54 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
+    fun recovery_transition_while_waiting_for_package_request_is_replayed_after_waiter_finishes() = runTest {
+        val map = FakeMapManager()
+        val packageRequestGate = CompletableDeferred<Unit>()
+        val packages = FakePackages(
+            regionState(OfflineRegionPackageStatus.NOT_INSTALLED),
+            firstRequestGate = packageRequestGate,
+        )
+        val network = FakeNetwork(OfflineNetworkAvailability.OFFLINE)
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+        runCurrent()
+
+        val firstOpen = launch {
+            coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        }
+        runCurrent()
+        assertEquals(1, packages.requestCalls)
+        assertEquals(0, map.prepareCalls)
+
+        network.availability = OfflineNetworkAvailability.UNMETERED
+        network.changes.emit(OfflineNetworkAvailability.UNMETERED)
+        runCurrent()
+        assertEquals(0, map.prepareCalls)
+
+        packageRequestGate.complete(Unit)
+        firstOpen.join()
+        runCurrent()
+        advanceUntilIdle()
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(2, packages.requestCalls)
+    }
+
+    @Test
+    fun repeated_first_map_open_while_waiting_does_not_repeat_package_request() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val network = FakeNetwork(OfflineNetworkAvailability.OFFLINE)
+        val coordinator = coordinator(map, packages, backgroundScope, network = network)
+        runCurrent()
+
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.6, 60.6), OfflineMapStyleVariant.BRIGHT)
+
+        assertEquals(1, packages.requestCalls)
+        assertEquals(0, map.prepareCalls)
+    }
+
+    @Test
     fun duplicate_allowed_network_transitions_do_not_start_duplicate_map_jobs() = runTest {
         val map = FakeMapManager(CompletableDeferred())
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
@@ -192,16 +240,24 @@ class OfflineRegionPreparationCoordinatorTest {
         override suspend fun delete(key: OfflineMapPackKey) = Unit
     }
 
-    private class FakePackages(vararg initial: OfflineRegionPackageState) : OfflineRegionPackageRepository {
+    private class FakePackages(
+        vararg initial: OfflineRegionPackageState,
+        private val firstRequestGate: CompletableDeferred<Unit>? = null,
+    ) : OfflineRegionPackageRepository {
         private val _states = MutableStateFlow(initial.toList())
         override val states = _states
         var requestCalls = 0
             private set
         val requestedIds = mutableListOf<String>()
+        private var firstRequestAwaited = false
         override suspend fun refreshCatalog() = Unit
         override suspend fun requestDownload(regionId: String, trigger: OfflineRegionDownloadTrigger, meteredConfirmed: Boolean) {
             requestCalls++
             requestedIds += regionId
+            if (!firstRequestAwaited) {
+                firstRequestAwaited = true
+                firstRequestGate?.await()
+            }
         }
         override suspend fun pauseDownload(regionId: String) = Unit
         override suspend fun resumeDownload(regionId: String) = Unit
