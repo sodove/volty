@@ -27,12 +27,23 @@ class OfflineMapPackPolicyTest {
 
     @Test
     fun invalid_bbox_and_default_tile_limit_are_rejected() {
-        assertFails { OfflineMapPackPolicy.definition(invalidRegion(), OfflineMapStyleVariant.DARK, 0) }
+        assertFails { OfflineRegionBounds(57.0, 60.0, 56.0, 61.0) }
+        assertFails { OfflineRegionBounds(Double.NaN, 60.0, 57.0, 61.0) }
+        assertFails { OfflineRegionBounds(56.0, 60.0, Double.POSITIVE_INFINITY, 61.0) }
+        assertFails { OfflineMapPackPolicy.definition(region(), OfflineMapStyleVariant.DARK, 0) }
         assertTrue(OfflineMapPackPolicy.estimatedTileCount(region().bounds, 5, 14) > 6_000)
     }
 
     @Test
-    fun invalid_zoom_range_and_style_url_are_rejected() {
+    fun estimator_returns_exact_known_xyz_counts() {
+        val world = OfflineRegionBounds(-90.0, -180.0, 90.0, 180.0)
+        assertEquals(1L, OfflineMapPackPolicy.estimatedTileCount(world, 0, 0))
+        assertEquals(4L, OfflineMapPackPolicy.estimatedTileCount(world, 1, 1))
+        assertEquals(9_390L, OfflineMapPackPolicy.estimatedTileCount(region().bounds, 5, 14))
+    }
+
+    @Test
+    fun invalid_zoom_range_is_rejected() {
         assertFails { OfflineMapPackPolicy.estimatedTileCount(region().bounds, 14, 5) }
         assertFails { OfflineMapPackPolicy.definition(region(), OfflineMapStyleVariant.BRIGHT, -1) }
     }
@@ -40,16 +51,6 @@ class OfflineMapPackPolicyTest {
     private fun region() = OfflineRegionManifest(
         regionId = "ekb",
         displayName = "Екатеринбург",
-        bounds = OfflineRegionBounds(56.0, 60.0, 57.0, 61.0),
-    )
-
-    private fun invalidRegion() = OfflineRegionManifest(
-        regionId = "ekb",
-        displayName = "Екатеринбург",
-        bounds = OfflineRegionBounds(56.0, 60.0, 57.0, 61.0).let {
-            // Constructor validation is the canonical bbox contract; bypass it only by testing
-            // a malformed region through an intentionally invalid numeric bound.
-            OfflineRegionBounds(it.south, it.west, it.north, it.east)
-        },
+        bounds = OfflineRegionBounds(56.30, 59.55, 57.25, 61.45),
     )
 }
