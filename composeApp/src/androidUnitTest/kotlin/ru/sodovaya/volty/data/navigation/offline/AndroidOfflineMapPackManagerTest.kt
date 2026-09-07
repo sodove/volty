@@ -1,8 +1,12 @@
 package ru.sodovaya.volty.data.navigation.offline
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
@@ -17,6 +21,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.coroutines.CoroutineContext
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class AndroidOfflineMapPackManagerTest {
@@ -78,6 +83,25 @@ class AndroidOfflineMapPackManagerTest {
     }
 
     @Test
+    fun restored_active_complete_pack_is_published_ready_and_paused() = runTest {
+        val store = AndroidOfflineMapPackStore()
+        val restored = FakeOfflinePack(
+            metadata = store.encode(DEFINITION),
+            initialStatus = ACTIVE_COMPLETE,
+        )
+        val manager = AndroidOfflineMapPackManager(
+            FakeOfflinePackClient(listOf(restored)),
+            store,
+            this,
+        )
+
+        manager.prepare(DEFINITION)
+
+        assertEquals(OfflineMapPackState.Ready, manager.states.value.single())
+        assertEquals(1, restored.pauseCount)
+    }
+
+    @Test
     fun active_then_complete_callback_becomes_ready_and_pauses_serially() = runTest {
         val client = FakeOfflinePackClient()
         val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
@@ -125,6 +149,23 @@ class AndroidOfflineMapPackManagerTest {
     }
 
     @Test
+    fun earlier_tile_limit_failure_wins_when_dispatcher_attempts_completion_first() = runTest {
+        val dispatcher = ReverseDispatcher()
+        val managerScope = CoroutineScope(SupervisorJob() + dispatcher)
+        val client = FakeOfflinePackClient()
+        val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), managerScope)
+        dispatcher.runAll()
+        manager.prepare(DEFINITION)
+
+        client.pack.emitTileLimit()
+        client.pack.emitStatus(ACTIVE_COMPLETE)
+        dispatcher.runLast()
+
+        assertEquals(OfflineMapPackState.Failed("tile_limit"), manager.states.value.single())
+        managerScope.cancel()
+    }
+
+    @Test
     fun queued_completion_and_late_error_cannot_pause_or_republish_after_delete() = runTest {
         val client = FakeOfflinePackClient()
         val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
@@ -162,6 +203,24 @@ class AndroidOfflineMapPackManagerTest {
 
         assertTrue(manager.states.value.isEmpty())
         assertEquals(1, client.pack.deleteCount)
+    }
+
+    @Test
+    fun cancellation_while_delete_is_queued_does_not_call_sdk_delete() = runTest {
+        val client = FakeOfflinePackClient()
+        val manager = AndroidOfflineMapPackManager(client, AndroidOfflineMapPackStore(), this)
+        manager.prepare(DEFINITION)
+        client.pack.pauseGate = CompletableDeferred()
+        val pause = launch(start = CoroutineStart.UNDISPATCHED) { manager.pause(DEFINITION.key) }
+        val deletion = launch { manager.delete(DEFINITION.key) }
+        advanceUntilIdle()
+
+        deletion.cancel()
+        client.pack.pauseGate!!.complete(Unit)
+        pause.join()
+        deletion.join()
+
+        assertEquals(0, client.pack.deleteCount)
     }
 
     @Test
@@ -223,6 +282,7 @@ class AndroidOfflineMapPackManagerTest {
         var pauseCount = 0
         var deleteCount = 0
         var deleteGate: CompletableDeferred<Result<Unit>>? = null
+        var pauseGate: CompletableDeferred<Unit>? = null
 
         override suspend fun setObserver(observer: SdkOfflinePackObserver?) {
             operationLog += if (observer == null) "detach" else "attach"
@@ -239,6 +299,7 @@ class AndroidOfflineMapPackManagerTest {
         override suspend fun pause() {
             operationLog += "pause"
             pauseCount += 1
+            pauseGate?.await()
         }
 
         override suspend fun invalidate() {
@@ -257,6 +318,22 @@ class AndroidOfflineMapPackManagerTest {
         fun emitError(reason: String, message: String) = currentObserver!!.onError(reason, message)
 
         fun emitTileLimit() = currentObserver!!.onTileLimitExceeded()
+    }
+
+    private class ReverseDispatcher : CoroutineDispatcher() {
+        private val queued = mutableListOf<Runnable>()
+
+        override fun dispatch(context: CoroutineContext, block: Runnable) {
+            queued += block
+        }
+
+        fun runLast() {
+            queued.removeLast().run()
+        }
+
+        fun runAll() {
+            while (queued.isNotEmpty()) runLast()
+        }
     }
 
     companion object {

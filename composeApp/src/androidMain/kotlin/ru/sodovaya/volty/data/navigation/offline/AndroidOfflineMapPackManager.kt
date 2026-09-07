@@ -2,8 +2,11 @@ package ru.sodovaya.volty.data.navigation.offline
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
@@ -52,6 +55,9 @@ class AndroidOfflineMapPackManager internal constructor(
     )
 
     private val operationMutex = Mutex()
+    private val callbackQueueLock = Any()
+    private val callbackQueue = ArrayDeque<QueuedCallback>()
+    private var callbackDrainScheduled = false
     private val packs = linkedMapOf<OfflineMapPackKey, PackEntry>()
     private val stateByKey = linkedMapOf<OfflineMapPackKey, OfflineMapPackState>()
     private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
@@ -123,13 +129,21 @@ class AndroidOfflineMapPackManager internal constructor(
     }
 
     override suspend fun delete(key: OfflineMapPackKey) {
-        withContext(NonCancellable) {
-            operationMutex.withLock {
-                loadPacksLocked()
-                val entry = packs[key] ?: return@withLock
-                entry.lifecycle = PackLifecycle.DELETING
-                entry.observerGeneration += 1
+        operationMutex.withLock {
+            loadPacksLocked()
+            val entry = packs[key] ?: return@withLock
+            try {
                 entry.pack.setObserver(null)
+                currentCoroutineContext().ensureActive()
+            } catch (cancelled: CancellationException) {
+                withContext(NonCancellable) { attachObserverLocked(entry) }
+                throw cancelled
+            }
+            // From this explicit destructive boundary onward, native callback reconciliation wins
+            // over cancellation so the retained entry cannot disagree with MapLibre.
+            entry.lifecycle = PackLifecycle.DELETING
+            entry.observerGeneration += 1
+            withContext(NonCancellable) {
                 try {
                     entry.pack.delete()
                     if (packs[key] === entry) {
@@ -170,9 +184,7 @@ class AndroidOfflineMapPackManager internal constructor(
                 if (status == null) {
                     update(metadata.key, OfflineMapPackState.Preparing)
                 } else {
-                    entry.downloadActive = status.isActive
-                    entry.complete = status.isComplete
-                    publishStatusLocked(entry, status)
+                    applyStatusLocked(entry, status)
                 }
             }
         }
@@ -185,16 +197,7 @@ class AndroidOfflineMapPackManager internal constructor(
         entry.pack.setObserver(object : SdkOfflinePackObserver {
             override fun onStatus(status: SdkOfflinePackStatus) {
                 dispatchCallback(entry, generation) { current ->
-                    if (state(current.key) !is OfflineMapPackState.Failed) {
-                        current.downloadActive = status.isActive
-                        current.complete = status.isComplete
-                        publishStatusLocked(current, status)
-                        if (status.isComplete && status.isActive) {
-                            current.pack.pause()
-                            current.downloadActive = false
-                            rotateObserverLocked(current)
-                        }
-                    }
+                    applyStatusLocked(current, status)
                 }
             }
 
@@ -217,14 +220,35 @@ class AndroidOfflineMapPackManager internal constructor(
         generation: Long,
         action: suspend (PackEntry) -> Unit,
     ) {
-        scope.launch {
+        val shouldScheduleDrain = synchronized(callbackQueueLock) {
+            callbackQueue.addLast(QueuedCallback(entry, generation, action))
+            if (callbackDrainScheduled) {
+                false
+            } else {
+                callbackDrainScheduled = true
+                true
+            }
+        }
+        if (shouldScheduleDrain) scope.launch { drainCallbacks() }
+    }
+
+    private suspend fun drainCallbacks() {
+        while (true) {
+            val callback = synchronized(callbackQueueLock) {
+                if (callbackQueue.isEmpty()) {
+                    callbackDrainScheduled = false
+                    null
+                } else {
+                    callbackQueue.removeFirst()
+                }
+            } ?: return
             operationMutex.withLock {
-                val current = packs[entry.key]
-                if (current === entry &&
+                val current = packs[callback.entry.key]
+                if (current === callback.entry &&
                     current.lifecycle == PackLifecycle.ACTIVE &&
-                    current.observerGeneration == generation
+                    current.observerGeneration == callback.generation
                 ) {
-                    action(current)
+                    callback.action(current)
                 }
             }
         }
@@ -248,6 +272,18 @@ class AndroidOfflineMapPackManager internal constructor(
             )
         } else {
             update(entry.key, OfflineMapPackState.Preparing)
+        }
+    }
+
+    private suspend fun applyStatusLocked(entry: PackEntry, status: SdkOfflinePackStatus) {
+        if (state(entry.key) is OfflineMapPackState.Failed) return
+        entry.downloadActive = status.isActive
+        entry.complete = status.isComplete
+        publishStatusLocked(entry, status)
+        if (status.isComplete && status.isActive) {
+            entry.pack.pause()
+            entry.downloadActive = false
+            rotateObserverLocked(entry)
         }
     }
 
@@ -315,6 +351,12 @@ class AndroidOfflineMapPackManager internal constructor(
         var complete: Boolean = false,
         var observerGeneration: Long = 0,
         var lifecycle: PackLifecycle = PackLifecycle.ACTIVE,
+    )
+
+    private data class QueuedCallback(
+        val entry: PackEntry,
+        val generation: Long,
+        val action: suspend (PackEntry) -> Unit,
     )
 
     private enum class PackLifecycle {
