@@ -65,9 +65,10 @@ import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.location.RideLocationStatus
-import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
 import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
@@ -92,6 +93,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val socialLiveState by component.socialLiveState.collectAsState()
     val rideAvailable by component.rideAvailable.subscribeAsState()
     val offlineRegions: OfflineRegionPackageRepository = koinInject()
+    val offlinePreparation: OfflineRegionPreparationCoordinator = koinInject()
     val offlineRegionStates by offlineRegions.states.collectAsState()
     val meteredApproval = offlineRegionStates.firstOrNull {
         it.status == OfflineRegionPackageStatus.AWAITING_METERED_APPROVAL
@@ -163,6 +165,18 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val locationPermissionRequired = locationState.status is RideLocationStatus.PermissionRequired
     LaunchedEffect(rideMapVisible) {
         component.navigation.onMapVisibilityChanged(rideMapVisible)
+    }
+    // Preparation belongs to the map host lifecycle: a non-null fix starts one
+    // keyed request; later GPS samples and recompositions cannot start another.
+    LaunchedEffect(rideMapVisible, ownFix != null, darkTheme, offlineRegionStates.size) {
+        if (rideMapVisible) {
+            ownFix?.let {
+                offlinePreparation.prepareCurrentRegion(
+                    coordinate = it.coordinate,
+                    style = if (darkTheme) OfflineMapStyleVariant.DARK else OfflineMapStyleVariant.BRIGHT,
+                )
+            }
+        }
     }
     LaunchedEffect(mapHost.requestLocationPermission, locationPermissionRequired) {
         if (mapHost.requestLocationPermission && locationPermissionRequired) {
@@ -295,10 +309,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     onClick = {
                         offlineActionScope.launch {
                             runCatching {
-                                offlineRegions.requestDownload(
+                                offlinePreparation.prepareExplicitRegionConfirmed(
                                     regionId = region.region.regionId,
-                                    trigger = OfflineRegionDownloadTrigger.SETTINGS,
-                                    meteredConfirmed = true,
+                                    style = if (darkTheme) OfflineMapStyleVariant.DARK else OfflineMapStyleVariant.BRIGHT,
                                 )
                             }
                         }

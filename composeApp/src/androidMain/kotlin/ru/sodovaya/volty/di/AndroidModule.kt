@@ -16,10 +16,10 @@ import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineNetworkStatus
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPackageRepository
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPackageStore
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineValhallaRuntime
-import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapSource
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackManager
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackStore
-import ru.sodovaya.volty.data.navigation.offline.OfflineMapPackManager
+import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPreparationStore
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackManager
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineFirstNavigationRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkStatus
@@ -27,6 +27,9 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionRuntime
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
+import ru.sodovaya.volty.domain.navigation.region.DefaultOfflineRegionPreparationCoordinator
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationStore
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.data.social.AndroidSocialCredentialStore
 import ru.sodovaya.volty.data.social.AndroidLiveKitVoiceRoomEngine
@@ -112,12 +115,19 @@ val androidModule = module {
             pixelRatio = androidContext().resources.displayMetrics.density,
         )
     }
-    single {
-        AndroidOfflineMapSource(
-            assetManager = androidContext().assets,
-            packageStore = get(),
+    single<OfflineRegionPreparationStore> { AndroidOfflineRegionPreparationStore(androidContext()) }
+    single<OfflineRegionPreparationCoordinator> {
+        DefaultOfflineRegionPreparationCoordinator(
+            mapPacks = get(),
             packages = get(),
-            downloadScope = get(named(OFFLINE_DOWNLOAD_SCOPE)),
+            scope = get(named(OFFLINE_DOWNLOAD_SCOPE)),
+            store = get(),
+            network = get(),
+            preferences = {
+                OfflineDownloadPreferences(
+                    skipMeteredConfirmation = get<AppPrefs>().offlineSkipMeteredConfirmation.value,
+                )
+            },
         )
     }
     single(named(OFFLINE_FIRST_NAVIGATION)) {

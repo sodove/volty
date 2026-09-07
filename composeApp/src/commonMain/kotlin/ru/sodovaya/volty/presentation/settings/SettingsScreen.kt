@@ -61,6 +61,8 @@ import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import ru.sodovaya.volty.presentation.common.chemistryLabel
 import ru.sodovaya.volty.presentation.common.dashboardStyleLabel
@@ -390,6 +392,7 @@ fun SettingsScreen(component: SettingsComponent) {
                 visibleOfflineRegions.forEach { region ->
                     OfflineRegionRow(
                         region = region,
+                        preparation = state.offlinePreparation.firstOrNull { it.regionId == region.region.regionId },
                         component = component,
                         onDeleteRequest = { pendingOfflineDelete = region },
                     )
@@ -490,6 +493,7 @@ fun SettingsScreen(component: SettingsComponent) {
 @Composable
 private fun OfflineRegionRow(
     region: OfflineRegionPackageState,
+    preparation: OfflineRegionPreparationState?,
     component: SettingsComponent,
     onDeleteRequest: () -> Unit,
 ) {
@@ -559,6 +563,16 @@ private fun OfflineRegionRow(
             fontSize = 11.sp,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        preparation?.let { progress ->
+            val mapStatus = when (val map = progress.map) {
+                OfflineMapPackState.Missing -> null
+                OfflineMapPackState.Preparing -> stringResource(Res.string.settings_offline_status_preparing)
+                is OfflineMapPackState.Downloading -> stringResource(Res.string.settings_offline_status_downloading, "${map.completedTiles} tiles", "")
+                OfflineMapPackState.Ready -> stringResource(Res.string.settings_offline_status_ready, "map")
+                is OfflineMapPackState.Failed -> stringResource(Res.string.settings_offline_status_failed)
+            }
+            if (mapStatus != null) Text(mapStatus, fontSize = 11.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (release != null) {
             Text(
                 stringResource(

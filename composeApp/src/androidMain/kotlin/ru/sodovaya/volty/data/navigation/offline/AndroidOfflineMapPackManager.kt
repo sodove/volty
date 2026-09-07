@@ -29,15 +29,6 @@ import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 import java.util.concurrent.atomic.AtomicReference
 
-interface OfflineMapPackManager {
-    val states: StateFlow<List<OfflineMapPackState>>
-    suspend fun prepare(definition: OfflineMapPackDefinition)
-    suspend fun pause(key: OfflineMapPackKey)
-    suspend fun resume(key: OfflineMapPackKey)
-    suspend fun invalidate(key: OfflineMapPackKey)
-    suspend fun delete(key: OfflineMapPackKey)
-}
-
 class AndroidOfflineMapPackManager internal constructor(
     private val client: SdkOfflinePackClient,
     private val store: AndroidOfflineMapPackStore,
@@ -64,6 +55,7 @@ class AndroidOfflineMapPackManager internal constructor(
     private val stateByKey = linkedMapOf<OfflineMapPackKey, OfflineMapPackState>()
     private val _states = MutableStateFlow<List<OfflineMapPackState>>(emptyList())
     override val states: StateFlow<List<OfflineMapPackState>> = _states
+
     private var loaded = false
 
     init {
@@ -334,7 +326,7 @@ class AndroidOfflineMapPackManager internal constructor(
         }
     }
 
-    private fun state(key: OfflineMapPackKey): OfflineMapPackState? = synchronized(stateByKey) {
+    override fun state(key: OfflineMapPackKey): OfflineMapPackState? = synchronized(stateByKey) {
         stateByKey[key]
     }
 

@@ -791,6 +791,7 @@ class DefaultRootComponent(
                     appPrefs = get<AppPrefs>(),
                     vehicleRepository = get(),
                     offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
+                    offlinePreparationCoordinator = get(),
                     logExporter = get(),
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {

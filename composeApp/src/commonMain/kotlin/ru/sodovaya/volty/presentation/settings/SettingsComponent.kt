@@ -9,9 +9,11 @@ import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.util.UnitSystem
-import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadTrigger
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationCoordinator
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPreparationState
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapStyleVariant
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -58,6 +60,7 @@ interface SettingsComponent {
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
+        val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
         val offlineCatalogRefreshing: Boolean = false,
         val offlineCatalogError: Boolean = false,
         val vehicles: List<Vehicle> = emptyList()
@@ -69,6 +72,7 @@ class DefaultSettingsComponent(
     private val appPrefs: AppPrefs,
     private val vehicleRepository: VehicleRepository,
     private val offlineRegionsRepository: OfflineRegionPackageRepository,
+    private val offlinePreparationCoordinator: OfflineRegionPreparationCoordinator,
     private val logExporter: LogExporter,
     private val onEditVehicleRequested: (String) -> Unit,
     private val onAddBatteryRequested: () -> Unit,
@@ -109,6 +113,7 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.voiceMicrophoneSource.collect { v -> _state.update { it.copy(voiceMicrophoneSource = v) } } }
         scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
         scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
+        scope.launch { offlinePreparationCoordinator.states.collect { v -> _state.update { it.copy(offlinePreparation = v) } } }
     }
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
@@ -139,26 +144,22 @@ class DefaultSettingsComponent(
     override fun onDownloadOfflineRegion(regionId: String) {
         scope.launch {
             runCatching {
-                offlineRegionsRepository.requestDownload(regionId, OfflineRegionDownloadTrigger.SETTINGS)
+                offlinePreparationCoordinator.prepareExplicitRegion(regionId, OfflineMapStyleVariant.BRIGHT)
             }
         }
     }
     override fun onConfirmMeteredOfflineRegion(regionId: String) {
         scope.launch {
             runCatching {
-                offlineRegionsRepository.requestDownload(
-                    regionId,
-                    OfflineRegionDownloadTrigger.SETTINGS,
-                    meteredConfirmed = true,
-                )
+                offlinePreparationCoordinator.prepareExplicitRegionConfirmed(regionId, OfflineMapStyleVariant.BRIGHT)
             }
         }
     }
     override fun onPauseOfflineRegion(regionId: String) {
-        scope.launch { runCatching { offlineRegionsRepository.pauseDownload(regionId) } }
+        scope.launch { runCatching { offlinePreparationCoordinator.pause(regionId) } }
     }
     override fun onResumeOfflineRegion(regionId: String) {
-        scope.launch { runCatching { offlineRegionsRepository.resumeDownload(regionId) } }
+        scope.launch { runCatching { offlinePreparationCoordinator.retry(regionId) } }
     }
     override fun onDeleteOfflineRegion(regionId: String) {
         scope.launch { runCatching { offlineRegionsRepository.deletePackage(regionId) } }
