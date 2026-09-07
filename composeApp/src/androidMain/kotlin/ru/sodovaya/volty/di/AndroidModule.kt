@@ -17,6 +17,9 @@ import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPackageRepo
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineRegionPackageStore
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineValhallaRuntime
 import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapSource
+import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackManager
+import ru.sodovaya.volty.data.navigation.offline.AndroidOfflineMapPackStore
+import ru.sodovaya.volty.data.navigation.offline.OfflineMapPackManager
 import ru.sodovaya.volty.domain.navigation.region.OfflineDownloadPreferences
 import ru.sodovaya.volty.domain.navigation.region.OfflineFirstNavigationRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkStatus
@@ -47,6 +50,7 @@ import org.koin.dsl.module
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
@@ -97,6 +101,16 @@ val androidModule = module {
     single<OfflineNetworkStatus> { AndroidOfflineNetworkStatus(androidContext()) }
     single(named(OFFLINE_DOWNLOAD_SCOPE)) {
         CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    }
+    single { OfflineManager.getInstance(androidContext()) }
+    single { AndroidOfflineMapPackStore() }
+    single<OfflineMapPackManager> {
+        AndroidOfflineMapPackManager(
+            offlineManager = get(),
+            store = get(),
+            scope = get(named(OFFLINE_DOWNLOAD_SCOPE)),
+            pixelRatio = androidContext().resources.displayMetrics.density,
+        )
     }
     single {
         AndroidOfflineMapSource(
