@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class OfflineRegionPackageManifestTest {
     @Test
-    fun manifest_codec_reads_the_published_three_component_shape() {
+    fun manifest_codec_reads_the_published_navigation_component_shape() {
         val parsed = OfflineRegionPackageManifestCodec.parse(
             validManifestJson(),
         )
@@ -15,7 +15,8 @@ class OfflineRegionPackageManifestTest {
         val manifest = assertIs<OfflineRegionManifestParseResult.Success>(parsed).manifest
         assertEquals("ru-sve-yekaterinburg-agglomeration", manifest.regionId)
         assertEquals("https://cdn.example.test/yekaterinburg/route.valhalla.zst", manifest.components.routing.url)
-        assertEquals("pmtiles", manifest.components.map.format)
+        assertEquals("https://cdn.example.test/yekaterinburg/search.sqlite.zst", manifest.components.search.url)
+        assertEquals("geofabrik-ural", manifest.source.sourceId)
         assertEquals("ed25519", manifest.signature.algorithm)
     }
 
@@ -31,14 +32,14 @@ class OfflineRegionPackageManifestTest {
             OfflineRegionManifestParseError.MALFORMED_MANIFEST,
             assertIs<OfflineRegionManifestParseResult.Failure>(
                 OfflineRegionPackageManifestCodec.parse(
-                    validManifestJson().replace("\"schemaVersion\": 2", "\"schemaVersion\": 2, \"future\": true"),
+                    validManifestJson().replace("\"schemaVersion\": 3", "\"schemaVersion\": 3, \"future\": true"),
                 ),
             ).error,
         )
     }
 
     @Test
-    fun valid_manifest_accepts_the_three_component_release() {
+    fun valid_manifest_accepts_the_navigation_release() {
         assertEquals(
             emptyList(),
             OfflineRegionPackageManifestPolicy.validate(
@@ -81,15 +82,15 @@ class OfflineRegionPackageManifestTest {
     }
 
     @Test
-    fun manifest_reports_incompatible_engine_format_sizes_and_signature() {
+    fun manifest_reports_incompatible_engine_schema_sizes_and_signature() {
         val invalid = validManifest(
             compatibility = validManifest().compatibility.copy(
                 minAppVersionCode = 29,
                 routingEngine = "brouter",
-                mapSchemaVersion = 0,
+                searchSchemaVersion = 0,
             ),
             components = validManifest().components.copy(
-                map = mapArtifact(format = "mbtiles", downloadBytes = 0L),
+                search = searchArtifact(downloadBytes = 0L).copy(schemaVersion = 0),
             ),
             signature = OfflineRegionManifestSignature(
                 keyId = "",
@@ -102,21 +103,20 @@ class OfflineRegionPackageManifestTest {
 
         assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.APP_VERSION_TOO_OLD })
         assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.UNSUPPORTED_ROUTING_ENGINE })
-        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_MAP_SCHEMA })
+        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_SEARCH_SCHEMA })
         assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_ARTIFACT_SIZE })
-        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_MAP_FORMAT })
+        assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_COMPONENT_SCHEMA })
         assertTrue(errors.any { it.code == OfflineRegionManifestErrorCode.INVALID_SIGNATURE })
     }
 
     @Test
-    fun manifest_requires_all_three_artifacts_and_unique_release_identity() {
+    fun manifest_requires_navigation_artifact_checksums_and_unique_release_identity() {
         val invalid = validManifest(
             regionId = "",
             releaseVersion = "",
             components = OfflineRegionComponents(
                 routing = routingArtifact(sha256 = checksum),
-                search = searchArtifact(sha256 = checksum),
-                map = mapArtifact(sha256 = "bad"),
+                search = searchArtifact(sha256 = "bad"),
             ),
         )
 
@@ -152,13 +152,11 @@ class OfflineRegionPackageManifestTest {
             minAppVersionCode = 28,
             routingEngine = "valhalla",
             routingDataVersion = OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION,
-            mapSchemaVersion = 1,
             searchSchemaVersion = 1,
         ),
         components: OfflineRegionComponents = OfflineRegionComponents(
             routing = routingArtifact(downloadBytes = 35_000_000L),
             search = searchArtifact(downloadBytes = 20_000_000L),
-            map = mapArtifact(downloadBytes = 80_000_000L),
         ),
         signature: OfflineRegionManifestSignature = OfflineRegionManifestSignature(
             keyId = "volty-navigation-2026",
@@ -166,13 +164,16 @@ class OfflineRegionPackageManifestTest {
             value = "signature",
         ),
     ) = OfflineRegionPackageManifest(
-        schemaVersion = 2,
+        schemaVersion = 3,
         regionId = regionId,
         releaseVersion = releaseVersion,
         createdAt = createdAt,
         source = OfflineRegionSource(
             osmReplicationSequence = 1L,
             osmTimestamp = osmTimestamp,
+            sourceId = "geofabrik-ural",
+            sourceUrl = "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf",
+            sourceSha256 = checksum,
         ),
         compatibility = compatibility,
         coverage = OfflineRegionCoverage(
@@ -205,39 +206,26 @@ class OfflineRegionPackageManifestTest {
         schemaVersion = 1,
     )
 
-    private fun mapArtifact(
-        format: String = "pmtiles",
-        downloadBytes: Long = 1_000_000L,
-        sha256: String = checksum,
-    ) = OfflineRegionMapArtifact(
-        url = "https://cdn.example.test/region.bin",
-        downloadBytes = downloadBytes,
-        installedBytes = 2_000_000L,
-        sha256 = sha256,
-        format = format,
-        minZoom = 7,
-        maxZoom = 16,
-        vectorLayerSchema = 1,
-    )
-
     private companion object {
         const val checksum = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
         fun validManifestJson() = """
             {
-              "schemaVersion": 2,
+              "schemaVersion": 3,
               "regionId": "ru-sve-yekaterinburg-agglomeration",
               "releaseVersion": "2026.09.1",
               "createdAt": "2026-09-03T00:00:00Z",
               "source": {
                 "osmReplicationSequence": 1,
-                "osmTimestamp": "2026-09-02T00:00:00Z"
+                "osmTimestamp": "2026-09-02T00:00:00Z",
+                "sourceId": "geofabrik-ural",
+                "sourceUrl": "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf",
+                "sourceSha256": "$checksum"
               },
               "compatibility": {
                 "minAppVersionCode": 28,
                 "routingEngine": "valhalla",
                 "routingDataVersion": "${OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION}",
-                "mapSchemaVersion": 1,
                 "searchSchemaVersion": 1
               },
               "coverage": {
@@ -260,17 +248,6 @@ class OfflineRegionPackageManifestTest {
                   "sha256": "$checksum",
                   "schemaVersion": 1,
                   "compression": "zstd"
-                },
-                "map": {
-                  "url": "https://cdn.example.test/yekaterinburg/map.pmtiles",
-                  "downloadBytes": 80000000,
-                  "installedBytes": 95000000,
-                  "sha256": "$checksum",
-                  "format": "pmtiles",
-                  "minZoom": 7,
-                  "maxZoom": 16,
-                  "vectorLayerSchema": 1,
-                  "compression": null
                 }
               },
               "manifestSignature": {

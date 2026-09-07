@@ -12,12 +12,12 @@ class OfflineRegionPackageStateTest {
             region = region(),
             latestRelease = release(),
             status = OfflineRegionPackageStatus.DOWNLOADING,
-            downloadedBytes = 67L,
+            downloadedBytes = 20L,
         )
 
-        assertEquals(135L, state.totalDownloadBytes)
-        assertEquals(200L, state.totalInstalledBytes)
-        assertEquals(67f / 135f, state.downloadProgress)
+        assertEquals(55L, state.totalDownloadBytes)
+        assertEquals(135L, state.totalInstalledBytes)
+        assertEquals(20f / 55f, state.downloadProgress)
     }
 
     @Test
@@ -51,7 +51,7 @@ class OfflineRegionPackageStateTest {
                 region = region(),
                 latestRelease = release(),
                 status = OfflineRegionPackageStatus.DOWNLOADING,
-                downloadedBytes = 136L,
+                downloadedBytes = 56L,
             )
         }
     }
@@ -63,17 +63,19 @@ class OfflineRegionPackageStateTest {
     )
 
     private fun release() = OfflineRegionPackageManifest(
-        schemaVersion = 2,
+        schemaVersion = 3,
         regionId = "ru-sve-yekaterinburg-agglomeration",
         releaseVersion = "2026.09.1",
         createdAt = "2026-09-03T00:00:00Z",
-        source = OfflineRegionSource(1L, "2026-09-02T00:00:00Z"),
-        compatibility = OfflineRegionCompatibility(28, "valhalla", "tiles-1", 1, 1),
+        source = OfflineRegionSource(
+            1L, "2026-09-02T00:00:00Z", "geofabrik-ural",
+            "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf", checksum,
+        ),
+        compatibility = OfflineRegionCompatibility(28, "valhalla", "valhalla-3.6.3", 1),
         coverage = OfflineRegionCoverage(listOf(59.55, 56.30, 61.45, 57.25), 30),
         components = OfflineRegionComponents(
             routing = OfflineRegionRoutingArtifact("https://cdn.test/routing", 35L, 90L, checksum, "zstd"),
             search = OfflineRegionSearchArtifact("https://cdn.test/search", 20L, 45L, checksum, 1),
-            map = OfflineRegionMapArtifact("https://cdn.test/map", 80L, 65L, checksum, "pmtiles", 7, 16, 1),
         ),
         signature = OfflineRegionManifestSignature("key", "ed25519", "signature"),
     )

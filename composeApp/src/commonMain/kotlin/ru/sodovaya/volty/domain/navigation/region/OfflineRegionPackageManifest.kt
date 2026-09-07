@@ -13,6 +13,9 @@ import kotlin.time.Instant
 data class OfflineRegionSource(
     val osmReplicationSequence: Long,
     val osmTimestamp: String,
+    val sourceId: String,
+    val sourceUrl: String,
+    val sourceSha256: String,
 )
 
 @Serializable
@@ -20,7 +23,6 @@ data class OfflineRegionCompatibility(
     val minAppVersionCode: Int,
     val routingEngine: String,
     val routingDataVersion: String,
-    val mapSchemaVersion: Int,
     val searchSchemaVersion: Int,
 )
 
@@ -67,7 +69,6 @@ data class OfflineRegionMapArtifact(
 data class OfflineRegionComponents(
     val routing: OfflineRegionRoutingArtifact,
     val search: OfflineRegionSearchArtifact,
-    val map: OfflineRegionMapArtifact,
 )
 
 @Serializable
@@ -94,6 +95,9 @@ data class OfflineRegionPackageManifest(
 /** The platform verifier for the manifest's canonical payload and Ed25519 signature. */
 fun interface OfflineRegionManifestVerifier {
     fun verify(manifest: OfflineRegionPackageManifest): Boolean
+
+    /** Legacy signatures authorize reading installed navigation data only. */
+    fun verifyLegacy(manifest: OfflineRegionLegacyManifest): Boolean = false
 }
 
 enum class OfflineRegionManifestParseError {
@@ -115,19 +119,24 @@ object OfflineRegionPackageManifestCodec {
     }
 
     fun parse(jsonText: String): OfflineRegionManifestParseResult = try {
-        OfflineRegionManifestParseResult.Success(
-            json.decodeFromString<OfflineRegionPackageManifest>(jsonText),
-        )
+        val manifest = json.decodeFromString<OfflineRegionPackageManifest>(jsonText)
+        if (manifest.schemaVersion == OfflineRegionPackageManifestPolicy.CURRENT_SCHEMA_VERSION) {
+            OfflineRegionManifestParseResult.Success(manifest)
+        } else malformed()
     } catch (_: SerializationException) {
         malformed()
     } catch (_: IllegalArgumentException) {
         malformed()
     }
 
-    fun encode(manifest: OfflineRegionPackageManifest): String = json.encodeToString(manifest)
+    fun encode(manifest: OfflineRegionPackageManifest): String {
+        require(manifest.schemaVersion == OfflineRegionPackageManifestPolicy.CURRENT_SCHEMA_VERSION)
+        return json.encodeToString(manifest)
+    }
 
     /** Stable UTF-8 payload used by the release Ed25519 signature verifier. */
     fun signingPayload(manifest: OfflineRegionPackageManifest): String {
+        require(manifest.schemaVersion == OfflineRegionPackageManifestPolicy.CURRENT_SCHEMA_VERSION)
         val unsignedObject = json.encodeToJsonElement(manifest).jsonObject.toMutableMap()
         unsignedObject.remove("manifestSignature")
         return json.encodeToString(JsonObject(unsignedObject))
@@ -136,6 +145,66 @@ object OfflineRegionPackageManifestCodec {
     private fun malformed() = OfflineRegionManifestParseResult.Failure(
         OfflineRegionManifestParseError.MALFORMED_MANIFEST,
     )
+}
+
+/** The old signed wire shape is retained solely for reading installed v2 packages. */
+@Serializable
+data class OfflineRegionLegacySource(val osmReplicationSequence: Long, val osmTimestamp: String)
+
+@Serializable
+data class OfflineRegionLegacyCompatibility(
+    val minAppVersionCode: Int,
+    val routingEngine: String,
+    val routingDataVersion: String,
+    val mapSchemaVersion: Int,
+    val searchSchemaVersion: Int,
+)
+
+@Serializable
+data class OfflineRegionLegacyComponents(
+    val routing: OfflineRegionRoutingArtifact,
+    val search: OfflineRegionSearchArtifact,
+    val map: OfflineRegionMapArtifact,
+)
+
+@Serializable
+data class OfflineRegionLegacyManifest(
+    val schemaVersion: Int,
+    val regionId: String,
+    val releaseVersion: String,
+    val createdAt: String,
+    val source: OfflineRegionLegacySource,
+    val compatibility: OfflineRegionLegacyCompatibility,
+    val coverage: OfflineRegionCoverage,
+    val components: OfflineRegionLegacyComponents,
+    @SerialName("manifestSignature") val signature: OfflineRegionManifestSignature,
+) {
+    val ignoredComponents: Set<OfflineRegionComponent> get() = setOf(OfflineRegionComponent.MAP)
+
+    /** Keeps schema 2: this projection cannot be signed, downloaded, or installed as v3. */
+    val navigationManifest: OfflineRegionPackageManifest get() = OfflineRegionPackageManifest(
+        schemaVersion, regionId, releaseVersion, createdAt,
+        OfflineRegionSource(source.osmReplicationSequence, source.osmTimestamp, "", "", ""),
+        OfflineRegionCompatibility(compatibility.minAppVersionCode, compatibility.routingEngine,
+            compatibility.routingDataVersion, compatibility.searchSchemaVersion),
+        coverage, OfflineRegionComponents(components.routing, components.search), signature,
+    )
+}
+
+object OfflineRegionLegacyManifestCodec {
+    private val json = Json { ignoreUnknownKeys = false; explicitNulls = true; isLenient = false }
+
+    fun parse(jsonText: String): OfflineRegionLegacyManifest? = runCatching {
+        json.decodeFromString<OfflineRegionLegacyManifest>(jsonText).takeIf { it.schemaVersion == 2 }
+    }.getOrNull()
+
+    /** Original v2 field order/default omission must remain unchanged for existing signatures. */
+    fun signingPayload(manifest: OfflineRegionLegacyManifest): String {
+        require(manifest.schemaVersion == 2)
+        val unsigned = json.encodeToJsonElement(manifest).jsonObject.toMutableMap()
+        unsigned.remove("manifestSignature")
+        return json.encodeToString(JsonObject(unsigned))
+    }
 }
 
 enum class OfflineRegionManifestErrorCode {
@@ -168,7 +237,7 @@ data class OfflineRegionManifestValidationError(
 )
 
 object OfflineRegionPackageManifestPolicy {
-    const val CURRENT_SCHEMA_VERSION: Int = 2
+    const val CURRENT_SCHEMA_VERSION: Int = 3
     const val EXPECTED_ROUTING_ENGINE: String = "valhalla"
     /**
      * Tile format consumed by the ready Android valhalla-mobile:0.6.3 AAR.
@@ -177,15 +246,30 @@ object OfflineRegionPackageManifestPolicy {
      * regional tiles after an ordinary catalog refresh.
      */
     const val EXPECTED_ROUTING_DATA_VERSION: String = "valhalla-3.6.3"
-    const val EXPECTED_MAP_FORMAT: String = "pmtiles"
 
     fun validate(
         manifest: OfflineRegionPackageManifest,
         currentAppVersionCode: Int,
         allowUnsignedManifest: Boolean = false,
+    ): List<OfflineRegionManifestValidationError> = validateNavigation(
+        manifest, currentAppVersionCode, allowUnsignedManifest, legacy = false,
+    )
+
+    fun validateLegacy(
+        manifest: OfflineRegionLegacyManifest,
+        currentAppVersionCode: Int,
+    ): List<OfflineRegionManifestValidationError> = validateNavigation(
+        manifest.navigationManifest, currentAppVersionCode, false, legacy = true,
+    )
+
+    private fun validateNavigation(
+        manifest: OfflineRegionPackageManifest,
+        currentAppVersionCode: Int,
+        allowUnsignedManifest: Boolean,
+        legacy: Boolean,
     ): List<OfflineRegionManifestValidationError> {
         val errors = mutableListOf<OfflineRegionManifestValidationError>()
-        if (manifest.schemaVersion != CURRENT_SCHEMA_VERSION) {
+        if (manifest.schemaVersion != if (legacy) 2 else CURRENT_SCHEMA_VERSION) {
             errors += error(OfflineRegionManifestErrorCode.UNSUPPORTED_SCHEMA_VERSION, manifest.schemaVersion)
         }
         if (!REGION_ID_PATTERN.matches(manifest.regionId)) {
@@ -198,7 +282,10 @@ object OfflineRegionPackageManifestPolicy {
             errors += error(OfflineRegionManifestErrorCode.INVALID_CREATED_AT, manifest.createdAt)
         }
         if (manifest.source.osmReplicationSequence < 0L ||
-            !isValidTimestamp(manifest.source.osmTimestamp)
+            !isValidTimestamp(manifest.source.osmTimestamp) ||
+            (!legacy && (manifest.source.sourceId.isBlank() ||
+                !SOURCE_URL_PATTERN.matches(manifest.source.sourceUrl) ||
+                !SHA256_PATTERN.matches(manifest.source.sourceSha256)))
         ) {
             errors += error(OfflineRegionManifestErrorCode.INVALID_SOURCE, manifest.source.toString())
         }
@@ -221,12 +308,6 @@ object OfflineRegionPackageManifestPolicy {
             errors += error(
                 OfflineRegionManifestErrorCode.INVALID_ROUTING_DATA_VERSION,
                 manifest.compatibility.routingDataVersion,
-            )
-        }
-        if (manifest.compatibility.mapSchemaVersion < 1) {
-            errors += error(
-                OfflineRegionManifestErrorCode.INVALID_MAP_SCHEMA,
-                manifest.compatibility.mapSchemaVersion,
             )
         }
         if (manifest.compatibility.searchSchemaVersion < 1) {
@@ -268,29 +349,6 @@ object OfflineRegionPackageManifestPolicy {
             errors += error(
                 OfflineRegionManifestErrorCode.INVALID_COMPONENT_SCHEMA,
                 "search.schemaVersion",
-            )
-        }
-        validateBaseArtifact(
-            name = "map",
-            url = manifest.components.map.url,
-            downloadBytes = manifest.components.map.downloadBytes,
-            installedBytes = manifest.components.map.installedBytes,
-            sha256 = manifest.components.map.sha256,
-            errors = errors,
-        )
-        if (manifest.components.map.format.lowercase() != EXPECTED_MAP_FORMAT) {
-            errors += error(OfflineRegionManifestErrorCode.INVALID_MAP_FORMAT, manifest.components.map.format)
-        }
-        if (manifest.components.map.minZoom !in 0..24 ||
-            manifest.components.map.maxZoom !in 0..24 ||
-            manifest.components.map.minZoom > manifest.components.map.maxZoom
-        ) {
-            errors += error(OfflineRegionManifestErrorCode.INVALID_MAP_ZOOM, "map")
-        }
-        if (manifest.components.map.vectorLayerSchema < 1) {
-            errors += error(
-                OfflineRegionManifestErrorCode.INVALID_VECTOR_LAYER_SCHEMA,
-                manifest.components.map.vectorLayerSchema,
             )
         }
 
@@ -346,5 +404,6 @@ object OfflineRegionPackageManifestPolicy {
     private val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")
     private val RELEASE_VERSION_PATTERN = Regex("[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
     private val SHA256_PATTERN = Regex("[0-9a-fA-F]{64}")
+    private val SOURCE_URL_PATTERN = Regex("https://[^/\\s?#]+/[^\\s]+")
     private val RESERVED_KEY_IDS = setOf("UNSIGNED_DEV", "UNSIGNED")
 }

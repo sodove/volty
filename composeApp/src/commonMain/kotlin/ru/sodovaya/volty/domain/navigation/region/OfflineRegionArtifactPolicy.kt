@@ -35,7 +35,7 @@ sealed interface OfflineRegionArtifactValidation {
     ) : OfflineRegionArtifactValidation
 }
 
-/** Compares the three downloaded payloads with the signed release declaration. */
+/** Compares navigation payloads with the signed release declaration. */
 object OfflineRegionArtifactPolicy {
     fun validate(
         manifest: OfflineRegionPackageManifest,
@@ -55,7 +55,8 @@ object OfflineRegionArtifactPolicy {
         }
 
         val observationsByComponent = observations.associateBy { it.component }
-        OfflineRegionComponent.entries.forEach { component ->
+        val navigationComponents = setOf(OfflineRegionComponent.ROUTING, OfflineRegionComponent.SEARCH)
+        navigationComponents.forEach { component ->
             val observation = observationsByComponent[component]
             if (observation == null) {
                 errors += OfflineRegionArtifactValidationError(
@@ -85,7 +86,7 @@ object OfflineRegionArtifactPolicy {
             }
         }
         observationsByComponent.keys
-            .filter { it !in OfflineRegionComponent.entries }
+            .filter { it !in navigationComponents }
             .forEach { component ->
                 errors += OfflineRegionArtifactValidationError(
                     code = OfflineRegionArtifactErrorCode.UNEXPECTED_COMPONENT,
@@ -105,16 +106,13 @@ object OfflineRegionArtifactPolicy {
     ): ArtifactSizeAndChecksum = when (component) {
         OfflineRegionComponent.ROUTING -> components.routing.toComparableArtifact()
         OfflineRegionComponent.SEARCH -> components.search.toComparableArtifact()
-        OfflineRegionComponent.MAP -> components.map.toComparableArtifact()
+        OfflineRegionComponent.MAP -> error("Map packs are not navigation artifacts")
     }
 
     private fun OfflineRegionRoutingArtifact.toComparableArtifact() =
         ArtifactSizeAndChecksum(downloadBytes, installedBytes, sha256)
 
     private fun OfflineRegionSearchArtifact.toComparableArtifact() =
-        ArtifactSizeAndChecksum(downloadBytes, installedBytes, sha256)
-
-    private fun OfflineRegionMapArtifact.toComparableArtifact() =
         ArtifactSizeAndChecksum(downloadBytes, installedBytes, sha256)
 
     private data class ArtifactSizeAndChecksum(

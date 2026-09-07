@@ -7,7 +7,7 @@ import kotlin.test.assertTrue
 
 class OfflineRegionDownloadPlanTest {
     @Test
-    fun creates_a_deterministic_three_component_plan() {
+    fun creates_a_deterministic_navigation_component_plan() {
         val manifest = release()
 
         val result = OfflineRegionDownloadPlanFactory.create(manifest, currentAppVersionCode = 28)
@@ -19,12 +19,11 @@ class OfflineRegionDownloadPlanTest {
             listOf(
                 "routing/valhalla-routing.tar.gz",
                 "search/places.sqlite.gz",
-                "map/map.pmtiles",
             ),
             plan.artifacts.map(OfflineRegionArtifactDownload::relativePath),
         )
-        assertEquals(30L, plan.totalDownloadBytes)
-        assertEquals(300L, plan.totalInstalledBytes)
+        assertEquals(20L, plan.totalDownloadBytes)
+        assertEquals(200L, plan.totalInstalledBytes)
     }
 
     @Test
@@ -77,17 +76,19 @@ class OfflineRegionDownloadPlanTest {
         minAppVersionCode: Int = 28,
         routingDataVersion: String = "valhalla-3.6.3",
     ) = OfflineRegionPackageManifest(
-        schemaVersion = 2,
+        schemaVersion = 3,
         regionId = "ru-sve-ekb",
         releaseVersion = "2026.09.1",
         createdAt = "2026-09-03T00:00:00Z",
-        source = OfflineRegionSource(1L, "2026-09-02T00:00:00Z"),
-        compatibility = OfflineRegionCompatibility(minAppVersionCode, "valhalla", routingDataVersion, 1, 1),
+        source = OfflineRegionSource(
+            1L, "2026-09-02T00:00:00Z", "geofabrik-ural",
+            "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf", checksum,
+        ),
+        compatibility = OfflineRegionCompatibility(minAppVersionCode, "valhalla", routingDataVersion, 1),
         coverage = OfflineRegionCoverage(listOf(59.0, 56.0, 62.0, 57.5), 20),
         components = OfflineRegionComponents(
             routing = OfflineRegionRoutingArtifact("https://cdn.test/routing", 10L, 100L, checksum, "gzip"),
             search = OfflineRegionSearchArtifact("https://cdn.test/search", 10L, 100L, checksum, 1, "gzip"),
-            map = OfflineRegionMapArtifact("https://cdn.test/map", 10L, 100L, checksum, "pmtiles", 5, 14, 1),
         ),
         signature = OfflineRegionManifestSignature("release", "ed25519", "signature"),
     )

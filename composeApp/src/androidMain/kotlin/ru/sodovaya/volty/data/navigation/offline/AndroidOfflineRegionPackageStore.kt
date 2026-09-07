@@ -12,6 +12,10 @@ import java.nio.file.StandardCopyOption.REPLACE_EXISTING
 import java.security.MessageDigest
 import java.util.UUID
 import java.util.zip.GZIPInputStream
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionComponent
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlan
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
@@ -20,21 +24,27 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestPo
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailureException
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanFactory
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionDownloadPlanResult
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionLegacyManifestCodec
 
 /**
- * Owns the installed routing/search/map files for regional releases.
+ * Owns installed navigation files. Legacy map files are retained only in rollback directories.
  *
  * A release is extracted into a private staging directory first. The active
  * pointer is the only mutable reference consumed by the app, so an interrupted
  * extraction or process death cannot expose half a Valhalla database to the
  * router or half a SQLite file to autocomplete.
  */
-class AndroidOfflineRegionPackageStore(
-    context: android.content.Context,
+class AndroidOfflineRegionPackageStore internal constructor(
+    filesDirectory: File,
     private val currentAppVersionCode: Int,
     private val manifestVerifier: OfflineRegionManifestVerifier,
 ) {
-    private val root = File(context.applicationContext.filesDir, STORAGE_DIRECTORY)
+    constructor(context: android.content.Context, currentAppVersionCode: Int, manifestVerifier: OfflineRegionManifestVerifier) :
+        this(context.applicationContext.filesDir, currentAppVersionCode, manifestVerifier)
+
+    private val root = File(filesDirectory, STORAGE_DIRECTORY)
     private val packages = File(root, PACKAGES_DIRECTORY)
     private val active = File(root, ACTIVE_DIRECTORY)
     private val lock = Any()
@@ -66,10 +76,18 @@ class AndroidOfflineRegionPackageStore(
                 message = "regional release signature is invalid",
             )
         }
-        if (downloadedArtifacts.keys != OfflineRegionComponent.entries.toSet()) {
+        val signedPlan = (OfflineRegionDownloadPlanFactory.create(manifest, currentAppVersionCode)
+            as? OfflineRegionDownloadPlanResult.Ready)?.plan
+        if (plan != signedPlan) {
             throw OfflineRegionPackageFailureException(
                 category = OfflineRegionPackageFailure.INCOMPATIBLE,
-                message = "a regional package must provide exactly three downloaded artifacts",
+                message = "download plan differs from the signed navigation artifacts",
+            )
+        }
+        if (downloadedArtifacts.keys != setOf(OfflineRegionComponent.ROUTING, OfflineRegionComponent.SEARCH)) {
+            throw OfflineRegionPackageFailureException(
+                category = OfflineRegionPackageFailure.INCOMPATIBLE,
+                message = "a regional package must provide exactly two navigation artifacts",
             )
         }
         downloadedArtifacts.forEach { (component, file) ->
@@ -135,9 +153,14 @@ class AndroidOfflineRegionPackageStore(
         if (manifest.regionId != regionId ||
             manifest.compatibility.minAppVersionCode > currentAppVersionCode
         ) return@synchronized null
-        runCatching { verifyInstalledPackage(directory, manifest) }
-            .getOrNull()
-            ?.let { InstalledOfflineRegion.fromDirectory(directory, manifest) }
+        runCatching {
+            verifyInstalledPackage(directory, manifest)
+            if (manifest.schemaVersion == 2 && !directory.name.startsWith(LEGACY_NAVIGATION_PREFIX)) {
+                migrateLegacyNavigation(directory, manifest)
+            } else {
+                InstalledOfflineRegion.fromDirectory(directory, manifest)
+            }
+        }.getOrNull()
     }
 
     fun installedRegionIds(): List<String> = synchronized(lock) {
@@ -211,8 +234,7 @@ class AndroidOfflineRegionPackageStore(
     ) {
         val routingDirectory = File(staging, ROUTING_DIRECTORY)
         val searchDirectory = File(staging, SEARCH_DIRECTORY)
-        val mapDirectory = File(staging, MAP_DIRECTORY)
-        if (!routingDirectory.mkdirs() || !searchDirectory.mkdirs() || !mapDirectory.mkdirs()) {
+        if (!routingDirectory.mkdirs() || !searchDirectory.mkdirs()) {
             throw IOException("Could not create regional component directories")
         }
         extractGzipTar(
@@ -222,10 +244,6 @@ class AndroidOfflineRegionPackageStore(
         gunzip(
             source = requireNotNull(artifacts[OfflineRegionComponent.SEARCH]),
             destination = File(searchDirectory, SEARCH_DATABASE_FILE),
-        )
-        copyFile(
-            source = requireNotNull(artifacts[OfflineRegionComponent.MAP]),
-            destination = File(mapDirectory, MAP_FILE),
         )
     }
 
@@ -252,7 +270,6 @@ class AndroidOfflineRegionPackageStore(
     ) {
         val routing = File(directory, ROUTING_DIRECTORY)
         val search = File(directory, "$SEARCH_DIRECTORY/$SEARCH_DATABASE_FILE")
-        val map = File(directory, "$MAP_DIRECTORY/$MAP_FILE")
         if (!File(routing, VALHALLA_CONFIG_FILE).isFile ||
             !File(routing, ROUTING_TILE_EXTRACT_FILE).isFile ||
             !File(routing, ROUTING_ADMINS_DATABASE_FILE).isFile ||
@@ -269,12 +286,6 @@ class AndroidOfflineRegionPackageStore(
                 message = "Regional search component is incomplete",
             )
         }
-        if (!map.isFile || map.length() == 0L) {
-            throw OfflineRegionPackageFailureException(
-                category = OfflineRegionPackageFailure.INCOMPATIBLE,
-                message = "Regional map component is incomplete",
-            )
-        }
 
         val expected = manifest.components
         val installedSearchBytes = search.length()
@@ -282,12 +293,6 @@ class AndroidOfflineRegionPackageStore(
             throw OfflineRegionPackageFailureException(
                 category = OfflineRegionPackageFailure.INCOMPATIBLE,
                 message = "Regional search installed size does not match the manifest",
-            )
-        }
-        if (map.length() != expected.map.installedBytes) {
-            throw OfflineRegionPackageFailureException(
-                category = OfflineRegionPackageFailure.INCOMPATIBLE,
-                message = "Regional map installed size does not match the manifest",
             )
         }
         // The routing config contains absolute paths after installation. Its
@@ -309,17 +314,74 @@ class AndroidOfflineRegionPackageStore(
     private fun readManifest(directory: File): OfflineRegionPackageManifest? {
         val file = File(directory, MANIFEST_FILE)
         if (!file.isFile) return null
-        val parsed = runCatching {
-            OfflineRegionPackageManifestCodec.parse(file.readText(Charsets.UTF_8))
-        }.getOrNull() ?: return null
-        val manifest = (parsed as? ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestParseResult.Success)
-            ?.manifest
-            ?: return null
-        return manifest.takeIf {
-            ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestPolicy
-                .validate(it, currentAppVersionCode).isEmpty() && manifestVerifier.verify(it)
+        val text = runCatching { file.readText(Charsets.UTF_8) }.getOrNull() ?: return null
+        val parsed = OfflineRegionPackageManifestCodec.parse(text)
+        val manifest = (parsed as? ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestParseResult.Success)?.manifest
+        if (manifest != null) {
+            return manifest.takeIf {
+                OfflineRegionPackageManifestPolicy.validate(it, currentAppVersionCode).isEmpty() && manifestVerifier.verify(it)
+            }
+        }
+        val legacy = OfflineRegionLegacyManifestCodec.parse(text) ?: return null
+        return legacy.takeIf {
+            OfflineRegionPackageManifestPolicy.validateLegacy(it, currentAppVersionCode).isEmpty() &&
+                manifestVerifier.verifyLegacy(it)
+        }?.navigationManifest
+    }
+
+    /**
+     * Earlier releases made map validity a condition for all navigation. The v2 signature
+     * still covers its original map declaration, but only verified installed navigation
+     * files are copied. The original directory and signed manifest remain rollback input.
+     * Extracted files cannot recreate the original compressed checksums; these structural
+     * checks are the same installed-data checks used before migration.
+     */
+    private fun migrateLegacyNavigation(
+        original: File,
+        manifest: OfflineRegionPackageManifest,
+    ): InstalledOfflineRegion {
+        val staging = File(root, "staging-${manifest.regionId}-${UUID.randomUUID()}")
+        val published = File(original.parentFile, "$LEGACY_NAVIGATION_PREFIX${manifest.releaseVersion}-${UUID.randomUUID()}")
+        try {
+            if (!staging.mkdirs()) throw IOException("Could not create navigation migration staging")
+            copyNavigationDirectory(File(original, ROUTING_DIRECTORY), File(staging, ROUTING_DIRECTORY))
+            val search = File(staging, SEARCH_DIRECTORY)
+            if (!search.mkdirs()) throw IOException("Could not create navigation search directory")
+            copyFile(File(original, "$SEARCH_DIRECTORY/$SEARCH_DATABASE_FILE"), File(search, SEARCH_DATABASE_FILE))
+            copyFile(File(original, MANIFEST_FILE), File(staging, MANIFEST_FILE))
+            verifyInstalledPackage(staging, manifest)
+            moveAtomically(staging, published)
+            val config = File(published, "$ROUTING_DIRECTORY/$VALHALLA_CONFIG_FILE")
+            val oldPath = original.canonicalPath.replace(File.separatorChar, '/')
+            val newPath = published.canonicalPath.replace(File.separatorChar, '/')
+            writeSyncedText(config, config.readText(Charsets.UTF_8).replace(oldPath, newPath))
+            rewriteValhallaPaths(File(published, ROUTING_DIRECTORY), published)
+            verifyInstalledPackage(published, manifest)
+            publishPointer(manifest.regionId, published.name)
+            return InstalledOfflineRegion.fromDirectory(published, manifest)
+        } finally {
+            staging.deleteRecursively()
+            val activeName = runCatching { File(active, "${manifest.regionId}.pointer").readText(Charsets.UTF_8).trim() }.getOrNull()
+            if (activeName != published.name) published.deleteRecursively()
         }
     }
+
+    private fun copyNavigationDirectory(source: File, destination: File) {
+        source.walkTopDown().forEach { entry ->
+            if (entry != source && !isChildOf(entry, source)) throw IOException("Invalid installed navigation path")
+            val target = File(destination, entry.relativeTo(source).path)
+            if (entry.isDirectory) {
+                if (!target.mkdirs() && !target.isDirectory) throw IOException("Could not copy navigation directory")
+            } else {
+                copyFile(entry, target)
+            }
+        }
+    }
+
+    private fun hasLegacyManifest(directory: File): Boolean = runCatching {
+        val text = File(directory, MANIFEST_FILE).readText(Charsets.UTF_8)
+        Json.parseToJsonElement(text).jsonObject["schemaVersion"]?.jsonPrimitive?.intOrNull == 2
+    }.getOrDefault(false)
 
     private fun validateDownloadedArtifact(
         file: File,
@@ -490,8 +552,9 @@ class AndroidOfflineRegionPackageStore(
      * Keeps only verified packages named by a valid active pointer. A process
      * can die after publishing a package directory but before publishing its
      * pointer, and normal updates otherwise leave the previous release behind.
-     * Both cases are safe to reclaim because the pointer is the sole active
-     * ownership record.
+     * Earlier revisions reclaimed every unreferenced directory. Legacy v2 directories
+     * are now retained, including unverified ones, so migration cannot erase rollback
+     * data. Explicit user deletion still removes the region's navigation directories.
      */
     private fun cleanupOrphanedPackages() {
         val referenced = active.listFiles()
@@ -533,7 +596,7 @@ class AndroidOfflineRegionPackageStore(
                             packageDirectory.canonicalFile.parentFile == regionDirectory.canonicalFile
                     }
                     ?.filterNot { packageDirectory ->
-                        "${regionDirectory.name}/${packageDirectory.name}" in referenced
+                        "${regionDirectory.name}/${packageDirectory.name}" in referenced || hasLegacyManifest(packageDirectory)
                     }
                     ?.forEach(File::deleteRecursively)
                 if (regionDirectory.listFiles().isNullOrEmpty()) regionDirectory.delete()
@@ -546,6 +609,7 @@ class AndroidOfflineRegionPackageStore(
         val routingConfig: File,
         val routingTileExtract: File,
         val searchDatabase: File,
+        /** Compatibility path for the retired renderer; migrated/v3 packages never create it. */
         val mapFile: File,
     ) {
         companion object {
@@ -576,6 +640,7 @@ class AndroidOfflineRegionPackageStore(
         const val ROUTING_TIMEZONES_DATABASE_FILE = "timezones.sqlite"
         const val SEARCH_DATABASE_FILE = "places.sqlite"
         const val MAP_FILE = "map.pmtiles"
+        const val LEGACY_NAVIGATION_PREFIX = "navigation-v2-"
         const val TAR_BLOCK_SIZE = 512
         const val COPY_BUFFER_SIZE = 64 * 1024
         val REGION_ID_PATTERN = Regex("[a-z0-9][a-z0-9._-]{0,63}")

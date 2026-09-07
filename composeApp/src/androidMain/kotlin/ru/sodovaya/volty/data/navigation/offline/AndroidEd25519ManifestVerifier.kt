@@ -1,6 +1,6 @@
 package ru.sodovaya.volty.data.navigation.offline
 
-import android.util.Base64
+import java.util.Base64
 import org.bouncycastle.crypto.params.Ed25519PublicKeyParameters
 import org.bouncycastle.crypto.signers.Ed25519Signer
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalog
@@ -9,6 +9,8 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionCatalogVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifestVerifier
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifest
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageManifestCodec
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionLegacyManifest
+import ru.sodovaya.volty.domain.navigation.region.OfflineRegionLegacyManifestCodec
 
 /** Verifies a release manifest with the pinned Volty navigation Ed25519 key. */
 class AndroidEd25519ManifestVerifier(
@@ -16,7 +18,7 @@ class AndroidEd25519ManifestVerifier(
     publicKeyBase64: String,
 ) : OfflineRegionManifestVerifier, OfflineRegionCatalogVerifier {
     private val publicKey = runCatching {
-        val rawKey = Base64.decode(publicKeyBase64, Base64.DEFAULT)
+        val rawKey = Base64.getDecoder().decode(publicKeyBase64)
         require(rawKey.size == RAW_ED25519_PUBLIC_KEY_BYTES) { "Ed25519 public key must be 32 bytes" }
         Ed25519PublicKeyParameters(rawKey, 0)
     }.getOrNull()
@@ -27,9 +29,23 @@ class AndroidEd25519ManifestVerifier(
             manifest.signature.algorithm.lowercase() != "ed25519"
         ) return false
         return runCatching {
-            val signature = Base64.decode(manifest.signature.value, Base64.DEFAULT)
+            val signature = Base64.getDecoder().decode(manifest.signature.value)
             val payload = OfflineRegionPackageManifestCodec.signingPayload(manifest)
                 .toByteArray(Charsets.UTF_8)
+            val verifier = Ed25519Signer()
+            verifier.init(false, key)
+            verifier.update(payload, 0, payload.size)
+            verifier.verifySignature(signature)
+        }.getOrDefault(false)
+    }
+
+    override fun verifyLegacy(manifest: OfflineRegionLegacyManifest): Boolean {
+        val key = publicKey ?: return false
+        if (manifest.schemaVersion != 2 || manifest.signature.keyId != expectedKeyId ||
+            manifest.signature.algorithm.lowercase() != "ed25519") return false
+        return runCatching {
+            val signature = Base64.getDecoder().decode(manifest.signature.value)
+            val payload = OfflineRegionLegacyManifestCodec.signingPayload(manifest).toByteArray(Charsets.UTF_8)
             val verifier = Ed25519Signer()
             verifier.init(false, key)
             verifier.update(payload, 0, payload.size)
@@ -44,7 +60,7 @@ class AndroidEd25519ManifestVerifier(
             signature.algorithm.lowercase() != "ed25519"
         ) return false
         return runCatching {
-            val encodedSignature = Base64.decode(signature.value, Base64.DEFAULT)
+            val encodedSignature = Base64.getDecoder().decode(signature.value)
             val payload = OfflineRegionCatalogCodec.signingPayload(catalog)
                 .toByteArray(Charsets.UTF_8)
             val verifier = Ed25519Signer()

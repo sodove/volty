@@ -31,6 +31,8 @@ class OfflineRegionCatalogTest {
         val catalog = assertIs<OfflineRegionCatalogParseResult.Success>(result).catalog
         assertEquals("ru-sve-ekb", catalog.regions.single().region.regionId)
         assertEquals("2026.09.1", catalog.regions.single().latestRelease?.releaseVersion)
+        assertEquals(3, catalog.regions.single().latestRelease?.schemaVersion)
+        assertEquals("geofabrik-ural", catalog.regions.single().latestRelease?.source?.sourceId)
         assertEquals(true, catalog.regions.single().onDemand.enabled)
     }
 
@@ -212,40 +214,40 @@ class OfflineRegionCatalogTest {
     private fun catalogSignature() = OfflineRegionCatalogSignature("key", "ed25519", "signature")
 
     private fun release(regionId: String = "ru-sve-ekb") = OfflineRegionPackageManifest(
-        schemaVersion = 2,
+        schemaVersion = 3,
         regionId = regionId,
         releaseVersion = "2026.09.1",
         createdAt = "2026-09-03T00:00:00Z",
-        source = OfflineRegionSource(1L, "2026-09-02T00:00:00Z"),
+        source = OfflineRegionSource(
+            1L, "2026-09-02T00:00:00Z", "geofabrik-ural",
+            "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf", checksum,
+        ),
         compatibility = OfflineRegionCompatibility(
             28,
             "valhalla",
             OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION,
-            1,
             1,
         ),
         coverage = OfflineRegionCoverage(listOf(59.0, 56.0, 62.0, 57.5), 20),
         components = OfflineRegionComponents(
             routing = OfflineRegionRoutingArtifact("https://cdn.test/routing", 1L, 1L, checksum, "gzip"),
             search = OfflineRegionSearchArtifact("https://cdn.test/search", 1L, 1L, checksum, 1),
-            map = OfflineRegionMapArtifact("https://cdn.test/map", 1L, 1L, checksum, "pmtiles", 5, 14, 1),
         ),
         signature = OfflineRegionManifestSignature("key", "ed25519", "signature"),
     )
 
     private fun releaseJson() = """
       {
-        "schemaVersion": 2,
+        "schemaVersion": 3,
         "regionId": "ru-sve-ekb",
         "releaseVersion": "2026.09.1",
         "createdAt": "2026-09-03T00:00:00Z",
-        "source": {"osmReplicationSequence": 1, "osmTimestamp": "2026-09-02T00:00:00Z"},
-        "compatibility": {"minAppVersionCode": 28, "routingEngine": "valhalla", "routingDataVersion": "${OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION}", "mapSchemaVersion": 1, "searchSchemaVersion": 1},
+        "source": {"osmReplicationSequence": 1, "osmTimestamp": "2026-09-02T00:00:00Z", "sourceId": "geofabrik-ural", "sourceUrl": "https://download.geofabrik.de/russia/ural-fed-district-latest.osm.pbf", "sourceSha256": "$checksum"},
+        "compatibility": {"minAppVersionCode": 28, "routingEngine": "valhalla", "routingDataVersion": "${OfflineRegionPackageManifestPolicy.EXPECTED_ROUTING_DATA_VERSION}", "searchSchemaVersion": 1},
         "coverage": {"bbox": [59.0, 56.0, 62.0, 57.5], "routingBufferKm": 20},
         "components": {
           "routing": {"url": "https://cdn.test/routing", "downloadBytes": 1, "installedBytes": 1, "sha256": "$checksum", "compression": "gzip"},
-          "search": {"url": "https://cdn.test/search", "downloadBytes": 1, "installedBytes": 1, "sha256": "$checksum", "schemaVersion": 1},
-          "map": {"url": "https://cdn.test/map", "downloadBytes": 1, "installedBytes": 1, "sha256": "$checksum", "format": "pmtiles", "minZoom": 5, "maxZoom": 14, "vectorLayerSchema": 1}
+          "search": {"url": "https://cdn.test/search", "downloadBytes": 1, "installedBytes": 1, "sha256": "$checksum", "schemaVersion": 1}
         },
         "manifestSignature": {"keyId": "key", "algorithm": "ed25519", "value": "signature"}
       }

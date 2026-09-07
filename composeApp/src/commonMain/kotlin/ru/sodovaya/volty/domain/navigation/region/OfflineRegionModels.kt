@@ -25,10 +25,31 @@ data class OfflineRegionBounds(
 }
 
 @Serializable
+data class OfflineRegionMapPackMetadata(
+    val styleUrls: List<String>,
+    val bounds: OfflineRegionBounds,
+    val minZoom: Int,
+    val maxZoom: Int,
+    val ofmStyleRevision: String? = null,
+) {
+    init {
+        require(styleUrls.isNotEmpty() && styleUrls.distinct().size == styleUrls.size)
+        require(styleUrls.all { it in OFM_STYLE_URLS }) { "map packs require an OFM style URL" }
+        require(minZoom in 0..24 && maxZoom in minZoom..24)
+        require(ofmStyleRevision == null || ofmStyleRevision.isNotBlank())
+    }
+
+    private companion object {
+        val OFM_STYLE_URLS = setOf("https://tiles.openfreemap.org/styles/bright", "https://tiles.openfreemap.org/styles/dark")
+    }
+}
+
+@Serializable
 data class OfflineRegionManifest(
     val regionId: String,
     val displayName: String,
     val bounds: OfflineRegionBounds,
+    val mapPack: OfflineRegionMapPackMetadata? = null,
 ) {
     init {
         require(regionId.isNotBlank()) { "regionId must not be blank" }

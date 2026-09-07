@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
 import kotlinx.coroutines.flow.StateFlow
+import ru.sodovaya.volty.domain.navigation.offline.OfflineMapPackState
 
 enum class OfflineRegionPackageFailure {
     NETWORK,
@@ -29,7 +30,10 @@ data class OfflineRegionPackageState(
     val installedReleaseVersion: String? = null,
     val downloadedBytes: Long = 0L,
     val failure: OfflineRegionPackageFailure? = null,
+    /** Supplied independently by the preparation coordinator from OfflineMapPackManager. */
+    val mapPackState: OfflineMapPackState = OfflineMapPackState.Missing,
 ) {
+    val navigationStatus: OfflineRegionPackageStatus get() = status
     init {
         require(downloadedBytes >= 0L) { "downloadedBytes must not be negative" }
         require(latestRelease != null || downloadedBytes == 0L) {
@@ -48,15 +52,13 @@ data class OfflineRegionPackageState(
     val totalDownloadBytes: Long
         get() = latestRelease?.let { release ->
             release.components.routing.downloadBytes +
-                release.components.search.downloadBytes +
-                release.components.map.downloadBytes
+                release.components.search.downloadBytes
         } ?: 0L
 
     val totalInstalledBytes: Long
         get() = latestRelease?.let { release ->
             release.components.routing.installedBytes +
-                release.components.search.installedBytes +
-                release.components.map.installedBytes
+                release.components.search.installedBytes
         } ?: 0L
 
     val downloadProgress: Float?

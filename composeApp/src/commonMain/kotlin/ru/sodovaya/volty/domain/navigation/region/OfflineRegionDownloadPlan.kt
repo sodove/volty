@@ -25,8 +25,9 @@ data class OfflineRegionDownloadPlan(
     val artifacts: List<OfflineRegionArtifactDownload>,
 ) {
     init {
-        require(artifacts.map(OfflineRegionArtifactDownload::component).toSet() == OfflineRegionComponent.entries.toSet()) {
-            "a regional release must contain exactly one routing, search, and map artifact"
+        require(artifacts.size == 2 && artifacts.map(OfflineRegionArtifactDownload::component).toSet() ==
+            setOf(OfflineRegionComponent.ROUTING, OfflineRegionComponent.SEARCH)) {
+            "a regional release must contain exactly one routing and search artifact"
         }
         require(artifacts.map(OfflineRegionArtifactDownload::relativePath).toSet().size == artifacts.size) {
             "regional artifact paths must be unique"
@@ -82,14 +83,6 @@ object OfflineRegionDownloadPlanFactory {
                         downloadBytes = manifest.components.search.downloadBytes,
                         installedBytes = manifest.components.search.installedBytes,
                         sha256 = manifest.components.search.sha256,
-                    ),
-                    OfflineRegionArtifactDownload(
-                        component = OfflineRegionComponent.MAP,
-                        relativePath = OfflineRegionArtifactFile.MAP.relativePath,
-                        url = manifest.components.map.url,
-                        downloadBytes = manifest.components.map.downloadBytes,
-                        installedBytes = manifest.components.map.installedBytes,
-                        sha256 = manifest.components.map.sha256,
                     ),
                 ),
             ),

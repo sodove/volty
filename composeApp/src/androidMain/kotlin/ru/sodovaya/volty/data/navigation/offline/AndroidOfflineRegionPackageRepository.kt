@@ -461,8 +461,7 @@ class AndroidOfflineRegionPackageRepository(
             status = OfflineRegionPackageStatus.READY,
             installedReleaseVersion = manifest.releaseVersion,
             downloadedBytes = manifest.components.routing.downloadBytes +
-                manifest.components.search.downloadBytes +
-                manifest.components.map.downloadBytes,
+                manifest.components.search.downloadBytes,
         )
     }
 
@@ -474,8 +473,7 @@ class AndroidOfflineRegionPackageRepository(
         if (previous != null && previous.status.isTransient()) {
             val total = latest?.let { release ->
                 release.components.routing.downloadBytes +
-                    release.components.search.downloadBytes +
-                    release.components.map.downloadBytes
+                    release.components.search.downloadBytes
             } ?: 0L
             return previous.copy(
                 latestRelease = latest,
