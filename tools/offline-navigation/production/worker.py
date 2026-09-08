@@ -162,10 +162,13 @@ class Worker:
             return self._job_status(job)
 
     def build_status(self, region_id: str) -> dict:
+        region = next((item for item in self.config.regions if item.id == region_id), None)
+        source_id = region.source_id if region else None
         with self._queue_lock:
             state = self._read()
             matching = [job for job in state["jobs"]
-                        if isinstance(job, dict) and job.get("regionId") == region_id]
+                        if isinstance(job, dict) and job.get("regionId") == region_id
+                        and job.get("sourceId") == source_id and job.get("onDemand") is True]
             for job in reversed(matching):
                 if job.get("state") in {"queued", "running", "ready", "failed"}:
                     return self._job_status(job)

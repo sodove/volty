@@ -219,6 +219,28 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual(2, len(jobs))
             self.assertTrue(jobs[1]["onDemand"])
 
+    def test_build_status_does_not_report_stale_scheduler_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "publicRoot": str(root / "public"),
+                "stagingRoot": str(root / "staging"),
+                "sourceRoot": str(root / "sources"),
+                "signingKey": str(root / "keys" / "signing-key.pem"),
+                "regions": [{"id": "region", "sourceId": "russia"}],
+            }), encoding="utf-8")
+            config = load_config(config_path)
+            queue = root / "queue.json"
+            queue.write_text(json.dumps({"jobs": [{
+                "id": "scheduled", "regionId": "region", "sourceId": "russia", "state": "queued",
+            }]}), encoding="utf-8")
+
+            result = Worker(config, queue).build_status("region")
+
+            self.assertEqual("unavailable", result["status"])
+            self.assertEqual("build_not_requested", result["errorCode"])
+
 
 if __name__ == "__main__":
     unittest.main()
