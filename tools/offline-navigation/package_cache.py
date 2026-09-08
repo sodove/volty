@@ -379,7 +379,12 @@ class PackageManager:
                     'errorCode': 'builder_malformed_response', 'retryAfterSeconds': 30}
         if value.get('status') == 'ready':
             try:
-                self.refresh()
+                if self.config.catalog_refresh_enabled:
+                    self.refresh()
+                else:
+                    # The worker writes the signed catalog atomically into
+                    # our local root; catalog_bytes() reloads it by mtime.
+                    self._reload_catalog_file_if_changed()
             except Exception:
                 pass
         return value

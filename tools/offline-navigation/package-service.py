@@ -179,7 +179,14 @@ def main():
     def refresh_loop():
         while not stop.is_set():
             try:
-                manager.refresh()
+                if manager.config.catalog_refresh_enabled:
+                    manager.refresh()
+                else:
+                    # In the production setup the worker publishes the
+                    # catalog into this service's root.  Never fetch the
+                    # public URL back through nginx: that is a self-proxy
+                    # loop and blocks requests while the refresh lock is held.
+                    manager.catalog_bytes()
                 manager.prune()
             except Exception:
                 LOG.exception('Catalog refresh failed; keeping last verified catalog')

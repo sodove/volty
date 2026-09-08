@@ -51,6 +51,12 @@ class Config:
         self.catalog_url = https_url(catalog_url)
         self.artifact_base_url = https_url(artifact_base_url)
         self.public_base_url = https_url(public_base_url)
+        # A worker publishes catalog.json into the same root that the package
+        # service exposes.  Fetching that public URL from the service itself
+        # creates a proxy loop (and can hold the refresh lock until timeout),
+        # so local publication must be consumed from disk instead.
+        public_catalog_url = self.public_base_url.rsplit('/regions', 1)[0] + '/catalog.json'
+        self.catalog_refresh_enabled = self.catalog_url != public_catalog_url
         self.builder_url = str(builder_url).rstrip('/') if builder_url else None
         if self.builder_url and not self.builder_url.startswith(('http://', 'https://')):
             raise ValueError('invalid_builder_url')

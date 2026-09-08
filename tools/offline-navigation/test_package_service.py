@@ -56,6 +56,16 @@ class PackageServiceTest(unittest.TestCase):
             max_download_bytes=1024*1024, max_expanded_bytes=1024*1024, min_free_bytes=0,
             prune_grace_seconds=10)
 
+    def test_public_catalog_url_disables_self_refresh(self):
+        config = service.Config(root=self.root / 'cache-self-refresh',
+            catalog_url='https://public.test/offline/catalog.json',
+            artifact_base_url='https://public.test/offline/regions',
+            public_base_url='https://public.test/offline/regions',
+            public_key=base64.b64encode(self.key.public_key().public_bytes(
+                serialization.Encoding.Raw, serialization.PublicFormat.Raw)).decode(), key_id='release-key',
+            min_free_bytes=0)
+        self.assertFalse(config.catalog_refresh_enabled)
+
     def make_artifacts(self):
         config = json.dumps({'mjolnir': {'tile_dir': 'tiles', 'tile_extract': 'tiles.tar',
             'admin': 'admins.sqlite', 'timezone': 'timezones.sqlite'}}).encode()
