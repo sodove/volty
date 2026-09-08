@@ -34,7 +34,10 @@ object OfflineRegionListPolicy {
         )
         return if (normalized.isBlank()) {
             val active = ordered.filter { it.status in activeStatuses }
-            val suggestions = ordered.filterNot { it.status in activeStatuses }.take(maxSuggestions)
+            val suggestions = ordered
+                .filterNot { it.status in activeStatuses }
+                .distinctBy { it.region.displayName.trim().lowercase() }
+                .take(maxSuggestions)
             active + suggestions
         } else {
             ordered.take(maxSuggestions)

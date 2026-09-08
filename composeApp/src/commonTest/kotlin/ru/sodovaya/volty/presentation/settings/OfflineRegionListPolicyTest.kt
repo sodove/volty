@@ -27,6 +27,19 @@ class OfflineRegionListPolicyTest {
         assertEquals(1, OfflineRegionListPolicy.filterAndOrder(states, "g1-ekb").size)
     }
 
+    @Test
+    fun `empty query collapses duplicate automatic region names`() {
+        val states = listOf(
+            state("g1-125-358", OfflineRegionPackageStatus.NOT_INSTALLED, "Россия"),
+            state("g1-125-359", OfflineRegionPackageStatus.NOT_INSTALLED, "Россия"),
+            state("g1-146-240", OfflineRegionPackageStatus.NOT_INSTALLED, "Екатеринбург"),
+        )
+
+        val result = OfflineRegionListPolicy.filterAndOrder(states, "", maxSuggestions = 8)
+
+        assertEquals(listOf("g1-146-240", "g1-125-358"), result.map { it.region.regionId })
+    }
+
     private fun state(id: String, status: OfflineRegionPackageStatus, name: String = id) = OfflineRegionPackageState(
         region = OfflineRegionManifest(id, name, OfflineRegionBounds(56.0, 60.0, 57.0, 61.0)),
         latestRelease = null,
