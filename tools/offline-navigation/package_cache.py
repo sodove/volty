@@ -12,6 +12,7 @@ import tempfile
 import threading
 import time
 from urllib.parse import quote
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 from cryptography.exceptions import InvalidSignature
 from package_validation import (
@@ -358,6 +359,18 @@ class PackageManager:
         try:
             with urlopen(Request(url, method=method, headers={'Accept': 'application/json'}), timeout=10) as response:
                 value = json.loads(response.read(16384))
+        except HTTPError as error:
+            # The worker uses 404 for a known-but-unavailable region.  Its
+            # JSON body is still the authoritative state and must reach the
+            # public package API instead of being flattened into a 503.
+            if error.code != 404:
+                return {'status': 'failed', 'regionId': region_id, 'releaseVersion': None,
+                        'errorCode': 'builder_unavailable', 'retryAfterSeconds': 30}
+            try:
+                value = json.loads(error.read(16384))
+            except Exception:
+                return {'status': 'failed', 'regionId': region_id, 'releaseVersion': None,
+                        'errorCode': 'builder_unavailable', 'retryAfterSeconds': 30}
         except Exception:
             return {'status': 'failed', 'regionId': region_id, 'releaseVersion': None,
                     'errorCode': 'builder_unavailable', 'retryAfterSeconds': 30}
