@@ -90,7 +90,7 @@ Add INVALID_ON_DEMAND_ENTRY. Validate the region envelope for every entry; run r
 
 In build-catalog.py, validate onDemand as an object with a boolean enabled. When manifest is absent, use the logical bounds as the region envelope and emit latestRelease: None; when a manifest exists, keep the current signed manifest verification and coverage check.
 
-In Worker._write_catalog, first index published manifests by region ID, then iterate config.regions. Emit the manifest when present and latestRelease: None otherwise. Set onDemand.enabled from source admission/configuration, never from an Android-supplied value. Use a stable fallback such as Регион · 56.0–57.0°N, 60.0–61.0°E when displayName is blank.
+In Worker._write_catalog, first index published manifests by region ID, then iterate config.regions. Emit the manifest when present and latestRelease: None otherwise. Set onDemand.enabled from source admission/configuration, never from an Android-supplied value. Region names are generated from OSM place metadata during package preparation; if no settlement is present, use the source extract's administrative name. A coordinate-only fallback was explicitly retracted after UI review because it is not a human region name.
 
 - [ ] **Step 4: Run the focused tests and verify they pass**
 

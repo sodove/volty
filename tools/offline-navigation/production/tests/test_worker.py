@@ -13,10 +13,10 @@ from production.worker import Worker
 
 
 class WorkerTest(unittest.TestCase):
-    def test_grid_region_name_is_generated_from_bbox_without_user_input(self):
+    def test_grid_region_name_uses_source_metadata_without_user_input(self):
         self.assertEqual(
-            "56–57° с.ш. · 60–61° в.д.",
-            Worker._fallback_display_name("g1-146-240", [60.0, 56.0, 61.0, 57.0]),
+            "Уральский федеральный округ",
+            Worker._fallback_display_name("g1-146-240", [60.0, 56.0, 61.0, 57.0], "ural-fed-district"),
         )
 
     def test_request_build_schedules_one_navigation_job(self):

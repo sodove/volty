@@ -11,9 +11,29 @@ assert _SPEC.loader is not None
 _SPEC.loader.exec_module(_MODULE)
 _rows = _MODULE._rows
 _deduplicate_rows = _MODULE._deduplicate_rows
+_region_name = _MODULE._region_name
 
 
 class BuildSearchTest(unittest.TestCase):
+    def test_region_name_comes_from_largest_osm_settlement(self):
+        features = [
+            self._feature("village", "Берёзовский", "place", "village", 60.80),
+            self._feature("city", "Екатеринбург", "place", "city", 60.60),
+        ]
+
+        self.assertEqual(
+            "Екатеринбург",
+            _region_name(features, (60.0, 56.0, 61.0, 57.0)),
+        )
+
+    def test_region_name_is_empty_when_pbf_has_no_named_settlement(self):
+        self.assertIsNone(
+            _region_name(
+                [self._feature("shop", "Алатырь", "shop", "mall", 60.60)],
+                (60.0, 56.0, 61.0, 57.0),
+            )
+        )
+
     def test_deduplicates_same_place_variants_but_keeps_distant_branches(self):
         features = [
             self._feature("food", "Алатырь", "amenity", "food_court", 60.6000),

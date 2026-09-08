@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import gzip
 import hashlib
 import json
 import os
 import re
 import shutil
 import signal
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -269,7 +271,13 @@ class Worker:
             # Region names are catalog metadata, never something the rider has
             # to enter.  A configured name is optional; generated grid cells
             # get a deterministic coordinate label from their bbox.
-            display_name = region.display_name or existing_names.get(region.id) or self._fallback_display_name(region.id, bbox)
+            generated_name = self._generated_region_name(manifest_path) if manifest_path is not None else None
+            previous_name = existing_names.get(region.id)
+            if _is_legacy_grid_name(previous_name):
+                previous_name = None
+            display_name = region.display_name or generated_name or previous_name or self._fallback_display_name(
+                region.id, bbox, region.source_id,
+            )
             entry = {"regionId": region.id, "displayName": display_name,
                      "bounds": bbox, "onDemand": {"enabled": manifest is None}}
             if manifest_path is not None:
@@ -291,15 +299,70 @@ class Worker:
                         "--current-app-version-code", str(self.config.min_app_version_code)], check=True, timeout=60)
 
     @staticmethod
-    def _fallback_display_name(region_id: str, bbox: list[float] | None = None) -> str:
+    def _generated_region_name(manifest_path: Path | None) -> str | None:
+        if manifest_path is None:
+            return None
+        database_gzip = manifest_path.parent / "search" / "places.sqlite.gz"
+        if not database_gzip.is_file():
+            return None
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(prefix="volty-region-", suffix=".sqlite", delete=False) as temporary:
+                temporary_path = Path(temporary.name)
+                with gzip.open(database_gzip, "rb") as source:
+                    shutil.copyfileobj(source, temporary)
+            with sqlite3.connect(temporary_path) as connection:
+                row = connection.execute(
+                    "SELECT value FROM metadata WHERE key = 'region_name' LIMIT 1",
+                ).fetchone()
+            value = row[0].strip() if row and isinstance(row[0], str) else None
+            return value or None
+        except (OSError, sqlite3.Error, gzip.BadGzipFile):
+            return None
+        finally:
+            if temporary_path is not None:
+                temporary_path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _fallback_display_name(
+        region_id: str,
+        bbox: list[float] | None = None,
+        source_id: str | None = None,
+    ) -> str:
+        source_name = _SOURCE_DISPLAY_NAMES.get(source_id or "")
+        if source_name:
+            return source_name
+        if source_id:
+            humanized_source = re.sub(r"[-_]+", " ", source_id).strip()
+            if humanized_source:
+                return humanized_source[:1].upper() + humanized_source[1:]
         if bbox is not None and len(bbox) == 4:
             west, south, east, north = bbox
             def coordinate(value: float) -> str:
                 rounded = round(value, 1)
                 return str(int(rounded)) if rounded.is_integer() else f"{rounded:g}"
-            return f"{coordinate(south)}–{coordinate(north)}° с.ш. · {coordinate(west)}–{coordinate(east)}° в.д."
+            return f"Регион {coordinate(south)}–{coordinate(north)}"
         match = re.fullmatch(r"g1-(\d+)-(\d+)", region_id)
         return f"Регион {match.group(1)}–{match.group(2)}" if match else region_id
+
+
+_SOURCE_DISPLAY_NAMES = {
+    "russia": "Россия",
+    "central-fed-district": "Центральный федеральный округ",
+    "northwestern-fed-district": "Северо-Западный федеральный округ",
+    "southern-fed-district": "Южный федеральный округ",
+    "north-caucasian-fed-district": "Северо-Кавказский федеральный округ",
+    "volga-fed-district": "Приволжский федеральный округ",
+    "ural-fed-district": "Уральский федеральный округ",
+    "siberian-fed-district": "Сибирский федеральный округ",
+    "far-eastern-fed-district": "Дальневосточный федеральный округ",
+}
+
+_LEGACY_GRID_NAME = re.compile(r"^(?:регион|region)\s+\d+[–-]\d+$", re.IGNORECASE)
+
+
+def _is_legacy_grid_name(value: object) -> bool:
+    return isinstance(value, str) and bool(_LEGACY_GRID_NAME.fullmatch(value.strip()))
 
 
 def main() -> int:

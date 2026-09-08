@@ -138,7 +138,7 @@ tar -czf "$STAGING/artifacts/routing/valhalla-routing.tar.gz" \
 rm -rf "$STAGING/installed/routing/tiles"
 
 echo "Building FTS4 search component"
-tools_run env REGION_ID="$REGION_ID" bash -lc 'set -e; osmium tags-filter /work/region.osm.pbf nwr/name nwr/addr:street -o /work/search/named.osm.pbf; osmium export /work/search/named.osm.pbf --geometry-types=point,linestring,polygon -o /work/search/named.geojson; python3 /tooling/build-search.py /work/search/named.geojson /work/installed/search/places.sqlite --region-id "$REGION_ID"'
+tools_run env REGION_ID="$REGION_ID" REGION_BBOX="$BBOX" bash -lc 'set -e; osmium tags-filter /work/region.osm.pbf nwr/name nwr/addr:street nwr/place -o /work/search/named.osm.pbf; osmium export /work/search/named.osm.pbf --geometry-types=point,linestring,polygon -o /work/search/named.geojson; python3 /tooling/build-search.py /work/search/named.geojson /work/installed/search/places.sqlite --region-id "$REGION_ID" --region-bbox "$REGION_BBOX"'
 gzip -9 -c "$STAGING/installed/search/places.sqlite" > "$STAGING/artifacts/search/places.sqlite.gz"
 rm -rf "$STAGING/search"
 

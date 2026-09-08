@@ -85,6 +85,14 @@ _DISPLAY_KINDS = {
     "railway:station": "Железнодорожная станция",
 }
 
+_REGION_PLACE_PRIORITY = {
+    "city": 0,
+    "town": 1,
+    "municipality": 2,
+    "village": 3,
+    "suburb": 4,
+}
+
 
 def _display_subtitle(properties: dict[str, Any]) -> str:
     kind = _DISPLAY_KINDS.get(_kind(properties))
@@ -197,11 +205,55 @@ def _rows(features: Iterable[dict[str, Any]]) -> Iterable[Row]:
     yield from _deduplicate_rows(raw_rows)
 
 
+def _region_name(features: Iterable[dict[str, Any]], bbox: tuple[float, float, float, float] | None) -> str | None:
+    """Pick a deterministic human region name from OSM place features.
+
+    The name is generated from the source PBF; operators and riders never have
+    to maintain a parallel naming table.  Prefer larger settlements, then the
+    one closest to the logical region centre.
+    """
+    if bbox is None:
+        return None
+    west, south, east, north = bbox
+    centre_lat = (south + north) / 2.0
+    centre_lon = (west + east) / 2.0
+    candidates: list[tuple[int, float, str]] = []
+    for feature in features:
+        properties = feature.get("properties")
+        geometry = feature.get("geometry")
+        if not isinstance(properties, dict) or not isinstance(geometry, dict):
+            continue
+        place = properties.get("place")
+        priority = _REGION_PLACE_PRIORITY.get(place) if isinstance(place, str) else None
+        if priority is None:
+            continue
+        names = _values(properties, "name:ru", "name", "official_name", "alt_name")
+        point = _centroid(geometry.get("coordinates"))
+        if not names or point is None:
+            continue
+        latitude, longitude = point
+        if not (west <= longitude <= east and south <= latitude <= north):
+            continue
+        distance = (latitude - centre_lat) ** 2 + (longitude - centre_lon) ** 2
+        candidates.append((priority, distance, names[0]))
+    return min(candidates, key=lambda item: (item[0], item[1], item[2].lower()))[2] if candidates else None
+
+
+def _parse_bbox(value: str | None) -> tuple[float, float, float, float] | None:
+    if not value:
+        return None
+    parts = [float(part.strip()) for part in value.split(",")]
+    if len(parts) != 4:
+        raise ValueError("region bbox must contain west,south,east,north")
+    return parts[0], parts[1], parts[2], parts[3]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("geojson", type=Path)
     parser.add_argument("database", type=Path)
     parser.add_argument("--region-id", default="ekb-agglomeration")
+    parser.add_argument("--region-bbox", help="logical region bbox: west,south,east,north")
     args = parser.parse_args()
 
     if args.database.exists():
@@ -240,6 +292,9 @@ def main() -> int:
             )
             inserted += 1
         connection.execute("INSERT INTO metadata(key, value) VALUES (?, ?)", ("rows", str(inserted)))
+        region_name = _region_name(features, _parse_bbox(args.region_bbox))
+        if region_name:
+            connection.execute("INSERT INTO metadata(key, value) VALUES (?, ?)", ("region_name", region_name))
         connection.commit()
         connection.execute("VACUUM")
         print(f"indexed {inserted} searchable features into {args.database}")
