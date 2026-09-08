@@ -160,6 +160,34 @@ class PackageServiceTest(unittest.TestCase):
         with manager.open_artifact('ekb-agglomeration', '0.1.2', 'search/places.sqlite.gz') as stream:
             self.assertEqual(self.artifacts['search'], stream.read())
 
+    def test_worker_publication_after_start_is_indexed_with_catalog_reload(self):
+        manager = self.manager()
+        manager.refresh()
+        publication = self.config.root / 'regions' / 'ekb-agglomeration' / '0.1.2'
+        publication.mkdir(parents=True)
+        for name, data in self.artifacts.items():
+            suffix = {'routing': 'routing/valhalla-routing.tar.gz',
+                      'search': 'search/places.sqlite.gz'}[name]
+            path = publication / suffix
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        manifest_bytes = json.dumps(self.manifest, ensure_ascii=False, separators=(',', ':')).encode()
+        (publication / 'manifest.json').write_bytes(manifest_bytes)
+        (publication / '.ready.json').write_text(
+            json.dumps({'manifestSha256': hashlib.sha256(manifest_bytes).hexdigest()}),
+        )
+        # Simulate the worker's atomic catalog publication after the service
+        # has already started and indexed its initial release set.
+        catalog = json.loads(self.catalog_bytes)
+        catalog['generatedAt'] = '2026-09-06T00:00:00Z'
+        updated = json.dumps(catalog_tools.sign_catalog(catalog, self.key, 'release-key'),
+                             ensure_ascii=False).encode()
+        (self.config.root / 'catalog.json').write_bytes(updated)
+
+        self.assertEqual('ready', manager.status('ekb-agglomeration')['status'])
+        with manager.open_artifact('ekb-agglomeration', '0.1.2', 'search/places.sqlite.gz') as stream:
+            self.assertEqual(self.artifacts['search'], stream.read())
+
     def test_catalog_and_manifest_tampering_preserve_previous_catalog(self):
         manager = self.manager()
         manager.refresh()

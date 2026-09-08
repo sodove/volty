@@ -81,22 +81,7 @@ class PackageManager:
             except (ValueError, OSError):
                 LOG.exception('Discarding invalid cached catalog')
         self._catalog_mtime_ns = self._catalog_file_mtime(self.root / 'catalog.json')
-        for marker in self.releases.glob('*/*/.ready.json'):
-            try:
-                path = marker.parent
-                if any(p.is_symlink() for p in (path, path.parent, marker)):
-                    continue
-                manifest = json.loads((path / 'manifest.json').read_bytes())
-                self._validate_manifest(manifest)
-                if path.name != manifest['releaseVersion'] or path.parent.name != manifest['regionId']:
-                    raise ValueError('release_path_mismatch')
-                self._verify_files(path, manifest, structures=False)
-                metadata = json.loads(marker.read_bytes())
-                if metadata.get('manifestSha256') != hashlib.sha256((path / 'manifest.json').read_bytes()).hexdigest():
-                    raise ValueError('ready_marker_mismatch')
-                self._ready[(manifest['regionId'], manifest['releaseVersion'])] = manifest
-            except (ValueError, OSError, KeyError):
-                LOG.exception('Ignoring damaged cached release %s', marker.parent)
+        self._index_ready_releases()
 
     def close(self):
         if self._closed:
@@ -186,6 +171,26 @@ class PackageManager:
             result[region_id] = entry
         return result, timestamp
 
+    def _index_ready_releases(self):
+        """Index packages published directly by the worker into our shared root."""
+        with self._lock:
+            for marker in self.releases.glob('*/*/.ready.json'):
+                try:
+                    path = marker.parent
+                    if any(p.is_symlink() for p in (path, path.parent, marker)):
+                        continue
+                    manifest = json.loads((path / 'manifest.json').read_bytes())
+                    self._validate_manifest(manifest)
+                    if path.name != manifest['releaseVersion'] or path.parent.name != manifest['regionId']:
+                        raise ValueError('release_path_mismatch')
+                    self._verify_files(path, manifest, structures=False)
+                    metadata = json.loads(marker.read_bytes())
+                    if metadata.get('manifestSha256') != hashlib.sha256((path / 'manifest.json').read_bytes()).hexdigest():
+                        raise ValueError('ready_marker_mismatch')
+                    self._ready[(manifest['regionId'], manifest['releaseVersion'])] = manifest
+                except (ValueError, OSError, KeyError):
+                    LOG.exception('Ignoring damaged cached release %s', marker.parent)
+
     @staticmethod
     def _catalog_file_mtime(path):
         try:
@@ -246,6 +251,7 @@ class PackageManager:
                 return
             try:
                 self._install_catalog(path.read_bytes(), observed_mtime=mtime)
+                self._index_ready_releases()
             except (OSError, ValueError):
                 # Keep serving the last verified catalog until the writer
                 # publishes a valid signed replacement.
@@ -288,6 +294,10 @@ class PackageManager:
                     'regionId': region_id, 'releaseVersion': release}
 
     def status(self, region_id, release_version=None):
+        # The worker publishes catalog.json and .ready.json independently of
+        # this process.  Refresh the local index before answering status so a
+        # newly published release is not reported as unavailable until restart.
+        self._reload_catalog_file_if_changed()
         with self._lock:
             entry = self._entries.get(region_id)
             latest = entry.get('latestRelease') if entry else None
