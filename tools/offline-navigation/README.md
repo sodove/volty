@@ -54,6 +54,16 @@ inside the spec are relative to that spec file:
       "regionId": "ekb-agglomeration",
       "displayName": "Екатеринбург и окрестности",
       "bounds": [59.10, 56.00, 61.90, 57.55],
+      "mapPack": {
+        "styleUrls": [
+          "https://tiles.openfreemap.org/styles/bright",
+          "https://tiles.openfreemap.org/styles/dark"
+        ],
+        "bounds": {"south": 56.00, "west": 59.10, "north": 57.55, "east": 61.90},
+        "minZoom": 5,
+        "maxZoom": 13,
+        "ofmStyleRevision": "ofm-2026-09"
+      },
       "manifest": "ekb-package-v0.1.1/manifest.json"
     }
   ]

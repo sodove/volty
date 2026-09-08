@@ -93,6 +93,21 @@ data class OfflineRegionCatalogValidationError(
 object OfflineRegionCatalogPolicy {
     const val CURRENT_SCHEMA_VERSION: Int = 2
 
+    /**
+     * Keeps every published region and every region the server can build on
+     * demand.  A current-location preparation must be able to discover an
+     * on-demand cell before it has a release; filtering those entries here
+     * makes automatic first-open download impossible.
+     */
+    fun visibleEntries(
+        entries: List<OfflineRegionCatalogEntry>,
+        installedRegionIds: Set<String>,
+    ): List<OfflineRegionCatalogEntry> = entries.filter { entry ->
+        entry.latestRelease != null ||
+            entry.onDemand.enabled ||
+            entry.region.regionId in installedRegionIds
+    }
+
     fun validate(
         catalog: OfflineRegionCatalog,
         currentAppVersionCode: Int,

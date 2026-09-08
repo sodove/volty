@@ -8,8 +8,9 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineRegionBounds
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionManifest
 
 object OfflineMapPackPolicy {
-    const val EKB_MIN_ZOOM: Int = 5
-    const val EKB_MAX_ZOOM: Int = 13
+    /** Conservative defaults used only when an older catalog has no map metadata. */
+    const val DEFAULT_MIN_ZOOM: Int = 5
+    const val DEFAULT_MAX_ZOOM: Int = 13
 
     fun definition(
         region: OfflineRegionManifest,
@@ -18,7 +19,7 @@ object OfflineMapPackPolicy {
     ): OfflineMapPackDefinition {
         require(region.regionId.isNotBlank()) { "regionId must not be blank" }
         require(tileLimit > 0) { "tileLimit must be positive" }
-        require(EKB_MIN_ZOOM in 0..MAX_SUPPORTED_ZOOM && EKB_MAX_ZOOM in EKB_MIN_ZOOM..MAX_SUPPORTED_ZOOM) {
+        require(DEFAULT_MIN_ZOOM in 0..MAX_SUPPORTED_ZOOM && DEFAULT_MAX_ZOOM in DEFAULT_MIN_ZOOM..MAX_SUPPORTED_ZOOM) {
             "invalid map zoom range"
         }
         val styleUrl = style.url
@@ -26,8 +27,8 @@ object OfflineMapPackPolicy {
         return OfflineMapPackDefinition(
             key = OfflineMapPackKey(region.regionId, style, styleUrl),
             bounds = region.bounds,
-            minZoom = EKB_MIN_ZOOM,
-            maxZoom = EKB_MAX_ZOOM,
+            minZoom = DEFAULT_MIN_ZOOM,
+            maxZoom = DEFAULT_MAX_ZOOM,
             tileLimit = tileLimit,
         )
     }

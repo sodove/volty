@@ -144,6 +144,62 @@ def non_negative_int(value: object, name: str) -> int:
     return value
 
 
+def map_pack_metadata(value: object, name: str) -> dict[str, Any] | None:
+    """Validate and normalize the OFM metadata carried by a catalog region."""
+
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError(f"{name}: map pack metadata must be an object")
+
+    style_urls = value.get("styleUrls")
+    if (not isinstance(style_urls, list) or not style_urls or
+            any(not isinstance(url, str) for url in style_urls) or
+            len(set(style_urls)) != len(style_urls) or
+            any(url not in {
+                "https://tiles.openfreemap.org/styles/bright",
+                "https://tiles.openfreemap.org/styles/dark",
+            } for url in style_urls)):
+        raise ValueError(f"{name}.styleUrls: expected distinct OFM style URLs")
+
+    bounds_object = value.get("bounds")
+    if not isinstance(bounds_object, dict):
+        raise ValueError(f"{name}.bounds: expected south/west/north/east")
+    bounds = finite_bbox(
+        [
+            bounds_object.get("west"),
+            bounds_object.get("south"),
+            bounds_object.get("east"),
+            bounds_object.get("north"),
+        ],
+        f"{name}.bounds",
+    )
+    min_zoom = value.get("minZoom")
+    max_zoom = value.get("maxZoom")
+    if (isinstance(min_zoom, bool) or not isinstance(min_zoom, int) or
+            isinstance(max_zoom, bool) or not isinstance(max_zoom, int) or
+            not 0 <= min_zoom <= max_zoom <= 24):
+        raise ValueError(f"{name}: invalid zoom range")
+    revision = value.get("ofmStyleRevision")
+    if revision is not None and (not isinstance(revision, str) or not revision.strip()):
+        raise ValueError(f"{name}.ofmStyleRevision: expected a non-empty string")
+
+    normalized: dict[str, Any] = {
+        "styleUrls": style_urls,
+        "bounds": {
+            "south": bounds[1],
+            "west": bounds[0],
+            "north": bounds[3],
+            "east": bounds[2],
+        },
+        "minZoom": min_zoom,
+        "maxZoom": max_zoom,
+    }
+    if revision is not None:
+        normalized["ofmStyleRevision"] = revision
+    return normalized
+
+
 def validate_artifact(component: object, name: str) -> None:
     if not isinstance(component, dict):
         raise ValueError(f"{name}: artifact must be an object")
@@ -368,6 +424,25 @@ def build_catalog(
         bounds = finite_bbox(entry.get("bounds", coverage), f"{region_id}: bounds")
         if coverage is not None and not coverage_covers(coverage, bounds):
             raise ValueError(f"{region_id}: logical bounds exceed signed release coverage")
+        map_pack = map_pack_metadata(entry.get("mapPack"), f"{spec_path}: regions[{index}].mapPack")
+        if map_pack is None:
+            # The basemap is always the canonical OFM style.  Keep its pack
+            # envelope in the catalog even when the operator did not provide
+            # explicit tuning so Android never has to guess region geometry.
+            map_pack = {
+                "styleUrls": [
+                    "https://tiles.openfreemap.org/styles/bright",
+                    "https://tiles.openfreemap.org/styles/dark",
+                ],
+                "bounds": {
+                    "south": bounds[1],
+                    "west": bounds[0],
+                    "north": bounds[3],
+                    "east": bounds[2],
+                },
+                "minZoom": 5,
+                "maxZoom": 13,
+            }
 
         catalog_entry = {
             "region": {
@@ -382,6 +457,8 @@ def build_catalog(
             },
             "latestRelease": manifest,
         }
+        if map_pack is not None:
+            catalog_entry["region"]["mapPack"] = map_pack
         if on_demand["enabled"]:
             catalog_entry["onDemand"] = {"enabled": True}
         catalog_entries.append(catalog_entry)

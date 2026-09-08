@@ -97,6 +97,24 @@ class OfflineRegionCatalogTest {
     }
 
     @Test
+    fun visible_entries_keep_on_demand_regions_for_current_location_preparation() {
+        val published = OfflineRegionCatalogEntry(region("published"), release())
+        val onDemand = OfflineRegionCatalogEntry(
+            region("on-demand"),
+            latestRelease = null,
+            onDemand = OfflineRegionOnDemand(enabled = true),
+        )
+        val unavailable = OfflineRegionCatalogEntry(region("unavailable"), latestRelease = null)
+
+        val visible = OfflineRegionCatalogPolicy.visibleEntries(
+            listOf(published, onDemand, unavailable),
+            installedRegionIds = emptySet(),
+        )
+
+        assertEquals(listOf("published", "on-demand"), visible.map { it.region.regionId })
+    }
+
+    @Test
     fun validation_rejects_an_unbuilt_entry_without_on_demand_capability() {
         val errors = OfflineRegionCatalogPolicy.validate(
             OfflineRegionCatalog(

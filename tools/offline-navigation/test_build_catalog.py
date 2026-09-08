@@ -214,6 +214,88 @@ class BuildCatalogTest(unittest.TestCase):
             self.assertIsNone(entry["latestRelease"])
             self.assertEqual({"enabled": True}, entry["onDemand"])
 
+    def test_copies_map_pack_metadata_into_the_region_envelope(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, key = self.signed_manifest()
+            spec_path = root / "regions.json"
+            spec_path.write_text(json.dumps({
+                "regions": [{
+                    "regionId": "ekb-agglomeration",
+                    "displayName": "Yekaterinburg",
+                    "bounds": [59.10, 56.00, 61.90, 57.55],
+                    "mapPack": {
+                        "styleUrls": [
+                            "https://tiles.openfreemap.org/styles/bright",
+                            "https://tiles.openfreemap.org/styles/dark",
+                        ],
+                        "bounds": {
+                            "south": 56.0,
+                            "west": 59.1,
+                            "north": 57.55,
+                            "east": 61.9,
+                        },
+                        "minZoom": 5,
+                        "maxZoom": 14,
+                        "ofmStyleRevision": "ofm-2026-09-03",
+                    },
+                    "manifest": "manifest.json",
+                }],
+            }, ensure_ascii=False), encoding="utf-8")
+            (root / "manifest.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+
+            catalog = MODULE.build_catalog(
+                spec_path,
+                generated_at="2026-09-03T00:00:00Z",
+                public_key=key.public_key(),
+                expected_key_id="release-key",
+                current_app_version_code=28,
+            )
+
+            self.assertEqual(
+                {
+                    "styleUrls": [
+                        "https://tiles.openfreemap.org/styles/bright",
+                        "https://tiles.openfreemap.org/styles/dark",
+                    ],
+                    "bounds": {"south": 56.0, "west": 59.1, "north": 57.55, "east": 61.9},
+                    "minZoom": 5,
+                    "maxZoom": 14,
+                    "ofmStyleRevision": "ofm-2026-09-03",
+                },
+                catalog["regions"][0]["region"]["mapPack"],
+            )
+
+    def test_rejects_malformed_map_pack_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            manifest, key = self.signed_manifest()
+            spec_path = root / "regions.json"
+            spec_path.write_text(json.dumps({
+                "regions": [{
+                    "regionId": "ekb-agglomeration",
+                    "displayName": "Yekaterinburg",
+                    "bounds": [59.10, 56.00, 61.90, 57.55],
+                    "mapPack": {
+                        "styleUrls": [{"unexpected": "object"}],
+                        "bounds": {"south": 56.0, "west": 59.1, "north": 57.55, "east": 61.9},
+                        "minZoom": 5,
+                        "maxZoom": 13,
+                    },
+                    "manifest": "manifest.json",
+                }],
+            }), encoding="utf-8")
+            (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+            with self.assertRaisesRegex(ValueError, "styleUrls"):
+                MODULE.build_catalog(
+                    spec_path,
+                    generated_at="2026-09-03T00:00:00Z",
+                    public_key=key.public_key(),
+                    expected_key_id="release-key",
+                    current_app_version_code=28,
+                )
+
     def test_catalog_signature_matches_android_nullable_defaults(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

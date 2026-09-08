@@ -435,14 +435,11 @@ class AndroidOfflineRegionPackageRepository(
         val installed = packageStore.installedRegions()
         val installedIds = installed.mapTo(mutableSetOf()) { it.manifest.regionId }
         val catalogIds = loaded.regions.mapTo(mutableSetOf()) { it.region.regionId }
-        // The bootstrap catalog is intentionally a country-wide inventory: it
-        // contains thousands of on-demand cells without a published release.
-        // They are not downloadable yet and must not become thousands of
-        // Compose rows (or make every map lookup scan an unusable entry).
-        // Keep only published releases plus verified local packages; a later
-        // catalog refresh will make a newly published on-demand region visible.
-        val available = loaded.regions
-            .filter { it.latestRelease != null || it.region.regionId in installedIds }
+        // On-demand cells are part of the trusted catalog even before their
+        // release exists. Keep them discoverable so first map open can resolve
+        // the current cell and ask the server to build it.
+        val available = OfflineRegionCatalogPolicy
+            .visibleEntries(loaded.regions, installedIds)
             .map(::stateFor)
         val localOnly = installed
             .filter { it.manifest.regionId !in catalogIds }
