@@ -49,11 +49,30 @@ internal fun resolveDeviceTypes(
     rememberedType?.let { memory ->
         if (memory.address == address) {
             return if (memory.controllerType != null) {
-                ResolvedDeviceTypes(
-                    bmsType = null,
-                    controllerType = memory.controllerType,
-                    provenance = DeviceTypeProvenance.REMEMBERED
-                )
+                // A failed/aborted VESC setup can leave a remembered controller
+                // role for the address. Begode/Veteran advertisements are also
+                // the battery half of a wheel, so that stale generic role must
+                // not hide a strong wheel-family detector result: doing so made
+                // the wizard seed VESC + JK on one link and render a pile of
+                // VESC warnings for an otherwise valid wheel. Saved vehicles
+                // still win above; this exception is only for free-standing
+                // scan memory that the rider can correct again.
+                if (memory.controllerType == ControllerType.VESC &&
+                    detectedBmsType.isNativeWheelBms() &&
+                    detectedControllerType == null
+                ) {
+                    ResolvedDeviceTypes(
+                        bmsType = detectedBmsType,
+                        controllerType = null,
+                        provenance = DeviceTypeProvenance.DETECTED
+                    )
+                } else {
+                    ResolvedDeviceTypes(
+                        bmsType = null,
+                        controllerType = memory.controllerType,
+                        provenance = DeviceTypeProvenance.REMEMBERED
+                    )
+                }
             } else {
                 ResolvedDeviceTypes(
                     bmsType = memory.bmsType,
@@ -77,4 +96,10 @@ internal fun resolveDeviceTypes(
             provenance = DeviceTypeProvenance.DETECTED
         )
     }
+}
+
+private fun BmsType?.isNativeWheelBms(): Boolean = when (this) {
+    BmsType.BEGODE, BmsType.LEAPERKIM -> true
+    null, BmsType.JK_BMS, BmsType.JBD_BMS, BmsType.ANT_BMS,
+    BmsType.DALY_BMS, BmsType.VESC_BMS -> false
 }

@@ -19,6 +19,8 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
@@ -608,44 +610,55 @@ private fun ScannedDeviceList(
     rows: List<SetupWizardComponent.ScanRow>,
     onAdd: (DiscoveredDevice, ScannedAdd) -> Unit
 ) {
-    rows.forEach { row ->
-        val identity = row.device.scanDeviceLabel()
-        val shape = RoundedCornerShape(10.dp)
-        Surface(
-            modifier = Modifier
-                .fillMaxWidth()
-                .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
-            shape = shape,
-            color = MaterialTheme.colorScheme.surface
-        ) {
-            Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp)) {
-                Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-                    Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(identity.title, fontWeight = FontWeight.SemiBold)
+    // Scanning is a live stream: every advertisement can add a row or update
+    // its identity. Keep the result viewport bounded so fields below it never
+    // move while the rider is typing. The small empty reservation also avoids
+    // a one-frame jump when the first advertisement arrives.
+    LazyColumn(
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 72.dp, max = 184.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp)
+    ) {
+        items(rows) { row ->
+            val identity = row.device.scanDeviceLabel()
+            val shape = RoundedCornerShape(10.dp)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(1.dp, MaterialTheme.colorScheme.outlineVariant, shape),
+                shape = shape,
+                color = MaterialTheme.colorScheme.surface
+            ) {
+                Column(modifier = Modifier.fillMaxWidth().padding(horizontal = 11.dp, vertical = 9.dp)) {
+                    Row(verticalAlignment = Alignment.Top, horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(identity.title, fontWeight = FontWeight.SemiBold)
+                            Text(
+                                identity.address.orEmpty(),
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                        WizardBadge(sourceRoleText(row.device.sourceRole()), live = row.device.controllerType != null)
                         Text(
-                            identity.address.orEmpty(),
+                            "${row.device.rssi} dBm · ${scanSignalProximityText(row.device.signalProximity())}",
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
-                    WizardBadge(sourceRoleText(row.device.sourceRole()), live = row.device.controllerType != null)
-                    Text(
-                        "${row.device.rssi} dBm · ${scanSignalProximityText(row.device.signalProximity())}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-                Row(
-                    modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
-                    horizontalArrangement = Arrangement.spacedBy(2.dp)
-                ) {
-                    row.additions.forEach { add ->
-                        TextButton(
-                            onClick = { onAdd(row.device, add) },
-                            modifier = Modifier.weight(1f),
-                            contentPadding = ButtonDefaults.TextButtonContentPadding
-                        ) {
-                            Text(scanAdditionText(add), fontSize = 11.sp)
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 5.dp),
+                        horizontalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        row.additions.forEach { add ->
+                            TextButton(
+                                onClick = { onAdd(row.device, add) },
+                                modifier = Modifier.weight(1f),
+                                contentPadding = ButtonDefaults.TextButtonContentPadding
+                            ) {
+                                Text(scanAdditionText(add), fontSize = 11.sp)
+                            }
                         }
                     }
                 }

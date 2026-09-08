@@ -108,6 +108,21 @@ class DeviceTypeResolutionTest {
     }
 
     @Test
+    fun `stale VESC memory does not hide a detected wheel battery`() {
+        val resolved = resolveDeviceTypes(
+            address = "AA:BB",
+            knownVehicle = null,
+            rememberedType = DeviceTypeMemory(address = "AA:BB", controllerType = ControllerType.VESC),
+            detectedBmsType = BmsType.BEGODE,
+            detectedControllerType = null
+        )
+
+        assertEquals(BmsType.BEGODE, resolved.bmsType)
+        assertNull(resolved.controllerType)
+        assertEquals(DeviceTypeProvenance.DETECTED, resolved.provenance)
+    }
+
+    @Test
     fun `saved vehicle type outranks an explicit correction for the same address`() {
         val resolved = resolveDeviceTypes(
             address = "AA:BB",
