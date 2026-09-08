@@ -48,6 +48,7 @@ import ru.sodovaya.volty.presentation.common.vehicleSourceLabel
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.picker_add_new
+import volty.composeapp.generated.resources.picker_add_advanced
 import volty.composeapp.generated.resources.picker_add_title
 import volty.composeapp.generated.resources.picker_cold_title
 import volty.composeapp.generated.resources.picker_detected
@@ -173,7 +174,15 @@ fun PickerScreen(component: PickerComponent) {
                 }
             }
 
-            if (state.mode != "add") {
+            if (state.mode == "add") {
+                HorizontalDivider()
+                TextButton(
+                    onClick = component::onAddNewBattery,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)
+                ) {
+                    Text(stringResource(Res.string.picker_add_advanced))
+                }
+            } else {
                 HorizontalDivider()
                 TextButton(
                     onClick = component::onAddNewBattery,

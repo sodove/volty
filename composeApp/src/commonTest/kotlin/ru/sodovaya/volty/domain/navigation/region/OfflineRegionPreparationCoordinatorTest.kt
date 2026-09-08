@@ -79,6 +79,22 @@ class OfflineRegionPreparationCoordinatorTest {
     }
 
     @Test
+    fun explicit_metered_approval_replays_the_waiting_request() = runTest {
+        val map = FakeMapManager()
+        val packages = FakePackages(regionState(OfflineRegionPackageStatus.NOT_INSTALLED))
+        val coordinator = coordinator(map, packages, backgroundScope, OfflineNetworkAvailability.METERED)
+
+        coordinator.prepareCurrentRegion(GeoCoordinate(56.5, 60.5), OfflineMapStyleVariant.BRIGHT)
+        assertEquals(0, map.prepareCalls)
+        assertEquals(1, packages.requestCalls)
+
+        coordinator.prepareExplicitRegionConfirmed("first", OfflineMapStyleVariant.BRIGHT)
+
+        assertEquals(1, map.prepareCalls)
+        assertEquals(2, packages.requestCalls)
+    }
+
+    @Test
     fun retry_releases_a_failed_key_for_an_explicit_second_attempt() = runTest {
         val map = FakeMapManager()
         val packages = FakePackages(regionState(OfflineRegionPackageStatus.FAILED))

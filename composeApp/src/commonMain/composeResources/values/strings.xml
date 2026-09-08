@@ -45,6 +45,7 @@
     <string name="picker_other_nearby">Other BMS nearby</string>
     <string name="picker_detected">BMS detected</string>
     <string name="picker_add_new">+ Add new vehicle</string>
+    <string name="picker_add_advanced">Advanced setup</string>
     <string name="picker_try_demo">Try demo mode</string>
     <string name="picker_try_demo_wheel">Demo mode: unicycle</string>
     <string name="picker_scanning">Scanning…</string>

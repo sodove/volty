@@ -45,6 +45,7 @@
     <string name="picker_other_nearby">Другие BMS рядом</string>
     <string name="picker_detected">BMS обнаружено</string>
     <string name="picker_add_new">+ Добавить новый транспорт</string>
+    <string name="picker_add_advanced">Расширенная настройка</string>
     <string name="picker_try_demo">Демо-режим</string>
     <string name="picker_try_demo_wheel">Демо-режим: моноколесо</string>
     <string name="picker_scanning">Сканирование…</string>

@@ -308,6 +308,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             confirmButton = {
                 TextButton(
                     onClick = {
+                        dismissedMeteredRegionId = region.region.regionId
                         offlineActionScope.launch {
                             runCatching {
                                 offlinePreparation.prepareExplicitRegionConfirmed(

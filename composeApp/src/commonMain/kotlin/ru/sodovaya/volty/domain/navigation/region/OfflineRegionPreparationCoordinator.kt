@@ -89,12 +89,21 @@ class DefaultOfflineRegionPreparationCoordinator(
     }
 
     override suspend fun prepareExplicitRegionConfirmed(regionId: String, style: OfflineMapStyleVariant) {
-        prepareExplicitRegionInternal(regionId, style, meteredConfirmed = true)
+        // A first attempt blocked by the metered-data policy is already held
+        // in `requested`/`pending`.  Confirmation must explicitly replay that
+        // keyed request; a normal idempotent prepare would be coalesced and
+        // leave the approval dialog stuck forever.
+        prepareExplicitRegionInternal(regionId, style, meteredConfirmed = true, force = true)
     }
 
-    private suspend fun prepareExplicitRegionInternal(regionId: String, style: OfflineMapStyleVariant, meteredConfirmed: Boolean) {
+    private suspend fun prepareExplicitRegionInternal(
+        regionId: String,
+        style: OfflineMapStyleVariant,
+        meteredConfirmed: Boolean,
+        force: Boolean = false,
+    ) {
         packages.states.value.firstOrNull { it.region.regionId == regionId }
-            ?.let { prepare(it, style, OfflinePreparationTrigger.SETTINGS, meteredConfirmed) }
+            ?.let { prepare(it, style, OfflinePreparationTrigger.SETTINGS, force = force, meteredConfirmed = meteredConfirmed) }
     }
 
     override suspend fun pause(regionId: String) {

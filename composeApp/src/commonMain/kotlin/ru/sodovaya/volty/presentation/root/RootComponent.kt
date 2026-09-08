@@ -568,11 +568,11 @@ class DefaultRootComponent(
             is Config.Welcome -> RootComponent.Child.Welcome(
                 DefaultWelcomeComponent(
                     componentContext = context,
-                    // The first saved vehicle must start in the same draft-owned
-                    // setup wizard as every later create entry. The picker is a
-                    // one-tap connection tool, not the vehicle constructor.
+                    // Start first-time setup in the short scan-and-connect flow.
+                    // The full draft wizard remains available from the picker
+                    // for riders who need to configure a multi-source vehicle.
                     onAddBatteryRequested = {
-                        goTo(Config.SetupWizard(prefillFromActiveConnection = false))
+                        replaceAll(Config.Picker(mode = "add"))
                     },
                     onQuickConnectRequested = { replaceAll(Config.Picker(mode = "guest")) },
                     onTryDemoRequested = { profile -> startDemo(profile) }
@@ -618,10 +618,9 @@ class DefaultRootComponent(
                     onConnectedKnown = { replaceAll(homeConfig()) },
                     onConnectedForEdit = { vehicleId -> replaceAll(Config.VehicleEdit(vehicleId)) },
                     onConnectedGuestNoSave = { replaceAll(homeConfig()) },
-                    // The picker is a connection chooser, never a vehicle
-                    // constructor. Every "add new" action, including the one
-                    // at the bottom of this picker, enters the same draft-owned
-                    // setup wizard as Welcome, Ride, Dashboard and Settings.
+                    // The picker is the short add flow. Its advanced action
+                    // enters the draft-owned setup wizard when a rider needs
+                    // multiple controllers, batteries, or CAN wiring.
                     onAddNewBatteryRequested = {
                         goTo(Config.SetupWizard(prefillFromActiveConnection = false))
                     },
