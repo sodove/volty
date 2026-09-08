@@ -6,9 +6,9 @@ import ru.sodovaya.volty.domain.navigation.region.OfflineNetworkAvailability
 
 class AndroidOfflineNetworkStatusTest {
     @Test
-    fun internet_without_validation_is_offline() {
+    fun internet_without_validation_is_still_available() {
         assertEquals(
-            OfflineNetworkAvailability.OFFLINE,
+            OfflineNetworkAvailability.UNMETERED,
             offlineNetworkAvailability(
                 hasInternet = true,
                 isValidated = false,

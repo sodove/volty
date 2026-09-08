@@ -47,13 +47,13 @@ class AndroidOfflineNetworkStatus(context: Context) : OfflineNetworkStatus {
     }
 }
 
-/** INTERNET is only an assertion; VALIDATED means Android verified usable Internet. */
+/** INTERNET is enough to attempt online services; validation can lag during reconnects. */
 internal fun offlineNetworkAvailability(
     hasInternet: Boolean,
-    isValidated: Boolean,
+    @Suppress("UNUSED_PARAMETER") isValidated: Boolean,
     isMetered: Boolean,
 ): OfflineNetworkAvailability {
-    if (!hasInternet || !isValidated) {
+    if (!hasInternet) {
         return OfflineNetworkAvailability.OFFLINE
     }
     return if (isMetered) OfflineNetworkAvailability.METERED else OfflineNetworkAvailability.UNMETERED
