@@ -154,6 +154,16 @@ class AndroidOfflineRegionPackageRepository(
         trigger: OfflineRegionDownloadTrigger,
         meteredConfirmed: Boolean,
     ) {
+        // A first map open can legitimately happen while the device is fully
+        // offline, before the signed catalog has ever been fetched.  Do not
+        // turn that normal state into an uncaught exception.  The connectivity
+        // callback (and the preparation coordinator) will retry once a catalog
+        // becomes available.
+        if (catalog == null) {
+            retryCatalogIfNeeded()
+            Log.i(TAG, "Offline download deferred: catalog is not loaded (region=$regionId)")
+            return
+        }
         var entry = requireCatalogEntry(regionId)
         var release = entry.latestRelease
         if (release == null) {
