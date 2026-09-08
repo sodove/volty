@@ -197,6 +197,15 @@ private fun AndroidMapLibreView(
             LegacyBuildingLayer.add(style)
             configureStyle(style, darkTheme)
             lastCameraSequence = Long.MIN_VALUE
+            if (defaultRideMapCameraPolicy.appliesWithoutTarget) {
+                readyMap.moveCamera(
+                    CameraUpdateFactory.newCameraPosition(
+                        CameraPosition.Builder(readyMap.cameraPosition)
+                            .tilt(defaultRideMapCameraPolicy.tiltDegrees)
+                            .build(),
+                    ),
+                )
+            }
             styleReady = true
         }
     }

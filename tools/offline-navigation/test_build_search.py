@@ -78,6 +78,14 @@ class BuildSearchTest(unittest.TestCase):
 
         self.assertEqual(2, len(rows))
 
+    def test_nearby_generic_aliases_collapse_with_wider_place_radius(self):
+        rows = list(_rows([
+            self._feature("feature-a", "ТЦ «Алатырь»", "historic", "yes", 60.6000),
+            self._feature("feature-b", "ТЦ «Алатырь»", "historic", "yes", 60.6010),
+        ]))
+
+        self.assertEqual(1, len(rows))
+
     @staticmethod
     def _feature(identifier, name, key, value, longitude):
         return {

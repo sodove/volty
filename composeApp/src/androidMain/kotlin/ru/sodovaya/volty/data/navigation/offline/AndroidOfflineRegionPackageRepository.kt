@@ -160,9 +160,16 @@ class AndroidOfflineRegionPackageRepository(
         // callback (and the preparation coordinator) will retry once a catalog
         // becomes available.
         if (catalog == null) {
-            retryCatalogIfNeeded()
-            Log.i(TAG, "Offline download deferred: catalog is not loaded (region=$regionId)")
-            return
+            if (networkAvailability() == OfflineNetworkAvailability.OFFLINE) {
+                retryCatalogIfNeeded()
+                Log.i(TAG, "Offline download deferred: catalog is not loaded (region=$regionId)")
+                return
+            }
+            runCatching { refreshCatalog() }
+                .onFailure { error ->
+                    Log.w(TAG, "Offline download deferred: catalog refresh failed (${error.message})")
+                }
+            if (catalog == null) return
         }
         var entry = requireCatalogEntry(regionId)
         var release = entry.latestRelease

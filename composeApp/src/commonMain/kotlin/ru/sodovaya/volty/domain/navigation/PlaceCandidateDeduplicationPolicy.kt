@@ -5,7 +5,7 @@ import kotlin.math.sqrt
 
 /** Collapses provider aliases without merging same-named places in different branches. */
 object PlaceCandidateDeduplicationPolicy {
-    private const val SAME_PLACE_METERS = 50.0
+    private const val SAME_PLACE_METERS = 150.0
     private val punctuation = Regex("[^\\p{L}\\p{N}]+")
 
     fun deduplicate(

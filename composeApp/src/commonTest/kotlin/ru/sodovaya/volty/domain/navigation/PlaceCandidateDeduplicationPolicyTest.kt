@@ -55,6 +55,18 @@ class PlaceCandidateDeduplicationPolicyTest {
     }
 
     @Test
+    fun `nearby generic aliases collapse with wider place radius`() {
+        val result = PlaceCandidateDeduplicationPolicy.deduplicate(
+            listOf(
+                candidate("feature-a", "ТЦ «Алатырь»", "feature", 60.6000),
+                candidate("feature-b", "ТЦ «Алатырь»", "feature", 60.6010),
+            ),
+        )
+
+        assertEquals(1, result.size)
+    }
+
+    @Test
     fun `raw place kinds become human readable subtitles`() {
         assertEquals("Магазин кальянов", PlaceCandidateDeduplicationPolicy.displaySubtitle("shop:hookah"))
         assertEquals("Автобусная остановка", PlaceCandidateDeduplicationPolicy.displaySubtitle("highway:bus_stop"))

@@ -156,7 +156,7 @@ def _deduplicate_rows(rows: Iterable[Row]) -> list[Row]:
                                    (name and not (_is_transit_kind(row[4]) or _is_transit_kind(result[index][4]) or
                                                   _is_name_only_shop(row[4]) or _is_name_only_shop(result[index][4])) and
                                     name == _name_normalize(result[index][0]) and
-                                    _distance_meters(row, result[index]) <= 50.0)), None)
+                                   _distance_meters(row, result[index]) <= 150.0)), None)
         if duplicate_index is None:
             duplicate_index = len(result)
             result.append(row)
