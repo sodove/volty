@@ -266,7 +266,10 @@ class Worker:
                 # A null-release entry must still have a logical envelope in
                 # production.json; refuse to sign an ambiguous catalog.
                 continue
-            display_name = region.display_name or existing_names.get(region.id) or self._fallback_display_name(region.id)
+            # Region names are catalog metadata, never something the rider has
+            # to enter.  A configured name is optional; generated grid cells
+            # get a deterministic coordinate label from their bbox.
+            display_name = region.display_name or existing_names.get(region.id) or self._fallback_display_name(region.id, bbox)
             entry = {"regionId": region.id, "displayName": display_name,
                      "bounds": bbox, "onDemand": {"enabled": manifest is None}}
             if manifest_path is not None:
@@ -288,7 +291,13 @@ class Worker:
                         "--current-app-version-code", str(self.config.min_app_version_code)], check=True, timeout=60)
 
     @staticmethod
-    def _fallback_display_name(region_id: str) -> str:
+    def _fallback_display_name(region_id: str, bbox: list[float] | None = None) -> str:
+        if bbox is not None and len(bbox) == 4:
+            west, south, east, north = bbox
+            def coordinate(value: float) -> str:
+                rounded = round(value, 1)
+                return str(int(rounded)) if rounded.is_integer() else f"{rounded:g}"
+            return f"{coordinate(south)}–{coordinate(north)}° с.ш. · {coordinate(west)}–{coordinate(east)}° в.д."
         match = re.fullmatch(r"g1-(\d+)-(\d+)", region_id)
         return f"Регион {match.group(1)}–{match.group(2)}" if match else region_id
 

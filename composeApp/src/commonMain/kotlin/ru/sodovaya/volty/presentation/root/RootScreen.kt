@@ -51,6 +51,7 @@ import ru.sodovaya.volty.presentation.picker.PickerScreen
 import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
 import ru.sodovaya.volty.presentation.scanning.ScanningScreen
 import ru.sodovaya.volty.presentation.settings.SettingsScreen
+import ru.sodovaya.volty.presentation.settings.OfflineRegionDisplayNamePolicy
 import ru.sodovaya.volty.presentation.nearby.NearbyScreen
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
@@ -302,7 +303,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     visibleMeteredApproval?.let { region ->
         AlertDialog(
             onDismissRequest = { dismissedMeteredRegionId = region.region.regionId },
-            title = { Text(stringResource(Res.string.settings_offline_metered_title, region.region.displayName)) },
+            title = { Text(stringResource(Res.string.settings_offline_metered_title, OfflineRegionDisplayNamePolicy.displayName(region.region))) },
             text = { Text(stringResource(Res.string.settings_offline_metered_text)) },
             confirmButton = {
                 TextButton(

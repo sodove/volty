@@ -13,6 +13,12 @@ from production.worker import Worker
 
 
 class WorkerTest(unittest.TestCase):
+    def test_grid_region_name_is_generated_from_bbox_without_user_input(self):
+        self.assertEqual(
+            "56–57° с.ш. · 60–61° в.д.",
+            Worker._fallback_display_name("g1-146-240", [60.0, 56.0, 61.0, 57.0]),
+        )
+
     def test_request_build_schedules_one_navigation_job(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

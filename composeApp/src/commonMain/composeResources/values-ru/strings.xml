@@ -178,6 +178,7 @@
     <!-- Settings -->
     <string name="settings_title">Настройки</string>
     <string name="settings_theme">Тема</string>
+    <string name="settings_connection">Подключение</string>
     <string name="settings_theme_system">Система</string>
     <string name="settings_theme_light">Светлая</string>
     <string name="settings_theme_dark">Тёмная</string>
@@ -724,7 +725,7 @@
     <string name="settings_offline_refreshing">Обновляем…</string>
     <string name="settings_offline_catalog_failed">Не удалось обновить список регионов; попробуйте ещё раз.</string>
     <string name="settings_offline_not_configured">Загрузка регионов не настроена в этой сборке.</string>
-    <string name="settings_offline_add_region">Добавить регион</string>
+    <string name="settings_offline_add_region">Найти регион</string>
     <string name="settings_offline_prepare">Подготовить оффлайн</string>
     <string name="settings_offline_preparing">Готовим регион…</string>
     <string name="settings_offline_no_region_match">Регион не найден</string>

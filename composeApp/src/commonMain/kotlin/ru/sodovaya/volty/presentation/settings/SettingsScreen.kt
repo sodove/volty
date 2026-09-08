@@ -20,6 +20,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.ExpandLess
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -74,6 +76,7 @@ import volty.composeapp.generated.resources.action_cancel
 import volty.composeapp.generated.resources.settings_add_new_battery
 import volty.composeapp.generated.resources.settings_auto_connect_countdown
 import volty.composeapp.generated.resources.settings_dashboard_style
+import volty.composeapp.generated.resources.settings_connection
 import volty.composeapp.generated.resources.settings_fault_display_duration
 import volty.composeapp.generated.resources.settings_fault_display_duration_active
 import volty.composeapp.generated.resources.settings_minutes
@@ -165,9 +168,10 @@ fun SettingsScreen(component: SettingsComponent) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            SettingsCard {
-            // THEME
-            SectionLabel(stringResource(Res.string.settings_theme))
+            SettingsSection(
+                title = stringResource(Res.string.settings_theme),
+                initiallyExpanded = true,
+            ) {
             val themes = listOf("system", "light", "dark")
             val themeLabels = mapOf(
                 "system" to stringResource(Res.string.settings_theme_system),
@@ -200,8 +204,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
             HorizontalDivider()
 
-            SettingsCard {
-            // SCAN TIMEOUT
+            SettingsSection(
+                title = stringResource(Res.string.settings_connection),
+                initiallyExpanded = false,
+            ) {
             SectionLabel(stringResource(Res.string.settings_scan_timeout))
             Text(stringResource(Res.string.settings_seconds, state.scanTimeoutSec), fontSize = 14.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
             Slider(
@@ -224,9 +230,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
             HorizontalDivider()
 
-            SettingsCard {
-            // UNITS
-            SectionLabel(stringResource(Res.string.settings_units))
+            SettingsSection(
+                title = stringResource(Res.string.settings_units),
+                initiallyExpanded = false,
+            ) {
             val unitSystems = listOf(UnitSystem.METRIC, UnitSystem.IMPERIAL)
             val unitLabels = mapOf(
                 UnitSystem.METRIC to stringResource(Res.string.settings_units_metric),
@@ -243,8 +250,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
 
             }
-            SettingsCard {
-            // NEARBY VOICE MICROPHONE
+            SettingsSection(
+                title = stringResource(Res.string.settings_voice_microphone),
+                initiallyExpanded = false,
+            ) {
             SectionLabel(stringResource(Res.string.settings_voice_microphone))
             Text(
                 stringResource(Res.string.settings_voice_microphone_subtitle),
@@ -272,8 +281,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
 
             }
-            SettingsCard {
-            // DASHBOARD STYLE (app default)
+            SettingsSection(
+                title = stringResource(Res.string.settings_dashboard_style),
+                initiallyExpanded = false,
+            ) {
             SectionLabel(stringResource(Res.string.settings_dashboard_style))
             val dashboardStyles = DashboardStyle.entries
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
@@ -307,9 +318,11 @@ fun SettingsScreen(component: SettingsComponent) {
             }
             HorizontalDivider()
 
-            SettingsCard {
-            // OFFLINE NAVIGATION REGIONS
-            SectionLabel(stringResource(Res.string.settings_offline_navigation))
+            SettingsSection(
+                title = stringResource(Res.string.settings_offline_navigation),
+                subtitle = stringResource(Res.string.settings_offline_navigation_subtitle),
+                initiallyExpanded = false,
+            ) {
             Text(
                 stringResource(Res.string.settings_offline_navigation_subtitle),
                 fontSize = 12.sp,
@@ -402,8 +415,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
             HorizontalDivider()
 
-            SettingsCard {
-            SectionLabel(stringResource(Res.string.settings_my_batteries))
+            SettingsSection(
+                title = stringResource(Res.string.settings_my_batteries),
+                initiallyExpanded = true,
+            ) {
             state.vehicles.forEach { v ->
                 VehicleRow(
                     vehicle = v,
@@ -418,9 +433,10 @@ fun SettingsScreen(component: SettingsComponent) {
             }
             HorizontalDivider()
 
-            SettingsCard {
-            // DIAGNOSTICS
-            SectionLabel(stringResource(Res.string.settings_diagnostics))
+            SettingsSection(
+                title = stringResource(Res.string.settings_diagnostics),
+                initiallyExpanded = false,
+            ) {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -483,7 +499,7 @@ fun SettingsScreen(component: SettingsComponent) {
                         Text(stringResource(Res.string.action_cancel))
                     }
                 },
-                title = { Text(stringResource(Res.string.settings_offline_delete_title, region.region.displayName)) },
+                title = { Text(stringResource(Res.string.settings_offline_delete_title, OfflineRegionDisplayNamePolicy.displayName(region.region))) },
                 text = { Text(stringResource(Res.string.settings_offline_delete_text)) },
             )
         }
@@ -557,7 +573,7 @@ private fun OfflineRegionRow(
             .padding(12.dp),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Text(region.region.displayName, fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
+        Text(OfflineRegionDisplayNamePolicy.displayName(region.region), fontSize = 14.sp, fontWeight = FontWeight.SemiBold)
         Text(
             offlineRegionStatusText(region, version),
             fontSize = 11.sp,
@@ -653,16 +669,53 @@ private fun SectionLabel(text: String) {
 }
 
 @Composable
-private fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+private fun SettingsSection(
+    title: String,
+    subtitle: String? = null,
+    initiallyExpanded: Boolean,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(22.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)),
         verticalArrangement = Arrangement.spacedBy(8.dp),
-        content = content,
     )
+    {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable { expanded = !expanded }
+                .padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(title, fontSize = 16.sp, fontWeight = FontWeight.SemiBold)
+                subtitle?.let {
+                    Text(
+                        it,
+                        fontSize = 11.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                    )
+                }
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                contentDescription = if (expanded) "Свернуть" else "Развернуть",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (expanded) {
+            Column(
+                modifier = Modifier.padding(start = 14.dp, end = 14.dp, bottom = 14.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+                content = content,
+            )
+        }
+    }
 }
 
 @Composable
