@@ -187,6 +187,38 @@ class WorkerTest(unittest.TestCase):
             self.assertEqual("failed", jobs[1]["state"])
             self.assertEqual("source_metadata_required", jobs[1]["reason"])
 
+    def test_request_build_does_not_reuse_scheduler_job(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "publicRoot": str(root / "public"),
+                "stagingRoot": str(root / "staging"),
+                "sourceRoot": str(root / "sources"),
+                "signingKey": str(root / "keys" / "signing-key.pem"),
+                "regions": [{"id": "region", "sourceId": "russia",
+                             "sourceUrl": "https://download.example/region.pbf"}],
+            }), encoding="utf-8")
+            config = load_config(config_path)
+            config.source_root.mkdir(parents=True)
+            (config.source_root / "russia.source.json").write_text(json.dumps({
+                "osmSequence": 42,
+                "osmTimestamp": "2026-09-07T00:00:00Z",
+                "geometryHash": "a" * 64,
+            }), encoding="utf-8")
+            queue = root / "queue.json"
+            queue.write_text(json.dumps({"jobs": [{
+                "id": "scheduled", "regionId": "region", "sourceId": "russia", "state": "queued",
+            }]}), encoding="utf-8")
+
+            result = Worker(config, queue).request_build("region")
+
+            self.assertEqual("queued", result["status"])
+            self.assertNotEqual("scheduled", result["requestId"])
+            jobs = json.loads(queue.read_text(encoding="utf-8"))["jobs"]
+            self.assertEqual(2, len(jobs))
+            self.assertTrue(jobs[1]["onDemand"])
+
 
 if __name__ == "__main__":
     unittest.main()

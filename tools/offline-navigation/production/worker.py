@@ -140,7 +140,8 @@ class Worker:
         with self._queue_lock:
             state = self._read()
             matching = [job for job in state["jobs"]
-                        if isinstance(job, dict) and job.get("regionId") == region_id]
+                        if isinstance(job, dict) and job.get("regionId") == region_id
+                        and job.get("sourceId") == source_id and job.get("onDemand") is True]
             for job in reversed(matching):
                 if job.get("state") in {"queued", "running"}:
                     return self._job_status(job)
