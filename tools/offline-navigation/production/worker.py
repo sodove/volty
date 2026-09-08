@@ -233,7 +233,21 @@ class Worker:
                 existing_names = {}
         published = {}
         for manifest_path in manifests:
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeDecodeError):
+                # A stale or partially written legacy directory must not take
+                # the v3 publisher down. It remains on disk for rollback and
+                # is simply absent from the new signed catalog.
+                continue
+            if (
+                not isinstance(manifest, dict)
+                or manifest.get("schemaVersion") != 3
+                or set(manifest.get("components", {})) != {"routing", "search"}
+            ):
+                # v2 packages contain PMTiles and are intentionally retained
+                # as read-only legacy data, never advertised as v3 releases.
+                continue
             published[manifest.get("regionId")] = (manifest, manifest_path)
         entries = []
         for region in sorted(self.config.regions, key=lambda item: (item.display_name or item.id, item.id)):

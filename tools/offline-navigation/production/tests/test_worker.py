@@ -88,8 +88,10 @@ class WorkerTest(unittest.TestCase):
             manifest_path = root / "public" / "regions" / "g1-146-240" / "2026-09-06" / "manifest.json"
             manifest_path.parent.mkdir(parents=True)
             manifest_path.write_text(json.dumps({
+                "schemaVersion": 3,
                 "regionId": "g1-146-240",
                 "coverage": {"bbox": [60.0, 56.0, 61.0, 57.0]},
+                "components": {"routing": {}, "search": {}},
             }), encoding="utf-8")
 
             config = load_config(config_path)
@@ -99,6 +101,45 @@ class WorkerTest(unittest.TestCase):
 
             spec = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
             self.assertEqual("Екатеринбург", spec["regions"][0]["displayName"])
+
+    def test_catalog_writer_skips_retained_legacy_manifests(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            key_path = root / "keys" / "signing-key.pem"
+            key_path.parent.mkdir()
+            key_path.write_bytes(Ed25519PrivateKey.generate().private_bytes(
+                serialization.Encoding.PEM,
+                serialization.PrivateFormat.PKCS8,
+                serialization.NoEncryption(),
+            ))
+            config_path = root / "config.json"
+            config_path.write_text(json.dumps({
+                "publicRoot": str(root / "public"),
+                "stagingRoot": str(root / "staging"),
+                "sourceRoot": str(root / "sources"),
+                "signingKey": str(key_path),
+                "regions": [{
+                    "id": "g1-146-240",
+                    "displayName": "Екатеринбург",
+                    "bbox": "60.0,56.0,61.0,57.0",
+                    "sourceUrl": "https://download.example/region.pbf",
+                }],
+            }), encoding="utf-8")
+            legacy = root / "public" / "regions" / "g1-146-240" / "2026-09-06" / "manifest.json"
+            legacy.parent.mkdir(parents=True)
+            legacy.write_text(json.dumps({
+                "schemaVersion": 2,
+                "regionId": "g1-146-240",
+                "components": {"routing": {}, "search": {}, "map": {}},
+            }), encoding="utf-8")
+
+            config = load_config(config_path)
+            with patch("production.worker.subprocess.run"):
+                Worker(config, root / "queue.json")._write_catalog()
+
+            spec = json.loads((root / "staging" / "catalog-spec.json").read_text(encoding="utf-8"))
+            self.assertNotIn("manifest", spec["regions"][0])
+            self.assertEqual({"enabled": True}, spec["regions"][0]["onDemand"])
 
     def test_worker_does_not_fabricate_source_metadata(self):
         with tempfile.TemporaryDirectory() as directory:
