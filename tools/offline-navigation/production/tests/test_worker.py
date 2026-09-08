@@ -228,7 +228,8 @@ class WorkerTest(unittest.TestCase):
                 "stagingRoot": str(root / "staging"),
                 "sourceRoot": str(root / "sources"),
                 "signingKey": str(root / "keys" / "signing-key.pem"),
-                "regions": [{"id": "region", "sourceId": "russia"}],
+                "regions": [{"id": "region", "sourceId": "russia",
+                             "sourceUrl": "https://download.example/region.pbf"}],
             }), encoding="utf-8")
             config = load_config(config_path)
             queue = root / "queue.json"
