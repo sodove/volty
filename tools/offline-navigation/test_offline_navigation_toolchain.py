@@ -310,7 +310,8 @@ class OfflineNavigationToolchainTest(unittest.TestCase):
         rows = list(SEARCH_MODULE._rows(features))
 
         self.assertEqual("Ёлка", rows[0][0])
-        self.assertEqual("елка екатеринбург", rows[0][1])
+        self.assertTrue(rows[0][1].startswith("елка екатеринбург"))
+        self.assertIn("elka ekaterinburg", rows[0][1])
 
     def test_routing_bbox_expands_logical_bbox_by_requested_buffer(self):
         bbox = EXPAND_MODULE.expand_bbox(

@@ -30,6 +30,37 @@ class PlaceCandidateDeduplicationPolicyTest {
         assertEquals(2, result.size)
     }
 
+    @Test
+    fun `nearby transit stops in different directions remain separate`() {
+        val result = PlaceCandidateDeduplicationPolicy.deduplicate(
+            listOf(
+                candidate("stop-a", "Алатырь", "Автобусная остановка", 60.6000),
+                candidate("stop-b", "Алатырь", "Автобусная остановка", 60.6002),
+            ),
+        )
+
+        assertEquals(2, result.size)
+    }
+
+    @Test
+    fun `same name hookah shops without addresses remain separate`() {
+        val result = PlaceCandidateDeduplicationPolicy.deduplicate(
+            listOf(
+                candidate("shop-a", "Cosmoshop", "Магазин кальянов", 60.6000),
+                candidate("shop-b", "Cosmoshop", "Магазин кальянов", 60.6002),
+            ),
+        )
+
+        assertEquals(2, result.size)
+    }
+
+    @Test
+    fun `raw place kinds become human readable subtitles`() {
+        assertEquals("Магазин кальянов", PlaceCandidateDeduplicationPolicy.displaySubtitle("shop:hookah"))
+        assertEquals("Автобусная остановка", PlaceCandidateDeduplicationPolicy.displaySubtitle("highway:bus_stop"))
+        assertEquals("Трамвайная остановка", PlaceCandidateDeduplicationPolicy.displaySubtitle("railway:tram_stop"))
+    }
+
     private fun candidate(id: String, title: String, subtitle: String, longitude: Double) = PlaceCandidate(
         id = id,
         title = title,

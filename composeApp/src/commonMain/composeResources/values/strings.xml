@@ -681,8 +681,8 @@
     <string name="navigation_route_loading">Building route…</string>
     <string name="navigation_build_route">Build route</string>
     <string name="navigation_route_alternatives">Routes</string>
-    <string name="navigation_route_profile">Route profile</string>
-    <string name="navigation_route_profile_selector">Route profile: %1$s</string>
+    <string name="navigation_route_profile">Style</string>
+    <string name="navigation_route_profile_selector">Route style: %1$s</string>
     <string name="navigation_route_style_fast_highways">Fast</string>
     <string name="navigation_route_style_fast_without_highways">Fast, no highways</string>
     <string name="navigation_route_style_curvy">Curvy</string>

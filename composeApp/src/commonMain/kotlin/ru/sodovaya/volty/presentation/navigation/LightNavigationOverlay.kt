@@ -54,6 +54,7 @@ import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.RadioButtonDefaults
 import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.minimumInteractiveComponentSize
@@ -394,105 +395,116 @@ private fun RoutingOptions(
     model: NavigationUiModel,
     callbacks: LightNavigationCallbacks,
 ) {
+    var routeOptionsExpanded by remember { mutableStateOf(false) }
     var routeStyleMenuExpanded by remember { mutableStateOf(false) }
+    val styleLabel = model.routeStyle.label()
+    val speedLabel = stringResource(Res.string.navigation_route_top_speed_value, model.topSpeedKph)
+    val palette = LocalLightHudPalette.current
 
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        val selectorDescription = stringResource(
+            Res.string.navigation_route_profile_selector,
+            styleLabel,
+        )
+        OutlinedButton(
+            onClick = { routeOptionsExpanded = !routeOptionsExpanded },
+            enabled = !model.requestInFlight,
+            modifier = Modifier
+                .fillMaxWidth()
+                .semantics { contentDescription = selectorDescription },
+            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+            border = BorderStroke(1.dp, palette.muted.copy(alpha = 0.65f)),
+            colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                contentColor = palette.text,
+            ),
         ) {
             Text(
-                stringResource(Res.string.navigation_route_profile),
-                modifier = Modifier.weight(0.8f),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
+                text = "$styleLabel · $speedLabel",
+                modifier = Modifier.weight(1f),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
-            Box(modifier = Modifier.weight(1.8f)) {
-                val selectorDescription = stringResource(
-                    Res.string.navigation_route_profile_selector,
-                    model.routeStyle.label(),
-                )
-                OutlinedButton(
-                    onClick = { routeStyleMenuExpanded = true },
-                    enabled = !model.requestInFlight,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .semantics { contentDescription = selectorDescription },
-                    contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
-                ) {
-                    Text(
-                        model.routeStyle.label(),
-                        modifier = Modifier.weight(1f),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                    Icon(
-                        imageVector = if (routeStyleMenuExpanded) {
-                            Icons.Default.KeyboardArrowUp
-                        } else {
-                            Icons.Default.KeyboardArrowDown
-                        },
-                        contentDescription = null,
-                    )
-                }
-                DropdownMenu(
-                    expanded = routeStyleMenuExpanded,
-                    onDismissRequest = { routeStyleMenuExpanded = false },
-                ) {
-                    RouteStyle.entries.forEach { style ->
-                        DropdownMenuItem(
-                            modifier = Modifier.semantics {
-                                selected = model.routeStyle == style
-                            },
-                            text = { Text(style.label()) },
-                            trailingIcon = if (model.routeStyle == style) {
-                                {
-                                    Icon(Icons.Default.Check, contentDescription = null)
-                                }
-                            } else null,
-                            onClick = {
-                                routeStyleMenuExpanded = false
-                                callbacks.onRouteStyleChanged(style)
-                            },
+            Icon(
+                imageVector = if (routeOptionsExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                contentDescription = null,
+                tint = palette.cyan,
+            )
+        }
+        if (routeOptionsExpanded) {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Box(modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { routeStyleMenuExpanded = true },
+                        enabled = !model.requestInFlight,
+                        modifier = Modifier.fillMaxWidth(),
+                        contentPadding = PaddingValues(horizontal = 10.dp, vertical = 0.dp),
+                        border = BorderStroke(1.dp, palette.muted.copy(alpha = 0.45f)),
+                        colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(
+                            contentColor = palette.text,
+                        ),
+                    ) {
+                        Text(stringResource(Res.string.navigation_route_profile), modifier = Modifier.weight(1f))
+                        Text(styleLabel, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Icon(
+                            if (routeStyleMenuExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                            contentDescription = null,
+                            tint = palette.cyan,
                         )
                     }
+                    DropdownMenu(
+                        expanded = routeStyleMenuExpanded,
+                        onDismissRequest = { routeStyleMenuExpanded = false },
+                    ) {
+                        RouteStyle.entries.forEach { style ->
+                            DropdownMenuItem(
+                                modifier = Modifier.semantics { selected = model.routeStyle == style },
+                                text = { Text(style.label()) },
+                                trailingIcon = if (model.routeStyle == style) {
+                                    { Icon(Icons.Default.Check, contentDescription = null) }
+                                } else null,
+                                onClick = {
+                                    routeStyleMenuExpanded = false
+                                    callbacks.onRouteStyleChanged(style)
+                                },
+                            )
+                        }
+                    }
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    val topSpeedDescription = stringResource(
+                        Res.string.navigation_route_top_speed,
+                        model.topSpeedKph,
+                    )
+                    Text(
+                        stringResource(Res.string.navigation_route_top_speed_label),
+                        color = palette.muted,
+                        fontSize = 13.sp,
+                    )
+                    Slider(
+                        value = model.topSpeedKph.toFloat(),
+                        onValueChange = { callbacks.onTopSpeedChanged(it.toInt()) },
+                        modifier = Modifier
+                            .weight(1f)
+                            .semantics { contentDescription = topSpeedDescription },
+                        valueRange = 20f..130f,
+                        steps = 10,
+                        enabled = !model.requestInFlight,
+                        colors = SliderDefaults.colors(
+                            thumbColor = palette.cyan,
+                            activeTrackColor = palette.cyan,
+                            inactiveTrackColor = palette.muted.copy(alpha = 0.45f),
+                        ),
+                    )
+                    Text(speedLabel, color = palette.text, fontSize = 13.sp, fontWeight = FontWeight.SemiBold)
                 }
             }
-        }
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            val topSpeedDescription = stringResource(
-                Res.string.navigation_route_top_speed,
-                model.topSpeedKph,
-            )
-            Text(
-                stringResource(Res.string.navigation_route_top_speed_label),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                fontSize = 13.sp,
-            )
-            Slider(
-                value = model.topSpeedKph.toFloat(),
-                onValueChange = { callbacks.onTopSpeedChanged(it.toInt()) },
-                modifier = Modifier
-                    .weight(1f)
-                    .semantics { contentDescription = topSpeedDescription },
-                valueRange = 20f..130f,
-                steps = 10,
-                enabled = !model.requestInFlight,
-            )
-            Text(
-                stringResource(Res.string.navigation_route_top_speed_value, model.topSpeedKph),
-                color = MaterialTheme.colorScheme.onSurface,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-            )
         }
     }
 }

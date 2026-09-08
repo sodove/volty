@@ -679,8 +679,8 @@
     <string name="navigation_route_loading">Строим маршрут…</string>
     <string name="navigation_build_route">Построить маршрут</string>
     <string name="navigation_route_alternatives">Маршруты</string>
-    <string name="navigation_route_profile">Профиль маршрута</string>
-    <string name="navigation_route_profile_selector">Профиль маршрута: %1$s</string>
+    <string name="navigation_route_profile">Стиль</string>
+    <string name="navigation_route_profile_selector">Стиль маршрута: %1$s</string>
     <string name="navigation_route_style_fast_highways">Быстрый</string>
     <string name="navigation_route_style_fast_without_highways">Быстрый без магистралей</string>
     <string name="navigation_route_style_curvy">Извилистый</string>

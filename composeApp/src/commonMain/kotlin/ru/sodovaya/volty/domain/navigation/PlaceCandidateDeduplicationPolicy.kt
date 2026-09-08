@@ -19,7 +19,9 @@ object PlaceCandidateDeduplicationPolicy {
             val duplicateIndex = result.indexOfFirst { existing ->
                 distanceMeters(existing.coordinate, candidate.coordinate) <= SAME_PLACE_METERS &&
                     (sameIdentity(existing, candidate) ||
-                        (mergeSameTitle && normalize(candidate.title).isNotBlank() &&
+                        (mergeSameTitle && !isTransitStop(existing) && !isTransitStop(candidate) &&
+                            !isNameOnlyShop(existing) && !isNameOnlyShop(candidate) &&
+                            normalize(candidate.title).isNotBlank() &&
                             normalize(existing.title) == normalize(candidate.title)))
             }
             if (duplicateIndex < 0) {
@@ -37,8 +39,22 @@ object PlaceCandidateDeduplicationPolicy {
         null, "", "feature" -> null
         "shop:mall", "mall", "торговый центр" -> "Торговый центр"
         "amenity:food_court", "food_court", "фуд-корт" -> "Фуд-корт"
+        "shop:hookah", "hookah", "магазин кальянов" -> "Магазин кальянов"
+        "highway:bus_stop", "bus_stop", "автобусная остановка" -> "Автобусная остановка"
+        "railway:tram_stop", "tram_stop", "трамвайная остановка" -> "Трамвайная остановка"
+        "railway:halt", "halt", "железнодорожная остановка" -> "Железнодорожная остановка"
         else -> raw.trim()
     }
+
+    private fun isTransitStop(candidate: PlaceCandidate): Boolean {
+        val subtitle = displaySubtitle(candidate.subtitle)?.lowercase().orEmpty()
+        return subtitle.startsWith("автобусная остановка") ||
+            subtitle.startsWith("трамвайная остановка") ||
+            subtitle.startsWith("железнодорожная остановка")
+    }
+
+    private fun isNameOnlyShop(candidate: PlaceCandidate): Boolean =
+        displaySubtitle(candidate.subtitle)?.lowercase() == "магазин кальянов"
 
     private fun sameIdentity(left: PlaceCandidate, right: PlaceCandidate): Boolean {
         val leftId = canonicalIdentity(left.id) ?: return false

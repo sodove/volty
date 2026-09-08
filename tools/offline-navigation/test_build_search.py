@@ -25,7 +25,7 @@ class BuildSearchTest(unittest.TestCase):
         rows = list(_rows(features))
 
         self.assertEqual(2, len(rows))
-        self.assertEqual("shop:mall", rows[0][4])
+        self.assertEqual("Торговый центр", rows[0][4])
 
     def test_cyrillic_names_are_normalized_without_merging_different_nearby_places(self):
         rows = list(_rows([
@@ -44,6 +44,37 @@ class BuildSearchTest(unittest.TestCase):
             ("", "", 56.84, 60.60, "feature", "node/1"),
             ("", "", 56.84, 60.6001, "feature", "node/2"),
         ])
+
+        self.assertEqual(2, len(rows))
+
+    def test_search_index_contains_transliteration_and_human_place_context(self):
+        rows = list(_rows([{
+            "properties": {
+                "name": "Алатырь",
+                "id": "node/1",
+                "shop": "hookah",
+                "addr:street": "улица Ленина",
+                "addr:housenumber": "1",
+            },
+            "geometry": {"type": "Point", "coordinates": [60.60, 56.84]},
+        }]))
+
+        self.assertEqual("Магазин кальянов · улица Ленина, 1", rows[0][4])
+        self.assertIn("alatyr", rows[0][1])
+
+    def test_nearby_transit_stops_in_different_directions_remain_separate(self):
+        rows = list(_rows([
+            self._feature("stop-a", "Алатырь", "highway", "bus_stop", 60.6000),
+            self._feature("stop-b", "Алатырь", "highway", "bus_stop", 60.6002),
+        ]))
+
+        self.assertEqual(2, len(rows))
+
+    def test_same_name_hookah_shops_without_addresses_remain_separate(self):
+        rows = list(_rows([
+            self._feature("shop-a", "Cosmoshop", "shop", "hookah", 60.6000),
+            self._feature("shop-b", "Cosmoshop", "shop", "hookah", 60.6002),
+        ]))
 
         self.assertEqual(2, len(rows))
 

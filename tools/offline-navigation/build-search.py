@@ -27,9 +27,25 @@ def _values(properties: dict[str, Any], *keys: str) -> list[str]:
     return values
 
 
+_RU_TRANSLITERATION = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e",
+    "ё": "e", "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k",
+    "л": "l", "м": "m", "н": "n", "о": "o", "п": "p", "р": "r",
+    "с": "s", "т": "t", "у": "u", "ф": "f", "х": "kh", "ц": "ts",
+    "ч": "ch", "ш": "sh", "щ": "shch", "ъ": "", "ы": "y", "ь": "",
+    "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _transliterate(value: str) -> str:
+    return "".join(_RU_TRANSLITERATION.get(character, character) for character in value.lower())
+
+
 def _search_normalize(value: str) -> str:
-    """Keep display text intact while matching Kotlin's Russian token folding."""
-    return value.lower().replace("ё", "е")
+    """Keep display text intact and add a Latin alias for Russian search."""
+    folded = value.lower().replace("ё", "е")
+    transliterated = _transliterate(folded)
+    return f"{folded} {transliterated}" if transliterated != folded else folded
 
 
 def _centroid(coordinates: Any) -> tuple[float, float] | None:
@@ -59,6 +75,30 @@ def _kind(properties: dict[str, Any]) -> str:
     return "feature"
 
 
+_DISPLAY_KINDS = {
+    "shop:hookah": "Магазин кальянов",
+    "shop:mall": "Торговый центр",
+    "amenity:food_court": "Фуд-корт",
+    "highway:bus_stop": "Автобусная остановка",
+    "railway:tram_stop": "Трамвайная остановка",
+    "railway:halt": "Железнодорожная остановка",
+    "railway:station": "Железнодорожная станция",
+}
+
+
+def _display_subtitle(properties: dict[str, Any]) -> str:
+    kind = _DISPLAY_KINDS.get(_kind(properties))
+    street = _values(properties, "addr:street")
+    house = _values(properties, "addr:housenumber")
+    place = _values(properties, "addr:place", "addr:city", "address")
+    address = ", ".join(dict.fromkeys(street + house))
+    if not address:
+        address = ", ".join(dict.fromkeys(place))
+    if kind and address:
+        return f"{kind} · {address}"
+    return kind or address
+
+
 Row = tuple[str, str, float, float, str, str]
 
 
@@ -75,8 +115,18 @@ def _distance_meters(left: Row, right: Row) -> float:
 
 
 def _row_quality(row: Row) -> tuple[int, int, int]:
-    semantic = {"shop:mall": 30, "amenity:food_court": 20}.get(row[4], 0)
+    semantic = {"Торговый центр": 30, "Фуд-корт": 20}.get(row[4].split(" · ", 1)[0], 0)
     return semantic, len(row[1]), len(row[0])
+
+
+def _is_transit_kind(kind: str) -> bool:
+    return kind.startswith(("Автобусная остановка", "Трамвайная остановка", "Железнодорожная остановка"))
+
+
+def _is_name_only_shop(kind: str) -> bool:
+    # Same-name branches (for example several Cosmoshop venues) must not be
+    # collapsed when OSM provides no address to distinguish them.
+    return kind == "Магазин кальянов"
 
 
 def _deduplicate_rows(rows: Iterable[Row]) -> list[Row]:
@@ -103,7 +153,9 @@ def _deduplicate_rows(rows: Iterable[Row]) -> list[Row]:
                     candidate_indices.update(spatial_index.get((name, x + dx, y + dy), ()))
         duplicate_index = next((index for index in candidate_indices
                                 if (row[5] and result[index][5] == row[5]) or
-                                   (name and name == _name_normalize(result[index][0]) and
+                                   (name and not (_is_transit_kind(row[4]) or _is_transit_kind(result[index][4]) or
+                                                  _is_name_only_shop(row[4]) or _is_name_only_shop(result[index][4])) and
+                                    name == _name_normalize(result[index][0]) and
                                     _distance_meters(row, result[index]) <= 50.0)), None)
         if duplicate_index is None:
             duplicate_index = len(result)
@@ -141,7 +193,7 @@ def _rows(features: Iterable[dict[str, Any]]) -> Iterable[Row]:
         display_name = names[0] if names else " ".join(address)
         search_text = _search_normalize(" ".join(dict.fromkeys(names + address)))
         osm_id = str(properties.get("id", properties.get("osm_id", "")))
-        raw_rows.append((display_name, search_text, point[0], point[1], _kind(properties), osm_id))
+        raw_rows.append((display_name, search_text, point[0], point[1], _display_subtitle(properties), osm_id))
     yield from _deduplicate_rows(raw_rows)
 
 
