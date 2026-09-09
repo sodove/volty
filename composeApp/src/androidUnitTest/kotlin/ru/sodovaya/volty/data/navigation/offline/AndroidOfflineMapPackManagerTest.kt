@@ -351,7 +351,7 @@ class AndroidOfflineMapPackManagerTest {
         }
 
         fun runLast() {
-            queued.removeLast().run()
+            queued.removeAt(queued.lastIndex).run()
         }
 
         fun runAll() {
