@@ -32,6 +32,8 @@ interface OfflineRegionPreparationCoordinator {
     suspend fun prepareCurrentRegion(coordinate: GeoCoordinate, style: OfflineMapStyleVariant)
     suspend fun prepareExplicitRegion(regionId: String, style: OfflineMapStyleVariant)
 
+    suspend fun retryPending() = Unit
+
     /** Same explicit action after the user approved a metered transfer. */
     suspend fun prepareExplicitRegionConfirmed(regionId: String, style: OfflineMapStyleVariant) {
         prepareExplicitRegion(regionId, style)

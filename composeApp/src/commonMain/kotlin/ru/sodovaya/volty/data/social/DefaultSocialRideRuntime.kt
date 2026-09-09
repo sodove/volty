@@ -5,14 +5,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.social.LocationProvider
 import ru.sodovaya.volty.domain.social.LocationSharePolicy
+import ru.sodovaya.volty.domain.social.LocationSnapshot
 import ru.sodovaya.volty.domain.social.LocationSnapshotStatus
 import ru.sodovaya.volty.domain.social.PresenceStatus
 import ru.sodovaya.volty.domain.social.RideGroup
@@ -40,6 +44,8 @@ class DefaultSocialRideRuntime(
     private val scope: CoroutineScope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob()),
     private val nowEpochMillis: () -> Long = { kotlin.time.Clock.System.now().toEpochMilliseconds() },
     private val freshnessTickerIntervalMillis: Long? = 1_000L,
+    /** Re-publish a stationary fix before the server's freshness window expires. */
+    private val sharingHeartbeatIntervalMillis: Long? = 5_000L,
 ) : SocialRideRuntime {
     override val state: StateFlow<SocialRuntimeState> = store.state
     override val locationPermissions: List<String> = locationProvider.requiredPermissions
@@ -171,9 +177,26 @@ class DefaultSocialRideRuntime(
             store.setSharing(result.value)
             sharingJob?.cancel()
             sharingJob = scope.launch {
-                locationProvider.updates.collect { location ->
-                    if (isCurrentGeneration(generation, group.id)) {
-                        sharingCoordinator.publish(group.id, result.value.profile, location)
+                var lastLocation: LocationSnapshot? = null
+                coroutineScope {
+                    launch {
+                        locationProvider.updates.collect { location ->
+                            lastLocation = location
+                            if (isCurrentGeneration(generation, group.id)) {
+                                sharingCoordinator.publish(group.id, result.value.profile, location)
+                            }
+                        }
+                    }
+                    sharingHeartbeatIntervalMillis?.let { intervalMillis ->
+                        launch {
+                            while (isActive) {
+                                delay(intervalMillis)
+                                val location = lastLocation ?: continue
+                                if (isCurrentGeneration(generation, group.id)) {
+                                    sharingCoordinator.publish(group.id, result.value.profile, location)
+                                }
+                            }
+                        }
                     }
                 }
             }

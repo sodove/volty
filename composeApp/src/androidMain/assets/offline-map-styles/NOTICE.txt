@@ -1,0 +1,17 @@
+Bundled OpenFreeMap style snapshots
+===================================
+
+This directory contains the dark and bright OpenFreeMap styles, sourced from
+https://github.com/hyperknot/openfreemap-styles at commit
+72e1480dfc92858d334647037988bd2591fdb021.
+
+The snapshots are transformed at runtime only to replace remote tile and font
+URLs with Volty's local PMTiles loopback server and to remove decorations that
+need an unavailable sprite atlas.  The original repository is MIT-licensed:
+Copyright (c) 2023 Zsolt Ero.
+
+The styles derive from OpenMapTiles / OSM Bright GL Style.  Their code is BSD
+3-Clause and visual design is CC BY 4.0.  Volty exposes the required map
+attribution in the map corner: © OpenMapTiles © OpenStreetMap contributors.
+See the upstream LICENSE.md for the full notices:
+https://github.com/hyperknot/openfreemap-styles/blob/72e1480dfc92858d334647037988bd2591fdb021/LICENSE.md

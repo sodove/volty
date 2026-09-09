@@ -45,3 +45,12 @@ internal fun groupMapBackAction(hasPreviousDestination: Boolean): GroupMapBackAc
         shouldPop = hasPreviousDestination,
         clearsSocialRuntime = false,
     )
+
+/**
+ * Android dispatches Back to the activity before a text field's IME has
+ * necessarily consumed it. While the IME is visible, the first Back belongs
+ * to the field; only a later Back may pop the Decompose stack or finish the
+ * activity. Keeping this as a pure policy makes the ordering regression
+ * testable without pretending Compose itself is unit-testable.
+ */
+internal fun shouldConsumeBackForIme(imeBottomPx: Int): Boolean = imeBottomPx > 0

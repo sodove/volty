@@ -25,6 +25,11 @@ sealed interface MapCameraRequest {
         val points: List<GeoCoordinate>,
     ) : MapCameraRequest
 
+    data class FitParticipants(
+        override val sequence: Long,
+        val points: List<GeoCoordinate>,
+    ) : MapCameraRequest
+
     data class FollowFix(
         override val sequence: Long,
         val fix: RideLocationFix,

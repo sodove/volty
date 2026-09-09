@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.map
 import android.content.Context
 import android.graphics.Color
 import android.os.SystemClock
+import android.view.ViewGroup
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -248,7 +249,7 @@ private fun AndroidMapLibreView(
         if (!styleReady) return@LaunchedEffect
         val request = latestScene.value.cameraRequest ?: return@LaunchedEffect
         if (request.sequence == lastCameraSequence) return@LaunchedEffect
-        if (request is MapCameraRequest.FitAlternatives) {
+        if (request is MapCameraRequest.FitAlternatives || request is MapCameraRequest.FitParticipants) {
             var frames = 0
             while ((readyMap.width <= 0 || readyMap.height <= 0) && frames < 120) {
                 withFrameNanos { }
@@ -258,6 +259,7 @@ private fun AndroidMapLibreView(
         }
         when (request) {
             is MapCameraRequest.FitAlternatives -> fitAlternatives(readyMap, request.points)
+            is MapCameraRequest.FitParticipants -> fitAlternatives(readyMap, request.points)
             is MapCameraRequest.Recenter -> recenter(readyMap, request.fix)
             is MapCameraRequest.FollowFix -> Unit
         }
@@ -350,7 +352,15 @@ private fun AndroidMapLibreView(
 
     Box(modifier = modifier.background(ComposeColor(0xFF07131E))) {
         AndroidView(
-            factory = { mapView },
+            // The map is retained across root destinations.  AndroidView's
+            // holder always attaches the factory result to a new parent, so a
+            // retained MapView must be detached from a stale holder first
+            // (for example after Activity recreation).  Without this the
+            // platform throws "The specified child already has a parent".
+            factory = {
+                (mapView.parent as? ViewGroup)?.removeView(mapView)
+                mapView
+            },
             modifier = Modifier
                 .fillMaxSize()
                 .hazeSource(state = hazeState, zIndex = 0f),

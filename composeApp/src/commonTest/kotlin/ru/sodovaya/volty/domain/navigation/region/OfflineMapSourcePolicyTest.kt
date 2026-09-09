@@ -6,6 +6,15 @@ import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 
 class OfflineMapSourcePolicyTest {
     @Test
+    fun `retained map keeps its last location while a transient screen hides the live fix`() {
+        val retained = GeoCoordinate(latitude = 56.84, longitude = 60.61)
+        val newer = GeoCoordinate(latitude = 56.85, longitude = 60.62)
+
+        assertEquals(retained, OfflineMapSourcePolicy.coordinateForRetainedMap(current = null, retained = retained))
+        assertEquals(newer, OfflineMapSourcePolicy.coordinateForRetainedMap(current = newer, retained = retained))
+    }
+
+    @Test
     fun installed_region_wins_over_online_source() {
         val decision = OfflineMapSourcePolicy.select(
             viewport = viewport(),

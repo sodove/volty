@@ -41,4 +41,10 @@ class RootNavigationChromePolicyTest {
         assertTrue(groupMapBackAction(hasPreviousDestination = true).shouldPop)
         assertFalse(groupMapBackAction(hasPreviousDestination = true).clearsSocialRuntime)
     }
+
+    @Test
+    fun first_back_is_consumed_by_a_visible_ime_instead_of_navigation() {
+        assertTrue(shouldConsumeBackForIme(1))
+        assertFalse(shouldConsumeBackForIme(0))
+    }
 }

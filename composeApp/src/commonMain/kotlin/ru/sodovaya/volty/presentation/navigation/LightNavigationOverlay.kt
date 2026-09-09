@@ -21,6 +21,9 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -220,6 +223,13 @@ private fun PlannerSurface(
     onOpenNearby: () -> Unit,
     modifier: Modifier,
 ) {
+    // RootScreen consumes the first Back while the IME is visible. Once the
+    // keyboard is gone, Back belongs to the planner and closes it instead of
+    // falling through to Activity.finish().
+    val imeBottomPx = WindowInsets.ime.getBottom(androidx.compose.ui.platform.LocalDensity.current)
+    BackHandler(enabled = imeBottomPx == 0) {
+        callbacks.onStopNavigation()
+    }
     val glass = lightNavigationGlass()
     val plannerShape = RoundedCornerShape(18.dp)
     Box(modifier = modifier) {

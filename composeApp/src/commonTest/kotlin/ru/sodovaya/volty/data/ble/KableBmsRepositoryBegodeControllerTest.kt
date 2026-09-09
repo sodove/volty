@@ -295,12 +295,11 @@ class KableBmsRepositoryBegodeControllerTest {
     // ----- 3. The observed duty layer -----
 
     @Test
-    fun `a wheel that has never reported PWM cannot arm the ШИМ alarm`() = repoTest { repo ->
-        // The hazard this task makes reachable: `truePWM` latches on the first
-        // NON-ZERO reading, and before it `dutyPercent` reads 0 —
-        // indistinguishable from a genuine 0 %. A firmware that never fills the
-        // field would leave Part F's headline alarm displayed as armed and
-        // permanently unable to fire (F §10's silent-dead-alarm class).
+    fun `a stationary wheel reports zero PWM and can configure the ШИМ alarm`() = repoTest { repo ->
+        // The stationary Begode capture starts with valid 0x07 frames whose
+        // balancing PWM is 0 %. Once the live frame has established the
+        // session, that zero is a real measurement and must not be rendered as
+        // a dash or treated as an unavailable alarm input.
         val v = wheel()
         val wire = Wire(repo, v)
         wire.notify(liveFrame(voltageRaw = 5888, currentRaw = -350, tempRaw = 2798))
@@ -310,19 +309,17 @@ class KableBmsRepositoryBegodeControllerTest {
         val motion = repo.activeMotion.value
         assertTrue(motion.isConnected, "precondition: a real sample, not the disconnected placeholder")
         assertEquals(0f, motion.dutyPercent, 0f, "0 is all the field can say — hence the flag")
-        assertFalse(motion.hasDuty, "the truePWM latch is still open")
+        assertTrue(motion.hasDuty, "stationary PWM zero is still a measurement")
 
         val availability = availabilityFor(v, motion)
         assertEquals(
-            // "not reported YET", not "this hardware cannot": the latch may
-            // close on the next frame, and on this wheel it does.
-            AlertAvailability.Unavailable(AlertUnavailableReason.ControllerHasNotReportedDuty),
+            AlertAvailability.Available,
             availability[MotionAlertKind.DUTY],
-            "an alarm that cannot fire must not be shown armed"
+            "a stationary wheel must allow PWM alarms to be configured"
         )
         assertTrue(
-            armedRules(v, motion, AlarmDefaults.all()).rules.none { it.kind == MotionAlertKind.DUTY },
-            "the shipped defaults armed a duty alarm against a duty we have never seen"
+            armedRules(v, motion, AlarmDefaults.all()).rules.any { it.kind == MotionAlertKind.DUTY },
+            "the shipped defaults should expose a real stationary duty reading"
         )
     }
 

@@ -2,6 +2,10 @@ package ru.sodovaya.volty.di
 
 import android.content.Context
 import android.os.Build
+import io.ktor.client.HttpClient
+import io.ktor.client.engine.okhttp.OkHttp
+import io.ktor.client.plugins.HttpTimeout
+import io.ktor.client.plugins.websocket.WebSockets
 import ru.sodovaya.volty.BuildConfig
 import ru.sodovaya.volty.data.db.SqlDriverFactory
 import ru.sodovaya.volty.data.prefs.DataStoreFactory
@@ -34,6 +38,7 @@ import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.data.social.AndroidSocialCredentialStore
 import ru.sodovaya.volty.data.social.AndroidLiveKitVoiceRoomEngine
 import ru.sodovaya.volty.data.social.AndroidLocationProvider
+import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.SocialCredentialStore
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
@@ -44,6 +49,7 @@ import ru.sodovaya.volty.notification.Notifier
 import ru.sodovaya.volty.permissions.PermissionsChecker
 import ru.sodovaya.volty.service.ServiceController
 import ru.sodovaya.volty.domain.social.LocationProvider
+import ru.sodovaya.volty.domain.social.SocialTransport
 import ru.sodovaya.volty.domain.social.VoiceRoomEngine
 import ru.sodovaya.volty.domain.location.RideLocationRepository
 import ru.sodovaya.volty.domain.navigation.NavigationRepository
@@ -61,6 +67,22 @@ val androidModule = module {
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
+    // Use the same Android OkHttp stack as navigation for the social REST/WS
+    // boundary. On the field emulator the platform-default Ktor engine failed
+    // before an HTTP request reached the production reverse proxy, which the
+    // transport reduced to a generic network error.
+    single<SocialTransport> {
+        HttpSocialTransport(
+            HttpClient(OkHttp) {
+                install(WebSockets)
+                install(HttpTimeout) {
+                    connectTimeoutMillis = 10_000L
+                    requestTimeoutMillis = 15_000L
+                    socketTimeoutMillis = 15_000L
+                }
+            },
+        )
+    }
     single<LocationProvider> { AndroidLocationProvider(get()) }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
     single { AndroidOfflineRoutingPackageManager(androidContext()) }

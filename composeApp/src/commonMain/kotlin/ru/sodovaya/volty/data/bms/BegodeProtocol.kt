@@ -170,10 +170,15 @@ class BegodeProtocol(
     private var dutyPercentValue: Float = 0f
 
     /**
-     * WheelLog's `truePWM` latch: true once the 0x07 duty field has been seen
-     * NON-ZERO at least once. Until then the wheel has not proved it reports a
-     * hardware duty at all, and [dutyPercent] withholds the value instead of
-     * publishing a zero that may just be an unimplemented field.
+     * Whether this connection has proved that the 0x07 duty field is present.
+     *
+     * An earlier revision copied WheelLog's `truePWM` rule and required a
+     * non-zero duty before publishing anything. The rider's stationary Begode
+     * capture disproves that rule for this firmware: the wheel sends a valid
+     * 0x07 frame with duty 0 while balancing, then rises above zero later. A
+     * valid live frame followed by a motion frame is therefore enough evidence
+     * to publish a genuine stationary 0 %, while an isolated synthetic stream
+     * of zero-filled motion frames remains unknown.
      */
     private var sawTrueDuty = false
 
@@ -577,12 +582,12 @@ class BegodeProtocol(
      * not a derivation. The capture reads 2 % on a stationary balancing wheel,
      * which is exactly what a wheel holding itself upright spends.
      *
-     * **Null until the field has been seen non-zero once** ([sawTrueDuty],
-     * WheelLog's `truePWM` latch). A frame full of zeros cannot distinguish "0
-     * % duty" from "this firmware does not fill the field in", and arming the
-     * ШИМ alarm against a constant zero is precisely the silent failure §7.2
-     * describes. After the latch, later zeros ARE published — by then the
-     * field has proved itself.
+     * A non-zero field proves duty immediately. For this wheel's stationary
+     * firmware, a valid live frame followed by a 0x07 frame also proves that a
+     * zero is a real balancing measurement; this is why the first stationary
+     * sample can be configured without moving the wheel. An isolated stream
+     * of zero-filled motion frames remains null because it has no session
+     * context to distinguish an absent field.
      *
      * ### The 0..100 above is enforced, not merely promised
      *
@@ -657,8 +662,9 @@ class BegodeProtocol(
      * from what this wheel actually sends — `true` for the ET Max, against
      * `D §2`'s prose that wheels expose only a board temperature.
      *
-     * **Duty in the not-yet-known window.** [dutyPercent] is null until the
-     * hardware PWM field has been seen non-zero once, and that window is NOT
+     * **Duty in the not-yet-known window.** [dutyPercent] is null only until
+     * the hardware PWM field is evidenced by a non-zero value or by a valid
+     * stationary 0x07 frame in an established live session. That window is NOT
      * the same statement as 0 %. [ControllerData.dutyPercent] still cannot say
      * it — of the representable values this publishes **0f**, deliberately not
      * a negative sentinel — so the statement travels beside it, on
@@ -680,18 +686,21 @@ class BegodeProtocol(
      *    PWM, a constant 16.9 % on a wheel that never moved); see
      *    [parseLiveFrame], which refuses it.
      *
-     * Task 2 recorded that choosing 0 made the latch INVISIBLE here —
+     * An earlier revision recorded that choosing 0 made the latch INVISIBLE
+     * here —
      * `dutyPercent() ?: 0f` and the raw `dutyPercentValue` were the same number
      * at every instant, so no test of this class could tell the latch from its
      * absence, and the residual risk was a firmware that never fills the PWM
      * field leaving duty at 0 forever while `reportsDuty[BEGODE] = true` kept
-     * the ШИМ alert armed against that constant. **[hasDuty] closes both.** It
-     * is the same latch, published where a caller can act on it, and
+     * the ШИМ alert armed against that constant. **[hasDuty] closed both for
+     * the old non-zero-only rule.** The stationary capture is the retraction:
+     * this wheel does report a meaningful 0 % and must expose it before motion.
+     * It is the same latch, published where a caller can act on it, and
      * `availabilityFor` now answers DUTY `Unavailable` on a sample that carries
      * it false instead of arming an alarm that could never fire. On the ET Max
      * the latch closes inside the first 0x07 frame — a balancing wheel spends
-     * 2 % standing still — so this window is a fraction of a second in
-     * practice, and the guard is for the firmware nobody here has seen.
+     * 2 % standing still — while the replay begins with several genuine 0 %
+     * samples — so the guard remains for firmware nobody here has seen.
      *
      * **Absent distances.** [odometerKm] and [tripKm] read 0 before the frames
      * that carry them arrive. 0 is also a real reading (a wheel out of its box,
@@ -1386,12 +1395,13 @@ class BegodeProtocol(
         if (motorTempRaw != 0) sawMotorTempEvidence = true
         motorTempCValue = motorTempRaw.toFloat()
         val dutyRaw = frame.i16BE(8)
-        // WheelLog's truePWM latch: one non-zero reading is what proves the
-        // firmware fills this field in at all. Before that a zero is not a
-        // measurement of zero duty. Read off the RAW value, ahead of the
-        // magnitude below, so a wheel that only ever reports negative PWM still
-        // proves it reports duty.
-        if (dutyRaw != 0) sawTrueDuty = true
+        // A non-zero value proves the field by itself. For the stationary
+        // Begode capture, however, the first valid 0x07 frames carry a real
+        // balancing duty of 0 %; once a genuine live frame has established the
+        // connection, that zero is a measurement rather than an absent field.
+        // Keep the isolated all-zero synthetic stream unknown (there is no
+        // session context to distinguish an unimplemented field there).
+        if (dutyRaw != 0 || sawLiveMotion) sawTrueDuty = true
         // MAGNITUDE, clamped to the 0..100 [dutyPercent]'s contract promises —
         // the same statement VescValues makes with `abs(duty) * 100`, made in
         // the decoder rather than in [rebuildMotion] so the two protocols agree

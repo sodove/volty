@@ -374,6 +374,23 @@ class BegodeMotionProtocolTest {
     }
 
     @Test
+    fun aStationaryWheelPublishesZeroDutyOnceTheLiveSessionIsEstablished() {
+        // REAL capture shape: the first 0x07 frames are stationary and carry
+        // duty 0, but a valid 0x00 live frame is interleaved before the next
+        // motion frame. That zero is the wheel's balancing PWM, not an absent
+        // field, so the dashboard and ШИМ alarm must be able to use it without
+        // asking the rider to start moving.
+        val protocol = BegodeProtocol()
+        protocol.onNotification(liveFrame(voltageRaw = 5892, speedRaw = 0))
+        protocol.onNotification(motionFrame(batteryCurrentRaw = 67, motorTempRaw = 20, dutyRaw = 0))
+
+        val motion = assertNotNull(protocol.latestMotion(0))
+        assertEquals(0f, motion.dutyPercent, 0f)
+        assertTrue(motion.hasDuty, "stationary PWM is a measured zero")
+        assertEquals(0f, assertNotNull(protocol.dutyPercent()), 0f)
+    }
+
+    @Test
     fun theControllerSampleCarriesTheLatchOnHasDutyBecauseZeroCannotSayIt() {
         // Task 2 recorded that the latch was INVISIBLE on the controller
         // sample: `dutyPercent() ?: 0f` and the raw value are the same number

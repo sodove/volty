@@ -1,5 +1,7 @@
 package ru.sodovaya.volty.domain.navigation.region
 
+import ru.sodovaya.volty.domain.navigation.GeoCoordinate
+
 /** The part of the map currently visible to the rider. */
 data class OfflineMapViewport(
     val bounds: OfflineRegionBounds,
@@ -24,6 +26,15 @@ sealed interface OfflineMapSourceDecision {
 
 /** Selects a complete installed PMTiles package without making the renderer network-aware. */
 object OfflineMapSourcePolicy {
+    /**
+     * The native map stays mounted beneath transient navigation screens. Those screens do not
+     * render a live fix, which must not make an installed regional source disappear.
+     */
+    fun coordinateForRetainedMap(
+        current: GeoCoordinate?,
+        retained: GeoCoordinate?,
+    ): GeoCoordinate? = current ?: retained
+
     fun select(
         viewport: OfflineMapViewport,
         packages: List<OfflineRegionPackageSnapshot>,

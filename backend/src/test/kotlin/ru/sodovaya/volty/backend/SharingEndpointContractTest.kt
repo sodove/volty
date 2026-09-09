@@ -57,6 +57,29 @@ class SharingEndpointContractTest {
     }
 
     @Test
+    fun locationOnlyUpdateAcceptsOmittedTelemetryField() = testApplication {
+        val store = SharingStore()
+        val dependencies = AppDependencies(AppConfig.forTests(), store, testMode = true)
+        application { module(dependencies) }
+        val auth = dependencies.tokenService.issueAccessToken("user-1")
+        val capturedAt = nowMillis()
+
+        client.post("/v1/groups/group-1/sharing") {
+            bearerAuth(auth)
+            header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            setBody("{\"groupId\":\"group-1\",\"profile\":\"LOCATION\",\"ttlMillis\":60000,\"startedAtEpochMillis\":$capturedAt}")
+        }
+        val published = client.post("/v1/groups/group-1/sharing/update") {
+            bearerAuth(auth)
+            header(HttpHeaders.ContentType, ContentType.Application.Json.toString())
+            setBody("{\"capturedAtEpochMillis\":$capturedAt,\"location\":{\"latitude\":56.8,\"longitude\":60.6,\"accuracyMeters\":5.0,\"capturedAtEpochMillis\":$capturedAt,\"staleAfterEpochMillis\":${capturedAt + 30000}}}")
+        }
+
+        assertEquals(HttpStatusCode.OK, published.status)
+        assertNull(store.lastTelemetry)
+    }
+
+    @Test
     fun sharingUsesServerTimeWhenDeviceClockIsOutsideAllowedSkew() = testApplication {
         val store = SharingStore()
         val dependencies = AppDependencies(AppConfig.forTests(), store, testMode = true)

@@ -164,7 +164,9 @@ data class LocationDto(
 data class PublishSharingRequest(
     val capturedAtEpochMillis: Long,
     val location: LocationDto?,
-    val telemetry: SharedTelemetryDto?,
+    // Location-only sharing is serialized by clients with explicitNulls=false,
+    // so an absent telemetry field is equivalent to a JSON null.
+    val telemetry: SharedTelemetryDto? = null,
 )
 
 @Serializable

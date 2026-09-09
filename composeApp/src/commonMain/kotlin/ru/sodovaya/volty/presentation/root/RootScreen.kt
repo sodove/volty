@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.ime
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -37,6 +39,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalDensity
+import androidx.activity.compose.BackHandler
 import com.arkivanov.decompose.extensions.compose.stack.Children
 import com.arkivanov.decompose.extensions.compose.stack.animation.fade
 import com.arkivanov.decompose.extensions.compose.stack.animation.stackAnimation
@@ -58,6 +64,7 @@ import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
 import ru.sodovaya.volty.presentation.map.NavigationMapRenderPolicy
 import ru.sodovaya.volty.presentation.map.NavigationMapScene
+import ru.sodovaya.volty.presentation.map.MapCameraRequest
 import ru.sodovaya.volty.presentation.map.NavigationTrailPoint
 import ru.sodovaya.volty.presentation.map.RideMapTrailSample
 import ru.sodovaya.volty.presentation.map.GroupMapScreen
@@ -88,6 +95,13 @@ import org.koin.compose.koinInject
 
 @Composable
 fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val imeBottomPx = WindowInsets.ime.getBottom(LocalDensity.current)
+    BackHandler(enabled = shouldConsumeBackForIme(imeBottomPx)) {
+        keyboardController?.hide()
+        focusManager.clearFocus(force = false)
+    }
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
     val darkTheme = LocalVoltyDarkTheme.current
@@ -112,6 +126,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val navigationState by component.navigation.state.collectAsState()
     val locationState by component.navigation.locationState.collectAsState()
     var mapRecenterRequest by remember { mutableLongStateOf(0L) }
+    var groupMapCameraRequest by remember { mutableLongStateOf(0L) }
     val groupMapVisible = active is RootComponent.Child.GroupMap
     val rideMapVisible = active is RootComponent.Child.Ride &&
         rideAvailable &&
@@ -167,6 +182,15 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     LaunchedEffect(rideMapVisible) {
         component.navigation.onMapVisibilityChanged(rideMapVisible)
     }
+    LaunchedEffect(groupMapVisible, socialLiveState.markers.size) {
+        // The group sheet can open before the live snapshot has delivered all
+        // participants. Re-fit when the marker set first becomes complete, but
+        // keep the request stable while locations are merely refreshed so a
+        // user's manual pan is never snapped back.
+        if (groupMapVisible && socialLiveState.markers.isNotEmpty()) {
+            groupMapCameraRequest++
+        }
+    }
     // Preparation belongs to the map host lifecycle: a non-null fix starts one
     // keyed request; later GPS samples and recompositions cannot start another.
     LaunchedEffect(rideMapVisible, ownFix != null, darkTheme, offlineRegionStates.size) {
@@ -200,8 +224,26 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             participantMarkers = socialLiveState.markers,
             routes = emptyList(),
             destination = null,
-            followState = navigationState.followState,
-            cameraRequest = null,
+            // The group map is an exploratory view. Navigation's ride-follow
+            // state must not recenter it on every render frame, otherwise a
+            // pan gesture appears to do nothing until the screen is closed.
+            followState = if (groupMapVisible) {
+                ru.sodovaya.volty.presentation.map.RideMapFollowState(
+                    mode = ru.sodovaya.volty.presentation.map.RideMapFollowMode.FREE,
+                )
+            } else {
+                navigationState.followState
+            },
+            cameraRequest = if (groupMapVisible && groupMapCameraRequest > 0L) {
+                MapCameraRequest.FitParticipants(
+                    sequence = groupMapCameraRequest,
+                    points = socialLiveState.markers.map {
+                        ru.sodovaya.volty.domain.navigation.GeoCoordinate(it.latitude, it.longitude)
+                    },
+                )
+            } else {
+                null
+            },
         )
     }
     Column(modifier = Modifier.fillMaxSize()) {
