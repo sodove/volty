@@ -5,9 +5,12 @@ import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.domain.model.DashboardStyle
+import ru.sodovaya.volty.domain.model.BleDiagnosticsState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
 import ru.sodovaya.volty.domain.repository.VehicleRepository
+import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
+import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.util.UnitSystem
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageRepository
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
@@ -48,6 +51,12 @@ interface SettingsComponent {
     fun onAddBattery()
     fun onSendLogs()
     fun onBack()
+    fun onTabSelected(tab: Tab)
+    fun onStartBleCapture()
+    fun onStopBleCapture()
+    fun onClearBleCapture()
+
+    enum class Tab { GENERAL, DEBUG }
 
     data class State(
         val themeMode: String = "system",
@@ -63,7 +72,10 @@ interface SettingsComponent {
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
         val offlineCatalogRefreshing: Boolean = false,
         val offlineCatalogError: Boolean = false,
-        val vehicles: List<Vehicle> = emptyList()
+        val vehicles: List<Vehicle> = emptyList(),
+        val selectedTab: Tab = Tab.GENERAL,
+        val diagnostics: BleDiagnosticsState = BleDiagnosticsState(),
+        val activeVehicle: Vehicle? = null
     )
 }
 
@@ -74,6 +86,8 @@ class DefaultSettingsComponent(
     private val offlineRegionsRepository: OfflineRegionPackageRepository,
     private val offlinePreparationCoordinator: OfflineRegionPreparationCoordinator,
     private val logExporter: LogExporter,
+    private val bleDiagnosticsRepository: BleDiagnosticsRepository,
+    private val bmsRepository: BmsRepository,
     private val onEditVehicleRequested: (String) -> Unit,
     private val onAddBatteryRequested: () -> Unit,
     private val onBackRequested: () -> Unit
@@ -114,6 +128,8 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
         scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
         scope.launch { offlinePreparationCoordinator.states.collect { v -> _state.update { it.copy(offlinePreparation = v) } } }
+        scope.launch { bleDiagnosticsRepository.state.collect { v -> _state.update { it.copy(diagnostics = v) } } }
+        scope.launch { bmsRepository.activeVehicle.collect { v -> _state.update { it.copy(activeVehicle = v) } } }
     }
 
     override fun onThemeChanged(theme: String) { scope.launch { appPrefs.setThemeMode(theme) } }
@@ -169,4 +185,8 @@ class DefaultSettingsComponent(
     override fun onAddBattery() { onAddBatteryRequested() }
     override fun onSendLogs() { logExporter.exportLogs() }
     override fun onBack() { onBackRequested() }
+    override fun onTabSelected(tab: SettingsComponent.Tab) { _state.update { it.copy(selectedTab = tab) } }
+    override fun onStartBleCapture() = bleDiagnosticsRepository.startCapture()
+    override fun onStopBleCapture() = bleDiagnosticsRepository.stopCapture()
+    override fun onClearBleCapture() = bleDiagnosticsRepository.clearCapture()
 }

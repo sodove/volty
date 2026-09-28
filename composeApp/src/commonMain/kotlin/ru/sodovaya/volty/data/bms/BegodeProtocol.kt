@@ -183,12 +183,18 @@ class BegodeProtocol(
     private var sawTrueDuty = false
 
     /**
-     * True once ANY smart-BMS frame (0x01/0x02/0x03) was decoded. Not every
-     * Begode has a smart BMS — the T4 and older wheels likely stream only
-     * 0x00 and 0x04 — and this flag is what decides between the two modes:
-     * while false, pack 0 is synthesised from the live frame ([liveData]);
-     * the first BMS frame retires the synthetic pack permanently (until
-     * [reset]), so it can never override real branch data.
+     * True once ANY smart-BMS frame (0x01/0x02/0x03) was decoded.
+     *
+     * **Retraction, 2026-09-28:** an earlier revision said the T4 likely
+     * streamed only 0x00 and 0x04. The rider's 2026-09-27 capture from
+     * `GotWay_59672`, configured as a Begode T4, contains repeated valid 0x01
+     * and 0x07 frames as well. That model-based inference was wrong; decide
+     * from frames actually observed, not the wheel name.
+     *
+     * Not every Begode has a smart BMS, and this flag decides between the two
+     * modes: while false, pack 0 is synthesised from the live frame
+     * ([liveData]); the first BMS frame retires the synthetic pack permanently
+     * (until [reset]), so it can never override real branch data.
      */
     private var smartBmsSeen = false
 

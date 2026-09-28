@@ -35,9 +35,9 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
-import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
@@ -139,6 +139,8 @@ import volty.composeapp.generated.resources.settings_offline_status_failed
 import volty.composeapp.generated.resources.settings_offline_status_deleting
 import volty.composeapp.generated.resources.settings_offline_delete_title
 import volty.composeapp.generated.resources.settings_offline_delete_text
+import volty.composeapp.generated.resources.settings_tab_general
+import volty.composeapp.generated.resources.settings_tab_debug
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -168,6 +170,22 @@ fun SettingsScreen(component: SettingsComponent) {
                 .padding(horizontal = 16.dp, vertical = 8.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                val tabs = listOf(SettingsComponent.Tab.GENERAL, SettingsComponent.Tab.DEBUG)
+                tabs.forEachIndexed { index, tab ->
+                    SegmentedButton(
+                        selected = state.selectedTab == tab,
+                        onClick = { component.onTabSelected(tab) },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = tabs.size),
+                    ) {
+                        Text(stringResource(if (tab == SettingsComponent.Tab.GENERAL) Res.string.settings_tab_general else Res.string.settings_tab_debug))
+                    }
+                }
+            }
+            if (state.selectedTab == SettingsComponent.Tab.DEBUG) {
+                DebugSettingsTab(state, component::onStartBleCapture, component::onStopBleCapture, component::onClearBleCapture)
+            } else {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             SettingsSection(
                 title = stringResource(Res.string.settings_theme),
                 initiallyExpanded = true,
@@ -464,6 +482,8 @@ fun SettingsScreen(component: SettingsComponent) {
 
             }
             Spacer(Modifier.height(24.dp))
+            }
+            }
         }
 
         pendingDelete?.let { v ->
@@ -655,6 +675,19 @@ private fun formatOfflineBytes(bytes: Long): String = when {
     bytes >= 1024L * 1024L -> "%.1f MB".format(bytes / (1024.0 * 1024.0))
     bytes >= 1024L -> "%.1f KB".format(bytes / 1024.0)
     else -> "$bytes B"
+}
+
+@Composable
+internal fun SettingsCard(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(22.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f))
+            .padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+        content = content,
+    )
 }
 
 @Composable

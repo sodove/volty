@@ -17,6 +17,7 @@ import ru.sodovaya.volty.data.social.DefaultSocialRideRuntime
 import ru.sodovaya.volty.data.navigation.OsmNavigationRepository
 import ru.sodovaya.volty.data.navigation.BmsNavigationEnergySource
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.repository.RideHistoryRepository
@@ -46,7 +47,8 @@ val appModule = module {
     single { KableBmsRepository(get(), get(), get(), get<BleAdapterStateProvider>()) } binds arrayOf(
         BmsRepository::class,
         CanDiscovery::class,
-        ControllerConfigSource::class
+        ControllerConfigSource::class,
+        BleDiagnosticsRepository::class
     )
     single { AlertEngine(get(), get()) }
     single<SocialTransport> { HttpSocialTransport() }

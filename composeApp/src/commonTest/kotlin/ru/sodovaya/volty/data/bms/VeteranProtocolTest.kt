@@ -56,10 +56,12 @@ class VeteranProtocolTest {
         assertEquals(78.5f, motion.dutyPercent, 0.001f)
         assertTrue(motion.hasDuty)
         assertEquals(-25f, motion.motorCurrentA, 0.001f)
-        assertFalse(motion.hasBatteryCurrent)
+        assertEquals(-19.625f, motion.batteryCurrentA, 0.001f)
+        assertTrue(motion.hasBatteryCurrent)
         assertEquals(125.25f, motion.inputVoltageV, 0.001f)
         assertTrue(motion.hasInputVoltage)
-        assertFalse(motion.hasPower)
+        assertEquals(-2_458.03125f, motion.powerW, 0.01f)
+        assertTrue(motion.hasPower)
         assertEquals(65.432f, motion.odometerKm, 0.001f)
         assertEquals(0f, motion.tripKm, 0.001f)
         assertTrue(motion.hasDistance)
@@ -105,7 +107,7 @@ class VeteranProtocolTest {
     }
 
     @Test
-    fun `smart BMS pages expose two complete packs with cells temperatures and current`() {
+    fun `smart BMS pages expose complete packs with cells temperatures current and derived power`() {
         val protocol = VeteranProtocol()
         protocol.onNotification(controllerFrame(versionRaw = 5_001))
 
@@ -135,11 +137,16 @@ class VeteranProtocolTest {
         assertEquals(36, first.cellVoltages.size)
         assertEquals(36, second.cellVoltages.size)
         assertEquals(148.365f, first.voltage, 0.001f)
-        assertEquals(1.23f, first.current, 0.001f)
+        assertEquals(-1.23f, first.current, 0.001f, "positive Leaperkim wire current means discharge")
         assertTrue(first.hasCurrent)
-        assertFalse(first.hasPower)
+        assertEquals(first.voltage * first.current, first.power, 0.001f)
+        assertTrue(first.hasPower)
+        assertTrue(first.power < 0f, "BmsData power is charge-positive")
+        assertEquals(second.voltage * second.current, second.power, 0.001f)
+        assertTrue(second.hasPower)
         assertEquals(listOf(25f, 25.1f, 25.2f, 25.3f, 25.4f, 25.5f), first.temperatures)
-        assertEquals(-2.34f, second.current, 0.001f)
+        assertEquals(2.34f, second.current, 0.001f, "negative Leaperkim wire current means charging")
+        assertTrue(second.power > 0f, "charging power must be positive in BmsData")
     }
 
     @Test
@@ -173,7 +180,7 @@ class VeteranProtocolTest {
         assertEquals(123.72f, battery.voltage, 0.001f)
         assertFalse(battery.hasCurrent)
         assertFalse(battery.hasPower)
-        assertEquals(0.94f, battery.soc, 0.01f)
+        assertEquals(94f, battery.soc, 0.01f)
     }
 
     @Test
@@ -208,7 +215,7 @@ class VeteranProtocolTest {
         )
 
         val battery = assertNotNull(protocol.latestData(0))
-        assertEquals(0.78f, battery.soc, 0.001f)
+        assertEquals(78f, battery.soc, 0.001f)
         assertTrue(battery.socKnown)
     }
 

@@ -26,14 +26,15 @@ import kotlin.math.abs
  * preamble are discarded.  Veteran's FFE1 characteristic is also its command
  * channel, so this adapter intentionally never writes to it.
  *
- * Limitations are deliberate.  The controller's current field is phase
- * current, not battery current; it therefore reaches [ControllerData]'s
- * `motorCurrentA` only.  Battery current and power remain unavailable until a
- * smart-BMS page supplies them.  Smart-BMS pages carry cell voltages,
- * temperatures and current for two packs. A reported page-2 SoC is retained
- * when present; otherwise pack SoC stays unknown. Controller-only SoC is the
- * model voltage curve used by WheelLog, and is marked known only for the model
- * revisions listed above. The Begode
+ * The controller's q-axis field remains phase current in `motorCurrentA`; its
+ * output-current and signed-power derivation is also published separately.
+ * Smart-BMS pages carry cell voltages, temperatures and current for two packs.
+ * A reported page-2 SoC wins, including a reported zero; otherwise complete
+ * cell voltage uses the upstream series-count table where the count is known.
+ * Controller-only SoC is the model voltage curve used by WheelLog. An earlier
+ * revision claimed that battery current/power and smart-BMS voltage estimates
+ * were unavailable; the reviewed upstream mapping and cell samples support
+ * those derived values, while unknown fields remain explicitly flagged. The Begode
  * `Master` is intentionally not classified here: the available sources do not
  * prove that its BLE frames use this Veteran layout.
  *
@@ -41,7 +42,29 @@ import kotlin.math.abs
  * - https://github.com/Wheellog/Wheellog.Android/blob/master/app/src/main/java/com/cooper/wheellog/utils/VeteranAdapter.java
  * - https://github.com/Tritbool/euc_ble_library/blob/main/euc-ble-core/src/main/kotlin/io/github/tritbool/euc/ble/protocols/LeaperkimProtocol.kt
  */
-class VeteranProtocol : BmsProtocol(), MotionSource {
+private val SmartBmsApexTable = intArrayOf(
+    11340, 11394, 11452, 11509, 11567, 11624, 11682, 11736, 11794, 11851,
+    11909, 11966, 12024, 12056, 12092, 12128, 12164, 12200, 12236, 12272,
+    12308, 12344, 12380, 12416, 12452, 12481, 12514, 12546, 12578, 12611,
+    12643, 12676, 12708, 12740, 12773, 12805, 12838, 12870, 12899, 12928,
+    12960, 12989, 13018, 13050, 13079, 13108, 13140, 13169, 13198, 13230,
+    13255, 13280, 13306, 13334, 13360, 13385, 13414, 13439, 13464, 13493,
+    13518, 13543, 13572, 13608, 13644, 13680, 13716, 13752, 13788, 13824,
+    13860, 13896, 13932, 13968, 14004, 14044, 14083, 14123, 14166, 14206,
+    14245, 14285, 14328, 14368, 14407, 14447, 14490, 14515, 14544, 14573,
+    14598, 14627, 14656, 14681, 14710, 14738, 14764, 14792, 14821, 14850
+)
+
+private val SmartBmsAeroTable = intArrayOf(
+    9450, 9495, 9543, 9591, 9639, 9687, 9735, 9780, 9828, 9876, 9924, 9972, 10020, 10047, 10077, 10107, 10137, 10167, 10197, 10227,
+    10257, 10287, 10317, 10347, 10377, 10401, 10428, 10455, 10482, 10509, 10536, 10563, 10590, 10617, 10644, 10671, 10698, 10725, 10749, 10773,
+    10800, 10824, 10848, 10875, 10899, 10923, 10950, 10974, 10998, 11025, 11046, 11067, 11088, 11112, 11133, 11154, 11178, 11199, 11220, 11244,
+    11265, 11286, 11310, 11340, 11370, 11400, 11430, 11460, 11490, 11520, 11550, 11580, 11610, 11640, 11670, 11703, 11736, 11769, 11805, 11838,
+    11871, 11904, 11940, 11973, 12006, 12039, 12075, 12096, 12120, 12144, 12165, 12189, 12213, 12234, 12258, 12282, 12303, 12327, 12351, 12375
+)
+
+
+class VeteranProtocol : BmsProtocol(), MotionSource, ProtocolDiagnostics {
 
     override val uuids = BmsUuids(
         serviceUuid = "0000ffe0-0000-1000-8000-00805f9b34fb",
@@ -81,6 +104,10 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
     /** Four-digit hardware profile decoded from the 24-bit version field. */
     val hardwareCode: String? get() = hardwareCodeValue
 
+    override val diagnosticHardwareCode: String? get() = hardwareCode
+    override val diagnosticModel: String? get() = hardwareCode?.let { model }
+    override val diagnosticFirmwareVersion: String? get() = firmwareVersion
+
     override fun onNotification(data: ByteArray) {
         if (data.isEmpty()) return
         buffer.append(data)
@@ -91,7 +118,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         if (packIndex !in bms.indices) return null
         if (!smartBmsSeen) return if (packIndex == 0) mainData else null
         val expected = bms[packIndex].reportedCellCount ?: expectedCellCount(majorVersion, hardwareCodeValue) ?: return null
-        return bms[packIndex].toData(expected, reportedSoc)
+        return bms[packIndex].toData(expected, hardwareCodeValue)
     }
 
     override val controllerCount: Int get() = 1
@@ -190,26 +217,35 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
 
     private fun parseController(frame: ByteArray, major: Int) {
         val voltage = frame.u16BE(4) / 100f
+        val voltageKnown = voltage in 20f..200f
         val speedRaw = frame.i16BE(6)
         val speed = abs(speedRaw / SPEED_RAW_PER_KMH)
+        val speedKnown = speed in 0f..120f
         val totalDistanceMeters = frame.reverseBeInt(12)
-        val phaseCurrent = frame.i16BE(16) / CURRENT_RAW_PER_AMP
+        val phaseCurrentRaw = frame.i16BE(16)
+        val phaseCurrent = phaseCurrentRaw / CURRENT_RAW_PER_AMP
         val temperature = frame.i16BE(18) / TEMPERATURE_RAW_PER_C
-        if (voltage !in 20f..200f || speed !in 0f..120f || temperature !in -50f..130f) return
+        val temperatureKnown = temperature in -50f..130f
+        val pwmRaw = if (frame.size >= 36) frame.u16BE(34) else -1
+        val dutyKnown = pwmRaw in 0..MAX_PWM_RAW
+        val duty = if (dutyKnown) pwmRaw / DUTY_RAW_PER_PERCENT else 0f
+        val outputCurrent = if (dutyKnown) powerFlowSign(phaseCurrentRaw, speedRaw) * abs(phaseCurrent) * duty / 100f else 0f
+        val powerKnown = voltageKnown && speedKnown && dutyKnown
 
-        val soc = reportedSoc ?: estimateSoc(voltage * 100f, major)
-        mainData = BmsData(
-            voltage = voltage,
-            // The controller field is phase current, not battery current.
-            current = 0f,
-            hasCurrent = false,
-            power = 0f,
-            hasPower = false,
-            soc = soc ?: 0f,
-            socKnown = soc != null,
-            temperatures = listOf(temperature),
-            isConnected = true
-        )
+        if (voltageKnown) {
+            val soc = reportedSoc ?: estimateSoc(voltage * 100f, major)
+            mainData = BmsData(
+                voltage = voltage,
+                current = 0f,
+                hasCurrent = false,
+                power = 0f,
+                hasPower = false,
+                soc = soc ?: 0f,
+                socKnown = soc != null,
+                temperatures = if (temperatureKnown) listOf(temperature) else emptyList(),
+                isConnected = true
+            )
+        }
 
         val baseline = tripBaselineMeters ?: totalDistanceMeters.also { tripBaselineMeters = it }
         val tripKm = if (totalDistanceMeters >= baseline) {
@@ -219,21 +255,19 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
             tripBaselineMeters = totalDistanceMeters
             0f
         }
-        val dutyKnown = major >= HARDWARE_PWM_MIN_MAJOR
-        val duty = if (dutyKnown) (frame.u16BE(34) / DUTY_RAW_PER_PERCENT).coerceIn(0f, 100f) else 0f
         motion = ControllerData(
-            speedKmh = speed,
-            speedSource = SpeedSource.REPORTED,
+            speedKmh = if (speedKnown) speed else 0f,
+            speedSource = if (speedKnown) SpeedSource.REPORTED else SpeedSource.NONE,
             dutyPercent = duty,
             hasDuty = dutyKnown,
             motorCurrentA = phaseCurrent,
-            batteryCurrentA = 0f,
-            hasBatteryCurrent = false,
-            inputVoltageV = voltage,
-            hasInputVoltage = true,
-            powerW = 0f,
-            hasPower = false,
-            escTempC = temperature,
+            batteryCurrentA = outputCurrent,
+            hasBatteryCurrent = speedKnown && dutyKnown,
+            inputVoltageV = if (voltageKnown) voltage else 0f,
+            hasInputVoltage = voltageKnown,
+            powerW = if (powerKnown) outputCurrent * voltage else 0f,
+            hasPower = powerKnown,
+            escTempC = if (temperatureKnown) temperature else NO_TEMPERATURE,
             motorTempC = 0f,
             hasMotorTemp = false,
             odometerKm = totalDistanceMeters / METERS_PER_KM,
@@ -254,16 +288,19 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         if (packet == 2 && frame.size > REPORTED_SOC_OFFSET) {
             val percent = frame[REPORTED_SOC_OFFSET].u8()
             if (percent != UNREPORTED && percent <= 100) {
-                reportedSoc = percent / PERCENT_PER_UNIT
+                state.reportedSoc = percent.toFloat()
+                reportedSoc = state.reportedSoc
             }
         }
 
         when (packet) {
             0, 4 -> {
                 if (frame.size <= BMS_CURRENT_2_OFFSET + 1) return
-                // WheelLog stores these as signed hundredths of an ampere.
+                // Leaperkim's wire convention is discharge-positive (signed
+                // hundredths of an ampere); BmsData is charge-positive, so
+                // normalize here before deriving pack power or publishing it.
                 val current = if (bmsIndex == 0) frame.i16BE(BMS_CURRENT_1_OFFSET) else frame.i16BE(BMS_CURRENT_2_OFFSET)
-                state.currentA = current / BMS_CURRENT_RAW_PER_AMP
+                state.currentA = -(current / BMS_CURRENT_RAW_PER_AMP)
             }
 
             1, 5 -> {
@@ -296,37 +333,75 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         }
     }
 
-    private class BmsState {
+    private inner class BmsState {
         val cells = arrayOfNulls<Float>(MAX_BMS_CELLS)
         var currentA: Float? = null
         var reportedCellCount: Int? = null
+        var reportedSoc: Float? = null
         val temperatures = mutableListOf<Float>()
 
         fun reset() {
             cells.fill(null)
             currentA = null
             reportedCellCount = null
+            reportedSoc = null
             temperatures.clear()
         }
 
-        fun toData(expectedCells: Int, reportedSoc: Float?): BmsData? {
+        fun toData(expectedCells: Int, hardwareCode: String?): BmsData? {
             if (cells.take(expectedCells).any { it == null }) return null
             val completeCells = cells.take(expectedCells).map { it!! }
+            val packVoltage = completeCells.sum()
+            val current = currentA
+            val power = current?.let { packVoltage * it }
+            val soc = reportedSoc ?: estimateSmartBmsSoc(packVoltage, expectedCells, hardwareCode)
             return BmsData(
                 // No pack-voltage field exists in these pages. A sum is only
                 // published after every expected cell has arrived.
-                voltage = completeCells.sum(),
-                current = currentA ?: 0f,
-                hasCurrent = currentA != null,
-                power = 0f,
-                hasPower = false,
-                soc = reportedSoc ?: 0f,
-                socKnown = reportedSoc != null,
+                voltage = packVoltage,
+                current = current ?: 0f,
+                hasCurrent = current != null,
+                // Smart BMS pages report current but no power field. With a
+                // complete cell set, Vpack × Ipack is an earned power estimate;
+                // both values use BmsData's charge-positive convention.
+                power = power ?: 0f,
+                hasPower = power != null,
+                soc = soc ?: 0f,
+                socKnown = soc != null,
                 cellVoltages = completeCells,
                 temperatures = temperatures.toList(),
                 isConnected = true
             )
         }
+    }
+
+    private fun estimateSmartBmsSoc(voltage: Float, cellCount: Int, hardwareCode: String?): Float? {
+        val seriesCount = when (hardwareCode) {
+            "0050", "0060", "0090", "5010", "5030" -> 36
+            "0070", "5020", "0040" -> 30
+            "0080" -> 42
+            "0010", "0011", "0030" -> 24
+            else -> cellCount.takeIf { it in 1..MAX_BMS_CELLS } ?: return null
+        }
+        val curve = when {
+            seriesCount == 30 -> SmartBmsAeroTable
+            seriesCount == 36 -> SmartBmsApexTable
+            seriesCount in setOf(24, 42) -> SmartBmsApexTable.map { it * seriesCount / 36 }.toIntArray()
+            else -> return null
+        }
+        val rawVoltage = voltage * 100f
+        if (rawVoltage >= curve.last()) return 100f
+        if (rawVoltage <= curve.first()) return 0f
+        val nextIndex = curve.indexOfFirst { it > rawVoltage }
+        if (nextIndex <= 0) return 0f
+        val lower = curve[nextIndex - 1].toFloat()
+        val upper = curve[nextIndex].toFloat()
+        return nextIndex - 1 + (rawVoltage - lower) / (upper - lower)
+    }
+
+    private fun powerFlowSign(currentRaw: Int, speedRaw: Int): Float {
+        if (speedRaw == 0 || currentRaw == 0) return 1f
+        return if ((currentRaw < 0) == (speedRaw < 0)) -1f else 1f
     }
 
     private fun estimateSoc(voltageRaw: Float, major: Int): Float? {
@@ -361,7 +436,7 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
 
             else -> return null
         }
-        return (percent / 100f).coerceIn(0f, 1f)
+        return percent.coerceIn(0f, 100f)
     }
 
     private fun modelName(major: Int?): String = when (hardwareCodeValue) {
@@ -441,8 +516,6 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         const val REPORTED_SOC_OFFSET = 50
         const val REPORTED_CELL_COUNT_OFFSET = 52
         const val UNREPORTED = 0x80
-        const val PERCENT_PER_UNIT = 100f
-        const val HARDWARE_PWM_MIN_MAJOR = 2
         const val MAX_BMS_CELLS = 42
         const val MIN_CELL_MV = 1_500
         const val MAX_CELL_MV = 5_000
@@ -452,6 +525,8 @@ class VeteranProtocol : BmsProtocol(), MotionSource {
         const val BMS_CURRENT_RAW_PER_AMP = 100f
         const val TEMPERATURE_RAW_PER_C = 100f
         const val DUTY_RAW_PER_PERCENT = 100f
+        const val MAX_PWM_RAW = 10_000
+        const val NO_TEMPERATURE = -100f
         const val METERS_PER_KM = 1_000f
     }
 }

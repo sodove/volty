@@ -7,11 +7,13 @@ import kotlin.time.Instant
 @OptIn(ExperimentalTime::class)
 data class BmsData(
     val voltage: Float = 0f,
+    /** Battery current in amperes: positive = charging, negative = discharging. */
     val current: Float = 0f,
     /** Whether [current] is a measurement rather than a controller-derived placeholder. */
     val hasCurrent: Boolean = true,
+    /** Battery power in watts, using the same charge-positive convention as [current]. */
     val power: Float = 0f,
-    /** Whether [power] is a measurement rather than a controller-derived placeholder. */
+    /** Whether [power] is measured or derived from known telemetry rather than a placeholder. */
     val hasPower: Boolean = true,
     val soc: Float = 0f,
     /**

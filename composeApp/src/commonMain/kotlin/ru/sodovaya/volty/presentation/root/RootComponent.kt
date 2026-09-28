@@ -792,6 +792,8 @@ class DefaultRootComponent(
                     offlineRegionsRepository = get<OfflineRegionPackageRepository>(),
                     offlinePreparationCoordinator = get(),
                     logExporter = get(),
+                    bleDiagnosticsRepository = get(),
+                    bmsRepository = bmsRepository,
                     onEditVehicleRequested = { id -> goTo(Config.VehicleEdit(id)) },
                     onAddBatteryRequested = {
                         goTo(configForCreateVehicle(CreateVehicleEntry.SETTINGS))

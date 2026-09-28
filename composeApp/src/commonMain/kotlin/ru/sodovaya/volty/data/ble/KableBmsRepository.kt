@@ -5,6 +5,7 @@ import com.juul.kable.Scanner
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.BmsProtocol
+import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
 import ru.sodovaya.volty.data.bms.ControllerConfigSource
 import ru.sodovaya.volty.data.bms.BmsTypeDetector
 import ru.sodovaya.volty.data.bms.DalyBmsProtocol
@@ -15,6 +16,10 @@ import ru.sodovaya.volty.data.demo.DemoBmsSimulator
 import ru.sodovaya.volty.data.history.RideTelemetryRecorder
 import ru.sodovaya.volty.data.memory.SampleRingBuffer
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.BleDiagnosticRecord
+import ru.sodovaya.volty.domain.model.BleDiagnosticLink
+import ru.sodovaya.volty.domain.model.BleDiagnosticBatterySample
+import ru.sodovaya.volty.domain.model.BleDiagnosticControllerSample
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.ConnectionState
@@ -44,6 +49,7 @@ import ru.sodovaya.volty.domain.model.vehiclesByAddress
 import ru.sodovaya.volty.domain.model.withCellCount
 import ru.sodovaya.volty.domain.model.yieldsBmsToHeadUnit
 import ru.sodovaya.volty.domain.repository.BmsRepository
+import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
 import ru.sodovaya.volty.domain.repository.CanDiscovery
 import ru.sodovaya.volty.domain.repository.CanScanRefusal
 import ru.sodovaya.volty.domain.repository.CanScanRefusedException
@@ -136,7 +142,16 @@ class KableBmsRepository private constructor(
     private val coroutineContext: kotlin.coroutines.CoroutineContext,
     private val rideHistoryRepository: RideHistoryRepository,
     private val bleAdapterStateProvider: BleAdapterStateProvider,
-) : BmsRepository, CanDiscovery, ControllerConfigSource {
+) : BmsRepository, CanDiscovery, ControllerConfigSource, BleDiagnosticsRepository {
+
+    private val diagnosticBuffer = BleDiagnosticBuffer()
+    private val protocolDiagnosticsByAddress = mutableMapOf<String, ProtocolDiagnosticValues>()
+    private val diagnosticBatteriesByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticBatterySample>>()
+    private val diagnosticControllersByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticControllerSample>>()
+    override val state get() = diagnosticBuffer.state
+    override fun startCapture() = diagnosticBuffer.start()
+    override fun stopCapture() = diagnosticBuffer.stop()
+    override fun clearCapture() = diagnosticBuffer.clear()
 
     /** Production constructor used by Koin. */
     constructor(
@@ -986,6 +1001,12 @@ class KableBmsRepository private constructor(
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
             }
+            synchronized(linkStateLock) {
+                protocolDiagnosticsByAddress.clear()
+                diagnosticBatteriesByAddress.clear()
+                diagnosticControllersByAddress.clear()
+            }
+            publishActiveDiagnosticLinks()
             _activeVehicle.value = demoVehicle
             ringBuffer.clear()
             motionRingBuffer.clear()
@@ -1430,7 +1451,8 @@ class KableBmsRepository private constructor(
         protocol: BmsProtocol,
         socVehicle: Vehicle?,
         channel: Channel<Sample>,
-        localToGlobal: (localIndex: Int) -> Int
+        localToGlobal: (localIndex: Int) -> Int,
+        onDiagnosticSample: (localIndex: Int, globalIndex: Int, data: BmsData) -> Unit = { _, _, _ -> }
     ): (Int, BmsData, List<SectionState>) -> Unit =
         { localIndex, sample, sections ->
             // Translate to the vehicle-global index FIRST: the scaler and the
@@ -1468,7 +1490,7 @@ class KableBmsRepository private constructor(
             val sent = channel.trySend(PackSample(packIndex, enriched, sections))
             if (sent.isFailure) {
                 println("[VOLTY-BLE] sample funnel: dropped sample for pack=$packIndex (channel closed or full)")
-            }
+            } else onDiagnosticSample(localIndex, packIndex, enriched)
         }
 
     /**
@@ -1506,7 +1528,8 @@ class KableBmsRepository private constructor(
      */
     private fun makeLinkOnMotionSample(
         spec: LinkSpec,
-        channel: Channel<Sample>
+        channel: Channel<Sample>,
+        onDiagnosticSample: (localIndex: Int, globalIndex: Int?, data: ControllerData) -> Unit = { _, _, _ -> }
     ): (controllerIndex: Int, data: ControllerData) -> Unit {
         var warnedUnowned = false
         return { localCtrlIndex, data ->
@@ -1515,13 +1538,16 @@ class KableBmsRepository private constructor(
                 val sent = channel.trySend(MotionSample(owned.globalIndex, data))
                 if (sent.isFailure) {
                     println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
+                } else onDiagnosticSample(localCtrlIndex, owned.globalIndex, data)
+            } else {
+                onDiagnosticSample(localCtrlIndex, null, data)
+                if (!warnedUnowned) {
+                    warnedUnowned = true
+                    println(
+                        "[VOLTY-BLE] motion funnel: link ${spec.address} decodes motion for " +
+                            "controller=$localCtrlIndex but owns ${spec.ownedControllers.size} — dropping (logged once)"
+                    )
                 }
-            } else if (!warnedUnowned) {
-                warnedUnowned = true
-                println(
-                    "[VOLTY-BLE] motion funnel: link ${spec.address} decodes motion for " +
-                        "controller=$localCtrlIndex but owns ${spec.ownedControllers.size} — dropping (logged once)"
-                )
             }
         }
     }
@@ -2050,13 +2076,69 @@ class KableBmsRepository private constructor(
         status: LinkStatus,
         attempt: Int = 0,
         reason: String? = null
-    ): Boolean = synchronized(linkStateLock) {
-        link.status = status
-        link.reconnectAttempt = attempt
-        if (reason != null) link.lastReason = reason
-        val current = links
-        if (current.none { it === link }) return@synchronized false
-        refoldConnectionStateLocked(current)
+    ): Boolean {
+        val becameConnected = synchronized(linkStateLock) {
+            link.status = status
+            link.reconnectAttempt = attempt
+            if (reason != null) link.lastReason = reason
+            val current = links
+            if (current.none { it === link }) false else refoldConnectionStateLocked(current)
+        }
+        publishActiveDiagnosticLinks()
+        return becameConnected
+    }
+
+    private fun publishActiveDiagnosticLinks() {
+        val snapshots = synchronized(linkStateLock) {
+            val onlineLinks = links.filter { it.status == LinkStatus.ONLINE }
+            val retainedAddresses = onlineLinks.map { it.spec.address }.toSet()
+            protocolDiagnosticsByAddress.keys.retainAll(retainedAddresses)
+            diagnosticBatteriesByAddress.keys.retainAll(retainedAddresses)
+            diagnosticControllersByAddress.keys.retainAll(retainedAddresses)
+            onlineLinks.map { link ->
+                val identity = link.spec.ownedControllers.mapNotNull { source ->
+                    link.vehicle?.controllers?.firstOrNull { it.index == source.globalIndex }?.controllerType?.name
+                }.distinct().takeIf { it.isNotEmpty() }?.joinToString("/")
+                val decoded = protocolDiagnosticsByAddress[link.spec.address]
+                BleDiagnosticLink(link.spec.address, cachedAdvertisement(link.spec.address)?.name,
+                    link.spec.protocolKind.name, identity, decoded?.hardwareCode, decoded?.model, decoded?.firmwareVersion,
+                    diagnosticBatteriesByAddress[link.spec.address]?.values?.sortedBy { it.localPackIndex }.orEmpty(),
+                    diagnosticControllersByAddress[link.spec.address]?.values?.sortedBy { it.localControllerIndex }.orEmpty())
+            }
+        }
+        diagnosticBuffer.updateActiveLinks(snapshots)
+    }
+
+    private fun retainDiagnosticBattery(
+        link: PackLink,
+        localIndex: Int,
+        globalIndex: Int,
+        data: BmsData,
+    ) {
+        synchronized(linkStateLock) {
+            if (links.none { it === link }) return
+            val identity = link.vehicle?.packs?.firstOrNull { it.index == globalIndex }?.bmsType?.name
+            diagnosticBatteriesByAddress.getOrPut(link.spec.address) { mutableMapOf() }[localIndex] =
+                BleDiagnosticBatterySample(localIndex, globalIndex, identity, data)
+        }
+        publishActiveDiagnosticLinks()
+    }
+
+    private fun retainDiagnosticController(
+        link: PackLink,
+        localIndex: Int,
+        globalIndex: Int?,
+        data: ControllerData,
+    ) {
+        synchronized(linkStateLock) {
+            if (links.none { it === link }) return
+            val identity = globalIndex?.let { index ->
+                link.vehicle?.controllers?.firstOrNull { it.index == index }?.controllerType?.name
+            }
+            diagnosticControllersByAddress.getOrPut(link.spec.address) { mutableMapOf() }[localIndex] =
+                BleDiagnosticControllerSample(localIndex, globalIndex, identity, data)
+        }
+        publishActiveDiagnosticLinks()
     }
 
     /**
@@ -2392,7 +2474,10 @@ class KableBmsRepository private constructor(
                 // THIS is where the local→global seam is populated: the
                 // session speaks indices local to its protocol, the shared
                 // funnel is keyed by the vehicle's global pack indices.
-                localToGlobal = link.spec::globalPackIndex
+                localToGlobal = link.spec::globalPackIndex,
+                onDiagnosticSample = { localIndex, globalIndex, data ->
+                    retainDiagnosticBattery(link, localIndex, globalIndex, data)
+                }
             )
 
             val advertisement = resolveAdvertisement(address)
@@ -2418,8 +2503,33 @@ class KableBmsRepository private constructor(
                 onBurstPollWriteSuccess = { clearLinkPollWriteFailures(link) },
                 onPlainVescNotificationsNotUnderstood = { recordLinkNotUnderstood(link) },
                 onPlainVescDecode = { clearLinkNotUnderstood(link) },
+                onNotification = { bytes ->
+                    diagnosticBuffer.appendNotification(
+                        timestampEpochMillis = Clock.System.now().toEpochMilliseconds(),
+                        address = address,
+                        name = advertisement.name,
+                        protocol = link.spec.protocolKind.name,
+                        notifyUuid = protocol.uuids.notifyCharUuid,
+                        bytes = bytes,
+                    )
+                },
+                onProtocolDiagnostics = { values ->
+                    synchronized(linkStateLock) {
+                        if (links.any { it === link }) {
+                            if (values == null) protocolDiagnosticsByAddress.remove(address)
+                            else protocolDiagnosticsByAddress[address] = values
+                        }
+                    }
+                    publishActiveDiagnosticLinks()
+                },
                 onSample = onSample,
-                onMotionSample = makeLinkOnMotionSample(link.spec, channel),
+                onMotionSample = makeLinkOnMotionSample(
+                    link.spec,
+                    channel,
+                    onDiagnosticSample = { localIndex, globalIndex, data ->
+                        retainDiagnosticController(link, localIndex, globalIndex, data)
+                    }
+                ),
                 onDropDetected = { reason ->
                     // The session detected a drop. Schedule THIS link's
                     // reconnect — unless the user disconnected in the meantime.
@@ -2444,6 +2554,9 @@ class KableBmsRepository private constructor(
                     return Result.failure(IllegalStateException("Link superseded"))
                 }
                 link.session = session
+                protocolDiagnosticsByAddress.remove(address)
+                diagnosticBatteriesByAddress.remove(address)
+                diagnosticControllersByAddress.remove(address)
             }
 
             val connectResult = session.connect()
@@ -2475,6 +2588,7 @@ class KableBmsRepository private constructor(
             }
 
             val becameConnected = setLinkState(link, LinkStatus.ONLINE)
+            publishActiveDiagnosticLinks()
             println("[VOLTY-BLE] link $address up (${vehicle?.name ?: "guest"})")
             if (becameConnected) {
                 serviceStart()
@@ -2731,6 +2845,12 @@ class KableBmsRepository private constructor(
             closeSampleFunnelLocked()
         }
         _activeVehicle.value = null
+        synchronized(linkStateLock) {
+            protocolDiagnosticsByAddress.clear()
+            diagnosticBatteriesByAddress.clear()
+            diagnosticControllersByAddress.clear()
+        }
+        publishActiveDiagnosticLinks()
         ringBuffer.clear()
         motionRingBuffer.clear()
         // Direct write, not the fold: the link list is empty (the fold no
@@ -2797,7 +2917,11 @@ class KableBmsRepository private constructor(
             println("[VOLTY-BLE] disconnectLink: dropping $address, ${remaining.size} link(s) remain")
             true
         }
-        if (removed) sessionToTearDown?.tearDown()
+        if (removed) {
+            synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
+            sessionToTearDown?.tearDown()
+            publishActiveDiagnosticLinks()
+        }
         return removed
     }
 
@@ -2825,6 +2949,7 @@ class KableBmsRepository private constructor(
                 println("[VOLTY-BLE] disconnectLink: dropping $address, ${outcome.remaining.size} link(s) remain")
                 outcome.reconnectJob?.cancel()
                 outcome.session?.tearDown()
+                synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
                 // Reuse the existing fold — do not hand-roll a second copy of
                 // it. Guarded by linkStateLock, same as every other fold
                 // write, so a sibling link's concurrent status transition
@@ -2832,6 +2957,7 @@ class KableBmsRepository private constructor(
                 synchronized(linkStateLock) {
                     refoldConnectionStateLocked(outcome.remaining)
                 }
+                publishActiveDiagnosticLinks()
             }
         }
     }

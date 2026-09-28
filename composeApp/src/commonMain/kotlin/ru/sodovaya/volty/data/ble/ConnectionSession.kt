@@ -8,6 +8,9 @@ import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.data.bms.BegodeProtocol
 import ru.sodovaya.volty.data.bms.CanBusScanner
 import ru.sodovaya.volty.data.bms.MotionSource
+import ru.sodovaya.volty.data.bms.ProtocolDiagnostics
+import ru.sodovaya.volty.data.bms.ProtocolDiagnosticValues
+import ru.sodovaya.volty.data.bms.diagnosticValues
 import ru.sodovaya.volty.data.bms.SerialPollSource
 import ru.sodovaya.volty.data.bms.VescProtocol
 import ru.sodovaya.volty.domain.model.BmsData
@@ -64,6 +67,8 @@ internal class ConnectionSession(
     private val onPlainVescNotificationsNotUnderstood: () -> Unit = {},
     /** A later plain-VESC decode clears [onPlainVescNotificationsNotUnderstood]'s state. */
     private val onPlainVescDecode: () -> Unit = {},
+    private val onNotification: (ByteArray) -> Unit = {},
+    private val onProtocolDiagnostics: (ProtocolDiagnosticValues?) -> Unit = {},
     /**
      * Called for every parsed sample. The session does not own where samples
      * go: with more than one pack behind a link there is no single
@@ -243,6 +248,7 @@ internal class ConnectionSession(
                         }
                     }
                 ).collect { data ->
+                    onNotification(data)
                     // This is deliberately at the accumulator boundary, before
                     // decoding. A VESC can notify a valid transport frame that
                     // answers neither opcode we know; redialling that healthy
@@ -260,6 +266,7 @@ internal class ConnectionSession(
                             onMotionSample(controllerIndex, motion.copy(timestamp = Clock.System.now()))
                         }
                     )
+                    onProtocolDiagnostics((protocol as? ProtocolDiagnostics)?.diagnosticValues())
                     // Battery protocols retain their historic cached-decode
                     // liveness rule. A plain VESC is different: an unknown
                     // notification after one valid reply still leaves the old
