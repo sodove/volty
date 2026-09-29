@@ -4,6 +4,7 @@ import com.arkivanov.decompose.ComponentContext
 import com.arkivanov.essenty.lifecycle.doOnDestroy
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.PackState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -52,6 +53,12 @@ interface DashboardComponent {
         val powerMin: Float? = null,
         val powerPeak: Float? = null,
         val sparkline: List<Float> = emptyList(),
+        /** Controller-side estimate, used only when packs have no power reading. */
+        val motion: ControllerData = ControllerData(),
+        /** Controller history is discharge-positive, matching the graph's display convention. */
+        val motionPowerMin: Float? = null,
+        val motionPowerPeak: Float? = null,
+        val motionSparkline: List<Float> = emptyList(),
         val cellsMinV: Float = 0f,
         val cellsMaxV: Float = 0f,
         val cellsDeltaMv: Int = 0,
@@ -92,6 +99,7 @@ class DefaultDashboardComponent(
     private val _state: MutableStateFlow<DashboardComponent.State> = run {
         val initialData = bmsRepository.activeData.value
         val initialVehicle = bmsRepository.activeVehicle.value
+        val initialMotion = bmsRepository.activeVehicleData.value.motion
         val cells = initialData.cellVoltages
         val minV = if (cells.isEmpty()) 0f else cells.min()
         val maxV = if (cells.isEmpty()) 0f else cells.max()
@@ -102,6 +110,7 @@ class DefaultDashboardComponent(
             DashboardComponent.State(
                 data = initialData,
                 vehicle = initialVehicle,
+                motion = initialMotion,
                 cellsMinV = minV,
                 cellsMaxV = maxV,
                 cellsDeltaMv = ((maxV - minV) * 1000f).toInt(),
@@ -137,7 +146,13 @@ class DefaultDashboardComponent(
 
         scope.launch {
             bmsRepository.activeVehicleData.collect { vd ->
-                _state.update { it.copy(packs = vd.packs, isPartial = vd.isPartial) }
+                _state.update {
+                    it.copy(
+                        packs = vd.packs,
+                        isPartial = vd.isPartial,
+                        motion = vd.motion
+                    )
+                }
             }
         }
 
@@ -192,6 +207,23 @@ class DefaultDashboardComponent(
                         sparkline = powers,
                         powerMin = powers.minOrNull(),
                         powerPeak = powers.maxOrNull()
+                    )
+                }
+            }
+        }
+
+        scope.launch {
+            bmsRepository.motionSamples(5.minutes).collect { samples ->
+                // Controller power is discharge-positive, already matching the
+                // dashboard sparkline's consumption-positive convention.
+                val powers = samples.mapNotNull { sample ->
+                    sample.powerW.takeIf { sample.isConnected && sample.hasPower }
+                }
+                _state.update {
+                    it.copy(
+                        motionSparkline = powers,
+                        motionPowerMin = powers.minOrNull(),
+                        motionPowerPeak = powers.maxOrNull()
                     )
                 }
             }

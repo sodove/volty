@@ -4,10 +4,12 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
@@ -207,61 +209,51 @@ fun PickerScreen(component: PickerComponent) {
 
         state.typePickerFor?.let { device ->
             ModalBottomSheet(onDismissRequest = component::onTypeSheetDismissed) {
-                Column(modifier = Modifier.fillMaxWidth().padding(16.dp)) {
-                    Text(
-                        stringResource(Res.string.picker_pick_type_title),
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(bottom = 8.dp)
-                    )
-
-                    // Single source of truth for both the pre-selected row and
-                    // the section order below — see [preselectedChoice]. Relies
-                    // on device.bmsType and device.controllerType being
-                    // mutually exclusive (BmsTypeDetector.detectController
-                    // returns null whenever detect() already matched, see
-                    // BmsTypeDetector.kt:82 and KableBmsRepository.kt:454-455),
-                    // so at most one of the two sections below is ever
-                    // preselected.
+                BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
                     val preselected = preselectedChoice(device)
+                    val manualBmsTypes = BmsType.entries.filter {
+                        it != BmsType.BEGODE &&
+                            it != BmsType.LEAPERKIM &&
+                            it != BmsType.VESC_BMS
+                    }
 
-                    val controllerSection: @Composable () -> Unit = {
-                        SectionHeader(stringResource(Res.string.picker_section_controller))
-                        // All four are legal manual choices even where the protocol lands
-                        // later controller protocols — the connection path decides what connecting does,
-                        // this sheet never hides or disables a type.
-                        ControllerType.entries.forEach { type ->
+                    // The sheet reports the available height to the lazy list,
+                    // so long type lists scroll inside the sheet on compact
+                    // windows instead of extending under the app navigation bar.
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = maxHeight)
+                            .padding(horizontal = 16.dp)
+                    ) {
+                        item(key = "picker-title") {
+                            Text(
+                                stringResource(Res.string.picker_pick_type_title),
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
+                        item(key = "controller-section") {
+                            SectionHeader(stringResource(Res.string.picker_section_controller))
+                        }
+                        items(ControllerType.entries, key = { "controller-${it.name}" }) { type ->
                             TypeRow(
                                 label = type.label,
                                 selected = preselected == SourceChoice.Controller(type),
                                 onClick = { component.onConnectWithType(device, SourceChoice.Controller(type)) }
                             )
                         }
-                    }
-                    val batterySection: @Composable () -> Unit = {
-                        SectionHeader(stringResource(Res.string.picker_section_battery))
-                        // VESC_BMS is gateway-hosted (produced only via the VESC gateway in a
-                        // later part), never a manually-picked direct BMS — excluding it here
-                        // keeps the not-yet-implemented createProtocol stub unreachable.
-                        BmsType.entries.filter { it != BmsType.VESC_BMS }.forEach { type ->
+                        item(key = "battery-section") {
+                            SectionHeader(stringResource(Res.string.picker_section_battery))
+                        }
+                        items(manualBmsTypes, key = { "bms-${it.name}" }) { type ->
                             TypeRow(
                                 label = bmsTypeLabel(type),
                                 selected = preselected == SourceChoice.Battery(type),
                                 onClick = { component.onConnectWithType(device, SourceChoice.Battery(type)) }
                             )
                         }
-                    }
-
-                    // The section matching this device's detection renders first (and
-                    // carries the highlight below), so the common case is one tap.
-                    // Both always render — detection is a hint, not a lock, so an
-                    // unrecognised (or misdetected) device can still pick either kind.
-                    if (preselected is SourceChoice.Battery) {
-                        batterySection()
-                        controllerSection()
-                    } else {
-                        controllerSection()
-                        batterySection()
                     }
                 }
             }
@@ -343,10 +335,10 @@ private fun DeviceRow(device: DiscoveredDevice, isConnecting: Boolean, onClick: 
         Avatar(letter = "?", bg = MaterialTheme.colorScheme.outline)
         Column(modifier = Modifier.weight(1f)) {
             Text(identity.title, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            val typeLabel = when {
-                device.bmsType != null -> bmsTypeLabel(device.bmsType)
-                device.controllerType != null -> device.controllerType.label
-                else -> stringResource(Res.string.picker_type_unknown)
+            val typeLabel = when (val choice = preselectedChoice(device)) {
+                is SourceChoice.Battery -> bmsTypeLabel(choice.type)
+                is SourceChoice.Controller -> choice.type.label
+                null -> stringResource(Res.string.picker_type_unknown)
             }
             val details = listOfNotNull(
                 identity.address,

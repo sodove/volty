@@ -213,8 +213,7 @@ private fun batteryVoltageKnown(battery: BmsData): Boolean =
     battery.isConnected && battery.voltage.isFinite() && battery.voltage > 0f
 
 private fun phaseCurrentKnown(link: BleDiagnosticLink, sample: BleDiagnosticControllerSample): Boolean =
-    sample.data.isConnected && link.protocol.equals("VETERAN", ignoreCase = true) &&
-        sample.controllerIdentity in setOf("VETERAN", "NOSFET")
+    sample.data.isConnected && link.protocol.equals("VETERAN", ignoreCase = true)
 
 private fun copyBundle(state: SettingsComponent.State): String = buildString {
     appendLine("BLE diagnostics")

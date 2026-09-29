@@ -7,7 +7,7 @@ import kotlin.test.assertNull
 
 class BmsTypeDetectorTest {
 
-    private val JK_OR_ANT_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb"
+    private val SHARED_FFE0_SERVICE = "0000ffe0-0000-1000-8000-00805f9b34fb"
     private val JBD_SERVICE = "0000ff00-0000-1000-8000-00805f9b34fb"
     private val DALY_SERVICE = "0000fff0-0000-1000-8000-00805f9b34fb"
 
@@ -44,11 +44,11 @@ class BmsTypeDetectorTest {
     }
 
     @Test
-    fun `detects JK by service UUID when name does not match`() {
-        // 0xFFE0 is shared by JK and ANT, but ANT always advertises an "ANT…"
-        // name (caught by name match first), so an unmatched name on 0xFFE0 is JK.
-        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = "BMS123", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
-        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = null, serviceUuids = listOf(JK_OR_ANT_SERVICE)))
+    fun `does not detect a BMS from the shared FFE0 service UUID alone`() {
+        // 0xFFE0 is shared by JK, ANT, and wheel peripherals; the service alone
+        // cannot establish which device type the rider has found.
+        assertNull(BmsTypeDetector.detect(name = "BMS123", serviceUuids = listOf(SHARED_FFE0_SERVICE)))
+        assertNull(BmsTypeDetector.detect(name = null, serviceUuids = listOf(SHARED_FFE0_SERVICE)))
     }
 
     @Test
@@ -61,8 +61,8 @@ class BmsTypeDetectorTest {
 
     @Test
     fun `name detection works regardless of service UUIDs`() {
-        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = "JK-001", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
-        assertEquals(BmsType.ANT_BMS, BmsTypeDetector.detect(name = "ANT-001", serviceUuids = listOf(JK_OR_ANT_SERVICE)))
+        assertEquals(BmsType.JK_BMS, BmsTypeDetector.detect(name = "JK-001", serviceUuids = listOf(SHARED_FFE0_SERVICE)))
+        assertEquals(BmsType.ANT_BMS, BmsTypeDetector.detect(name = "ANT-001", serviceUuids = listOf(SHARED_FFE0_SERVICE)))
     }
 
     @Test

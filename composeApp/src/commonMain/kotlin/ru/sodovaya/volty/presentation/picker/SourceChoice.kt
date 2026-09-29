@@ -21,13 +21,18 @@ sealed interface SourceChoice {
 
 /**
  * The choice the type sheet should pre-highlight for [device], mirroring
- * whichever detector already fired for it — `null` for an unrecognised
- * device, which still renders both sections, just with nothing selected.
+ * whichever controller or standalone-BMS choice represents it — wheel BMS
+ * detections are presented as their controller choice because each wheel is
+ * one device exposing both controller and battery telemetry. `null` for an
+ * unrecognised device, which still renders both sections, just with nothing
+ * selected.
  * Pulled out as a pure function (rather than inlined in the sheet) so it is
  * testable without a Compose UI harness.
  */
 fun preselectedChoice(device: DiscoveredDevice): SourceChoice? = when {
     device.controllerType != null -> SourceChoice.Controller(device.controllerType)
+    device.bmsType == BmsType.BEGODE -> SourceChoice.Controller(ControllerType.BEGODE)
+    device.bmsType == BmsType.LEAPERKIM -> SourceChoice.Controller(ControllerType.VETERAN)
     device.bmsType != null -> SourceChoice.Battery(device.bmsType)
     else -> null
 }

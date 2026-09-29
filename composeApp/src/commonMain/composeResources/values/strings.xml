@@ -86,6 +86,7 @@
 
     <string name="metric_voltage">Voltage</string>
     <string name="metric_power">Power</string>
+    <string name="power_source_controller_estimate">controller estimate</string>
     <string name="metric_temperature">Temperature</string>
     <string name="metric_cells">Cells</string>
     <string name="cells_delta_label">Cells · Δ %1$d mV</string>

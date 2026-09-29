@@ -8,22 +8,20 @@ object BmsTypeDetector {
     /**
      * Heuristic detection of BMS type. Name prefix is the primary, high-confidence
      * signal. When the name doesn't match a known prefix (e.g. the "DB…" stock BMS
-     * on a Syccyba Goliath, or a JK unit whose local name is missing / unusual), we
-     * fall back to the service UUID — but ONLY for short codes unique enough to be
-     * worth the false-positive risk:
+     * on a Syccyba Goliath), we fall back to a service UUID only for short codes
+     * unique enough to be worth the false-positive risk:
      *   - 0xFF00 → JBD   (unique to JBD; rarely used by generic gadgets)
-     *   - 0xFFE0 → JK    (shared with ANT, but ANT advertises an "ANT…" name caught
-     *                     by name match first, so an unmatched 0xFFE0 device is JK)
-     * 0xFFF0 (Daly) is intentionally NOT used as a fallback: it's the same short code
-     * DJI cameras and headphones advertise, so Daly requires a name match.
+     *
+     * 0xFFE0 is shared by JK, ANT, and wheel peripherals, so it cannot establish
+     * a BMS type by itself. 0xFFF0 (Daly) is also intentionally not a fallback:
+     * DJI cameras and headphones advertise it, so Daly requires a name match.
      */
     fun detect(name: String?, serviceUuids: List<String>): BmsType? =
         nameMatch(name) ?: serviceMatch(serviceUuids)
 
     /** Short service codes worth using as a fallback signal (see [detect]). */
     private val fallbackServiceShorts = mapOf(
-        "ff00" to BmsType.JBD_BMS,
-        "ffe0" to BmsType.JK_BMS
+        "ff00" to BmsType.JBD_BMS
     )
 
     private fun serviceMatch(serviceUuids: List<String>): BmsType? {
@@ -52,8 +50,8 @@ object BmsTypeDetector {
                 name.startsWith("Daly", ignoreCase = true) -> BmsType.DALY_BMS
             // Begode / Gotway wheels advertise a model-family name, e.g.
             // "GotWay_75042" (ET Max), "EXN-…", "MTEN3", "Master", "T4".
-            // The wheel also exposes FFE0, but the JK fallback below only fires
-            // when no name prefix matched, so these must stay in the name list.
+            // The wheel also exposes FFE0, which is deliberately not enough to
+            // identify a standalone BMS and is not used as a fallback here.
             name.startsWith("GotWay", ignoreCase = true) ||
                 name.startsWith("Begode", ignoreCase = true) ||
                 name.startsWith("GW", ignoreCase = true) ||
@@ -77,10 +75,9 @@ object BmsTypeDetector {
         // This guard must win over controller-family substrings: a VESC retrofit
         // renamed into a Begode wheel (e.g. "GW-VESC") matches both the BMS
         // prefix and the controller substring.
-        // A wheel's FFE0 service is shared with JK/ANT fallbacks.  A strong
-        // controller-family name must therefore be evaluated before the
-        // service-only BMS fallback; otherwise "Ninebot One" is silently
-        // handed to JK merely because it exposes FFE0.
+        // Check strong controller-family names before any service-only BMS
+        // fallback, so a controller name still wins if it advertises a generic
+        // service UUID also used by a BMS.
         controllerNameMatch(name, serviceUuids)?.let {
             if (nameMatch(name) == null) return it
         }
@@ -93,6 +90,8 @@ object BmsTypeDetector {
     private fun controllerNameMatch(name: String?, serviceUuids: List<String>): ControllerType? {
         if (name.isNullOrEmpty()) return null
         return when {
+            matchesSerialName(name, "LK") -> ControllerType.VETERAN
+            matchesSerialName(name, "NF") -> ControllerType.NOSFET
             name.contains("VESC", ignoreCase = true) ||
                 name.startsWith("uBox", ignoreCase = true) ||
                 name.startsWith("ubox", ignoreCase = true) -> ControllerType.VESC
@@ -115,6 +114,7 @@ object BmsTypeDetector {
                 name.startsWith("V13", ignoreCase = true) -> ControllerType.INMOTION
             name.contains("Nosfet", ignoreCase = true) -> ControllerType.NOSFET
             name.contains("Veteran", ignoreCase = true) ||
+                name.contains("Leaperkim", ignoreCase = true) ||
                 name.contains("Sherman", ignoreCase = true) ||
                 name.contains("Abrams", ignoreCase = true) ||
                 name.contains("Lynx", ignoreCase = true) ||
@@ -129,4 +129,9 @@ object BmsTypeDetector {
             else -> null
         }
     }
+
+    private fun matchesSerialName(name: String, prefix: String): Boolean =
+        name.length > prefix.length &&
+            name.regionMatches(0, prefix, 0, prefix.length, ignoreCase = true) &&
+            name.substring(prefix.length).all { it in '0'..'9' }
 }

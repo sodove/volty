@@ -39,6 +39,7 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ConnectionState
+import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.cellCountOrNull
 import ru.sodovaya.volty.presentation.common.CellGrid
 import ru.sodovaya.volty.presentation.common.CellUiModel
@@ -81,6 +82,7 @@ import volty.composeapp.generated.resources.mosfet_discharge_off
 import volty.composeapp.generated.resources.mosfet_discharge_on
 import volty.composeapp.generated.resources.no_battery
 import volty.composeapp.generated.resources.power_last_5_min
+import volty.composeapp.generated.resources.power_source_controller_estimate
 import volty.composeapp.generated.resources.status_connected
 import volty.composeapp.generated.resources.status_connecting
 import volty.composeapp.generated.resources.status_disconnected
@@ -193,7 +195,11 @@ fun DashboardScreen(
                 }
                 Spacer(Modifier.height(6.dp))
                 SparklineGraph(
-                    values = state.sparkline,
+                    values = if (dashboardPower(data, state.motion)?.fromController == true) {
+                        state.motionSparkline
+                    } else {
+                        state.sparkline
+                    },
                     modifier = Modifier.fillMaxWidth().height(40.dp),
                     minRange = 100f
                 )
@@ -354,10 +360,11 @@ private fun PrimaryMetrics(
                 "${seriesCells}s · ${fmt2(perCell)} V/cell"
             } else null
         )
-        val powerText = BmsMetricMapper.powerValue(data)
-        val powerMin = state.powerMin
-        val powerPeak = state.powerPeak
-        val powerCharging = BmsReadings.current(data)?.let { it > 0.05f } ?: false
+        val power = dashboardPower(data, state.motion)
+        val powerText = power?.chargePositiveW?.let(::fmt0)
+        val powerMin = if (power?.fromController == true) state.motionPowerMin else state.powerMin
+        val powerPeak = if (power?.fromController == true) state.motionPowerPeak else state.powerPeak
+        val powerCharging = power?.chargePositiveW?.let { it > 0.05f } ?: false
         // Fixed dark-green palette matches the hero card while charging so the
         // two cards visually agree regardless of dynamic-color wallpaper.
         val powerChargingContainer = Color(0xFF184D24)
@@ -368,16 +375,19 @@ private fun PrimaryMetrics(
             label = stringResource(Res.string.metric_power),
             value = powerText?.let { "$it W" } ?: "—",
             modifier = Modifier.weight(1f).fillMaxHeight(),
+            sub = if (power?.fromController == true) {
+                stringResource(Res.string.power_source_controller_estimate)
+            } else null,
             containerColor = if (powerCharging) powerChargingContainer else null,
             onColor = if (powerCharging) powerChargingOn else null,
             extra = {
                 if (powerText != null && powerMin != null && powerPeak != null) Column {
                     // powerMin/powerPeak are consumption-positive (DashboardComponent
                     // negates the power series: discharge plots upward). The marker
-                    // tracks current consumption, so we negate data.power here too.
+                    // tracks current consumption, so negate the selected source here too.
                     // The big number above keeps the domain sign (+ = charging).
                     PowerRangeBar(
-                        min = powerMin, peak = powerPeak, now = -data.power,
+                        min = powerMin, peak = powerPeak, now = -(power?.chargePositiveW ?: 0f),
                         modifier = Modifier.fillMaxWidth().height(12.dp),
                         marker = if (powerCharging) powerChargingOn else Color.White
                     )
@@ -538,6 +548,7 @@ private fun HeroCard(
     val data = state.data
     val socKnown = data.isConnected && data.socKnown
     val v = state.vehicle
+    val power = dashboardPower(data, state.motion)
     // Direction from short window (30 s) — switches fast on real flips, ignores
     // brief regen blips during a long discharge. We keep the per-vehicle long
     // window (state.avgPowerW) for the ETA magnitude below.
@@ -545,7 +556,7 @@ private fun HeroCard(
     val isCharging = when {
         dirAvg != null && dirAvg > 1f -> true
         dirAvg != null && dirAvg < -1f -> false
-        else -> BmsReadings.power(data)?.let { it > 0.05f } ?: false
+        else -> power?.chargePositiveW?.let { it > 0.05f } ?: false
     }
     // Fixed darker-green palette for the charging hero so dynamic-color wallpapers
     // can't wash the card out. Other UI keeps the dynamic palette.
@@ -682,6 +693,24 @@ private fun HeroCard(
 /** Pure counterpart of the dashboard hero's SoC contract; Compose itself is not unit-testable. */
 internal fun dashboardSocValue(data: BmsData): String =
     if (data.isConnected && data.socKnown) fmt0(data.soc) else "—"
+
+private data class DashboardPowerReading(
+    val chargePositiveW: Float,
+    val fromController: Boolean
+)
+
+/** Prefer pack telemetry; only fall back to the controller's explicitly separate power estimate. */
+private fun dashboardPower(data: BmsData, motion: ControllerData): DashboardPowerReading? {
+    if (data.isConnected) {
+        BmsReadings.power(data)?.let { return DashboardPowerReading(it, fromController = false) }
+    }
+    if (motion.isConnected && motion.hasPower) {
+        // ControllerData is discharge-positive; the battery dashboard uses
+        // BMS convention (+ charging), so invert while retaining the source tag.
+        return DashboardPowerReading(-motion.powerW, fromController = true)
+    }
+    return null
+}
 
 // --- Number formatting delegates to util.NumberFormat (KMP-safe, negative-correct) ---
 
