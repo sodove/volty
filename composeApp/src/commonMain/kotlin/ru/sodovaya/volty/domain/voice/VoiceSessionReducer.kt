@@ -17,6 +17,10 @@ object VoiceSessionReducer {
         is VoiceSessionEvent.Tick -> if (hasExpiredLease(state, event.nowMillis)) stop(state) else unchanged(state)
         is VoiceSessionEvent.SetMuted -> setMuted(state, event.value)
         is VoiceSessionEvent.SetDeafened -> setDeafened(state, event.value)
+        VoiceSessionEvent.EnableSharing -> if (state.activeTag() != null && !state.sharingEnabled) {
+            VoiceTransition(state.copy(sharingEnabled = true), listOf(VoiceSessionEffect.AddNearbyDemand))
+        } else unchanged(state)
+        VoiceSessionEvent.HidePosition -> hidePosition(state)
         is VoiceSessionEvent.Failed -> if (event.generation == state.generation && state.wanted) {
             val stopped = stop(state)
             stopped.copy(state = stopped.state.copy(phase = VoicePhase.FAILED))
@@ -27,7 +31,7 @@ object VoiceSessionReducer {
         // An intentional retry must use a fresh operation ID; cancelled IDs have backend tombstones.
         if (event.operationId == state.operationId) return unchanged(state)
         val generation = VoiceGeneration(state.generation.value + 1)
-        val effects = if (state.wanted) stop(state).effects else emptyList()
+        val effects = if (state.wanted || state.sharingEnabled) stop(state).effects else emptyList()
         return VoiceTransition(
             VoiceSessionState(generation, event.operationId, phase = VoicePhase.JOINING, wanted = true,
                 muted = state.muted, deafened = state.deafened),
@@ -48,7 +52,7 @@ object VoiceSessionReducer {
     }
 
     private fun stop(state: VoiceSessionState): VoiceTransition {
-        if (!state.wanted) return unchanged(state)
+        if (!state.wanted) return hidePosition(state)
         val effects = buildList {
             if (state.sessionId == null) state.operationId?.let {
                 add(VoiceSessionEffect.CancelJoin(it, state.generation))
@@ -60,6 +64,7 @@ object VoiceSessionReducer {
         }
         return VoiceTransition(state.withoutMediaEvidence().copy(
             wanted = false, cleanupPending = true, phase = VoicePhase.STOPPING, lastLeaseAckMillis = null,
+            sharingEnabled = false,
         ), effects)
     }
 
@@ -104,6 +109,12 @@ object VoiceSessionReducer {
         val effects = state.activeTag()?.let { listOf(VoiceSessionEffect.SetMuted(it, value)) } ?: emptyList()
         return VoiceTransition(state.copy(muted = value), effects)
     }
+
+    private fun hidePosition(state: VoiceSessionState): VoiceTransition = if (state.sharingEnabled) {
+        VoiceTransition(state.copy(sharingEnabled = false), listOf(
+            VoiceSessionEffect.RemoveNearbyDemand, VoiceSessionEffect.ClearSharingQueue,
+        ))
+    } else unchanged(state)
 
     private fun setDeafened(state: VoiceSessionState, value: Boolean): VoiceTransition {
         if (state.deafened == value) return unchanged(state)

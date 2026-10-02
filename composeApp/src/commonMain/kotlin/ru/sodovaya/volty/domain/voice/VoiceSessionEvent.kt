@@ -30,4 +30,6 @@ sealed interface VoiceSessionEvent {
     data class Tick(val nowMillis: Long) : VoiceSessionEvent
     data class SetMuted(val value: Boolean) : VoiceSessionEvent
     data class SetDeafened(val value: Boolean) : VoiceSessionEvent
+    data object EnableSharing : VoiceSessionEvent
+    data object HidePosition : VoiceSessionEvent
 }

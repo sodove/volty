@@ -12,6 +12,7 @@ sealed interface VoiceSessionEffect {
     data class StopEngine(val generation: VoiceGeneration) : VoiceSessionEffect
     data class StopSession(val sessionId: VoiceSessionId) : VoiceSessionEffect
     data object RemoveNearbyDemand : VoiceSessionEffect
+    data object AddNearbyDemand : VoiceSessionEffect
     data object ClearSharingQueue : VoiceSessionEffect
     data class SetMuted(val tag: VoiceSessionTag, val value: Boolean) : VoiceSessionEffect
     data class SetDeafened(val tag: VoiceSessionTag, val value: Boolean) : VoiceSessionEffect

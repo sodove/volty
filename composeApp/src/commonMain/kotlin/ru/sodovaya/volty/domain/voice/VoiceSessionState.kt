@@ -18,6 +18,7 @@ data class VoiceSessionState(
     val lastLeaseAckMillis: Long? = null,
     val muted: Boolean = false,
     val deafened: Boolean = false,
+    val sharingEnabled: Boolean = false,
 )
 
 data class VoiceTransition(val state: VoiceSessionState, val effects: List<VoiceSessionEffect>)

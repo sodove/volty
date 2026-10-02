@@ -1,5 +1,12 @@
 # Nearby pure voice core Implementation Plan
 
+Execution 2026-10-03: Tasks1–3 implemented in isolated branch
+`codex/nearby-foundations`.40 new pure-core tests; full fresh suite2556 tests,
+0 failures/errors. Narrow Luna/xhigh lifecycle, lease and sharing/route checks
+completed; fixture assertion gaps strengthened. Ledger/evidence retained.
+Core is not wired into the current app; Android routing/FGS, Xiaomi field proof,
+backend/SFU revocation and new UX are subsequent stages.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans task-by-task. User routing overrides defaults: primary implements complex logic; only small bounded checks go to gpt-6-luna/xhigh, with complete task context. No Sol medium. No Astra without a new user request.
 
 **Goal:** Создать тестируемое ядро управления одной голосовой сессией, которое
@@ -38,15 +45,15 @@
 
 ## Preflight
 
-- [ ] Прочитать AGENTS, foundations ledger, spec/reports. Изоляция уже существует:
+- [x] Прочитать AGENTS, foundations ledger, spec/reports. Изоляция уже существует:
   `C:/Users/sodovaya/.codex/worktrees/nearby-foundations/volty`,
   branch `codex/nearby-foundations`; не создавать новый worktree без причины.
-- [ ] Восстановить baseline execution environment: предыдущие три запуска failed
+- [x] Восстановить baseline execution environment: предыдущие три запуска failed
   до tests из-за SQLDelight SQLite DLL lock в C:/WINDOWS. Диагностировать JVM
   worker properties/native loader, не менять migrations ради passing build.
   Выполнить fresh full suite, сохранить log и фактический test count. До этого
   возможен review плана, но implementation/commit не начинается.
-- [ ] Создать `.superpowers/sdd/2026-10-03-nearby-voice-core/progress.md` с HEAD,
+- [x] Создать `.superpowers/sdd/2026-10-03-nearby-voice-core/progress.md` с HEAD,
   ownership, outcomes и risks; разработка только после review данного плана.
 
 ## File map
@@ -101,7 +108,7 @@ StartEngine(tag), StopEngine(generation), StopSession(sessionId),
 RemoveNearbyDemand, ClearSharingQueue. No effect removes server membership.
 SessionGranted is an adapter event: opaque credentials never stored in reducer.
 
-- [ ] Write failing tests below (exact imports/types in this task).
+- [x] Write failing tests below (exact imports/types in this task).
 
 ```kotlin
 @Test fun lateGrantAfterStopCannotStartEngine() {
@@ -128,18 +135,18 @@ SessionGranted is an adapter event: opaque credentials never stored in reducer.
 }
 ```
 
-- [ ] Run filtered failing tests: command at end of plan with lifecycle class.
-- [ ] Implement reducer. Join increases generation and issues old cleanup before
+- [x] Run filtered failing tests: command at end of plan with lifecycle class.
+- [x] Implement reducer. Join increases generation and issues old cleanup before
   new RequestJoin; Stop fences intent immediately, emits cancel for pending op,
   stops engine, stops known session, clears queue/removes Nearby demand.
   Duplicate Stop has no new effects once intent false/cleanup already issued.
   Stopped clears cleanupPending only for matching generation; old grant emits
   StopSession except duplicate grant for currently active tag (must not close it).
-- [ ] Add duplicate grant/duplicate stop and failed join tests: same active grant
+- [x] Add duplicate grant/duplicate stop and failed join tests: same active grant
   has no second StartEngine/StopSession; Failed ends wanted, CancelJoin issued;
   Join while active emits StopEngine+StopSession before RequestJoin. Assert effects
   ordered, not just state. No state-machine test relies on wall-clock sleep.
-- [ ] Focused red/green, full suite, scoped review, git diff --check and commit
+- [x] Focused red/green, full suite, scoped review, git diff --check and commit
   only task1 files after full suite success. Record counts and review in ledger.
 
 ### Task 2: Media evidence and lease deadline
@@ -156,7 +163,7 @@ Tick(nowMillis), SetMuted(Boolean), SetDeafened(Boolean). Effects SetMuted(tag,v
 SetDeafened(tag,value). Success CONNECTED means confirmed transport only; fields
 remain separate and there is no aggregate `audible=true`.
 
-- [ ] Write failing tests with explicit tag and timestamps:
+- [x] Write failing tests with explicit tag and timestamps:
 
 ```kotlin
 @Test fun transportDoesNotInventMedia() {
@@ -183,16 +190,16 @@ remain separate and there is no aggregate `audible=true`.
 }
 ```
 
-- [ ] Run red tests. Implement tagged matching on BOTH sessionId and generation;
+- [x] Run red tests. Implement tagged matching on BOTH sessionId and generation;
   SessionGranted establishes initial ACK timestamp, only monotonic nondecreasing
   LeaseAck matching active intent updates it. Tick elapsed>30_000 stops once.
   Reconnecting clears current media evidence; it emits no RequestJoin/StartEngine
   (SDK reconnect owner). New media callbacks re-establish evidence explicitly.
-- [ ] Add cases: old session same generation and same session old generation
+- [x] Add cases: old session same generation and same session old generation
   ignored; ACK after expiry doesn't revive; ACK time regression ignored; late
   Published after stop ignored; muted/deafened prefs generate one matching effect
   when active and survive reconnect without claiming capture/render evidence.
-- [ ] Focused red/green then full suite/review/diff/commit task2 files; record proof.
+- [x] Focused red/green then full suite/review/diff/commit task2 files; record proof.
 
 ### Task 3: Separate sharing and route observation
 
@@ -212,7 +219,7 @@ desiredOutput, selectedOutput, observedInput, observedOutput. `withSelectedOutpu
 updates selectedOutput only. Unknown observations default nullable; the desired
 pair is not automatically supported, and this class does not infer support.
 
-- [ ] Write and run red tests:
+- [x] Write and run red tests:
 
 ```kotlin
 @Test fun hidePositionKeepsVoiceAndRemovesOnlyNearbyDemand() {
@@ -233,12 +240,12 @@ pair is not automatically supported, and this class does not infer support.
 }
 ```
 
-- [ ] Implement transitions, route value types and pure update. Add cases: full
+- [x] Implement transitions, route value types and pure update. Add cases: full
   disconnect clears sharing and keeps no claim; EnableSharing while joining/idle
   has no effect; hide twice is idempotent; COMMUNICATION_DEVICE observation is
   preserved as that provenance, never promoted to STREAM_ROUTING. Test fixtures
   may deliberately disagree desired/selected/observed devices.
-- [ ] Focused red/green, full suite/review/diff/commit task3 files.
+- [x] Focused red/green, full suite/review/diff/commit task3 files.
 
 ## Verification and commit commands
 
@@ -268,6 +275,6 @@ asserted. No unbounded runTest loop. New core not wired to production prevents
 pretending a fake backend fixes the current app. Diagnostic Android plan follows
 after the reducer API is stable and separately validates real devices.
 
-This is the next concrete executable plan for user review, not already executed.
+User approved this concrete plan with `+`; execution evidence is recorded above.
 Preserved method: primary handles complex tasks, Luna/xhigh handles simple
 bounded checks with sufficient context. Astra is not invoked again.
