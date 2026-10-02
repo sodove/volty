@@ -72,6 +72,9 @@ import volty.composeapp.generated.resources.debug_flag_battery_voltage
 import volty.composeapp.generated.resources.debug_record_count
 import volty.composeapp.generated.resources.debug_local_index
 import volty.composeapp.generated.resources.debug_global_index
+import volty.composeapp.generated.resources.debug_voice_diagnostics
+import org.koin.compose.koinInject
+import ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher
 
 @Composable
 fun DebugSettingsTab(
@@ -81,10 +84,16 @@ fun DebugSettingsTab(
     onClear: () -> Unit,
 ) {
     val clipboard = LocalClipboardManager.current
+    val voiceDiagnostics = koinInject<VoiceDiagnosticLauncher>()
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        SettingsCard {
+            TextButton(onClick = voiceDiagnostics::launch) {
+                Text(stringResource(Res.string.debug_voice_diagnostics))
+            }
+        }
         SettingsCard {
             Text(
                 stringResource(if (state.diagnostics.isCapturing) Res.string.debug_capture_active else Res.string.debug_capture_stopped),

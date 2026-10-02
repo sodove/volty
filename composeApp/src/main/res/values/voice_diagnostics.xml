@@ -1,0 +1,27 @@
+<resources>
+    <string name="voice_diag_title">Voice diagnostics</string>
+    <string name="voice_diag_legacy_active">Disconnect the existing voice and sharing session in Nearby before starting this test.</string>
+    <string name="voice_diag_description">Experimental voice adapter. Location and telemetry are not shared. Group membership is preserved when you disconnect.</string>
+    <string name="voice_diag_notification">Voice test is active. Tap Disconnect to release the microphone.</string>
+    <string name="voice_diag_start">Connect</string>
+    <string name="voice_diag_stop">Disconnect</string>
+    <string name="voice_diag_export">Export voice diagnostics</string>
+    <string name="voice_diag_reload">Reload groups</string>
+    <string name="voice_diag_empty">Sign in and join a group in Nearby to run a voice test.</string>
+    <string name="voice_diag_input">Microphone</string>
+    <string name="voice_diag_output">Sound output</string>
+    <string name="voice_diag_auto">Automatic</string>
+    <string name="voice_diag_phone">Phone</string>
+    <string name="voice_diag_headset">Headphones</string>
+    <string name="voice_diag_speaker">Speaker</string>
+    <string name="voice_diag_permission">Microphone and nearby-device permissions are required to start the test.</string>
+    <string name="voice_diag_mute">Mute microphone</string>
+    <string name="voice_diag_deafen">Mute incoming sound</string>
+    <string name="voice_diag_failed">Voice test failed. You can export diagnostics and retry.</string>
+    <string name="voice_diag_route_unknown">Actual microphone and playback route: unknown. Selected output and Android device hints below do not prove the actual route.</string>
+    <string name="voice_diag_cleanup_failed">Cleanup failed. Tap Disconnect to retry before starting another test.</string>
+    <string name="voice_diag_idle">Disconnected</string>
+    <string name="voice_diag_connecting">Connecting…</string>
+    <string name="voice_diag_running">Connected</string>
+    <string name="voice_diag_stopping">Disconnecting…</string>
+</resources>

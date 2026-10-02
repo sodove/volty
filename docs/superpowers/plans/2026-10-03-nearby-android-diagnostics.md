@@ -1,5 +1,16 @@
 # Nearby Android adapter and diagnostics Implementation Plan
 
+**Status:** implementation complete as an isolated diagnostic experiment.
+Fresh full suite: 2573 tests, zero failures/errors; signed release APK and
+database migration verification passed. Device audibility, Xiaomi, FGS and
+PHONE→headphones routing remain NOT MEASURED (adb inventory empty). Production
+Nearby UI/DI and backend remain unchanged; v2 cutover is still pending.
+
+**Source-backed refinement:** pinned AudioSwitchHandler.stop posts asynchronous
+cleanup, so the adapter owns AbstractAudioSwitch on its own worker and awaits
+worker disposal. Diagnostic preflight rejects active legacy voice/sharing because
+the old repository cannot cancel a pending join. This is not a legacy race fix.
+
 > **For agentic workers:** Use executing-plans; primary implements complex work, Luna/xhigh only bounded checks with context. User explicitly requested autonomous continuation without interruptions. No additional approval handoff for this stage; no Astra.
 
 **Goal:** Build an independently usable diagnostic surface for the new LiveKit
@@ -79,17 +90,17 @@ outside mutex; callbacks checked against current tag. CancellationException
 rethrows after NonCancellable cleanup of owned session. Stop closes only matching
 handle. No new reconnect loop: SDK owns reconnect.
 
-- [ ] Write failing fake-session tests: suspend connect using CompletableDeferred,
+- [x] Write failing fake-session tests: suspend connect using CompletableDeferred,
   stop, release gate → publishCalls0 and closeCalls1; replacement B active while A
   later errors → B closeCalls0; publish false → own closeCalls1; desired muted and
   deafened set before publish; wrong-generation stop leaves current session open.
   Assert issued calls/events, never sleep timing. No unbounded virtual-time loops.
-- [ ] Watch RED via testDebugUnitTest --tests '*VoiceEngineDriverTest'.
-- [ ] Implement lifecycle with tagged handle and idempotent close; check current
+- [x] Watch RED via testDebugUnitTest --tests '*VoiceEngineDriverTest'.
+- [x] Implement lifecycle with tagged handle and idempotent close; check current
   ownership before/after connect/publish. Repeated close uses the captured handle,
   not global room. Driver emits Stopped only after close return; close failure
   remains typed failure, not successful release. Emit Failed on failed active start.
-- [ ] Focused GREEN, full fresh suite, narrow Luna trace check, diff/commit.
+- [x] Focused GREEN, full fresh suite, narrow Luna trace check, diff/commit.
 
 ### Task 2: Owned Android audio and LiveKit session
 
@@ -98,28 +109,28 @@ VoiceAudioRouteMonitor.kt, VoiceCommunicationKeeper.kt. Common diagnostics typed
 models/formatter under domain/voice; tests sanitize/format counters and unknowns.
 Consumes Task1 factory/session interfaces; produces AndroidVoiceSdkSessionFactory.
 
-- [ ] Read pinned LiveKit LiveKitOverrides/RTCModule/CommunicationWorkaround/
+- [x] Read pinned LiveKit LiveKitOverrides/RTCModule/CommunicationWorkaround/
   LocalParticipant/RoomEvent/Track sources; javap exact prefixed ADM API.
-- [ ] Write failing pure tests for trace formatting: only enum codes/counters/
+- [x] Write failing pure tests for trace formatting: only enum codes/counters/
   generation/provenance can enter exporter, credentials.toString redacted;
   selection evidence never invents routed device; PHONE input does not rewrite
   desired output preference. Keep Android types out of common functions.
-- [ ] Implement typed fixed-capacity diagnostic buffer; no raw exception strings.
-- [ ] Initialize LiveKit before own JavaAudioDeviceModule; capture/track callbacks
+- [x] Implement typed fixed-capacity diagnostic buffer; no raw exception strings.
+- [x] Initialize LiveKit before own JavaAudioDeviceModule; capture/track callbacks
   emit Started/Stopped and stable init/start/runtime error codes. Samples callback
   counts bytes/frames only. Match SDK default VOICE_COMMUNICATION/AEC/NS setup.
-- [ ] Own AudioSwitchHandler for focus/output; wrap start/stop with own silent
+- [x] Own AudioSwitchHandler for focus/output; wrap start/stop with own silent
   communication keeper. ADM input uses AudioManager builtin mic device separately.
   AUTO starts a fresh session with no preference; changing explicit→AUTO recreates
   session, never calls nullable setter. Register/remove recording/device callbacks.
-- [ ] Own ADM release after Room disconnect/release in finally, including failed
+- [x] Own ADM release after Room disconnect/release in finally, including failed
   connect. Publish respects desired mute before track creation/publication and
   checks Boolean result; deafen uses Room.setSpeakerMute. Map only real SDK
   media callbacks; aggregate peer audio publications for unsubscribe.
-- [ ] Stats getRTCStats records audio outbound/inbound packet counters without
+- [x] Stats getRTCStats records audio outbound/inbound packet counters without
   exporting track/peer identity or bearer. Callback transport connected separate
   from publication/ADM start. Polling job cancelled with session.
-- [ ] Compile Android, pure tests/full suite, narrow callback/release check, commit.
+- [x] Compile Android, pure tests/full suite, narrow callback/release check, commit.
 
 ### Task 3: Explicit diagnostic Activity, FGS and APK
 
@@ -129,23 +140,23 @@ Android actual, DebugSettingsTab entry and both values/values-ru strings.
 Manifest microphone FGS permission/service and nonexported Activity; BLE
 MonitoringService unchanged. Existing Nearby engine DI unchanged.
 
-- [ ] Diagnostic controller loads existing authenticated groups, gets actual v1
+- [x] Diagnostic controller loads existing authenticated groups, gets actual v1
   credentials only after explicit start. Tags are local experiment IDs, never
   described as server lease/claim. Stop/cancellation fences late token response.
   Before diagnostic start leave existing voice via VoiceRoomRepository without
   deleting group membership. No location/telemetry sharing started.
-- [ ] Activity renders controller StateFlow; start permission via launcher and
+- [x] Activity renders controller StateFlow; start permission via launcher and
   visible Activity. Foreground notification before connect/capture; Stop action
   calls controller disconnect; service nonsticky and stops after resource release.
   No static credential Intent extras. Configuration change retains controller via
   ViewModel; service stop reaches that same instance. Process death has no resume.
-- [ ] Show desired mic/output, selected output, communication-device hint,
+- [x] Show desired mic/output, selected output, communication-device hint,
   uncorrelated recording config hint, ADM capture/render starts, counters/error
   codes. Clearly label unknown actual stream route. Export only dedicated typed
   trace + app/model/build metadata, not existing unrestricted logcat.
-- [ ] Android strings both directories. Unit tests for late credential response
+- [x] Android strings both directories. Unit tests for late credential response
   after stop and typed export. No Compose/FGS fake proof; run compile/full suite.
-- [ ] Build APK with existing local signing configuration if available. Verify
+- [x] Build APK with existing local signing configuration if available. Verify
   APK artifact and adb inventory; empty inventory → device NOT MEASURED. Record
   two-phone/Xiaomi protocol from foundation report. No production deploy.
 

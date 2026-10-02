@@ -1,0 +1,27 @@
+<resources>
+    <string name="voice_diag_title">Диагностика голосовой связи</string>
+    <string name="voice_diag_legacy_active">Перед тестом отключите текущий голос и передачу данных в Nearby.</string>
+    <string name="voice_diag_description">Проверка нового голосового адаптера. Позиция и телеметрия не передаются. Отключение сохраняет членство в группе.</string>
+    <string name="voice_diag_notification">Голосовой тест активен. Нажмите «Отключиться», чтобы освободить микрофон.</string>
+    <string name="voice_diag_start">Подключиться</string>
+    <string name="voice_diag_stop">Отключиться</string>
+    <string name="voice_diag_export">Экспорт диагностики голоса</string>
+    <string name="voice_diag_reload">Обновить группы</string>
+    <string name="voice_diag_empty">Для теста войдите в аккаунт и вступите в группу в Nearby.</string>
+    <string name="voice_diag_input">Микрофон</string>
+    <string name="voice_diag_output">Вывод звука</string>
+    <string name="voice_diag_auto">Автоматически</string>
+    <string name="voice_diag_phone">Телефон</string>
+    <string name="voice_diag_headset">Наушники</string>
+    <string name="voice_diag_speaker">Динамик</string>
+    <string name="voice_diag_permission">Для теста нужны разрешения на микрофон и устройства поблизости.</string>
+    <string name="voice_diag_mute">Выключить микрофон</string>
+    <string name="voice_diag_deafen">Выключить входящий звук</string>
+    <string name="voice_diag_failed">Ошибка голосового теста. Можно экспортировать диагностику и повторить.</string>
+    <string name="voice_diag_route_unknown">Фактический маршрут микрофона и воспроизведения неизвестен. Выбранный выход и подсказки Android ниже не доказывают маршрут.</string>
+    <string name="voice_diag_cleanup_failed">Ошибка освобождения ресурсов. Нажмите «Отключиться» ещё раз перед новым тестом.</string>
+    <string name="voice_diag_idle">Отключено</string>
+    <string name="voice_diag_connecting">Подключение…</string>
+    <string name="voice_diag_running">Подключено</string>
+    <string name="voice_diag_stopping">Отключение…</string>
+</resources>

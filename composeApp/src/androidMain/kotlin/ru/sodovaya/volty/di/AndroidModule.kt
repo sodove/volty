@@ -197,6 +197,8 @@ val androidModule = module {
     single<AlarmPreview> { HolderAlarmPreview(get()) }
     single { ServiceController(androidContext()) }
     single { LogExporter(androidContext()) }
+    single { ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher(androidContext()) }
+    single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get()) }
 }
 
 private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"

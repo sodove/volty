@@ -810,4 +810,5 @@
 <string name="debug_record_count">Captured records: %1$d</string>
     <string name="debug_local_index">Local source index</string>
     <string name="debug_global_index">Vehicle source index</string>
+    <string name="debug_voice_diagnostics">Voice diagnostics</string>
 </resources>
