@@ -19,6 +19,6 @@ fun interface VoiceSdkSessionFactory {
     fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession
 }
 
-enum class VoiceEngineError { CONNECTION, PUBLICATION, MUTE, CLEANUP }
+enum class VoiceEngineError { CONNECTION, PUBLICATION, MUTE, CLEANUP, LEGACY_ACTIVE }
 
 class VoiceEngineException(val code: VoiceEngineError) : Exception("voice_${code.name.lowercase()}")
