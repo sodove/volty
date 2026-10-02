@@ -78,6 +78,24 @@ field reports under that spec's `field-reports/`. Execution is
 loop, ledgers in `.superpowers/sdd/<plan-name>/progress.md` (git-ignored — **read the ledger
 before assuming a task is undone**).
 
+### Subagent routing and scope
+
+- Delegate only simple, narrowly scoped tasks. Use **`gpt-6-luna` with `xhigh`**
+  reasoning for those subagents.
+- Do not assign complex research, architecture, or multi-module implementation
+  to a subagent without sufficient context. Keep that work with the primary
+  agent; split out only concrete, simple subtasks.
+- Every dispatch must provide the relevant requirements, file ownership,
+  surrounding interfaces, prior decisions, and a precise expected result.
+  A fresh context must still be sufficient to complete the assigned task.
+- **Do not use `medium` reasoning for Sol subagents.** If the user explicitly
+  authorizes a Sol subagent, use `high` or higher and preserve adequate context.
+- This user preference overrides skill defaults for model selection and fresh
+  implementer dispatch when a task is too complex to delegate responsibly.
+- **Do not invoke Astra again without a new explicit user request.** The single
+  requested Nearby design review was completed on 2026-10-03; ordinary task or
+  final reviews do not authorize another Astra invocation.
+
 Two cultural rules that are load-bearing, not decoration:
 
 - **Measurement beats inference, every time they disagree.** The specs were written from one
