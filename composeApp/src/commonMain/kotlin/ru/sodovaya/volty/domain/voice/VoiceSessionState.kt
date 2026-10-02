@@ -10,6 +10,14 @@ data class VoiceSessionState(
     val phase: VoicePhase = VoicePhase.IDLE,
     val wanted: Boolean = false,
     val cleanupPending: Boolean = false,
+    val transportConnected: Boolean = false,
+    val captureStarted: Boolean = false,
+    val published: Boolean = false,
+    val subscribedPeers: Set<String> = emptySet(),
+    val renderStarted: Boolean = false,
+    val lastLeaseAckMillis: Long? = null,
+    val muted: Boolean = false,
+    val deafened: Boolean = false,
 )
 
 data class VoiceTransition(val state: VoiceSessionState, val effects: List<VoiceSessionEffect>)
