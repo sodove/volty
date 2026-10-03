@@ -2,7 +2,7 @@ package ru.sodovaya.volty.backend.nearby
 
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
-import org.postgresql.ds.PGSimpleDataSource
+import javax.sql.DataSource
 import ru.sodovaya.volty.backend.SchemaMigrator
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -118,19 +118,13 @@ class JdbcSessionRosterJournalTest {
         assertEquals(session, JdbcRosterJournal(old).eventsAfter(0, 1).single().sessionId)
     }
 
-    private fun schema(): PGSimpleDataSource {
+    private fun schema(): DataSource {
         val name = "roster_test_" + id().replace("-", "")
-        val base = PGSimpleDataSource().apply {
-            setURL(checkNotNull(System.getenv("VOLTY_NEARBY_TEST_JDBC_URL")))
-            user = "nearby_test"; password = "nearby-disposable-test-only"
-        }
+        val base = NearbyPostgresFixture.source()
         base.connection.use { it.createStatement().use { statement -> statement.execute("CREATE SCHEMA $name") } }
-        return PGSimpleDataSource().apply {
-            setURL(checkNotNull(System.getenv("VOLTY_NEARBY_TEST_JDBC_URL")) + "&currentSchema=$name")
-            user = "nearby_test"; password = "nearby-disposable-test-only"
-        }
+        return NearbyPostgresFixture.source(name)
     }
-    private fun user(target: PGSimpleDataSource, owner: String) = target.connection.use { c ->
+    private fun user(target: DataSource, owner: String) = target.connection.use { c ->
         c.prepareStatement("INSERT INTO users(id,email,password_hash,display_name,created_at) VALUES (?::uuid,?,'test','test',0)").use {
             it.setString(1, owner); it.setString(2, "$owner@example.invalid"); it.executeUpdate()
         }

@@ -2,7 +2,6 @@ package ru.sodovaya.volty.backend.nearby
 
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
-import org.postgresql.ds.PGSimpleDataSource
 import ru.sodovaya.volty.backend.SchemaMigrator
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -11,10 +10,7 @@ import kotlin.test.*
 
 @Tag("postgres")
 class SessionServicePostgresTest {
-    private val source = PGSimpleDataSource().apply {
-        setURL(checkNotNull(System.getenv("VOLTY_NEARBY_TEST_JDBC_URL")))
-        user = "nearby_test"; password = "nearby-disposable-test-only"
-    }
+    private val source = NearbyPostgresFixture.source()
     private val actor = UUID.randomUUID().toString()
     private val operation = UUID.randomUUID().toString()
     private val destination = UUID.randomUUID().toString()

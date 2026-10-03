@@ -65,7 +65,7 @@ fun Route.installNearbySessionRoutes(dependencies: AppDependencies) {
     }
 }
 
-private fun ApplicationCall.nearbyActor(dependencies: AppDependencies): String {
+internal fun ApplicationCall.nearbyActor(dependencies: AppDependencies): String {
     response.header(HttpHeaders.CacheControl, "no-store")
     val subject = principal<JWTPrincipal>()?.payload?.subject
         ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Authentication required")
@@ -73,7 +73,7 @@ private fun ApplicationCall.nearbyActor(dependencies: AppDependencies): String {
         ?: throw ApiException(HttpStatusCode.Unauthorized, "unauthorized", "Account unavailable")
 }
 
-private fun ApplicationCall.nearbyId(name: String) = canonicalId(parameters[name] ?: "")
+internal fun ApplicationCall.nearbyId(name: String) = canonicalId(parameters[name] ?: "")
 private fun canonicalId(value: String): String = try {
     require(value.length == 36)
     UUID.fromString(value).toString()

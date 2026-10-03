@@ -62,6 +62,18 @@ Files: WebhookVerifier, media observation journal/coordinator, route/tests.
   cannot remove a newer claim. Terminal state cannot resurrect on delayed joined.
 - Missing hooks are reconciled from authenticated SFU state plus leases. Record
   what is observed; no device audibility, microphone or routing inference.
+- Registered admission without observed transport must not renew indefinitely:
+  heartbeat cannot extend the initial30s window while media is unconfirmed.
+  Missing joined hooks may be resolved by an authenticated, incarnation-fenced
+  current participant observation. Keep SFU network work outside SQL locks.
+- Same logical session may reconnect with a new participant SID. A delayed left
+  hook for the prior SID must not end the new transport; when hooks are missing,
+  reconcile current SFU SID instead of choosing the newest event timestamp.
+- Participant credentials/heartbeat responses need explicit remaining lease at
+  server authorization time. The client SessionPort must derive a conservative
+  monotonic deadline from request-start, not phone wall time or a fresh fixed30s
+  credit on every replay/status ACK. The current client core's fixed window is
+  a foundation requiring this adaptation before production integration.
 - Actual signed/invalid/tampered-body HTTP checks and PostgreSQL event replay/
   reordered delivery tests. Test provenance on intentionally incoherent fixtures.
 

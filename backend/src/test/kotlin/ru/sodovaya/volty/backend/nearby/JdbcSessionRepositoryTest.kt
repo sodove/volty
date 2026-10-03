@@ -2,7 +2,7 @@ package ru.sodovaya.volty.backend.nearby
 
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Tag
-import org.postgresql.ds.PGSimpleDataSource
+import javax.sql.DataSource
 import ru.sodovaya.volty.backend.SchemaMigrator
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
@@ -16,11 +16,7 @@ import kotlin.test.*
 
 @Tag("postgres")
 class JdbcSessionRepositoryTest {
-    private val source = PGSimpleDataSource().apply {
-        setURL(checkNotNull(System.getenv("VOLTY_NEARBY_TEST_JDBC_URL")) { "Disposable test database URL required" })
-        user = "nearby_test"
-        password = "nearby-disposable-test-only"
-    }
+    private val source = NearbyPostgresFixture.source()
     private val actor = id()
     private val operation = id()
     private val destination = id()
@@ -333,13 +329,10 @@ class JdbcSessionRepositoryTest {
         assertTrue(JdbcSessionRepository(source).pendingWork(1000).any { it.operation.sessionId == session && it.cleanupPending && !it.admissionPending })
     }
 
-    private fun freshSchema(): PGSimpleDataSource {
+    private fun freshSchema(): DataSource {
         val schema = "nearby_test_" + id().replace("-", "")
         source.connection.use { c -> c.createStatement().use { it.execute("CREATE SCHEMA $schema") } }
-        return PGSimpleDataSource().apply {
-            setURL(checkNotNull(System.getenv("VOLTY_NEARBY_TEST_JDBC_URL")) + "&currentSchema=$schema")
-            user = "nearby_test"; password = "nearby-disposable-test-only"
-        }
+        return NearbyPostgresFixture.source(schema)
     }
 
     private fun id() = UUID.randomUUID().toString()
