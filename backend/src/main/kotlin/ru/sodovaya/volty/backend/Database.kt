@@ -699,6 +699,7 @@ class SchemaMigrator(private val dataSource: DataSource, private val migrations:
     2 to "/db/migration/V2__nearby_session_journal.sql",
     3 to "/db/migration/V3__nearby_roster_journal.sql",
     4 to "/db/migration/V4__nearby_media_webhook_inbox.sql",
+    5 to "/db/migration/V5__nearby_media_observations.sql",
 )) {
     fun migrate() {
         dataSource.connection.use { connection ->

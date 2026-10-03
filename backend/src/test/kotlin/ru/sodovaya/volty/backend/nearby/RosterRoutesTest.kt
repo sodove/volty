@@ -16,6 +16,19 @@ class RosterRoutesTest {
         override fun isAccessActive(userId: String, issuedAtEpochSeconds: Long) = userId == actor
     }, testMode = true, nearbyRoster = port)
 
+    @Test fun confirmedSnapshotCarriesCurrentTransportSidWithoutImplyingDeviceAudio() = testApplication {
+        val session = UUID.randomUUID().toString()
+        val deps = dependencies(RosterEndpointPort { _, _ -> ChannelRosterSnapshot(channel, 7, 100,
+            listOf(ChannelRosterPeer(actor, session, UUID.randomUUID().toString(), RosterConnectionPhase.CONNECTED,
+                30_100, MediaPresence.CONNECTED, "PA_current"))) })
+        application { module(deps) }
+        val response = client.get("/v2/nearby/channels/$channel/roster") { bearerAuth(deps.tokenService.issueAccessToken(actor)) }
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertTrue(response.bodyAsText().contains("\"participantSid\":\"PA_current\""))
+        assertTrue(response.bodyAsText().contains("\"phase\":\"CONNECTED\""))
+        assertFalse(response.bodyAsText().contains("audible"))
+    }
+
     @Test fun authenticationAndDisabledBoundaryDoNotExposeRoster() = testApplication {
         val deps = dependencies()
         application { module(deps) }

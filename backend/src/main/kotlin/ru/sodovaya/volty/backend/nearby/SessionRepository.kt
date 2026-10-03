@@ -8,7 +8,16 @@ data class SessionJournalEntry(
     val sfuEpoch: SfuEpoch?,
     val admissionPending: Boolean,
     val cleanupPending: Boolean,
+    val media: SessionMedia = SessionMedia(),
 )
+
+/** Version fences concurrent observation replies; it is separate from visible roster revision. */
+data class SessionMedia(val participantSid: String? = null, val state: SfuParticipantState? = null, val observationVersion: Long = 0) {
+    init {
+        require(observationVersion >= 0 && (participantSid == null) == (state == null))
+        require(participantSid == null || (participantSid.isNotBlank() && participantSid.length <= 256))
+    }
+}
 data class SessionClaim(val operationId: String, val sessionId: String, val sfuEpoch: SfuEpoch)
 data class SessionJournalResult(val state: SessionJournalEntry?, val rejection: OperationRejection? = null)
 
@@ -18,6 +27,8 @@ interface SessionRepository {
     fun cancel(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
     fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
+    fun observeMedia(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, observation: SfuParticipantObservation, now: () -> Long): SessionJournalResult
+    fun heartbeatConnected(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, participantSid: String, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
     fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun get(actor: String, operation: String): SessionJournalEntry?
     fun findSession(actor: String, session: String): SessionJournalEntry?

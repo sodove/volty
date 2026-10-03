@@ -20,7 +20,7 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
                 it.executeQuery().use { rows -> check(rows.next()); rows.getLong(1) }
             }
             val peers = c.prepareStatement("""
-                SELECT o.actor_id,o.operation_id,o.session_id,o.phase,o.deadline_epoch_millis
+                SELECT o.actor_id,o.operation_id,o.session_id,o.phase,o.deadline_epoch_millis,o.participant_sid,o.media_state
                 FROM nearby_session_operations o JOIN nearby_actor_claims c
                   ON c.actor_id=o.actor_id AND c.operation_id=o.operation_id AND c.session_id=o.session_id
                  AND c.room_epoch=o.room_epoch AND c.node_epoch=o.node_epoch
@@ -29,9 +29,14 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
             """.trimIndent()).use {
                 it.setString(1, channel)
                 it.executeQuery().use { rows -> buildList {
-                    while (rows.next()) add(ChannelRosterPeer(rows.getString("actor_id"), rows.getString("session_id"),
-                        rows.getString("operation_id"), if (rows.getString("phase") == "PENDING") RosterConnectionPhase.JOINING else RosterConnectionPhase.CONNECTING,
-                        rows.getLong("deadline_epoch_millis")))
+                    while (rows.next()) {
+                        val sid = rows.getString("participant_sid")
+                        val pending = rows.getString("phase") == "PENDING"
+                        val connected = !pending && sid != null && rows.getString("media_state") == "ACTIVE"
+                        add(ChannelRosterPeer(rows.getString("actor_id"), rows.getString("session_id"), rows.getString("operation_id"),
+                            if (pending) RosterConnectionPhase.JOINING else if (connected) RosterConnectionPhase.CONNECTED else RosterConnectionPhase.CONNECTING,
+                            rows.getLong("deadline_epoch_millis"), if (connected) MediaPresence.CONNECTED else MediaPresence.UNKNOWN, sid))
+                    }
                 } }
             }
             // Do not filter using this clock: expiry changes rows/revision through the journal.

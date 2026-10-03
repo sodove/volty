@@ -47,6 +47,24 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
     override fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
         mediaChange(actor, operation, session, sfuEpoch) { policy.heartbeat(it, session, now(), confirmedDeadline) }
 
+    override fun observeMedia(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, observation: SfuParticipantObservation, now: () -> Long) =
+        observedChange(actor, operation, session, sfuEpoch, now) { c, row ->
+            if (row.media.observationVersion != expectedVersion) return@observedChange SessionJournalResult(row, OperationRejection.OBSERVATION_CHANGED)
+            val next = row.copy(media = SessionMedia(observation.participantSid, observation.state, Math.addExact(expectedVersion, 1)))
+            save(c, next)
+            if (row.media.participantSid != next.media.participantSid || row.media.state != next.media.state) appendRosterChange(c, next)
+            SessionJournalResult(next)
+        }
+
+    override fun heartbeatConnected(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, participantSid: String, now: () -> Long, confirmedDeadline: Long) =
+        observedChange(actor, operation, session, sfuEpoch, now) { c, row ->
+            if (row.media.state != SfuParticipantState.ACTIVE) return@observedChange SessionJournalResult(row, OperationRejection.NOT_ACTIVE)
+            if (row.media.observationVersion != expectedVersion || row.media.participantSid != participantSid) {
+                return@observedChange SessionJournalResult(row, OperationRejection.OBSERVATION_CHANGED)
+            }
+            persist(c, row, policy.heartbeat(row.operation, session, now(), confirmedDeadline))
+        }
+
     override fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
         val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
         persist(c, row, policy.expire(row.operation, now()))
@@ -90,12 +108,24 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
         persist(c, row, change(row.operation))
     }
 
+    private fun observedChange(actor: String, operation: String, session: String, epoch: SfuEpoch, now: () -> Long,
+                               change: (Connection, SessionJournalEntry) -> SessionJournalResult): SessionJournalResult = locked(actor) { c ->
+        val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
+        if (row.operation.sessionId != session) return@locked SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
+        if (row.sfuEpoch != epoch) return@locked SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
+        if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@locked SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
+        val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
+        if (current.operation.terminal) return@locked SessionJournalResult(current, OperationRejection.TERMINAL)
+        if (current.operation.phase != OperationPhase.ACTIVE) return@locked SessionJournalResult(current, OperationRejection.NOT_ACTIVE)
+        change(c, current)
+    }
+
     private fun persist(c: Connection, existing: SessionJournalEntry?, decision: OperationDecision): SessionJournalResult {
         val next = checkNotNull(decision.operation)
         val newlyTerminal = next.terminal && existing?.operation?.terminal != true
         val row = SessionJournalEntry(next, existing?.sfuEpoch,
             admissionPending = next.phase == OperationPhase.PENDING,
-            cleanupPending = existing?.cleanupPending == true || (newlyTerminal && next.sessionId != null))
+            cleanupPending = existing?.cleanupPending == true || (newlyTerminal && next.sessionId != null), media = existing?.media ?: SessionMedia())
         save(c, row)
         if (existing?.operation != row.operation) appendRosterChange(c, row)
         if (next.terminal && next.sessionId != null) {
@@ -108,15 +138,17 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
 
     private fun save(c: Connection, row: SessionJournalEntry) {
         c.prepareStatement("""
-            INSERT INTO nearby_session_operations(actor_id,operation_id,destination_id,session_id,room_epoch,node_epoch,phase,deadline_epoch_millis,admission_pending,cleanup_pending)
-            VALUES (?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?,?,?)
+            INSERT INTO nearby_session_operations(actor_id,operation_id,destination_id,session_id,room_epoch,node_epoch,phase,deadline_epoch_millis,admission_pending,cleanup_pending,participant_sid,media_state,media_observation_version)
+            VALUES (?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(actor_id,operation_id) DO UPDATE SET phase=EXCLUDED.phase,
-            deadline_epoch_millis=EXCLUDED.deadline_epoch_millis,admission_pending=EXCLUDED.admission_pending,cleanup_pending=EXCLUDED.cleanup_pending
+            deadline_epoch_millis=EXCLUDED.deadline_epoch_millis,admission_pending=EXCLUDED.admission_pending,cleanup_pending=EXCLUDED.cleanup_pending,
+            participant_sid=EXCLUDED.participant_sid,media_state=EXCLUDED.media_state,media_observation_version=EXCLUDED.media_observation_version
         """.trimIndent()).use {
             val op = row.operation
             it.setString(1, op.actorId); it.setString(2, op.operationId); it.setString(3, op.destinationId)
             it.setString(4, op.sessionId); it.setString(5, row.sfuEpoch?.roomEpoch); it.setString(6, row.sfuEpoch?.nodeEpoch); it.setString(7, op.phase.name)
             it.setObject(8, op.deadlineEpochMillis); it.setBoolean(9, row.admissionPending); it.setBoolean(10, row.cleanupPending)
+            it.setString(11, row.media.participantSid); it.setString(12, row.media.state?.name); it.setLong(13, row.media.observationVersion)
             it.executeUpdate()
         }
     }
@@ -151,7 +183,8 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
     private fun ResultSet.entry() = SessionJournalEntry(
         SessionOperation(getString("actor_id"), getString("operation_id"), getString("destination_id"), getString("session_id"),
             OperationPhase.valueOf(getString("phase")), getLong("deadline_epoch_millis").takeUnless { wasNull() }),
-        getString("room_epoch")?.let { SfuEpoch(it, getString("node_epoch")) }, getBoolean("admission_pending"), getBoolean("cleanup_pending"))
+        getString("room_epoch")?.let { SfuEpoch(it, getString("node_epoch")) }, getBoolean("admission_pending"), getBoolean("cleanup_pending"),
+        SessionMedia(getString("participant_sid"), getString("media_state")?.let(SfuParticipantState::valueOf), getLong("media_observation_version")))
 
     private fun <T> locked(actor: String, block: (Connection) -> T): T = source.connection.use { c ->
         UUID.fromString(actor)
