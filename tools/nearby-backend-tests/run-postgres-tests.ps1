@@ -3,9 +3,10 @@ param(
     [int]$RemotePort = 23217,
     [int]$LocalPort = 23217,
     [int]$ExpectedTests = 17,
-    [string]$TestFilter = '*JdbcSessionRepositoryTest'
+    [string[]]$TestFilter = @('*JdbcSessionRepositoryTest')
 )
 $ErrorActionPreference = 'Stop'
+if ($TestFilter.Count -eq 0 -or @($TestFilter | Where-Object { [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {throw 'Test filters required'}
 if ($HostName -notmatch '^[a-zA-Z0-9_.-]+@[a-zA-Z0-9.-]+$') {throw 'Invalid SSH host'}
 if ($LocalPort -lt 1024 -or $LocalPort -gt 65535 -or $RemotePort -lt 1024 -or $RemotePort -gt 65535) {throw 'Invalid port'}
 if (Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue) {throw 'Local fixture port occupied'}
@@ -39,7 +40,10 @@ try {
     }
     if (!(Get-NetTCPConnection -LocalPort $LocalPort -State Listen -ErrorAction SilentlyContinue)) {throw 'Owned SSH tunnel not listening'}
     $env:VOLTY_NEARBY_TEST_JDBC_URL = "jdbc:postgresql://127.0.0.1:${LocalPort}/nearby_test?connectTimeout=5&socketTimeout=10"
-    & "$root/gradlew.bat" -p "$root/backend" postgresTest --tests $TestFilter --rerun-tasks --no-build-cache --no-configuration-cache *> (Join-Path $run 'gradle.log')
+    $gradleArguments = @('-p', "$root/backend", 'postgresTest')
+    foreach ($filter in $TestFilter) { $gradleArguments += @('--tests', $filter) }
+    $gradleArguments += @('--rerun-tasks', '--no-build-cache', '--no-configuration-cache')
+    & "$root/gradlew.bat" @gradleArguments *> (Join-Path $run 'gradle.log')
     $testExit = $LASTEXITCODE
     if (Test-Path "$root/backend/build/test-results/postgresTest") {
         Get-ChildItem "$root/backend/build/test-results/postgresTest/TEST-*.xml" | Copy-Item -Destination $run
