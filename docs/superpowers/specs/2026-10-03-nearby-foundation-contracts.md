@@ -152,7 +152,7 @@ RTP не объясняется автоматически Xiaomi routing. Не 
 |---|---|---|
 | Pure voice core | READY FOR PLAN | tagged reducer/effects, stop/cancel races, bounded deadlines; без platform proof |
 | Android adapter | READY FOR PROTOTYPE | pinned APIs; реальные route/capture/render и Xiaomi ещё NOT MEASURED |
-| Backend/SFU | BLOCKED | строгий revoke NOT PROVEN; remove+TTL опровергнут runtime |
+| Backend/SFU | READY FOR SINGLE-NODE INTEGRATION PLAN | local admission overlay: revoke/expiry/race RTP measured; durable backend/restart integration and production readiness not proven |
 | Servers/channels UX | contracts agreed | нужен backend wire/state и pure core; Compose/device QA отдельно |
 | Direct calls/push | contracts agreed | claims/revoke gate + FCM provisioning/notification tests |
 | Optional navigation summary | deferred | opt-in, outside critical path |

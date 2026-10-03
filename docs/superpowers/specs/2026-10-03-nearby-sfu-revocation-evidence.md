@@ -1,5 +1,11 @@
 # Nearby: SFU revocation evidence
 
+Позднейшее уточнение: stock remove+TTL по-прежнему опровергнут. Отдельный
+single-node SFU admission overlay прошёл локальную revoke/expiry/race RTP
+матрицу; см. [новое evidence](2026-10-03-nearby-sfu-admission-evidence.md).
+Ниже сохранён первоначальный отрицательный результат. Блокировка backend
+плана снята только для интеграции этого кандидата; production readiness не заявлена.
+
 Дата: 2026-10-03. **Строгий отзыв NOT PROVEN; remove + короткий JWT опровергнут.**
 Production не менялся. Локальный disposable loopback SFU остановлен после опыта.
 
