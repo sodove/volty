@@ -1,11 +1,32 @@
 package lease
 
 import (
+	"context"
 	"encoding/hex"
 	"io"
 	"sync"
 	"time"
 )
+
+func (g *Gate) Remaining(ctx context.Context, key Key) (time.Duration, error) {
+	e, err := g.find(key, false)
+	if err != nil {
+		return 0, err
+	}
+	if err = e.lock(ctx); err != nil {
+		return 0, err
+	}
+	defer e.unlock()
+	if !e.registered || e.terminal {
+		return 0, ErrDenied
+	}
+	remaining := e.deadline.Sub(g.now())
+	if remaining <= 0 {
+		e.terminal = true
+		return 0, ErrDenied
+	}
+	return remaining, nil
+}
 
 func NewNodeIncarnation(entropy io.Reader) (string, error) {
 	var nonce [16]byte

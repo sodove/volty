@@ -8,10 +8,11 @@ import javax.sql.DataSource
 class JdbcSessionRepository(private val source: DataSource) : SessionRepository {
     private val policy = SessionOperationPolicy()
 
-    override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: Long): SessionJournalResult =
+    override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long): SessionJournalResult =
         locked(actor) { c ->
             val existing = read(c, actor, operation)
-            val decision = policy.begin(existing?.operation, actor, operation, destination, session, now)
+            val observedAt = now()
+            val decision = policy.begin(existing?.operation, actor, operation, destination, session, observedAt)
             if (existing != null) {
                 if (!existing.operation.terminal && existing.sfuEpoch != sfuEpoch) return@locked SessionJournalResult(existing, OperationRejection.EPOCH_MISMATCH)
                 return@locked persist(c, existing, decision)
@@ -19,7 +20,7 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             // Serializing through the actor row also covers cancel before any operation row exists.
             claim(c, actor)?.let { oldClaim ->
                 val old = checkNotNull(read(c, actor, oldClaim.operationId))
-                persist(c, old, policy.cancel(old.operation, actor, oldClaim.operationId, now))
+                persist(c, old, policy.cancel(old.operation, actor, oldClaim.operationId, observedAt))
             }
             val row = SessionJournalEntry(checkNotNull(decision.operation), sfuEpoch, admissionPending = true, cleanupPending = false)
             save(c, row)
@@ -29,27 +30,39 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             SessionJournalResult(row)
         }
 
-    override fun cancel(actor: String, operation: String, now: Long): SessionJournalResult = locked(actor) { c ->
+    override fun cancel(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
         val existing = read(c, actor, operation)
-        persist(c, existing, policy.cancel(existing?.operation, actor, operation, now))
+        persist(c, existing, policy.cancel(existing?.operation, actor, operation, now()))
     }
 
-    override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: Long, confirmedDeadline: Long) =
-        mediaChange(actor, operation, session, sfuEpoch) { policy.admit(it, session, now, confirmedDeadline) }
+    override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
+        mediaChange(actor, operation, session, sfuEpoch) { policy.admit(it, session, now(), confirmedDeadline) }
 
-    override fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: Long, confirmedDeadline: Long) =
-        mediaChange(actor, operation, session, sfuEpoch) { policy.heartbeat(it, session, now, confirmedDeadline) }
+    override fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
+        mediaChange(actor, operation, session, sfuEpoch) { policy.heartbeat(it, session, now(), confirmedDeadline) }
 
-    override fun expire(actor: String, operation: String, now: Long): SessionJournalResult = locked(actor) { c ->
+    override fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
         val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
-        persist(c, row, policy.expire(row.operation, now))
+        persist(c, row, policy.expire(row.operation, now()))
     }
 
     override fun get(actor: String, operation: String) = source.connection.use { read(it, actor, operation) }
     override fun currentClaim(actor: String) = source.connection.use { claim(it, actor) }
 
     override fun pendingWork(limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit)
+    override fun pendingWork(actor: String, limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit, actor)
+    override fun pendingCleanup(actor: String, limit: Int) = selectWork("cleanup_pending", null, limit, actor)
     override fun dueOperations(now: Long, limit: Int) = selectWork("phase IN ('PENDING','ACTIVE') AND deadline_epoch_millis <= ?", now, limit)
+    override fun dueOperations(actor: String, now: Long, limit: Int) = selectWork("phase IN ('PENDING','ACTIVE') AND deadline_epoch_millis <= ?", now, limit, actor)
+
+    override fun <T : Any> withActiveSession(actor: String, operation: String, now: () -> Long, producer: (SessionJournalEntry) -> T): T? = locked(actor) { c ->
+        val row = read(c, actor, operation) ?: return@locked null
+        val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
+        if (current.operation.phase != OperationPhase.ACTIVE) return@locked null
+        val expected = SessionClaim(operation, checkNotNull(current.operation.sessionId), checkNotNull(current.sfuEpoch))
+        if (claim(c, actor) != expected) return@locked null
+        producer(current)
+    }
 
     override fun completeCleanup(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch): Boolean = locked(actor) { c ->
         c.prepareStatement("UPDATE nearby_session_operations SET cleanup_pending=FALSE WHERE actor_id=?::uuid AND operation_id=?::uuid AND session_id=?::uuid AND room_epoch=? AND node_epoch=? AND phase IN ('CANCELLED','EXPIRED')").use {
@@ -108,12 +121,14 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             }
         }
 
-    private fun selectWork(predicate: String, now: Long?, limit: Int): List<SessionJournalEntry> {
+    private fun selectWork(predicate: String, now: Long?, limit: Int, actor: String? = null): List<SessionJournalEntry> {
         require(limit in 1..1000)
         return source.connection.use { c ->
-            c.prepareStatement("SELECT * FROM nearby_session_operations WHERE $predicate ORDER BY actor_id,operation_id LIMIT ?").use {
+            val actorFilter = if (actor == null) "" else " AND actor_id=?::uuid"
+            c.prepareStatement("SELECT * FROM nearby_session_operations WHERE ($predicate)$actorFilter ORDER BY actor_id,operation_id LIMIT ?").use {
                 var index = 1
                 if (now != null) it.setLong(index++, now)
+                if (actor != null) it.setString(index++, actor)
                 it.setInt(index, limit)
                 it.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.entry()) } }
             }

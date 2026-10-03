@@ -45,12 +45,12 @@ class HttpSfuLeaseClient(
         val value = try { json.decodeFromString<ReadinessResponse>(wire.body) } catch (_: Exception) {
             return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
         }
-        if (value.protocolVersion != 1 || !value.nodeEpoch.matches(Regex("[a-f0-9]{32}")) ||
+        if (value.protocolVersion != 2 || !value.singleNode || !value.nodeEpoch.matches(Regex("[a-f0-9]{32}")) ||
             value.capacity !in 1..1_000_000 || value.slotsUsed !in 0..value.capacity || value.maximumLeaseSeconds != 30 ||
             value.lastSweepAgeMillis < -1 || (value.ready && value.lastSweepAgeMillis !in 0..1999)) {
             return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
         }
-        return SfuReply.Accepted(SfuNodeStatus(value.nodeEpoch, value.ready, value.slotsUsed < value.capacity))
+        return SfuReply.Accepted(SfuNodeStatus(value.nodeEpoch, value.ready, value.slotsUsed < value.capacity, value.singleNode))
     }
 
     override fun register(room: String, session: String, expectedNodeEpoch: String) = lease("register", room, session, expectedNodeEpoch)
@@ -68,7 +68,10 @@ class HttpSfuLeaseClient(
         val response = post(action, room, json.encodeToString(ControlRequest(room, session, 30, epoch)))
         if (response is SfuReply.Rejected) return response
         val wire = (response as SfuReply.Accepted).value
-        return if (wire.status == 204) SfuReply.Accepted(LeaseReceipt(Math.addExact(requestStartedAt, 30_000))) else rejectStatus(wire.status)
+        if (wire.status != 204) return rejectStatus(wire.status)
+        val remaining = wire.remainingMillis
+        if (remaining == null || remaining !in 1..30_000) return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
+        return SfuReply.Accepted(LeaseReceipt(Math.addExact(requestStartedAt, remaining)))
     }
 
     private fun post(action: String, room: String, body: String): SfuReply<WireReply> {
@@ -85,7 +88,8 @@ class HttpSfuLeaseClient(
             val pending = http.sendAsync(request, HttpResponse.BodyHandler { receiver })
             try {
                 val response = pending.get(requestTimeout.toMillis(), TimeUnit.MILLISECONDS)
-                SfuReply.Accepted(WireReply(response.statusCode(), response.body().toString(Charsets.UTF_8)))
+                SfuReply.Accepted(WireReply(response.statusCode(), response.body().toString(Charsets.UTF_8),
+                    response.headers().firstValue("X-Volty-Lease-Remaining-Millis").orElse(null)?.toLongOrNull()))
             } finally {
                 // Request timeout alone can finish at headers; bound the complete body too.
                 if (!pending.isDone) { receiver.abort(); pending.cancel(true) }
@@ -117,11 +121,11 @@ class HttpSfuLeaseClient(
         else -> SfuFailure.INVALID_RESPONSE
     })
 
-    private data class WireReply(val status: Int, val body: String)
+    private data class WireReply(val status: Int, val body: String, val remainingMillis: Long?)
     @Serializable private data class ReadinessRequest(val room: String)
     @Serializable private data class ControlRequest(val room: String, val identity: String, val ttlSeconds: Int, val nodeEpoch: String)
     @Serializable private data class ReadinessResponse(
         val protocolVersion: Int, val nodeEpoch: String, val ready: Boolean, val slotsUsed: Int,
-        val capacity: Int, val maximumLeaseSeconds: Int, val lastSweepAgeMillis: Long,
+        val capacity: Int, val maximumLeaseSeconds: Int, val lastSweepAgeMillis: Long, val singleNode: Boolean,
     )
 }

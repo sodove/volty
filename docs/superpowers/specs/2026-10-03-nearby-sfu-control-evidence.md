@@ -3,6 +3,14 @@
 2026-10-03. Backend plan task3a: versioned readiness and control adapter completed;
 durable coordinator, v2 endpoints and production deployment remain unfinished.
 
+Retraction recorded during coordinator integration: protocol1's request-start
++30s receipt was insufficient for an idempotent register replay after a lost
+response. The gate preserved the original deadline, but the adapter invented a
+later one. Protocol2 reports actual remaining milliseconds. Actual supervised
+singleton process restart is now measured separately. This document preserves
+the historical run; see [coordinator evidence](2026-10-03-nearby-coordinator-evidence.md)
+for the corrected protocol and later runtime checks.
+
 The single-node overlay exposes authenticated exact-room POST readiness protocol1:
 node incarnation, sweep health, registry slots/capacity, maximum lease duration.
 Node incarnation comes from 128 bits of startup cryptographic randomness and is

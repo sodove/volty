@@ -41,7 +41,7 @@ class HttpSfuLeaseClientTest {
     }
 
     @Test fun readinessRequiresExactProtocolAndValidFields() {
-        for (body in listOf(readyBody(version = 2), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1))) {
+        for (body in listOf(readyBody(version = 1), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1), readyBody(singleNode = false))) {
             respond = { reply(it, 200, body) }
             assertEquals(SfuFailure.INVALID_RESPONSE, (client().inspect("room") as SfuReply.Rejected).reason)
         }
@@ -93,6 +93,28 @@ class HttpSfuLeaseClientTest {
         assertEquals(31_000, receipt.conservativeDeadlineEpochMillis)
     }
 
+    @Test fun idempotentRegistrationReplayUsesRemainingLeaseInsteadOfNewThirtySeconds() {
+        var now = 1000L
+        val clock = object : Clock() {
+            override fun getZone() = ZoneId.of("UTC")
+            override fun withZone(zone: ZoneId) = this
+            override fun instant() = Instant.ofEpochMilli(now)
+        }
+        respond = { it.responseHeaders.set("X-Volty-Lease-Remaining-Millis", "30000"); reply(it, 204, "") }
+        val first = (client(clock).register("room", "session", epoch) as SfuReply.Accepted).value
+        now = 9000
+        respond = { it.responseHeaders.set("X-Volty-Lease-Remaining-Millis", "22000"); reply(it, 204, "") }
+        val replay = (client(clock).register("room", "session", epoch) as SfuReply.Accepted).value
+        assertEquals(first.conservativeDeadlineEpochMillis, replay.conservativeDeadlineEpochMillis)
+    }
+
+    @Test fun missingOrImpossibleLeaseReceiptIsNotAcknowledged() {
+        for (remaining in listOf(null, "0", "-1", "30001", "not-a-number")) {
+            respond = { reply(it, 204, "", remaining) }
+            assertEquals(SfuFailure.INVALID_RESPONSE, (client().register("room", "session", epoch) as SfuReply.Rejected).reason)
+        }
+    }
+
     @Test fun epochConflictAndUnavailableAreExplicitFailures() {
         respond = { reply(it, 409, "node_epoch_mismatch") }
         assertEquals(SfuFailure.REJECTED, (client().revoke("room", "session", epoch) as SfuReply.Rejected).reason)
@@ -140,10 +162,13 @@ class HttpSfuLeaseClientTest {
         } finally { release.countDown(); caller.shutdownNow() }
     }
 
-    private fun readyBody(version: Int = 1, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0) =
-        """{"protocolVersion":$version,"nodeEpoch":"$node","ready":$ready,"slotsUsed":$used,"capacity":4096,"maximumLeaseSeconds":$ttl,"lastSweepAgeMillis":$age}"""
+    private fun readyBody(version: Int = 2, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0, singleNode: Boolean = true) =
+        """{"protocolVersion":$version,"nodeEpoch":"$node","ready":$ready,"slotsUsed":$used,"capacity":4096,"maximumLeaseSeconds":$ttl,"lastSweepAgeMillis":$age,"singleNode":$singleNode}"""
 
-    private fun reply(exchange: HttpExchange, code: Int, body: String) {
+    private fun reply(exchange: HttpExchange, code: Int, body: String, remaining: String? = "30000") {
+        if (code == 204 && remaining != null && exchange.responseHeaders.getFirst("X-Volty-Lease-Remaining-Millis") == null) {
+            exchange.responseHeaders.set("X-Volty-Lease-Remaining-Millis", remaining)
+        }
         val bytes = body.toByteArray()
         exchange.sendResponseHeaders(code, if (code == 204) -1 else bytes.size.toLong())
         if (code != 204) exchange.responseBody.write(bytes)

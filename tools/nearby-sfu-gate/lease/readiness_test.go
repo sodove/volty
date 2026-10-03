@@ -75,3 +75,24 @@ func TestRegistryStatsCountTerminalTombstones(t *testing.T) {
 		t.Fatal("terminal capacity evicted")
 	}
 }
+
+func TestRemainingLeaseIsNotResetByIdempotentRegisterReplay(t *testing.T) {
+	g, now := fixture(2)
+	if err := g.Register(ctx, key, 10*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(3 * time.Second)
+	if err := g.Register(ctx, key, 30*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	remaining, err := g.Remaining(ctx, key)
+	if err != nil || remaining != 7*time.Second {
+		t.Fatalf("replay fabricated deadline: %v %v", remaining, err)
+	}
+	if err := g.Revoke(ctx, key); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := g.Remaining(ctx, key); err != ErrDenied {
+		t.Fatal("terminal lease acknowledged")
+	}
+}

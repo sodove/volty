@@ -65,14 +65,14 @@ Files: `nearby/SessionRepository.kt`, `nearby/JdbcSessionRepository.kt`, migrati
 
 Files: `nearby/SessionService.kt`, `nearby/SfuLeaseClient.kt`, bounded reconciler/tests.
 
-- [ ] Versioned authenticated readiness plus node epoch/capacity health must be
+- [x] Versioned authenticated readiness plus node epoch/capacity health must be
   implemented in the SFU candidate before enablement; missing readiness rejects.
-- [ ] Register only committed pending intent, recheck operation/claim after ACK,
+- [x] Register only committed pending intent, recheck operation/claim after ACK,
   then activate and issue identity=sessionId JWT. Late ACK dispatches revoke.
-- [ ] Cancel/stop persist terminal intent first, revoke outside transaction, retain
+- [x] Cancel/stop persist terminal intent first, revoke outside transaction, retain
   retryable cleanup until ACK; release only matching claim. Heartbeat renewal
   rechecks active state after external response. Sweep pending/expired independently.
-- [ ] Test offline/backend restart/SFU restart, lost ACK, partial cleanup, timeout,
+- [x] Test offline/backend restart/SFU restart, lost ACK, partial cleanup, timeout,
   raced replacement and original/refreshed token admission through isolated runtime.
 
 ### Task 4: v2 API and authoritative roster boundary

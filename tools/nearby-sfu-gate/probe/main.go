@@ -5,11 +5,15 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"github.com/go-logr/logr"
+	protocolLogger "github.com/livekit/protocol/logger"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -224,6 +228,7 @@ type readinessInfo struct {
 	SlotsUsed           int    `json:"slotsUsed"`
 	Capacity            int    `json:"capacity"`
 	MaximumLeaseSeconds int    `json:"maximumLeaseSeconds"`
+	SingleNode          bool   `json:"singleNode"`
 }
 
 func readiness(room, bearer string) (int, readinessInfo) {
@@ -240,6 +245,18 @@ func readiness(room, bearer string) (int, readinessInfo) {
 		return 0, info
 	}
 	return response.StatusCode, info
+}
+func receiptControl(room, identity string, ttl int) int64 {
+	body, _ := json.Marshal(map[string]any{"room": room, "identity": identity, "ttlSeconds": ttl, "nodeEpoch": nodeEpoch})
+	req, _ := http.NewRequest(http.MethodPost, host+"/volty/leases/register", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+adminBearer(room))
+	response, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	require(err == nil, "receipt request failed")
+	defer response.Body.Close()
+	require(response.StatusCode == 204, "receipt control rejected")
+	remaining, err := strconv.ParseInt(response.Header.Get("X-Volty-Lease-Remaining-Millis"), 10, 64)
+	require(err == nil, "remaining duration missing")
+	return remaining
 }
 func require(ok bool, message string) {
 	if !ok {
@@ -268,6 +285,12 @@ func awaitBarrier(room, identity, action string) {
 	panic("barrier precondition missing: " + action)
 }
 func main() {
+	// SDK auto-reconnect can log request URLs containing JWTs. Counters are our evidence.
+	lksdk.SetLogger(protocolLogger.LogRLogger(logr.Discard()))
+	if len(os.Args) > 1 && os.Args[1] == "restart" {
+		runRestartMatrix()
+		return
+	}
 	proxyServer, err := proxy()
 	require(err == nil, "proxy startup failed")
 	defer proxyServer.Close()
@@ -286,7 +309,7 @@ func main() {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	require(info.Ready && info.ProtocolVersion == 1 && len(info.NodeEpoch) == 32 && info.Capacity == 4096 && info.MaximumLeaseSeconds == 30, "readiness contract missing")
+	require(info.Ready && info.SingleNode && info.ProtocolVersion == 2 && len(info.NodeEpoch) == 32 && info.Capacity == 4096 && info.MaximumLeaseSeconds == 30, "readiness contract missing")
 	nodeEpoch = info.NodeEpoch
 	status, _ := readiness(room, token(room, "untrusted"))
 	require(status == 403, "participant read admin readiness")
@@ -295,6 +318,11 @@ func main() {
 	require(controlAtNode("/volty/leases/register", room, "stale-node", adminBearer(room), 30, "old-incarnation") == 409, "old-node register accepted")
 	denied(room, "stale-node", token(room, "stale-node"), "old_node_register")
 	fmt.Printf("readiness_protocol=%d node_epoch=%s capacity=%d health_ready=true auth_fenced=true\n", info.ProtocolVersion, nodeEpoch, info.Capacity)
+	firstRemaining := receiptControl(room, "receipt-probe", 8)
+	replayedRemaining := receiptControl(room, "receipt-probe", 30)
+	require(firstRemaining > 0 && firstRemaining <= 8000 && replayedRemaining > 0 && replayedRemaining <= firstRemaining, "idempotent receipt extended original deadline")
+	mustLease("revoke", room, "receipt-probe", 0)
+	fmt.Printf("receipt_first_remaining_ms=%d replay_remaining_ms=%d replay_did_not_extend=true\n", firstRemaining, replayedRemaining)
 	// Valid participant credentials must not mutate the registry. Wrong room-admin scope too.
 	require(control("/volty/leases/register", room, "untrusted", token(room, "untrusted"), 30) == 403, "participant mutated lease")
 	require(control("/volty/leases/register", room, "untrusted", adminBearer(room+"-wrong"), 30) == 403, "wrong-room admin mutated lease")

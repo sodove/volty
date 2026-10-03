@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -98,6 +99,14 @@ func (s *RTCService) voltyLeaseControl(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "lease_rejected", 409)
 		return
+	}
+	if r.URL.Path != "/volty/leases/revoke" {
+		remaining, err := voltyGate.Remaining(ctx, key)
+		if err != nil || remaining.Milliseconds() <= 0 {
+			http.Error(w, "lease_rejected", 409)
+			return
+		}
+		w.Header().Set("X-Volty-Lease-Remaining-Millis", strconv.FormatInt(remaining.Milliseconds(), 10))
 	}
 	w.WriteHeader(http.StatusNoContent)
 }
