@@ -47,6 +47,34 @@ No production deployment or enabled session dependencies in this slice.
 - Do not expose membership-removal writes before this cleanup integration exists.
   Foundation reads/create/join may be tested while routes remain disabled.
 
+### Durable departure replay refinement
+
+Network loss after committed leave must not turn retry into an ambiguous denied
+request, and replay after rejoining must not leave the new membership again.
+Add counted V8 (V1..V7 now implemented), not an edit to V7: actor/operation-owned
+departure receipt stores immutable community/successor/revision and exact cleanup
+session targets. The caller keeps operation UUID across retries. Same payload
+returns the same committed effect; conflicting payload fails without mutation.
+Do not retarget a replay to the current voice claim or a new channel membership.
+
+Departure transaction holds UPDATE access fence, checks current active member/
+owner/successor, locks affected actor claims in sorted order, terminalizes only
+current exact claims within that community, transfers ownership if explicitly
+requested, removes membership, revokes matching legacy sharing/position records,
+and appends community mutation/receipt/targets atomically. No target exists when
+departing voice was in another community. Owner membership foreign key commits
+only with an eligible successor; last owner receives an explicit delete-required
+result. A missing/denied request does not leak private resource state.
+
+Return exact durable cleanup targets for network work outside the transaction.
+SQL membership removal is not proof that SFU media has stopped: the eventual
+HTTP service must report cleanup pending until strict SFU acknowledgement, with
+durable retry. Production v2 sharing is not implemented yet and must join this
+transaction before any public removal endpoint is enabled. Tests cover outbox
+rollback of membership/claim/ownership/receipt, lost-response replay after rejoin,
+explicit owner successor, last-owner rejection, unrelated voice preservation,
+and separate voice disconnect retaining permanent membership.
+
 ## Task3: Atomic session/snapshot authorization
 
 - Preflight resolveRoom alone is insufficient. Use a persisted singleton access

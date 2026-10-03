@@ -45,6 +45,10 @@ class SessionService(
         val epoch = SfuEpoch(room, status.nodeEpoch)
         if (existing != null && existing.sfuEpoch != epoch) return stop(actor, operation)
         val begun = repository.begin(actor, operation, destination, UUID.randomUUID().toString(), epoch, now, replace)
+        if (begun.rejection == OperationRejection.ACCESS_DENIED) {
+            begun.state?.let(::cleanup)
+            return SessionAction.Denied(SessionDenial.MEMBERSHIP)
+        }
         if (begun.rejection == OperationRejection.CLAIM_BUSY) return SessionAction.Denied(SessionDenial.BUSY)
         val row = checkNotNull(begun.state)
         if (row.operation.terminal) return SessionAction.Ended(row)

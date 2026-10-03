@@ -12,7 +12,9 @@ internal fun <T> communityTransaction(source: DataSource, write: Boolean, block:
             it.execute("SET LOCAL lock_timeout = '5s'")
             it.execute("SET LOCAL statement_timeout = '10s'")
             it.execute("SET LOCAL idle_in_transaction_session_timeout = '15s'")
-            if (write) it.executeQuery("SELECT singleton FROM nearby_access_fence WHERE singleton=1 FOR UPDATE").use { rows -> check(rows.next()) }
+        }
+        if (write) c.prepareStatement("SELECT singleton FROM nearby_access_fence WHERE singleton=1 FOR UPDATE").use {
+            it.executeQuery().use { rows -> check(rows.next()) }
         }
         val result = block(c)
         c.commit()

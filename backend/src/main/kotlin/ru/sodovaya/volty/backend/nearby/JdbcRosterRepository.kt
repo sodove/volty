@@ -6,7 +6,12 @@ import javax.sql.DataSource
 
 /** Internal reader; caller must authorize the channel. No membership preflight enables production. */
 class JdbcRosterRepository(private val source: DataSource, private val now: () -> Long = System::currentTimeMillis) {
-    fun snapshot(destination: String): ChannelRosterSnapshot = source.connection.use { c ->
+    fun snapshot(destination: String): ChannelRosterSnapshot = checkNotNull(readSnapshot(destination, null, null))
+
+    fun authorizedSnapshot(actor: String, destination: String, access: SessionAccessPolicy): ChannelRosterSnapshot? =
+        readSnapshot(destination, actor, access)
+
+    private fun readSnapshot(destination: String, actor: String?, access: SessionAccessPolicy?): ChannelRosterSnapshot? = source.connection.use { c ->
         val channel = UUID.fromString(destination).toString()
         c.autoCommit = false
         c.transactionIsolation = Connection.TRANSACTION_REPEATABLE_READ
@@ -18,6 +23,10 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
             }
             val revision = c.prepareStatement("SELECT revision FROM nearby_roster_clock WHERE singleton=1").use {
                 it.executeQuery().use { rows -> check(rows.next()); rows.getLong(1) }
+            }
+            if (access != null && !access.allows(c, checkNotNull(actor), channel, null)) {
+                c.commit()
+                return@use null
             }
             val peers = c.prepareStatement("""
                 SELECT o.actor_id,o.operation_id,o.session_id,o.phase,o.deadline_epoch_millis,o.participant_sid,o.media_state

@@ -5,7 +5,8 @@ import java.sql.ResultSet
 import java.util.UUID
 import javax.sql.DataSource
 
-class JdbcSessionRepository(private val source: DataSource) : SessionRepository {
+/** Null access is the isolated legacy foundation only, never production v2 wiring. */
+class JdbcSessionRepository(private val source: DataSource, private val access: SessionAccessPolicy? = null) : SessionRepository {
     private val policy = SessionOperationPolicy()
 
     override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, replace: Boolean): SessionJournalResult =
@@ -15,8 +16,12 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             val decision = policy.begin(existing?.operation, actor, operation, destination, session, observedAt)
             if (existing != null) {
                 if (!existing.operation.terminal && existing.sfuEpoch != sfuEpoch) return@locked SessionJournalResult(existing, OperationRejection.EPOCH_MISMATCH)
+                if (decision.rejection == null && !decision.operation!!.terminal && !allowed(c, actor, destination, sfuEpoch)) {
+                    return@locked denied(c, existing, observedAt)
+                }
                 return@locked persist(c, existing, decision)
             }
+            if (!allowed(c, actor, destination, sfuEpoch)) return@locked SessionJournalResult(null, OperationRejection.ACCESS_DENIED)
             // Serializing through the actor row also covers cancel before any operation row exists.
             claim(c, actor)?.let { oldClaim ->
                 val old = checkNotNull(read(c, actor, oldClaim.operationId))
@@ -42,10 +47,10 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
     }
 
     override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
-        mediaChange(actor, operation, session, sfuEpoch) { policy.admit(it, session, now(), confirmedDeadline) }
+        mediaChange(actor, operation, session, sfuEpoch, now) { current, at -> policy.admit(current, session, at, confirmedDeadline) }
 
     override fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
-        mediaChange(actor, operation, session, sfuEpoch) { policy.heartbeat(it, session, now(), confirmedDeadline) }
+        mediaChange(actor, operation, session, sfuEpoch, now) { current, at -> policy.heartbeat(current, session, at, confirmedDeadline) }
 
     override fun observeMedia(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, observation: SfuParticipantObservation, now: () -> Long) =
         observedChange(actor, operation, session, sfuEpoch, now) { c, row ->
@@ -67,7 +72,9 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
 
     override fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
         val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
-        persist(c, row, policy.expire(row.operation, now()))
+        val at = now()
+        if (!row.operation.terminal && !allowed(c, row)) denied(c, row, at)
+        else persist(c, row, policy.expire(row.operation, at))
     }
 
     override fun get(actor: String, operation: String) = source.connection.use { read(it, actor, operation) }
@@ -86,6 +93,25 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
     }
     override fun currentClaim(actor: String) = source.connection.use { claim(it, actor) }
 
+    /** Caller holds UPDATE access fence. Close only the departing actor's exact community claim. */
+    internal fun cancelCurrentCommunityClaim(c: Connection, actor: String, community: String, at: Long): List<SessionJournalEntry> {
+        check(access != null && !c.autoCommit)
+        lockActor(c, actor)
+        val claim = claim(c, actor) ?: return emptyList()
+        val row = checkNotNull(read(c, actor, claim.operationId))
+        check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        val affected = c.prepareStatement("SELECT 1 FROM nearby_voice_channels WHERE id=?::uuid AND community_id=?::uuid").use {
+            it.setString(1, row.operation.destinationId); it.setString(2, community); it.executeQuery().use { rows -> rows.next() }
+        }
+        if (!affected) return emptyList()
+        return listOf(checkNotNull(persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at)).state))
+    }
+
+    internal fun readSession(c: Connection, session: String): SessionJournalEntry? =
+        c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
+            it.setString(1, session); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
+        }
+
     override fun pendingWork(limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit)
     override fun pendingWork(actor: String, limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit, actor)
     override fun pendingCleanup(actor: String, limit: Int) = selectWork("cleanup_pending", null, limit, actor)
@@ -96,6 +122,7 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
         val row = read(c, actor, operation) ?: return@locked null
         val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
         if (current.operation.phase != OperationPhase.ACTIVE) return@locked null
+        if (!allowed(c, current)) { denied(c, current, now()); return@locked null }
         val expected = SessionClaim(operation, checkNotNull(current.operation.sessionId), checkNotNull(current.sfuEpoch))
         if (claim(c, actor) != expected) return@locked null
         producer(current)
@@ -107,12 +134,15 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
         }
     }
 
-    private fun mediaChange(actor: String, operation: String, session: String, epoch: SfuEpoch, change: (SessionOperation) -> OperationDecision): SessionJournalResult = locked(actor) { c ->
+    private fun mediaChange(actor: String, operation: String, session: String, epoch: SfuEpoch, now: () -> Long,
+                            change: (SessionOperation, Long) -> OperationDecision): SessionJournalResult = locked(actor) { c ->
         val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
         if (row.operation.sessionId != session) return@locked SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
         if (row.sfuEpoch != epoch) return@locked SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
         if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@locked SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
-        persist(c, row, change(row.operation))
+        val at = now()
+        if (!row.operation.terminal && !allowed(c, row)) denied(c, row, at)
+        else persist(c, row, change(row.operation, at))
     }
 
     private fun observedChange(actor: String, operation: String, session: String, epoch: SfuEpoch, now: () -> Long,
@@ -123,9 +153,16 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
         if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@locked SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
         val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
         if (current.operation.terminal) return@locked SessionJournalResult(current, OperationRejection.TERMINAL)
+        if (!allowed(c, current)) return@locked denied(c, current, now())
         if (current.operation.phase != OperationPhase.ACTIVE) return@locked SessionJournalResult(current, OperationRejection.NOT_ACTIVE)
         change(c, current)
     }
+
+    private fun allowed(c: Connection, actor: String, destination: String, epoch: SfuEpoch?) =
+        access?.allows(c, actor, destination, epoch?.roomEpoch) != false
+    private fun allowed(c: Connection, row: SessionJournalEntry) = allowed(c, row.operation.actorId, checkNotNull(row.operation.destinationId), row.sfuEpoch)
+    private fun denied(c: Connection, row: SessionJournalEntry, at: Long): SessionJournalResult =
+        persist(c, row, policy.cancel(row.operation, row.operation.actorId, row.operation.operationId, at)).copy(rejection = OperationRejection.ACCESS_DENIED)
 
     private fun persist(c: Connection, existing: SessionJournalEntry?, decision: OperationDecision): SessionJournalResult {
         val next = checkNotNull(decision.operation)
@@ -202,16 +239,24 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
                 it.execute("SET LOCAL statement_timeout = '10s'")
                 it.execute("SET LOCAL idle_in_transaction_session_timeout = '15s'")
             }
-            c.prepareStatement("INSERT INTO nearby_actor_claims(actor_id) VALUES (?::uuid) ON CONFLICT DO NOTHING").use { it.setString(1, actor); it.executeUpdate() }
-            c.prepareStatement("SELECT actor_id FROM nearby_actor_claims WHERE actor_id=?::uuid FOR UPDATE").use {
-                it.setString(1, actor); it.executeQuery().use { rows -> check(rows.next()) }
+            // Lock order is access fence -> actor -> resource -> revision. No network.
+            if (access != null) c.prepareStatement("SELECT singleton FROM nearby_access_fence WHERE singleton=1 FOR SHARE").use {
+                it.executeQuery().use { rows -> check(rows.next()) }
             }
+            lockActor(c, actor)
             val result = block(c)
             c.commit()
             result
         } catch (failure: Throwable) {
             try { c.rollback() } catch (rollback: Throwable) { failure.addSuppressed(rollback) }
             throw failure
+        }
+    }
+
+    private fun lockActor(c: Connection, actor: String) {
+        c.prepareStatement("INSERT INTO nearby_actor_claims(actor_id) VALUES (?::uuid) ON CONFLICT DO NOTHING").use { it.setString(1, actor); it.executeUpdate() }
+        c.prepareStatement("SELECT actor_id FROM nearby_actor_claims WHERE actor_id=?::uuid FOR UPDATE").use {
+            it.setString(1, actor); it.executeQuery().use { rows -> check(rows.next()) }
         }
     }
 }
