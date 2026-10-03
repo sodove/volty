@@ -1,7 +1,7 @@
 package ru.sodovaya.volty.backend.nearby
 
 enum class OperationPhase { PENDING, ACTIVE, CANCELLED, EXPIRED }
-enum class OperationRejection { IDENTITY_MISMATCH, DESTINATION_MISMATCH, SESSION_MISMATCH, TERMINAL, NOT_ACTIVE }
+enum class OperationRejection { IDENTITY_MISMATCH, DESTINATION_MISMATCH, SESSION_MISMATCH, TERMINAL, NOT_ACTIVE, NOT_FOUND, CLAIM_MISMATCH, EPOCH_MISMATCH }
 
 /** Stored under an actor/operation lock. Terminal rows retain session ownership for cleanup. */
 data class SessionOperation(

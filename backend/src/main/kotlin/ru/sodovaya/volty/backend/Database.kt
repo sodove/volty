@@ -694,17 +694,27 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     private fun inviteCode(): String = java.util.UUID.randomUUID().toString().replace("-", "").take(10).uppercase()
 }
 
-class SchemaMigrator(private val dataSource: DataSource) {
+class SchemaMigrator(private val dataSource: DataSource, private val migrations: List<Pair<Int, String>> = listOf(
+    1 to "/db/migration/V1__initial.sql",
+    2 to "/db/migration/V2__nearby_session_journal.sql",
+)) {
     fun migrate() {
         dataSource.connection.use { connection ->
-            connection.createStatement().use { it.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL)") }
-            val applied = connection.prepareStatement("SELECT version FROM schema_migrations").use { statement -> statement.executeQuery().use { rows -> buildSet { while (rows.next()) add(rows.getInt(1)) } } }
-            if (1 !in applied) {
-                val sql = javaClass.getResourceAsStream("/db/migration/V1__initial.sql")!!.bufferedReader().readText()
-                connection.autoCommit = false
-                sql.split(';').map(String::trim).filter(String::isNotEmpty).forEach { connection.createStatement().use { statement -> statement.execute(it) } }
-                connection.prepareStatement("INSERT INTO schema_migrations(version,applied_at) VALUES (1, ?)").use { statement -> statement.setLong(1, nowMillis()); statement.executeUpdate() }
+            connection.autoCommit = false
+            try {
+                // Serialize migrations across application instances, including schema table creation.
+                connection.createStatement().use { it.execute("SELECT pg_advisory_xact_lock(867530902)") }
+                connection.createStatement().use { it.execute("CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, applied_at BIGINT NOT NULL)") }
+                val applied = connection.prepareStatement("SELECT version FROM schema_migrations").use { statement -> statement.executeQuery().use { rows -> buildSet { while (rows.next()) add(rows.getInt(1)) } } }
+                for ((version, resource) in migrations) if (version !in applied) {
+                    val sql = checkNotNull(javaClass.getResourceAsStream(resource)).bufferedReader().use { it.readText() }
+                    sql.split(';').map(String::trim).filter(String::isNotEmpty).forEach { connection.createStatement().use { statement -> statement.execute(it) } }
+                    connection.prepareStatement("INSERT INTO schema_migrations(version,applied_at) VALUES (?, ?)").use { statement -> statement.setInt(1, version); statement.setLong(2, nowMillis()); statement.executeUpdate() }
+                }
                 connection.commit()
+            } catch (failure: Throwable) {
+                try { connection.rollback() } catch (rollback: Throwable) { failure.addSuppressed(rollback) }
+                throw failure
             }
         }
     }

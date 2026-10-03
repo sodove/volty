@@ -51,5 +51,12 @@ application {
 }
 
 tasks.test {
-    useJUnitPlatform()
+    useJUnitPlatform { excludeTags("postgres") }
+}
+
+tasks.register<Test>("postgresTest") {
+    description = "Nearby transaction tests against an explicitly supplied disposable PostgreSQL"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("postgres") }
 }

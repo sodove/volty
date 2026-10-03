@@ -53,11 +53,11 @@ Files: `backend/src/{main,test}/kotlin/ru/sodovaya/volty/backend/nearby/SessionO
 Files: `nearby/SessionRepository.kt`, `nearby/JdbcSessionRepository.kt`, migration
 `V2__nearby_session_journal.sql`, additive `SchemaMigrator` wiring and integration tests.
 
-- [ ] Inspect current migration count and test baseline before adding version.
-- [ ] Persist actor-scoped operation tombstones, destination, session/claim id,
+- [x] Inspect current migration count and test baseline before adding version.
+- [x] Persist actor-scoped operation tombstones, destination, session/claim id,
   pending/active deadlines, node epoch and cleanup intent. Use per-account locking
   in one transaction; no network call under DB lock.
-- [ ] Test concurrent cancel/join in both lock orders, lost-response replay,
+- [x] Test concurrent cancel/join in both lock orders, lost-response replay,
   replacement cleanup ownership, rollback and restart replay on disposable DB.
   Preserve existing accounts/groups/friends; migration runs once and rolls back.
 
