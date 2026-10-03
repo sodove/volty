@@ -47,8 +47,10 @@ class VoiceControlOwner(
         send(Command.Join(channel, operation, replace))
     }
     suspend fun stop() = send(Command.Event(VoiceSessionEvent.Stop))
-    suspend fun retryJoin() = send(Command.RetryJoin)
-    suspend fun heartbeat() = send(Command.Heartbeat)
+    suspend fun retryJoin() = send(Command.RetryJoin(null))
+    suspend fun retryJoin(operation: VoiceOperationId, generation: VoiceGeneration) = send(Command.RetryJoin(operation to generation))
+    suspend fun heartbeat() = send(Command.Heartbeat(null))
+    suspend fun heartbeat(tag: VoiceSessionTag) = send(Command.Heartbeat(tag))
     suspend fun retryStops() = send(Command.RetryStops)
     suspend fun event(event: VoiceSessionEvent) {
         require(event !is VoiceSessionEvent.Join && event !is VoiceSessionEvent.SessionGranted && event !is VoiceSessionEvent.LeaseAck)
@@ -64,11 +66,16 @@ class VoiceControlOwner(
                 apply(transition)
             }
             is Command.Event -> apply(VoiceSessionReducer.reduce(stateOutput.value, command.event))
-            Command.RetryJoin -> if (stateOutput.value.wanted && stateOutput.value.sessionId == null && joinJob?.isActive != true) attempt?.let(::requestJoin)
-            Command.Heartbeat -> {
+            is Command.RetryJoin -> {
+                val s = stateOutput.value
+                if (s.wanted && s.sessionId == null && joinJob?.isActive != true &&
+                    (command.expected == null || command.expected == s.operationId to s.generation)) attempt?.let(::requestJoin)
+            }
+            is Command.Heartbeat -> {
                 val s = stateOutput.value
                 if (s.wanted && s.sessionId != null && heartbeatJob?.isActive != true) {
                     val tag = VoiceSessionTag(s.sessionId, s.generation)
+                    if (command.expected != null && command.expected != tag) return
                     heartbeatJob = scope.launch { deliver(Command.HeartbeatReply(tag, network { port.heartbeat(tag) })) }
                 }
             }
@@ -192,8 +199,8 @@ class VoiceControlOwner(
         data class JoinReply(val attempt: Attempt, val reply: VoiceHttpReply) : Command
         data class HeartbeatReply(val tag: VoiceSessionTag, val reply: VoiceHttpReply) : Command
         data class StopReply(val request: VoiceStopRequest, val reply: VoiceHttpReply) : Command
-        data object RetryJoin : Command
-        data object Heartbeat : Command
+        data class RetryJoin(val expected: Pair<VoiceOperationId, VoiceGeneration>?) : Command
+        data class Heartbeat(val expected: VoiceSessionTag?) : Command
         data object RetryStops : Command
     }
 }

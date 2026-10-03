@@ -176,6 +176,25 @@ class VoiceControlOwnerTest {
         assertTrue(owner.pendingRemoteStops.value.isEmpty())
     }
 
+    @Test fun scheduledOldHeartbeatCannotIssueForReplacementTag() = runTest {
+        val port = FakePort(); val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent(); port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        owner.join("two", op2); runCurrent(); port.joinReplies.getValue(op2).complete(grant(2)); runCurrent()
+        owner.heartbeat(tag(1)); runCurrent(); assertTrue(port.heartbeats.isEmpty())
+        owner.heartbeat(tag(2)); runCurrent(); assertEquals(listOf(tag(2)), port.heartbeats)
+        port.heartbeatReply.complete(VoiceHttpReply.Failed(VoiceHttpFailure.UNAVAILABLE)); runCurrent()
+    }
+    @Test fun scheduledOldJoinRetryCannotIssueForReplacementOperation() = runTest {
+        val port = FakePort(); val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(VoiceHttpReply.Pending(VoiceGeneration(1), null, op1)); runCurrent()
+        owner.join("two", op2); runCurrent()
+        port.joinReplies.getValue(op2).complete(VoiceHttpReply.Pending(VoiceGeneration(2), null, op2)); runCurrent()
+        owner.retryJoin(op1, VoiceGeneration(1)); runCurrent(); assertEquals(2, port.joins.size)
+        owner.retryJoin(op2, VoiceGeneration(2)); runCurrent()
+        assertEquals(3, port.joins.size); assertEquals(Triple(op2, VoiceGeneration(2), "two"), port.joins.last())
+    }
+
     private class FakePort(val ignoreJoinCancellation: Boolean = false, var disconnectFailure: Boolean = false,
                            val throwJoin: Boolean = false, var throwDisconnect: Boolean = false,
                            var cleanupPending: Boolean? = null) : VoiceSessionControlPort {
