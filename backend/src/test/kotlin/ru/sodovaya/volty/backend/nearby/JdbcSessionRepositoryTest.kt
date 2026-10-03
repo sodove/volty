@@ -295,7 +295,7 @@ class JdbcSessionRepositoryTest {
             assertTrue(ready.await(5, TimeUnit.SECONDS)); start.countDown()
             futures.forEach { it.get(15, TimeUnit.SECONDS) }
             fresh.connection.use { c ->
-                c.createStatement().use { it.executeQuery("SELECT count(*) FROM schema_migrations").use { rows -> rows.next(); assertEquals(2, rows.getInt(1)) } }
+                c.createStatement().use { it.executeQuery("SELECT count(*) FROM schema_migrations").use { rows -> rows.next(); assertEquals(3, rows.getInt(1)) } }
             }
         } finally { pool.shutdownNow() }
     }

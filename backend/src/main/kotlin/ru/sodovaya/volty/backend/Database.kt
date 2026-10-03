@@ -697,6 +697,7 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
 class SchemaMigrator(private val dataSource: DataSource, private val migrations: List<Pair<Int, String>> = listOf(
     1 to "/db/migration/V1__initial.sql",
     2 to "/db/migration/V2__nearby_session_journal.sql",
+    3 to "/db/migration/V3__nearby_roster_journal.sql",
 )) {
     fun migrate() {
         dataSource.connection.use { connection ->

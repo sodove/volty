@@ -29,6 +29,7 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             }
             val row = SessionJournalEntry(checkNotNull(decision.operation), sfuEpoch, admissionPending = true, cleanupPending = false)
             save(c, row)
+            appendRosterChange(c, row)
             c.prepareStatement("UPDATE nearby_actor_claims SET operation_id=?::uuid,session_id=?::uuid,room_epoch=?,node_epoch=? WHERE actor_id=?::uuid").use {
                 it.setString(1, operation); it.setString(2, session); it.setString(3, sfuEpoch.roomEpoch); it.setString(4, sfuEpoch.nodeEpoch); it.setString(5, actor); it.executeUpdate()
             }
@@ -96,6 +97,7 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             admissionPending = next.phase == OperationPhase.PENDING,
             cleanupPending = existing?.cleanupPending == true || (newlyTerminal && next.sessionId != null))
         save(c, row)
+        if (existing?.operation != row.operation) appendRosterChange(c, row)
         if (next.terminal && next.sessionId != null) {
             c.prepareStatement("UPDATE nearby_actor_claims SET operation_id=NULL,session_id=NULL,room_epoch=NULL,node_epoch=NULL WHERE actor_id=?::uuid AND operation_id=?::uuid AND session_id=?::uuid").use {
                 it.setString(1, next.actorId); it.setString(2, next.operationId); it.setString(3, next.sessionId); it.executeUpdate()
