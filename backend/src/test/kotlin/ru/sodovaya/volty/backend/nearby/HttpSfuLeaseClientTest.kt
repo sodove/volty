@@ -90,8 +90,23 @@ class HttpSfuLeaseClientTest {
         }
     }
 
+    @Test fun connectedRenewalCarriesExactObservedSIDAndPreservesRemainingReceipt() {
+        respond = { exchange ->
+            assertEquals("/volty/leases/renew-connected", exchange.requestURI.path)
+            val body = Json.parseToJsonElement(exchange.requestBody.reader().readText()).jsonObject
+            assertEquals("PA_current", body["participantSid"]!!.jsonPrimitive.content)
+            assertEquals("session", body["identity"]!!.jsonPrimitive.content)
+            assertEquals(epoch, body["nodeEpoch"]!!.jsonPrimitive.content)
+            reply(exchange, 204, "", "12000")
+        }
+        val clock = Clock.fixed(Instant.ofEpochMilli(1000), ZoneId.of("UTC"))
+        assertEquals(13000, (client(clock).renewConnected("room", "session", epoch, "PA_current") as SfuReply.Accepted).value.conservativeDeadlineEpochMillis)
+        respond = { reply(it, 409, "unconfirmed_or_replaced") }
+        assertEquals(SfuFailure.REJECTED, (client().renewConnected("room", "session", epoch, "PA_old") as SfuReply.Rejected).reason)
+    }
+
     @Test fun readinessRequiresExactProtocolAndValidFields() {
-        for (body in listOf(readyBody(version = 1), readyBody(version = 2), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1), readyBody(singleNode = false))) {
+        for (body in listOf(readyBody(version = 1), readyBody(version = 2), readyBody(version = 3), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1), readyBody(singleNode = false))) {
             respond = { reply(it, 200, body) }
             assertEquals(SfuFailure.INVALID_RESPONSE, (client().inspect("room") as SfuReply.Rejected).reason)
         }
@@ -212,7 +227,7 @@ class HttpSfuLeaseClientTest {
         } finally { release.countDown(); caller.shutdownNow() }
     }
 
-    private fun readyBody(version: Int = 3, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0, singleNode: Boolean = true) =
+    private fun readyBody(version: Int = 4, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0, singleNode: Boolean = true) =
         """{"protocolVersion":$version,"nodeEpoch":"$node","ready":$ready,"slotsUsed":$used,"capacity":4096,"maximumLeaseSeconds":$ttl,"lastSweepAgeMillis":$age,"singleNode":$singleNode}"""
 
     private fun reply(exchange: HttpExchange, code: Int, body: String, remaining: String? = "30000") {

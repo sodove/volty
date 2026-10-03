@@ -52,5 +52,5 @@ func (s *RTCService) voltyReadiness(w http.ResponseWriter, r *http.Request) {
 		MaximumLeaseSeconds int    `json:"maximumLeaseSeconds"`
 		LastSweepAgeMillis  int64  `json:"lastSweepAgeMillis"`
 		SingleNode          bool   `json:"singleNode"`
-	}{3, voltyNodeEpoch, status.Ready, stats.Used, stats.Capacity, 30, status.AgeMillis, true})
+	}{4, voltyNodeEpoch, status.Ready, stats.Used, stats.Capacity, 30, status.AgeMillis, true})
 }

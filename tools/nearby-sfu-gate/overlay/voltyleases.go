@@ -25,6 +25,7 @@ func (s *RTCService) setupVoltyLeases(mux *http.ServeMux) {
 	}
 	mux.HandleFunc("/volty/leases/register", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/renew", s.voltyLeaseControl)
+	mux.HandleFunc("/volty/leases/renew-connected", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/revoke", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/readiness", s.voltyReadiness)
 	mux.HandleFunc("/volty/leases/participant", s.voltyParticipant)
@@ -49,10 +50,11 @@ func (s *RTCService) voltyLeaseControl(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Room       string `json:"room"`
-		Identity   string `json:"identity"`
-		TTLSeconds int64  `json:"ttlSeconds"`
-		NodeEpoch  string `json:"nodeEpoch"`
+		Room           string `json:"room"`
+		Identity       string `json:"identity"`
+		TTLSeconds     int64  `json:"ttlSeconds"`
+		NodeEpoch      string `json:"nodeEpoch"`
+		ParticipantSID string `json:"participantSid"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -93,6 +95,8 @@ func (s *RTCService) voltyLeaseControl(w http.ResponseWriter, r *http.Request) {
 		ttl := time.Duration(body.TTLSeconds) * time.Second
 		if r.URL.Path == "/volty/leases/register" {
 			err = voltyGate.Register(ctx, key, ttl)
+		} else if r.URL.Path == "/volty/leases/renew-connected" {
+			err = voltyGate.RenewConnected(ctx, key, body.ParticipantSID, ttl)
 		} else {
 			err = voltyGate.Renew(ctx, key, ttl)
 		}

@@ -269,6 +269,23 @@ func observeParticipant(room, identity, bearer, epoch string) (int, participantI
 	}
 	return response.StatusCode, info
 }
+
+func renewConnected(room, identity, sid, epoch string) int {
+	body, _ := json.Marshal(map[string]any{"room": room, "identity": identity, "participantSid": sid, "nodeEpoch": epoch, "ttlSeconds": 30})
+	req, _ := http.NewRequest(http.MethodPost, host+"/volty/leases/renew-connected", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+adminBearer(room))
+	req.Header.Set("Content-Type", "application/json")
+	response, err := (&http.Client{Timeout: 7 * time.Second}).Do(req)
+	if err != nil {
+		return 0
+	}
+	defer response.Body.Close()
+	if response.StatusCode == 204 {
+		remaining, err := strconv.ParseInt(response.Header.Get("X-Volty-Lease-Remaining-Millis"), 10, 64)
+		require(err == nil && remaining > 0 && remaining <= 30000, "connected renewal receipt invalid")
+	}
+	return response.StatusCode
+}
 func receiptControl(room, identity string, ttl int) int64 {
 	body, _ := json.Marshal(map[string]any{"room": room, "identity": identity, "ttlSeconds": ttl, "nodeEpoch": nodeEpoch})
 	req, _ := http.NewRequest(http.MethodPost, host+"/volty/leases/register", strings.NewReader(string(body)))
@@ -332,7 +349,7 @@ func main() {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	require(info.Ready && info.SingleNode && info.ProtocolVersion == 3 && len(info.NodeEpoch) == 32 && info.Capacity == 4096 && info.MaximumLeaseSeconds == 30, "readiness contract missing")
+	require(info.Ready && info.SingleNode && info.ProtocolVersion == 4 && len(info.NodeEpoch) == 32 && info.Capacity == 4096 && info.MaximumLeaseSeconds == 30, "readiness contract missing")
 	nodeEpoch = info.NodeEpoch
 	status, _ := readiness(room, token(room, "untrusted"))
 	require(status == 403, "participant read admin readiness")
@@ -344,6 +361,7 @@ func main() {
 	firstRemaining := receiptControl(room, "receipt-probe", 8)
 	observationCode, observation := observeParticipant(room, "receipt-probe", adminBearer(room), nodeEpoch)
 	require(observationCode == 200 && observation.NodeEpoch == nodeEpoch && observation.SID == "" && observation.State == "", "registration invented connected transport")
+	require(renewConnected(room, "receipt-probe", "PA_missing", nodeEpoch) == 409, "registered-only media renewed")
 	replayedRemaining := receiptControl(room, "receipt-probe", 30)
 	require(firstRemaining > 0 && firstRemaining <= 8000 && replayedRemaining > 0 && replayedRemaining <= firstRemaining, "idempotent receipt extended original deadline")
 	mustLease("revoke", room, "receipt-probe", 0)
@@ -402,6 +420,9 @@ func main() {
 	fmt.Printf("baseline_B_receive=%d C_from_B=%d A_from_C=%d\n", b.count("A"), c.count("B"), a.count("C"))
 	observationCode, observation = observeParticipant(room, "B", adminBearer(room), nodeEpoch)
 	require(observationCode == 200 && observation.SID == string(b.room.LocalParticipant.SID()) && observation.State == "ACTIVE", "live transport observation differs from issued connection")
+	require(renewConnected(room, "B", "PA_old", nodeEpoch) == 409, "wrong SID renewed active lease")
+	require(renewConnected(room, "B", observation.SID, "old-incarnation") == 409, "old node renewed connected lease")
+	require(renewConnected(room, "B", observation.SID, nodeEpoch) == 204, "current ACTIVE SID did not renew")
 	observationCode, _ = observeParticipant(room, "B", token(room, "B"), nodeEpoch)
 	require(observationCode == 403, "participant credentials read admin observation")
 	observationCode, _ = observeParticipant(room, "B", adminBearer(room+"-wrong"), nodeEpoch)
@@ -421,8 +442,11 @@ func main() {
 	require(waitMedia(nextObserved, "A", 0), "replacement observation transport has no media baseline")
 	observationCode, observation = observeParticipant(room, "O", adminBearer(room), nodeEpoch)
 	require(observationCode == 200 && observation.State == "ACTIVE" && observation.SID != oldSID && observation.SID == string(nextObserved.room.LocalParticipant.SID()), "observation retained prior participant SID")
+	require(renewConnected(room, "O", oldSID, nodeEpoch) == 409, "old observed SID renewed replacement")
+	require(renewConnected(room, "O", observation.SID, nodeEpoch) == 204, "replacement ACTIVE SID did not renew")
 	mustLease("revoke", room, "O", 0)
 	fmt.Println("participant_observation_registered_absent=true active_sid_exact=true same_session_new_sid=true auth_node_fenced=true")
+	fmt.Println("connected_renewal_registered_denied=true old_sid_denied=true current_active_sid_accepted=true node_fenced=true")
 	require(controlAtNode("/volty/leases/revoke", room, "B", adminBearer(room), 0, "old-incarnation") == 409, "old-node revoke accepted")
 	require(controlAtNode("/volty/leases/revoke", room, "B", adminBearer(room), 0, "") == 409, "missing-node revoke accepted")
 	require(controlAtNode("/volty/leases/renew", room, "B", adminBearer(room), 30, "old-incarnation") == 409, "old-node renew accepted")
@@ -517,5 +541,5 @@ func main() {
 		panic("survivor renewal failed")
 	default:
 	}
-	fmt.Println("matrix_passed=true synthetic_RTP_only Android_audibility_not_tested=true restart_invariant_unit_test_only=true")
+	fmt.Println("matrix_passed=true synthetic_RTP_only Android_audibility_not_tested=true restart_probe_separate=true")
 }

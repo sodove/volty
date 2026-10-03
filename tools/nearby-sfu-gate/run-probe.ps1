@@ -30,7 +30,7 @@ try {
         if ($contents -match '[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}') {throw 'Credential-looking content detected; do not print raw logs'}
     }
     if ($probeExit -ne 0) {throw "Probe failed (exit $probeExit); inspect sanitized evidence"}
-    Get-Content (Join-Path $run 'probe.log') | Where-Object {$_ -match '^(nonce=|case=|baseline_|original_exp=|revoke_ack_|post_ack_|participant_control_|participant_observation_|race_admission_|expiry_without_|matrix_|readiness_protocol=|node_fence_|receipt_)'}
+    Get-Content (Join-Path $run 'probe.log') | Where-Object {$_ -match '^(nonce=|case=|baseline_|original_exp=|revoke_ack_|post_ack_|participant_control_|participant_observation_|connected_renewal_|race_admission_|expiry_without_|matrix_|readiness_protocol=|node_fence_|receipt_)'}
 } finally {
     if (!$owned.HasExited) {
         $current = Get-Process -Id $owned.Id -ErrorAction SilentlyContinue

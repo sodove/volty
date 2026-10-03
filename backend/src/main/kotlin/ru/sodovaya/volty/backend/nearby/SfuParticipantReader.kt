@@ -8,3 +8,8 @@ data class SfuParticipantObservation(val participantSid: String?, val state: Sfu
 interface SfuParticipantReader {
     fun observeParticipant(room: String, session: String, expectedNodeEpoch: String): SfuReply<SfuParticipantObservation>
 }
+
+interface SfuConnectedLeaseClient : SfuParticipantReader {
+    /** SFU must validate ACTIVE+current SID within the entry lock extending this lease. */
+    fun renewConnected(room: String, session: String, expectedNodeEpoch: String, expectedParticipantSid: String): SfuReply<LeaseReceipt>
+}
