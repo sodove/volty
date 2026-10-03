@@ -3,6 +3,9 @@ package ru.sodovaya.volty.backend.nearby
 import kotlinx.serialization.Serializable
 
 @Serializable data class CommunityCreateRequest(val name: String, val description: String = "", val visibility: String = "PRIVATE")
+@Serializable data class CommunityLeaveRequest(val operationId: String, val successorId: String? = null)
+@Serializable data class CommunityDeleteRequest(val operationId: String)
+@Serializable data class CommunityRemovalResponse(val operationId: String, val communityId: String, val revision: Long, val cleanupPending: Boolean)
 @Serializable data class CommunitySummaryDto(val id: String, val name: String, val description: String,
                                             val visibility: String, val createdAtEpochMillis: Long)
 @Serializable data class CommunityListResponse(val items: List<CommunitySummaryDto>)

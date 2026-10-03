@@ -44,7 +44,7 @@ fun Route.installNearbyCommunityRoutes(dependencies: AppDependencies) {
                 val actor = call.nearbyActor(dependencies)
                 val community = call.nearbyId("communityId")
                 val port = dependencies.nearbyCommunities ?: disabled()
-                val request = call.createBody(dependencies)
+                val request = call.communityBody<CommunityCreateRequest>(dependencies)
                 val title = request.name.trim(); val about = request.description.trim()
                 if (title.length !in 1..80 || title.any(Char::isISOControl) || about.length > 1000 || '\u0000' in about) invalid()
                 val visibility = try { CommunityVisibility.valueOf(request.visibility) } catch (_: IllegalArgumentException) { invalid() }
@@ -55,6 +55,35 @@ fun Route.installNearbyCommunityRoutes(dependencies: AppDependencies) {
                 val community = call.nearbyId("communityId")
                 val port = dependencies.nearbyCommunities ?: disabled()
                 call.writeResponse(withContext(Dispatchers.IO) { port.join(actor, community) })
+            }
+            post("/{communityId}/leave") {
+                val actor = call.nearbyActor(dependencies)
+                val community = call.nearbyId("communityId")
+                val port = dependencies.nearbyCommunityRemoval ?: disabled()
+                val request = call.communityBody<CommunityLeaveRequest>(dependencies)
+                canonicalId(request.operationId); request.successorId?.let(::canonicalId)
+                when (val result = withContext(Dispatchers.IO) { port.leave(actor, request.operationId, community, request.successorId) }) {
+                    is CommunityDepartureResult.Departed -> call.respond(CommunityRemovalResponse(request.operationId,
+                        result.communityId, result.revision, result.cleanupSessions.any { it.cleanupPending }))
+                    CommunityDepartureResult.SuccessorRequired -> removalConflict("successor_required", "Choose a successor before leaving")
+                    CommunityDepartureResult.DeleteRequired -> removalConflict("delete_required", "Last owner must explicitly delete the community")
+                    CommunityDepartureResult.InvalidSuccessor -> removalConflict("invalid_successor", "Successor is not eligible")
+                    CommunityDepartureResult.Conflict -> removalConflict("community_conflict", "Request conflicts with current community")
+                    CommunityDepartureResult.Denied -> denied()
+                }
+            }
+            post("/{communityId}/delete") {
+                val actor = call.nearbyActor(dependencies)
+                val community = call.nearbyId("communityId")
+                val port = dependencies.nearbyCommunityRemoval ?: disabled()
+                val request = call.communityBody<CommunityDeleteRequest>(dependencies)
+                canonicalId(request.operationId)
+                when (val result = withContext(Dispatchers.IO) { port.delete(actor, request.operationId, community) }) {
+                    is CommunityDeletionResult.Deleted -> call.respond(CommunityRemovalResponse(request.operationId,
+                        result.communityId, result.revision, result.cleanupSessions.any { it.cleanupPending }))
+                    CommunityDeletionResult.Conflict -> removalConflict("community_conflict", "Request conflicts with current community")
+                    CommunityDeletionResult.Denied -> denied()
+                }
             }
         }
     }
@@ -82,7 +111,7 @@ private fun ApplicationCall.page(): Pair<String?, Int> {
     return after to limit
 }
 
-private suspend fun ApplicationCall.createBody(dependencies: AppDependencies): CommunityCreateRequest {
+private suspend inline fun <reified T> ApplicationCall.communityBody(dependencies: AppDependencies): T {
     val maximum = 16 * 1024
     if ((request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0) > maximum) tooLarge()
     val bytes = withTimeoutOrNull(10_000) {
@@ -100,13 +129,18 @@ private suspend fun ApplicationCall.createBody(dependencies: AppDependencies): C
         // CharsetDecoder defaults to REPORT, never replacement characters that
         // silently change a name/idempotency payload.
         val text = Charsets.UTF_8.newDecoder().decode(java.nio.ByteBuffer.wrap(bytes)).toString()
-        dependencies.json.decodeFromString<CommunityCreateRequest>(text)
+        dependencies.json.decodeFromString<T>(text)
     }
     catch (_: IllegalArgumentException) { invalid() }
     catch (_: java.nio.charset.CharacterCodingException) { invalid() }
 }
 
 private fun invalid(): Nothing = throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "Request is invalid")
+private fun canonicalId(value: String) {
+    try { if (value.length != 36 || UUID.fromString(value).toString() != value) invalid() }
+    catch (_: IllegalArgumentException) { invalid() }
+}
+private fun removalConflict(code: String, message: String): Nothing = throw ApiException(HttpStatusCode.Conflict, code, message)
 private fun denied(): Nothing = throw ApiException(HttpStatusCode.NotFound, "community_unavailable", "Community unavailable")
 private fun disabled(): Nothing = throw ApiException(HttpStatusCode.ServiceUnavailable, "nearby_unavailable", "Nearby unavailable")
 private fun tooLarge(): Nothing = throw ApiException(HttpStatusCode.PayloadTooLarge, "body_too_large", "Request body is too large")

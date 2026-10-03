@@ -66,6 +66,7 @@ import ru.sodovaya.volty.backend.nearby.installNearbyRosterRoutes
 import ru.sodovaya.volty.backend.nearby.MediaWebhookEndpoint
 import ru.sodovaya.volty.backend.nearby.installNearbyMediaWebhookRoutes
 import ru.sodovaya.volty.backend.nearby.CommunityEndpointPort
+import ru.sodovaya.volty.backend.nearby.CommunityRemovalEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyCommunityRoutes
 
 private const val ISSUER = "volty"
@@ -82,6 +83,7 @@ class AppDependencies(
     val nearbyRoster: RosterEndpointPort? = null,
     val nearbyMediaWebhook: MediaWebhookEndpoint? = null,
     val nearbyCommunities: CommunityEndpointPort? = null,
+    val nearbyCommunityRemoval: CommunityRemovalEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
