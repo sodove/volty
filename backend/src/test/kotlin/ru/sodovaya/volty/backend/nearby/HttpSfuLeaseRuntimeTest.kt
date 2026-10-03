@@ -18,8 +18,12 @@ class HttpSfuLeaseRuntimeTest {
         val status = ready()
         try {
             assertIs<SfuReply.Accepted<LeaseReceipt>>(client.register(room, session, status.nodeEpoch))
+            val observation = (client.observeParticipant(room, session, status.nodeEpoch) as SfuReply.Accepted).value
+            assertNull(observation.participantSid, "Registered lease must not invent media")
+            assertNull(observation.state)
             assertIs<SfuReply.Accepted<LeaseReceipt>>(client.renew(room, session, status.nodeEpoch))
             assertIs<SfuReply.Accepted<Unit>>(client.revoke(room, session, status.nodeEpoch))
+            assertEquals(SfuFailure.REJECTED, (client.observeParticipant(room, session, status.nodeEpoch) as SfuReply.Rejected).reason)
             assertEquals(SfuFailure.REJECTED, (client.register(room, session, status.nodeEpoch) as SfuReply.Rejected).reason)
             assertEquals(SfuFailure.REJECTED, (client.renew(room, session, status.nodeEpoch) as SfuReply.Rejected).reason)
             assertIs<SfuReply.Accepted<Unit>>(client.revoke(room, session, status.nodeEpoch))
@@ -32,6 +36,7 @@ class HttpSfuLeaseRuntimeTest {
         assertEquals(SfuFailure.REJECTED, (client.register(room, session, stale) as SfuReply.Rejected).reason)
         assertEquals(SfuFailure.REJECTED, (client.renew(room, session, stale) as SfuReply.Rejected).reason)
         assertEquals(SfuFailure.REJECTED, (client.revoke(room, session, stale) as SfuReply.Rejected).reason)
+        assertEquals(SfuFailure.REJECTED, (client.observeParticipant(room, session, stale) as SfuReply.Rejected).reason)
         // Rejected old-node revoke must not create a current-node terminal tombstone.
         try {
             assertIs<SfuReply.Accepted<LeaseReceipt>>(client.register(room, session, status.nodeEpoch))

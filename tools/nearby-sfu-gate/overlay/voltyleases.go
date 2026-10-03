@@ -27,6 +27,7 @@ func (s *RTCService) setupVoltyLeases(mux *http.ServeMux) {
 	mux.HandleFunc("/volty/leases/renew", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/revoke", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/readiness", s.voltyReadiness)
+	mux.HandleFunc("/volty/leases/participant", s.voltyParticipant)
 	for _, action := range []string{"arm", "entered", "release", "revoking"} {
 		mux.HandleFunc("/volty/test/barrier/"+action, s.voltyBarrierControl)
 	}
@@ -144,7 +145,63 @@ func (r *RoomManager) StartSession(ctx context.Context, pi routing.ParticipantIn
 				return lease.ErrCleanup
 			}
 			return waiter.VoltyWaitMediaClosed(ctx)
+		}, Observe: func() lease.ParticipantObservation {
+			room := r.GetRoom(ctx, livekit.RoomName(key.Room))
+			if room == nil {
+				return lease.ParticipantObservation{}
+			}
+			current := room.GetParticipant(captured.Identity())
+			if current == nil || current.ID() != captured.ID() {
+				return lease.ParticipantObservation{}
+			}
+			return lease.ParticipantObservation{SID: string(current.ID()), State: current.State().String()}
 		}}
 		return handle, err
 	})
+}
+
+// Read the live gate-owned participant, not RoomService's persisted participant cache.
+func (s *RTCService) voltyParticipant(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method_denied", 405)
+		return
+	}
+	var body struct {
+		Room      string `json:"room"`
+		Identity  string `json:"identity"`
+		NodeEpoch string `json:"nodeEpoch"`
+	}
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	decoder.DisallowUnknownFields()
+	var trailing any
+	if decoder.Decode(&body) != nil || body.Room == "" || body.Identity == "" || decoder.Decode(&trailing) != io.EOF {
+		http.Error(w, "observation_invalid", 400)
+		return
+	}
+	if EnsureAdminPermission(r.Context(), livekit.RoomName(body.Room)) != nil {
+		http.Error(w, "observation_forbidden", 403)
+		return
+	}
+	if body.NodeEpoch != voltyNodeEpoch {
+		http.Error(w, "node_epoch_mismatch", 409)
+		return
+	}
+	if !voltyHealth.Status().Ready {
+		http.Error(w, "admission_unavailable", 503)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	value, err := voltyGate.Observe(ctx, lease.Key{Room: body.Room, Identity: body.Identity})
+	if err != nil {
+		http.Error(w, "observation_rejected", 409)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(struct {
+		NodeEpoch string `json:"nodeEpoch"`
+		SID       string `json:"sid"`
+		State     string `json:"state"`
+	}{voltyNodeEpoch, value.SID, value.State})
 }

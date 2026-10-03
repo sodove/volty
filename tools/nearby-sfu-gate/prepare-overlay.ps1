@@ -18,6 +18,7 @@ Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Destination 
 New-Item -ItemType Directory -Path (Join-Path $Destination 'pkg/voltylease') | Out-Null
 Copy-Item -LiteralPath "$PSScriptRoot/lease/gate.go" -Destination (Join-Path $Destination 'pkg/voltylease/gate.go')
 Copy-Item -LiteralPath "$PSScriptRoot/lease/readiness.go" -Destination (Join-Path $Destination 'pkg/voltylease/readiness.go')
+Copy-Item -LiteralPath "$PSScriptRoot/lease/observation.go" -Destination (Join-Path $Destination 'pkg/voltylease/observation.go')
 Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltyleases.go" -Destination (Join-Path $Destination 'pkg/service/voltyleases.go')
 Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltybarrier.go" -Destination (Join-Path $Destination 'pkg/service/voltybarrier.go')
 Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltyreadiness.go" -Destination (Join-Path $Destination 'pkg/service/voltyreadiness.go')

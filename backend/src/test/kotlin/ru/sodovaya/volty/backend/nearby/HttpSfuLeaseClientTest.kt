@@ -40,8 +40,58 @@ class HttpSfuLeaseClientTest {
         assertEquals(SfuFailure.UNSUPPORTED, (client().inspect("room") as SfuReply.Rejected).reason)
     }
 
+    @Test fun observationRequiresExactNodeAndImmutableIdentityWithoutInterpretingJoinedAsActive() {
+        for (state in listOf("JOINING", "JOINED", "ACTIVE", "DISCONNECTED")) {
+            respond = { exchange ->
+                assertEquals("/volty/leases/participant", exchange.requestURI.path)
+                val body = Json.parseToJsonElement(exchange.requestBody.reader().readText()).jsonObject
+                assertEquals("room", body["room"]!!.jsonPrimitive.content)
+                assertEquals("session", body["identity"]!!.jsonPrimitive.content)
+                assertEquals(epoch, body["nodeEpoch"]!!.jsonPrimitive.content)
+                val bearer = exchange.requestHeaders.getFirst("Authorization").removePrefix("Bearer ")
+                val video = JWT.require(Algorithm.HMAC256("test-secret")).build().verify(bearer).getClaim("video").asMap()
+                assertEquals("room", video["room"])
+                assertEquals(true, video["roomAdmin"])
+                reply(exchange, 200, """{"nodeEpoch":"$epoch","sid":"PA_current","state":"$state"}""")
+            }
+            val value = (client().observeParticipant("room", "session", epoch) as SfuReply.Accepted).value
+            assertEquals("PA_current", value.participantSid)
+            assertEquals(state, value.state!!.name)
+        }
+    }
+
+    @Test fun absentParticipantIsExplicitButMissingEndpointIsUnsupported() {
+        respond = { reply(it, 200, """{"nodeEpoch":"$epoch","sid":"","state":""}""") }
+        val value = (client().observeParticipant("room", "session", epoch) as SfuReply.Accepted).value
+        assertNull(value.participantSid)
+        assertNull(value.state)
+        respond = { reply(it, 404, "missing") }
+        assertEquals(SfuFailure.UNSUPPORTED, (client().observeParticipant("room", "session", epoch) as SfuReply.Rejected).reason)
+    }
+
+    @Test fun observationRejectsOldNodeAndIncoherentWireState() {
+        for (body in listOf(
+            """{"nodeEpoch":"${"b".repeat(32)}","sid":"PA_current","state":"ACTIVE"}""",
+            """{"nodeEpoch":"$epoch","sid":"PA_current","state":"future-state"}""",
+            """{"nodeEpoch":"$epoch","sid":"","state":"ACTIVE"}""",
+            """{"nodeEpoch":"$epoch","sid":"PA_current","state":""}""",
+            """{"nodeEpoch":"$epoch","sid":"${"a".repeat(257)}","state":"ACTIVE"}""",
+            """{"nodeEpoch":"$epoch","sid":"PA_current"}""",
+        )) {
+            respond = { reply(it, 200, body) }
+            assertEquals(SfuFailure.INVALID_RESPONSE, (client().observeParticipant("room", "session", epoch) as SfuReply.Rejected).reason)
+        }
+    }
+
+    @Test fun observationNeverConvertsRejectionIntoAbsentParticipant() {
+        for ((code, expected) in listOf(409 to SfuFailure.REJECTED, 403 to SfuFailure.FORBIDDEN, 503 to SfuFailure.UNAVAILABLE)) {
+            respond = { reply(it, code, "private-server-details") }
+            assertEquals(expected, (client().observeParticipant("room", "session", epoch) as SfuReply.Rejected).reason)
+        }
+    }
+
     @Test fun readinessRequiresExactProtocolAndValidFields() {
-        for (body in listOf(readyBody(version = 1), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1), readyBody(singleNode = false))) {
+        for (body in listOf(readyBody(version = 1), readyBody(version = 2), readyBody(node = ""), readyBody(used = 4097), readyBody(ttl = 60), readyBody(age = -1), readyBody(singleNode = false))) {
             respond = { reply(it, 200, body) }
             assertEquals(SfuFailure.INVALID_RESPONSE, (client().inspect("room") as SfuReply.Rejected).reason)
         }
@@ -162,7 +212,7 @@ class HttpSfuLeaseClientTest {
         } finally { release.countDown(); caller.shutdownNow() }
     }
 
-    private fun readyBody(version: Int = 2, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0, singleNode: Boolean = true) =
+    private fun readyBody(version: Int = 3, node: String = epoch, used: Int = 0, ttl: Int = 30, ready: Boolean = true, age: Long = 0, singleNode: Boolean = true) =
         """{"protocolVersion":$version,"nodeEpoch":"$node","ready":$ready,"slotsUsed":$used,"capacity":4096,"maximumLeaseSeconds":$ttl,"lastSweepAgeMillis":$age,"singleNode":$singleNode}"""
 
     private fun reply(exchange: HttpExchange, code: Int, body: String, remaining: String? = "30000") {

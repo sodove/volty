@@ -20,6 +20,8 @@ type Key struct{ Room, Identity string }
 type Handle struct {
 	ID    string
 	Close func(context.Context) error
+	// Local current-participant lookup only; never network or blocking I/O.
+	Observe func() ParticipantObservation
 }
 type Join func(context.Context) (Handle, error)
 type entry struct {

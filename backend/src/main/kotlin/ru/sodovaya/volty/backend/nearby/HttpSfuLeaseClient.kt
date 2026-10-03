@@ -25,7 +25,7 @@ class HttpSfuLeaseClient(
     private val apiSecret: String,
     private val clock: Clock = Clock.systemUTC(),
     private val requestTimeout: Duration = Duration.ofSeconds(6),
-) : SfuLeaseClient {
+) : SfuLeaseClient, SfuParticipantReader {
     private val json = Json { ignoreUnknownKeys = true }
     private val http = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(3))
         .followRedirects(HttpClient.Redirect.NEVER).build()
@@ -45,7 +45,7 @@ class HttpSfuLeaseClient(
         val value = try { json.decodeFromString<ReadinessResponse>(wire.body) } catch (_: Exception) {
             return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
         }
-        if (value.protocolVersion != 2 || !value.singleNode || !value.nodeEpoch.matches(Regex("[a-f0-9]{32}")) ||
+        if (value.protocolVersion != 3 || !value.singleNode || !value.nodeEpoch.matches(Regex("[a-f0-9]{32}")) ||
             value.capacity !in 1..1_000_000 || value.slotsUsed !in 0..value.capacity || value.maximumLeaseSeconds != 30 ||
             value.lastSweepAgeMillis < -1 || (value.ready && value.lastSweepAgeMillis !in 0..1999)) {
             return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
@@ -55,6 +55,25 @@ class HttpSfuLeaseClient(
 
     override fun register(room: String, session: String, expectedNodeEpoch: String) = lease("register", room, session, expectedNodeEpoch)
     override fun renew(room: String, session: String, expectedNodeEpoch: String) = lease("renew", room, session, expectedNodeEpoch)
+
+    override fun observeParticipant(room: String, session: String, expectedNodeEpoch: String): SfuReply<SfuParticipantObservation> {
+        require(session.isNotBlank() && session.length <= 256 && expectedNodeEpoch.matches(Regex("[a-f0-9]{32}")))
+        val response = post("participant", room, json.encodeToString(ParticipantRequest(room, session, expectedNodeEpoch)))
+        if (response is SfuReply.Rejected) return response
+        val wire = (response as SfuReply.Accepted).value
+        if (wire.status != 200) return rejectStatus(wire.status)
+        val value = try { json.decodeFromString<ParticipantResponse>(wire.body) } catch (_: Exception) {
+            return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
+        }
+        if (value.nodeEpoch != expectedNodeEpoch || value.sid.length > 256 ||
+            value.sid.isEmpty() != value.state.isEmpty() || (value.sid.isNotEmpty() && value.sid.isBlank())) {
+            return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
+        }
+        if (value.sid.isEmpty()) return SfuReply.Accepted(SfuParticipantObservation(null, null))
+        val state = SfuParticipantState.entries.firstOrNull { it.name == value.state }
+            ?: return SfuReply.Rejected(SfuFailure.INVALID_RESPONSE)
+        return SfuReply.Accepted(SfuParticipantObservation(value.sid, state))
+    }
 
     override fun revoke(room: String, session: String, expectedNodeEpoch: String): SfuReply<Unit> {
         val response = post("revoke", room, json.encodeToString(ControlRequest(room, session, 0, expectedNodeEpoch)))
@@ -124,6 +143,8 @@ class HttpSfuLeaseClient(
     private data class WireReply(val status: Int, val body: String, val remainingMillis: Long?)
     @Serializable private data class ReadinessRequest(val room: String)
     @Serializable private data class ControlRequest(val room: String, val identity: String, val ttlSeconds: Int, val nodeEpoch: String)
+    @Serializable private data class ParticipantRequest(val room: String, val identity: String, val nodeEpoch: String)
+    @Serializable private data class ParticipantResponse(val nodeEpoch: String, val sid: String, val state: String)
     @Serializable private data class ReadinessResponse(
         val protocolVersion: Int, val nodeEpoch: String, val ready: Boolean, val slotsUsed: Int,
         val capacity: Int, val maximumLeaseSeconds: Int, val lastSweepAgeMillis: Long, val singleNode: Boolean,
