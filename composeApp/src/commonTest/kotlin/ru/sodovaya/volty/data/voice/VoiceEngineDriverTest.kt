@@ -101,7 +101,7 @@ class VoiceEngineDriverTest {
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { driver.events.collect { events += it } }
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials).isSuccess)
         emit(VoiceSessionEvent.Published(tag(1)))
-        emit(VoiceSessionEvent.LeaseAck(tag(2), 20_000))
+        emit(VoiceSessionEvent.LeaseAck(tag(2), ru.sodovaya.volty.domain.voice.VoiceLeaseGrant(ru.sodovaya.volty.domain.voice.VoiceLeaseRequestId(1), 20_000, 20_000, 30_000)))
         emit(VoiceSessionEvent.Stopped(tag(2).generation))
         runCurrent()
         assertTrue(events.isEmpty())

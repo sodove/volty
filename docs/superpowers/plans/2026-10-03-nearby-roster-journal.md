@@ -95,6 +95,39 @@ slices do not individually complete Task3 or enable production.
 - Actual signed/invalid/tampered-body HTTP checks and PostgreSQL event replay/
   reordered delivery tests. Test provenance on intentionally incoherent fixtures.
 
+### Room-finished durable targets (Task3d)
+
+Pinned LiveKit1.13.5 `pkg/telemetry/events.go` RoomEnded sends an event with
+Room and no Participant. Therefore participant identity/SID is optional only
+for ROOM_FINISHED, never synthesized from client data. The signed room name is
+the immutable room epoch; room-finished is a reconciliation hint, not a blanket
+stop command. A room can have newer transports by the time the event arrives.
+
+- Count V1..V5 and add V6. Expand the supported kind constraint and allow a
+  null session/SID pair only for ROOM_FINISHED. Keep JOINED/LEFT pairs required.
+- Persist the parent event and immutable per-session targets atomically on first
+  receipt. ROOM_FINISHED captures exact current claim/session/room/node joins
+  at receipt; participant events have one target even if its session is unknown.
+  Duplicate matching event ID/digest never adds later joins to its target set.
+  Conflicting digest changes nothing. Zero-target room events are already done.
+- Backfill targets for existing unprocessed V4/V5 participant events; preserve
+  processed parents, sequence ordering and hashes. No SQL network callbacks.
+- Pending work is ordered by parent sequence and target identity. Complete one
+  exact parent ID/digest/target only after durable reconciliation; finish parent
+  when all its targets are done. Lock the parent row before target completion
+  and the all-targets check: concurrent ACKs for different children otherwise
+  can both observe the other's uncommitted child and leave an unfinished parent
+  with no pending targets. Acknowledging one peer cannot consume another.
+- Reuse current-SFU refresh without renewal/JWT. Terminal/foreign-room targets
+  cannot touch replacements. A delayed room event with current live ACTIVE SID
+  preserves it; failed lookup retains that target. New joins after receipt are
+  reconciled by heartbeat/later events, not added by replay of an old room event.
+- Tests: signed real-shaped room event without participant, malformed paired
+  provenance, migration backfill, zero/multiple targets, duplicate receipt after
+  new join, exact-target ACK, lost ACK replay, transient observation failure and
+  delayed room event preserving new current media. Run fresh backend, exact
+  PostgreSQL counts and Android before commit.
+
 ## Task4: Delivery cursor and reconnect
 
 - Build durable outbox cursor consumption with complete authorized snapshots.

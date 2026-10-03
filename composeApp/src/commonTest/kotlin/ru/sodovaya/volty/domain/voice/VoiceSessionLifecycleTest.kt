@@ -149,5 +149,5 @@ class VoiceSessionLifecycleTest {
         assertEquals(listOf(VoiceSessionEffect.RequestJoin(op, result.state.generation)), result.effects)
         return result
     }
-    private fun grant(state: VoiceSessionState) = VoiceSessionEvent.SessionGranted(op, state.generation, session, 0)
+    private fun grant(state: VoiceSessionState) = VoiceSessionEvent.SessionGranted(op, state.generation, session, VoiceLeaseGrant(VoiceLeaseRequestId(0), 0, 0, 30_000))
 }

@@ -4,8 +4,13 @@ import java.util.UUID
 
 enum class SessionDenial { MEMBERSHIP, OPERATION_CONFLICT, BUSY }
 sealed interface SessionAction {
-    data class Ready(val credentials: SessionCredentials) : SessionAction
-    data class Confirmed(val sessionId: String, val deadlineEpochMillis: Long, val media: SessionMedia = SessionMedia()) : SessionAction
+    data class Ready(val credentials: SessionCredentials, val remainingMillis: Long) : SessionAction {
+        init { require(remainingMillis in 1..30_000) }
+    }
+    data class Confirmed(val sessionId: String, val deadlineEpochMillis: Long,
+                         val remainingMillis: Long, val media: SessionMedia = SessionMedia()) : SessionAction {
+        init { require(remainingMillis in 1..30_000) }
+    }
     data class Pending(val state: SessionJournalEntry) : SessionAction
     data class Ended(val state: SessionJournalEntry) : SessionAction
     data class Unavailable(val reason: SfuFailure) : SessionAction
@@ -177,14 +182,29 @@ class SessionService(
     private fun result(row: SessionJournalEntry, credentials: Boolean): SessionAction {
         if (row.operation.terminal) return SessionAction.Ended(row)
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (!credentials) return SessionAction.Confirmed(row.operation.sessionId!!, row.operation.deadlineEpochMillis!!, row.media)
         val authorized = try {
-            repository.withActiveSession(row.operation.actorId, row.operation.operationId, now) { issuer.issue(it) }
+            repository.withActiveSession(row.operation.actorId, row.operation.operationId, now) { current ->
+                // CPU-only issuance and the final credit calculation share current-claim authorization.
+                // Earlier revisions returned a stale row for status and gave no remaining credit.
+                val issued = if (credentials) issuer.issue(current) else null
+                val deadline = checkNotNull(current.operation.deadlineEpochMillis)
+                val authorizedAt = now()
+                if (authorizedAt >= deadline) SessionAction.Unavailable(SfuFailure.UNAVAILABLE)
+                else {
+                    val remaining = minOf(30_000L, deadline - authorizedAt)
+                    if (issued != null) SessionAction.Ready(issued, remaining)
+                    else SessionAction.Confirmed(current.operation.sessionId!!, deadline, remaining, current.media)
+                }
+            }
         } catch (_: Exception) {
             stop(row.operation.actorId, row.operation.operationId)
             return SessionAction.Unavailable(SfuFailure.UNAVAILABLE)
         }
-        if (authorized != null) return SessionAction.Ready(authorized)
+        if (authorized is SessionAction.Unavailable) {
+            stop(row.operation.actorId, row.operation.operationId)
+            return authorized
+        }
+        if (authorized != null) return authorized
         return stop(row.operation.actorId, row.operation.operationId)
     }
 }

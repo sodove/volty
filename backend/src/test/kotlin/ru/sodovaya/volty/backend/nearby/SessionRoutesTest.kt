@@ -53,6 +53,7 @@ class SessionRoutesTest {
         assertTrue(body.contains("opaque-participant-credential"))
         assertFalse(body.contains("CONNECTED"))
         assertFalse(body.contains("nodeEpoch"))
+        assertTrue(body.contains("\"remainingLeaseMillis\":12000"))
     }
 
     @Test fun replacementMustBeExplicitAndBusyHasItsOwnResponseCode() = testApplication {
@@ -97,6 +98,7 @@ class SessionRoutesTest {
         assertEquals(HttpStatusCode.OK, response.status)
         assertFalse(response.bodyAsText().contains("participantToken"))
         assertEquals(listOf("status:$actor:$operation"), port.calls)
+        assertTrue(response.bodyAsText().contains("\"remainingLeaseMillis\":7000"))
         port.missing = true
         assertEquals(HttpStatusCode.NotFound, client.get("/v2/nearby/operations/$operation") { bearerAuth(deps.tokenService.issueAccessToken(actor)) }.status)
     }
@@ -146,14 +148,14 @@ class SessionRoutesTest {
             calls += "join:$actor:$operation:$destination"
             replacementRequested = replace
             denial?.let { return SessionAction.Denied(it) }
-            return SessionAction.Ready(SessionCredentials("wss://test.invalid", "opaque-participant-credential", session, "server-room-generation", 30000))
+            return SessionAction.Ready(SessionCredentials("wss://test.invalid", "opaque-participant-credential", session, "server-room-generation", 30000), 12_000)
         }
         override fun status(actor: String, operation: String): SessionAction? {
             calls += "status:$actor:$operation"
-            return if (missing) null else SessionAction.Confirmed(session, 30000, media)
+            return if (missing) null else SessionAction.Confirmed(session, 30000, 7_000, media)
         }
         override fun cancel(actor: String, operation: String): SessionAction { calls += "cancel:$actor:$operation"; return ended() }
-        override fun heartbeat(actor: String, session: String): SessionAction? { calls += "heartbeat:$actor:$session"; return SessionAction.Confirmed(session, 30000, media) }
+        override fun heartbeat(actor: String, session: String): SessionAction? { calls += "heartbeat:$actor:$session"; return SessionAction.Confirmed(session, 30000, 7_000, media) }
         override fun disconnect(actor: String, session: String): SessionAction? { calls += "disconnect:$actor:$session"; return ended() }
     }
 }

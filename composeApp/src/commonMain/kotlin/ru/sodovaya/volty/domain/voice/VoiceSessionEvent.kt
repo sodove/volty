@@ -6,7 +6,7 @@ sealed interface VoiceSessionEvent {
         val operationId: VoiceOperationId,
         val generation: VoiceGeneration,
         val sessionId: VoiceSessionId,
-        val nowMillis: Long,
+        val lease: VoiceLeaseGrant,
     ) : VoiceSessionEvent
     data object Stop : VoiceSessionEvent
     /** Acknowledges engine release, not server claim or SFU revocation. */
@@ -25,8 +25,8 @@ sealed interface VoiceSessionEvent {
     data class RenderStarted(override val tag: VoiceSessionTag) : Tagged
     data class RenderStopped(override val tag: VoiceSessionTag) : Tagged
     data class Reconnecting(override val tag: VoiceSessionTag) : Tagged
-    /** Timestamp is the receiving client's monotonic time, not the server's wall clock. */
-    data class LeaseAck(override val tag: VoiceSessionTag, val nowMillis: Long) : Tagged
+    /** Backend receipt only; SDK transport callbacks cannot authorize a lease. */
+    data class LeaseAck(override val tag: VoiceSessionTag, val lease: VoiceLeaseGrant) : Tagged
     data class Tick(val nowMillis: Long) : VoiceSessionEvent
     data class SetMuted(val value: Boolean) : VoiceSessionEvent
     data class SetDeafened(val value: Boolean) : VoiceSessionEvent

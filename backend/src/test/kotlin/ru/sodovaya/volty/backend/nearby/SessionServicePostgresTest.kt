@@ -17,13 +17,45 @@ class SessionServicePostgresTest {
     private var now = 100L
     private var allowed = true
     private var tokensIssued = 0
+    private var issuerDelayMillis = 0L
     private val repository = JdbcSessionRepository(source)
     private val sfu = FakeSfu { now }
     private val service = SessionService(repository, sfu, { _, _ -> "room-generation".takeIf { allowed } },
         SessionCredentialIssuer { row ->
             tokensIssued++
+            now += issuerDelayMillis
             SessionCredentials("ws://test", "opaque-test-token", row.operation.sessionId!!, row.sfuEpoch!!.roomEpoch, row.operation.deadlineEpochMillis!!)
         }, { now })
+
+    @Test fun replayStatusAndUnconfirmedHeartbeatExposeOnlyRemainingCredit() {
+        val initial = assertIs<SessionAction.Ready>(service.join(actor, operation, destination))
+        assertEquals(30_000, initial.remainingMillis)
+        now = 5_100
+        val replay = assertIs<SessionAction.Ready>(service.join(actor, operation, destination))
+        assertEquals(initial.credentials.deadlineEpochMillis, replay.credentials.deadlineEpochMillis)
+        assertEquals(25_000, replay.remainingMillis)
+        assertEquals(25_000, assertIs<SessionAction.Confirmed>(service.status(actor, operation)).remainingMillis)
+        assertEquals(25_000, assertIs<SessionAction.Confirmed>(service.heartbeat(actor, operation)).remainingMillis)
+        assertEquals(2, tokensIssued)
+        assertTrue(sfu.calls.none { it.startsWith("renew-connected:") })
+    }
+
+    @Test fun credentialIssuanceConsumesCreditBeforeAuthorizationResponse() {
+        issuerDelayMillis = 5_000
+        val result = assertIs<SessionAction.Ready>(service.join(actor, operation, destination))
+        assertEquals(25_000, result.remainingMillis)
+        assertEquals(30_100, result.credentials.deadlineEpochMillis)
+        assertEquals(1, tokensIssued)
+    }
+
+    @Test fun expiryDuringCredentialIssuanceNeverReturnsBearerOrCredit() {
+        issuerDelayMillis = 30_000
+        assertIs<SessionAction.Unavailable>(service.join(actor, operation, destination))
+        assertEquals(1, tokensIssued)
+        assertTrue(repository.get(actor, operation)!!.operation.terminal)
+        assertNull(repository.currentClaim(actor))
+        assertTrue(sfu.calls.any { it.startsWith("revoke:") })
+    }
 
     @Test fun endpointSessionOwnershipAndOldDisconnectCannotAffectReplacement() {
         val endpoints = SessionEndpointService(service, repository)

@@ -86,9 +86,11 @@ private suspend fun ApplicationCall.sessionResponse(action: SessionAction?) {
     if (action == null) throw ApiException(HttpStatusCode.NotFound, "session_not_found", "Session unavailable")
     when (action) {
         is SessionAction.Ready -> respond(SessionStateResponse("CONNECTING", action.credentials.sessionId,
-            action.credentials.deadlineEpochMillis, credentials = SessionCredentialDto.from(action.credentials)))
+            action.credentials.deadlineEpochMillis, credentials = SessionCredentialDto.from(action.credentials),
+            remainingLeaseMillis = action.remainingMillis))
         is SessionAction.Confirmed -> respond(SessionStateResponse(
-            if (action.media.state == SfuParticipantState.ACTIVE) "CONNECTED" else "CONNECTING", action.sessionId, action.deadlineEpochMillis))
+            if (action.media.state == SfuParticipantState.ACTIVE) "CONNECTED" else "CONNECTING", action.sessionId,
+            action.deadlineEpochMillis, remainingLeaseMillis = action.remainingMillis))
         is SessionAction.Pending -> respond(HttpStatusCode.Accepted, SessionStateResponse("PENDING", action.state.operation.sessionId,
             action.state.operation.deadlineEpochMillis, action.state.operation.operationId))
         is SessionAction.Ended -> respond(SessionStateResponse(action.state.operation.phase.name, action.state.operation.sessionId,

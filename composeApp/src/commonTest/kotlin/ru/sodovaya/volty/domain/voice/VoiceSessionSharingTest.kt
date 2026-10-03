@@ -9,7 +9,7 @@ class VoiceSessionSharingTest {
     private val tag = VoiceSessionTag(VoiceSessionId("s1"), VoiceGeneration(1))
     private fun active() = VoiceSessionState(
         generation = tag.generation, sessionId = tag.sessionId, wanted = true,
-        phase = VoicePhase.CONNECTED, lastLeaseAckMillis = 0,
+        phase = VoicePhase.CONNECTED, leaseDeadlineMillis = 30_000, lastLeaseRequestId = VoiceLeaseRequestId(0),
     )
 
     @Test

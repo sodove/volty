@@ -9,7 +9,7 @@ class VoiceSessionLeaseTest {
     private val tag = VoiceSessionTag(VoiceSessionId("s1"), VoiceGeneration(1))
     private fun active() = VoiceSessionState(
         generation = tag.generation, sessionId = tag.sessionId,
-        phase = VoicePhase.CONNECTING, wanted = true, lastLeaseAckMillis = 0,
+        phase = VoicePhase.CONNECTING, wanted = true, leaseDeadlineMillis = 30_000, lastLeaseRequestId = VoiceLeaseRequestId(0),
     )
 
     @Test
@@ -26,44 +26,44 @@ class VoiceSessionLeaseTest {
     @Test
     fun aliveTransportCannotOutliveUnconfirmedLease() {
         val initial = active().copy(transportConnected = true)
-        val before = reduce(initial, VoiceSessionEvent.Tick(30_000))
+        val before = reduce(initial, VoiceSessionEvent.Tick(29_999))
         assertTrue(before.state.wanted)
-        val expired = reduce(before.state, VoiceSessionEvent.Tick(30_001))
+        val expired = reduce(before.state, VoiceSessionEvent.Tick(30_000))
         assertStopped(expired)
         assertTrue(reduce(expired.state, VoiceSessionEvent.Tick(60_000)).effects.isEmpty())
     }
 
     @Test
     fun lateAckBeforeTickCannotExtendLease() {
-        assertStopped(reduce(active(), VoiceSessionEvent.LeaseAck(tag, 30_001)))
+        assertStopped(reduce(active(), VoiceSessionEvent.LeaseAck(tag, lease(1, 29_000, 30_001))))
     }
 
     @Test
     fun ackAfterStopCannotReviveIntent() {
         val stopped = reduce(active(), VoiceSessionEvent.Stop).state
         assertFalse(stopped.wanted)
-        assertEquals(VoiceTransition(stopped, emptyList()), reduce(stopped, VoiceSessionEvent.LeaseAck(tag, 50_000)))
+        assertEquals(VoiceTransition(stopped, emptyList()), reduce(stopped, VoiceSessionEvent.LeaseAck(tag, lease(1, 49_000, 50_000))))
     }
 
     @Test
     fun matchingAckExtendsDeadlineButRegressionDoesNot() {
-        val acked = reduce(active(), VoiceSessionEvent.LeaseAck(tag, 20_000)).state
-        assertEquals(20_000, acked.lastLeaseAckMillis)
-        val backwards = reduce(acked, VoiceSessionEvent.LeaseAck(tag, 15_000))
+        val acked = reduce(active(), VoiceSessionEvent.LeaseAck(tag, lease(2, 20_000, 20_000))).state
+        assertEquals(50_000, acked.leaseDeadlineMillis)
+        val backwards = reduce(acked, VoiceSessionEvent.LeaseAck(tag, lease(1, 15_000, 21_000)))
         assertEquals(acked, backwards.state)
         assertTrue(backwards.effects.isEmpty())
-        assertTrue(reduce(acked, VoiceSessionEvent.Tick(50_000)).state.wanted)
-        assertStopped(reduce(acked, VoiceSessionEvent.Tick(50_001)))
+        assertTrue(reduce(acked, VoiceSessionEvent.Tick(49_999)).state.wanted)
+        assertStopped(reduce(acked, VoiceSessionEvent.Tick(50_000)))
     }
 
     @Test
     fun missingAckEvidenceFailsClosedEvenWithAliveTransport() {
-        assertStopped(reduce(active().copy(lastLeaseAckMillis = null, transportConnected = true), VoiceSessionEvent.Tick(0)))
+        assertStopped(reduce(active().copy(leaseDeadlineMillis = null, transportConnected = true), VoiceSessionEvent.Tick(0)))
     }
 
     @Test
     fun clockRegressionDoesNotExpireSession() {
-        val initial = active().copy(lastLeaseAckMillis = 5_000)
+        val initial = active().copy(leaseDeadlineMillis = 35_000)
         assertEquals(VoiceTransition(initial, emptyList()), reduce(initial, VoiceSessionEvent.Tick(1_000)))
     }
 
@@ -76,7 +76,7 @@ class VoiceSessionLeaseTest {
                 VoiceSessionEvent.TransportConnected(wrong), VoiceSessionEvent.CaptureStarted(wrong),
                 VoiceSessionEvent.Published(wrong), VoiceSessionEvent.Subscribed(wrong, "peer"),
                 VoiceSessionEvent.RenderStarted(wrong), VoiceSessionEvent.Reconnecting(wrong),
-                VoiceSessionEvent.LeaseAck(wrong, 20_000),
+                VoiceSessionEvent.LeaseAck(wrong, lease(1, 20_000, 20_000)),
                 VoiceSessionEvent.CaptureStopped(wrong), VoiceSessionEvent.Unpublished(wrong),
                 VoiceSessionEvent.Unsubscribed(wrong, "peer"), VoiceSessionEvent.RenderStopped(wrong),
             )
@@ -152,8 +152,8 @@ class VoiceSessionLeaseTest {
         val desired = reduce(muted.state, VoiceSessionEvent.SetDeafened(true)).state
         val op = VoiceOperationId("new")
         val joining = reduce(desired, VoiceSessionEvent.Join(op)).state
-        val granted = reduce(joining, VoiceSessionEvent.SessionGranted(op, joining.generation, tag.sessionId, 10_000))
-        assertEquals(10_000, granted.state.lastLeaseAckMillis)
+        val granted = reduce(joining, VoiceSessionEvent.SessionGranted(op, joining.generation, tag.sessionId, lease(0, 10_000, 10_000)))
+        assertEquals(40_000, granted.state.leaseDeadlineMillis)
         assertEquals(listOf(VoiceSessionEffect.StartEngine(VoiceSessionTag(tag.sessionId, joining.generation),
             muted = true, deafened = true)), granted.effects)
     }
@@ -192,6 +192,8 @@ class VoiceSessionLeaseTest {
         assertTrue(result.state.renderStarted)
         assertTrue(result.effects.isEmpty())
     }
+
+    private fun lease(id: Long, start: Long, received: Long) = VoiceLeaseGrant(VoiceLeaseRequestId(id), start, received, 30_000)
 
     private fun reduce(state: VoiceSessionState, event: VoiceSessionEvent) = VoiceSessionReducer.reduce(state, event)
 }

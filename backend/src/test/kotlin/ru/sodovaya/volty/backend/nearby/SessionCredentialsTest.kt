@@ -32,6 +32,6 @@ class SessionCredentialsTest {
     @Test fun actionAndCredentialsRenderingDoNotExposeBearer() {
         val value = SessionCredentials("wss://voice.example.invalid", "secret-that-must-stay-private", "session", "room", 1000)
         assertFalse(value.toString().contains(value.participantToken))
-        assertFalse(SessionAction.Ready(value).toString().contains(value.participantToken))
+        assertFalse(SessionAction.Ready(value, 30_000).toString().contains(value.participantToken))
     }
 }

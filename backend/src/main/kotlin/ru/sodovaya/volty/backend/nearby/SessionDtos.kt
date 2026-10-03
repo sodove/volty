@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
     val deadlineEpochMillis: Long? = null,
     val operationId: String? = null,
     val credentials: SessionCredentialDto? = null,
+    /** Credit at actor-locked authorization; clients charge it from their HTTP request start. */
+    val remainingLeaseMillis: Long? = null,
 )
 
 @Serializable data class SessionCredentialDto(

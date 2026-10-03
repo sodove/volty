@@ -1,7 +1,6 @@
 package ru.sodovaya.volty.domain.voice
 
 object VoiceSessionReducer {
-    private const val LEASE_ACK_TIMEOUT_MILLIS = 30_000L
     /** Effects must be dispatched in order by a single owner; acknowledgements are tagged. */
     fun reduce(state: VoiceSessionState, event: VoiceSessionEvent): VoiceTransition = when (event) {
         is VoiceSessionEvent.Join -> join(state, event)
@@ -45,8 +44,10 @@ object VoiceSessionReducer {
         if (!state.wanted || state.generation != event.generation || state.operationId != event.operationId ||
             state.sessionId != null
         ) return VoiceTransition(state, listOf(VoiceSessionEffect.StopSession(event.sessionId)))
+        if (event.lease.expiredOnReceipt) return stop(state.copy(sessionId = event.sessionId))
         return VoiceTransition(
-            state.copy(sessionId = event.sessionId, phase = VoicePhase.CONNECTING, lastLeaseAckMillis = event.nowMillis),
+            state.copy(sessionId = event.sessionId, phase = VoicePhase.CONNECTING,
+                leaseDeadlineMillis = event.lease.deadlineMillis, lastLeaseRequestId = event.lease.requestId),
             listOf(VoiceSessionEffect.StartEngine(VoiceSessionTag(event.sessionId, event.generation), state.muted, state.deafened)),
         )
     }
@@ -63,7 +64,8 @@ object VoiceSessionReducer {
             add(VoiceSessionEffect.ClearSharingQueue)
         }
         return VoiceTransition(state.withoutMediaEvidence().copy(
-            wanted = false, cleanupPending = true, phase = VoicePhase.STOPPING, lastLeaseAckMillis = null,
+            wanted = false, cleanupPending = true, phase = VoicePhase.STOPPING, leaseDeadlineMillis = null,
+            lastLeaseRequestId = null,
             sharingEnabled = false,
         ), effects)
     }
@@ -90,18 +92,20 @@ object VoiceSessionReducer {
             is VoiceSessionEvent.RenderStopped -> unchanged(state.copy(renderStarted = false))
             is VoiceSessionEvent.Reconnecting -> unchanged(state.withoutMediaEvidence().copy(phase = VoicePhase.RECONNECTING))
             is VoiceSessionEvent.LeaseAck -> when {
-                hasExpiredLease(state, event.nowMillis) -> stop(state)
-                event.nowMillis >= (state.lastLeaseAckMillis ?: event.nowMillis) ->
-                    unchanged(state.copy(lastLeaseAckMillis = event.nowMillis))
-                else -> unchanged(state)
+                hasExpiredLease(state, event.lease.responseReceivedMillis) -> stop(state)
+                state.lastLeaseRequestId == null -> stop(state)
+                event.lease.requestId.value <= state.lastLeaseRequestId.value -> unchanged(state)
+                event.lease.expiredOnReceipt -> stop(state)
+                else -> unchanged(state.copy(leaseDeadlineMillis = event.lease.deadlineMillis,
+                    lastLeaseRequestId = event.lease.requestId))
             }
         }
     }
 
     private fun hasExpiredLease(state: VoiceSessionState, nowMillis: Long): Boolean {
         if (!state.wanted || state.sessionId == null) return false
-        val lastAck = state.lastLeaseAckMillis ?: return true
-        return nowMillis > lastAck && nowMillis - lastAck > LEASE_ACK_TIMEOUT_MILLIS
+        val deadline = state.leaseDeadlineMillis ?: return true
+        return nowMillis >= deadline
     }
 
     private fun setMuted(state: VoiceSessionState, value: Boolean): VoiceTransition {
