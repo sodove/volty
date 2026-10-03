@@ -5,7 +5,7 @@ import java.util.UUID
 enum class SessionDenial { MEMBERSHIP, OPERATION_CONFLICT, BUSY }
 sealed interface SessionAction {
     data class Ready(val credentials: SessionCredentials) : SessionAction
-    data class Confirmed(val sessionId: String, val deadlineEpochMillis: Long) : SessionAction
+    data class Confirmed(val sessionId: String, val deadlineEpochMillis: Long, val media: SessionMedia = SessionMedia()) : SessionAction
     data class Pending(val state: SessionJournalEntry) : SessionAction
     data class Ended(val state: SessionJournalEntry) : SessionAction
     data class Unavailable(val reason: SfuFailure) : SessionAction
@@ -65,16 +65,62 @@ class SessionService(
         if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
         if (resolveRoom(actor, checkNotNull(row.operation.destinationId)) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
-        val response = sfu.renew(row.sfuEpoch.roomEpoch, row.operation.sessionId!!, row.sfuEpoch.nodeEpoch)
+        val observed = observeCurrent(row)
+        if (observed is SfuReply.Rejected) return SessionAction.Unavailable(observed.reason)
+        val current = (observed as SfuReply.Accepted).value
+        if (current.operation.terminal) return result(current, false)
+        // Registration/signalling alone never earns another thirty seconds.
+        if (current.media.state != SfuParticipantState.ACTIVE) return result(current, false)
+        val mediaClient = sfu as? SfuConnectedLeaseClient ?: return SessionAction.Unavailable(SfuFailure.UNSUPPORTED)
+        val response = mediaClient.renewConnected(current.sfuEpoch!!.roomEpoch, current.operation.sessionId!!,
+            current.sfuEpoch.nodeEpoch, current.media.participantSid!!)
         if (response is SfuReply.Rejected) {
-            if (response.reason == SfuFailure.REJECTED) return stop(actor, operation)
+            // A different/new JOINING SID may have replaced the observation; don't cancel it.
+            val latest = checkNotNull(repository.expire(actor, operation, now).state)
+            if (latest.operation.terminal) { cleanup(latest); return result(checkNotNull(repository.get(actor, operation)), false) }
             return SessionAction.Unavailable(response.reason)
         }
         val receipt = (response as SfuReply.Accepted).value
-        val updated = checkNotNull(repository.heartbeat(actor, operation, row.operation.sessionId,
-            row.sfuEpoch, now, receipt.conservativeDeadlineEpochMillis).state)
+        val recorded = repository.heartbeatConnected(actor, operation, current.operation.sessionId,
+            current.sfuEpoch, current.media.observationVersion, current.media.participantSid, now, receipt.conservativeDeadlineEpochMillis)
+        val updated = checkNotNull(recorded.state)
         if (updated.operation.terminal) cleanup(updated)
+        else if (recorded.rejection != null) return SessionAction.Unavailable(SfuFailure.UNAVAILABLE)
         return result(checkNotNull(repository.get(actor, operation)), false)
+    }
+
+    /** Reconcile signed notification intent without renewing admission or minting credentials. */
+    fun refreshMedia(actor: String, operation: String): SessionAction {
+        val row = repository.expire(actor, operation, now).state
+            ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
+        if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
+        if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
+        if (resolveRoom(actor, checkNotNull(row.operation.destinationId)) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        return when (val observed = observeCurrent(row)) {
+            is SfuReply.Accepted -> result(observed.value, false)
+            is SfuReply.Rejected -> SessionAction.Unavailable(observed.reason)
+        }
+    }
+
+    /** Current live lookup is bounded and outside the actor transaction; no stale-cache fallback. */
+    private fun observeCurrent(row: SessionJournalEntry): SfuReply<SessionJournalEntry> {
+        val mediaClient = sfu as? SfuConnectedLeaseClient ?: return SfuReply.Rejected(SfuFailure.UNSUPPORTED)
+        val epoch = checkNotNull(row.sfuEpoch)
+        val observed = mediaClient.observeParticipant(epoch.roomEpoch, row.operation.sessionId!!, epoch.nodeEpoch)
+        if (observed is SfuReply.Rejected) {
+            // Unlike a conditional renewal SID mismatch, gate observation rejection means no valid admission.
+            if (observed.reason == SfuFailure.REJECTED) return SfuReply.Accepted(stop(row.operation.actorId, row.operation.operationId).state)
+            return observed
+        }
+        val recorded = repository.observeMedia(row.operation.actorId, row.operation.operationId, row.operation.sessionId,
+            epoch, row.media.observationVersion, (observed as SfuReply.Accepted).value, now)
+        val current = checkNotNull(recorded.state)
+        if (current.operation.terminal) {
+            cleanup(current)
+            return SfuReply.Accepted(checkNotNull(repository.get(row.operation.actorId, row.operation.operationId)))
+        }
+        if (recorded.rejection != null) return SfuReply.Rejected(SfuFailure.UNAVAILABLE)
+        return SfuReply.Accepted(current)
     }
 
     /** One bounded work item; the application owns scheduling/cancellation. No credentials minted. */
@@ -131,7 +177,7 @@ class SessionService(
     private fun result(row: SessionJournalEntry, credentials: Boolean): SessionAction {
         if (row.operation.terminal) return SessionAction.Ended(row)
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (!credentials) return SessionAction.Confirmed(row.operation.sessionId!!, row.operation.deadlineEpochMillis!!)
+        if (!credentials) return SessionAction.Confirmed(row.operation.sessionId!!, row.operation.deadlineEpochMillis!!, row.media)
         val authorized = try {
             repository.withActiveSession(row.operation.actorId, row.operation.operationId, now) { issuer.issue(it) }
         } catch (_: Exception) {

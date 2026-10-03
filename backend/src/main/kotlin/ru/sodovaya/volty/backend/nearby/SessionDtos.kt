@@ -4,7 +4,7 @@ import kotlinx.serialization.Serializable
 
 @Serializable data class SessionJoinRequest(val destinationId: String, val replace: Boolean = false)
 
-/** CONNECTING denotes registered admission, never proof of capture/render/media. */
+/** CONNECTING is registered admission; CONNECTED is observed SFU transport, never device audibility. */
 @Serializable data class SessionStateResponse(
     val phase: String,
     val sessionId: String? = null,

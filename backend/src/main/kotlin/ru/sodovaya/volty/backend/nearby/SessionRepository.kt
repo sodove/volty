@@ -32,6 +32,8 @@ interface SessionRepository {
     fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun get(actor: String, operation: String): SessionJournalEntry?
     fun findSession(actor: String, session: String): SessionJournalEntry?
+    /** Trusted internal reconciliation only; public endpoints still require exact actor ownership. */
+    fun findSessionById(session: String): SessionJournalEntry?
     fun currentClaim(actor: String): SessionClaim?
     fun pendingWork(limit: Int): List<SessionJournalEntry>
     fun pendingWork(actor: String, limit: Int): List<SessionJournalEntry>

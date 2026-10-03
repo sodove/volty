@@ -5,8 +5,13 @@ import javax.sql.DataSource
 
 data class PendingMediaWebhook(val sequence: Long, val event: VerifiedMediaWebhook)
 
+interface MediaWebhookInbox : MediaWebhookEventPort {
+    fun pending(limit: Int): List<PendingMediaWebhook>
+    fun complete(eventId: String, bodySha256: String): Boolean
+}
+
 /** Durable reconciliation intent only: receipt changes neither claims nor roster/media state. */
-class JdbcMediaWebhookInbox(private val source: DataSource) : MediaWebhookEventPort {
+class JdbcMediaWebhookInbox(private val source: DataSource) : MediaWebhookInbox {
     override fun accept(event: VerifiedMediaWebhook): MediaWebhookDisposition = transaction { c ->
         require(event.eventId.isNotBlank() && event.eventId.length <= 256 && event.bodySha256.matches(Regex("[a-f0-9]{64}")))
         c.prepareStatement("""
@@ -26,7 +31,7 @@ class JdbcMediaWebhookInbox(private val source: DataSource) : MediaWebhookEventP
         }
     }
 
-    fun pending(limit: Int): List<PendingMediaWebhook> {
+    override fun pending(limit: Int): List<PendingMediaWebhook> {
         require(limit in 1..1000)
         return transaction { c ->
             c.prepareStatement("SELECT * FROM nearby_media_webhook_inbox WHERE NOT processed ORDER BY sequence LIMIT ?").use {
@@ -42,7 +47,7 @@ class JdbcMediaWebhookInbox(private val source: DataSource) : MediaWebhookEventP
     }
 
     /** Call after a durable reconciliation outcome; retries and old hashes cannot consume new intent. */
-    fun complete(eventId: String, bodySha256: String): Boolean = transaction { c ->
+    override fun complete(eventId: String, bodySha256: String): Boolean = transaction { c ->
         c.prepareStatement("UPDATE nearby_media_webhook_inbox SET processed=TRUE WHERE event_id=? AND body_sha256=?").use {
             it.setString(1, eventId); it.setString(2, bodySha256); it.executeUpdate() == 1
         }

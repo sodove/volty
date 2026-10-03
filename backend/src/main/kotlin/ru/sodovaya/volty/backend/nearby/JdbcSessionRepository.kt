@@ -77,6 +77,13 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
         }
     }
+    override fun findSessionById(session: String): SessionJournalEntry? = source.connection.use { c ->
+        c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
+            it.queryTimeout = 5
+            it.setString(1, session)
+            it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
+        }
+    }
     override fun currentClaim(actor: String) = source.connection.use { claim(it, actor) }
 
     override fun pendingWork(limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit)

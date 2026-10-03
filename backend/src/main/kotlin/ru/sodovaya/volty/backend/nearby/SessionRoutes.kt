@@ -87,7 +87,8 @@ private suspend fun ApplicationCall.sessionResponse(action: SessionAction?) {
     when (action) {
         is SessionAction.Ready -> respond(SessionStateResponse("CONNECTING", action.credentials.sessionId,
             action.credentials.deadlineEpochMillis, credentials = SessionCredentialDto.from(action.credentials)))
-        is SessionAction.Confirmed -> respond(SessionStateResponse("CONNECTING", action.sessionId, action.deadlineEpochMillis))
+        is SessionAction.Confirmed -> respond(SessionStateResponse(
+            if (action.media.state == SfuParticipantState.ACTIVE) "CONNECTED" else "CONNECTING", action.sessionId, action.deadlineEpochMillis))
         is SessionAction.Pending -> respond(HttpStatusCode.Accepted, SessionStateResponse("PENDING", action.state.operation.sessionId,
             action.state.operation.deadlineEpochMillis, action.state.operation.operationId))
         is SessionAction.Ended -> respond(SessionStateResponse(action.state.operation.phase.name, action.state.operation.sessionId,

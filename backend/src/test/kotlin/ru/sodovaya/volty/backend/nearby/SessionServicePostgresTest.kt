@@ -135,12 +135,104 @@ class SessionServicePostgresTest {
 
     @Test fun cancellationDuringRenewAckCannotExtendLease() {
         service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_current", SfuParticipantState.ACTIVE)
         sfu.beforeRenewAck = { service.stop(actor, operation) }
         now = 200
         assertIs<SessionAction.Ended>(service.heartbeat(actor, operation))
         assertEquals(OperationPhase.CANCELLED, repository.get(actor, operation)!!.operation.phase)
         assertNull(repository.currentClaim(actor))
         assertEquals(1, tokensIssued)
+        assertTrue(sfu.calls.any { it.startsWith("renew-connected:") }, "The conditional renewal path was issued")
+    }
+
+    @Test fun registeredOnlyHeartbeatCannotExtendInitialAdmissionWindow() {
+        service.join(actor, operation, destination)
+        now = 200
+        val result = assertIs<SessionAction.Confirmed>(service.heartbeat(actor, operation))
+        assertEquals(30_100, result.deadlineEpochMillis)
+        assertTrue(sfu.calls.any { it.startsWith("observe:") })
+        assertFalse(sfu.calls.any { it.startsWith("renew:") || it.startsWith("renew-connected:") })
+        assertEquals(1, tokensIssued)
+    }
+
+    @Test fun joinedSignallingCannotKeepNeverConnectedMediaAliveForever() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_joined", SfuParticipantState.JOINED)
+        for (at in listOf(1000L, 15000L, 25000L)) {
+            now = at
+            assertEquals(30_100, assertIs<SessionAction.Confirmed>(service.heartbeat(actor, operation)).deadlineEpochMillis)
+        }
+        assertEquals(3, sfu.calls.count { it.startsWith("observe:") })
+        assertFalse(sfu.calls.any { it.startsWith("renew:") || it.startsWith("renew-connected:") })
+        now = 30_100
+        assertIs<SessionAction.Ended>(service.heartbeat(actor, operation))
+        assertNull(repository.currentClaim(actor))
+    }
+
+    @Test fun missingJoinedHookIsRecoveredFromCurrentActiveTransportBeforeConditionalRenewal() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_live", SfuParticipantState.ACTIVE)
+        now = 200
+        assertEquals(30_200, assertIs<SessionAction.Confirmed>(service.heartbeat(actor, operation)).deadlineEpochMillis)
+        assertEquals("PA_live", repository.get(actor, operation)!!.media.participantSid)
+        assertEquals(MediaPresence.CONNECTED, JdbcRosterRepository(source).snapshot(destination).peers.single().mediaPresence)
+        assertEquals(1, sfu.calls.count { it.startsWith("renew-connected:") })
+        assertFalse(sfu.calls.any { it.startsWith("renew:") })
+        assertEquals(1, tokensIssued)
+    }
+
+    @Test fun oldObservedSidRejectedDuringRenewalDoesNotCancelReplacementTransport() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_old", SfuParticipantState.ACTIVE)
+        sfu.beforeConnectedRenewValidation = { sfu.media = SfuParticipantObservation("PA_new", SfuParticipantState.JOINED) }
+        now = 200
+        assertIs<SessionAction.Unavailable>(service.heartbeat(actor, operation))
+        assertEquals(OperationPhase.ACTIVE, repository.get(actor, operation)!!.operation.phase)
+        assertEquals(30_100, repository.get(actor, operation)!!.operation.deadlineEpochMillis)
+        assertEquals(repository.get(actor, operation)!!.operation.sessionId, repository.currentClaim(actor)!!.sessionId)
+        assertFalse(sfu.calls.any { it.startsWith("revoke:") })
+        sfu.beforeConnectedRenewValidation = {}
+        sfu.media = SfuParticipantObservation("PA_new", SfuParticipantState.ACTIVE)
+        assertIs<SessionAction.Confirmed>(service.heartbeat(actor, operation))
+        assertEquals("PA_new", repository.get(actor, operation)!!.media.participantSid)
+    }
+
+    @Test fun cancellationInsideObservationAckCannotPublishMediaOrIssueRenewal() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_live", SfuParticipantState.ACTIVE)
+        sfu.beforeObserveAck = { service.stop(actor, operation) }
+        assertIs<SessionAction.Ended>(service.heartbeat(actor, operation))
+        assertTrue(sfu.calls.any { it.startsWith("observe:") })
+        assertFalse(sfu.calls.any { it.startsWith("renew-connected:") })
+        assertNull(repository.get(actor, operation)!!.media.participantSid)
+        assertNull(repository.currentClaim(actor))
+    }
+
+    @Test fun competingObservationWinsOverOldNetworkReplyWithoutRenewingItsOldSid() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_old", SfuParticipantState.ACTIVE)
+        sfu.beforeObserveAck = {
+            val row = repository.get(actor, operation)!!
+            assertNull(repository.observeMedia(actor, operation, row.operation.sessionId!!, row.sfuEpoch!!,
+                row.media.observationVersion, SfuParticipantObservation("PA_new", SfuParticipantState.ACTIVE), { now }).rejection)
+        }
+        assertIs<SessionAction.Unavailable>(service.heartbeat(actor, operation))
+        assertEquals("PA_new", repository.get(actor, operation)!!.media.participantSid)
+        assertFalse(sfu.calls.any { it.startsWith("renew-connected:") })
+    }
+
+    @Test fun failedObservationCannotRenewUsingPreviouslyStoredActiveMedia() {
+        service.join(actor, operation, destination)
+        sfu.media = SfuParticipantObservation("PA_live", SfuParticipantState.ACTIVE)
+        now = 200
+        service.heartbeat(actor, operation)
+        assertEquals(SfuParticipantState.ACTIVE, repository.get(actor, operation)!!.media.state)
+        val issued = sfu.calls.count { it.startsWith("renew-connected:") }
+        sfu.observationFailure = SfuFailure.TIMEOUT
+        now = 300
+        assertEquals(SfuFailure.TIMEOUT, assertIs<SessionAction.Unavailable>(service.heartbeat(actor, operation)).reason)
+        assertEquals(issued, sfu.calls.count { it.startsWith("renew-connected:") })
+        assertEquals(30_200, repository.get(actor, operation)!!.operation.deadlineEpochMillis)
     }
 
     @Test fun expiredHeartbeatNeverIssuesRenewal() {
@@ -222,13 +314,17 @@ class SessionServicePostgresTest {
         assertEquals(2, tokensIssued)
     }
 
-    private class FakeSfu(private val now: () -> Long) : SfuLeaseClient {
+    private class FakeSfu(private val now: () -> Long) : SfuLeaseClient, SfuConnectedLeaseClient {
         var node = "a".repeat(32)
         var available = true
         var failCleanup = false
         var loseRegisterAck = false
         var beforeRegisterAck: () -> Unit = {}
         var beforeRenewAck: () -> Unit = {}
+        var beforeObserveAck: () -> Unit = {}
+        var beforeConnectedRenewValidation: () -> Unit = {}
+        var media = SfuParticipantObservation(null, null)
+        var observationFailure: SfuFailure? = null
         val calls = CopyOnWriteArrayList<String>()
         private val deadlines = ConcurrentHashMap<String, Long>()
         private val terminal = ConcurrentHashMap.newKeySet<String>()
@@ -248,6 +344,25 @@ class SessionServicePostgresTest {
         override fun renew(room: String, session: String, expectedNodeEpoch: String): SfuReply<LeaseReceipt> {
             calls += "renew:$session"
             if (node != expectedNodeEpoch || terminal.contains(session)) return SfuReply.Rejected(SfuFailure.REJECTED)
+            val receipt = LeaseReceipt(now() + 30_000)
+            deadlines[session] = receipt.conservativeDeadlineEpochMillis
+            beforeRenewAck()
+            return SfuReply.Accepted(receipt)
+        }
+        override fun observeParticipant(room: String, session: String, expectedNodeEpoch: String): SfuReply<SfuParticipantObservation> {
+            calls += "observe:$session"
+            if (node != expectedNodeEpoch || terminal.contains(session)) return SfuReply.Rejected(SfuFailure.REJECTED)
+            observationFailure?.let { return SfuReply.Rejected(it) }
+            val captured = media
+            beforeObserveAck()
+            return SfuReply.Accepted(captured)
+        }
+        override fun renewConnected(room: String, session: String, expectedNodeEpoch: String, expectedParticipantSid: String): SfuReply<LeaseReceipt> {
+            calls += "renew-connected:$session"
+            beforeConnectedRenewValidation()
+            if (node != expectedNodeEpoch || terminal.contains(session) || media.participantSid != expectedParticipantSid || media.state != SfuParticipantState.ACTIVE) {
+                return SfuReply.Rejected(SfuFailure.REJECTED)
+            }
             val receipt = LeaseReceipt(now() + 30_000)
             deadlines[session] = receipt.conservativeDeadlineEpochMillis
             beforeRenewAck()

@@ -111,6 +111,20 @@ class SessionRoutesTest {
         assertEquals(listOf("heartbeat:$actor:$session", "disconnect:$actor:$session"), port.calls)
     }
 
+    @Test fun onlyConfirmedActiveTransportEarnsConnectedPhaseAndNoStatusCredentials() = testApplication {
+        val port = RecordingPort()
+        val deps = dependencies(port)
+        application { module(deps) }
+        for (state in listOf(null, SfuParticipantState.JOINED, SfuParticipantState.ACTIVE)) {
+            port.media = if (state == null) SessionMedia() else SessionMedia("PA_current", state, 1)
+            val response = client.post("/v2/nearby/sessions/$session/heartbeat") { bearerAuth(deps.tokenService.issueAccessToken(actor)) }
+            assertEquals(HttpStatusCode.OK, response.status)
+            assertTrue(response.bodyAsText().contains("\"phase\":\"${if (state == SfuParticipantState.ACTIVE) "CONNECTED" else "CONNECTING"}\""))
+            assertFalse(response.bodyAsText().contains("participantToken"))
+            assertFalse(response.bodyAsText().contains("audible"))
+        }
+    }
+
     @Test fun cancellationUsesOperationWithoutNeedingSessionOrDestination() = testApplication {
         val port = RecordingPort()
         val deps = dependencies(port)
@@ -126,6 +140,7 @@ class SessionRoutesTest {
         var missing = false
         var replacementRequested = false
         var denial: SessionDenial? = null
+        var media = SessionMedia()
         private fun ended() = SessionAction.Ended(SessionJournalEntry(SessionOperation(actor, operation, null, null, OperationPhase.CANCELLED, null), null, false, false))
         override fun join(actor: String, operation: String, destination: String, replace: Boolean): SessionAction {
             calls += "join:$actor:$operation:$destination"
@@ -135,10 +150,10 @@ class SessionRoutesTest {
         }
         override fun status(actor: String, operation: String): SessionAction? {
             calls += "status:$actor:$operation"
-            return if (missing) null else SessionAction.Confirmed(session, 30000)
+            return if (missing) null else SessionAction.Confirmed(session, 30000, media)
         }
         override fun cancel(actor: String, operation: String): SessionAction { calls += "cancel:$actor:$operation"; return ended() }
-        override fun heartbeat(actor: String, session: String): SessionAction? { calls += "heartbeat:$actor:$session"; return SessionAction.Confirmed(session, 30000) }
+        override fun heartbeat(actor: String, session: String): SessionAction? { calls += "heartbeat:$actor:$session"; return SessionAction.Confirmed(session, 30000, media) }
         override fun disconnect(actor: String, session: String): SessionAction? { calls += "disconnect:$actor:$session"; return ended() }
     }
 }
