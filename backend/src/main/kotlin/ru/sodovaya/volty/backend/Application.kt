@@ -63,6 +63,8 @@ import ru.sodovaya.volty.backend.nearby.SessionEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbySessionRoutes
 import ru.sodovaya.volty.backend.nearby.RosterEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyRosterRoutes
+import ru.sodovaya.volty.backend.nearby.MediaWebhookEndpoint
+import ru.sodovaya.volty.backend.nearby.installNearbyMediaWebhookRoutes
 
 private const val ISSUER = "volty"
 private const val AUDIENCE = "volty-app"
@@ -76,6 +78,7 @@ class AppDependencies(
     val navigationProvider: NavigationProvider = navigationProviderFor(config),
     val nearbySessions: SessionEndpointPort? = null,
     val nearbyRoster: RosterEndpointPort? = null,
+    val nearbyMediaWebhook: MediaWebhookEndpoint? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -259,6 +262,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     routing {
         installNearbySessionRoutes(dependencies)
         installNearbyRosterRoutes(dependencies)
+        installNearbyMediaWebhookRoutes(dependencies)
         installOfflineRegionRoutes(dependencies)
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
             route("/v1") {

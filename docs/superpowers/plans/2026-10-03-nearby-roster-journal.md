@@ -54,6 +54,12 @@ Files: RosterRepository, DTOs, routes and PostgreSQL/HTTP tests.
 
 Files: WebhookVerifier, media observation journal/coordinator, route/tests.
 
+Execution slices:3a live gate-owned SFU observation (complete e2502b34);
+3b signed bounded receiver and durable supported-event inbox;3c actor-locked
+media observation versions, reconciliation and connected-only renewal;3d
+room-finished handling plus remaining-grant client/server adaptation. These
+slices do not individually complete Task3 or enable production.
+
 - Inspect the pinned io.livekit server SDK before using WebhookReceiver. Receive
   original bytes/text and Authorization; verify signature/body digest, never skip
   authorization. Bound body size before allocating the whole request.
@@ -66,6 +72,18 @@ Files: WebhookVerifier, media observation journal/coordinator, route/tests.
   heartbeat cannot extend the initial30s window while media is unconfirmed.
   Missing joined hooks may be resolved by an authenticated, incarnation-fenced
   current participant observation. Keep SFU network work outside SQL locks.
+- Renew must validate the expected current participant SID and ACTIVE state
+  within the SFU entry lock that extends the lease. A backend observation followed
+  by an unconstrained renewal is insufficient: a new unconfirmed SID can replace
+  the observed transport between those calls. Unsupported conditional renewal
+  fails closed; no fallback to the generic prototype admin renewal.
+- Persist an observation version under the actor lock. A network lookup uses its
+  captured version; a response that loses to a newer observation retries rather
+  than overwriting that SID/state. Snapshot media changes share the roster
+  revision/outbox transaction. Repeated identical media observations must not
+  invent visible revisions; revision protects payload, observation version
+  protects concurrent reconciliation. Unknown current media cannot extend its
+  admission window merely because an older stored observation was ACTIVE.
 - Same logical session may reconnect with a new participant SID. A delayed left
   hook for the prior SID must not end the new transport; when hooks are missing,
   reconcile current SFU SID instead of choosing the newest event timestamp.
