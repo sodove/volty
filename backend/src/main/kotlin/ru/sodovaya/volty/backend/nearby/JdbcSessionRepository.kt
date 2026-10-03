@@ -8,7 +8,7 @@ import javax.sql.DataSource
 class JdbcSessionRepository(private val source: DataSource) : SessionRepository {
     private val policy = SessionOperationPolicy()
 
-    override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long): SessionJournalResult =
+    override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, replace: Boolean): SessionJournalResult =
         locked(actor) { c ->
             val existing = read(c, actor, operation)
             val observedAt = now()
@@ -20,7 +20,12 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
             // Serializing through the actor row also covers cancel before any operation row exists.
             claim(c, actor)?.let { oldClaim ->
                 val old = checkNotNull(read(c, actor, oldClaim.operationId))
-                persist(c, old, policy.cancel(old.operation, actor, oldClaim.operationId, observedAt))
+                val expired = policy.expire(old.operation, observedAt)
+                if (expired.operation!!.terminal) persist(c, old, expired)
+                else {
+                    if (!replace) return@locked SessionJournalResult(null, OperationRejection.CLAIM_BUSY)
+                    persist(c, old, policy.cancel(old.operation, actor, oldClaim.operationId, observedAt))
+                }
             }
             val row = SessionJournalEntry(checkNotNull(decision.operation), sfuEpoch, admissionPending = true, cleanupPending = false)
             save(c, row)
@@ -47,6 +52,12 @@ class JdbcSessionRepository(private val source: DataSource) : SessionRepository 
     }
 
     override fun get(actor: String, operation: String) = source.connection.use { read(it, actor, operation) }
+    override fun findSession(actor: String, session: String): SessionJournalEntry? = source.connection.use { c ->
+        c.prepareStatement("SELECT * FROM nearby_session_operations WHERE actor_id=?::uuid AND session_id=?::uuid").use {
+            it.setString(1, actor); it.setString(2, session)
+            it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
+        }
+    }
     override fun currentClaim(actor: String) = source.connection.use { claim(it, actor) }
 
     override fun pendingWork(limit: Int) = selectWork("admission_pending OR cleanup_pending", null, limit)

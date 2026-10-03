@@ -14,12 +14,13 @@ data class SessionJournalResult(val state: SessionJournalEntry?, val rejection: 
 
 /** Server timestamps only. No network effects may execute inside these transactions. */
 interface SessionRepository {
-    fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long): SessionJournalResult
+    fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, replace: Boolean = false): SessionJournalResult
     fun cancel(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
     fun heartbeat(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
     fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun get(actor: String, operation: String): SessionJournalEntry?
+    fun findSession(actor: String, session: String): SessionJournalEntry?
     fun currentClaim(actor: String): SessionClaim?
     fun pendingWork(limit: Int): List<SessionJournalEntry>
     fun pendingWork(actor: String, limit: Int): List<SessionJournalEntry>

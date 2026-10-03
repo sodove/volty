@@ -2,7 +2,7 @@ package ru.sodovaya.volty.backend.nearby
 
 import java.util.UUID
 
-enum class SessionDenial { MEMBERSHIP, OPERATION_CONFLICT }
+enum class SessionDenial { MEMBERSHIP, OPERATION_CONFLICT, BUSY }
 sealed interface SessionAction {
     data class Ready(val credentials: SessionCredentials) : SessionAction
     data class Confirmed(val sessionId: String, val deadlineEpochMillis: Long) : SessionAction
@@ -21,7 +21,7 @@ class SessionService(
     private val now: () -> Long = System::currentTimeMillis,
     private val singletonOrigin: Boolean = false,
 ) {
-    fun join(actor: String, operation: String, destination: String): SessionAction {
+    fun join(actor: String, operation: String, destination: String, replace: Boolean = false): SessionAction {
         val existing = repository.get(actor, operation)
         if (existing != null && existing.operation.terminal) return SessionAction.Ended(existing)
         if (existing != null && existing.operation.destinationId != destination) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
@@ -39,11 +39,18 @@ class SessionService(
         }
         val epoch = SfuEpoch(room, status.nodeEpoch)
         if (existing != null && existing.sfuEpoch != epoch) return stop(actor, operation)
-        val begun = repository.begin(actor, operation, destination, UUID.randomUUID().toString(), epoch, now)
+        val begun = repository.begin(actor, operation, destination, UUID.randomUUID().toString(), epoch, now, replace)
+        if (begun.rejection == OperationRejection.CLAIM_BUSY) return SessionAction.Denied(SessionDenial.BUSY)
         val row = checkNotNull(begun.state)
         if (row.operation.terminal) return SessionAction.Ended(row)
         if (begun.rejection != null) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         return result(advancePending(row), credentials = true)
+    }
+
+    fun status(actor: String, operation: String): SessionAction? {
+        val row = repository.expire(actor, operation, now).state ?: return null
+        if (row.operation.terminal) cleanup(row)
+        return result(checkNotNull(repository.get(actor, operation)), credentials = false)
     }
 
     fun stop(actor: String, operation: String): SessionAction.Ended {

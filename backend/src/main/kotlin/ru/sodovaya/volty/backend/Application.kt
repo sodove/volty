@@ -59,6 +59,8 @@ import java.time.Instant
 import java.util.Date
 import java.util.concurrent.ConcurrentHashMap
 import javax.sql.DataSource
+import ru.sodovaya.volty.backend.nearby.SessionEndpointPort
+import ru.sodovaya.volty.backend.nearby.installNearbySessionRoutes
 
 private const val ISSUER = "volty"
 private const val AUDIENCE = "volty-app"
@@ -70,6 +72,7 @@ class AppDependencies(
     val testMode: Boolean = false,
     val liveHub: LiveHub = LiveHub(json),
     val navigationProvider: NavigationProvider = navigationProviderFor(config),
+    val nearbySessions: SessionEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -238,7 +241,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     intercept(io.ktor.server.application.ApplicationCallPipeline.Plugins) {
-        if (call.request.path().startsWith("/v1/")) {
+        if (call.request.path().startsWith("/v1/") || call.request.path().startsWith("/v2/")) {
             val key = "${call.request.local.remoteHost}:${call.request.httpMethod.value}:${call.request.path().substringBeforeLast('/', call.request.path())}"
             val now = Instant.now().epochSecond
             if (!dependencies.rateLimiter.allow(key, now)) {
@@ -251,6 +254,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     routing {
+        installNearbySessionRoutes(dependencies)
         installOfflineRegionRoutes(dependencies)
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
             route("/v1") {

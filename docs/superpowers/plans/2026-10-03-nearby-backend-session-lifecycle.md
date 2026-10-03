@@ -79,6 +79,18 @@ Files: `nearby/SessionService.kt`, `nearby/SfuLeaseClient.kt`, bounded reconcile
 
 Files: `nearby/SessionRoutes.kt`, `nearby/SessionDtos.kt`, route contract tests.
 
+Execution split: 4a authenticated bounded session HTTP boundary with production
+dependency disabled by default; 4b persisted roster/revision/outbox and media
+confirmation. Registered admission is not confirmed media: 4a returns CONNECTING,
+never a speaking/CONNECTED roster assertion. Community membership wiring follows
+the additive community plan; no arbitrary client room name becomes a resolver.
+Before exposing the boundary, enforce approved claim policy: join from a second
+operation returns busy unless replacement is explicit. The earlier repository
+foundation unconditionally replaced the claim; preserve existing ownership tests
+by making their replacement intent explicit, then add competing-join tests under
+the actual actor lock. Default false must reach repository atomically, not through
+a race-prone service preflight read.
+
 - [ ] Authenticated operation join/status/cancel, session heartbeat/disconnect;
   require channel membership through destination resolver (no arbitrary room names).
 - [ ] Revisioned roster snapshots reflect committed active sessions. Duplicate

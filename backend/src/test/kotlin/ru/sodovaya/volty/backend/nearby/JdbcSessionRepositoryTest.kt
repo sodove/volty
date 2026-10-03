@@ -27,8 +27,8 @@ class JdbcSessionRepositoryTest {
     private val session = id()
     private val repository = JdbcSessionRepository(source)
     private val epoch = SfuEpoch("room-epoch-1", "node-epoch-1")
-    private fun begin(op: String = operation, sid: String = session, time: Long = 100) =
-        repository.begin(actor, op, destination, sid, epoch, { time })
+    private fun begin(op: String = operation, sid: String = session, time: Long = 100, replace: Boolean = false) =
+        repository.begin(actor, op, destination, sid, epoch, { time }, replace)
 
     @BeforeEach fun prepare() {
         SchemaMigrator(source).migrate()
@@ -65,10 +65,49 @@ class JdbcSessionRepositoryTest {
         assertEquals(OperationRejection.TERMINAL, repository.admit(actor, operation, session, epoch, { 102 }, 30_100).rejection)
     }
 
+    @Test fun secondOperationWithoutReplacementCannotTakeLiveClaim() {
+        begin()
+        val next = id()
+        val result = begin(next, id(), 101)
+        assertNull(result.state)
+        assertNotNull(result.rejection)
+        assertNull(repository.get(actor, next))
+        assertEquals(OperationPhase.PENDING, repository.get(actor, operation)!!.operation.phase)
+        assertEquals(session, repository.currentClaim(actor)!!.sessionId)
+    }
+
+    @Test fun competingOperationsWithoutReplacementHaveExactlyOneWinner() {
+        val ready = CountDownLatch(2); val start = CountDownLatch(1)
+        val pool = Executors.newFixedThreadPool(2)
+        val ops = listOf(id(), id())
+        try {
+            val futures = ops.map { op -> pool.submit<SessionJournalResult> {
+                ready.countDown(); check(start.await(5, TimeUnit.SECONDS)); begin(op, id(), 100)
+            } }
+            assertTrue(ready.await(5, TimeUnit.SECONDS)); start.countDown()
+            val results = futures.map { it.get(15, TimeUnit.SECONDS) }
+            assertEquals(1, results.count { it.state != null && it.rejection == null })
+            assertEquals(1, results.count { it.state == null && it.rejection != null })
+            assertEquals(1, ops.count { repository.get(actor, it) != null })
+            assertTrue(repository.currentClaim(actor)!!.operationId in ops)
+        } finally { pool.shutdownNow() }
+    }
+
+    @Test fun expiredClaimAllowsNewOperationWithoutReplacementAndKeepsOldCleanup() {
+        begin()
+        val nextOp = id(); val nextSession = id()
+        val result = begin(nextOp, nextSession, 15_100)
+        assertNull(result.rejection)
+        assertEquals(nextSession, result.state!!.operation.sessionId)
+        assertEquals(OperationPhase.EXPIRED, repository.get(actor, operation)!!.operation.phase)
+        assertTrue(repository.get(actor, operation)!!.cleanupPending)
+        assertEquals(nextSession, repository.currentClaim(actor)!!.sessionId)
+    }
+
     @Test fun replacementAndOldCleanupNeverReleaseNewClaim() {
         begin()
         val nextOp = id(); val nextSession = id()
-        begin(nextOp, nextSession, 101)
+        begin(nextOp, nextSession, 101, replace = true)
         assertEquals(OperationPhase.CANCELLED, repository.get(actor, operation)!!.operation.phase)
         assertTrue(repository.get(actor, operation)!!.cleanupPending)
         assertFalse(repository.completeCleanup(actor, operation, id(), epoch))
@@ -103,7 +142,7 @@ class JdbcSessionRepositoryTest {
 
     @Test fun rollbackRestoresPreviousClaimAndOperation() {
         begin()
-        assertFails { repository.begin(actor, id(), "invalid-uuid", id(), epoch, { 101 }) }
+        assertFails { repository.begin(actor, id(), "invalid-uuid", id(), epoch, { 101 }, replace = true) }
         assertEquals(OperationPhase.PENDING, repository.get(actor, operation)!!.operation.phase)
         assertFalse(repository.get(actor, operation)!!.cleanupPending)
         assertEquals(session, repository.currentClaim(actor)!!.sessionId)

@@ -29,6 +29,53 @@ class SessionServicePostgresTest {
             SessionCredentials("ws://test", "opaque-test-token", row.operation.sessionId!!, row.sfuEpoch!!.roomEpoch, row.operation.deadlineEpochMillis!!)
         }, { now })
 
+    @Test fun endpointSessionOwnershipAndOldDisconnectCannotAffectReplacement() {
+        val endpoints = SessionEndpointService(service, repository)
+        val oldSession = assertIs<SessionAction.Ready>(endpoints.join(actor, operation, destination)).credentials.sessionId
+        val replacementOperation = UUID.randomUUID().toString()
+        val replacementSession = assertIs<SessionAction.Ready>(endpoints.join(actor, replacementOperation, destination, replace = true)).credentials.sessionId
+        val before = sfu.calls.toList()
+        assertNull(endpoints.heartbeat(UUID.randomUUID().toString(), replacementSession))
+        assertNull(endpoints.disconnect(UUID.randomUUID().toString(), replacementSession))
+        assertEquals(before, sfu.calls)
+        assertIs<SessionAction.Ended>(endpoints.disconnect(actor, oldSession))
+        assertEquals(replacementSession, repository.currentClaim(actor)!!.sessionId)
+        val renews = sfu.calls.count { it.startsWith("renew:") }
+        assertIs<SessionAction.Ended>(endpoints.heartbeat(actor, oldSession))
+        assertEquals(renews, sfu.calls.count { it.startsWith("renew:") })
+    }
+
+    @Test fun endpointStatusExpiresAndCleansSessionWithoutIssuingCredentials() {
+        val endpoints = SessionEndpointService(service, repository)
+        assertNull(endpoints.status(actor, operation))
+        service.join(actor, operation, destination)
+        assertIs<SessionAction.Confirmed>(endpoints.status(actor, operation))
+        assertEquals(1, tokensIssued)
+        now = repository.get(actor, operation)!!.operation.deadlineEpochMillis!!
+        val ended = assertIs<SessionAction.Ended>(endpoints.status(actor, operation))
+        assertEquals(OperationPhase.EXPIRED, ended.state.operation.phase)
+        assertFalse(ended.state.cleanupPending)
+        assertNull(repository.currentClaim(actor))
+        assertEquals(1, tokensIssued)
+        assertTrue(sfu.calls.any { it.startsWith("revoke:") })
+    }
+
+    @Test fun newOperationWithoutExplicitReplacementDoesNotRegisterOrRevoke() {
+        val first = assertIs<SessionAction.Ready>(service.join(actor, operation, destination))
+        val next = UUID.randomUUID().toString()
+        val registers = sfu.calls.count { it.startsWith("register:") }
+        val revokes = sfu.calls.count { it.startsWith("revoke:") }
+        assertEquals(SessionDenial.BUSY, assertIs<SessionAction.Denied>(service.join(actor, next, destination)).reason)
+        assertEquals(registers, sfu.calls.count { it.startsWith("register:") })
+        assertEquals(revokes, sfu.calls.count { it.startsWith("revoke:") })
+        assertEquals(1, tokensIssued)
+        assertNull(repository.get(actor, next))
+        assertEquals(first.credentials.sessionId, repository.currentClaim(actor)!!.sessionId)
+        assertIs<SessionAction.Ready>(service.join(actor, next, destination, replace = true))
+        assertEquals(2, tokensIssued)
+        assertEquals(OperationPhase.CANCELLED, repository.get(actor, operation)!!.operation.phase)
+    }
+
     @BeforeEach fun prepare() {
         SchemaMigrator(source).migrate()
         source.connection.use { c ->
@@ -79,7 +126,7 @@ class SessionServicePostgresTest {
         service.join(actor, operation, destination)
         val next = UUID.randomUUID().toString()
         sfu.failCleanup = true
-        assertIs<SessionAction.Pending>(service.join(actor, next, destination))
+        assertIs<SessionAction.Pending>(service.join(actor, next, destination, replace = true))
         val nextSession = repository.get(actor, next)!!.operation.sessionId
         assertFalse(sfu.calls.contains("register:$nextSession"))
         assertTrue(repository.get(actor, operation)!!.cleanupPending)
