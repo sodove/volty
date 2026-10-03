@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
     val maxUses: Int, val uses: Int, val revokedAtMillis: Long?, val creationRevision: Long, val revocationRevision: Long?,
 )
 @Serializable data class InvitationRevocationResponse(val invitationId: String, val communityId: String, val revision: Long)
+@Serializable data class InvitationListResponse(val items: List<InvitationMetadataResponse>)
 /** Historical receipt, not a current membership/voice/location grant. */
 @Serializable data class InvitationAcceptanceResponse(val operationId: String, val invitationId: String, val communityId: String,
                                                       val revision: Long, val membershipChanged: Boolean)

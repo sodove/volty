@@ -25,6 +25,7 @@ class InvitationRoutesTest {
         override fun isAccessActive(userId: String, issuedAtEpochSeconds: Long) = userId == actor
     }, testMode = true, nearbyInvitations = port)
     private inner class Recording : InvitationEndpointPort {
+        override fun list(actor: String, community: String, after: String?, limit: Int) = InvitationListingResult.Denied
         val calls = mutableListOf<String>()
         var creation: InvitationCreationResult = InvitationCreationResult.Created(InvitationSummary(invitation, community, 100, 900100, 10, 0, null, 7, null))
         var revocation: InvitationRevocationResult = InvitationRevocationResult.Revoked(invitation, community, 8)

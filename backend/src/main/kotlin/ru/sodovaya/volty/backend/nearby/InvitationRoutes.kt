@@ -13,6 +13,23 @@ import ru.sodovaya.volty.backend.AppDependencies
 /** Raw invitation secret exists only in a bounded request body, never server URL or response. */
 fun Route.installNearbyInvitationRoutes(dependencies: AppDependencies) {
     authenticate("auth-jwt") {
+        get("/v2/nearby/communities/{communityId}/invitations") {
+            val actor = call.nearbyActor(dependencies)
+            val community = communityCanonicalId(call.parameters["communityId"] ?: "")
+            val port = dependencies.nearbyInvitations ?: invitationDisabled()
+            fun single(name: String): String? {
+                val values = call.request.queryParameters.getAll(name) ?: return null
+                if (values.size != 1) invitationInvalid()
+                return values.single()
+            }
+            val after = single("after")?.let(::communityCanonicalId)
+            val limit = single("limit")?.let { it.toIntOrNull() ?: invitationInvalid() } ?: 20
+            if (limit !in 1..50) invitationInvalid()
+            when (val result = withContext(Dispatchers.IO) { port.list(actor, community, after, limit) }) {
+                is InvitationListingResult.Listed -> call.respond(InvitationListResponse(result.items.map { it.dto() }))
+                InvitationListingResult.Denied -> invitationDenied()
+            }
+        }
         route("/v2/nearby/communities/{communityId}/invitations/{invitationId}") {
             put {
                 val actor = call.nearbyActor(dependencies)
