@@ -130,6 +130,14 @@ stop command. A room can have newer transports by the time the event arrives.
 
 ## Task4: Delivery cursor and reconnect
 
+- Client pure replica slice may run while independent backend integration tests
+  run. Tag every roster subscription with channel and its own generation. A full
+  snapshot replaces rows only for that tag and a newer revision; same-revision
+  replay is harmless only when peer content agrees (row order is irrelevant).
+  Reject duplicate actors/sessions or CONNECTED without confirmed SID; request
+  resync without presenting last-known rows as a current count. Old-channel and
+  retired-subscription replies cannot clear another subscription. This slice
+  does not implement transport, authorization or local peer lease expiry yet.
 - Build durable outbox cursor consumption with complete authorized snapshots.
   Register subscription before initial read; buffer then discard revisions no
   newer than initial snapshot. Repeated delivery is safe.
