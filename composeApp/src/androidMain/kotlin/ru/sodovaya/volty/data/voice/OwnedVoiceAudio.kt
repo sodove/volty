@@ -90,7 +90,7 @@ internal class OwnedVoiceAudio(
         released = true
     }
     private fun record(code: VoiceDiagnosticCode) = diagnostics.record(SystemClock.elapsedRealtime(), code)
-    private fun fail(code: VoiceDiagnosticCode) { record(code); emit(VoiceSessionEvent.Failed(tag.generation)) }
+    private fun fail(code: VoiceDiagnosticCode) { record(code); emit(VoiceSessionEvent.EngineFailed(tag)) }
     private fun isHeadsetInput(type: Int): Boolean = type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
         type == AudioDeviceInfo.TYPE_USB_HEADSET ||
         type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||

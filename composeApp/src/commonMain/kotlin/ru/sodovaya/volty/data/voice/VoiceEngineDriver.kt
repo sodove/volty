@@ -20,7 +20,12 @@ import ru.sodovaya.volty.domain.voice.VoiceSessionEffect
 import ru.sodovaya.volty.domain.voice.VoiceSessionEvent
 import ru.sodovaya.volty.domain.voice.VoiceSessionTag
 
-class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: VoiceSdkSessionFactory) {
+class VoiceEngineDriver(
+    private val scope: CoroutineScope,
+    private val factory: VoiceSdkSessionFactory,
+    /** Required nonblocking current intent/lease predicate; no permit-all default. */
+    private val authorized: (VoiceSessionTag) -> Boolean,
+) {
     private val mutex = Mutex()
     private var command: Command? = null
     private var current: Handle? = null
@@ -29,13 +34,19 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
     val events = output.asSharedFlow()
     suspend fun start(effect: VoiceSessionEffect.StartEngine, credentials: VoiceConnectionCredentials): Result<Unit> = coroutineScope {
         val requested = Command(effect.tag, currentCoroutineContext()[Job]!!, effect.muted, effect.deafened)
-        val previous = mutex.withLock {
+        val registration = mutex.withLock {
+            if (!isAuthorized(effect.tag)) return@withLock false to null
             val old = command
             current?.let { retired += it }
             current = null
             command = requested
-            old
+            true to old
         }
+        if (!registration.first) {
+            output.tryEmit(VoiceSessionEvent.EngineFailed(effect.tag))
+            return@coroutineScope Result.failure(VoiceEngineException(VoiceEngineError.AUTHORIZATION))
+        }
+        val previous = registration.second
         previous?.job?.cancel()
         var handle: Handle? = null
         try {
@@ -49,8 +60,8 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
                 Handle(requested, factory.create(effect.tag) { event ->
                     scope.launch {
                         mutex.withLock {
-                            if (command === requested && current?.command === requested && isSdkEvent(event, requested.tag)) {
-                                output.tryEmit(event)
+                            if (command === requested && current?.command === requested && isAuthorized(requested.tag) && isSdkEvent(event, requested.tag)) {
+                                output.tryEmit(if (event is VoiceSessionEvent.Failed) VoiceSessionEvent.EngineFailed(requested.tag) else event)
                             }
                         }
                     }
@@ -60,6 +71,7 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
                 checkCommand(requested)
                 handle.session.setDeafened(requested.deafened)
             }
+            assertOwned(handle)
             handle.session.connect(credentials)
             assertOwned(handle)
             // Earlier publication used effect.muted captured before connect.
@@ -79,7 +91,7 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
             val cleanup = handle?.let { release(it) }
             val code = if (cleanup?.isFailure == true) VoiceEngineError.CLEANUP
                 else (error as? VoiceEngineException)?.code ?: VoiceEngineError.CONNECTION
-            output.tryEmit(VoiceSessionEvent.Failed(effect.tag.generation))
+            output.tryEmit(VoiceSessionEvent.EngineFailed(effect.tag))
             Result.failure(VoiceEngineException(code))
         }
     }
@@ -105,7 +117,7 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
 
     suspend fun setMuted(tag: VoiceSessionTag, muted: Boolean): Result<Unit> {
         val (accepted, handle) = mutex.withLock {
-            val owned = command?.takeIf { it.tag == tag } ?: return@withLock false to null
+            val owned = command?.takeIf { it.tag == tag && isAuthorized(tag) } ?: return@withLock false to null
             check(owned.muteVersion < Long.MAX_VALUE)
             owned.muted = muted
             owned.muteVersion++
@@ -143,7 +155,7 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
     suspend fun setDeafened(tag: VoiceSessionTag, deafened: Boolean): Result<Unit> {
         return try {
             val accepted = mutex.withLock {
-                val owned = command?.takeIf { it.tag == tag } ?: return@withLock false
+                val owned = command?.takeIf { it.tag == tag && isAuthorized(tag) } ?: return@withLock false
                 owned.deafened = deafened
                 // Synchronous native speaker-mute setter, no suspended SDK work
                 // under ownership lock. Allocation samples this same intent.
@@ -168,7 +180,10 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
 
     private fun checkCommand(requested: Command) {
         if (command !== requested) throw CancellationException("Voice operation superseded")
+        if (!isAuthorized(requested.tag)) throw VoiceEngineException(VoiceEngineError.AUTHORIZATION)
     }
+
+    private fun isAuthorized(tag: VoiceSessionTag): Boolean = try { authorized(tag) } catch (_: Exception) { false }
 
     private suspend fun detach(requested: Command, handle: Handle?) = withContext(NonCancellable) {
         mutex.withLock {

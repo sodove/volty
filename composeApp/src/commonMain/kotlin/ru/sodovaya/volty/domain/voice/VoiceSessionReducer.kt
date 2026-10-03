@@ -75,6 +75,10 @@ object VoiceSessionReducer {
             return unchanged(state)
         }
         return when (event) {
+            is VoiceSessionEvent.EngineFailed -> {
+                val stopped = stop(state)
+                stopped.copy(state = stopped.state.copy(phase = VoicePhase.FAILED))
+            }
             is VoiceSessionEvent.TransportConnected -> VoiceTransition(
                 state.copy(transportConnected = true, phase = VoicePhase.CONNECTED),
                 if (state.phase == VoicePhase.RECONNECTING) listOf(

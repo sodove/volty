@@ -7,6 +7,31 @@ import ru.sodovaya.volty.domain.voice.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class VoiceDiagnosticControllerTest {
+    @Test fun diagnosticAuthorizationRequiresCurrentActiveTagAndIntent() = runTest {
+        val active = ru.sodovaya.volty.domain.voice.VoiceSessionTag(ru.sodovaya.volty.domain.voice.VoiceSessionId("diagnostic-1"), ru.sodovaya.volty.domain.voice.VoiceGeneration(1))
+        lateinit var controller: VoiceDiagnosticController
+        controller = VoiceDiagnosticController(backgroundScope, object : VoiceDiagnosticPort {
+            override suspend fun groups() = emptyList<VoiceDiagnosticGroup>()
+            override suspend fun leaveLegacyVoice() = Unit
+            override suspend fun join(group: String) = VoiceConnectionCredentials("url", "token")
+            override suspend fun leave(group: String) = Unit
+        }) { tag, _, _ ->
+            assertEquals(active, tag); assertTrue(controller.authorizesEngine(tag))
+            VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> object : VoiceSdkSession {
+                override suspend fun connect(credentials: VoiceConnectionCredentials) = Unit
+                override suspend fun publishMicrophone(muted: Boolean) = true
+                override suspend fun setMuted(muted: Boolean) = true
+                override fun setDeafened(deafened: Boolean) = Unit
+                override suspend fun close() = Unit
+            } }, controller::authorizesEngine)
+        }
+        assertFalse(controller.authorizesEngine(active))
+        controller.start("group", VoiceAudioPreferences()); runCurrent()
+        assertEquals(VoiceDiagnosticPhase.RUNNING, controller.state.value.phase)
+        assertTrue(controller.authorizesEngine(active))
+        assertFalse(controller.authorizesEngine(active.copy(generation = ru.sodovaya.volty.domain.voice.VoiceGeneration(2))))
+        assertTrue(controller.stop()); assertFalse(controller.authorizesEngine(active))
+    }
     @Test fun rejectedPreflightNeverLeavesExistingGroupVoice() = runTest {
         var joins = 0
         var leaves = 0
@@ -70,7 +95,7 @@ class VoiceDiagnosticControllerTest {
                 override suspend fun setMuted(muted: Boolean) = true
                 override fun setDeafened(deafened: Boolean) = Unit
                 override suspend fun close() { closes++; if (closes == 1) error("secret raw cleanup error") }
-            } })
+            } }, authorized = { true })
         }
         controller.start("group", VoiceAudioPreferences())
         runCurrent()

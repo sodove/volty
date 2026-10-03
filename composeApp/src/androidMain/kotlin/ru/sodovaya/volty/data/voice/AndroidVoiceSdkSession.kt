@@ -76,7 +76,7 @@ internal class AndroidVoiceSdkSession(
                 if (!closing) {
                     ownedAudio.module.setMicrophoneMute(true)
                     record(VoiceDiagnosticCode.INPUT_UNAVAILABLE)
-                    event(VoiceSessionEvent.Failed(tag.generation))
+                    event(VoiceSessionEvent.EngineFailed(tag))
                 }
             }).also { routes = it }
         val ownedRoom = LiveKit.create(context, overrides = LiveKitOverrides(audioOptions = AudioOptions(
@@ -146,8 +146,8 @@ internal class AndroidVoiceSdkSession(
             is RoomEvent.Connected -> { record(VoiceDiagnosticCode.CONNECTED); event(VoiceSessionEvent.TransportConnected(tag)) }
             is RoomEvent.Reconnecting -> { record(VoiceDiagnosticCode.RECONNECTING); event(VoiceSessionEvent.Reconnecting(tag)) }
             is RoomEvent.Reconnected -> { record(VoiceDiagnosticCode.RECONNECTED); event(VoiceSessionEvent.TransportConnected(tag)) }
-            is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.Failed(tag.generation)) }
-            is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.Failed(tag.generation))
+            is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.EngineFailed(tag)) }
+            is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
             is RoomEvent.TrackUnpublished -> if (event.participant == ownedRoom.localParticipant && event.publication.kind == Track.Kind.AUDIO) this.event(VoiceSessionEvent.Unpublished(tag))
             is RoomEvent.TrackSubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
                 val peer = event.participant.sid.toString()

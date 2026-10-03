@@ -8,7 +8,7 @@ import ru.sodovaya.volty.domain.social.*
 /** Process-local owner shared by Activity and service. Never restores a call after death. */
 class AndroidVoiceDiagnosticRuntime(context: Context, social: SocialRepository, legacy: VoiceRoomRepository) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    val controller = VoiceDiagnosticController(scope, object : VoiceDiagnosticPort {
+    val controller: VoiceDiagnosticController = VoiceDiagnosticController(scope, object : VoiceDiagnosticPort {
         override suspend fun groups(): List<VoiceDiagnosticGroup> = when (val result = social.listGroups()) {
             is SocialResult.Success -> result.value.map { VoiceDiagnosticGroup(it.id.value, it.name) }
             is SocialResult.Failure -> throw VoiceEngineException(VoiceEngineError.CONNECTION)
@@ -27,6 +27,8 @@ class AndroidVoiceDiagnosticRuntime(context: Context, social: SocialRepository, 
             if (social.leaveVoice(RideGroupId(group)) is SocialResult.Failure) throw VoiceEngineException(VoiceEngineError.CLEANUP)
         }
     }) { _, preferences, diagnostics ->
-        VoiceEngineDriver(scope, AndroidVoiceSdkSessionFactory(context, preferences, diagnostics))
+        VoiceEngineDriver(scope, AndroidVoiceSdkSessionFactory(context, preferences, diagnostics), ::diagnosticAuthorized)
     }
+    private fun diagnosticAuthorized(tag: ru.sodovaya.volty.domain.voice.VoiceSessionTag): Boolean =
+        scope.isActive && controller.authorizesEngine(tag)
 }

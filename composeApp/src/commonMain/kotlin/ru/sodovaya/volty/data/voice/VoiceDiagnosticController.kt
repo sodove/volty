@@ -42,6 +42,10 @@ class VoiceDiagnosticController(
     private var eventJob: Job? = null
     private var driver: VoiceEngineDriver? = null
 
+    /** Diagnostic intent only: legacy credentials provide no v2 lease evidence. */
+    fun authorizesEngine(tag: VoiceSessionTag): Boolean = activeTag == tag &&
+        mutable.value.phase in listOf(VoiceDiagnosticPhase.CONNECTING, VoiceDiagnosticPhase.RUNNING)
+
     fun loadGroups() { scope.launch {
         try { val groups = port.groups(); mutable.update { it.copy(groups = groups, error = null) } }
         catch (cancelled: CancellationException) { throw cancelled }
@@ -65,7 +69,12 @@ class VoiceDiagnosticController(
                 if (activeTag != tag || mutable.value.phase != VoiceDiagnosticPhase.CONNECTING) return@launch
                 val owned = makeDriver(tag, preferences, diagnostics).also { driver = it }
                 eventJob = scope.launch(start = CoroutineStart.UNDISPATCHED) { owned.events.collect { event ->
-                    if (activeTag == tag && event is VoiceSessionEvent.Failed) failAndStop(tag, VoiceEngineError.CONNECTION)
+                    val failed = when (event) {
+                        is VoiceSessionEvent.EngineFailed -> event.tag == tag
+                        is VoiceSessionEvent.Failed -> event.generation == tag.generation
+                        else -> false
+                    }
+                    if (activeTag == tag && failed) failAndStop(tag, VoiceEngineError.CONNECTION)
                 } }
                 val result = owned.start(VoiceSessionEffect.StartEngine(tag), credentials)
                 ensureActive()

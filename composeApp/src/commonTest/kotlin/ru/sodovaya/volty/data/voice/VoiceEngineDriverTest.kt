@@ -22,11 +22,13 @@ import ru.sodovaya.volty.domain.voice.VoiceSessionEvent
 class VoiceEngineDriverTest {
     private val credentials = VoiceConnectionCredentials("https://example.invalid", "secret-test-token")
     private fun tag(number: Long) = VoiceSessionTag(VoiceSessionId("s$number"), VoiceGeneration(number))
+    private fun kotlinx.coroutines.test.TestScope.driver(factory: VoiceSdkSessionFactory) =
+        VoiceEngineDriver(backgroundScope, factory, authorized = { true })
 
     @Test
     fun stopDuringConnectPreventsLatePublicationAndClosesOnce() = runTest {
         val session = FakeSession(blockConnect = true)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent()
         assertTrue(session.enteredConnect.isCompleted)
@@ -42,7 +44,7 @@ class VoiceEngineDriverTest {
     fun replacingSuspendedStartCannotCloseNewSessionOnOldCancellation() = runTest {
         val one = FakeSession(blockConnect = true)
         val two = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) one else two })
+        val driver = driver(VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) one else two })
         val old = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent()
         assertTrue(one.enteredConnect.isCompleted)
@@ -59,7 +61,7 @@ class VoiceEngineDriverTest {
     @Test
     fun publicationFalseReturnsTypedFailureAndReleasesOwnResources() = runTest {
         val session = FakeSession(publishResult = false)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val result = driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials)
         assertEquals(VoiceEngineError.PUBLICATION, (result.exceptionOrNull() as VoiceEngineException).code)
         assertEquals(1, session.publishCalls)
@@ -69,7 +71,7 @@ class VoiceEngineDriverTest {
     @Test
     fun wrongGenerationStopLeavesCurrentResourcesOpen() = runTest {
         val session = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials).isSuccess)
         assertEquals(1, session.publishCalls)
         driver.stop(tag(1).generation)
@@ -80,7 +82,7 @@ class VoiceEngineDriverTest {
     @Test
     fun initialDeafenPrecedesConnectAndMutePrecedesPublication() = runTest {
         val session = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1), muted = true, deafened = true), credentials).isSuccess)
         assertEquals(listOf("deafen:true", "connect", "publish:true", "mute:true"), session.calls)
         driver.stop(tag(1).generation)
@@ -96,11 +98,13 @@ class VoiceEngineDriverTest {
     fun callbackWithWrongTagCannotPublishIntoCurrentEventStream() = runTest {
         lateinit var emit: (VoiceSessionEvent) -> Unit
         val session = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, callback -> emit = callback; session })
+        val driver = driver(VoiceSdkSessionFactory { _, callback -> emit = callback; session })
         val events = mutableListOf<VoiceSessionEvent>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { driver.events.collect { events += it } }
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials).isSuccess)
         emit(VoiceSessionEvent.Published(tag(1)))
+        emit(VoiceSessionEvent.EngineFailed(tag(1)))
+        emit(VoiceSessionEvent.Failed(tag(1).generation))
         emit(VoiceSessionEvent.LeaseAck(tag(2), ru.sodovaya.volty.domain.voice.VoiceLeaseGrant(ru.sodovaya.volty.domain.voice.VoiceLeaseRequestId(1), 20_000, 20_000, 30_000)))
         emit(VoiceSessionEvent.Stopped(tag(2).generation))
         runCurrent()
@@ -108,13 +112,15 @@ class VoiceEngineDriverTest {
         emit(VoiceSessionEvent.Published(tag(2)))
         runCurrent()
         assertEquals(listOf<VoiceSessionEvent>(VoiceSessionEvent.Published(tag(2))), events)
+        emit(VoiceSessionEvent.Failed(tag(2).generation)); runCurrent()
+        assertEquals(listOf<VoiceSessionEvent>(VoiceSessionEvent.Published(tag(2)), VoiceSessionEvent.EngineFailed(tag(2))), events)
         driver.stop(tag(2).generation)
     }
 
     @Test
     fun failedCloseDoesNotAcknowledgeStoppedAndCanBeRetriedByGeneration() = runTest {
         val session = FakeSession(closeFailures = 1)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val events = mutableListOf<VoiceSessionEvent>()
         backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) { driver.events.collect { events += it } }
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials).isSuccess)
@@ -128,7 +134,7 @@ class VoiceEngineDriverTest {
 
     @Test fun muteWhileConnectPendingIsAcceptedAndCannotBeOverwrittenAtPublication() = runTest {
         val session = FakeSession(blockConnect = true)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent()
         assertTrue(session.enteredConnect.isCompleted)
@@ -141,7 +147,7 @@ class VoiceEngineDriverTest {
 
     @Test fun initialUnmutedIntentStillPublishesMutedBeforeApplyingCurrentIntent() = runTest {
         val session = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials).isSuccess)
         assertEquals(listOf("deafen:false", "connect", "publish:true", "mute:false"), session.calls)
         driver.stop(tag(1).generation)
@@ -149,7 +155,7 @@ class VoiceEngineDriverTest {
 
     @Test fun muteChangedDuringPublicationIsReconciledAfterTrackExists() = runTest {
         val session = FakeSession(blockPublication = true)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent(); assertTrue(session.enteredPublication.isCompleted)
         assertTrue(driver.setMuted(tag(1), true).isSuccess)
@@ -162,7 +168,7 @@ class VoiceEngineDriverTest {
 
     @Test fun queuedMuteCannotFinishWithOlderIntentAfterSuspendedSdkControl() = runTest {
         val session = FakeSession(blockFirstMute = true)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent(); assertTrue(session.enteredMute.isCompleted)
         val change = async { driver.setMuted(tag(1), true) }
@@ -175,7 +181,7 @@ class VoiceEngineDriverTest {
 
     @Test fun oldGenerationMuteCannotChangeReplacementIntent() = runTest {
         val old = FakeSession(blockConnect = true); val fresh = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) old else fresh })
+        val driver = driver(VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) old else fresh })
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
         runCurrent(); assertTrue(old.enteredConnect.isCompleted)
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials).isSuccess)
@@ -188,7 +194,7 @@ class VoiceEngineDriverTest {
 
     @Test fun failureApplyingInitialMuteReleasesStackAndReportsTypedFailure() = runTest {
         val session = FakeSession(muteResult = false)
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session })
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
         val result = driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials)
         assertEquals(VoiceEngineError.MUTE, (result.exceptionOrNull() as VoiceEngineException).code)
         assertEquals(1, session.closeCalls)
@@ -197,7 +203,7 @@ class VoiceEngineDriverTest {
 
     @Test fun deafenDuringOldResourceReleaseIsAcceptedBeforeNewAllocation() = runTest {
         val old = FakeSession(blockClose = true); val fresh = FakeSession()
-        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) old else fresh })
+        val driver = driver(VoiceSdkSessionFactory { tag, _ -> if (tag == tag(1)) old else fresh })
         assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials).isSuccess)
         val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials) }
         runCurrent(); assertTrue(old.enteredClose.isCompleted)
@@ -207,6 +213,59 @@ class VoiceEngineDriverTest {
         assertTrue(start.await().isSuccess)
         assertEquals(listOf("deafen:true", "connect", "publish:true", "mute:false"), fresh.calls)
         driver.stop(tag(2).generation)
+    }
+
+    @Test fun expiredWhileOldCloseWaitsCannotAllocateReplacement() = runTest {
+        val old = FakeSession(blockClose = true); var allowed = true; var created = 0
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> created++; old }, authorized = { allowed })
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials).isSuccess)
+        val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials) }
+        runCurrent(); assertTrue(old.enteredClose.isCompleted); assertEquals(1, created)
+        allowed = false; old.closeGate.complete(Unit); runCurrent()
+        assertEquals(VoiceEngineError.AUTHORIZATION, (start.await().exceptionOrNull() as VoiceEngineException).code)
+        assertEquals(1, created); assertEquals(1, old.closeCalls)
+    }
+    @Test fun expiredDuringConnectCannotPublishMicrophone() = runTest {
+        var allowed = true; val session = FakeSession(blockConnect = true)
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session }, authorized = { allowed })
+        val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
+        runCurrent(); assertTrue(session.enteredConnect.isCompleted)
+        allowed = false; session.connectGate.complete(Unit); runCurrent()
+        assertTrue(start.await().isFailure); assertEquals(0, session.publishCalls); assertEquals(1, session.closeCalls)
+    }
+    @Test fun expiredDuringPublicationNeverAppliesUnmute() = runTest {
+        var allowed = true; val session = FakeSession(blockPublication = true)
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session }, authorized = { allowed })
+        val start = async { driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials) }
+        runCurrent(); assertTrue(session.enteredPublication.isCompleted)
+        allowed = false; session.publicationGate.complete(Unit); runCurrent()
+        assertTrue(start.await().isFailure); assertFalse(session.calls.any { it.startsWith("mute:") }); assertEquals(1, session.closeCalls)
+    }
+    @Test fun deniedBeforeStartAllocatesNothing() = runTest {
+        var created = 0
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> created++; FakeSession() }, authorized = { false })
+        val result = driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials)
+        assertEquals(VoiceEngineError.AUTHORIZATION, (result.exceptionOrNull() as VoiceEngineException).code)
+        assertEquals(0, created)
+    }
+    @Test fun laterControlAfterExpiryCannotIssueUnmuteOrUndeafen() = runTest {
+        var allowed = true; val session = FakeSession()
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session }, authorized = { allowed })
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1), muted = true, deafened = true), credentials).isSuccess)
+        val issued = session.calls.toList(); allowed = false
+        assertTrue(driver.setMuted(tag(1), false).isFailure); assertTrue(driver.setDeafened(tag(1), false).isFailure)
+        assertEquals(issued, session.calls)
+        assertTrue(driver.stop(tag(1).generation).isSuccess)
+    }
+    @Test fun deniedStaleStartCannotRetireCurrentlyAuthorizedStack() = runTest {
+        val session = FakeSession(); var created = 0
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> created++; session }, authorized = { it == tag(2) })
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)), credentials).isSuccess)
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)), credentials).isFailure)
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2).copy(sessionId = VoiceSessionId("foreign"))), credentials).isFailure)
+        assertEquals(1, created); assertEquals(0, session.closeCalls)
+        assertTrue(driver.setMuted(tag(2), true).isSuccess)
+        assertTrue(driver.stop(tag(2).generation).isSuccess); assertEquals(1, session.closeCalls)
     }
 
     private class FakeSession(
