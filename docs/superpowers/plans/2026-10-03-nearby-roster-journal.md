@@ -143,6 +143,24 @@ stop command. A room can have newer transports by the time the event arrives.
   newer than initial snapshot. Repeated delivery is safe.
 - Consumer error/restart must not lose pending revisions; never claim an in-memory
   hub is sufficient for multiple backend processes.
+- Server cursor slice: create an owned durable-log cursor before initial
+  authorized snapshot (capture the journal watermark). The persisted outbox is
+  the buffer; no legacy LiveHub is the delivery authority. Every delivery attempt
+  reads a fresh authorized complete snapshot, including retries. Wrong channel,
+  malformed rows or a revision below the captured/committed watermark fails
+  closed. Raw outbox events never go to a subscriber.
+- Produce an offered snapshot without advancing the cursor. Transport confirms
+  its exact offered revision only after publication succeeds; an old ACK cannot
+  acknowledge a newer offer. Failed read/publication retains the durable position.
+  A newer full snapshot may jump past buffered older events because it includes
+  their committed effects. Restart/reconnect creates a new owned cursor and reads
+  an initial full snapshot, rather than resurrecting an old socket/cache.
+- Keep this cursor foundation separate from WebSocket scheduling and atomic
+  community authorization. Add bounded JDBC read timeouts. Tests cover issued
+  registration/read order, duplicate offers/old ACK, transient read failure,
+  revoked reader on retry, incoherent port data, initial snapshot plus concurrent
+  commit, and fresh complete state after consumer reconstruction. Production
+  delivery is still disabled until its authorized snapshot port exists.
 - Fresh backend/Android checks before commit; record counts and remaining limits.
 
 After this foundation, implement communities/catalog/channel ownership and its

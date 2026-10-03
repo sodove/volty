@@ -10,18 +10,24 @@ data class RosterJournalEvent(
     val participantSid: String? = null, val mediaState: SfuParticipantState? = null,
 )
 
-class JdbcRosterJournal(private val source: DataSource) {
-    fun revision(): Long = source.connection.use { c ->
-        c.createStatement().use { it.executeQuery("SELECT revision FROM nearby_roster_clock WHERE singleton=1").use { rows ->
+interface RosterJournalReader {
+    fun revision(): Long
+    fun eventsAfter(revision: Long, limit: Int): List<RosterJournalEvent>
+}
+
+class JdbcRosterJournal(private val source: DataSource) : RosterJournalReader {
+    override fun revision(): Long = source.connection.use { c ->
+        c.createStatement().use { it.queryTimeout = 5; it.executeQuery("SELECT revision FROM nearby_roster_clock WHERE singleton=1").use { rows ->
             check(rows.next()); rows.getLong(1)
         } }
     }
 
     /** Repeated cursor reads are intentional; consumer acknowledgement belongs to delivery. */
-    fun eventsAfter(revision: Long, limit: Int): List<RosterJournalEvent> {
+    override fun eventsAfter(revision: Long, limit: Int): List<RosterJournalEvent> {
         require(revision >= 0 && limit in 1..1000)
         return source.connection.use { c ->
             c.prepareStatement("SELECT * FROM nearby_roster_outbox WHERE revision>? ORDER BY revision LIMIT ?").use {
+                it.queryTimeout = 5
                 it.setLong(1, revision); it.setInt(2, limit)
                 it.executeQuery().use { rows -> buildList {
                     while (rows.next()) add(RosterJournalEvent(rows.getLong("revision"), rows.getString("actor_id"),
