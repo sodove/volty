@@ -111,7 +111,9 @@ class VoiceEngineDriver(
             val result = release(handle)
             if (result.isFailure) return result
         }
-        if (pending != null || handles.isNotEmpty()) output.tryEmit(VoiceSessionEvent.Stopped(generation))
+        // No handle allocated is also a confirmed local release. An earlier
+        // revision emitted nothing here, leaving preallocation stop pending.
+        output.tryEmit(VoiceSessionEvent.Stopped(generation))
         return Result.success(Unit)
     }
 
