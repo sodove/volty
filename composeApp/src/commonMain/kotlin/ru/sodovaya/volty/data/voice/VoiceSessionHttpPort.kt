@@ -12,7 +12,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.*
 import ru.sodovaya.volty.domain.voice.*
 
 /**
@@ -90,7 +90,14 @@ class VoiceSessionHttpPort(
                     })
                     val bytes = response.bodyAsChannel().readRemaining(MAX_RESPONSE_BYTES + 1).readByteArray()
                     if (bytes.size > MAX_RESPONSE_BYTES) return@execute VoiceHttpReply.Failed(VoiceHttpFailure.INVALID_RESPONSE)
-                    val wire = json.decodeFromString<StateBody>(bytes.decodeToString(throwOnInvalidSequence = true))
+                    val document = json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true))
+                    require(document is JsonObject)
+                    document["cleanupPending"]?.takeUnless { it == JsonNull }?.let {
+                        // kotlinx.serialization accepts quoted boolean text;
+                        // remote cleanup evidence requires an actual JSON bool.
+                        require(it is JsonPrimitive && !it.isString && it.booleanOrNull != null)
+                    }
+                    val wire = json.decodeFromJsonElement<StateBody>(document)
                     val received = monotonicMillis()
                     decode(wire, generation, operation, expectedSession, allowCredentials, terminalOnly, ordinal, started, received)
                 }
@@ -114,7 +121,7 @@ class VoiceSessionHttpPort(
         val session = wire.sessionId?.let(::VoiceSessionId)
         if (wire.phase in setOf("CANCELLED", "EXPIRED")) {
             require(wire.credentials == null && wire.remainingLeaseMillis == null)
-            return VoiceHttpReply.Ended(generation, session, wire.phase)
+            return VoiceHttpReply.Ended(generation, session, wire.phase, wire.cleanupPending)
         }
         require(!terminalOnly)
         if (wire.phase == "PENDING") {
@@ -144,6 +151,7 @@ class VoiceSessionHttpPort(
     @Serializable private data class StateBody(
         val phase: String, val sessionId: String? = null, val operationId: String? = null,
         val deadlineEpochMillis: Long? = null, val remainingLeaseMillis: Long? = null, val credentials: CredentialBody? = null,
+        val cleanupPending: Boolean? = null,
     )
     @Serializable private data class CredentialBody(val serverUrl: String, val participantToken: String, val roomEpoch: String) {
         override fun toString() = "CredentialBody(redacted)"

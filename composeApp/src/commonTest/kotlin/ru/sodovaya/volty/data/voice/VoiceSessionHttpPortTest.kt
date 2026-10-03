@@ -33,6 +33,22 @@ class VoiceSessionHttpPortTest {
                      sessionId: String = session.value, phase: String = "CONNECTING") =
         """{"phase":"$phase","sessionId":"$sessionId","deadlineEpochMillis":999999999$credit${if (credentials) ",\"credentials\":{\"serverUrl\":\"wss://sfu.example.test\",\"participantToken\":\"participant-secret\",\"roomEpoch\":\"room\"}" else ""}}"""
 
+    @Test fun terminalCleanupCreditRequiresExplicitBooleanAndMissingIsUnknown() = runTest {
+        var field = ""; var issued = 0
+        val client = client { issued++; respond("""{"phase":"CANCELLED","sessionId":"${session.value}"$field}""") }
+        val port = port(client)
+        try {
+            assertNull(assertIs<VoiceHttpReply.Ended>(port.disconnect(tag)).cleanupPending)
+            field = ",\"cleanupPending\":true"
+            assertEquals(true, assertIs<VoiceHttpReply.Ended>(port.disconnect(tag)).cleanupPending)
+            field = ",\"cleanupPending\":false"
+            assertEquals(false, assertIs<VoiceHttpReply.Ended>(port.disconnect(tag)).cleanupPending)
+            field = ",\"cleanupPending\":\"false\""
+            assertEquals(VoiceHttpReply.Failed(VoiceHttpFailure.INVALID_RESPONSE), port.disconnect(tag))
+            assertEquals(4, issued)
+        } finally { port.close(); client.close() }
+    }
+
     @Test fun grantIsChargedFromIssuedRequestStartNotResponseArrivalOrWallDeadline() = runTest {
         var issued: HttpRequestData? = null
         val client = client { request -> issued = request; time = 4000; respond(body()) }

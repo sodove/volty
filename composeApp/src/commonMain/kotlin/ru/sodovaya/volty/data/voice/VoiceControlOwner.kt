@@ -31,6 +31,9 @@ class VoiceControlOwner(
     val state = stateOutput.asStateFlow()
     private val stopsOutput = MutableStateFlow<Set<VoiceStopRequest>>(emptySet())
     val unconfirmedStops = stopsOutput.asStateFlow()
+    private val remoteStopsOutput = MutableStateFlow<Set<VoiceStopRequest>>(emptySet())
+    /** Unknown/missing cleanup status remains pending independently of engine release. */
+    val pendingRemoteStops = remoteStopsOutput.asStateFlow()
     private var attempt: Attempt? = null
     private var joinJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -69,7 +72,7 @@ class VoiceControlOwner(
                     heartbeatJob = scope.launch { deliver(Command.HeartbeatReply(tag, network { port.heartbeat(tag) })) }
                 }
             }
-            Command.RetryStops -> stopsOutput.value.forEach(::requestStop)
+            Command.RetryStops -> (stopsOutput.value + remoteStopsOutput.value).forEach(::requestStop)
             is Command.JoinReply -> onJoin(command.attempt, command.reply)
             is Command.HeartbeatReply -> {
                 val s = stateOutput.value
@@ -91,7 +94,10 @@ class VoiceControlOwner(
                 }
                 if (matches) {
                     stopsOutput.value -= command.request
-                    if (command.request is VoiceStopRequest.Session) sessions.remove(command.request.tag.sessionId)
+                    if (ended.cleanupPending == false) {
+                        remoteStopsOutput.value -= command.request
+                        if (command.request is VoiceStopRequest.Session) sessions.remove(command.request.tag.sessionId)
+                    }
                 }
             }
         }
@@ -146,6 +152,7 @@ class VoiceControlOwner(
 
     private fun requestStop(request: VoiceStopRequest) {
         stopsOutput.value += request
+        remoteStopsOutput.value += request
         if (!stopping.add(request)) return
         scope.launch {
             val reply = network { when (request) {

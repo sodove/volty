@@ -137,13 +137,31 @@ class SessionRoutesTest {
         assertEquals(listOf("cancel:$actor:$operation"), port.calls)
     }
 
+    @Test fun terminalPhaseDoesNotFabricateRemoteCleanupCompletion() = testApplication {
+        val port = RecordingPort().also { it.cleanupPending = true }
+        val deps = dependencies(port)
+        application { module(deps) }
+        suspend fun cancel() = client.post("/v2/nearby/operations/$operation/cancel") { bearerAuth(deps.tokenService.issueAccessToken(actor)) }
+        val pending = cancel()
+        assertEquals(HttpStatusCode.OK, pending.status)
+        assertTrue(pending.bodyAsText().contains("\"cleanupPending\":true"))
+        port.cleanupPending = false
+        val completed = cancel()
+        assertEquals(HttpStatusCode.OK, completed.status)
+        assertTrue(completed.bodyAsText().contains("\"cleanupPending\":false"))
+        assertEquals(listOf("cancel:$actor:$operation", "cancel:$actor:$operation"), port.calls)
+    }
+
     private inner class RecordingPort : SessionEndpointPort {
         val calls = mutableListOf<String>()
         var missing = false
         var replacementRequested = false
         var denial: SessionDenial? = null
         var media = SessionMedia()
-        private fun ended() = SessionAction.Ended(SessionJournalEntry(SessionOperation(actor, operation, null, null, OperationPhase.CANCELLED, null), null, false, false))
+        var cleanupPending = false
+        // Deliberately incoherent null session + pending cleanup: route must
+        // project repository evidence, never guess completion from phase/ID.
+        private fun ended() = SessionAction.Ended(SessionJournalEntry(SessionOperation(actor, operation, null, null, OperationPhase.CANCELLED, null), null, false, cleanupPending))
         override fun join(actor: String, operation: String, destination: String, replace: Boolean): SessionAction {
             calls += "join:$actor:$operation:$destination"
             replacementRequested = replace

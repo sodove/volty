@@ -94,7 +94,7 @@ private suspend fun ApplicationCall.sessionResponse(action: SessionAction?) {
         is SessionAction.Pending -> respond(HttpStatusCode.Accepted, SessionStateResponse("PENDING", action.state.operation.sessionId,
             action.state.operation.deadlineEpochMillis, action.state.operation.operationId))
         is SessionAction.Ended -> respond(SessionStateResponse(action.state.operation.phase.name, action.state.operation.sessionId,
-            action.state.operation.deadlineEpochMillis, action.state.operation.operationId))
+            action.state.operation.deadlineEpochMillis, action.state.operation.operationId, cleanupPending = action.state.cleanupPending))
         is SessionAction.Unavailable -> unavailable()
         is SessionAction.Denied -> throw when (action.reason) {
             SessionDenial.MEMBERSHIP -> ApiException(HttpStatusCode.Forbidden, "membership_required", "Channel membership required")

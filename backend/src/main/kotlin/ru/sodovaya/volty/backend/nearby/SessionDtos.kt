@@ -13,6 +13,8 @@ import kotlinx.serialization.Serializable
     val credentials: SessionCredentialDto? = null,
     /** Credit at actor-locked authorization; clients charge it from their HTTP request start. */
     val remainingLeaseMillis: Long? = null,
+    /** Terminal journal cleanup, not guessed from phase or media observation. */
+    val cleanupPending: Boolean? = null,
 )
 
 @Serializable data class SessionCredentialDto(

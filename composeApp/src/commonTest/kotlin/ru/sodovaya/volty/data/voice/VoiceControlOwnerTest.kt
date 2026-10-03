@@ -144,8 +144,41 @@ class VoiceControlOwnerTest {
         assertFalse(owner.state.value.wanted)
     }
 
+    @Test fun terminalIntentAndEngineReleaseDoNotErasePendingRemoteCleanup() = runTest {
+        val port = FakePort(cleanupPending = true)
+        val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        owner.stop(); runCurrent()
+        owner.event(VoiceSessionEvent.Stopped(VoiceGeneration(1))); runCurrent()
+        assertTrue(owner.unconfirmedStops.value.isEmpty())
+        assertEquals(setOf(VoiceStopRequest.Session(tag(1))), owner.pendingRemoteStops.value)
+        owner.join("two", op2); runCurrent()
+        port.joinReplies.getValue(op2).complete(grant(2)); runCurrent()
+        port.cleanupPending = false
+        owner.retryStops(); runCurrent()
+        assertEquals(listOf(tag(1), tag(1)), port.disconnects)
+        assertTrue(owner.pendingRemoteStops.value.isEmpty())
+        assertEquals(tag(2).sessionId, owner.state.value.sessionId)
+    }
+
+    @Test fun missingCleanupFieldRemainsUnknownUntilExplicitCompletion() = runTest {
+        val port = FakePort()
+        val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent()
+        owner.stop(); runCurrent()
+        assertEquals(listOf(op1 to VoiceGeneration(1)), port.cancels)
+        assertTrue(owner.unconfirmedStops.value.isEmpty())
+        assertEquals(setOf(VoiceStopRequest.Operation(op1, VoiceGeneration(1))), owner.pendingRemoteStops.value)
+        port.cleanupPending = false
+        owner.retryStops(); runCurrent()
+        assertEquals(listOf(op1 to VoiceGeneration(1), op1 to VoiceGeneration(1)), port.cancels)
+        assertTrue(owner.pendingRemoteStops.value.isEmpty())
+    }
+
     private class FakePort(val ignoreJoinCancellation: Boolean = false, var disconnectFailure: Boolean = false,
-                           val throwJoin: Boolean = false, var throwDisconnect: Boolean = false) : VoiceSessionControlPort {
+                           val throwJoin: Boolean = false, var throwDisconnect: Boolean = false,
+                           var cleanupPending: Boolean? = null) : VoiceSessionControlPort {
         val joins = mutableListOf<Triple<VoiceOperationId, VoiceGeneration, String>>()
         val joinReplies = mutableMapOf<VoiceOperationId, CompletableDeferred<VoiceHttpReply>>()
         val cancels = mutableListOf<Pair<VoiceOperationId, VoiceGeneration>>()
@@ -168,13 +201,13 @@ class VoiceControlOwnerTest {
         }
         override suspend fun cancel(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply {
             cancels += operation to generation
-            return VoiceHttpReply.Ended(generation, null, "CANCELLED")
+            return VoiceHttpReply.Ended(generation, null, "CANCELLED", cleanupPending)
         }
         override suspend fun disconnect(tag: VoiceSessionTag): VoiceHttpReply {
             disconnects += tag
             if (throwDisconnect) error("transport failure")
             return if (disconnectFailure) VoiceHttpReply.Failed(VoiceHttpFailure.UNAVAILABLE)
-            else VoiceHttpReply.Ended(tag.generation, tag.sessionId, "CANCELLED")
+            else VoiceHttpReply.Ended(tag.generation, tag.sessionId, "CANCELLED", cleanupPending)
         }
     }
 }
