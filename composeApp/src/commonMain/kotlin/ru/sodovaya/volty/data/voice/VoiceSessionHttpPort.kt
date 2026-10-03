@@ -25,7 +25,7 @@ class VoiceSessionHttpPort(
     baseUrl: String,
     private val bearer: suspend () -> String?,
     private val monotonicMillis: () -> Long,
-) {
+) : VoiceSessionControlPort {
     private val base = baseUrl.trimEnd('/').also {
         val url = Url(it)
         require(url.protocol == URLProtocol.HTTPS && url.user.isNullOrEmpty() && url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())
@@ -35,24 +35,24 @@ class VoiceSessionHttpPort(
     private val requestMutex = Mutex()
     private var nextOrdinal = 0L
 
-    suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean = false): VoiceHttpReply {
+    override suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean): VoiceHttpReply {
         requireId(operation.value); requireId(channel)
         return request(HttpMethod.Post, "operations/${operation.value}/join", generation, operation,
             body = json.encodeToString(JoinBody(channel, replace)), allowCredentials = true)
     }
-    suspend fun status(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply {
+    override suspend fun status(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply {
         requireId(operation.value)
         return request(HttpMethod.Get, "operations/${operation.value}", generation, operation)
     }
-    suspend fun heartbeat(tag: VoiceSessionTag): VoiceHttpReply {
+    override suspend fun heartbeat(tag: VoiceSessionTag): VoiceHttpReply {
         requireId(tag.sessionId.value)
         return request(HttpMethod.Post, "sessions/${tag.sessionId.value}/heartbeat", tag.generation, expectedSession = tag.sessionId)
     }
-    suspend fun cancel(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply {
+    override suspend fun cancel(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply {
         requireId(operation.value)
         return request(HttpMethod.Post, "operations/${operation.value}/cancel", generation, operation, terminalOnly = true)
     }
-    suspend fun disconnect(tag: VoiceSessionTag): VoiceHttpReply {
+    override suspend fun disconnect(tag: VoiceSessionTag): VoiceHttpReply {
         requireId(tag.sessionId.value)
         return request(HttpMethod.Post, "sessions/${tag.sessionId.value}/disconnect", tag.generation, expectedSession = tag.sessionId, terminalOnly = true)
     }

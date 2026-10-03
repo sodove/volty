@@ -1,0 +1,192 @@
+package ru.sodovaya.volty.data.voice
+
+import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.selects.select
+import ru.sodovaya.volty.domain.voice.*
+
+/** Server intent confirmations only. Ended is not an SFU revocation ACK. */
+sealed interface VoiceStopRequest {
+    data class Operation(val operation: VoiceOperationId, val generation: VoiceGeneration) : VoiceStopRequest
+    data class Session(val tag: VoiceSessionTag) : VoiceStopRequest
+}
+
+data class VoiceControlDispatch(val effect: VoiceSessionEffect, val credentials: VoiceConnectionCredentials? = null)
+
+/**
+ * Mailbox foundation; caller owns lifetime and a NONBLOCKING engine/sharing
+ * dispatcher. No timers, DI, offline persistence or SFU-ACK projection yet.
+ * Network completion never owns state. Credentials are delivered once, not
+ * exposed through state flows. Cancelled requests can still require cleanup.
+ */
+class VoiceControlOwner(
+    private val scope: CoroutineScope,
+    private val port: VoiceSessionControlPort,
+    private val dispatch: (VoiceControlDispatch) -> Unit,
+) {
+    private val inbox = Channel<Command>(64)
+    private val stateOutput = MutableStateFlow(VoiceSessionState())
+    val state = stateOutput.asStateFlow()
+    private val stopsOutput = MutableStateFlow<Set<VoiceStopRequest>>(emptySet())
+    val unconfirmedStops = stopsOutput.asStateFlow()
+    private var attempt: Attempt? = null
+    private var joinJob: Job? = null
+    private var heartbeatJob: Job? = null
+    private val sessions = mutableMapOf<VoiceSessionId, VoiceSessionTag>()
+    private val stopping = mutableSetOf<VoiceStopRequest>()
+    private val ownerJob: Job
+
+    init { ownerJob = scope.launch { for (command in inbox) handle(command) } }
+
+    suspend fun join(channel: String, operation: VoiceOperationId, replace: Boolean = false) {
+        send(Command.Join(channel, operation, replace))
+    }
+    suspend fun stop() = send(Command.Event(VoiceSessionEvent.Stop))
+    suspend fun retryJoin() = send(Command.RetryJoin)
+    suspend fun heartbeat() = send(Command.Heartbeat)
+    suspend fun retryStops() = send(Command.RetryStops)
+    suspend fun event(event: VoiceSessionEvent) {
+        require(event !is VoiceSessionEvent.Join && event !is VoiceSessionEvent.SessionGranted && event !is VoiceSessionEvent.LeaseAck)
+        send(Command.Event(event))
+    }
+
+    private fun handle(command: Command) {
+        when (command) {
+            is Command.Join -> {
+                if (stateOutput.value.operationId == command.operation) return
+                val transition = VoiceSessionReducer.reduce(stateOutput.value, VoiceSessionEvent.Join(command.operation))
+                attempt = Attempt(command.operation, transition.state.generation, command.channel, command.replace)
+                apply(transition)
+            }
+            is Command.Event -> apply(VoiceSessionReducer.reduce(stateOutput.value, command.event))
+            Command.RetryJoin -> if (stateOutput.value.wanted && stateOutput.value.sessionId == null && joinJob?.isActive != true) attempt?.let(::requestJoin)
+            Command.Heartbeat -> {
+                val s = stateOutput.value
+                if (s.wanted && s.sessionId != null && heartbeatJob?.isActive != true) {
+                    val tag = VoiceSessionTag(s.sessionId, s.generation)
+                    heartbeatJob = scope.launch { deliver(Command.HeartbeatReply(tag, network { port.heartbeat(tag) })) }
+                }
+            }
+            Command.RetryStops -> stopsOutput.value.forEach(::requestStop)
+            is Command.JoinReply -> onJoin(command.attempt, command.reply)
+            is Command.HeartbeatReply -> {
+                val s = stateOutput.value
+                if (!s.wanted || s.generation != command.tag.generation || s.sessionId != command.tag.sessionId) return
+                when (val reply = command.reply) {
+                    is VoiceHttpReply.Acknowledged -> apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.LeaseAck(reply.tag, reply.lease)))
+                    is VoiceHttpReply.Expired, is VoiceHttpReply.Ended -> apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(s.generation)))
+                    is VoiceHttpReply.Failed -> if (reply.reason in setOf(VoiceHttpFailure.ACCESS_DENIED, VoiceHttpFailure.UNAUTHORIZED))
+                        apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(s.generation)))
+                    else -> Unit
+                }
+            }
+            is Command.StopReply -> {
+                stopping -= command.request
+                val ended = command.reply as? VoiceHttpReply.Ended ?: return
+                val matches = when (val request = command.request) {
+                    is VoiceStopRequest.Operation -> ended.generation == request.generation
+                    is VoiceStopRequest.Session -> ended.generation == request.tag.generation && ended.sessionId == request.tag.sessionId
+                }
+                if (matches) {
+                    stopsOutput.value -= command.request
+                    if (command.request is VoiceStopRequest.Session) sessions.remove(command.request.tag.sessionId)
+                }
+            }
+        }
+    }
+
+    private fun onJoin(request: Attempt, reply: VoiceHttpReply) {
+        val s = stateOutput.value
+        val current = s.wanted && s.generation == request.generation && s.operationId == request.operation
+        when (reply) {
+            is VoiceHttpReply.Credentials -> {
+                sessions[reply.tag.sessionId] = reply.tag
+                apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.SessionGranted(request.operation,
+                    request.generation, reply.tag.sessionId, reply.lease)), reply)
+            }
+            is VoiceHttpReply.Expired -> {
+                sessions[reply.tag.sessionId] = reply.tag
+                if (current) apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(request.generation)))
+                requestStop(VoiceStopRequest.Session(reply.tag))
+            }
+            is VoiceHttpReply.Pending -> Unit // explicit retry reuses the same operation and destination
+            else -> if (current) apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(request.generation)))
+        }
+    }
+
+    private fun apply(transition: VoiceTransition, grant: VoiceHttpReply.Credentials? = null) {
+        stateOutput.value = transition.state
+        for (effect in transition.effects) when (effect) {
+            is VoiceSessionEffect.RequestJoin -> requestJoin(checkNotNull(attempt).also {
+                check(it.operation == effect.operationId && it.generation == effect.generation)
+            })
+            is VoiceSessionEffect.CancelJoin -> {
+                joinJob?.cancel()
+                requestStop(VoiceStopRequest.Operation(effect.operationId, effect.generation))
+            }
+            is VoiceSessionEffect.StopSession -> requestStop(VoiceStopRequest.Session(checkNotNull(sessions[effect.sessionId])))
+            is VoiceSessionEffect.StopEngine -> {
+                heartbeatJob?.cancel()
+                dispatch(VoiceControlDispatch(effect))
+            }
+            is VoiceSessionEffect.StartEngine -> {
+                check(grant?.tag == effect.tag)
+                dispatch(VoiceControlDispatch(effect, grant.connection))
+            }
+            else -> dispatch(VoiceControlDispatch(effect))
+        }
+    }
+
+    private fun requestJoin(request: Attempt) {
+        joinJob = scope.launch { deliver(Command.JoinReply(request,
+            network { port.join(request.operation, request.generation, request.channel, request.replace) })) }
+    }
+
+    private fun requestStop(request: VoiceStopRequest) {
+        stopsOutput.value += request
+        if (!stopping.add(request)) return
+        scope.launch {
+            val reply = network { when (request) {
+                is VoiceStopRequest.Operation -> port.cancel(request.operation, request.generation)
+                is VoiceStopRequest.Session -> port.disconnect(request.tag)
+            } }
+            deliver(Command.StopReply(request, reply))
+        }
+    }
+
+    private suspend fun network(block: suspend () -> VoiceHttpReply): VoiceHttpReply = try {
+        block()
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        VoiceHttpReply.Failed(VoiceHttpFailure.UNAVAILABLE)
+    }
+
+    // A transport may return after cancellation. Preserve that reply's identity
+    // for cleanup while the mailbox lifetime exists; do not suppress it locally.
+    private suspend fun deliver(command: Command) = withContext(NonCancellable) {
+        select<Unit> {
+            ownerJob.onJoin { }
+            inbox.onSend(command) { }
+        }
+    }
+
+    private suspend fun send(command: Command) = select<Unit> {
+        ownerJob.onJoin { throw CancellationException("Voice owner closed") }
+        inbox.onSend(command) { }
+    }
+
+    private data class Attempt(val operation: VoiceOperationId, val generation: VoiceGeneration, val channel: String, val replace: Boolean)
+    private sealed interface Command {
+        data class Join(val channel: String, val operation: VoiceOperationId, val replace: Boolean) : Command
+        data class Event(val event: VoiceSessionEvent) : Command
+        data class JoinReply(val attempt: Attempt, val reply: VoiceHttpReply) : Command
+        data class HeartbeatReply(val tag: VoiceSessionTag, val reply: VoiceHttpReply) : Command
+        data class StopReply(val request: VoiceStopRequest, val reply: VoiceHttpReply) : Command
+        data object RetryJoin : Command
+        data object Heartbeat : Command
+        data object RetryStops : Command
+    }
+}
