@@ -113,6 +113,16 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         actors.distinct().sorted().forEach { lockActor(c, it) }
     }
 
+    /** Account deletion closes this actor's exact claim regardless of destination. */
+    internal fun cancelCurrentAccountClaim(c: Connection, actor: String, at: Long): List<SessionJournalEntry> {
+        check(access != null && !c.autoCommit)
+        lockActor(c, actor)
+        val claim = claim(c, actor) ?: return emptyList()
+        val row = checkNotNull(read(c, actor, claim.operationId))
+        check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        return listOf(checkNotNull(persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at)).state))
+    }
+
     internal fun readSession(c: Connection, session: String): SessionJournalEntry? =
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
             it.setString(1, session); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }

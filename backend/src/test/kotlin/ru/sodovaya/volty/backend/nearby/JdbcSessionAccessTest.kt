@@ -187,7 +187,7 @@ class JdbcSessionAccessTest {
     private fun id() = UUID.randomUUID().toString()
 }
 
-private class AccessFenceBarrierSource(private val delegate: DataSource) : DataSource by delegate {
+internal class AccessFenceBarrierSource(private val delegate: DataSource) : DataSource by delegate {
     val held = CountDownLatch(1); val competingIssued = CountDownLatch(1); val release = CountDownLatch(1)
     private val attempts = AtomicInteger()
     override fun getConnection(): Connection {

@@ -292,22 +292,10 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
         connection.commit()
     }
 
-    override fun deleteAccount(userId: String): Int = dataSource.connection.use { connection ->
-        connection.autoCommit = false
-        try {
-            val now = nowMillis()
-            val changed = connection.prepareStatement("UPDATE users SET deleted_at = ?, tokens_revoked_at = ? WHERE id = ?").use { statement ->
-                statement.setLong(1, now); statement.setLong(2, now / 1000); statement.setObject(3, UUID.fromString(userId)); statement.executeUpdate()
-            }
-            connection.prepareStatement("DELETE FROM live_updates WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
-            connection.prepareStatement("DELETE FROM sharing_sessions WHERE user_id = ?").use { it.setObject(1, UUID.fromString(userId)); it.executeUpdate() }
-            connection.commit()
-            changed
-        } catch (error: Throwable) {
-            runCatching { connection.rollback() }
-            throw error
-        }
-    }
+    // Earlier deletion only tombstoned the user and removed position. That could
+    // race a v2 credential transaction and leave exact voice claims active.
+    override fun deleteAccount(userId: String): Int =
+        ru.sodovaya.volty.backend.nearby.JdbcAccountDeletionRepository(dataSource).deleteAccount(userId, ::nowMillis)
 
     override fun listGroupIdsForUser(userId: String): List<String> = dataSource.connection.use { connection ->
         connection.prepareStatement("SELECT group_id FROM group_members WHERE user_id = ?").use { statement ->
