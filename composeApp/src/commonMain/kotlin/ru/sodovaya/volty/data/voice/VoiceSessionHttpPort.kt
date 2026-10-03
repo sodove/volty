@@ -90,7 +90,9 @@ class VoiceSessionHttpPort(
                     })
                     val bytes = response.bodyAsChannel().readRemaining(MAX_RESPONSE_BYTES + 1).readByteArray()
                     if (bytes.size > MAX_RESPONSE_BYTES) return@execute VoiceHttpReply.Failed(VoiceHttpFailure.INVALID_RESPONSE)
-                    val document = json.parseToJsonElement(bytes.decodeToString(throwOnInvalidSequence = true))
+                    val text = try { bytes.decodeToString(throwOnInvalidSequence = true) }
+                    catch (_: Exception) { return@execute VoiceHttpReply.Failed(VoiceHttpFailure.INVALID_RESPONSE) }
+                    val document = json.parseToJsonElement(text)
                     require(document is JsonObject)
                     document["cleanupPending"]?.takeUnless { it == JsonNull }?.let {
                         // kotlinx.serialization accepts quoted boolean text;

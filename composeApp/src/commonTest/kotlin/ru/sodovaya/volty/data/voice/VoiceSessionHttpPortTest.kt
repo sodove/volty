@@ -49,6 +49,18 @@ class VoiceSessionHttpPortTest {
         } finally { port.close(); client.close() }
     }
 
+    @Test fun invalidUtf8CredentialsAreInvalidRatherThanNetworkUnavailable() = runTest {
+        val wire = body()
+        val bytes = wire.substringBefore("participant-secret").encodeToByteArray() + byteArrayOf(0xc3.toByte(), 0x28) +
+            wire.substringAfter("participant-secret").encodeToByteArray()
+        var issued = 0
+        val client = client { issued++; respond(bytes) }; val port = port(client)
+        try {
+            assertEquals(VoiceHttpReply.Failed(VoiceHttpFailure.INVALID_RESPONSE), port.join(operation, generation, channel))
+            assertEquals(1, issued)
+        } finally { port.close(); client.close() }
+    }
+
     @Test fun grantIsChargedFromIssuedRequestStartNotResponseArrivalOrWallDeadline() = runTest {
         var issued: HttpRequestData? = null
         val client = client { request -> issued = request; time = 4000; respond(body()) }
