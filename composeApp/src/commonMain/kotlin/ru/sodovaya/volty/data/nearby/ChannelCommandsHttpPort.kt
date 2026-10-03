@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.nearby.community.*
 /** Account-bound caller supplies auth; no automatic retry, UI or production DI here. */
 class ChannelCommandsHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?) : ChannelCommandsPort {
     private val base = baseUrl.trimEnd('/').also {
+        require('?' !in it && '#' !in it)
         val url = Url(it)
         require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
             url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())

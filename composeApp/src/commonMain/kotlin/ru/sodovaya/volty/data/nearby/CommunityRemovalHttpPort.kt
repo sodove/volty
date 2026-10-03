@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.nearby.community.*
 /** Explicit stable-operation removal; no retries, UI or production DI here. */
 class CommunityRemovalHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?) : CommunityRemovalPort {
     private val base = baseUrl.trimEnd('/').also {
+        require('?' !in it && '#' !in it)
         val url = Url(it)
         require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
             url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())

@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.nearby.community.*
 /** Secret stays in bounded body; caller owns entropy, stable creation draft and operation ID. */
 class InvitationHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?) : InvitationPort {
     private val base = baseUrl.trimEnd('/').also {
+        require('?' !in it && '#' !in it)
         val url = Url(it)
         require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
             url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())

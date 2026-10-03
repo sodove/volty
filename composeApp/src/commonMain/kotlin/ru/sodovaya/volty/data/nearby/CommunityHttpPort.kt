@@ -16,6 +16,7 @@ import ru.sodovaya.volty.domain.nearby.community.*
 /** Bounded authenticated client boundary; no DI/product or screen-owner wiring. */
 class CommunityHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?) : CommunityPort {
     private val base = baseUrl.trimEnd('/').also {
+        require('?' !in it && '#' !in it)
         val url = Url(it)
         require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
             url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())
