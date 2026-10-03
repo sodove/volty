@@ -693,6 +693,7 @@ class SchemaMigrator(private val dataSource: DataSource, private val migrations:
     8 to "/db/migration/V8__nearby_departure_receipts.sql",
     9 to "/db/migration/V9__nearby_resource_deletion_receipts.sql",
     10 to "/db/migration/V10__nearby_channel_creation_receipts.sql",
+    11 to "/db/migration/V11__nearby_private_invitations.sql",
 )) {
     fun migrate() {
         dataSource.connection.use { connection ->
