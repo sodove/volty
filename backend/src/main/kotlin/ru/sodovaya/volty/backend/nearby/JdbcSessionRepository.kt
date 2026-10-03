@@ -123,6 +123,22 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         return listOf(checkNotNull(persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at)).state))
     }
 
+    /** Startup holds UPDATE fence; native v2 destinations are never retirement targets. */
+    internal fun cancelCurrentImportedClaim(c: Connection, actor: String, at: Long) {
+        check(access != null && !c.autoCommit)
+        lockActor(c, actor)
+        val claim = claim(c, actor) ?: return
+        val row = checkNotNull(read(c, actor, claim.operationId))
+        check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        val imported = c.prepareStatement("""
+            SELECT 1 FROM nearby_voice_channels v JOIN nearby_communities g ON g.id=v.community_id
+            WHERE v.id=?::uuid AND g.create_request_hash IS NULL AND g.state='ACTIVE'
+        """.trimIndent()).use {
+            it.setString(1, row.operation.destinationId); it.executeQuery().use { rows -> rows.next() }
+        }
+        if (imported) persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at))
+    }
+
     internal fun readSession(c: Connection, session: String): SessionJournalEntry? =
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
             it.setString(1, session); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }

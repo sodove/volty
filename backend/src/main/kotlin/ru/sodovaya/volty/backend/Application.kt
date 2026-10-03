@@ -97,7 +97,7 @@ class AppDependencies(
     companion object {
         fun create(config: AppConfig = AppConfig.fromEnvironment()): AppDependencies {
             val dataSource = createDataSource(config)
-            SchemaMigrator(dataSource).migrate()
+            prepareBackendSchema(dataSource)
             val json = backendJson()
             return AppDependencies(config, JdbcStore(dataSource, json), json = json)
         }

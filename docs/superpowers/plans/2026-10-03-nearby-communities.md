@@ -5,6 +5,18 @@ Continue the approved voice-spaces specification after roster foundation
 reviews, no additional Astra. Read the execution ledger before replaying tasks.
 No production deployment or enabled session dependencies in this slice.
 
+## Scope retraction, 2026-10-04
+
+The user explicitly removed legacy group migration: preserve accounts/friends,
+create new servers from scratch. Historical V7 backfill tests describe the old
+schema step only; they are not the current product acceptance contract. Do not
+rewrite V7. Before serving HTTP, retire its imported communities/channels under
+the UPDATE access fence, with exact durable session cleanup. Preserve legacy
+tables and native v2 communities. Final group reconciliation, mapping legacy
+reads to v2 default channels and dual-writing legacy group creation are cancelled.
+Legacy voice/sharing write upgrade boundary remains required at actual cutover.
+Detailed UI plans/mockups are deferred until screen assembly, as requested.
+
 ## Task1: Additive schema and migration
 
 - Count existing V1..V6, add V7 and deliberately update migration expectations.
@@ -115,15 +127,12 @@ and separate voice disconnect retaining permanent membership.
 - Connect owned roster cursor transport with exact ACK after publication and
   cancellation on access denial. Durable community events trigger authorized
   refresh; do not leak raw events or claim an in-memory hub is durable authority.
-- Legacy groups read map to migrated private/default channels where compatible.
+- Retracted 2026-10-04: legacy groups do not map to new servers/default channels.
   At actual cutover legacy voice/sharing writes return client_upgrade_required;
   delayed v1 stop cannot affect v2 claims. Migration does not perform rollout.
-- V7 is an initial backfill, not a live replication mechanism for legacy creates.
-  At cutover quiesce old instances, perform an idempotent final reconciliation of
-  groups created after initial migration, then enable the compatibility write
-  boundary. New legacy-compatible group creation must update both representations
-  atomically or require an upgrade. Do not silently orphan groups written by a
-  still-running old instance after V7.
+- V7's historical imports are retired before HTTP startup. No final group
+  reconciliation or dual-write transfer is performed. At cutover quiesce old
+  writers and enable the upgrade boundary; retained old groups remain legacy data.
 - Client communities repository/components/UI and real voice adapter follow this
   backend contract. Public join never captures microphone or shares location.
 
