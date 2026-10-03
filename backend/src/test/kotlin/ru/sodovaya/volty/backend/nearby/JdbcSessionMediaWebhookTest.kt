@@ -21,7 +21,7 @@ class JdbcSessionMediaWebhookTest {
         val pending = JdbcMediaWebhookInbox(source).pending(10)
         assertEquals(listOf(event), pending.map { it.event })
         assertTrue(pending.single().sequence > 0)
-        assertTrue(store.complete(event.eventId, event.bodySha256))
+        assertTrue(store.complete(event.eventId, event.bodySha256, event.sessionId!!))
         assertTrue(JdbcMediaWebhookInbox(source).pending(10).isEmpty())
         assertEquals(MediaWebhookDisposition.ACCEPTED, store.accept(event))
         assertTrue(store.pending(10).isEmpty(), "Duplicate cannot requeue completed event")
@@ -32,7 +32,7 @@ class JdbcSessionMediaWebhookTest {
         store.accept(event)
         val collision = event.copy(bodySha256 = "b".repeat(64), participantSid = "PA_new", kind = MediaWebhookKind.LEFT)
         assertEquals(MediaWebhookDisposition.CONFLICT, store.accept(collision))
-        assertFalse(store.complete(collision.eventId, collision.bodySha256))
+        assertFalse(store.complete(collision.eventId, collision.bodySha256, collision.sessionId!!))
         assertEquals(event, store.pending(1).single().event)
     }
 
@@ -55,8 +55,8 @@ class JdbcSessionMediaWebhookTest {
         SchemaMigrator(source).migrate()
         val next = event.copy(eventId = "EV_" + UUID.randomUUID(), participantSid = "PA_new", kind = MediaWebhookKind.LEFT)
         store.accept(event); store.accept(next)
-        assertFalse(store.complete("EV_missing", event.bodySha256))
-        assertTrue(store.complete(event.eventId, event.bodySha256))
+        assertFalse(store.complete("EV_missing", event.bodySha256, event.sessionId!!))
+        assertTrue(store.complete(event.eventId, event.bodySha256, event.sessionId!!))
         assertEquals(listOf(next), store.pending(10).map { it.event })
     }
 

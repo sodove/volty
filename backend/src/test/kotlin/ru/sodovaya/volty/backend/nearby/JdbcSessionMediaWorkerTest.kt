@@ -66,7 +66,7 @@ class JdbcSessionMediaWorkerTest {
         sfu.media = SfuParticipantObservation("PA_live", SfuParticipantState.ACTIVE)
         inbox.accept(event(MediaWebhookKind.JOINED, "PA_live"))
         val lostAck = object : MediaWebhookInbox by inbox {
-            override fun complete(eventId: String, bodySha256: String) = false
+            override fun complete(eventId: String, bodySha256: String, targetSessionId: String) = false
         }
         assertFalse(MediaWebhookReconciler(lostAck, repository, service).reconcileNext())
         assertEquals(3, JdbcRosterJournal(source).revision())
@@ -94,6 +94,43 @@ class JdbcSessionMediaWorkerTest {
     }
 
     private fun worker() = MediaWebhookReconciler(JdbcMediaWebhookInbox(source), JdbcSessionRepository(source), service)
+
+    @Test fun delayedRoomFinishedPreservesNewCurrentSessionAndTransport() {
+        val next = id()
+        val fresh = assertIs<SessionAction.Ready>(service.join(actor, next, destination, replace = true)).credentials.sessionId
+        sfu.media = SfuParticipantObservation("PA_new", SfuParticipantState.ACTIVE)
+        inbox.accept(VerifiedMediaWebhook("EV_room_" + id(), "a".repeat(64), "room", null, null, MediaWebhookKind.ROOM_FINISHED))
+        assertEquals(fresh, inbox.pending(1).single().targetSessionId)
+        val revokes = sfu.revocations
+        assertTrue(worker().reconcileNext())
+        assertEquals(fresh, repository.currentClaim(actor)!!.sessionId)
+        assertEquals("PA_new", repository.get(actor, next)!!.media.participantSid)
+        assertEquals(revokes, sfu.revocations)
+        assertEquals(0, sfu.renewals)
+        assertEquals(2, issued)
+    }
+
+    @Test fun roomTargetTimeoutAndLostAckRemainDurableWithoutDuplicateVisibleRevision() {
+        inbox.accept(VerifiedMediaWebhook("EV_room_" + id(), "a".repeat(64), "room", null, null, MediaWebhookKind.ROOM_FINISHED))
+        sfu.failure = SfuFailure.TIMEOUT
+        assertFalse(worker().reconcileNext())
+        assertEquals(1, inbox.pending(1).size)
+        sfu.failure = null
+        sfu.media = SfuParticipantObservation("PA_new", SfuParticipantState.ACTIVE)
+        val lostAck = object : MediaWebhookInbox by inbox {
+            override fun complete(eventId: String, bodySha256: String, targetSessionId: String) = false
+        }
+        assertFalse(MediaWebhookReconciler(lostAck, repository, service).reconcileNext())
+        val revision = JdbcRosterJournal(source).revision()
+        assertEquals("PA_new", repository.get(actor, operation)!!.media.participantSid)
+        assertEquals(1, repository.get(actor, operation)!!.media.observationVersion)
+        assertTrue(worker().reconcileNext())
+        assertEquals(revision, JdbcRosterJournal(source).revision())
+        assertEquals(2, repository.get(actor, operation)!!.media.observationVersion)
+        assertTrue(inbox.pending(1).isEmpty())
+        assertEquals(1, issued)
+        assertEquals(0, sfu.renewals)
+    }
     private fun event(kind: MediaWebhookKind, sid: String) = VerifiedMediaWebhook("EV_" + id(), "a".repeat(64), "room",
         repository.get(actor, operation)!!.operation.sessionId!!, sid, kind)
     private fun schema(): javax.sql.DataSource {

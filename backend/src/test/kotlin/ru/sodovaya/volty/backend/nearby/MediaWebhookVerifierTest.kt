@@ -70,4 +70,21 @@ class MediaWebhookVerifierTest {
         assertIs<MediaWebhookResult.Ignored>(verifier.verify(bytes, token(bytes)))
         assertIs<MediaWebhookResult.Rejected>(verifier.verify(bytes, "invalid"))
     }
+
+    @Test fun signedRoomFinishedHasRoomButNoFabricatedParticipant() {
+        val bytes = """{"event":"room_finished","id":"EV_room","room":{"name":"room-epoch","sid":"RM_old"}}""".toByteArray()
+        val event = assertIs<MediaWebhookResult.Accepted>(verifier.verify(bytes, token(bytes))).event
+        assertEquals(MediaWebhookKind.ROOM_FINISHED, event.kind)
+        assertEquals("room-epoch", event.roomEpoch)
+        assertNull(event.sessionId)
+        assertNull(event.participantSid)
+        assertIs<MediaWebhookResult.Rejected>(verifier.verify(bytes, "invalid"))
+    }
+
+    @Test fun roomFinishedCannotCarryParticipantOrMissingRoomProvenance() {
+        val missingRoom = """{"event":"room_finished","id":"EV_room"}""".toByteArray()
+        for (bytes in listOf(body("room_finished"), missingRoom)) {
+            assertIs<MediaWebhookResult.Rejected>(verifier.verify(bytes, token(bytes)))
+        }
+    }
 }

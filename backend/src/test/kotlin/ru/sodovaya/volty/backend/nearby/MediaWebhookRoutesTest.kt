@@ -82,4 +82,20 @@ class MediaWebhookRoutesTest {
         assertFalse(response.bodyAsText().contains("private-body-token"))
         assertFalse(response.bodyAsText().contains(session))
     }
+
+    @Test fun signedRoomFinishedRequiresDurableReceiptBeforeAcknowledgement() = testApplication {
+        val roomBody = """{"event":"room_finished","id":"EV_room","room":{"name":"room-epoch"}}""".toByteArray()
+        var disposition = MediaWebhookDisposition.RETRY
+        var received: VerifiedMediaWebhook? = null
+        application { module(deps(endpoint { received = it; disposition })) }
+        assertEquals(HttpStatusCode.ServiceUnavailable, client.post("/v2/nearby/media/webhook") {
+            setBody(roomBody); header(HttpHeaders.Authorization, signed(roomBody))
+        }.status)
+        assertEquals(MediaWebhookKind.ROOM_FINISHED, received!!.kind)
+        assertNull(received!!.sessionId)
+        disposition = MediaWebhookDisposition.ACCEPTED
+        assertEquals(HttpStatusCode.NoContent, client.post("/v2/nearby/media/webhook") {
+            setBody(roomBody); header(HttpHeaders.Authorization, signed(roomBody))
+        }.status)
+    }
 }

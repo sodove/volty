@@ -158,13 +158,19 @@ class JdbcSessionMediaObservationTest {
             }
         }
         val hook = VerifiedMediaWebhook("EV_retained", "a".repeat(64), "room", session, "PA_old", MediaWebhookKind.LEFT)
-        JdbcMediaWebhookInbox(old).accept(hook)
+        // Earlier fixture used the current producer on V4. V6's producer requires
+        // targets: seed the historical V4 row directly, then verify real upgrade.
+        old.connection.use { c -> c.prepareStatement("INSERT INTO nearby_media_webhook_inbox(event_id,body_sha256,room_epoch,session_id,participant_sid,kind) VALUES (?,?,?,?::uuid,?,'LEFT')").use {
+            it.setString(1, hook.eventId); it.setString(2, hook.bodySha256); it.setString(3, hook.roomEpoch)
+            it.setString(4, hook.sessionId); it.setString(5, hook.participantSid); it.executeUpdate()
+        } }
         SchemaMigrator(old).migrate(); SchemaMigrator(old).migrate()
         val migrated = JdbcSessionRepository(old)
         assertEquals(SessionMedia(), migrated.get(actor, operation)!!.media)
         assertEquals(session, migrated.currentClaim(actor)!!.sessionId)
         assertEquals(15_100, migrated.get(actor, operation)!!.operation.deadlineEpochMillis)
         assertEquals(listOf(hook), JdbcMediaWebhookInbox(old).pending(10).map { it.event })
+        assertEquals(session, JdbcMediaWebhookInbox(old).pending(10).single().targetSessionId)
     }
 
     private fun observe(version: Long, value: SfuParticipantObservation, now: Long = 102) =
