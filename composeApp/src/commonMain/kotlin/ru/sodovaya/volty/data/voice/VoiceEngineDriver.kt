@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import ru.sodovaya.volty.domain.voice.VoiceGeneration
@@ -27,7 +28,7 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
     private val output = MutableSharedFlow<VoiceSessionEvent>(extraBufferCapacity = 64)
     val events = output.asSharedFlow()
     suspend fun start(effect: VoiceSessionEffect.StartEngine, credentials: VoiceConnectionCredentials): Result<Unit> = coroutineScope {
-        val requested = Command(effect.tag, currentCoroutineContext()[Job]!!)
+        val requested = Command(effect.tag, currentCoroutineContext()[Job]!!, effect.muted, effect.deafened)
         val previous = mutex.withLock {
             val old = command
             current?.let { retired += it }
@@ -55,11 +56,19 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
                     }
                 }).also { current = it }
             }
-            handle.session.setDeafened(effect.deafened)
+            mutex.withLock {
+                checkCommand(requested)
+                handle.session.setDeafened(requested.deafened)
+            }
             handle.session.connect(credentials)
             assertOwned(handle)
-            if (!handle.session.publishMicrophone(effect.muted)) throw VoiceEngineException(VoiceEngineError.PUBLICATION)
+            // Earlier publication used effect.muted captured before connect.
+            // That overwrote mute requested while no publication existed yet.
+            // Publish closed first, then reconcile the owned latest intent.
+            if (!handle.session.publishMicrophone(true)) throw VoiceEngineException(VoiceEngineError.PUBLICATION)
             assertOwned(handle)
+            mutex.withLock { checkCommand(requested); handle.publicationReady = true }
+            applyMute(handle).getOrThrow()
             Result.success(Unit)
         } catch (cancelled: CancellationException) {
             detach(requested, handle)
@@ -94,25 +103,58 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
         return Result.success(Unit)
     }
 
-    suspend fun setMuted(tag: VoiceSessionTag, muted: Boolean): Result<Unit> = control(tag, VoiceEngineError.MUTE) {
-        if (!it.setMuted(muted)) throw VoiceEngineException(VoiceEngineError.MUTE)
+    suspend fun setMuted(tag: VoiceSessionTag, muted: Boolean): Result<Unit> {
+        val (accepted, handle) = mutex.withLock {
+            val owned = command?.takeIf { it.tag == tag } ?: return@withLock false to null
+            check(owned.muteVersion < Long.MAX_VALUE)
+            owned.muted = muted
+            owned.muteVersion++
+            true to current?.takeIf { it.command === owned && it.publicationReady }
+        }
+        if (!accepted) return Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
+        // Intent is accepted even before factory allocation/publication. Start
+        // will sample it after initially muted publication becomes available.
+        return if (handle == null) Result.success(Unit) else applyMute(handle)
     }
 
-    suspend fun setDeafened(tag: VoiceSessionTag, deafened: Boolean): Result<Unit> = control(tag, VoiceEngineError.MUTE) {
-        it.setDeafened(deafened)
+    private suspend fun applyMute(handle: Handle): Result<Unit> = try {
+        val completed = withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) {
+            handle.controlMutex.withLock {
+                do {
+                    val (muted, version) = mutex.withLock {
+                        checkCommand(handle.command)
+                        if (current !== handle) throw CancellationException("Voice session superseded")
+                        handle.command.muted to handle.command.muteVersion
+                    }
+                    if (!handle.session.setMuted(muted)) throw VoiceEngineException(VoiceEngineError.MUTE)
+                    assertOwned(handle)
+                    val settled = mutex.withLock { handle.command.muteVersion == version }
+                } while (!settled)
+            }
+            true
+        }
+        if (completed == true) Result.success(Unit) else Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
     }
 
-    private suspend fun control(tag: VoiceSessionTag, code: VoiceEngineError, action: suspend (VoiceSdkSession) -> Unit): Result<Unit> {
-        val handle = mutex.withLock { current?.takeIf { it.command.tag == tag } }
-            ?: return Result.failure(VoiceEngineException(code))
+    suspend fun setDeafened(tag: VoiceSessionTag, deafened: Boolean): Result<Unit> {
         return try {
-            action(handle.session)
-            assertOwned(handle)
-            Result.success(Unit)
+            val accepted = mutex.withLock {
+                val owned = command?.takeIf { it.tag == tag } ?: return@withLock false
+                owned.deafened = deafened
+                // Synchronous native speaker-mute setter, no suspended SDK work
+                // under ownership lock. Allocation samples this same intent.
+                current?.takeIf { it.command === owned }?.session?.setDeafened(deafened)
+                true
+            }
+            if (accepted) Result.success(Unit) else Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
-            Result.failure(VoiceEngineException(code))
+            Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
         }
     }
 
@@ -151,13 +193,20 @@ class VoiceEngineDriver(private val scope: CoroutineScope, private val factory: 
         }
     }
 
-    private class Command(val tag: VoiceSessionTag, val job: Job)
+    private class Command(val tag: VoiceSessionTag, val job: Job, var muted: Boolean, var deafened: Boolean) {
+        var muteVersion = 0L
+    }
     private class Handle(val command: Command, val session: VoiceSdkSession) {
         val closeMutex = Mutex()
+        val controlMutex = Mutex()
+        var publicationReady = false
         var closed = false
     }
 
-    private companion object { const val CLOSE_TIMEOUT_MILLIS = 5_000L }
+    private companion object {
+        const val CLOSE_TIMEOUT_MILLIS = 5_000L
+        const val CONTROL_TIMEOUT_MILLIS = 5_000L
+    }
 
     private fun isSdkEvent(event: VoiceSessionEvent, tag: VoiceSessionTag): Boolean = when (event) {
         // SFU media cannot acknowledge a backend lease or prove resource release.
