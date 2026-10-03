@@ -51,7 +51,7 @@ application {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("postgres") }
+    useJUnitPlatform { excludeTags("postgres", "sfu") }
 }
 
 tasks.register<Test>("postgresTest") {
@@ -59,4 +59,11 @@ tasks.register<Test>("postgresTest") {
     testClassesDirs = sourceSets["test"].output.classesDirs
     classpath = sourceSets["test"].runtimeClasspath
     useJUnitPlatform { includeTags("postgres") }
+}
+
+tasks.register<Test>("sfuTest") {
+    description = "Nearby control protocol against an explicitly supplied disposable SFU"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("sfu") }
 }

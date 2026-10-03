@@ -17,8 +17,10 @@ New-Item -ItemType Directory -Path $Destination | Out-Null
 Get-ChildItem -LiteralPath $Source -Force | Copy-Item -Destination $Destination -Recurse
 New-Item -ItemType Directory -Path (Join-Path $Destination 'pkg/voltylease') | Out-Null
 Copy-Item -LiteralPath "$PSScriptRoot/lease/gate.go" -Destination (Join-Path $Destination 'pkg/voltylease/gate.go')
+Copy-Item -LiteralPath "$PSScriptRoot/lease/readiness.go" -Destination (Join-Path $Destination 'pkg/voltylease/readiness.go')
 Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltyleases.go" -Destination (Join-Path $Destination 'pkg/service/voltyleases.go')
 Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltybarrier.go" -Destination (Join-Path $Destination 'pkg/service/voltybarrier.go')
+Copy-Item -LiteralPath "$PSScriptRoot/overlay/voltyreadiness.go" -Destination (Join-Path $Destination 'pkg/service/voltyreadiness.go')
 function Replace-One([string]$Text,[string]$Needle,[string]$Replacement) {
     if (($Text.Split($Needle,[System.StringSplitOptions]::None).Length - 1) -ne 1) {throw "Patch anchor not unique: $Needle"}
     return $Text.Replace($Needle,$Replacement)
@@ -50,6 +52,6 @@ Write-Source 'pkg/rtc/participant.go' $participant
 $auth = Read-Source 'pkg/service/auth.go'
 $auth = Replace-One $auth 'errors.New("invalid token: "+authToken+", error: "+err.Error())' 'ErrInvalidAuthorizationToken'
 Write-Source 'pkg/service/auth.go' $auth
-& gofmt -w (Join-Path $Destination 'pkg/voltylease/gate.go') (Join-Path $Destination 'pkg/service/voltyleases.go') (Join-Path $Destination 'pkg/service/voltybarrier.go') (Join-Path $Destination 'pkg/service/roommanager.go') (Join-Path $Destination 'pkg/service/rtcservice.go') (Join-Path $Destination 'pkg/rtc/participant.go') (Join-Path $Destination 'pkg/service/auth.go')
+& gofmt -w (Join-Path $Destination 'pkg/voltylease/gate.go') (Join-Path $Destination 'pkg/voltylease/readiness.go') (Join-Path $Destination 'pkg/service/voltyreadiness.go') (Join-Path $Destination 'pkg/service/voltyleases.go') (Join-Path $Destination 'pkg/service/voltybarrier.go') (Join-Path $Destination 'pkg/service/roommanager.go') (Join-Path $Destination 'pkg/service/rtcservice.go') (Join-Path $Destination 'pkg/rtc/participant.go') (Join-Path $Destination 'pkg/service/auth.go')
 if ($LASTEXITCODE -ne 0) {throw 'gofmt failed'}
 Write-Output $Destination

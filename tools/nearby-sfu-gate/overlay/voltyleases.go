@@ -25,6 +25,7 @@ func (s *RTCService) setupVoltyLeases(mux *http.ServeMux) {
 	mux.HandleFunc("/volty/leases/register", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/renew", s.voltyLeaseControl)
 	mux.HandleFunc("/volty/leases/revoke", s.voltyLeaseControl)
+	mux.HandleFunc("/volty/leases/readiness", s.voltyReadiness)
 	for _, action := range []string{"arm", "entered", "release", "revoking"} {
 		mux.HandleFunc("/volty/test/barrier/"+action, s.voltyBarrierControl)
 	}
@@ -34,7 +35,7 @@ func (s *RTCService) setupVoltyLeases(mux *http.ServeMux) {
 			defer ticker.Stop()
 			for range ticker.C {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				_ = voltyGate.Sweep(ctx)
+				voltyHealth.Observe(voltyGate.Sweep(ctx))
 				cancel()
 			}
 		}()
@@ -49,6 +50,7 @@ func (s *RTCService) voltyLeaseControl(w http.ResponseWriter, r *http.Request) {
 		Room       string `json:"room"`
 		Identity   string `json:"identity"`
 		TTLSeconds int64  `json:"ttlSeconds"`
+		NodeEpoch  string `json:"nodeEpoch"`
 	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
 	decoder.DisallowUnknownFields()
@@ -63,6 +65,15 @@ func (s *RTCService) voltyLeaseControl(w http.ResponseWriter, r *http.Request) {
 	}
 	if EnsureAdminPermission(r.Context(), livekit.RoomName(body.Room)) != nil {
 		http.Error(w, "lease_forbidden", 403)
+		return
+	}
+	if body.NodeEpoch != voltyNodeEpoch {
+		http.Error(w, "node_epoch_mismatch", 409)
+		return
+	}
+	// Revoke remains available when cleanup health is degraded.
+	if r.URL.Path != "/volty/leases/revoke" && !voltyHealth.Status().Ready {
+		http.Error(w, "admission_unavailable", 503)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
@@ -97,6 +108,9 @@ func (r *RoomManager) StartSession(ctx context.Context, pi routing.ParticipantIn
 	}
 	if pi.CreateRoom == nil {
 		return lease.ErrInvalid
+	}
+	if !voltyHealth.Status().Ready {
+		return lease.ErrDenied
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

@@ -31,6 +31,7 @@ const key = "nearby-probe"
 const secret = "local-nearby-probe-secret-not-production-20261003"
 
 var refreshed sync.Map // opaque credentials, never printed or persisted
+var nodeEpoch string   // public node incarnation, not a credential
 
 func claims(token string) map[string]any {
 	parts := strings.Split(token, ".")
@@ -197,7 +198,10 @@ func adminBearer(room string) string {
 	return value
 }
 func control(path, room, identity, bearer string, ttl int) int {
-	body, _ := json.Marshal(map[string]any{"room": room, "identity": identity, "ttlSeconds": ttl})
+	return controlAtNode(path, room, identity, bearer, ttl, nodeEpoch)
+}
+func controlAtNode(path, room, identity, bearer string, ttl int, epoch string) int {
+	body, _ := json.Marshal(map[string]any{"room": room, "identity": identity, "ttlSeconds": ttl, "nodeEpoch": epoch})
 	if strings.Contains(path, "/barrier/") {
 		body, _ = json.Marshal(map[string]any{"room": room, "identity": identity})
 	}
@@ -211,6 +215,31 @@ func control(path, room, identity, bearer string, ttl int) int {
 	defer response.Body.Close()
 	_, _ = io.Copy(io.Discard, response.Body)
 	return response.StatusCode
+}
+
+type readinessInfo struct {
+	ProtocolVersion     int    `json:"protocolVersion"`
+	NodeEpoch           string `json:"nodeEpoch"`
+	Ready               bool   `json:"ready"`
+	SlotsUsed           int    `json:"slotsUsed"`
+	Capacity            int    `json:"capacity"`
+	MaximumLeaseSeconds int    `json:"maximumLeaseSeconds"`
+}
+
+func readiness(room, bearer string) (int, readinessInfo) {
+	body, _ := json.Marshal(map[string]string{"room": room})
+	req, _ := http.NewRequest(http.MethodPost, host+"/volty/leases/readiness", strings.NewReader(string(body)))
+	req.Header.Set("Authorization", "Bearer "+bearer)
+	response, err := (&http.Client{Timeout: 3 * time.Second}).Do(req)
+	if err != nil {
+		return 0, readinessInfo{}
+	}
+	defer response.Body.Close()
+	var info readinessInfo
+	if response.StatusCode == 200 && json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&info) != nil {
+		return 0, info
+	}
+	return response.StatusCode, info
 }
 func require(ok bool, message string) {
 	if !ok {
@@ -247,6 +276,25 @@ func main() {
 	admin := lksdk.NewRoomServiceClient(host, key, secret)
 	defer admin.DeleteRoom(context.Background(), &livekit.DeleteRoomRequest{Room: room})
 	fmt.Printf("nonce=%s\n", nonce)
+	deadline := time.Now().Add(3 * time.Second)
+	var info readinessInfo
+	for time.Now().Before(deadline) {
+		status, observed := readiness(room, adminBearer(room))
+		if status == 200 && observed.Ready {
+			info = observed
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	require(info.Ready && info.ProtocolVersion == 1 && len(info.NodeEpoch) == 32 && info.Capacity == 4096 && info.MaximumLeaseSeconds == 30, "readiness contract missing")
+	nodeEpoch = info.NodeEpoch
+	status, _ := readiness(room, token(room, "untrusted"))
+	require(status == 403, "participant read admin readiness")
+	status, _ = readiness(room, adminBearer(room+"-wrong"))
+	require(status == 403, "wrong-room admin read readiness")
+	require(controlAtNode("/volty/leases/register", room, "stale-node", adminBearer(room), 30, "old-incarnation") == 409, "old-node register accepted")
+	denied(room, "stale-node", token(room, "stale-node"), "old_node_register")
+	fmt.Printf("readiness_protocol=%d node_epoch=%s capacity=%d health_ready=true auth_fenced=true\n", info.ProtocolVersion, nodeEpoch, info.Capacity)
 	// Valid participant credentials must not mutate the registry. Wrong room-admin scope too.
 	require(control("/volty/leases/register", room, "untrusted", token(room, "untrusted"), 30) == 403, "participant mutated lease")
 	require(control("/volty/leases/register", room, "untrusted", adminBearer(room+"-wrong"), 30) == 403, "wrong-room admin mutated lease")
@@ -299,6 +347,11 @@ func main() {
 	defer stopC()
 	require(waitMedia(b, "A", 0) && waitMedia(c, "B", 0) && waitMedia(a, "C", 0), "INVALID duplex baseline")
 	fmt.Printf("baseline_B_receive=%d C_from_B=%d A_from_C=%d\n", b.count("A"), c.count("B"), a.count("C"))
+	require(controlAtNode("/volty/leases/revoke", room, "B", adminBearer(room), 0, "old-incarnation") == 409, "old-node revoke accepted")
+	require(controlAtNode("/volty/leases/revoke", room, "B", adminBearer(room), 0, "") == 409, "missing-node revoke accepted")
+	require(controlAtNode("/volty/leases/renew", room, "B", adminBearer(room), 30, "old-incarnation") == 409, "old-node renew accepted")
+	require(waitMedia(b, "A", b.count("A")) && waitMedia(c, "B", c.count("B")), "stale node mutation stopped current media")
+	fmt.Println("node_fence_register_renew_revoke=true stale_controls_left_media_running=true")
 	captured, ok := refreshed.Load("B")
 	require(ok, "SFU refresh not captured")
 	refresh := captured.(string)
