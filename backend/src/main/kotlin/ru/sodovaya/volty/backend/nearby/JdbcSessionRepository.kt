@@ -107,6 +107,12 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         return listOf(checkNotNull(persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at)).state))
     }
 
+    /** Caller owns UPDATE fence; lock every affected actor before any revision write. */
+    internal fun lockCommunityActors(c: Connection, actors: Collection<String>) {
+        check(access != null && !c.autoCommit)
+        actors.distinct().sorted().forEach { lockActor(c, it) }
+    }
+
     internal fun readSession(c: Connection, session: String): SessionJournalEntry? =
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
             it.setString(1, session); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
