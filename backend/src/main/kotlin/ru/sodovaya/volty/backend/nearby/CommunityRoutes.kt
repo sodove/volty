@@ -61,7 +61,7 @@ fun Route.installNearbyCommunityRoutes(dependencies: AppDependencies) {
                 val community = call.nearbyId("communityId")
                 val port = dependencies.nearbyCommunityRemoval ?: disabled()
                 val request = call.communityBody<CommunityLeaveRequest>(dependencies)
-                canonicalId(request.operationId); request.successorId?.let(::canonicalId)
+                communityCanonicalId(request.operationId); request.successorId?.let(::communityCanonicalId)
                 when (val result = withContext(Dispatchers.IO) { port.leave(actor, request.operationId, community, request.successorId) }) {
                     is CommunityDepartureResult.Departed -> call.respond(CommunityRemovalResponse(request.operationId,
                         result.communityId, result.revision, result.cleanupSessions.any { it.cleanupPending }))
@@ -77,7 +77,7 @@ fun Route.installNearbyCommunityRoutes(dependencies: AppDependencies) {
                 val community = call.nearbyId("communityId")
                 val port = dependencies.nearbyCommunityRemoval ?: disabled()
                 val request = call.communityBody<CommunityDeleteRequest>(dependencies)
-                canonicalId(request.operationId)
+                communityCanonicalId(request.operationId)
                 when (val result = withContext(Dispatchers.IO) { port.delete(actor, request.operationId, community) }) {
                     is CommunityDeletionResult.Deleted -> call.respond(CommunityRemovalResponse(request.operationId,
                         result.communityId, result.revision, result.cleanupSessions.any { it.cleanupPending }))
@@ -111,7 +111,7 @@ private fun ApplicationCall.page(): Pair<String?, Int> {
     return after to limit
 }
 
-private suspend inline fun <reified T> ApplicationCall.communityBody(dependencies: AppDependencies): T {
+internal suspend inline fun <reified T> ApplicationCall.communityBody(dependencies: AppDependencies): T {
     val maximum = 16 * 1024
     if ((request.headers[HttpHeaders.ContentLength]?.toLongOrNull() ?: 0) > maximum) tooLarge()
     val bytes = withTimeoutOrNull(10_000) {
@@ -136,9 +136,10 @@ private suspend inline fun <reified T> ApplicationCall.communityBody(dependencie
 }
 
 private fun invalid(): Nothing = throw ApiException(HttpStatusCode.BadRequest, "invalid_request", "Request is invalid")
-private fun canonicalId(value: String) {
+internal fun communityCanonicalId(value: String): String {
     try { if (value.length != 36 || UUID.fromString(value).toString() != value) invalid() }
     catch (_: IllegalArgumentException) { invalid() }
+    return value
 }
 private fun removalConflict(code: String, message: String): Nothing = throw ApiException(HttpStatusCode.Conflict, code, message)
 private fun denied(): Nothing = throw ApiException(HttpStatusCode.NotFound, "community_unavailable", "Community unavailable")
