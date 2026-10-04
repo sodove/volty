@@ -18,9 +18,11 @@ class VoiceEngineEffectRunner(
     private val currentState: () -> VoiceSessionState,
     private val monotonicMillis: () -> Long,
     private val emit: suspend (VoiceSessionEvent) -> Unit,
+    /** Additional nonblocking account fence; independent cleanup must bypass it. */
+    private val accountPermission: () -> Boolean = { true },
 ) {
     private val scope = CoroutineScope(parent.coroutineContext + queuedDispatcher)
-    private val driver = VoiceEngineDriver(scope, factory) { currentState().authorizesEngine(it, monotonicMillis()) }
+    private val driver = VoiceEngineDriver(scope, factory, ::authorizes)
     private val starts = mutableMapOf<VoiceGeneration, Start>()
     private val stops = mutableMapOf<VoiceGeneration, Job>()
     private var mute: Control? = null
@@ -80,7 +82,7 @@ class VoiceEngineEffectRunner(
 
     private fun control(tag: VoiceSessionTag, value: Boolean, microphone: Boolean) {
         // A stale preference must not even cancel the current tag's queued work.
-        if (!currentState().authorizesEngine(tag, monotonicMillis())) return
+        if (!authorizes(tag)) return
         val previous = if (microphone) mute else deafen
         previous?.job?.cancel()
         val pending = Control(tag)
@@ -91,6 +93,11 @@ class VoiceEngineEffectRunner(
             if (result.isFailure) emit(VoiceSessionEvent.EngineFailed(tag))
         }
     }
+
+    private fun authorizes(tag: VoiceSessionTag): Boolean = try {
+        accountPermission() && currentState().authorizesEngine(tag, monotonicMillis())
+    } catch (_: Exception) { false }
+
     private class Start(val tag: VoiceSessionTag) { var job: Job? = null }
     private class Control(val tag: VoiceSessionTag) { var job: Job? = null }
 }

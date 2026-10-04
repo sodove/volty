@@ -16,12 +16,12 @@ Direct transport join also records its own intent. Exact operation/generation/ch
 replace binding is first-writer immutable. Reply-derived session identity is retained
 for cleanup even when positive result publication is rejected after logout.
 
-Two owned raw adapters keep positive lease ordinals separate from terminal cleanup;
+Two owned raw adapters keep positive lease ordinals separate from terminal cleanup.
 Suspend creation validates the account/root and captures its original bearer before
 allocating adapters or accepting intent. This also permits cleanup when a registered
 join producer never enters transport. Cleanup never waits for auth refresh; its token
 is only the original authority token observed at creation or a positive request.
-the latter uses the original account's last observed bearer after retirement. Such
+The terminal adapter uses the original account's last observed bearer after retirement. Such
 requests may receive 401, remain unconfirmed, and do not prove media revocation.
 Close is explicit only after the enclosing voice drain is done; admission retirement
 alone never closes the cleanup port or cancels native/full voice cleanup. No implicit

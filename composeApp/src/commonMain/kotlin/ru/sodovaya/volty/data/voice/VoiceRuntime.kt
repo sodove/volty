@@ -23,6 +23,7 @@ class VoiceRuntime(
     pulses: Flow<Unit>,
     private val monotonicMillis: () -> Long,
     private val sharingDispatch: (VoiceSharingEffect) -> Unit,
+    private val accountPermission: () -> Boolean = { true },
 ) {
     private val scope = run {
         require(queuedDispatcher.isDispatchNeeded(parent.coroutineContext)) { "Queued serial dispatcher required" }
@@ -32,7 +33,7 @@ class VoiceRuntime(
     private var retiring = false
     private val owner = VoiceControlOwner(scope, port, ::dispatch)
     private val engine = VoiceEngineEffectRunner(scope, queuedDispatcher, factory,
-        { owner.state.value }, monotonicMillis, owner::event)
+        { owner.state.value }, monotonicMillis, owner::event, accountPermission)
     private val scheduler = VoiceControlScheduler(scope, owner, pulses, monotonicMillis,
         { engine.failedCleanup.value }, { engine.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(it))) })
 
