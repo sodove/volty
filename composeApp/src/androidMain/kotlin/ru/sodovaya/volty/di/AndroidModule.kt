@@ -46,6 +46,7 @@ import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
 import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
 import ru.sodovaya.volty.data.voice.VoiceAccountCoordinator
+import ru.sodovaya.volty.data.voice.AndroidVoiceAudioFactory
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -131,6 +132,7 @@ val androidModule = module {
         )
     }
     single<LocationProvider> { AndroidLocationProvider(get()) }
+    single { AndroidVoiceAudioFactory(androidContext()) }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
     single { AndroidOfflineRoutingPackageManager(androidContext()) }
     single { AndroidOfflineNavigationConfig.from(androidContext()) }
