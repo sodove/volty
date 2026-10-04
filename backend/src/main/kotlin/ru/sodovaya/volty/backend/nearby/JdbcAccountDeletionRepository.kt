@@ -7,6 +7,7 @@ import javax.sql.DataSource
 /** Account tombstone, membership/resources and durable cleanup share the access fence. */
 class JdbcAccountDeletionRepository(private val source: DataSource) {
     private val sessions = JdbcSessionRepository(source, JdbcChannelAccess())
+    private val rings = JdbcDirectCallRingingRepository(source)
 
     fun deleteAccount(actor: String, now: () -> Long): Int {
         require(UUID.fromString(actor).toString() == actor)
@@ -26,10 +27,11 @@ class JdbcAccountDeletionRepository(private val source: DataSource) {
                 JOIN nearby_session_operations o ON o.actor_id=a.actor_id AND o.operation_id=a.operation_id
                 JOIN nearby_voice_channels v ON v.id=o.destination_id AND o.destination_kind='CHANNEL' JOIN nearby_communities g ON g.id=v.community_id
                 WHERE g.owner_id=?::uuid AND g.state='ACTIVE'
-            """.trimIndent(), actor, actor) + actor
+            """.trimIndent(), actor, actor) + actor + rings.accountRingingActors(c, actor)
             // Acquire ALL actor locks before any cancellation increments the roster revision.
             sessions.lockCommunityActors(c, affected)
             val at = now().also { require(it >= 0) }
+            rings.cancelAccountRings(c, actor, at)
             sessions.cancelCurrentAccountClaim(c, actor, at)
             for (peer in affected.distinct().sorted().filter { it != actor })
                 for (community in owned) sessions.cancelCurrentCommunityClaim(c, peer, community, at)

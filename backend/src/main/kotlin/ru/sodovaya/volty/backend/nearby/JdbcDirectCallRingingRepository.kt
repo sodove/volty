@@ -8,6 +8,27 @@ import javax.sql.DataSource
 /** Ringing only. Accepted media/claims and public call endpoints are not enabled here. */
 class JdbcDirectCallRingingRepository(private val source: DataSource) {
     private val policy = DirectCallLifecyclePolicy()
+
+    /** Account writer holds the UPDATE access fence. Collect the entire actor set before
+     * locking actors or mutating roster revisions; call creation cannot race this set. */
+    internal fun accountRingingActors(c: Connection, actor: String): List<String> {
+        check(!c.autoCommit)
+        return c.prepareStatement("SELECT caller_id,callee_id FROM nearby_direct_calls WHERE phase='RINGING' AND (caller_id=?::uuid OR callee_id=?::uuid) ORDER BY call_id").use {
+            it.setString(1, actor); it.setString(2, actor)
+            it.executeQuery().use {r -> buildList {while (r.next()) {add(r.getString(1)); add(r.getString(2))}}}
+        }.distinct().sorted()
+    }
+
+    /** Same account transaction, with all affected actors already locked. No accepted
+     * writer exists yet. Earlier deletion left rings/peer reservations until polling. */
+    internal fun cancelAccountRings(c: Connection, actor: String, at: Long) {
+        check(!c.autoCommit)
+        val affected = c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE phase='RINGING' AND (caller_id=?::uuid OR callee_id=?::uuid) ORDER BY call_id FOR UPDATE").use {
+            it.setString(1, actor); it.setString(2, actor)
+            it.executeQuery().use {r -> buildList {while (r.next()) add(r.call())}}
+        }
+        for (call in affected) persist(c, policy.revokeFriendship(call, at))
+    }
     /** Original outgoing binding survives a stop before the creation request reaches SQL.
      * Never-rang tombstones are private to caller; no incoming notification/history is earned. */
     fun cancelOutgoingRinging(caller: String, callee: String, callId: String, key: String, operation: String, now: () -> Long): DirectCallDecision {
