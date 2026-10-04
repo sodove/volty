@@ -53,6 +53,29 @@ internal class VoiceSessionAccountControl private constructor(
         }
     }
 
+    /** Validated call transport supplied this identity; recording it never authorizes audio.
+     * Retired original owners can still learn what to stop, while closed owners stay empty. */
+    internal fun rememberPreparedCallSession(call: String, operation: VoiceOperationId,
+        generation: VoiceGeneration, reply: VoiceHttpReply): Boolean {
+        val tag = when (reply) {
+            is VoiceHttpReply.Credentials -> reply.tag
+            is VoiceHttpReply.Acknowledged -> reply.tag
+            is VoiceHttpReply.Expired -> reply.tag
+            is VoiceHttpReply.Pending -> {
+                if (reply.operationId != null && reply.operationId != operation) return false
+                reply.sessionId?.let {VoiceSessionTag(it, reply.generation)}
+            }
+            else -> null
+        } ?: return false
+        if (tag.generation != generation || !ID.matches(tag.sessionId.value)) return false
+        while (true) {
+            val current = capability.value
+            if (current.closed || current.intents[operation] != Intent(generation, call, false)) return false
+            if (tag in current.sessions) return true
+            if (capability.compareAndSet(current, current.copy(sessions = current.sessions + tag))) return true
+        }
+    }
+
     override suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean): VoiceHttpReply {
         ensureLive()
         rememberJoinIntent(operation, generation, channel, replace)
