@@ -14,6 +14,9 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
             val existing = read(c, actor, operation)
             if (access != null && existing?.operation?.terminal != true && hasCallReservation(c, actor))
                 return@locked SessionJournalResult(null, OperationRejection.CLAIM_BUSY)
+            if (access != null && existing?.operation?.terminal != true &&
+                existing?.operation?.destinationKind != VoiceDestinationKind.DIRECT_CALL && hasCallMediaClaim(c, actor))
+                return@locked SessionJournalResult(null, OperationRejection.CLAIM_BUSY)
             val observedAt = now()
             val decision = policy.begin(existing?.operation, actor, operation, destination, session, observedAt)
             if (existing != null) {
@@ -43,9 +46,15 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
             SessionJournalResult(row)
         }
 
-    override fun cancel(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
-        val existing = read(c, actor, operation)
-        persist(c, existing, policy.cancel(existing?.operation, actor, operation, now()))
+    override fun cancel(actor: String, operation: String, now: () -> Long): SessionJournalResult {
+        // Identify immutable target before taking a single actor lock. The pair owner must
+        // acquire the complete actor set before any revision write; no nested transaction.
+        if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+            JdbcDirectCallMediaRepository(source).stopSession(actor, operation, now)?.let {return it}
+        return locked(actor) { c ->
+            val existing = read(c, actor, operation)
+            persist(c, existing, policy.cancel(existing?.operation, actor, operation, now()))
+        }
     }
 
     override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
@@ -72,11 +81,15 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
             persist(c, row, policy.heartbeat(row.operation, session, now(), confirmedDeadline))
         }
 
-    override fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult = locked(actor) { c ->
-        val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
-        val at = now()
-        if (!row.operation.terminal && !allowed(c, row)) denied(c, row, at)
-        else persist(c, row, policy.expire(row.operation, at))
+    override fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult {
+        if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+            JdbcDirectCallMediaRepository(source).reconcileSession(actor, operation, now)?.let {return it}
+        return locked(actor) { c ->
+            val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
+            val at = now()
+            if (!row.operation.terminal && !allowed(c, row)) denied(c, row, at)
+            else persist(c, row, policy.expire(row.operation, at))
+        }
     }
 
     override fun get(actor: String, operation: String) = source.connection.use { read(it, actor, operation) }
@@ -298,6 +311,15 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     private fun hasCallReservation(c: Connection, actor: String): Boolean =
         c.prepareStatement("SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
             it.setString(1, actor); it.executeQuery().use {r -> r.next() && r.getString(1) != null}
+        }
+
+    private fun hasCallMediaClaim(c: Connection, actor: String): Boolean =
+        c.prepareStatement("""
+            SELECT 1 FROM nearby_actor_claims a JOIN nearby_session_operations o
+            ON o.actor_id=a.actor_id AND o.operation_id=a.operation_id AND o.session_id=a.session_id
+            WHERE a.actor_id=?::uuid AND o.destination_kind='DIRECT_CALL'
+        """.trimIndent()).use {
+            it.setString(1, actor); it.executeQuery().use {r -> r.next()}
         }
 
     private fun claim(c: Connection, actor: String): SessionClaim? =

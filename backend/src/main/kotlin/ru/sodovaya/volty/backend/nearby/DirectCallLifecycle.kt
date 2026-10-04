@@ -1,7 +1,7 @@
 package ru.sodovaya.volty.backend.nearby
 
 enum class DirectCallPhase { RINGING, ACCEPTED, DECLINED, CANCELLED, MISSED, ENDED }
-enum class DirectCallOutcome { CALLEE_DECLINED, CALLER_CANCELLED, CALLEE_CANCELLED, RING_TIMEOUT, CALLER_ENDED, CALLEE_ENDED, FRIENDSHIP_REVOKED, MEDIA_TIMEOUT }
+enum class DirectCallOutcome { CALLEE_DECLINED, CALLER_CANCELLED, CALLEE_CANCELLED, RING_TIMEOUT, CALLER_ENDED, CALLEE_ENDED, FRIENDSHIP_REVOKED, MEDIA_TIMEOUT, MEDIA_LOST }
 enum class DirectCallRejection { NOT_FRIENDS, IDENTITY_MISMATCH, ACCESS_DENIED, REVISION_MISMATCH, TERMINAL, NOT_RINGING, CLAIM_BUSY }
 
 data class DirectCallRecord(
@@ -18,7 +18,7 @@ data class DirectCallRecord(
             DirectCallPhase.DECLINED -> outcome == DirectCallOutcome.CALLEE_DECLINED
             DirectCallPhase.CANCELLED -> outcome in setOf(DirectCallOutcome.CALLER_CANCELLED, DirectCallOutcome.CALLEE_CANCELLED, DirectCallOutcome.FRIENDSHIP_REVOKED)
             DirectCallPhase.MISSED -> outcome == DirectCallOutcome.RING_TIMEOUT
-            DirectCallPhase.ENDED -> outcome in setOf(DirectCallOutcome.CALLER_ENDED, DirectCallOutcome.CALLEE_ENDED, DirectCallOutcome.FRIENDSHIP_REVOKED, DirectCallOutcome.MEDIA_TIMEOUT)
+            DirectCallPhase.ENDED -> outcome in setOf(DirectCallOutcome.CALLER_ENDED, DirectCallOutcome.CALLEE_ENDED, DirectCallOutcome.FRIENDSHIP_REVOKED, DirectCallOutcome.MEDIA_TIMEOUT, DirectCallOutcome.MEDIA_LOST)
         })
     }
     val terminal get() = phase != DirectCallPhase.RINGING && phase != DirectCallPhase.ACCEPTED
@@ -88,6 +88,15 @@ class DirectCallLifecyclePolicy {
         require(call.phase == DirectCallPhase.ACCEPTED || call.terminal)
         return if (call.terminal) DirectCallDecision(call)
         else finish(call, DirectCallPhase.ENDED, DirectCallOutcome.MEDIA_TIMEOUT)
+    }
+
+    /** Trusted pair owner proved terminal media or a lost exact claim, without lease expiry.
+     * Do not attribute this to a user or elapsed clock that was never observed. */
+    fun loseMedia(call: DirectCallRecord, now: Long): DirectCallDecision {
+        time(now)
+        require(call.phase == DirectCallPhase.ACCEPTED || call.terminal)
+        return if (call.terminal) DirectCallDecision(call)
+        else finish(call, DirectCallPhase.ENDED, DirectCallOutcome.MEDIA_LOST)
     }
 
     /** Trusted repository reconciliation, never an unguarded public endpoint. */

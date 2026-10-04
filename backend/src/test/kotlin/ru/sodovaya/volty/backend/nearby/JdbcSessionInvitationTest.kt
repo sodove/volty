@@ -30,7 +30,7 @@ class JdbcSessionInvitationTest {
         val result = assertIs<InvitationCreationResult.Created>(create())
         assertEquals(900_100, result.invitation.expiresAtMillis); assertEquals(0, result.invitation.uses)
         assertEquals(2, result.invitation.creationRevision); assertEquals(1, count("nearby_community_members"))
-        assertEquals(0, count("nearby_session_operations")); assertEquals(0, count("sharing_sessions")); assertEquals(14, count("schema_migrations"))
+        assertEquals(0, count("nearby_session_operations")); assertEquals(0, count("sharing_sessions")); assertEquals(15, count("schema_migrations"))
         source.connection.use { c -> c.createStatement().use { s ->
             s.executeQuery("SELECT * FROM nearby_invitations").use { rows ->
                 assertTrue(rows.next()); assertEquals(InvitationTokens.hash(raw), rows.getString("token_hash"))

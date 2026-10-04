@@ -18,6 +18,7 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
             val friend = friends(c, current)
             val at = now()
             expireAccepted(c, current, at)?.let {return@owned it.copy(rejection = DirectCallRejection.TERMINAL)}
+            retireLostClaims(c, current, at)?.let {return@owned it.copy(rejection = DirectCallRejection.TERMINAL)}
             if (!friend && !current.terminal)
                 return@owned persist(c, policy.revokeFriendship(current, at), at).copy(rejection = DirectCallRejection.NOT_FRIENDS)
             val decision = policy.accept(current, actor, revision, at)
@@ -68,6 +69,7 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
         return owned(actor, call) {c, current ->
             val at = now()
             expireAccepted(c, current, at)?.let {return@owned it}
+            retireLostClaims(c, current, at)?.let {return@owned it}
             persist(c, policy.stop(current, actor, at), at)
         }
     }
@@ -75,10 +77,72 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
     private fun expireAccepted(c: Connection, call: DirectCallRecord, at: Long): DirectCallDecision? {
         if (call.phase != DirectCallPhase.ACCEPTED) return null
         val rows = pair(c, call)
-        if (rows.none {it.operation.terminal || at >= checkNotNull(it.operation.deadlineEpochMillis)}) return null
+        val expired = rows.any {at >= checkNotNull(it.operation.deadlineEpochMillis)}
+        if (!expired && rows.none {it.operation.terminal}) return null
         // Earlier replay returned ACCEPTED solely from the call row; stop at the elapsed
         // media lease also invented a user cause. Original lease evidence ends both rows.
-        return persist(c, policy.expireMedia(call, at), at)
+        return persist(c, if (expired) policy.expireMedia(call, at) else policy.loseMedia(call, at), at)
+    }
+
+    private fun retireLostClaims(c: Connection, call: DirectCallRecord, at: Long): DirectCallDecision? {
+        if (call.phase != DirectCallPhase.ACCEPTED) return null
+        val rows = pair(c, call)
+        if (rows.all {sessions.claimInTransaction(c, it.operation.actorId) ==
+                    SessionClaim(it.operation.operationId, it.operation.sessionId!!, it.sfuEpoch!!)}) return null
+        return persist(c, policy.loseMedia(call, at), at)
+    }
+
+    /** Reconciliation is SQL-only. Fresh pending rows are not channel-access denied or audible. */
+    fun reconcile(actor: String, call: String, now: () -> Long): DirectCallDecision {
+        canonical(actor); canonical(call)
+        return owned(actor, call) {c, current ->
+            val friend = friends(c, current)
+            val at = now()
+            expireAccepted(c, current, at)?.let {return@owned it}
+            if (!friend && !current.terminal) return@owned persist(c, policy.revokeFriendship(current, at), at)
+            retireLostClaims(c, current, at)?.let {return@owned it}
+            persist(c, policy.expire(current, at), at)
+        }
+    }
+
+    internal fun stopSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
+        sessionAction(actor, operation) {call -> stop(actor, call, now)}
+
+    internal fun reconcileSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
+        sessionAction(actor, operation) {call -> reconcile(actor, call, now)}
+
+    private fun sessionAction(actor: String, operation: String, action: (String) -> DirectCallDecision): SessionJournalResult? {
+        val seed = sessions.get(actor, operation) ?: return null
+        if (seed.operation.destinationKind != VoiceDestinationKind.DIRECT_CALL) return null
+        val call = checkNotNull(seed.operation.destinationId)
+        val participant = source.connection.use {c -> c.prepareStatement("SELECT 1 FROM nearby_direct_calls WHERE call_id=?::uuid AND (caller_id=?::uuid OR (callee_id=?::uuid AND ever_rang))").use {
+            it.setString(1, call); it.setString(2, actor); it.setString(3, actor); it.executeQuery().use {r -> r.next()}
+        }}
+        if (!participant) return null // Malformed isolated fixture has no pair authority.
+        val decision = action(call) // Revalidates original participants/operations under pair locks.
+        val row = sessions.get(actor, operation)
+        return SessionJournalResult(row, if (decision.call == null) OperationRejection.ACCESS_DENIED else null)
+    }
+
+    /** Account writer holds UPDATE fence before collecting the complete peer actor set. */
+    internal fun accountAcceptedActors(c: Connection, actor: String): List<String> {
+        check(!c.autoCommit)
+        return c.prepareStatement("SELECT caller_id,callee_id FROM nearby_direct_calls WHERE phase='ACCEPTED' AND (caller_id=?::uuid OR callee_id=?::uuid) ORDER BY call_id").use {
+            it.setString(1, actor); it.setString(2, actor)
+            it.executeQuery().use {r -> buildList {while (r.next()) {add(r.getString(1)); add(r.getString(2))}}}
+        }.distinct().sorted()
+    }
+
+    /** Same account transaction, all affected actors already locked before any revisions. */
+    internal fun cancelAccountCalls(c: Connection, actor: String, at: Long) {
+        check(!c.autoCommit)
+        val calls = c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE phase='ACCEPTED' AND (caller_id=?::uuid OR callee_id=?::uuid) ORDER BY call_id FOR UPDATE").use {
+            it.setString(1, actor); it.setString(2, actor)
+            it.executeQuery().use {r -> buildList {while (r.next()) add(r.call())}}
+        }
+        for (call in calls) {
+            if (expireAccepted(c, call, at) == null) persist(c, policy.revokeFriendship(call, at), at)
+        }
     }
 
     private fun pair(c: Connection, call: DirectCallRecord): List<SessionJournalEntry> {

@@ -19,6 +19,19 @@ class DirectCallLifecycleTest {
         assertEquals(stopped, policy.expireMedia(stopped, 15_103).call)
     }
 
+    @Test fun trustedMediaLossHasItsOwnReasonAndPreservesTerminalOutcome() {
+        val ring = ringing()
+        assertFailsWith<IllegalArgumentException> {policy.loseMedia(ring, 101)}
+        val accepted = assertNotNull(policy.accept(ring, "callee", 0, 101).call)
+        val lost = assertNotNull(policy.loseMedia(accepted, 102).call)
+        assertEquals(DirectCallPhase.ENDED, lost.phase)
+        assertEquals(DirectCallOutcome.MEDIA_LOST, lost.outcome)
+        assertEquals(accepted.revision + 1, lost.revision)
+        assertEquals(lost, policy.loseMedia(lost, 103).call)
+        val stopped = assertNotNull(policy.stop(accepted, "caller", 102).call)
+        assertEquals(stopped, policy.loseMedia(stopped, 103).call)
+    }
+
     @Test fun creationRequiresFriendshipAndRetryPreservesIdentityAndDeadline() {
         assertEquals(DirectCallRejection.NOT_FRIENDS, policy.create(null, "call", "caller", "callee", "key", "caller-op", 100, false).rejection)
         val original = ringing()
