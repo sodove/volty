@@ -118,6 +118,41 @@ class VoiceRosterAccountSessionTest {
     }
 
     @Test
+    fun accessDeniedRetiresConsumerTransportWithoutRetiringAuthentication() = runTest {
+        val repository = DefaultSocialRepository(Transport(actor), Store(), backgroundScope)
+        runCurrent(); repository.login(LoginRequest("rider", "password"))
+        val authority = assertNotNull(repository.authenticatedAccount.value)
+        val pulses = Channel<Unit>(Channel.UNLIMITED)
+        var issued = 0
+        val client = HttpClient(MockEngine) { engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {
+                issued++
+                if (issued == 1) respond("", HttpStatusCode.Forbidden) else respond(snapshot())
+            }
+        } }
+        val old = VoiceRosterAccountSession(authority, client, root, tag,
+            StandardTestDispatcher(testScheduler), pulses.receiveAsFlow(), {100})
+        var fresh: VoiceRosterAccountSession? = null
+        try {
+            runCurrent()
+            assertEquals(1, issued)
+            assertTrue(old.state.value.retired)
+            assertEquals(null, old.state.value.connectedCount)
+            assertFailsWith<CancellationException> { old.port.snapshot(tag) }
+            assertEquals(1, issued)
+            assertFalse(old.refresh())
+            assertTrue(authority.job.isActive)
+            fresh = VoiceRosterAccountSession(authority, client, root, tag.copy(generation = 8),
+                StandardTestDispatcher(testScheduler), pulses.receiveAsFlow(), {100})
+            runCurrent()
+            assertEquals(1, fresh.state.value.connectedCount)
+            assertEquals(2, issued)
+            assertFalse(old.cleanupFailed.value)
+        } finally { fresh?.retire(); old.retire(); pulses.close(); client.close(); runCurrent() }
+    }
+
+    @Test
     fun invalidConstructionAllocatesNoAccountChildrenAndDoesNotIssueHttp() = runTest {
         val repository = DefaultSocialRepository(Transport(actor), Store(), backgroundScope)
         runCurrent(); repository.login(LoginRequest("rider", "password"))

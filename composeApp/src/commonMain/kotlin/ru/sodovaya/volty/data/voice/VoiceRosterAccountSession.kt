@@ -62,7 +62,9 @@ internal class VoiceRosterAccountSession(
     val state = runtime.state
     private val guardian = parent.launch(start = CoroutineStart.UNDISPATCHED) {
         try {
-            awaitCancellation()
+            // An earlier revision waited only for account cancellation. Runtime-local
+            // closure (e.g. access denied) must also revoke direct snapshot permission.
+            state.first { it.retired }
         } finally {
             retired.value = true
             withContext(NonCancellable) { cleanup() }
