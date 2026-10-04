@@ -5,6 +5,8 @@ import java.sql.Connection
 /** SQL-only permission query on the caller's transaction; no preflight connection. */
 interface SessionAccessPolicy {
     fun allows(connection: Connection, actor: String, destination: String, roomEpoch: String?): Boolean
+    fun allows(connection: Connection, actor: String, destination: String, roomEpoch: String?, kind: VoiceDestinationKind): Boolean =
+        kind == VoiceDestinationKind.CHANNEL && allows(connection, actor, destination, roomEpoch)
 }
 
 class JdbcChannelAccess : SessionAccessPolicy {

@@ -238,53 +238,58 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     override fun dueOperations(now: Long, limit: Int) = selectWork("phase IN ('PENDING','ACTIVE') AND deadline_epoch_millis <= ?", now, limit)
     override fun dueOperations(actor: String, now: Long, limit: Int) = selectWork("phase IN ('PENDING','ACTIVE') AND deadline_epoch_millis <= ?", now, limit, actor)
 
-    override fun <T : Any> withActiveSession(actor: String, operation: String, now: () -> Long, producer: (SessionJournalEntry) -> T): T? = locked(actor) { c ->
-        val row = read(c, actor, operation) ?: return@locked null
+    override fun <T : Any> withActiveSession(actor: String, operation: String, now: () -> Long, producer: (SessionJournalEntry) -> T): T? = lockedOperation(actor, operation, now) { c ->
+        val row = read(c, actor, operation) ?: return@lockedOperation null
         val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
-        if (current.operation.phase != OperationPhase.ACTIVE) return@locked null
-        if (!allowed(c, current)) { denied(c, current, now()); return@locked null }
+        if (current.operation.phase != OperationPhase.ACTIVE) return@lockedOperation null
+        if (!allowed(c, current)) { denied(c, current, now()); return@lockedOperation null }
         val expected = SessionClaim(operation, checkNotNull(current.operation.sessionId), checkNotNull(current.sfuEpoch))
-        if (claim(c, actor) != expected) return@locked null
-        producer(current)
+        if (claim(c, actor) != expected) return@lockedOperation null
+        val authorized = if (current.operation.destinationKind == VoiceDestinationKind.DIRECT_CALL) {
+            val deadline = JdbcDirectCallMediaRepository(source).authorizationDeadline(c, checkNotNull(current.operation.destinationId))
+            current.copy(operation = current.operation.copy(deadlineEpochMillis = deadline))
+        } else current
+        producer(authorized)
     }
 
-    override fun completeCleanup(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch): Boolean = locked(actor) { c ->
+    override fun completeCleanup(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch): Boolean = lockedOperation(actor, operation, null) { c ->
         c.prepareStatement("UPDATE nearby_session_operations SET cleanup_pending=FALSE WHERE actor_id=?::uuid AND operation_id=?::uuid AND session_id=?::uuid AND room_epoch=? AND node_epoch=? AND phase IN ('CANCELLED','EXPIRED')").use {
             it.setString(1, actor); it.setString(2, operation); it.setString(3, session); it.setString(4, sfuEpoch.roomEpoch); it.setString(5, sfuEpoch.nodeEpoch); it.executeUpdate() == 1
         }
     }
 
     private fun mediaChange(actor: String, operation: String, session: String, epoch: SfuEpoch, now: () -> Long,
-                            change: (SessionOperation, Long) -> OperationDecision): SessionJournalResult = locked(actor) { c ->
-        val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
-        if (row.operation.sessionId != session) return@locked SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
-        if (row.sfuEpoch != epoch) return@locked SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
-        if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@locked SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
+                            change: (SessionOperation, Long) -> OperationDecision): SessionJournalResult = lockedOperation(actor, operation, now) { c ->
+        val row = read(c, actor, operation) ?: return@lockedOperation SessionJournalResult(null, OperationRejection.NOT_FOUND)
+        if (row.operation.sessionId != session) return@lockedOperation SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
+        if (row.sfuEpoch != epoch) return@lockedOperation SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
+        if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@lockedOperation SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
         val at = now()
         if (!row.operation.terminal && !allowed(c, row)) denied(c, row, at)
         else persist(c, row, change(row.operation, at))
     }
 
     private fun observedChange(actor: String, operation: String, session: String, epoch: SfuEpoch, now: () -> Long,
-                               change: (Connection, SessionJournalEntry) -> SessionJournalResult): SessionJournalResult = locked(actor) { c ->
-        val row = read(c, actor, operation) ?: return@locked SessionJournalResult(null, OperationRejection.NOT_FOUND)
-        if (row.operation.sessionId != session) return@locked SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
-        if (row.sfuEpoch != epoch) return@locked SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
-        if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@locked SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
+                               change: (Connection, SessionJournalEntry) -> SessionJournalResult): SessionJournalResult = lockedOperation(actor, operation, now) { c ->
+        val row = read(c, actor, operation) ?: return@lockedOperation SessionJournalResult(null, OperationRejection.NOT_FOUND)
+        if (row.operation.sessionId != session) return@lockedOperation SessionJournalResult(row, OperationRejection.SESSION_MISMATCH)
+        if (row.sfuEpoch != epoch) return@lockedOperation SessionJournalResult(row, OperationRejection.EPOCH_MISMATCH)
+        if (!row.operation.terminal && claim(c, actor) != SessionClaim(operation, session, epoch)) return@lockedOperation SessionJournalResult(row, OperationRejection.CLAIM_MISMATCH)
         val current = checkNotNull(persist(c, row, policy.expire(row.operation, now())).state)
-        if (current.operation.terminal) return@locked SessionJournalResult(current, OperationRejection.TERMINAL)
-        if (!allowed(c, current)) return@locked denied(c, current, now())
-        if (current.operation.phase != OperationPhase.ACTIVE) return@locked SessionJournalResult(current, OperationRejection.NOT_ACTIVE)
+        if (current.operation.terminal) return@lockedOperation SessionJournalResult(current, OperationRejection.TERMINAL)
+        if (!allowed(c, current)) return@lockedOperation denied(c, current, now())
+        if (current.operation.phase != OperationPhase.ACTIVE) return@lockedOperation SessionJournalResult(current, OperationRejection.NOT_ACTIVE)
         change(c, current)
     }
 
     private fun allowed(c: Connection, actor: String, destination: String, epoch: SfuEpoch?) =
         access?.allows(c, actor, destination, epoch?.roomEpoch) != false
-    // Earlier access relied on UUID/room alone. A call row cannot earn channel credentials
-    // even if its metadata has a channel-shaped room. Call access is not enabled yet.
-    private fun allowed(c: Connection, row: SessionJournalEntry) =
-        row.operation.destinationKind == VoiceDestinationKind.CHANNEL &&
-            allowed(c, row.operation.actorId, checkNotNull(row.operation.destinationId), row.sfuEpoch)
+    // Earlier revisions granted only channel access. Typed call access now requires its private pair.
+    private fun allowed(c: Connection, row: SessionJournalEntry): Boolean {
+        val kind = checkNotNull(row.operation.destinationKind)
+        return access?.allows(c, row.operation.actorId, checkNotNull(row.operation.destinationId), row.sfuEpoch?.roomEpoch, kind)
+            ?: (kind == VoiceDestinationKind.CHANNEL)
+    }
     private fun denied(c: Connection, row: SessionJournalEntry, at: Long): SessionJournalResult =
         persist(c, row, policy.cancel(row.operation, row.operation.actorId, row.operation.operationId, at)).copy(rejection = OperationRejection.ACCESS_DENIED)
 
@@ -375,6 +380,12 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         getString("room_epoch")?.let { SfuEpoch(it, getString("node_epoch")) }, getBoolean("admission_pending"), getBoolean("cleanup_pending"),
         SessionMedia(getString("participant_sid"), getString("media_state")?.let(SfuParticipantState::valueOf), getLong("media_observation_version")))
 
+    private fun <T> lockedOperation(actor: String, operation: String, now: (() -> Long)?, block: (Connection) -> T): T {
+        if (access != null) {
+            JdbcDirectCallMediaRepository(source).withSessionPair(actor, operation, now, block)?.let {return it.value}
+        }
+        return locked(actor, block)
+    }
     private fun <T> locked(actor: String, block: (Connection) -> T): T = source.connection.use { c ->
         UUID.fromString(actor)
         c.autoCommit = false

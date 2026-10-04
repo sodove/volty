@@ -77,7 +77,7 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
     private fun expireAccepted(c: Connection, call: DirectCallRecord, at: Long): DirectCallDecision? {
         if (call.phase != DirectCallPhase.ACCEPTED) return null
         val rows = pair(c, call)
-        val expired = rows.any {at >= checkNotNull(it.operation.deadlineEpochMillis)}
+        val expired = rows.any {it.operation.phase == OperationPhase.EXPIRED || at >= checkNotNull(it.operation.deadlineEpochMillis)}
         if (!expired && rows.none {it.operation.terminal}) return null
         // Earlier replay returned ACCEPTED solely from the call row; stop at the elapsed
         // media lease also invented a user cause. Original lease evidence ends both rows.
@@ -126,6 +126,47 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
 
     internal fun reconcileSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
         sessionAction(actor, operation) {call -> reconcile(actor, call, now)}
+
+    internal data class PairExecution<T>(val value: T)
+
+    /** Positive work shares the same pair ownership as stop; the block performs no network IO. */
+    internal fun <T> withSessionPair(actor: String, operation: String, now: (() -> Long)?, block: (Connection) -> T): PairExecution<T>? {
+        val seed = sessions.get(actor, operation) ?: return null
+        if (seed.operation.destinationKind != VoiceDestinationKind.DIRECT_CALL) return null
+        val id = checkNotNull(seed.operation.destinationId)
+        return communityTransaction(source, write = true) {c ->
+            val call = c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE call_id=?::uuid AND (caller_id=?::uuid OR (callee_id=?::uuid AND ever_rang))").use {
+                it.setString(1, id); it.setString(2, actor); it.setString(3, actor)
+                it.executeQuery().use {r -> if (r.next()) r.call() else null}
+            } ?: return@communityTransaction null
+            sessions.lockCommunityActors(c, listOf(call.callerId, call.calleeId))
+            val original = currentCall(c, id)
+            val row = checkNotNull(sessions.operationInTransaction(c, actor, operation))
+            check(row.operation.destinationId == id && row.operation.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+            if (actor == original.callerId) check(operation == original.callerOperationId)
+            val at = now?.invoke()
+            if (at != null) reconcileInTransaction(c, original, at)
+            val result = block(c)
+            if (at != null) reconcileInTransaction(c, currentCall(c, id), at)
+            PairExecution(result)
+        }
+    }
+
+    internal fun authorizationDeadline(c: Connection, call: String): Long =
+        pair(c, currentCall(c, call)).minOf {checkNotNull(it.operation.deadlineEpochMillis)}
+
+    private fun currentCall(c: Connection, id: String): DirectCallRecord =
+        c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE call_id=?::uuid FOR UPDATE").use {
+            it.setString(1, id); it.executeQuery().use {r -> check(r.next()); r.call()}
+        }
+
+    private fun reconcileInTransaction(c: Connection, current: DirectCallRecord, at: Long) {
+        val friend = friends(c, current)
+        if (expireAccepted(c, current, at) != null) return
+        if (!friend && !current.terminal) {persist(c, policy.revokeFriendship(current, at), at); return}
+        if (retireLostClaims(c, current, at) != null) return
+        persist(c, policy.expire(current, at), at)
+    }
 
     private fun sessionAction(actor: String, operation: String, action: (String) -> DirectCallDecision): SessionJournalResult? {
         val seed = sessions.get(actor, operation) ?: return null
