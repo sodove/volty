@@ -61,8 +61,9 @@ class DefaultSocialRepository(
     private val _activeSharing = MutableStateFlow<SharingSession?>(null)
     private val _authenticatedAccount = MutableStateFlow<SocialAuthenticatedAccount?>(null)
     val authenticatedAccount: StateFlow<SocialAuthenticatedAccount?> = _authenticatedAccount.asStateFlow()
-    private val refreshMutex = Mutex()
-    private class AuthenticationGeneration(var pendingCaller: Job? = null)
+    private class AuthenticationGeneration(var pendingCaller: Job? = null) {
+        val refreshMutex = Mutex()
+    }
     private val authenticationGeneration = MutableStateFlow(AuthenticationGeneration())
     private val sessionMutex = Mutex()
     private val credentialMutex = Mutex()
@@ -563,7 +564,7 @@ class DefaultSocialRepository(
     private suspend fun refreshOwnedAccessToken(
         previous: SocialCredentials,
         generation: AuthenticationGeneration,
-    ): SocialResult<String> = refreshMutex.withLock {
+    ): SocialResult<String> = generation.refreshMutex.withLock {
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
         val current = _credentials.value
         if (current != null && current.accessToken != previous.accessToken &&
