@@ -31,6 +31,87 @@ class CommunityBrowserTest {
         override suspend fun joinPublic(community: String): CommunityResult<CommunityDetails> = error("Browsing must not join")
     }
 
+    @Test fun invalidPageSizeDoesNotAllocateAnOrphanLifetime() = runTest {
+        val parent = SupervisorJob(coroutineContext[Job])
+        try {
+            for (size in listOf(0, 51)) {
+                assertFailsWith<IllegalArgumentException> {
+                    CommunityBrowser(CoroutineScope(coroutineContext + parent), Fake(), size)
+                }
+            }
+            assertTrue(parent.children.none(), "Rejected construction must not leave child jobs")
+        } finally { parent.cancel() }
+    }
+
+    @Test fun parentCancellationClearsCachedAccountDataBeforeHeldReadReturns() = runTest {
+        val parent = SupervisorJob(coroutineContext[Job])
+        val port = Fake()
+        val browser = CommunityBrowser(CoroutineScope(coroutineContext + parent), port)
+        try {
+            browser.refreshMemberships(); runCurrent()
+            val privateServer = summary("private").copy(visibility = CommunityVisibility.PRIVATE)
+            port.memberships.single().response.complete(CommunityResult.Ready(listOf(privateServer)))
+            runCurrent()
+            assertEquals(listOf(privateServer), browser.state.value.memberships.items)
+            browser.search("private"); runCurrent()
+            assertEquals(1, port.catalogs.size)
+            assertEquals(listOf(privateServer), browser.state.value.memberships.items)
+            assertFalse(port.catalogs.single().response.isCompleted)
+            parent.cancel(); runCurrent()
+            assertFalse(parent.isCompleted, "Read is deliberately still outstanding")
+            assertEquals(CommunityBrowserState(), browser.state.value)
+            port.catalogs.single().response.complete(CommunityResult.Ready(listOf(privateServer)))
+            runCurrent()
+            assertTrue(port.catalogs.single().returned, "Late producer return must actually happen")
+            assertEquals(CommunityBrowserState(), browser.state.value)
+            browser.refreshMemberships(); runCurrent()
+            assertEquals(1, port.memberships.size)
+        } finally {
+            port.memberships.forEach { it.response.complete(CommunityResult.Ready(emptyList())) }
+            port.catalogs.forEach { it.response.complete(CommunityResult.Ready(emptyList())) }
+            browser.close(); parent.cancel()
+        }
+    }
+
+    @Test fun parentCancellationBeforeFirstDispatchStillClearsSynchronousQueryState() = runTest {
+        val parent = SupervisorJob(coroutineContext[Job])
+        val port = Fake()
+        val browser = CommunityBrowser(CoroutineScope(coroutineContext + parent), port)
+        try {
+            browser.search("private")
+            assertEquals("private", browser.state.value.query)
+            assertTrue(port.catalogs.isEmpty(), "No queued coroutine has dispatched yet")
+            parent.cancel(); runCurrent()
+            assertEquals(CommunityBrowserState(), browser.state.value)
+            assertTrue(port.catalogs.isEmpty())
+        } finally {
+            port.catalogs.forEach { it.response.complete(CommunityResult.Ready(emptyList())) }
+            browser.close(); parent.cancel()
+        }
+    }
+
+    @Test fun independentlyCancelledTransportCannotLeaveAnActiveBrowserLoadingForever() = runTest {
+        val port = Fake(); val browser = CommunityBrowser(this, port)
+        try {
+            browser.refreshMemberships(); runCurrent()
+            assertEquals(1, port.memberships.size)
+            port.memberships.single().response.completeExceptionally(CancellationException("private transport text"))
+            runCurrent()
+            assertFalse(browser.state.value.memberships.loading)
+            assertEquals(CommunityFailure.UNAVAILABLE, browser.state.value.memberships.error)
+            assertNull(browser.state.value.memberships.items)
+            browser.refreshMemberships(); runCurrent()
+            assertEquals(2, port.memberships.size)
+            port.memberships.last().response.complete(CommunityResult.Ready(emptyList()))
+            runCurrent()
+            assertEquals(emptyList(), browser.state.value.memberships.items)
+            assertNull(browser.state.value.memberships.error)
+        } finally {
+            port.memberships.forEach { it.response.complete(CommunityResult.Ready(emptyList())) }
+            browser.close()
+        }
+    }
+
     @Test fun olderSearchSurvivingCancellationCannotReplaceCurrentQuery() = runTest {
         val port = Fake(); val browser = CommunityBrowser(this, port, 2)
         browser.search("old"); runCurrent(); browser.search("new"); runCurrent()

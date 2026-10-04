@@ -25,15 +25,25 @@ data class CommunityBrowserState(
 
 /** Account/screen-owned read state. Closing never disconnects voice or changes membership. */
 class CommunityBrowser(parent: CoroutineScope, private val port: CommunityPort, private val pageSize: Int = 20) {
+    init { require(pageSize in 1..50) }
+
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)
     private val mutex = Mutex()
     private val output = MutableStateFlow(CommunityBrowserState())
     val state = output.asStateFlow()
+    private val cancellationGuardian = scope.launch(start = CoroutineStart.UNDISPATCHED) {
+        try {
+            awaitCancellation()
+        } finally {
+            withContext(NonCancellable) {
+                mutex.withLock { output.value = CommunityBrowserState() }
+            }
+        }
+    }
     private val catalog = RequestOwner()
     private val memberships = RequestOwner()
     private val details = RequestOwner()
-    init { require(pageSize in 1..50) }
 
     suspend fun search(query: String) = mutex.withLock {
         if (!lifetime.isActive) return@withLock
@@ -108,7 +118,8 @@ class CommunityBrowser(parent: CoroutineScope, private val port: CommunityPort, 
     private suspend fun <T> network(action: suspend () -> CommunityResult<T>): CommunityResult<T> = try {
         action()
     } catch (cancelled: CancellationException) {
-        throw cancelled
+        if (!currentCoroutineContext().isActive) throw cancelled
+        CommunityResult.Failed(CommunityFailure.UNAVAILABLE)
     } catch (_: Exception) {
         CommunityResult.Failed(CommunityFailure.UNAVAILABLE)
     }
