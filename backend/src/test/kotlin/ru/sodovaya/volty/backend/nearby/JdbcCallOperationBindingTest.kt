@@ -50,6 +50,47 @@ class JdbcCallOperationBindingTest {
         assertEquals(DirectCallOutcome.CALLEE_DECLINED, rings.status(callee, call, {103}).call?.outcome)
     }
 
+    @Test fun liveRingNonceIsRejectedBeforeAllowedChannelResolutionOrSfu() {
+        val sfu = RecordingSfu(); var resolved = 0
+        val service = SessionService(sessions, sfu, {_, _ -> resolved++; "volty-channel-$channel"}, SessionCredentialIssuer {error("unexpected signing")}, {102})
+        assertEquals(SessionDenial.OPERATION_CONFLICT, assertIs<SessionAction.Denied>(service.join(caller, operation, channel)).reason)
+        assertEquals(0, resolved); assertTrue(sfu.calls.isEmpty())
+        assertEquals(DirectCallPhase.RINGING, rawPhase()); assertEquals(call, reserved(caller))
+        assertNull(sessions.get(caller, operation))
+    }
+
+    @Test fun deniedChannelResolutionCannotCancelExistingRingNonce() {
+        val sfu = RecordingSfu()
+        val service = SessionService(sessions, sfu, {_, _ -> null}, SessionCredentialIssuer {error("unexpected signing")}, {102})
+        val result = service.join(caller, operation, channel)
+        assertEquals(DirectCallPhase.RINGING, rawPhase()); assertEquals(call, reserved(caller))
+        assertEquals(SessionDenial.OPERATION_CONFLICT, assertIs<SessionAction.Denied>(result).reason)
+        assertNull(sessions.get(caller, operation)); assertTrue(sfu.calls.isEmpty())
+    }
+
+    @Test fun terminalRingNonceStillRejectsBeforeChannelResolutionOrSfu() {
+        rings.decline(callee, call, {101})
+        val sfu = RecordingSfu(); var resolved = 0
+        val service = SessionService(sessions, sfu, {_, _ -> resolved++; "volty-channel-$channel"}, SessionCredentialIssuer {error("unexpected signing")}, {102})
+        assertIs<SessionAction.Denied>(service.join(caller, operation, channel))
+        assertEquals(0, resolved); assertTrue(sfu.calls.isEmpty())
+        assertEquals(DirectCallPhase.DECLINED, rawPhase()); assertNull(sessions.get(caller, operation))
+    }
+
+    @Test fun ringCreatedDuringRoomResolutionSurvivesUnknownChannelInvalidation() {
+        val late = id(); val lateOperation = id(); val sfu = RecordingSfu()
+        val service = SessionService(sessions, sfu, {actor, _ ->
+            assertEquals(callee, actor)
+            assertEquals(DirectCallPhase.RINGING, rings.create(callee, caller, late, id(), lateOperation, {102}).call?.phase)
+            null
+        }, SessionCredentialIssuer {error("unexpected signing")}, {103})
+        val result = runCatching {service.join(callee, lateOperation, channel)}
+        assertTrue(result.isSuccess)
+        assertEquals(DirectCallPhase.RINGING, rawPhase(late)); assertEquals(late, reserved(callee))
+        assertEquals(SessionDenial.OPERATION_CONFLICT, assertIs<SessionAction.Denied>(result.getOrThrow()).reason)
+        assertNull(sessions.get(callee, lateOperation)); assertTrue(sfu.calls.isEmpty())
+    }
+
     @Test fun channelOnlyServiceRejectsCollidingCallNonceBeforeSfuOrStop() {
         val calleeOperation = id()
         val media = JdbcDirectCallMediaRepository(source)
@@ -157,8 +198,8 @@ class JdbcCallOperationBindingTest {
         try {method.invoke(target, *(args ?: emptyArray()))}
         catch (failure: InvocationTargetException) {throw failure.targetException}
 
-    private fun rawPhase() = source.connection.use {c -> c.prepareStatement("SELECT phase FROM nearby_direct_calls WHERE call_id=?::uuid").use {
-        it.setString(1, call); it.executeQuery().use {r -> assertTrue(r.next()); DirectCallPhase.valueOf(r.getString(1))}
+    private fun rawPhase(id: String = call) = source.connection.use {c -> c.prepareStatement("SELECT phase FROM nearby_direct_calls WHERE call_id=?::uuid").use {
+        it.setString(1, id); it.executeQuery().use {r -> assertTrue(r.next()); DirectCallPhase.valueOf(r.getString(1))}
     }}
     private fun reserved(actor: String): String? = source.connection.use {c -> c.prepareStatement("SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
         it.setString(1, actor); it.executeQuery().use {r -> if (r.next()) r.getString(1) else null}

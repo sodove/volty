@@ -69,6 +69,17 @@ class JdbcVoiceDestinationKindTest {
         assertNull(credentials); assertFalse(produced)
     }
 
+    @Test fun malformedUnparentedCallStillClosesItsOwnOriginalMediaOnInvalidation() {
+        val operation = collidingCall(peer)
+        val original = assertNotNull(sessions.get(peer, operation))
+        val stopped = assertNotNull(sessions.invalidateMedia(peer, operation, {101}).state)
+        assertTrue(stopped.operation.terminal); assertTrue(stopped.cleanupPending)
+        assertEquals(original.operation.sessionId, stopped.operation.sessionId)
+        assertEquals(original.sfuEpoch, stopped.sfuEpoch)
+        assertEquals(VoiceDestinationKind.DIRECT_CALL, stopped.operation.destinationKind)
+        assertNull(sessions.currentClaim(peer))
+    }
+
     @Test fun channelBeginCannotReplayCallOperationWithSameUuid() {
         val operation = collidingCall(peer, channelShapedRoom = true)
         val original = assertNotNull(sessions.get(peer, operation))

@@ -43,11 +43,16 @@ class SessionService(
     fun join(actor: String, operation: String, destination: String, replace: Boolean = false): SessionAction {
         val existing = repository.get(actor, operation)
         if (existing != null && existing.operation.terminal) return SessionAction.Ended(existing)
-        if (existing?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+        if (repository.isDirectCallOperation(actor, operation))
             return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (existing != null && existing.operation.destinationId != destination) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         val room = resolveRoom(actor, destination)
-        if (room == null) { endMedia(actor, operation); return SessionAction.Denied(SessionDenial.MEMBERSHIP) }
+        if (room == null) {
+            val invalidated = repository.invalidateMedia(actor, operation, now)
+            if (invalidated.rejection != null) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
+            invalidated.state?.let(::cleanup)
+            return SessionAction.Denied(SessionDenial.MEMBERSHIP)
+        }
         val observed = sfu.inspect(room)
         if (observed is SfuReply.Rejected) {
             if (existing == null) repository.cancel(actor, operation, now)

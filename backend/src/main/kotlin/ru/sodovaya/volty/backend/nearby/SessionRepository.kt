@@ -33,6 +33,9 @@ interface SessionRepository {
     fun heartbeatConnected(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, expectedVersion: Long, participantSid: String, now: () -> Long, confirmedDeadline: Long): SessionJournalResult
     fun expire(actor: String, operation: String, now: () -> Long): SessionJournalResult
     fun get(actor: String, operation: String): SessionJournalEntry?
+    /** Original call binding also exists before its accepted media journal row. */
+    fun isDirectCallOperation(actor: String, operation: String): Boolean =
+        get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL
     fun findSession(actor: String, session: String): SessionJournalEntry?
     /** Trusted internal reconciliation only; public endpoints still require exact actor ownership. */
     fun findSessionById(session: String): SessionJournalEntry?

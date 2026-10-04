@@ -70,9 +70,20 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     private data class CancelStep(val result: SessionJournalResult?, val pairHandoff: Boolean)
 
     override fun invalidateMedia(actor: String, operation: String, now: () -> Long): SessionJournalResult {
-        if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+        val knownCall = get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL
+        if (knownCall)
             JdbcDirectCallMediaRepository(source).invalidateSession(actor, operation, now)?.let {return it}
-        return cancel(actor, operation, now)
+        return locked(actor) {c ->
+            val row = read(c, actor, operation)
+            // Earlier fallback invoked generic caller cancellation. A channel denial
+            // could then cancel a ring committed during its room resolution.
+            // An already-known malformed/unparented CALL still earns only isolated
+            // negative cleanup. Reject a CALL discovered after unknown-channel failure.
+            if (!knownCall && (row?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL ||
+                (access != null && callerCallId(c, actor, operation) != null)))
+                return@locked SessionJournalResult(row, OperationRejection.DESTINATION_MISMATCH)
+            persist(c, row, policy.cancel(row?.operation, actor, operation, now()))
+        }
     }
 
     override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
@@ -111,6 +122,10 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     }
 
     override fun get(actor: String, operation: String) = source.connection.use { read(it, actor, operation) }
+    override fun isDirectCallOperation(actor: String, operation: String): Boolean {
+        if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL) return true
+        return access != null && source.connection.use {callerCallId(it, actor, operation) != null}
+    }
     override fun findSession(actor: String, session: String): SessionJournalEntry? = source.connection.use { c ->
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE actor_id=?::uuid AND session_id=?::uuid").use {
             it.setString(1, actor); it.setString(2, session)
