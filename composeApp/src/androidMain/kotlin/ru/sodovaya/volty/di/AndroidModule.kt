@@ -40,6 +40,9 @@ import ru.sodovaya.volty.data.social.AndroidLiveKitVoiceRoomEngine
 import ru.sodovaya.volty.data.social.AndroidLocationProvider
 import ru.sodovaya.volty.data.social.HttpSocialTransport
 import ru.sodovaya.volty.data.social.SocialCredentialStore
+import ru.sodovaya.volty.data.nearby.AndroidInvitationDraftStore
+import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
+import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -56,6 +59,7 @@ import ru.sodovaya.volty.domain.navigation.NavigationRepository
 import org.koin.android.ext.koin.androidContext
 import org.koin.core.qualifier.named
 import org.koin.dsl.module
+import org.koin.dsl.onClose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -67,6 +71,24 @@ val androidModule = module {
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
+    single(named(NEARBY_HTTP_CLIENT)) {
+        HttpClient(OkHttp) {
+            install(HttpTimeout) {
+                connectTimeoutMillis = 10_000L
+                requestTimeoutMillis = 10_000L
+                socketTimeoutMillis = 10_000L
+            }
+        }
+    } onClose { it?.close() }
+    single {
+        val context = androidContext()
+        NearbyCommunityAccountFactory(
+            client = get(named(NEARBY_HTTP_CLIENT)),
+            baseUrl = NEARBY_API_BASE_URL,
+            storeForActor = { actor -> AndroidInvitationDraftStore(context, actor) },
+            generator = AndroidInvitationSecretGenerator(),
+        )
+    }
     // Use the same Android OkHttp stack as navigation for the social REST/WS
     // boundary. On the field emulator the platform-default Ktor engine failed
     // before an HTTP request reached the production reverse proxy, which the
@@ -204,6 +226,8 @@ val androidModule = module {
 private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"
 private const val OFFLINE_FIRST_NAVIGATION = "offline-first-navigation"
 private const val APP_VERSION_CODE = "app-version-code"
+private const val NEARBY_HTTP_CLIENT = "nearby-http-client"
+private const val NEARBY_API_BASE_URL = "https://volty.sodove.ru/v2/nearby"
 
 private fun currentAppVersionCode(context: Context): Int {
     val packageInfo = context.packageManager.getPackageInfo(context.packageName, 0)
