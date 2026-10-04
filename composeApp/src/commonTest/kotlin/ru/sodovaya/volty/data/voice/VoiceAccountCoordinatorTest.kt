@@ -144,6 +144,34 @@ class VoiceAccountCoordinatorTest {
         } finally {f.close()}
     }
 
+    @Test fun foregroundLossFencesHeldConnectWhileOriginalDisconnectRemainsAllowed() = runTest {
+        var permission = false; var ids = 0
+        val gate = VoiceForegroundGate({permission}, {"50000000-0000-0000-0000-${(++ids).toString().padStart(12, '0')}"})
+        val f = Fixture(this, nativeEnvironment = {gate.allows(it)}); val sdk = Session(holdConnect = true)
+        try {
+            runCurrent(); f.login()
+            val runtime = f.coordinator.acquire(assertNotNull(f.repository.authenticatedAccount.value), factory(sdk), {})
+            assertFalse(runtime.join(channel, first)); runCurrent()
+            assertTrue(f.wire.headers.isEmpty())
+            val ticket = gate.request(runtime) {backgroundScope.launch {runtime.disconnect()}}
+            val service = Any()
+            assertFalse(gate.acknowledge(ticket, service))
+            permission = true
+            assertTrue(gate.acknowledge(ticket, service))
+            assertTrue(runtime.join(channel, first)); runCurrent()
+            assertTrue(sdk.entered.isCompleted)
+            assertTrue(gate.destroyed(service)); runCurrent()
+            assertEquals(1, sdk.closes)
+            assertFalse(runtime.state.value.wanted)
+            assertFalse(runtime.retired.value)
+            assertTrue(assertNotNull(f.repository.authenticatedAccount.value).job.isActive)
+            sdk.release.complete(Unit); runCurrent()
+            assertTrue(sdk.returned); assertEquals(0, sdk.publishes)
+            assertFalse(runtime.join(channel, second))
+            assertEquals(listOf("Bearer token-1", "Bearer token-1"), f.wire.headers.filterNotNull())
+        } finally {sdk.release.complete(Unit); f.close()}
+    }
+
     private fun factory(session: Session) = VoiceSdkSessionFactory {_, _ -> session}
     private class Wire {val headers = mutableListOf<String?>()}
     private fun TestScope.client(wire: Wire) = HttpClient(MockEngine) {engine {
@@ -160,11 +188,12 @@ class VoiceAccountCoordinatorTest {
         }
     }}
     private inner class Fixture(val test: TestScope, transport: Transport = Transport(),
-                                dispatcher: CoroutineDispatcher = StandardTestDispatcher(test.testScheduler)) {
+                                dispatcher: CoroutineDispatcher = StandardTestDispatcher(test.testScheduler),
+                                nativeEnvironment: (AuthenticatedVoiceRuntime) -> Boolean = {true}) {
         val repository = DefaultSocialRepository(transport, Store(), test.backgroundScope)
         val wire = Wire(); val client = test.client(wire)
         val pulses = MutableSharedFlow<Unit>(extraBufferCapacity = 16); var now = 100L
-        val coordinator = VoiceAccountCoordinator(client, root, dispatcher, pulses, {now})
+        val coordinator = VoiceAccountCoordinator(client, root, dispatcher, pulses, {now}, nativeEnvironment)
         suspend fun login() {assertIs<SocialResult.Success<Unit>>(repository.login(LoginRequest("rider", "password")))}
         suspend fun close() {coordinator.retireAll(); test.runCurrent(); client.close()}
     }

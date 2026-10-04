@@ -47,6 +47,7 @@ import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
 import ru.sodovaya.volty.data.voice.VoiceAccountCoordinator
 import ru.sodovaya.volty.data.voice.AndroidVoiceAudioFactory
+import ru.sodovaya.volty.data.voice.VoiceForegroundGate
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -106,6 +107,7 @@ val androidModule = module {
         )
     }
     single {
+        val gate = get<VoiceForegroundGate>()
         VoiceAccountCoordinator(
             client = get(named(NEARBY_HTTP_CLIENT)),
             baseUrl = NEARBY_API_BASE_URL,
@@ -113,6 +115,15 @@ val androidModule = module {
             // Each runtime receives its own cadence; ticks must not be divided among owners.
             pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
             monotonicMillis = SystemClock::elapsedRealtime,
+            nativeEnvironment = { gate.allows(it) },
+        )
+    }
+    single {
+        val application = androidContext()
+        VoiceForegroundGate(
+            permission = { androidx.core.content.ContextCompat.checkSelfPermission(application,
+                android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED },
+            nextId = { java.util.UUID.randomUUID().toString() },
         )
     }
     // Use the same Android OkHttp stack as navigation for the social REST/WS

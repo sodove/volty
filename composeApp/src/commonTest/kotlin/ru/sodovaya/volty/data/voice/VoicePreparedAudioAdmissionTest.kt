@@ -137,7 +137,7 @@ class VoicePreparedAudioAdmissionTest {
             }
         }}
         val coordinator = VoiceAccountCoordinator(client, "https://example.test/v2/nearby",
-            StandardTestDispatcher(test.testScheduler), MutableSharedFlow<Unit>(), {100})
+            StandardTestDispatcher(test.testScheduler), MutableSharedFlow<Unit>(), {100}, {true})
         suspend fun start(): AuthenticatedVoiceRuntime {
             test.runCurrent(); assertIs<SocialResult.Success<Unit>>(repository.login(LoginRequest("rider", "password")))
             return coordinator.acquire(assertNotNull(repository.authenticatedAccount.value), audio, {})

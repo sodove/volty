@@ -15,6 +15,7 @@ internal class VoiceAccountCoordinator(
     private val queuedDispatcher: CoroutineDispatcher,
     private val pulses: Flow<Unit>,
     private val monotonicMillis: () -> Long,
+    private val nativeEnvironment: (AuthenticatedVoiceRuntime) -> Boolean,
 ) {
     private val root = nearbyHttpsApiBaseUrl(baseUrl)
     private class Entry(val account: SocialAuthenticatedAccount) {
@@ -84,6 +85,8 @@ internal class VoiceAccountCoordinator(
 
     private fun mayAllocate(entry: Entry): Boolean {
         if (current !== entry || entry.obsolete || !entry.account.job.isActive) return false
+        val runtime = entry.runtime ?: return false
+        if (!try { nativeEnvironment(runtime) } catch (_: Exception) { false }) return false
         return entries.all { older ->
             if (older === entry) true else {
                 // A pending factory has never delivered a runtime or admitted an SDK start.
