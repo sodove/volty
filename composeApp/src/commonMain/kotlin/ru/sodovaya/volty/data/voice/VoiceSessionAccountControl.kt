@@ -55,6 +55,13 @@ internal class VoiceSessionAccountControl private constructor(
         }
     }
 
+    internal fun canRememberPreparedCallOperation(call: String, operation: VoiceOperationId): Boolean {
+        val current = capability.value
+        val original = current.intents[operation]
+        return !current.closed && ID.matches(call) && ID.matches(operation.value) &&
+            (original == null || (original.kind == IntentKind.DIRECT_CALL && original.channel == call))
+    }
+
     internal fun rememberPreparedCallIntent(call: String, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
         if (!ID.matches(call) || !ID.matches(operation.value) || generation.value < 0) return false
         val intent = Intent(generation, call, false, IntentKind.DIRECT_CALL)
