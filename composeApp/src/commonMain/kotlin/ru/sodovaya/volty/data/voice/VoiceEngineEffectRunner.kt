@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.voice
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import ru.sodovaya.volty.domain.voice.*
 
 /**
@@ -29,6 +30,9 @@ class VoiceEngineEffectRunner(
     private var deafen: Control? = null
     private val cleanup = MutableStateFlow<Set<VoiceGeneration>>(emptySet())
     val failedCleanup = cleanup.asStateFlow()
+    private val workCount = MutableStateFlow(0)
+    /** Cancelled-but-incomplete producers still hold this count, even after Stopped. */
+    val inFlight = workCount.asStateFlow()
 
     init {
         require(queuedDispatcher.isDispatchNeeded(parent.coroutineContext)) { "Queued serial dispatcher required" }
@@ -54,7 +58,7 @@ class VoiceEngineEffectRunner(
         }
         val record = Start(effect.tag)
         starts[effect.tag.generation] = record
-        record.job = scope.launch {
+        record.job = launchWork {
             val state = currentState()
             val intent = if (state.sessionId == effect.tag.sessionId && state.generation == effect.tag.generation)
                 effect.copy(muted = state.muted, deafened = state.deafened) else effect
@@ -69,7 +73,7 @@ class VoiceEngineEffectRunner(
         mute?.takeIf { it.tag.generation == generation }?.job?.cancel()
         deafen?.takeIf { it.tag.generation == generation }?.job?.cancel()
         if (stops[generation]?.isActive == true) return
-        stops[generation] = scope.launch {
+        stops[generation] = launchWork {
             try {
                 val result = driver.stop(generation)
                 if (result.isSuccess) {
@@ -87,8 +91,8 @@ class VoiceEngineEffectRunner(
         previous?.job?.cancel()
         val pending = Control(tag)
         if (microphone) mute = pending else deafen = pending
-        pending.job = scope.launch {
-            if ((if (microphone) mute else deafen) !== pending) return@launch
+        pending.job = launchWork {
+            if ((if (microphone) mute else deafen) !== pending) return@launchWork
             val result = if (microphone) driver.setMuted(tag, value) else driver.setDeafened(tag, value)
             if (result.isFailure) emit(VoiceSessionEvent.EngineFailed(tag))
         }
@@ -97,6 +101,15 @@ class VoiceEngineEffectRunner(
     private fun authorizes(tag: VoiceSessionTag): Boolean = try {
         accountPermission() && currentState().authorizesEngine(tag, monotonicMillis())
     } catch (_: Exception) { false }
+
+    private fun launchWork(block: suspend CoroutineScope.() -> Unit): Job {
+        workCount.update { check(it < Int.MAX_VALUE); it + 1 }
+        val job = try { scope.launch(block = block) }
+        catch (failure: Throwable) { workCount.update { it - 1 }; throw failure }
+        // A cancelled queued job may never enter its body/finally. Completion is the fence.
+        job.invokeOnCompletion { workCount.update { it - 1 } }
+        return job
+    }
 
     private class Start(val tag: VoiceSessionTag) { var job: Job? = null }
     private class Control(val tag: VoiceSessionTag) { var job: Job? = null }

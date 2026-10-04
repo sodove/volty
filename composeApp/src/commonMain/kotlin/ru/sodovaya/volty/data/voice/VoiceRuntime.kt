@@ -41,6 +41,7 @@ class VoiceRuntime(
     val unconfirmedStops = owner.unconfirmedStops
     val pendingRemoteStops = owner.pendingRemoteStops
     val failedLocalCleanup = engine.failedCleanup
+    val nativeInFlight = engine.inFlight
 
     /** False means admission has permanently retired; no new operation is sent. */
     suspend fun join(channel: String, operation: VoiceOperationId, replace: Boolean = false): Boolean = command {
