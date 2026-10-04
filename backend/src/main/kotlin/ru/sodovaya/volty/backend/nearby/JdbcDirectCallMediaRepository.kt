@@ -7,6 +7,33 @@ import java.util.UUID
 
 /** SQL-only accepted pair foundation. Not wired to DI, routes or SFU. */
 class JdbcDirectCallMediaRepository(private val source: DataSource) {
+    /** Pair-owned transport snapshot, never a channel membership or audibility assertion. */
+    fun roster(actor: String, call: String, now: () -> Long): DirectCallRosterSnapshot? {
+        canonical(actor); canonical(call)
+        var snapshot: DirectCallRosterSnapshot? = null
+        owned(actor, call) {c, original ->
+            if (original.phase != DirectCallPhase.ACCEPTED) return@owned DirectCallDecision(original)
+            val at = now().also {require(it >= 0)}
+            reconcileInTransaction(c, original, at)
+            val current = currentCall(c, call)
+            if (current.phase != DirectCallPhase.ACCEPTED) return@owned DirectCallDecision(current)
+            val rows = pair(c, current)
+            val deadline = rows.minOf {checkNotNull(it.operation.deadlineEpochMillis)}
+            val revision = c.createStatement().use {s ->
+                s.executeQuery("SELECT revision FROM nearby_roster_clock WHERE singleton=1").use {r -> check(r.next()); r.getLong(1)}
+            }
+            val peers = rows.sortedBy {it.operation.actorId}.map {row ->
+                val pending = row.operation.phase == OperationPhase.PENDING
+                val connected = !pending && row.media.state == SfuParticipantState.ACTIVE && row.media.participantSid != null
+                ChannelRosterPeer(row.operation.actorId, checkNotNull(row.operation.sessionId), row.operation.operationId,
+                    if (pending) RosterConnectionPhase.JOINING else if (connected) RosterConnectionPhase.CONNECTED else RosterConnectionPhase.CONNECTING,
+                    deadline, if (connected) MediaPresence.CONNECTED else MediaPresence.UNKNOWN, row.media.participantSid)
+            }
+            snapshot = DirectCallRosterSnapshot(call, revision, at, peers)
+            DirectCallDecision(current)
+        }
+        return snapshot
+    }
     private val policy = DirectCallLifecyclePolicy()
     private val sessions = JdbcSessionRepository(source, JdbcChannelAccess())
 

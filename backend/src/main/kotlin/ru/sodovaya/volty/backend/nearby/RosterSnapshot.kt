@@ -15,3 +15,8 @@ data class ChannelRosterSnapshot(
     val channelId: String, val revision: Long, val serverTimeEpochMillis: Long,
     val peers: List<ChannelRosterPeer>,
 )
+
+data class DirectCallRosterSnapshot(
+    val callId: String, val revision: Long, val serverTimeEpochMillis: Long,
+    val peers: List<ChannelRosterPeer>,
+)
