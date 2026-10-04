@@ -36,3 +36,9 @@ operation/actual returned session tag, never destination UUID. Discovery require
 but does not demand audio permission. Root startup will carry explicit Channel/OutgoingCall/IncomingCall
 targets, register call metadata only for the current selected account intent, then use the existing
 visible-Activity foreground readiness and audio preference path. No incoming discovery auto-starts audio.
+
+Root target integration preserves the current account/selection checks before and after runtime
+registration. An unobserved incoming snapshot cannot request foreground or accept. Call target
+identity persists in conversation state; the existing channel string overload creates an explicit
+Channel target. Cancellation/replacement while preferences are held must not ring later or stop
+a newer channel with the same UUID. Production UI and FCM acceptance remain separate wiring.

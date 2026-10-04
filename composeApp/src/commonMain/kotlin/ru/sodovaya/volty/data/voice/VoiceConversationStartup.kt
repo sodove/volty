@@ -3,6 +3,8 @@ package ru.sodovaya.volty.data.voice
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
+import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
+import ru.sodovaya.volty.data.nearby.DirectCallPhase
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 import ru.sodovaya.volty.domain.voice.*
 
@@ -14,12 +16,21 @@ internal interface VoiceConversationForegroundPort {
 }
 
 internal enum class VoiceConversationPhase { STOPPED, PREPARING, JOIN_SUBMITTED, FAILED }
+internal sealed interface VoiceConversationTarget {
+    val destinationId: String
+    data class Channel(override val destinationId: String) : VoiceConversationTarget
+    data class OutgoingCall(override val destinationId: String, val calleeId: String, val idempotencyKey: String) : VoiceConversationTarget
+    data class IncomingCall(val call: DirectCallSnapshot) : VoiceConversationTarget {
+        override val destinationId get() = call.callId
+    }
+}
 internal data class VoiceConversationState(
     val phase: VoiceConversationPhase = VoiceConversationPhase.STOPPED,
     val channelId: String? = null,
     val operationId: VoiceOperationId? = null,
     /** Actual matching runtime evidence only; absent during preparation or withdrawn intent. */
     val voice: VoiceSessionState? = null,
+    val target: VoiceConversationTarget? = null,
 )
 
 /** One process conversation intent. All selection/foreground operations run on queued Main.
@@ -31,10 +42,11 @@ internal class VoiceConversationStartup(
 ) {
     private val mutableState = MutableStateFlow(VoiceConversationState())
     val state = mutableState.asStateFlow()
-    private class Intent(val account: SocialAuthenticatedAccount, val channel: String,
+    private class Intent(val account: SocialAuthenticatedAccount, val target: VoiceConversationTarget,
                          val operation: VoiceOperationId, val replace: Boolean,
                          val preferences: suspend () -> VoiceAudioPreferences,
                          var launcher: ((VoiceForegroundTicket) -> Boolean)?) {
+        val channel get() = target.destinationId
         var runtime: AuthenticatedVoiceRuntime? = null
         var ticket: VoiceForegroundTicket? = null
         var work: Job? = null
@@ -47,12 +59,30 @@ internal class VoiceConversationStartup(
 
     suspend fun start(account: SocialAuthenticatedAccount, channel: String, operation: VoiceOperationId,
                       replace: Boolean = false, readPreferences: suspend () -> VoiceAudioPreferences,
+                      launch: (VoiceForegroundTicket) -> Boolean) =
+        start(account, VoiceConversationTarget.Channel(channel), operation, replace, readPreferences, launch)
+
+    suspend fun start(account: SocialAuthenticatedAccount, target: VoiceConversationTarget, operation: VoiceOperationId,
+                      replace: Boolean = false, readPreferences: suspend () -> VoiceAudioPreferences,
                       launch: (VoiceForegroundTicket) -> Boolean) = withContext(queuedDispatcher) {
         currentCoroutineContext().ensureActive()
         check(account.job.isActive) { "Authenticated account retired" }
         invitationDraftId(account.userId.value)
-        invitationDraftId(channel)
+        invitationDraftId(target.destinationId)
         invitationDraftId(operation.value)
+        when (target) {
+            is VoiceConversationTarget.Channel -> Unit
+            is VoiceConversationTarget.OutgoingCall -> {
+                require(!replace) { "Call admission cannot replace by channel UUID" }
+                invitationDraftId(target.calleeId); invitationDraftId(target.idempotencyKey)
+                require(target.calleeId != account.userId.value) { "Cannot call own account" }
+            }
+            is VoiceConversationTarget.IncomingCall -> {
+                require(!replace && target.call.phase == DirectCallPhase.RINGING &&
+                    target.call.calleeId == account.userId.value && target.call.callerId != account.userId.value) { "Not an incoming ring" }
+                invitationDraftId(target.call.callerId)
+            }
+        }
         val parent = account.retirementParentScope()
         val job = requireNotNull(parent.coroutineContext[Job]) { "Conversation requires application Job" }
         check(job.isActive) { "Conversation parent stopped" }
@@ -63,9 +93,9 @@ internal class VoiceConversationStartup(
         rootJob = job
         // Fence the previous intent before cancellation or any asynchronous acquisition.
         selected?.let { finish(it, VoiceConversationPhase.STOPPED) }
-        val intent = Intent(account, channel, operation, replace, readPreferences, launch)
+        val intent = Intent(account, target, operation, replace, readPreferences, launch)
         selected = intent
-        mutableState.value = VoiceConversationState(VoiceConversationPhase.PREPARING, channel, operation)
+        mutableState.value = conversationState(intent, VoiceConversationPhase.PREPARING)
         val scope = CoroutineScope(parent.coroutineContext + queuedDispatcher)
         intent.work = scope.launch(start = CoroutineStart.LAZY) { execute(intent, scope) }
         intent.guardian = account.scope().launch(start = CoroutineStart.UNDISPATCHED) {
@@ -101,6 +131,13 @@ internal class VoiceConversationStartup(
             val runtime = acquire(intent.account)
             if (!isCurrent(intent) || runtime.retired.value) return
             intent.runtime = runtime
+            val registered = when (val target = intent.target) {
+                is VoiceConversationTarget.Channel -> true
+                is VoiceConversationTarget.OutgoingCall -> runtime.registerOutgoingCall(target.destinationId,
+                    target.calleeId, target.idempotencyKey, intent.operation)
+                is VoiceConversationTarget.IncomingCall -> runtime.registerIncomingCall(target.call, intent.operation)
+            }
+            if (!registered || !isCurrent(intent)) return
             val ticket = foreground.request(runtime)
             intent.ticket = ticket
             intent.foregroundObserver = scope.launch {
@@ -111,7 +148,7 @@ internal class VoiceConversationStartup(
             if (!launchForeground(intent, ticket) || !foreground.awaitReady(ticket) || !isCurrent(intent)) return
             val accepted = runtime.joinWithAudio(intent.channel, intent.operation, intent.replace, intent.preferences)
             if (!accepted || !isCurrent(intent)) return
-            mutableState.value = VoiceConversationState(VoiceConversationPhase.JOIN_SUBMITTED, intent.channel, intent.operation)
+            mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED)
             // Earlier terminal/wanted values cannot finish a new pending intent. Only this
             // unique operation's state can do so; ticket/account retirement have their own fences.
             val terminal = combine(runtime.state, runtime.retired) {voice, retired ->
@@ -121,8 +158,7 @@ internal class VoiceConversationStartup(
                         if (voice.phase == VoicePhase.FAILED) VoiceConversationPhase.FAILED else VoiceConversationPhase.STOPPED
                     else -> {
                         if (voice.operationId == intent.operation)
-                            mutableState.value = VoiceConversationState(VoiceConversationPhase.JOIN_SUBMITTED,
-                                intent.channel, intent.operation, voice)
+                            mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, voice)
                         null
                     }
                 }
@@ -140,6 +176,8 @@ internal class VoiceConversationStartup(
     }
 
     private fun isCurrent(intent: Intent) = selected === intent && intent.account.job.isActive
+    private fun conversationState(intent: Intent, phase: VoiceConversationPhase, voice: VoiceSessionState? = null) =
+        VoiceConversationState(phase, intent.channel, intent.operation, voice, intent.target)
 
     // No suspension here: an Activity-bound callback cannot be spilled into the long-lived
     // readiness/preferences/active-conversation continuation frame.
@@ -153,7 +191,7 @@ internal class VoiceConversationStartup(
         if (selected !== intent) return
         selected = null
         intent.launcher = null
-        mutableState.value = VoiceConversationState(phase, intent.channel, intent.operation)
+        mutableState.value = conversationState(intent, phase)
         intent.guardian?.cancel()
         intent.foregroundObserver?.cancel()
         intent.work?.cancel()

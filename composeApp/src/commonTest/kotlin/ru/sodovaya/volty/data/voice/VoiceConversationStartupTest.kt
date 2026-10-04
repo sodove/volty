@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.voice
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.*
 import io.ktor.http.HttpStatusCode
+import ru.sodovaya.volty.data.nearby.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.test.*
@@ -18,6 +19,87 @@ class VoiceConversationStartupTest {
     private val first = VoiceOperationId("30000000-0000-0000-0000-000000000003")
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
+
+    @Test fun explicitOutgoingCallWaitsForForegroundAndKeepsPhoneMicHeadsetPreferences() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.acknowledgeLaunch = false
+            val target = VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key)
+            f.owner.start(account, target, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent()
+            assertEquals(1, f.launches); assertTrue(f.paths.isEmpty()); assertTrue(f.allocated.isEmpty())
+            val ticket = assertNotNull(f.gate.current.value)
+            assertTrue(f.gate.acknowledge(ticket, f.service)); runCurrent()
+            assertEquals(listOf(phone), f.allocated); assertEquals(1, f.published)
+            assertEquals(target, f.owner.state.value.target)
+            assertEquals(listOf("/v2/nearby/calls/$channel/create", "/v2/nearby/calls/$channel/resume"), f.paths)
+            f.owner.stop(); runCurrent()
+            assertEquals(listOf("/v2/nearby/calls/$channel/cancel-outgoing", "/v2/nearby/sessions/40000000-0000-0000-0000-000000000004/disconnect"), f.paths.takeLast(2))
+            assertTrue(account.job.isActive); assertNull(f.gate.current.value)
+        } finally {f.close()}
+    }
+
+    @Test fun refusedForegroundLaunchCannotRingOrAllocateCallAudio() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {error("Must not read preferences")}, launch = {false})
+            runCurrent()
+            assertTrue(f.paths.isEmpty()); assertTrue(f.allocated.isEmpty())
+            assertNull(f.gate.current.value); assertEquals(VoiceConversationPhase.FAILED, f.owner.state.value.phase)
+        } finally {f.close()}
+    }
+
+    @Test fun incomingDiscoveryNeedsNoForegroundButOnlyExplicitAcceptanceStartsAudio() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true
+            val runtime = f.acquire(account)
+            val ring = assertIs<IncomingCallReply.Ready>(runtime.incomingCalls()).calls.single()
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+            val target = VoiceConversationTarget.IncomingCall(ring)
+            f.owner.start(account, target, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(1, f.launches); assertEquals(1, f.published)
+            assertEquals(target, f.owner.state.value.target)
+            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$channel/accept"), f.paths)
+            f.owner.stop(); runCurrent()
+            assertEquals(listOf("/v2/nearby/calls/$channel/stop", "/v2/nearby/sessions/40000000-0000-0000-0000-000000000004/disconnect"), f.paths.takeLast(2))
+        } finally {f.close()}
+    }
+
+    @Test fun unobservedIncomingSnapshotCannotStartForegroundOrAccept() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true
+            val unobserved = DirectCallSnapshot(channel, f.peer, actor, DirectCallPhase.RINGING, 2, 45100, null)
+            f.owner.start(account, VoiceConversationTarget.IncomingCall(unobserved), first,
+                readPreferences = {error("Unobserved ring")}, launch = f::launch); runCurrent()
+            assertEquals(0, f.launches); assertTrue(f.paths.isEmpty()); assertTrue(f.allocated.isEmpty())
+            assertEquals(VoiceConversationPhase.FAILED, f.owner.state.value.phase)
+            assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun lateOutgoingPreferencesCannotRingOverNewChannelWithSameDestinationUuid() = runTest {
+        val f = Fixture(this); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        var returned = false
+        try {
+            val account = f.login(); f.callMode = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {withContext(NonCancellable) {entered.complete(Unit); release.await(); returned = true; phone}},
+                launch = f::launch); runCurrent()
+            assertTrue(entered.isCompleted); assertTrue(f.paths.isEmpty())
+            f.owner.start(account, channel, second, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val selected = assertNotNull(f.gate.current.value)
+            assertEquals(1, f.published)
+            release.complete(Unit); runCurrent(); assertTrue(returned)
+            assertSame(selected, f.gate.current.value)
+            assertEquals(VoiceConversationTarget.Channel(channel), f.owner.state.value.target)
+            assertEquals(listOf("/v2/nearby/operations/${second.value}/join"), f.paths)
+            assertEquals(1, f.published); assertEquals(0, f.closes)
+        } finally {release.complete(Unit); f.close()}
+    }
 
     @Test fun storageFailureReleasesForegroundDemandWithoutJoinOrLogout() = runTest {
         val f = Fixture(this)
@@ -290,6 +372,12 @@ class VoiceConversationStartupTest {
         var nonce = 0
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
         var launches = 0; var acknowledgeLaunch = true; var rejectJoin = false
+        var callMode = false; var incomingMode = false
+        val peer = "70000000-0000-0000-0000-000000000007"
+        val key = "80000000-0000-0000-0000-000000000008"
+        private fun callSnapshot(phase: String, outcome: String = "null") =
+            """{"callId":"$channel","callerId":"${if (incomingMode) peer else actor}","calleeId":"${if (incomingMode) actor else peer}","phase":"$phase","revision":2,"ringDeadlineEpochMillis":45100,"outcome":$outcome}"""
+        private fun callGrant() = """{"phase":"CONNECTING","sessionId":"40000000-0000-0000-0000-000000000004","remainingLeaseMillis":10000,"credentials":{"serverUrl":"wss://media.test","participantToken":"secret","roomEpoch":"volty-call-$channel"}}"""
         var published = 0; var closes = 0
         val mutes = mutableListOf<Boolean>(); val deafens = mutableListOf<Boolean>()
         val paths = mutableListOf<String>()
@@ -301,6 +389,14 @@ class VoiceConversationStartupTest {
             dispatcher = this@Fixture.dispatcher
             addHandler {
                 paths += it.url.encodedPath
+                if (callMode && it.url.encodedPath.contains("/calls/")) {
+                    return@addHandler respond(when {
+                        it.url.encodedPath.endsWith("incoming") -> """{"calls":[${callSnapshot("RINGING") }]}"""
+                        it.url.encodedPath.endsWith("create") -> """{"call":${callSnapshot("ACCEPTED")}}"""
+                        it.url.encodedPath.endsWith("accept") || it.url.encodedPath.endsWith("resume") -> """{"call":${callSnapshot("ACCEPTED")},"session":${callGrant()}}"""
+                        else -> """{"call":${callSnapshot("ENDED", if (incomingMode) "\"CALLEE_ENDED\"" else "\"CALLER_ENDED\"")}}"""
+                    })
+                }
                 val operation = it.url.encodedPath.removeSuffix("/join").substringAfterLast('/')
                 if (rejectJoin && it.url.encodedPath.endsWith("/join")) respond("{}", HttpStatusCode.Forbidden)
                 else respond(if (it.url.encodedPath.endsWith("/join"))
@@ -318,7 +414,8 @@ class VoiceConversationStartupTest {
                 when {selected !== ticket -> false; ready === ticket -> gate.allows(ticket.owner); else -> null}
             }.filterNotNull().first()
         }
-        val owner = VoiceConversationStartup(dispatcher, foreground) {account ->
+        val owner = VoiceConversationStartup(dispatcher, foreground, ::acquire)
+        suspend fun acquire(account: SocialAuthenticatedAccount): AuthenticatedVoiceRuntime {
             val audio = VoiceSessionAudioFactory({error("Must prepare")}, requiresPreparation = true) {tag, prefs, _, emit ->
                 allocated += prefs
                 emitters += tag to emit
@@ -330,7 +427,7 @@ class VoiceConversationStartupTest {
                     override suspend fun close() {closes++}
                 }
             }
-            coordinator.acquire(account, audio, {}).also {runtime = it; afterAcquire()}
+            return coordinator.acquire(account, audio, {}).also {runtime = it; afterAcquire()}
         }
         fun launch(ticket: VoiceForegroundTicket): Boolean {launches++; if (acknowledgeLaunch) assertTrue(gate.acknowledge(ticket, service)); return true}
         suspend fun login(): SocialAuthenticatedAccount {
