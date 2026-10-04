@@ -5,6 +5,8 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
 import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
+import ru.sodovaya.volty.data.nearby.DirectCallReply
+import ru.sodovaya.volty.data.nearby.DirectCallFailure
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 import ru.sodovaya.volty.domain.voice.*
@@ -65,6 +67,13 @@ internal class AuthenticatedVoiceRuntime private constructor(
         }
     suspend fun incomingCalls(after: String? = null, limit: Int = 20) = control.incoming(after, limit)
     suspend fun callStatus(call: String) = control.callStatus(call)
+    /** The UI owns only its waiter. Rejection runs on the original cleanup root without audio. */
+    fun requestDeclineIncomingCall(call: DirectCallSnapshot, operation: VoiceOperationId): Deferred<DirectCallReply> =
+        cleanupScope.async {
+            if (admissionRetired.value || !account.job.isActive || !control.registerIncoming(call, operation))
+                DirectCallReply.Failed(DirectCallFailure.ACCESS_DENIED)
+            else control.declineIncoming(operation)
+        }
 
     suspend fun join(channel: String, operation: VoiceOperationId, replace: Boolean = false): Boolean = withContext(queuedDispatcher) {
         audioPreparation = null

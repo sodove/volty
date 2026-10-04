@@ -81,6 +81,51 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
+    @Test fun explicitRejectSurvivesUiWaiterCancellationAndAccountRetirementWithoutAudio() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>()
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true
+            val runtime = f.acquire(account)
+            val ring = assertIs<IncomingCallReply.Ready>(runtime.incomingCalls()).calls.single()
+            f.declineRelease = release
+            val result = runtime.requestDeclineIncomingCall(ring, first)
+            val waiter = launch {result.await()}; runCurrent()
+            assertTrue(f.declineEntered.isCompleted)
+            waiter.cancel(); f.repository.logout(); runCurrent()
+            assertTrue(runtime.retired.value)
+            release.complete(Unit); runCurrent()
+            val reply = assertIs<DirectCallReply.Ready>(result.await())
+            assertEquals(DirectCallPhase.DECLINED, reply.call.phase)
+            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$channel/decline"), f.paths)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty()); assertEquals(0, f.published)
+        } finally {release.complete(Unit); f.close()}
+    }
+
+    @Test fun rejectDoesNotUseAnUnobservedIncomingSnapshot() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true
+            val runtime = f.acquire(account)
+            val ring = DirectCallSnapshot(channel, f.peer, actor, DirectCallPhase.RINGING, 2, 45100, null)
+            assertEquals(DirectCallFailure.ACCESS_DENIED,
+                assertIs<DirectCallReply.Failed>(runtime.requestDeclineIncomingCall(ring, first).await()).reason)
+            assertTrue(f.paths.isEmpty()); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {f.close()}
+    }
+
+    @Test fun rejectRaceWithAcceptanceReportsConflictWithoutStoppingOrStartingMedia() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.declineConflict = true
+            val runtime = f.acquire(account)
+            val ring = assertIs<IncomingCallReply.Ready>(runtime.incomingCalls()).calls.single()
+            assertEquals(DirectCallFailure.CONFLICT,
+                assertIs<DirectCallReply.Failed>(runtime.requestDeclineIncomingCall(ring, first).await()).reason)
+            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$channel/decline"), f.paths)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty()); assertFalse(runtime.state.value.wanted)
+        } finally {f.close()}
+    }
+
     @Test fun lateOutgoingPreferencesCannotRingOverNewChannelWithSameDestinationUuid() = runTest {
         val f = Fixture(this); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
         var returned = false
@@ -373,6 +418,9 @@ class VoiceConversationStartupTest {
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
         var launches = 0; var acknowledgeLaunch = true; var rejectJoin = false
         var callMode = false; var incomingMode = false
+        var declineRelease: CompletableDeferred<Unit>? = null
+        var declineConflict = false
+        val declineEntered = CompletableDeferred<Unit>()
         val peer = "70000000-0000-0000-0000-000000000007"
         val key = "80000000-0000-0000-0000-000000000008"
         private fun callSnapshot(phase: String, outcome: String = "null") =
@@ -390,6 +438,11 @@ class VoiceConversationStartupTest {
             addHandler {
                 paths += it.url.encodedPath
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
+                    if (it.url.encodedPath.endsWith("decline")) {
+                        declineEntered.complete(Unit); declineRelease?.await()
+                        if (declineConflict) return@addHandler respond("""{"code":"call_not_ringing"}""", HttpStatusCode.Conflict)
+                        return@addHandler respond("""{"call":${callSnapshot("DECLINED", "\"CALLEE_DECLINED\"")}}""")
+                    }
                     return@addHandler respond(when {
                         it.url.encodedPath.endsWith("incoming") -> """{"calls":[${callSnapshot("RINGING") }]}"""
                         it.url.encodedPath.endsWith("create") -> """{"call":${callSnapshot("ACCEPTED")}}"""

@@ -15,6 +15,7 @@ internal class AccountVoiceSessionControl private constructor(
     fun registerIncoming(call: DirectCallSnapshot, operation: VoiceOperationId) = calls.registerIncoming(call, operation)
     suspend fun incoming(after: String? = null, limit: Int = 20) = calls.incoming(after, limit)
     suspend fun callStatus(call: String) = calls.callStatus(call)
+    suspend fun declineIncoming(operation: VoiceOperationId) = calls.declineIncoming(operation)
 
     private fun original(operation: VoiceOperationId): VoiceSessionControlPort = if (calls.owns(operation)) calls else journal
     private fun original(tag: VoiceSessionTag): VoiceSessionControlPort = if (calls.owns(tag)) calls else journal

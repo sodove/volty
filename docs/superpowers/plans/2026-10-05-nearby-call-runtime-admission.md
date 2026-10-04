@@ -42,3 +42,10 @@ registration. An unobserved incoming snapshot cannot request foreground or accep
 identity persists in conversation state; the existing channel string overload creates an explicit
 Channel target. Cancellation/replacement while preferences are held must not ring later or stop
 a newer channel with the same UUID. Production UI and FCM acceptance remain separate wiring.
+
+Explicit incoming rejection: observed callee RING plus immutable operation metadata earns only
+the original negative decline capability. Root-owned deferred work survives UI waiter cancellation;
+auth retirement after issuance cannot substitute credentials or turn it into media admission.
+Discovery/fabricated notification payload alone cannot decline; refresh actual server state first.
+Reply is a call control result, never voice transport or SFU cleanup acknowledgment. No foreground
+service or audio allocation for reject. Parent accepted-race conflict remains explicit.

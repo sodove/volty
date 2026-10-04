@@ -51,6 +51,13 @@ internal class DirectCallVoiceSessionControl private constructor(
     }
     fun owns(operation: VoiceOperationId) = operation in capability.value.modes
     fun owns(tag: VoiceSessionTag) = tag in capability.value.sessions
+    /** Original observed incoming metadata only; no generation, foreground or media grant. */
+    suspend fun declineIncoming(operation: VoiceOperationId): DirectCallReply {
+        ensureOpen()
+        val incoming = capability.value.modes[operation] as? Mode.Incoming
+            ?: return DirectCallReply.Failed(DirectCallFailure.ACCESS_DENIED)
+        return calls.decline(incoming.call).also {ensureOpen()}
+    }
 
     override fun rememberJoinIntent(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean) {
         val mode = capability.value.modes[operation] ?: return
