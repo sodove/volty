@@ -25,7 +25,21 @@ class SessionService(
     private val issuer: SessionCredentialIssuer,
     private val now: () -> Long = System::currentTimeMillis,
     private val singletonOrigin: Boolean = false,
+    private val resolveTypedRoom: ((actor: String, destination: String, kind: VoiceDestinationKind) -> String?)? = null,
 ) {
+    /** Only the original SQL-prepared participant may continue admission; this never begins a call. */
+    internal fun resumeCall(actor: String, operation: String, call: String): SessionAction {
+        val original = repository.get(actor, operation)
+            ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
+        if (original.operation.destinationKind != VoiceDestinationKind.DIRECT_CALL || original.operation.destinationId != call)
+            return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
+        val current = checkNotNull(repository.expire(actor, operation, now).state)
+        if (current.operation.terminal) {cleanup(current); return result(checkNotNull(repository.get(actor, operation)), false)}
+        // Earlier implementation skipped room resolution on ACTIVE replay, unlike channel join.
+        if (roomFor(current) != current.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        return result(advancePending(current), credentials = true)
+    }
+
     fun join(actor: String, operation: String, destination: String, replace: Boolean = false): SessionAction {
         val existing = repository.get(actor, operation)
         if (existing != null && existing.operation.terminal) return SessionAction.Ended(existing)
@@ -76,7 +90,7 @@ class SessionService(
             ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (resolveRoom(actor, checkNotNull(row.operation.destinationId)) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
         val observed = observeCurrent(row)
         if (observed is SfuReply.Rejected) return SessionAction.Unavailable(observed.reason)
         val current = (observed as SfuReply.Accepted).value
@@ -107,7 +121,7 @@ class SessionService(
             ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (resolveRoom(actor, checkNotNull(row.operation.destinationId)) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
         return when (val observed = observeCurrent(row)) {
             is SfuReply.Accepted -> result(observed.value, false)
             is SfuReply.Rejected -> SessionAction.Unavailable(observed.reason)
@@ -154,7 +168,7 @@ class SessionService(
         var row = checkNotNull(repository.expire(actor, operation, now).state)
         if (row.operation.terminal) { cleanup(row); return checkNotNull(repository.get(actor, operation)) }
         if (row.operation.phase == OperationPhase.ACTIVE) return row
-        if (resolveRoom(actor, row.operation.destinationId!!) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation).state
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation).state
         repository.pendingCleanup(actor, 1).firstOrNull()?.let { cleanup(it) }
         if (repository.pendingCleanup(actor, 1).isNotEmpty()) return checkNotNull(repository.get(actor, operation))
         row = checkNotNull(repository.expire(actor, operation, now).state)
@@ -171,6 +185,14 @@ class SessionService(
             now, receipt.conservativeDeadlineEpochMillis).state)
         if (activated.operation.terminal) cleanup(activated)
         return checkNotNull(repository.get(actor, operation))
+    }
+
+    private fun roomFor(row: SessionJournalEntry): String? {
+        val kind = checkNotNull(row.operation.destinationKind)
+        val destination = checkNotNull(row.operation.destinationId)
+        return if (resolveTypedRoom != null) resolveTypedRoom.invoke(row.operation.actorId, destination, kind)
+        else if (kind == VoiceDestinationKind.CHANNEL) resolveRoom(row.operation.actorId, destination)
+        else null
     }
 
     private fun cleanup(row: SessionJournalEntry) {
