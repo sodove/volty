@@ -57,7 +57,7 @@ val appModule = module {
     // available for it without defining the interface twice in Koin.
     single { OsmNavigationRepository() }
     single<NavigationEnergySource> { BmsNavigationEnergySource(get()) }
-    singleOf(::DefaultSocialRepository) bind SocialRepository::class
+    single { DefaultSocialRepository(get(), get()) } bind SocialRepository::class
     single<VoiceRoomRepository> { LiveKitVoiceRoomRepository(get(), get()) }
     single<SocialTelemetrySource> { BmsSocialTelemetrySource(get()) }
     single { SocialShareSessionCoordinator(get(), get()) }

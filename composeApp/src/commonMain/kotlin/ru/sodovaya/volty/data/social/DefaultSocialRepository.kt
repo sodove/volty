@@ -46,8 +46,8 @@ import ru.sodovaya.volty.domain.social.VoiceProviderAvailability
 class DefaultSocialRepository(
     private val transport: SocialTransport,
     private val credentials: SocialCredentialStore,
+    private val scope: CoroutineScope = CoroutineScope(Dispatchers.Default + SupervisorJob()),
 ) : SocialRepository {
-    private val scope = CoroutineScope(Dispatchers.Default + SupervisorJob())
     private val _session = MutableStateFlow<SocialSession>(SocialSession.LoggedOut)
     override val session: StateFlow<SocialSession> = _session.asStateFlow()
     private val _credentials = MutableStateFlow<SocialCredentials?>(null)
@@ -59,7 +59,11 @@ class DefaultSocialRepository(
     private val credentialMutex = Mutex()
     override val activeSharing: StateFlow<SharingSession?> = _activeSharing.asStateFlow()
 
-    init { scope.launch { restoreSession() } }
+    init {
+        // Capture before dispatch: a queued startup task must not adopt a later login.
+        val generation = authenticationGeneration.value
+        scope.launch { restoreSession(generation) }
+    }
 
     override suspend fun register(request: RegistrationRequest): SocialResult<Unit> =
         authenticate { transport.register(request) }
@@ -303,25 +307,7 @@ class DefaultSocialRepository(
     ): SocialResult<Unit> {
         val stored = session.toStored()
         return when (val profile = transport.getProfile(stored.accessToken)) {
-            is SocialResult.Success -> credentialMutex.withLock {
-                if (!ownsAuthentication(generation)) return@withLock unauthorized()
-                credentials.write(stored)
-                val published = sessionMutex.withLock {
-                    if (authenticationGeneration.value !== generation) false
-                    else {
-                        _credentials.value = stored
-                        _session.value = profile.value
-                        true
-                    }
-                }
-                if (published) SocialResult.Success(Unit)
-                else {
-                    // A newer login cannot write while this credential lock is held.
-                    // Earlier code denied the profile but left its already-written token behind.
-                    credentials.clear()
-                    unauthorized()
-                }
-            }
+            is SocialResult.Success -> commitCredentials(generation, stored, profile.value)
             is SocialResult.Failure -> {
                 if (!ownsAuthentication(generation)) return unauthorized()
                 clearLocalSession(generation)
@@ -333,47 +319,82 @@ class DefaultSocialRepository(
     private suspend fun ownsAuthentication(generation: AuthenticationGeneration): Boolean =
         sessionMutex.withLock { authenticationGeneration.value === generation }
 
-    private suspend fun restoreSession() {
-        val saved = credentials.read() ?: return
+    private suspend fun commitCredentials(
+        generation: AuthenticationGeneration,
+        stored: SocialCredentials,
+        profile: SocialSession.Authenticated? = null,
+    ): SocialResult<Unit> = credentialMutex.withLock {
+        if (!ownsAuthentication(generation)) return@withLock unauthorized()
+        credentials.write(stored)
+        val published = sessionMutex.withLock {
+            if (authenticationGeneration.value !== generation) false
+            else {
+                _credentials.value = stored
+                if (profile != null) _session.value = profile
+                true
+            }
+        }
+        if (published) SocialResult.Success(Unit)
+        else {
+            // All credential writers use this lock; a newer login cannot write until cleanup ends.
+            // Earlier code denied the profile but left its already-written token behind.
+            credentials.clear()
+            unauthorized()
+        }
+    }
+
+    private suspend fun restoreSession(generation: AuthenticationGeneration) {
+        val saved = credentialMutex.withLock {
+            if (!ownsAuthentication(generation)) return@withLock null
+            credentials.read()
+        } ?: return
+        if (!ownsAuthentication(generation)) return
         val session = if (saved.expiresAtEpochMillis <= epochMillis()) {
             transport.refreshSession(saved.refreshToken)
         } else {
             SocialResult.Success(saved.toSessionCredentials())
         }
+        if (!ownsAuthentication(generation)) return
         when (session) {
             is SocialResult.Success -> {
                 val refreshed = session.value.toStored()
-                if (refreshed != saved) credentials.write(refreshed)
-                _credentials.value = refreshed
                 when (val profile = transport.getProfile(refreshed.accessToken)) {
-                    is SocialResult.Success -> _session.value = profile.value
+                    is SocialResult.Success -> commitCredentials(generation, refreshed, profile.value)
                     is SocialResult.Failure -> if (profile.error is SocialFailure.Unauthorized) {
-                        when (val retryToken = refreshAccessToken(refreshed)) {
-                            is SocialResult.Success -> when (val retryProfile = transport.getProfile(retryToken.value)) {
-                                is SocialResult.Success -> _session.value = retryProfile.value
-                                is SocialResult.Failure -> if (retryProfile.error is SocialFailure.Unauthorized) clearLocalSession()
+                        if (!ownsAuthentication(generation)) return
+                        when (val retry = transport.refreshSession(refreshed.refreshToken)) {
+                            is SocialResult.Success -> {
+                                if (!ownsAuthentication(generation)) return
+                                val retryCredentials = retry.value.toStored()
+                                when (val retryProfile = transport.getProfile(retryCredentials.accessToken)) {
+                                    is SocialResult.Success -> commitCredentials(generation, retryCredentials, retryProfile.value)
+                                    is SocialResult.Failure -> if (retryProfile.error is SocialFailure.Unauthorized)
+                                        clearLocalSession(generation)
+                                }
                             }
-                            is SocialResult.Failure -> Unit
+                            is SocialResult.Failure -> if (retry.error is SocialFailure.Unauthorized)
+                                clearLocalSession(generation)
                         }
                     }
                 }
             }
-            is SocialResult.Failure -> if (session.error is SocialFailure.Unauthorized) clearLocalSession()
+            is SocialResult.Failure -> if (session.error is SocialFailure.Unauthorized) clearLocalSession(generation)
         }
     }
 
     private suspend fun <T> authorized(
         request: suspend (accessToken: String) -> SocialResult<T>,
     ): SocialResult<T> {
+        val generation = authenticationGeneration.value
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()
         val saved = _credentials.value ?: return unauthorized()
-        val accessToken = when (val fresh = ensureFreshAccessToken(saved)) {
+        val accessToken = when (val fresh = ensureFreshAccessToken(saved, generation)) {
             is SocialResult.Failure -> return fresh
             is SocialResult.Success -> fresh.value
         }
         val result = request(accessToken)
         if (result !is SocialResult.Failure || result.error != SocialFailure.Unauthorized) return result
-        val refreshed = when (val retryToken = refreshAccessToken(saved)) {
+        val refreshed = when (val retryToken = refreshAccessToken(saved, generation)) {
             is SocialResult.Failure -> return retryToken
             is SocialResult.Success -> retryToken.value
         }
@@ -385,30 +406,40 @@ class DefaultSocialRepository(
         is SocialResult.Failure -> null
     }
 
-    private suspend fun ensureFreshAccessToken(saved: SocialCredentials): SocialResult<String> =
-        if (saved.expiresAtEpochMillis > epochMillis() + TOKEN_REFRESH_SKEW_MILLIS) {
+    private suspend fun ensureFreshAccessToken(
+        saved: SocialCredentials,
+        generation: AuthenticationGeneration,
+    ): SocialResult<String> {
+        if (!ownsAuthentication(generation)) return unauthorized()
+        return if (saved.expiresAtEpochMillis > epochMillis() + TOKEN_REFRESH_SKEW_MILLIS)
             SocialResult.Success(saved.accessToken)
-        } else {
-            refreshAccessToken(saved)
-        }
+        else refreshAccessToken(saved, generation)
+    }
 
-    private suspend fun refreshAccessToken(previous: SocialCredentials): SocialResult<String> = refreshMutex.withLock {
+    private suspend fun refreshAccessToken(
+        previous: SocialCredentials,
+        generation: AuthenticationGeneration = authenticationGeneration.value,
+    ): SocialResult<String> = refreshMutex.withLock {
+        if (!ownsAuthentication(generation)) return@withLock unauthorized()
         val current = _credentials.value
         if (current != null && current.accessToken != previous.accessToken &&
             current.expiresAtEpochMillis > epochMillis() + TOKEN_REFRESH_SKEW_MILLIS
         ) {
             return@withLock SocialResult.Success(current.accessToken)
         }
-        when (val result = transport.refreshSession(previous.refreshToken)) {
+        val result = transport.refreshSession(previous.refreshToken)
+        if (!ownsAuthentication(generation)) return@withLock unauthorized()
+        when (result) {
             is SocialResult.Failure -> {
-                if (result.error == SocialFailure.Unauthorized) clearLocalSession()
+                if (result.error == SocialFailure.Unauthorized) clearLocalSession(generation)
                 result
             }
             is SocialResult.Success -> {
                 val refreshed = result.value.toStored()
-                credentials.write(refreshed)
-                _credentials.value = refreshed
-                SocialResult.Success(refreshed.accessToken)
+                when (val committed = commitCredentials(generation, refreshed)) {
+                    is SocialResult.Failure -> committed
+                    is SocialResult.Success -> SocialResult.Success(refreshed.accessToken)
+                }
             }
         }
     }
