@@ -4,6 +4,12 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,7 +62,7 @@ class DefaultSocialRepository(
     private val _authenticatedAccount = MutableStateFlow<SocialAuthenticatedAccount?>(null)
     val authenticatedAccount: StateFlow<SocialAuthenticatedAccount?> = _authenticatedAccount.asStateFlow()
     private val refreshMutex = Mutex()
-    private class AuthenticationGeneration
+    private class AuthenticationGeneration(var pendingCaller: Job? = null)
     private val authenticationGeneration = MutableStateFlow(AuthenticationGeneration())
     private val sessionMutex = Mutex()
     private val credentialMutex = Mutex()
@@ -313,9 +319,12 @@ class DefaultSocialRepository(
     private suspend fun authenticate(
         request: suspend () -> SocialResult<SessionCredentials>,
     ): SocialResult<Unit> {
+        val callerContext = currentCoroutineContext()
+        callerContext.ensureActive()
+        val callerJob = callerContext[Job]
         val generation = sessionMutex.withLock {
             if (!accountParentJob.isActive) return@withLock null
-            AuthenticationGeneration().also {
+            AuthenticationGeneration(callerJob).also {
                 authenticationGeneration.value = it
                 retireAccount()
                 _credentials.value = null
@@ -323,16 +332,38 @@ class DefaultSocialRepository(
                 _session.value = SocialSession.Authenticating
             }
         } ?: return unauthorized()
-        return when (val result = request()) {
-            is SocialResult.Failure -> {
-                if (!ownsAuthentication(generation)) return unauthorized()
-                clearLocalSession(generation)
-                result
+        // This child observes cancellation even when the transport ignores it.
+        // Normal completion cancels the guardian while its caller remains active.
+        val guardian = if (callerJob == null) null else CoroutineScope(callerContext).launch(start = CoroutineStart.UNDISPATCHED) {
+            try { awaitCancellation() }
+            finally {
+                if (callerJob?.isCancelled == true) {
+                    withContext(NonCancellable) { clearLocalSession(generation) }
+                }
             }
-            is SocialResult.Success -> {
-                if (!ownsAuthentication(generation)) return unauthorized()
-                finishAuthentication(result.value, generation)
+        }
+        try {
+            val result = request()
+            callerContext.ensureActive()
+            return when (result) {
+                is SocialResult.Failure -> {
+                    if (!ownsAuthentication(generation)) return unauthorized()
+                    clearLocalSession(generation)
+                    result
+                }
+                is SocialResult.Success -> {
+                    if (!ownsAuthentication(generation)) return unauthorized()
+                    finishAuthentication(result.value, generation)
+                }
             }
+        } catch (failure: Exception) {
+            withContext(NonCancellable) {
+                try { clearLocalSession(generation) }
+                catch (cleanupFailure: Exception) { failure.addSuppressed(cleanupFailure) }
+            }
+            throw failure
+        } finally {
+            guardian?.cancel()
         }
     }
 
@@ -356,6 +387,7 @@ class DefaultSocialRepository(
 
     private fun ownsAuthenticationLocked(generation: AuthenticationGeneration): Boolean =
         authenticationGeneration.value === generation && accountParentJob.isActive &&
+            generation.pendingCaller?.isActive != false &&
             _authenticatedAccount.value?.job?.isActive != false
 
     /** Called under the state lock; never joins children or waits for remote cleanup. */
@@ -371,12 +403,25 @@ class DefaultSocialRepository(
         profile: SocialSession.Authenticated? = null,
     ): SocialResult<Unit> = credentialMutex.withLock {
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
-        credentials.write(stored)
+        currentCoroutineContext().ensureActive()
+        try {
+            credentials.write(stored)
+            currentCoroutineContext().ensureActive()
+        } catch (failure: Exception) {
+            // A write can finish before delivering cancellation/another failure.
+            // Keep rollback serialized and able to suspend in a cancelled caller.
+            withContext(NonCancellable) {
+                try { credentials.clear() }
+                catch (cleanupFailure: Exception) { failure.addSuppressed(cleanupFailure) }
+            }
+            throw failure
+        }
         val published = sessionMutex.withLock {
             if (!ownsAuthenticationLocked(generation)) false
             else {
                 _credentials.value = stored
                 if (profile != null) {
+                    generation.pendingCaller = null
                     _session.value = profile
                     if (_authenticatedAccount.value == null) {
                         _authenticatedAccount.value = SocialAuthenticatedAccount(
@@ -392,7 +437,7 @@ class DefaultSocialRepository(
         else {
             // All credential writers use this lock; a newer login cannot write until cleanup ends.
             // Earlier code denied the profile but left its already-written token behind.
-            credentials.clear()
+            withContext(NonCancellable) { credentials.clear() }
             unauthorized()
         }
     }
@@ -442,6 +487,7 @@ class DefaultSocialRepository(
         validate: ((T) -> Boolean)? = null,
         request: suspend (accessToken: String) -> SocialResult<T>,
     ): SocialResult<T> {
+        currentCoroutineContext().ensureActive()
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()
         val saved = _credentials.value ?: return unauthorized()
         val accessToken = when (val fresh = ensureFreshAccessToken(saved, generation)) {
@@ -449,6 +495,7 @@ class DefaultSocialRepository(
             is SocialResult.Success -> fresh.value
         }
         if (!ownsAuthentication(generation)) return unauthorized()
+        currentCoroutineContext().ensureActive()
         val result = publishAuthorized(generation, request(accessToken), publish, validate)
         if (result !is SocialResult.Failure || result.error != SocialFailure.Unauthorized) return result
         val refreshed = when (val retryToken = refreshAccessToken(saved, generation)) {
@@ -456,6 +503,7 @@ class DefaultSocialRepository(
             is SocialResult.Success -> retryToken.value
         }
         if (!ownsAuthentication(generation)) return unauthorized()
+        currentCoroutineContext().ensureActive()
         return publishAuthorized(generation, request(refreshed), publish, validate)
     }
 
@@ -465,6 +513,7 @@ class DefaultSocialRepository(
         publish: ((T) -> Unit)?,
         validate: ((T) -> Boolean)?,
     ): SocialResult<T> = sessionMutex.withLock {
+        currentCoroutineContext().ensureActive()
         if (!ownsAuthenticationLocked(generation)) unauthorized()
         else {
             if (result is SocialResult.Success) {
@@ -497,6 +546,23 @@ class DefaultSocialRepository(
     private suspend fun refreshAccessToken(
         previous: SocialCredentials,
         generation: AuthenticationGeneration,
+    ): SocialResult<String> {
+        val account = sessionMutex.withLock {
+            if (ownsAuthenticationLocked(generation)) _authenticatedAccount.value else null
+        } ?: return unauthorized()
+        return try {
+            // Rotation belongs to the account: cancelling one screen/request must not
+            // discard a refresh token that the server has already rotated.
+            withContext(account.job) { refreshOwnedAccessToken(previous, generation) }
+        } catch (cancelled: CancellationException) {
+            currentCoroutineContext().ensureActive()
+            if (!ownsAuthentication(generation)) unauthorized() else throw cancelled
+        }
+    }
+
+    private suspend fun refreshOwnedAccessToken(
+        previous: SocialCredentials,
+        generation: AuthenticationGeneration,
     ): SocialResult<String> = refreshMutex.withLock {
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
         val current = _credentials.value
@@ -509,7 +575,9 @@ class DefaultSocialRepository(
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
         when (result) {
             is SocialResult.Failure -> {
-                if (result.error == SocialFailure.Unauthorized) clearLocalSession(generation)
+                if (result.error == SocialFailure.Unauthorized) {
+                    withContext(NonCancellable) { clearLocalSession(generation) }
+                }
                 result
             }
             is SocialResult.Success -> {
