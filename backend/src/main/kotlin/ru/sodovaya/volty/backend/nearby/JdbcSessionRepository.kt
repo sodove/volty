@@ -161,6 +161,40 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         if (imported) persist(c, row, policy.cancel(row.operation, actor, claim.operationId, at))
     }
 
+    /** Call owner already holds UPDATE fence and all participant actor locks. */
+    internal fun operationInTransaction(c: Connection, actor: String, operation: String) = read(c, actor, operation)
+
+    internal fun claimInTransaction(c: Connection, actor: String) = claim(c, actor)
+
+    internal fun callMediaInTransaction(c: Connection, call: String): List<SessionJournalEntry> =
+        c.prepareStatement("SELECT * FROM nearby_session_operations WHERE destination_kind='DIRECT_CALL' AND destination_id=?::uuid ORDER BY actor_id").use {
+            it.setString(1, call); it.executeQuery().use {r -> buildList {while (r.next()) add(r.entry())}}
+        }
+
+    internal fun createCallPending(c: Connection, actor: String, operation: String, call: String, epoch: SfuEpoch, at: Long): SessionJournalEntry {
+        check(access != null && !c.autoCommit && epoch.roomEpoch == "volty-call-$call")
+        check(read(c, actor, operation) == null)
+        val session = UUID.randomUUID().toString()
+        val pending = checkNotNull(policy.begin(null, actor, operation, call, session, at, VoiceDestinationKind.DIRECT_CALL).operation)
+        val row = SessionJournalEntry(pending, epoch, admissionPending = true, cleanupPending = false)
+        save(c, row); appendRosterChange(c, row)
+        c.prepareStatement("UPDATE nearby_actor_claims SET reserved_call_id=NULL,operation_id=?::uuid,session_id=?::uuid,room_epoch=?,node_epoch=? WHERE actor_id=?::uuid AND session_id IS NULL AND (reserved_call_id IS NULL OR reserved_call_id=?::uuid)").use {
+            it.setString(1, operation); it.setString(2, session); it.setString(3, epoch.roomEpoch); it.setString(4, epoch.nodeEpoch)
+            it.setString(5, actor); it.setString(6, call); check(it.executeUpdate() == 1)
+        }
+        return row
+    }
+
+    internal fun cancelCallMedia(c: Connection, call: DirectCallRecord, at: Long) {
+        check(access != null && !c.autoCommit)
+        val rows = callMediaInTransaction(c, call.callId)
+        check(rows.size <= 2 && rows.all {it.operation.actorId == call.callerId || it.operation.actorId == call.calleeId})
+        for (row in rows) {
+            if (row.operation.actorId == call.callerId) check(row.operation.operationId == call.callerOperationId)
+            persist(c, row, policy.cancel(row.operation, row.operation.actorId, row.operation.operationId, at))
+        }
+    }
+
     internal fun readSession(c: Connection, session: String): SessionJournalEntry? =
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE session_id=?::uuid").use {
             it.setString(1, session); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
