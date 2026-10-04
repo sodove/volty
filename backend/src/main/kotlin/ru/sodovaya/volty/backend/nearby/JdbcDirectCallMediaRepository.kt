@@ -170,6 +170,19 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
     internal fun authorizationDeadline(c: Connection, call: String): Long =
         pair(c, currentCall(c, call)).minOf {checkNotNull(it.operation.deadlineEpochMillis)}
 
+    /** Terminal immutable descriptors only; a caller cannot select a newer peer conversation. */
+    internal fun terminalSessions(actor: String, call: String): List<SessionJournalEntry> {
+        canonical(actor); canonical(call)
+        return source.connection.use {c ->
+            val original = c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE call_id=?::uuid AND phase NOT IN ('RINGING','ACCEPTED') AND (caller_id=?::uuid OR (callee_id=?::uuid AND ever_rang))").use {
+                it.setString(1, call); it.setString(2, actor); it.setString(3, actor)
+                it.executeQuery().use {r -> if (r.next()) r.call() else null}
+            } ?: return@use emptyList()
+            if (sessions.callMediaInTransaction(c, call).isEmpty()) return@use emptyList()
+            pair(c, original).filter {it.operation.terminal && it.cleanupPending}
+        }
+    }
+
     private fun currentCall(c: Connection, id: String): DirectCallRecord =
         c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE call_id=?::uuid FOR UPDATE").use {
             it.setString(1, id); it.executeQuery().use {r -> check(r.next()); r.call()}
