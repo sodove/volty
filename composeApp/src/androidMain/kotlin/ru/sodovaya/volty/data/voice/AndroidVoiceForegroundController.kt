@@ -19,13 +19,13 @@ import kotlinx.coroutines.withContext
 internal enum class VoiceForegroundLaunchResult { REQUESTED, ALREADY_READY, NOT_VISIBLE, PERMISSION_REQUIRED, OBSOLETE, REJECTED }
 
 /** Process registry only; it neither restores a call nor owns the account cleanup lifetime. */
-internal class AndroidVoiceForegroundController(context: Context, private val gate: VoiceForegroundGate) {
+internal class AndroidVoiceForegroundController(context: Context, private val gate: VoiceForegroundGate) : VoiceConversationForegroundPort {
     private val application = context.applicationContext
-    val current = gate.current
+    override val current = gate.current
     private val failure = MutableStateFlow<VoiceForegroundLaunchResult?>(null)
     val lastFailure = failure.asStateFlow()
 
-    fun request(runtime: AuthenticatedVoiceRuntime): VoiceForegroundTicket {
+    override fun request(runtime: AuthenticatedVoiceRuntime): VoiceForegroundTicket {
         mainOwner()
         check(!runtime.retired.value) { "Voice runtime retired" }
         return gate.request(runtime, runtime::requestDisconnect)
@@ -47,7 +47,7 @@ internal class AndroidVoiceForegroundController(context: Context, private val ga
         } catch (_: Exception) { reject(ticket, VoiceForegroundLaunchResult.REJECTED) }
     }
 
-    suspend fun awaitReady(ticket: VoiceForegroundTicket): Boolean = withContext(Dispatchers.Main) {
+    override suspend fun awaitReady(ticket: VoiceForegroundTicket): Boolean = withContext(Dispatchers.Main) {
         combine(gate.current, gate.ready) { selected, ready ->
             when {
                 selected !== ticket -> false
@@ -62,7 +62,7 @@ internal class AndroidVoiceForegroundController(context: Context, private val ga
         mainOwner()
         return gate.acknowledge(ticket, service).also {if (it) failure.value = null}
     }
-    fun stop(ticket: VoiceForegroundTicket): Boolean {mainOwner(); return gate.stop(ticket)}
+    override fun stop(ticket: VoiceForegroundTicket): Boolean {mainOwner(); return gate.stop(ticket)}
     fun destroyed(service: Any) {mainOwner(); gate.destroyed(service)}
     fun refreshPermissions() {
         mainOwner()
