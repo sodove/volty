@@ -3,6 +3,7 @@ package ru.sodovaya.volty.data.social
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -52,11 +53,16 @@ class DefaultSocialRepository(
     override val session: StateFlow<SocialSession> = _session.asStateFlow()
     private val _credentials = MutableStateFlow<SocialCredentials?>(null)
     private val _activeSharing = MutableStateFlow<SharingSession?>(null)
+    private val _authenticatedAccount = MutableStateFlow<SocialAuthenticatedAccount?>(null)
+    val authenticatedAccount: StateFlow<SocialAuthenticatedAccount?> = _authenticatedAccount.asStateFlow()
     private val refreshMutex = Mutex()
     private class AuthenticationGeneration
     private val authenticationGeneration = MutableStateFlow(AuthenticationGeneration())
     private val sessionMutex = Mutex()
     private val credentialMutex = Mutex()
+    private val accountParentJob = requireNotNull(scope.coroutineContext[Job]) {
+        "Social repository requires a parent Job"
+    }
     override val activeSharing: StateFlow<SharingSession?> = _activeSharing.asStateFlow()
 
     init {
@@ -91,12 +97,17 @@ class DefaultSocialRepository(
         return result
     }
 
-    override suspend fun getProfile(): SocialResult<SocialSession.Authenticated> = authorized(publish = ::publishProfile) { accessToken ->
+    override suspend fun getProfile(): SocialResult<SocialSession.Authenticated> = authorized(
+        publish = ::publishProfile,
+        validate = ::acceptsProfile,
+    ) { accessToken ->
         transport.getProfile(accessToken)
     }
 
     override suspend fun updateProfile(request: ProfileUpdate): SocialResult<SocialSession.Authenticated> =
-        authorized(publish = ::publishProfile) { accessToken -> transport.updateProfile(accessToken, request) }
+        authorized(publish = ::publishProfile, validate = ::acceptsProfile) { accessToken ->
+            transport.updateProfile(accessToken, request)
+        }
 
     override suspend fun listFriends(): SocialResult<List<FriendSummary>> =
         authorized { accessToken -> transport.listFriends(accessToken) }
@@ -150,7 +161,7 @@ class DefaultSocialRepository(
                 transport.observeGroup(groupId) { currentAccessToken(generation) }
                     .transformWhile { event ->
                         val accepted = sessionMutex.withLock {
-                            if (authenticationGeneration.value !== generation) false
+                            if (!ownsAuthenticationLocked(generation)) false
                             else {
                                 val userId = (_session.value as? SocialSession.Authenticated)?.userId
                                 when (event) {
@@ -207,7 +218,7 @@ class DefaultSocialRepository(
                 if (!refresh) return@flow
                 if (refresh) {
                     val saved = sessionMutex.withLock {
-                        if (authenticationGeneration.value === generation) _credentials.value else null
+                        if (ownsAuthenticationLocked(generation)) _credentials.value else null
                     }
                     if (saved == null) {
                         emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
@@ -303,13 +314,15 @@ class DefaultSocialRepository(
         request: suspend () -> SocialResult<SessionCredentials>,
     ): SocialResult<Unit> {
         val generation = sessionMutex.withLock {
+            if (!accountParentJob.isActive) return@withLock null
             AuthenticationGeneration().also {
                 authenticationGeneration.value = it
+                retireAccount()
                 _credentials.value = null
                 _activeSharing.value = null
                 _session.value = SocialSession.Authenticating
             }
-        }
+        } ?: return unauthorized()
         return when (val result = request()) {
             is SocialResult.Failure -> {
                 if (!ownsAuthentication(generation)) return unauthorized()
@@ -339,7 +352,18 @@ class DefaultSocialRepository(
     }
 
     private suspend fun ownsAuthentication(generation: AuthenticationGeneration): Boolean =
-        sessionMutex.withLock { authenticationGeneration.value === generation }
+        sessionMutex.withLock { ownsAuthenticationLocked(generation) }
+
+    private fun ownsAuthenticationLocked(generation: AuthenticationGeneration): Boolean =
+        authenticationGeneration.value === generation && accountParentJob.isActive &&
+            _authenticatedAccount.value?.job?.isActive != false
+
+    /** Called under the state lock; never joins children or waits for remote cleanup. */
+    private fun retireAccount() {
+        val previous = _authenticatedAccount.value
+        _authenticatedAccount.value = null
+        previous?.job?.cancel()
+    }
 
     private suspend fun commitCredentials(
         generation: AuthenticationGeneration,
@@ -349,10 +373,18 @@ class DefaultSocialRepository(
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
         credentials.write(stored)
         val published = sessionMutex.withLock {
-            if (authenticationGeneration.value !== generation) false
+            if (!ownsAuthenticationLocked(generation)) false
             else {
                 _credentials.value = stored
-                if (profile != null) _session.value = profile
+                if (profile != null) {
+                    _session.value = profile
+                    if (_authenticatedAccount.value == null) {
+                        _authenticatedAccount.value = SocialAuthenticatedAccount(
+                            profile.userId,
+                            SupervisorJob(accountParentJob),
+                        ) { currentAccessToken(generation) }
+                    }
+                }
                 true
             }
         }
@@ -407,6 +439,7 @@ class DefaultSocialRepository(
     private suspend fun <T> authorized(
         generation: AuthenticationGeneration = authenticationGeneration.value,
         publish: ((T) -> Unit)? = null,
+        validate: ((T) -> Boolean)? = null,
         request: suspend (accessToken: String) -> SocialResult<T>,
     ): SocialResult<T> {
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()
@@ -416,24 +449,32 @@ class DefaultSocialRepository(
             is SocialResult.Success -> fresh.value
         }
         if (!ownsAuthentication(generation)) return unauthorized()
-        val result = publishAuthorized(generation, request(accessToken), publish)
+        val result = publishAuthorized(generation, request(accessToken), publish, validate)
         if (result !is SocialResult.Failure || result.error != SocialFailure.Unauthorized) return result
         val refreshed = when (val retryToken = refreshAccessToken(saved, generation)) {
             is SocialResult.Failure -> return retryToken
             is SocialResult.Success -> retryToken.value
         }
         if (!ownsAuthentication(generation)) return unauthorized()
-        return publishAuthorized(generation, request(refreshed), publish)
+        return publishAuthorized(generation, request(refreshed), publish, validate)
     }
 
     private suspend fun <T> publishAuthorized(
         generation: AuthenticationGeneration,
         result: SocialResult<T>,
         publish: ((T) -> Unit)?,
+        validate: ((T) -> Boolean)?,
     ): SocialResult<T> = sessionMutex.withLock {
-        if (authenticationGeneration.value !== generation) unauthorized()
+        if (!ownsAuthenticationLocked(generation)) unauthorized()
         else {
-            if (result is SocialResult.Success) publish?.invoke(result.value)
+            if (result is SocialResult.Success) {
+                if (validate?.invoke(result.value) == false) {
+                    return@withLock SocialResult.Failure(
+                        SocialFailure.InvalidRequest("Authenticated profile actor mismatch"),
+                    )
+                }
+                publish?.invoke(result.value)
+            }
             result
         }
     }
@@ -486,12 +527,17 @@ class DefaultSocialRepository(
     /** Called only inside the generation-checked publication lock. */
     private fun publishProfile(profile: SocialSession.Authenticated) { _session.value = profile }
 
+    /** A refresh or profile update cannot change the established principal. */
+    private fun acceptsProfile(profile: SocialSession.Authenticated): Boolean =
+        _authenticatedAccount.value?.userId == profile.userId
+
     private suspend fun clearLocalSession(expected: AuthenticationGeneration? = null): SocialCredentials? {
         val retired = sessionMutex.withLock {
             if (expected != null && authenticationGeneration.value !== expected) return@withLock null
             val previous = _credentials.value
             val next = AuthenticationGeneration()
             authenticationGeneration.value = next
+            retireAccount()
             _credentials.value = null
             _activeSharing.value = null
             _session.value = SocialSession.LoggedOut
