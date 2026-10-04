@@ -5,9 +5,43 @@ import java.sql.ResultSet
 import java.util.UUID
 import javax.sql.DataSource
 
+data class IncomingCallPage(val calls: List<DirectCallRecord>, val nextCursor: String?)
+
 /** Ringing only. Accepted media/claims and public call endpoints are not enabled here. */
 class JdbcDirectCallRingingRepository(private val source: DataSource) {
     private val policy = DirectCallLifecyclePolicy()
+
+    /** Listing earns no admission and never replaces the callee's current conversation. */
+    fun incoming(actor: String, limit: Int, cursor: String?, now: () -> Long): IncomingCallPage {
+        canonical(actor); cursor?.let(::canonical); require(limit in 1..50)
+        return communityTransaction(source, write = true) {c ->
+            val alive = c.prepareStatement("SELECT 1 FROM users WHERE id=?::uuid AND deleted_at IS NULL").use {
+                it.setString(1, actor); it.executeQuery().use {r -> r.next()}
+            }
+            if (!alive) return@communityTransaction IncomingCallPage(emptyList(), null)
+            val after = if (cursor == null) "" else " AND call_id>?::uuid"
+            val candidates = c.prepareStatement("SELECT * FROM nearby_direct_calls WHERE callee_id=?::uuid AND ever_rang AND phase='RINGING'$after ORDER BY call_id LIMIT ?").use {
+                var index = 1; it.setString(index++, actor)
+                if (cursor != null) it.setString(index++, cursor)
+                it.setInt(index, limit + 1)
+                it.executeQuery().use {r -> buildList {while (r.next()) add(r.call())}}
+            }
+            val scanned = candidates.take(limit)
+            if (scanned.isEmpty()) return@communityTransaction IncomingCallPage(emptyList(), null)
+            // Complete participant set before any call/revision write; no nested actor transaction.
+            JdbcSessionRepository(source, JdbcChannelAccess()).lockCommunityActors(c, scanned.map {it.callerId} + actor)
+            val originals = scanned.map {checkNotNull(read(c, it.callId, true))}
+            val at = now()
+            val visible = originals.mapNotNull {call ->
+                check(call.calleeId == actor && call.phase == DirectCallPhase.RINGING)
+                val friend = friends(c, call.callerId, call.calleeId)
+                val decision = retireLostRing(c, call, at)
+                    ?: persist(c, if (friend) policy.expire(call, at) else policy.revokeFriendship(call, at))
+                decision.call?.takeIf {it.phase == DirectCallPhase.RINGING}
+            }
+            IncomingCallPage(visible, scanned.last().callId.takeIf {candidates.size > limit})
+        }
+    }
 
     /** Account writer holds the UPDATE access fence. Collect the entire actor set before
      * locking actors or mutating roster revisions; call creation cannot race this set. */
@@ -144,11 +178,17 @@ class JdbcDirectCallRingingRepository(private val source: DataSource) {
 
     private fun retireLostRing(c: Connection, call: DirectCallRecord, at: Long): DirectCallDecision? {
         if (call.phase != DirectCallPhase.RINGING) return null
-        val current = c.prepareStatement("SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
-            it.setString(1, call.callerId); it.executeQuery().use {r -> r.next() && r.getString(1) == call.callId}
+        val current = c.prepareStatement("""
+            SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid
+            AND NOT EXISTS (SELECT 1 FROM nearby_session_operations WHERE actor_id=?::uuid AND operation_id=?::uuid)
+        """.trimIndent()).use {
+            it.setString(1, call.callerId); it.setString(2, call.callerId); it.setString(3, call.callerOperationId)
+            it.executeQuery().use {r -> r.next() && r.getString(1) == call.callId}
         }
         // Earlier replay/status advertised RINGING solely from the row. A superseded caller
         // slot cannot authorize it; exact reservation release must preserve the newer session.
+        // A later review also found a retained reservation could override the original
+        // cancellation tombstone. RINGING has no media operation; an existing one invalidates it.
         return if (current) null else persist(c, policy.stop(call, call.callerId, at))
     }
 
