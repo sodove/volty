@@ -72,6 +72,8 @@ import ru.sodovaya.volty.backend.nearby.ChannelCommandsEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyChannelCommandsRoutes
 import ru.sodovaya.volty.backend.nearby.InvitationEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyInvitationRoutes
+import ru.sodovaya.volty.backend.nearby.DirectCallEndpointPort
+import ru.sodovaya.volty.backend.nearby.installNearbyDirectCallRoutes
 
 private const val ISSUER = "volty"
 private const val AUDIENCE = "volty-app"
@@ -90,6 +92,7 @@ class AppDependencies(
     val nearbyCommunityRemoval: CommunityRemovalEndpointPort? = null,
     val nearbyChannelCommands: ChannelCommandsEndpointPort? = null,
     val nearbyInvitations: InvitationEndpointPort? = null,
+    val nearbyCalls: DirectCallEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -277,6 +280,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         installNearbyCommunityRoutes(dependencies)
         installNearbyChannelCommandsRoutes(dependencies)
         installNearbyInvitationRoutes(dependencies)
+        installNearbyDirectCallRoutes(dependencies)
         installOfflineRegionRoutes(dependencies)
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
             route("/v1") {
