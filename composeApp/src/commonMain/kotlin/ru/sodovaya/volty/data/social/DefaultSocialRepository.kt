@@ -428,6 +428,7 @@ class DefaultSocialRepository(
                         _authenticatedAccount.value = SocialAuthenticatedAccount(
                             profile.userId,
                             SupervisorJob(accountParentJob),
+                            scope.coroutineContext,
                         ) { currentAccessToken(generation) }
                     }
                 }

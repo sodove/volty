@@ -17,33 +17,54 @@ import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.data.nearby.NearbyAccountCredentials
 import ru.sodovaya.volty.data.nearby.NearbyAccountHttpSession
 import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
+import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.InvitationCreationDraftOwner
 import ru.sodovaya.volty.domain.nearby.community.InvitationDraftStore
 import ru.sodovaya.volty.domain.nearby.community.InvitationSecretGenerator
+import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 import ru.sodovaya.volty.presentation.nearby.CommunityBrowser
 
 /** Composes community commands, browser state, and invitation drafts for one account lifetime. */
-class NearbyCommunityAccount(
+class NearbyCommunityAccount private constructor(
     parent: CoroutineScope,
-    credentials: NearbyAccountCredentials,
+    val actorId: String,
     store: InvitationDraftStore,
     generator: InvitationSecretGenerator,
-    client: HttpClient,
     baseUrl: String,
+    apiFactory: (Job) -> NearbyAccountHttpSession,
 ) {
+    constructor(
+        parent: CoroutineScope,
+        credentials: NearbyAccountCredentials,
+        store: InvitationDraftStore,
+        generator: InvitationSecretGenerator,
+        client: HttpClient,
+        baseUrl: String,
+    ) : this(parent, credentials.actorId, store, generator, baseUrl,
+        { job -> NearbyAccountHttpSession(credentials, client, baseUrl, job) })
+
+    internal constructor(
+        account: SocialAuthenticatedAccount,
+        store: InvitationDraftStore,
+        generator: InvitationSecretGenerator,
+        client: HttpClient,
+        baseUrl: String,
+    ) : this(account.scope(), account.userId.value, store, generator, baseUrl,
+        { NearbyAccountHttpSession(account, client, baseUrl) })
+
     private val accountJob: Job = requireNotNull(parent.coroutineContext[Job]) {
         "Nearby community account requires a parent Job"
     }
 
     init {
-        require(store.actorId == credentials.actorId) { "Invitation draft store actor does not match account" }
+        invitationDraftId(actorId)
+        require(store.actorId == actorId) { "Invitation draft store actor does not match account" }
         nearbyHttpsApiBaseUrl(baseUrl)
     }
 
-    val actorId: String = credentials.actorId
-    val api = NearbyAccountHttpSession(credentials, client, baseUrl, accountJob)
+    val api = apiFactory(accountJob)
     val invitations = InvitationCreationDraftOwner(
-        credentials.actorId,
+        actorId,
         store,
         generator,
         api.invitations,
