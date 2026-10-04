@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.nearby
 
 import io.ktor.client.HttpClient
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import ru.sodovaya.volty.domain.nearby.community.*
@@ -11,10 +12,11 @@ class NearbyAccountHttpSession(
     credentials: NearbyAccountCredentials,
     client: HttpClient,
     baseUrl: String,
+    accountJob: Job? = null,
 ) {
     private val root = nearbyHttpsApiBaseUrl(baseUrl)
     val actorId: String = credentials.actorId
-    private val binding = NearbyAccountBinding(credentials)
+    private val binding = NearbyAccountBinding(credentials, accountJob)
 
     private val communitiesHttp = CommunityHttpPort(client, "$root/communities") { binding.bearer() }
     private val removalsHttp = CommunityRemovalHttpPort(client, "$root/communities") { binding.bearer() }

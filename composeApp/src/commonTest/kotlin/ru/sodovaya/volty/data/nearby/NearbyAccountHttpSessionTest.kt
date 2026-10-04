@@ -19,6 +19,64 @@ class NearbyAccountHttpSessionTest {
     private val operation = "60000000-0000-0000-0000-000000000006"
     private val root = "https://example.test/v2/nearby"
     private val token = "A".repeat(43)
+
+    @Test fun cancellingAccountImmediatelyDeniesAllMethodsWithoutWaitingForItsChildren() = runTest {
+        val accountJob = Job()
+        val release = CompletableDeferred<Unit>()
+        CoroutineScope(accountJob + StandardTestDispatcher(testScheduler)).launch(start = CoroutineStart.UNDISPATCHED) {
+            withContext(NonCancellable) { release.await() }
+        }
+        var issued = 0
+        val client = HttpClient(MockEngine) { engine { addHandler { issued++; respond("", HttpStatusCode.Unauthorized) } } }
+        val session = NearbyAccountHttpSession(NearbyAccountCredentials(actor, "private"), client, root, accountJob)
+        try {
+            accountJob.cancel()
+            assertFalse(accountJob.isActive)
+            assertFalse(accountJob.isCompleted, "Held child must prevent account completion")
+            for (intent in intents(session)) assertFailsWith<CancellationException> { intent.call() }
+            assertEquals(0, issued)
+            assertFailsWith<IllegalStateException> { session.refresh(NearbyAccountCredentials(actor, "new")) }
+        } finally { release.complete(Unit); accountJob.cancel(); session.retire(); client.close(); runCurrent() }
+    }
+
+    @Test fun cancelledAccountCannotPublishAnActuallyIssuedResponseToAnIndependentCaller() = runTest {
+        val accountJob = Job()
+        val release = CompletableDeferred<Unit>()
+        var issued = 0
+        var returned = false
+        var published = false
+        val client = HttpClient(MockEngine) { engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { withContext(NonCancellable) {
+                issued++; release.await()
+                respond("", HttpStatusCode.Forbidden).also { returned = true }
+            } }
+        } }
+        val session = NearbyAccountHttpSession(NearbyAccountCredentials(actor, "private"), client, root, accountJob)
+        try {
+            val request = async { session.communities.memberships().also { published = true } }
+            runCurrent()
+            assertEquals(1, issued)
+            accountJob.cancel()
+            release.complete(Unit); runCurrent()
+            assertTrue(returned, "Producer must return so the publication guard is reached")
+            assertFailsWith<CancellationException> { request.await() }
+            assertFalse(published)
+        } finally { release.complete(Unit); accountJob.cancel(); session.retire(); client.close(); runCurrent() }
+    }
+
+    @Test fun explicitHttpRetirementDoesNotCancelOrAttachChildrenToBorrowedAccountJob() = runTest {
+        val accountJob = Job()
+        val client = HttpClient(MockEngine) { engine { addHandler { respond("") } } }
+        val before = accountJob.children.toList()
+        val session = NearbyAccountHttpSession(NearbyAccountCredentials(actor, "private"), client, root, accountJob)
+        try {
+            assertEquals(before, accountJob.children.toList())
+            session.retire()
+            assertTrue(accountJob.isActive)
+            client.get("https://example.test/parent")
+        } finally { accountJob.cancel(); session.retire(); client.close() }
+    }
     private data class Intent(val method: HttpMethod, val path: String, val call: suspend () -> Any)
     private fun intents(session: NearbyAccountHttpSession): List<Intent> {
         val base = "/v2/nearby/communities"

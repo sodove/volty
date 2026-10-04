@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.nearby
 
 import io.ktor.client.HttpClient
+import kotlinx.coroutines.Job
 import ru.sodovaya.volty.domain.nearby.community.*
 
 /**
@@ -14,11 +15,12 @@ class InvitationAccountSession(
     generator: InvitationSecretGenerator,
     client: HttpClient,
     baseUrl: String,
+    accountJob: Job? = null,
 ) {
     val actorId = credentials.actorId.also { require(store.actorId == it) }
-    private val binding = NearbyAccountBinding(credentials)
+    private val binding = NearbyAccountBinding(credentials, accountJob)
     private val port = InvitationHttpPort(client, baseUrl) { binding.bearer() }
-    val owner = InvitationCreationDraftOwner(actorId, store, generator, port)
+    val owner = InvitationCreationDraftOwner(actorId, store, generator, port, accountJob)
 
     fun refresh(credentials: NearbyAccountCredentials) = binding.refresh(credentials)
 

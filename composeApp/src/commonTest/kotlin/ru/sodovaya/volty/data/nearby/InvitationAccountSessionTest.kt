@@ -35,8 +35,11 @@ class InvitationAccountSessionTest {
                 issued++; started.complete(Unit); finish.await(); respond(metadata())
             } }
         } }
+        val accountJob = Job()
         val session = InvitationAccountSession(NearbyAccountCredentials(actor, "private"), Store(actor),
-            InvitationSecretGenerator { InvitationSecret.fromToken(token) }, client, "https://example.test/v2/nearby")
+            InvitationSecretGenerator { InvitationSecret.fromToken(token) }, client, "https://example.test/v2/nearby",
+            accountJob = accountJob)
+        assertTrue(accountJob.children.none(), "The invitation session must not create a child Job")
         try {
             session.owner.prepare(invitation, community, 900_000, 4)
             val executing = async { session.owner.execute(invitation).also { published = true } }
@@ -45,7 +48,112 @@ class InvitationAccountSessionTest {
             session.retire(); finish.complete(Unit); runCurrent()
             assertFailsWith<CancellationException> { executing.await() }
             assertEquals(1, issued); assertFalse(published)
-        } finally { finish.complete(Unit); session.retire(); client.close() }
+            assertTrue(accountJob.isActive, "Retiring a session must leave its borrowed Job active")
+        } finally { finish.complete(Unit); session.retire(); accountJob.cancel(); client.close() }
+    }
+
+    @Test fun cancelledBorrowedJobDeniesPrepareBeforeStoreReadOrSecretGeneration() = runTest {
+        val accountJob = Job()
+        var generated = 0
+        val store = Store(actor)
+        val client = HttpClient(MockEngine) { engine { addHandler { error("No HTTP request expected") } } }
+        val session = InvitationAccountSession(
+            NearbyAccountCredentials(actor, "private"), store,
+            InvitationSecretGenerator { generated++; InvitationSecret.fromToken(token) },
+            client, "https://example.test/v2/nearby", accountJob = accountJob,
+        )
+        assertTrue(accountJob.children.none(), "The invitation session must not create a child Job")
+        val childEntered = CompletableDeferred<Unit>()
+        val releaseChild = CompletableDeferred<Unit>()
+        CoroutineScope(accountJob + StandardTestDispatcher(testScheduler)).launch {
+            withContext(NonCancellable) {
+                childEntered.complete(Unit)
+                releaseChild.await()
+            }
+        }
+        try {
+            runCurrent()
+            assertTrue(childEntered.isCompleted)
+            accountJob.cancel()
+            assertFalse(accountJob.isCompleted, "The held child keeps the cancelled account Job incomplete")
+
+            assertFailsWith<CancellationException> {
+                session.owner.prepare(invitation, community, 900_000, 4)
+            }
+            assertEquals(0, store.reads)
+            assertEquals(0, generated)
+        } finally {
+            releaseChild.complete(Unit)
+            accountJob.cancel()
+            runCurrent()
+            session.retire()
+            client.close()
+        }
+    }
+
+    @Test fun heldStoreReadAfterAccountCancellationCannotPublishOrGenerateSecret() = runTest {
+        val readStarted = CompletableDeferred<Unit>()
+        val finishRead = CompletableDeferred<InvitationCreationDraft?>()
+        val childEntered = CompletableDeferred<Unit>()
+        val releaseChild = CompletableDeferred<Unit>()
+        var reads = 0
+        var retained = 0
+        var generated = 0
+        var published = false
+        var readReturned = false
+        val store = object : InvitationDraftStore {
+            override val actorId = actor
+            override suspend fun read(invitationId: String): InvitationCreationDraft? = withContext(NonCancellable) {
+                reads++
+                readStarted.complete(Unit)
+                finishRead.await().also { readReturned = true }
+            }
+            override suspend fun retain(draft: InvitationCreationDraft): InvitationCreationDraft {
+                retained++
+                return draft
+            }
+        }
+        val client = HttpClient(MockEngine) { engine { addHandler { error("No HTTP request expected") } } }
+        val accountJob = Job()
+        val session = InvitationAccountSession(
+            NearbyAccountCredentials(actor, "private"), store,
+            InvitationSecretGenerator { generated++; InvitationSecret.fromToken(token) },
+            client, "https://example.test/v2/nearby", accountJob = accountJob,
+        )
+        assertTrue(accountJob.children.none(), "The invitation session must not create a child Job")
+        CoroutineScope(accountJob + StandardTestDispatcher(testScheduler)).launch {
+            withContext(NonCancellable) {
+                childEntered.complete(Unit)
+                releaseChild.await()
+            }
+        }
+        try {
+            val preparation = async {
+                session.owner.prepare(invitation, community, 900_000, 4).also { published = true }
+            }
+            runCurrent()
+            assertTrue(readStarted.isCompleted, "Preparation must reach the deliberately held store read")
+            assertTrue(childEntered.isCompleted)
+
+            accountJob.cancel()
+            assertFalse(accountJob.isCompleted, "The held child keeps the cancelled account Job incomplete")
+            finishRead.complete(null)
+            runCurrent()
+
+            assertTrue(readReturned, "The held read must return before judging its publication guard")
+            assertFailsWith<CancellationException> { preparation.await() }
+            assertEquals(1, reads)
+            assertEquals(0, generated)
+            assertEquals(0, retained)
+            assertFalse(published, "A late store result must not publish preparation")
+        } finally {
+            finishRead.complete(null)
+            releaseChild.complete(Unit)
+            accountJob.cancel()
+            runCurrent()
+            session.retire()
+            client.close()
+        }
     }
 
     @Test fun actualRequestUsesSameAccountRefreshAndRetirementKeepsParentClientUsable() = runTest {

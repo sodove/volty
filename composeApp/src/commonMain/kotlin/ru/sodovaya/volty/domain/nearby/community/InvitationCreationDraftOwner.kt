@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.domain.nearby.community
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -13,6 +14,7 @@ class InvitationCreationDraftOwner(
     private val store: InvitationDraftStore,
     private val generator: InvitationSecretGenerator,
     private val port: InvitationPort,
+    private val accountJob: Job? = null,
 ) {
     init { invitationDraftId(actor); require(store.actorId == actor) }
     private val preparation = Mutex()
@@ -96,6 +98,7 @@ class InvitationCreationDraftOwner(
 
     private suspend fun ensureOwnerActive() {
         currentCoroutineContext().ensureActive()
+        if (accountJob?.isActive == false) retired.value = true
         if (retired.value) throw CancellationException("Invitation creation owner retired")
     }
 

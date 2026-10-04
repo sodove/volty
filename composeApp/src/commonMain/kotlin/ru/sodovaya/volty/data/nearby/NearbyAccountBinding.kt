@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.nearby
 
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 
@@ -11,19 +12,43 @@ class NearbyAccountCredentials(val actorId: String, private val token: String) {
 }
 
 /** Immutable principal for a lifetime; same-actor refresh cannot revive a retired lifetime. */
-class NearbyAccountBinding(initial: NearbyAccountCredentials) {
+class NearbyAccountBinding(
+    initial: NearbyAccountCredentials,
+    private val accountJob: Job? = null,
+) {
     val actorId: String = initial.actorId
     private val credentials = MutableStateFlow<NearbyAccountCredentials?>(initial)
 
-    fun bearer(): String? = credentials.value?.bearer()
+    fun bearer(): String? {
+        if (!accountActive()) return null
+        val current = credentials.value ?: return null
+        if (!accountActive()) return null
+        return current.bearer()
+    }
 
     fun refresh(updated: NearbyAccountCredentials) {
         require(updated.actorId == actorId)
         while (true) {
+            ensureAccountActive()
             val previous = checkNotNull(credentials.value) { "Nearby account retired" }
-            if (credentials.compareAndSet(previous, updated)) return
+            if (credentials.compareAndSet(previous, updated)) {
+                ensureAccountActive()
+                return
+            }
         }
     }
 
     fun retire() { credentials.value = null }
+
+    private fun accountActive(): Boolean {
+        if (accountJob?.isActive == false) {
+            retire()
+            return false
+        }
+        return true
+    }
+
+    private fun ensureAccountActive() {
+        if (!accountActive()) throw IllegalStateException("Nearby account retired")
+    }
 }
