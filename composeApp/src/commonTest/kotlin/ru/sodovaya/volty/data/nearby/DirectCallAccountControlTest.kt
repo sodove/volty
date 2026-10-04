@@ -179,4 +179,66 @@ class DirectCallAccountControlTest {
             assertEquals(2, issued)
         } finally {control.close(); http.close(); root.cancel()}
     }
+
+    @Test fun originalMetadataPrecedesGenerationAndOnlyActualVoiceJoinCanBindItOnce() = runTest {
+        val root = Job(); val job = Job(root); var issued = 0
+        val http = HttpClient(MockEngine) {engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {issued++; respond("", HttpStatusCode.Unauthorized)}
+        }}
+        val control = DirectCallAccountControl.create(account(job, root) {"original-token"}, http, "https://api.test/v2/nearby", {100})
+        try {
+            assertTrue(control.rememberOutgoing(call, peer, key, operation))
+            assertEquals(DirectCallFailure.ACCESS_DENIED, assertIs<DirectCallReply.Failed>(control.resume(call, operation, generation)).reason)
+            assertEquals(0, issued)
+            assertFalse(control.bindMediaGeneration(call, VoiceOperationId(key), generation))
+            assertTrue(control.bindMediaGeneration(call, operation, VoiceGeneration(5)))
+            assertTrue(control.bindMediaGeneration(call, operation, VoiceGeneration(5)))
+            assertFalse(control.bindMediaGeneration(call, operation, generation))
+            assertEquals(DirectCallFailure.UNAUTHORIZED, assertIs<DirectCallReply.Failed>(control.resume(call, operation, VoiceGeneration(5))).reason)
+            assertEquals(1, issued)
+            control.retireAdmission()
+            assertFalse(control.bindMediaGeneration(call, operation, VoiceGeneration(5)))
+        } finally {control.close(); http.close(); root.cancel()}
+    }
+
+    @Test fun incomingGenerationIsBoundOnlyAfterOriginalObservedIntent() = runTest {
+        val root = Job(); val job = Job(root); val issued = mutableListOf<String>()
+        val http = HttpClient(MockEngine) {engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {
+                issued += it.url.encodedPath
+                respond(if (it.url.encodedPath.endsWith("incoming")) """{"calls":[${snapshot("RINGING", peer, actor, null)}]}"""
+                else """{"call":${snapshot("ACCEPTED", peer, actor, null)},"session":{"phase":"PENDING","operationId":"${operation.value}"}}""",
+                    if (it.url.encodedPath.endsWith("accept")) HttpStatusCode.Accepted else HttpStatusCode.OK)
+            }
+        }}
+        val control = DirectCallAccountControl.create(account(job, root) {"original-token"}, http, "https://api.test/v2/nearby", {100})
+        try {
+            assertFalse(control.bindMediaGeneration(call, operation, generation))
+            val ring = assertIs<IncomingCallReply.Ready>(control.incoming()).calls.single()
+            assertTrue(control.rememberIncoming(ring, operation))
+            assertEquals(DirectCallFailure.ACCESS_DENIED, assertIs<DirectCallReply.Failed>(control.accept(call, operation, generation, 0)).reason)
+            assertTrue(control.bindMediaGeneration(call, operation, VoiceGeneration(5)))
+            assertFalse(control.bindMediaGeneration(call, operation, generation))
+            assertIs<DirectCallReply.Ready>(control.accept(call, operation, VoiceGeneration(5), 0))
+            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$call/accept"), issued)
+        } finally {control.close(); http.close(); root.cancel()}
+    }
+
+    @Test fun originalOutgoingCanBeCancelledWithoutEverBindingAMediaGeneration() = runTest {
+        val root = Job(); val job = Job(root); val issued = mutableListOf<String>()
+        val http = HttpClient(MockEngine) {engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {issued += it.url.encodedPath; respond("""{"call":${snapshot()}}""")}
+        }}
+        val control = DirectCallAccountControl.create(account(job, root) {"original-token"}, http, "https://api.test/v2/nearby", {100})
+        try {
+            assertTrue(control.rememberOutgoing(call, peer, key, operation))
+            job.cancel(); control.retireAdmission()
+            assertTrue(assertIs<DirectCallReply.Ready>(control.cancelOutgoing(call, peer, key, operation)).call.terminal)
+            assertEquals(listOf("/v2/nearby/calls/$call/cancel-outgoing"), issued)
+            assertFalse(control.bindMediaGeneration(call, operation, generation))
+        } finally {control.close(); http.close(); root.cancel()}
+    }
 }

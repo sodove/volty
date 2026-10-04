@@ -17,11 +17,11 @@ internal class DirectCallAccountControl private constructor(
 ) : DirectCallControlPort {
     private sealed interface Intent {
         val operation: VoiceOperationId
-        val generation: VoiceGeneration
+        val generation: VoiceGeneration?
         data class Outgoing(val callee: String, val key: String, override val operation: VoiceOperationId,
-            override val generation: VoiceGeneration) : Intent
+            override val generation: VoiceGeneration?) : Intent
         data class Incoming(val revision: Long, override val operation: VoiceOperationId,
-            override val generation: VoiceGeneration) : Intent
+            override val generation: VoiceGeneration?) : Intent
     }
     private data class Capability(val retired: Boolean = false, val closed: Boolean = false,
         val bearer: String? = null, val intents: Map<String, Intent> = emptyMap(),
@@ -40,15 +40,32 @@ internal class DirectCallAccountControl private constructor(
         capability.value.bearer
     }, monotonicMillis, leaseRequests)
 
-    fun rememberOutgoing(call: String, callee: String, key: String, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
-        if (!valid(call, callee, key, operation.value) || callee == account.userId.value || generation.value < 0) return false
+    fun rememberOutgoing(call: String, callee: String, key: String, operation: VoiceOperationId, generation: VoiceGeneration? = null): Boolean {
+        if (!valid(call, callee, key, operation.value) || callee == account.userId.value || (generation != null && generation.value < 0)) return false
         return remember(call, Intent.Outgoing(callee, key, operation, generation))
     }
-    fun rememberIncoming(call: DirectCallSnapshot, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
-        if (!valid(call.callId, operation.value) || generation.value < 0 || call.phase != DirectCallPhase.RINGING ||
+    fun rememberIncoming(call: DirectCallSnapshot, operation: VoiceOperationId, generation: VoiceGeneration? = null): Boolean {
+        if (!valid(call.callId, operation.value) || (generation != null && generation.value < 0) || call.phase != DirectCallPhase.RINGING ||
             call.calleeId != account.userId.value) return false
         return remember(call.callId, Intent.Incoming(call.revision, operation, generation), call)
     }
+    /** Pure admission metadata: the queued voice Join binds its actual generation once. */
+    fun bindMediaGeneration(call: String, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
+        if (generation.value < 0) return false
+        while (true) {
+            val current = capability.value
+            if (current.closed || current.retired || !account.job.isActive) return false
+            val original = current.intents[call] ?: return false
+            if (original.operation != operation) return false
+            if (original.generation != null) return original.generation == generation
+            val bound = when (original) {
+                is Intent.Outgoing -> original.copy(generation = generation)
+                is Intent.Incoming -> original.copy(generation = generation)
+            }
+            if (capability.compareAndSet(current, current.copy(intents = current.intents + (call to bound)))) return true
+        }
+    }
+
     private fun remember(call: String, intent: Intent, observation: DirectCallSnapshot? = null): Boolean {
         while (true) {
             val current = capability.value
