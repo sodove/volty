@@ -134,15 +134,40 @@ class DefaultSocialRepository(
         }
 
     override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> {
+        val generation = authenticationGeneration.value
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) {
             return flowOf(SocialLiveEvent.Failure(SocialFailure.Unauthorized))
         }
         return kotlinx.coroutines.flow.flow {
             var authRefreshAttempted = false
             while (currentCoroutineContext().isActive) {
+                if (!ownsAuthentication(generation)) {
+                    emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
+                    return@flow
+                }
                 var refresh = false
-                transport.observeGroup(groupId) { currentAccessToken() }
+                var retired = false
+                transport.observeGroup(groupId) { currentAccessToken(generation) }
                     .transformWhile { event ->
+                        val accepted = sessionMutex.withLock {
+                            if (authenticationGeneration.value !== generation) false
+                            else {
+                                val userId = (_session.value as? SocialSession.Authenticated)?.userId
+                                when (event) {
+                                    is SocialLiveEvent.ShareExpired ->
+                                        if (event.userId == userId) _activeSharing.value = null
+                                    is SocialLiveEvent.ShareRevoked ->
+                                        if (event.userId == userId) _activeSharing.value = null
+                                    else -> Unit
+                                }
+                                true
+                            }
+                        }
+                        if (!accepted) {
+                            retired = true
+                            emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
+                            return@transformWhile false
+                        }
                         val keepCollecting = when (event) {
                             is SocialLiveEvent.Failure -> if (event.terminal) {
                                 emit(event)
@@ -168,26 +193,31 @@ class DefaultSocialRepository(
                                 }
                             }
                             else -> {
-                                val currentUserId = (_session.value as? SocialSession.Authenticated)?.userId
-                                when (event) {
-                                    is SocialLiveEvent.ShareExpired ->
-                                        if (event.userId == currentUserId) _activeSharing.value = null
-                                    is SocialLiveEvent.ShareRevoked ->
-                                        if (event.userId == currentUserId) _activeSharing.value = null
-                                    else -> Unit
-                                }
                                 emit(event)
                                 true
                             }
                         }
                         keepCollecting
                     }.collect { event -> emit(event) }
+                if (retired) return@flow
+                if (!ownsAuthentication(generation)) {
+                    emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
+                    return@flow
+                }
                 if (!refresh) return@flow
                 if (refresh) {
-                    when (val refreshed = refreshAccessToken(_credentials.value ?: return@flow)) {
+                    val saved = sessionMutex.withLock {
+                        if (authenticationGeneration.value === generation) _credentials.value else null
+                    }
+                    if (saved == null) {
+                        emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
+                        return@flow
+                    }
+                    when (val refreshed = refreshAccessToken(saved, generation)) {
                         is SocialResult.Success -> Unit
                         is SocialResult.Failure -> {
-                            emit(SocialLiveEvent.Failure(refreshed.error))
+                            if (ownsAuthentication(generation)) emit(SocialLiveEvent.Failure(refreshed.error))
+                            else emit(SocialLiveEvent.Failure(SocialFailure.Unauthorized, terminal = true))
                             return@flow
                         }
                     }
@@ -408,7 +438,7 @@ class DefaultSocialRepository(
         }
     }
 
-    private suspend fun currentAccessToken(): String? = when (val result = authorized { accessToken -> SocialResult.Success(accessToken) }) {
+    private suspend fun currentAccessToken(generation: AuthenticationGeneration): String? = when (val result = authorized(generation) { accessToken -> SocialResult.Success(accessToken) }) {
         is SocialResult.Success -> result.value
         is SocialResult.Failure -> null
     }
@@ -425,7 +455,7 @@ class DefaultSocialRepository(
 
     private suspend fun refreshAccessToken(
         previous: SocialCredentials,
-        generation: AuthenticationGeneration = authenticationGeneration.value,
+        generation: AuthenticationGeneration,
     ): SocialResult<String> = refreshMutex.withLock {
         if (!ownsAuthentication(generation)) return@withLock unauthorized()
         val current = _credentials.value
