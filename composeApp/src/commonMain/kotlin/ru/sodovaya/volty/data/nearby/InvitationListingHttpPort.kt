@@ -12,12 +12,7 @@ import kotlinx.serialization.json.*
 import ru.sodovaya.volty.domain.nearby.community.*
 
 class InvitationListingHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?) : InvitationListingPort {
-    private val base = baseUrl.trimEnd('/').also {
-        require('?' !in it && '#' !in it)
-        val url = Url(it)
-        require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
-            url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())
-    }
+    private val base = nearbyHttpsApiBaseUrl(baseUrl)
     private val http = client.config { followRedirects = false; expectSuccess = false }
     private val json = Json { ignoreUnknownKeys = true }
     override suspend fun list(community: String, after: String?, limit: Int): InvitationListingCommandResult {

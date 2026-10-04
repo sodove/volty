@@ -11,18 +11,13 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.readByteArray
 import kotlinx.serialization.json.*
+import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
 import ru.sodovaya.volty.domain.voice.*
 
 /** Account-bound snapshot transport; caller owns subscription generation and retirement. */
 class VoiceRosterHttpPort(client: HttpClient, baseUrl: String, private val bearer: suspend () -> String?,
                           private val monotonicMillis: () -> Long) : VoiceRosterSnapshotPort {
-    private val base = baseUrl.trimEnd('/').also {
-        // Empty delimiters survive URL parsing without a nonempty parameter/fragment.
-        require('?' !in it && '#' !in it)
-        val url = Url(it)
-        require(url.protocol == URLProtocol.HTTPS && url.host.isNotBlank() && url.user.isNullOrEmpty() &&
-            url.password.isNullOrEmpty() && url.fragment.isEmpty() && url.parameters.isEmpty())
-    }
+    private val base = nearbyHttpsApiBaseUrl(baseUrl)
     private val http = client.config { followRedirects = false; expectSuccess = false }
     private val json = Json { ignoreUnknownKeys = true }
     private val requestMutex = Mutex()

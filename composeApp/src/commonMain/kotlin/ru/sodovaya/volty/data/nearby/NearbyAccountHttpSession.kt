@@ -1,0 +1,127 @@
+package ru.sodovaya.volty.data.nearby
+
+import io.ktor.client.HttpClient
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import ru.sodovaya.volty.domain.nearby.community.*
+
+/** Owns five bounded HTTP adapters for one authenticated Nearby account lifetime. */
+class NearbyAccountHttpSession(
+    credentials: NearbyAccountCredentials,
+    client: HttpClient,
+    baseUrl: String,
+) {
+    private val root = nearbyHttpsApiBaseUrl(baseUrl)
+    val actorId: String = credentials.actorId
+    private val binding = NearbyAccountBinding(credentials)
+
+    private val communitiesHttp = CommunityHttpPort(client, "$root/communities") { binding.bearer() }
+    private val removalsHttp = CommunityRemovalHttpPort(client, "$root/communities") { binding.bearer() }
+    private val channelsHttp = ChannelCommandsHttpPort(client, "$root/communities") { binding.bearer() }
+    private val invitationsHttp = InvitationHttpPort(client, root) { binding.bearer() }
+    private val invitationListingHttp = InvitationListingHttpPort(client, root) { binding.bearer() }
+
+    val communities: CommunityPort = object : CommunityPort {
+        override suspend fun memberships(after: String?, limit: Int) = guarded {
+            communitiesHttp.memberships(after, limit)
+        }
+
+        override suspend fun catalog(query: String, after: String?, limit: Int) = guarded {
+            communitiesHttp.catalog(query, after, limit)
+        }
+
+        override suspend fun detail(community: String) = guarded { communitiesHttp.detail(community) }
+
+        override suspend fun create(
+            community: String,
+            name: String,
+            description: String,
+            visibility: CommunityVisibility,
+        ) = guarded { communitiesHttp.create(community, name, description, visibility) }
+
+        override suspend fun joinPublic(community: String) = guarded { communitiesHttp.joinPublic(community) }
+    }
+
+    val removals: CommunityRemovalPort = object : CommunityRemovalPort {
+        override suspend fun leave(community: String, operation: String, successor: String?) = guarded {
+            removalsHttp.leave(community, operation, successor)
+        }
+
+        override suspend fun delete(community: String, operation: String) = guarded {
+            removalsHttp.delete(community, operation)
+        }
+    }
+
+    val channels: ChannelCommandsPort = object : ChannelCommandsPort {
+        override suspend fun create(community: String, channel: String, name: String) = guarded {
+            channelsHttp.create(community, channel, name)
+        }
+
+        override suspend fun delete(community: String, channel: String, operation: String) = guarded {
+            channelsHttp.delete(community, channel, operation)
+        }
+    }
+
+    val invitations: InvitationPort = object : InvitationPort {
+        override suspend fun create(
+            community: String,
+            invitation: String,
+            token: String,
+            ttlMillis: Long,
+            maxUses: Int,
+        ) = guarded { invitationsHttp.create(community, invitation, token, ttlMillis, maxUses) }
+
+        override suspend fun revoke(community: String, invitation: String) = guarded {
+            invitationsHttp.revoke(community, invitation)
+        }
+
+        override suspend fun accept(operation: String, token: String) = guarded {
+            invitationsHttp.accept(operation, token)
+        }
+    }
+
+    val invitationListing: InvitationListingPort = object : InvitationListingPort {
+        override suspend fun list(community: String, after: String?, limit: Int) = guarded {
+            invitationListingHttp.list(community, after, limit)
+        }
+    }
+
+    fun refresh(credentials: NearbyAccountCredentials) = binding.refresh(credentials)
+
+    fun retire() {
+        binding.retire()
+
+        var closeFailed = false
+        try { communitiesHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { removalsHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { channelsHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { invitationsHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { invitationListingHttp.close() } catch (_: Throwable) { closeFailed = true }
+        if (closeFailed) throw IllegalStateException(CLEANUP_FAILED)
+    }
+
+    private suspend fun <T> guarded(call: suspend () -> T): T {
+        ensureLive()
+        try {
+            val result = call()
+            ensureLive()
+            return result
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (failure: Exception) {
+            ensureLive()
+            throw failure
+        }
+    }
+
+    private suspend fun ensureLive() {
+        currentCoroutineContext().ensureActive()
+        if (binding.bearer() == null) throw CancellationException(RETIRED)
+    }
+
+    private companion object {
+        const val RETIRED = "Nearby account retired"
+        const val CLEANUP_FAILED = "Nearby account HTTP cleanup failed"
+    }
+}
