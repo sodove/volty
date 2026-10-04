@@ -221,6 +221,68 @@ class VoiceConversationStartupTest {
         } finally {release.complete(Unit); f.close()}
     }
 
+    @Test fun rootProjectionDoesNotInventMediaFromSuccessfulSdkCalls() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login()
+            f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent(); assertEquals(1, f.published)
+            val initial = assertNotNull(f.owner.state.value.voice)
+            assertEquals(first, initial.operationId); assertEquals(VoicePhase.CONNECTING, initial.phase)
+            assertFalse(initial.transportConnected); assertFalse(initial.captureStarted); assertFalse(initial.published)
+            assertFalse(initial.renderStarted); assertTrue(initial.subscribedPeers.isEmpty())
+            val (tag, emit) = f.emitters.single()
+            emit(VoiceSessionEvent.TransportConnected(tag)); runCurrent()
+            val connected = assertNotNull(f.owner.state.value.voice)
+            assertTrue(connected.transportConnected); assertFalse(connected.captureStarted); assertFalse(connected.renderStarted)
+            emit(VoiceSessionEvent.CaptureStarted(tag)); emit(VoiceSessionEvent.Published(tag))
+            emit(VoiceSessionEvent.Subscribed(tag, "peer")); emit(VoiceSessionEvent.RenderStarted(tag)); runCurrent()
+            val earned = assertNotNull(f.owner.state.value.voice)
+            assertTrue(earned.captureStarted); assertTrue(earned.published); assertTrue(earned.renderStarted)
+            assertEquals(setOf("peer"), earned.subscribedPeers)
+            assertTrue(f.owner.setMuted(first, true)); runCurrent(); assertTrue(assertNotNull(f.owner.state.value.voice).muted)
+            f.owner.stop(); runCurrent(); assertNull(f.owner.state.value.voice); assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun oldMediaCannotPopulatePendingOrReplacementTarget() = runTest {
+        val f = Fixture(this); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        try {
+            val account = f.login()
+            f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent(); val (oldTag, oldEmit) = f.emitters.single()
+            oldEmit(VoiceSessionEvent.TransportConnected(oldTag)); runCurrent()
+            assertTrue(assertNotNull(f.owner.state.value.voice).transportConnected)
+            f.owner.start(account, channel, second, readPreferences = {entered.complete(Unit); release.await(); phone}, launch = f::launch)
+            runCurrent(); assertTrue(entered.isCompleted); assertNull(f.owner.state.value.voice)
+            oldEmit(VoiceSessionEvent.RenderStarted(oldTag)); runCurrent(); assertNull(f.owner.state.value.voice)
+            release.complete(Unit); runCurrent(); assertEquals(2, f.published)
+            val fresh = assertNotNull(f.owner.state.value.voice)
+            assertEquals(second, fresh.operationId); assertFalse(fresh.transportConnected); assertFalse(fresh.renderStarted)
+            oldEmit(VoiceSessionEvent.RenderStarted(oldTag)); oldEmit(VoiceSessionEvent.Published(oldTag)); runCurrent()
+            assertFalse(assertNotNull(f.owner.state.value.voice).renderStarted); assertFalse(assertNotNull(f.owner.state.value.voice).published)
+            val (newTag, newEmit) = f.emitters.last()
+            newEmit(VoiceSessionEvent.TransportConnected(newTag)); runCurrent()
+            assertEquals(second, assertNotNull(f.owner.state.value.voice).operationId)
+            assertTrue(assertNotNull(f.owner.state.value.voice).transportConnected)
+        } finally {release.complete(Unit); f.close()}
+    }
+
+    @Test fun logoutClearsEarnedRootMediaSnapshot() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login()
+            f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent(); val (tag, emit) = f.emitters.single()
+            emit(VoiceSessionEvent.CaptureStarted(tag)); runCurrent()
+            assertTrue(assertNotNull(f.owner.state.value.voice).captureStarted)
+            f.repository.logout(); runCurrent()
+            assertFalse(account.job.isActive); assertNull(f.owner.state.value.voice)
+            assertEquals(VoiceConversationPhase.STOPPED, f.owner.state.value.phase)
+            emit(VoiceSessionEvent.Published(tag)); runCurrent(); assertNull(f.owner.state.value.voice)
+        } finally {f.close()}
+    }
+
     private inner class Fixture(val test: TestScope) {
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         val repository = DefaultSocialRepository(Transport(), Store(), test.backgroundScope)
@@ -232,6 +294,7 @@ class VoiceConversationStartupTest {
         val mutes = mutableListOf<Boolean>(); val deafens = mutableListOf<Boolean>()
         val paths = mutableListOf<String>()
         val allocated = mutableListOf<VoiceAudioPreferences>()
+        val emitters = mutableListOf<Pair<VoiceSessionTag, (VoiceSessionEvent) -> Unit>>()
         var runtime: AuthenticatedVoiceRuntime? = null
         var afterAcquire: suspend () -> Unit = {}
         val client = HttpClient(MockEngine) {engine {
@@ -256,8 +319,9 @@ class VoiceConversationStartupTest {
             }.filterNotNull().first()
         }
         val owner = VoiceConversationStartup(dispatcher, foreground) {account ->
-            val audio = VoiceSessionAudioFactory({error("Must prepare")}, requiresPreparation = true) {_, prefs, _, _ ->
+            val audio = VoiceSessionAudioFactory({error("Must prepare")}, requiresPreparation = true) {tag, prefs, _, emit ->
                 allocated += prefs
+                emitters += tag to emit
                 object : VoiceSdkSession {
                     override suspend fun connect(credentials: VoiceConnectionCredentials) = Unit
                     override suspend fun publishMicrophone(muted: Boolean): Boolean {published++; return true}

@@ -18,6 +18,8 @@ internal data class VoiceConversationState(
     val phase: VoiceConversationPhase = VoiceConversationPhase.STOPPED,
     val channelId: String? = null,
     val operationId: VoiceOperationId? = null,
+    /** Actual matching runtime evidence only; absent during preparation or withdrawn intent. */
+    val voice: VoiceSessionState? = null,
 )
 
 /** One process conversation intent. All selection/foreground operations run on queued Main.
@@ -114,10 +116,15 @@ internal class VoiceConversationStartup(
             // unique operation's state can do so; ticket/account retirement have their own fences.
             val terminal = combine(runtime.state, runtime.retired) {voice, retired ->
                 when {
-                    retired -> VoiceConversationPhase.STOPPED
+                    retired || !isCurrent(intent) || foreground.current.value !== ticket -> VoiceConversationPhase.STOPPED
                     voice.operationId == intent.operation && !voice.wanted ->
                         if (voice.phase == VoicePhase.FAILED) VoiceConversationPhase.FAILED else VoiceConversationPhase.STOPPED
-                    else -> null
+                    else -> {
+                        if (voice.operationId == intent.operation)
+                            mutableState.value = VoiceConversationState(VoiceConversationPhase.JOIN_SUBMITTED,
+                                intent.channel, intent.operation, voice)
+                        null
+                    }
                 }
             }.filterNotNull().first()
             finish(intent, terminal)
