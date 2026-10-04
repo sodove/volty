@@ -77,6 +77,22 @@ internal class VoiceConversationStartup(
         withContext(queuedDispatcher) { selected?.let {finish(it, VoiceConversationPhase.STOPPED)} }
     }
 
+    /** True is command admission, not evidence of capture/rendering or native effect completion. */
+    suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean =
+        control(operation) {it.setMuted(operation, value)}
+    suspend fun setDeafened(operation: VoiceOperationId, value: Boolean): Boolean =
+        control(operation) {it.setDeafened(operation, value)}
+
+    private suspend fun control(operation: VoiceOperationId,
+                                command: suspend (AuthenticatedVoiceRuntime) -> Boolean): Boolean = withContext(queuedDispatcher) {
+        val intent = selected ?: return@withContext false
+        val runtime = intent.runtime ?: return@withContext false
+        if (!isCurrent(intent) || intent.operation != operation || mutableState.value.phase != VoiceConversationPhase.JOIN_SUBMITTED ||
+            foreground.current.value !== intent.ticket || runtime.state.value.operationId != operation || !runtime.state.value.wanted)
+            return@withContext false
+        command(runtime) && isCurrent(intent) && foreground.current.value === intent.ticket
+    }
+
     private suspend fun execute(intent: Intent, scope: CoroutineScope) {
         try {
             if (!isCurrent(intent)) return

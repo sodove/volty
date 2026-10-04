@@ -195,6 +195,26 @@ class VoiceControlOwnerTest {
         assertEquals(3, port.joins.size); assertEquals(Triple(op2, VoiceGeneration(2), "two"), port.joins.last())
     }
 
+    @Test fun queuedPreviousOperationControlsCannotFollowReplacementJoin() = runTest {
+        val port = FakePort(); val effects = mutableListOf<VoiceControlDispatch>()
+        val owner = VoiceControlOwner(backgroundScope, port, effects::add)
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        assertEquals(op1, owner.state.value.operationId); assertEquals(tag(1).sessionId, owner.state.value.sessionId)
+        owner.join("two", op2)
+        // The actor has not consumed its mailbox: producer-side state still advertises op1.
+        assertEquals(op1, owner.state.value.operationId)
+        owner.event(VoiceSessionEvent.SetMuted(true, op1))
+        owner.event(VoiceSessionEvent.SetDeafened(true, op1))
+        runCurrent(); assertEquals(op2, owner.state.value.operationId)
+        port.joinReplies.getValue(op2).complete(grant(2)); runCurrent()
+        assertFalse(owner.state.value.muted); assertFalse(owner.state.value.deafened)
+        assertFalse(effects.any {it.effect is VoiceSessionEffect.SetMuted || it.effect is VoiceSessionEffect.SetDeafened})
+        val starts = effects.map {it.effect}.filterIsInstance<VoiceSessionEffect.StartEngine>()
+        assertEquals(listOf(VoiceSessionEffect.StartEngine(tag(1)), VoiceSessionEffect.StartEngine(tag(2))), starts)
+        assertEquals(listOf(tag(1)), port.disconnects)
+    }
+
     private class FakePort(val ignoreJoinCancellation: Boolean = false, var disconnectFailure: Boolean = false,
                            val throwJoin: Boolean = false, var throwDisconnect: Boolean = false,
                            var cleanupPending: Boolean? = null) : VoiceSessionControlPort {

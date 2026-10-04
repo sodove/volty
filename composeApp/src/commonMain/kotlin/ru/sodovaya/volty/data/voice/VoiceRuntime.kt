@@ -56,6 +56,13 @@ class VoiceRuntime(
     suspend fun setDeafened(value: Boolean) = command {
         if (!retiring) owner.event(VoiceSessionEvent.SetDeafened(value))
     }
+    /** Production controls carry the rendered operation through the bounded mailbox. */
+    suspend fun setMuted(operation: VoiceOperationId, value: Boolean) = command {
+        if (!retiring) owner.event(VoiceSessionEvent.SetMuted(value, operation))
+    }
+    suspend fun setDeafened(operation: VoiceOperationId, value: Boolean) = command {
+        if (!retiring) owner.event(VoiceSessionEvent.SetDeafened(value, operation))
+    }
     suspend fun enableSharing() = command {
         val state = owner.state.value
         val tag = state.sessionId?.let { VoiceSessionTag(it, state.generation) }

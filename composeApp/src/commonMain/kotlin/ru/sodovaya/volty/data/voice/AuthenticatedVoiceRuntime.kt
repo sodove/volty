@@ -97,6 +97,8 @@ internal class AuthenticatedVoiceRuntime private constructor(
 
     suspend fun setMuted(value: Boolean): Boolean = positiveCommand { runtime.setMuted(value) }
     suspend fun setDeafened(value: Boolean): Boolean = positiveCommand { runtime.setDeafened(value) }
+    suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean = positiveCommand { runtime.setMuted(operation, value) }
+    suspend fun setDeafened(operation: VoiceOperationId, value: Boolean): Boolean = positiveCommand { runtime.setDeafened(operation, value) }
     suspend fun enableSharing(): Boolean = positiveCommand { runtime.enableSharing() }
     suspend fun hidePosition() = withContext(NonCancellable) { runtime.hidePosition() }
 

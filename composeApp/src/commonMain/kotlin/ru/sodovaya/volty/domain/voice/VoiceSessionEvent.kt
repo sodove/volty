@@ -29,8 +29,8 @@ sealed interface VoiceSessionEvent {
     /** Backend receipt only; SDK transport callbacks cannot authorize a lease. */
     data class LeaseAck(override val tag: VoiceSessionTag, val lease: VoiceLeaseGrant) : Tagged
     data class Tick(val nowMillis: Long) : VoiceSessionEvent
-    data class SetMuted(val value: Boolean) : VoiceSessionEvent
-    data class SetDeafened(val value: Boolean) : VoiceSessionEvent
+    data class SetMuted(val value: Boolean, val operationId: VoiceOperationId? = null) : VoiceSessionEvent
+    data class SetDeafened(val value: Boolean, val operationId: VoiceOperationId? = null) : VoiceSessionEvent
     data object EnableSharing : VoiceSessionEvent
     data object HidePosition : VoiceSessionEvent
 }

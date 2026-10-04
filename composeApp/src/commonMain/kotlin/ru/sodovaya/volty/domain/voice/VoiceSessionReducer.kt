@@ -14,8 +14,8 @@ object VoiceSessionReducer {
         } else unchanged(state)
         is VoiceSessionEvent.Tagged -> media(state, event)
         is VoiceSessionEvent.Tick -> if (hasExpiredLease(state, event.nowMillis)) stop(state) else unchanged(state)
-        is VoiceSessionEvent.SetMuted -> setMuted(state, event.value)
-        is VoiceSessionEvent.SetDeafened -> setDeafened(state, event.value)
+        is VoiceSessionEvent.SetMuted -> if (admitsControl(state, event.operationId)) setMuted(state, event.value) else unchanged(state)
+        is VoiceSessionEvent.SetDeafened -> if (admitsControl(state, event.operationId)) setDeafened(state, event.value) else unchanged(state)
         VoiceSessionEvent.EnableSharing -> if (state.activeTag() != null && !state.sharingEnabled) {
             VoiceTransition(state.copy(sharingEnabled = true), listOf(VoiceSessionEffect.AddNearbyDemand))
         } else unchanged(state)
@@ -111,6 +111,10 @@ object VoiceSessionReducer {
         val deadline = state.leaseDeadlineMillis ?: return true
         return nowMillis >= deadline
     }
+
+    /** Check at mailbox consumption, not just before a producer suspends sending its command. */
+    private fun admitsControl(state: VoiceSessionState, operation: VoiceOperationId?) =
+        operation == null || (state.wanted && state.operationId == operation)
 
     private fun setMuted(state: VoiceSessionState, value: Boolean): VoiceTransition {
         if (state.muted == value) return unchanged(state)

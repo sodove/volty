@@ -185,6 +185,42 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
+    @Test fun rootMuteAndDeafenIssueNativeCommandsAndRestoreMuteIntent() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login()
+            f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent(); assertEquals(1, f.published)
+            assertTrue(f.owner.setMuted(first, true)); runCurrent()
+            assertTrue(assertNotNull(f.runtime).state.value.muted); assertTrue(f.mutes.last())
+            assertTrue(f.owner.setDeafened(first, true)); runCurrent()
+            assertTrue(assertNotNull(f.runtime).state.value.deafened); assertTrue(f.deafens.last())
+            assertTrue(f.owner.setDeafened(first, false)); runCurrent()
+            assertFalse(assertNotNull(f.runtime).state.value.deafened); assertFalse(f.deafens.last())
+            assertTrue(assertNotNull(f.runtime).state.value.muted); assertTrue(f.mutes.last())
+            assertTrue(f.owner.setMuted(first, false)); runCurrent(); assertFalse(f.mutes.last())
+        } finally {f.close()}
+    }
+
+    @Test fun pendingAndStaleControlsCannotAlterReplacementConversation() = runTest {
+        val f = Fixture(this); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        try {
+            val account = f.login()
+            f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch)
+            runCurrent(); assertEquals(1, f.published)
+            f.owner.start(account, channel, second, readPreferences = {entered.complete(Unit); release.await(); phone}, launch = f::launch)
+            runCurrent(); assertTrue(entered.isCompleted)
+            assertFalse(f.owner.setMuted(first, true)); assertFalse(f.owner.setDeafened(first, true))
+            assertFalse(f.owner.setMuted(second, true)); assertFalse(f.owner.setDeafened(second, true))
+            release.complete(Unit); runCurrent(); assertEquals(2, f.published)
+            assertFalse(f.owner.setMuted(first, true)); assertFalse(f.owner.setDeafened(first, true)); runCurrent()
+            assertEquals(second, assertNotNull(f.runtime).state.value.operationId)
+            assertFalse(assertNotNull(f.runtime).state.value.muted); assertFalse(assertNotNull(f.runtime).state.value.deafened)
+            assertFalse(f.mutes.contains(true)); assertFalse(f.deafens.contains(true))
+            f.owner.stop(); runCurrent(); assertFalse(f.owner.setMuted(second, true))
+        } finally {release.complete(Unit); f.close()}
+    }
+
     private inner class Fixture(val test: TestScope) {
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         val repository = DefaultSocialRepository(Transport(), Store(), test.backgroundScope)
@@ -193,6 +229,7 @@ class VoiceConversationStartupTest {
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
         var launches = 0; var acknowledgeLaunch = true; var rejectJoin = false
         var published = 0; var closes = 0
+        val mutes = mutableListOf<Boolean>(); val deafens = mutableListOf<Boolean>()
         val paths = mutableListOf<String>()
         val allocated = mutableListOf<VoiceAudioPreferences>()
         var runtime: AuthenticatedVoiceRuntime? = null
@@ -224,8 +261,8 @@ class VoiceConversationStartupTest {
                 object : VoiceSdkSession {
                     override suspend fun connect(credentials: VoiceConnectionCredentials) = Unit
                     override suspend fun publishMicrophone(muted: Boolean): Boolean {published++; return true}
-                    override suspend fun setMuted(muted: Boolean) = true
-                    override fun setDeafened(deafened: Boolean) = Unit
+                    override suspend fun setMuted(muted: Boolean): Boolean {mutes += muted; return true}
+                    override fun setDeafened(deafened: Boolean) {deafens += deafened}
                     override suspend fun close() {closes++}
                 }
             }
