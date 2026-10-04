@@ -5,24 +5,38 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import ru.sodovaya.volty.domain.nearby.community.*
+import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 
 /** Owns five bounded HTTP adapters for one authenticated Nearby account lifetime. */
-class NearbyAccountHttpSession(
-    credentials: NearbyAccountCredentials,
+class NearbyAccountHttpSession private constructor(
+    val actorId: String,
+    private val binding: NearbyAccountBinding?,
+    private val authority: SocialAuthenticatedAccount?,
+    private val accountJob: Job?,
     client: HttpClient,
     baseUrl: String,
-    accountJob: Job? = null,
 ) {
-    private val root = nearbyHttpsApiBaseUrl(baseUrl)
-    val actorId: String = credentials.actorId
-    private val binding = NearbyAccountBinding(credentials, accountJob)
+    constructor(
+        credentials: NearbyAccountCredentials,
+        client: HttpClient,
+        baseUrl: String,
+        accountJob: Job? = null,
+    ) : this(credentials.actorId, NearbyAccountBinding(credentials, accountJob), null, accountJob, client, baseUrl)
 
-    private val communitiesHttp = CommunityHttpPort(client, "$root/communities") { binding.bearer() }
-    private val removalsHttp = CommunityRemovalHttpPort(client, "$root/communities") { binding.bearer() }
-    private val channelsHttp = ChannelCommandsHttpPort(client, "$root/communities") { binding.bearer() }
-    private val invitationsHttp = InvitationHttpPort(client, root) { binding.bearer() }
-    private val invitationListingHttp = InvitationListingHttpPort(client, root) { binding.bearer() }
+    internal constructor(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String) :
+        this(account.userId.value, null, account, account.job, client, baseUrl)
+
+    private val root = nearbyHttpsApiBaseUrl(baseUrl)
+    init { invitationDraftId(actorId) }
+    private val retired = MutableStateFlow(false)
+
+    private val communitiesHttp = CommunityHttpPort(client, "$root/communities") { currentBearer() }
+    private val removalsHttp = CommunityRemovalHttpPort(client, "$root/communities") { currentBearer() }
+    private val channelsHttp = ChannelCommandsHttpPort(client, "$root/communities") { currentBearer() }
+    private val invitationsHttp = InvitationHttpPort(client, root) { currentBearer() }
+    private val invitationListingHttp = InvitationListingHttpPort(client, root) { currentBearer() }
 
     val communities: CommunityPort = object : CommunityPort {
         override suspend fun memberships(after: String?, limit: Int) = guarded {
@@ -89,10 +103,16 @@ class NearbyAccountHttpSession(
         }
     }
 
-    fun refresh(credentials: NearbyAccountCredentials) = binding.refresh(credentials)
+    fun refresh(credentials: NearbyAccountCredentials) {
+        require(credentials.actorId == actorId)
+        check(!retired.value && accountJob?.isActive != false) { RETIRED }
+        checkNotNull(binding) { "Authenticated account owns token refresh" }.refresh(credentials)
+    }
 
     fun retire() {
-        binding.retire()
+        // Consumer retirement never retires authentication or cancels its borrowed Job.
+        retired.value = true
+        binding?.retire()
 
         var closeFailed = false
         try { communitiesHttp.close() } catch (_: Throwable) { closeFailed = true }
@@ -119,7 +139,16 @@ class NearbyAccountHttpSession(
 
     private suspend fun ensureLive() {
         currentCoroutineContext().ensureActive()
-        if (binding.bearer() == null) throw CancellationException(RETIRED)
+        if (retired.value || accountJob?.isActive == false || (binding != null && binding.bearer() == null)) {
+            throw CancellationException(RETIRED)
+        }
+    }
+
+    private suspend fun currentBearer(): String? {
+        ensureLive()
+        val token = if (binding != null) binding.bearer() else authority?.bearer()
+        ensureLive()
+        return token
     }
 
     private companion object {
