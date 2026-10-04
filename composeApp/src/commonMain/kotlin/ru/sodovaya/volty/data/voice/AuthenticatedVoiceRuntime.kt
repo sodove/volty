@@ -26,6 +26,15 @@ internal class AuthenticatedVoiceRuntime private constructor(
     val retired = admissionRetired.asStateFlow()
     private val retirementFailure = MutableStateFlow(false)
     val retirementFailed = retirementFailure.asStateFlow()
+    private val disconnectSubmissionFailure = MutableStateFlow(false)
+    val disconnectFailed = disconnectSubmissionFailure.asStateFlow()
+    /** Platform loss uses this original cleanup root, never the service/Activity caller Job. */
+    fun requestDisconnect() {
+        cleanupScope.launch(start = CoroutineStart.UNDISPATCHED) {
+            try { disconnect() }
+            catch (_: Exception) { disconnectSubmissionFailure.value = true }
+        }
+    }
     private val runtime = VoiceRuntime(cleanupScope, queuedDispatcher, control, factory, pulses,
         monotonicMillis, sharingDispatch, ::allowsAudioWork)
     val state = runtime.state
@@ -76,7 +85,13 @@ internal class AuthenticatedVoiceRuntime private constructor(
         // cancelled caller. Keep its outer boundary and move only the owned command inside.
         withContext(queuedDispatcher) {
             audioPreparation = null
-            runtime.disconnect()
+            try {
+                runtime.disconnect()
+                disconnectSubmissionFailure.value = false
+            } catch (failure: Exception) {
+                disconnectSubmissionFailure.value = true
+                throw failure
+            }
         }
     }
 

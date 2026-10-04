@@ -153,7 +153,7 @@ class VoiceAccountCoordinatorTest {
             val runtime = f.coordinator.acquire(assertNotNull(f.repository.authenticatedAccount.value), factory(sdk), {})
             assertFalse(runtime.join(channel, first)); runCurrent()
             assertTrue(f.wire.headers.isEmpty())
-            val ticket = gate.request(runtime) {backgroundScope.launch {runtime.disconnect()}}
+            val ticket = gate.request(runtime, runtime::requestDisconnect)
             val service = Any()
             assertFalse(gate.acknowledge(ticket, service))
             permission = true

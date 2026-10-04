@@ -1,0 +1,5 @@
+<resources>
+    <string name="nearby_voice_notification_title">Голосовой разговор</string>
+    <string name="nearby_voice_notification_body">Голосовое подключение работает или подготавливается</string>
+    <string name="nearby_voice_notification_disconnect">Отключиться</string>
+</resources>

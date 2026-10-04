@@ -1,0 +1,5 @@
+<resources>
+    <string name="nearby_voice_notification_title">Voice conversation</string>
+    <string name="nearby_voice_notification_body">Voice connection is active or being prepared</string>
+    <string name="nearby_voice_notification_disconnect">Disconnect</string>
+</resources>

@@ -96,6 +96,30 @@ class AuthenticatedVoiceRuntimeTest {
         } finally {runtime.retire(); pulses.close(); client.close(); runCurrent()}
     }
 
+    @Test fun foregroundDisconnectSubmissionUsesOriginalRootDespiteCancelledCaller() = runTest {
+        val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
+        val authority = assertNotNull(repository.authenticatedAccount.value)
+        val wire = Wire(); val client = client(wire); val sdk = Session()
+        val pulses = Channel<Unit>(Channel.UNLIMITED)
+        val runtime = AuthenticatedVoiceRuntime.create(authority, client, root,
+            StandardTestDispatcher(testScheduler), VoiceSdkSessionFactory {_, _ -> sdk},
+            pulses.receiveAsFlow(), {100}, {}, mayAllocateAudio = {true})
+        try {
+            assertTrue(runtime.join(channel, operation)); runCurrent()
+            val caller = Job().apply {cancel()}; var returned = false
+            CoroutineScope(coroutineContext + caller).launch(start = CoroutineStart.UNDISPATCHED) {
+                runtime.requestDisconnect(); returned = true
+            }
+            runCurrent()
+            assertTrue(returned); assertEquals(1, sdk.closes)
+            assertFalse(runtime.disconnectFailed.value)
+            assertFalse(runtime.state.value.wanted); assertFalse(runtime.retired.value)
+            assertTrue(authority.job.isActive)
+            assertEquals(2, wire.paths.size)
+            assertTrue(wire.paths.last().endsWith("/disconnect"))
+        } finally {runtime.retire(); pulses.close(); client.close(); runCurrent()}
+    }
+
     @Test fun globalNativeGateDeniesJoinBeforeHttpAndSdkButDoesNotPreventRetirement() = runTest {
         val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
         val authority = assertNotNull(repository.authenticatedAccount.value)
