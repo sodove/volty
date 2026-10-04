@@ -50,6 +50,7 @@ internal class DirectCallVoiceSessionControl private constructor(
         ensurePositive(); return calls.status(call).also {ensurePositive()}
     }
     fun owns(operation: VoiceOperationId) = operation in capability.value.modes
+    fun owns(tag: VoiceSessionTag) = tag in capability.value.sessions
 
     override fun rememberJoinIntent(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean) {
         val mode = capability.value.modes[operation] ?: return
@@ -168,6 +169,10 @@ internal class DirectCallVoiceSessionControl private constructor(
     })
     companion object {
         private const val RETIRED = "Direct call voice admission retired"
+        internal suspend fun withJournal(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
+                                         monotonicMillis: () -> Long, sequence: VoiceLeaseRequestSequence,
+                                         journal: VoiceSessionAccountControl): DirectCallVoiceSessionControl =
+            DirectCallVoiceSessionControl(account, DirectCallAccountControl.create(account, client, baseUrl, monotonicMillis, sequence), journal)
         suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String, monotonicMillis: () -> Long): DirectCallVoiceSessionControl {
             val sequence = VoiceLeaseRequestSequence()
             val calls = DirectCallAccountControl.create(account, client, baseUrl, monotonicMillis, sequence)

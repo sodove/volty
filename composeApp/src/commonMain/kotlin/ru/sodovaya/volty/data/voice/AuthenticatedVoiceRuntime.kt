@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
+import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 import ru.sodovaya.volty.domain.voice.*
@@ -12,7 +13,7 @@ import ru.sodovaya.volty.domain.voice.*
 internal class AuthenticatedVoiceRuntime private constructor(
     private val account: SocialAuthenticatedAccount,
     private val cleanupScope: CoroutineScope,
-    private val control: VoiceSessionAccountControl,
+    private val control: AccountVoiceSessionControl,
     private val queuedDispatcher: CoroutineDispatcher,
     factory: VoiceSdkSessionFactory,
     pulses: Flow<Unit>,
@@ -51,6 +52,19 @@ internal class AuthenticatedVoiceRuntime private constructor(
             withContext(NonCancellable) { submitRetirement() }
         }
     }
+
+    /** Metadata only. Audio still requires the current foreground and explicit join. */
+    suspend fun registerOutgoingCall(call: String, callee: String, key: String, operation: VoiceOperationId): Boolean =
+        withContext(queuedDispatcher) {
+            if (admissionRetired.value || !account.job.isActive) false
+            else control.registerOutgoing(call, callee, key, operation)
+        }
+    suspend fun registerIncomingCall(call: DirectCallSnapshot, operation: VoiceOperationId): Boolean =
+        withContext(queuedDispatcher) {
+            if (admissionRetired.value || !account.job.isActive) false else control.registerIncoming(call, operation)
+        }
+    suspend fun incomingCalls(after: String? = null, limit: Int = 20) = control.incoming(after, limit)
+    suspend fun callStatus(call: String) = control.callStatus(call)
 
     suspend fun join(channel: String, operation: VoiceOperationId, replace: Boolean = false): Boolean = withContext(queuedDispatcher) {
         audioPreparation = null
@@ -148,7 +162,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
             check(parentJob.isActive) { "Voice retirement parent stopped" }
             require(parentJob !== account.job) { "Voice cleanup must outlive account cancellation" }
             require(queuedDispatcher.isDispatchNeeded(parent.coroutineContext)) { "Queued serial dispatcher required" }
-            val control = VoiceSessionAccountControl.create(account, client, baseUrl, monotonicMillis)
+            val control = AccountVoiceSessionControl.create(account, client, baseUrl, monotonicMillis)
             val lifetime = SupervisorJob(parentJob)
             val scope = CoroutineScope(parent.coroutineContext + lifetime + queuedDispatcher)
             return try {

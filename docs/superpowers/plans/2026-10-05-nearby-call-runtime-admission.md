@@ -29,3 +29,10 @@ earned session tag heartbeat; parent-only terminal is not cleanup ACK; original 
 survive account retirement; late replies never allocate native audio or replace current intent.
 Finite gates, exact issued requests, parent manual review, fresh Android suite before commit.
 Product/root UI wiring, FCM acceptance and physical device proof follow separately.
+
+Shared runtime composition: one account composite shares the same journal and request sequence
+for channel admission and explicit registered call operations. Routing is by immutable original
+operation/actual returned session tag, never destination UUID. Discovery requires a live account
+but does not demand audio permission. Root startup will carry explicit Channel/OutgoingCall/IncomingCall
+targets, register call metadata only for the current selected account intent, then use the existing
+visible-Activity foreground readiness and audio preference path. No incoming discovery auto-starts audio.

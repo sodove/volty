@@ -34,6 +34,48 @@ class AuthenticatedVoiceRuntimeTest {
     }}
     private fun TestScope.repository() = DefaultSocialRepository(Transport(actor), Store(), backgroundScope)
 
+    @Test fun sharedAccountRuntimeRingsWithoutNativeAudioThenStopsOriginalCallAfterLogout() = runTest {
+        val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
+        val authority = assertNotNull(repository.authenticatedAccount.value)
+        val paths = mutableListOf<String>(); var accepted = false
+        val peer = "70000000-0000-0000-0000-000000000007"
+        val key = "80000000-0000-0000-0000-000000000008"
+        fun snapshot(phase: String, outcome: String = "null") =
+            """{"callId":"$channel","callerId":"$actor","calleeId":"$peer","phase":"$phase","revision":2,"ringDeadlineEpochMillis":45100,"outcome":$outcome}"""
+        val client = HttpClient(MockEngine) {engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler {
+                paths += it.url.encodedPath
+                respond(when {
+                    it.url.encodedPath.endsWith("create") -> """{"call":${snapshot(if (accepted) "ACCEPTED" else "RINGING")}}"""
+                    it.url.encodedPath.endsWith("resume") -> """{"call":${snapshot("ACCEPTED")},"session":{"phase":"CONNECTING","sessionId":"$session","remainingLeaseMillis":10000,"credentials":{"serverUrl":"wss://media.test","participantToken":"token","roomEpoch":"volty-call-$channel"}}}"""
+                    it.url.encodedPath.endsWith("cancel-outgoing") -> """{"call":${snapshot("ENDED", "\"CALLER_ENDED\"")}}"""
+                    else -> """{"phase":"CANCELLED","sessionId":"$session","cleanupPending":false}"""
+                })
+            }
+        }}
+        val sdk = Session(); val pulses = Channel<Unit>(Channel.UNLIMITED); var now = 100L
+        val runtime = AuthenticatedVoiceRuntime.create(authority, client, root, StandardTestDispatcher(testScheduler),
+            VoiceSdkSessionFactory {_, _ -> sdk}, pulses.receiveAsFlow(), {now}, {}, {true})
+        try {
+            assertTrue(runtime.registerOutgoingCall(channel, peer, key, operation))
+            assertTrue(runtime.join(channel, operation)); runCurrent()
+            assertEquals(0, sdk.connects); assertEquals(0, sdk.publishes)
+            assertEquals(listOf("/v2/nearby/calls/$channel/create"), paths)
+            pulses.send(Unit); runCurrent()
+            accepted = true
+            now = 1100; pulses.send(Unit); runCurrent()
+            assertEquals(1, sdk.connects); assertEquals(1, sdk.publishes)
+            repository.logout(); runCurrent()
+            assertEquals(1, sdk.closes)
+            assertEquals(listOf("/v2/nearby/calls/$channel/cancel-outgoing", "/v2/nearby/sessions/$session/disconnect"), paths.takeLast(2))
+            assertFalse(runtime.state.value.wanted)
+            assertTrue(runtime.unconfirmedStops.value.isEmpty()); assertTrue(runtime.pendingRemoteStops.value.isEmpty())
+            assertFalse(runtime.registerOutgoingCall(channel, peer, key, operation))
+            assertFalse(paths.any {it.endsWith("/join")})
+        } finally {runtime.retire(); pulses.close(); client.close(); runCurrent()}
+    }
+
     @Test fun logoutRetiresAutomaticallyButOriginalNativeAndRemoteRetriesOutliveHeldAuthChild() = runTest {
         val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
         val authority = assertNotNull(repository.authenticatedAccount.value)
