@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.domain.nearby.community
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -13,35 +16,71 @@ class InvitationCreationDraftOwner(
 ) {
     init { invitationDraftId(actor); require(store.actorId == actor) }
     private val preparation = Mutex()
+    private val retired = MutableStateFlow(false)
+
+    /** Ends this owner's lifetime immediately; already retained drafts remain available to a new owner. */
+    fun retire() {
+        retired.value = true
+    }
 
     suspend fun prepare(invitation: String, community: String, ttlMillis: Long, maxUses: Int): InvitationDraftPreparation {
         invitationDraftInput(invitation, community, ttlMillis, maxUses)
+        ensureOwnerActive()
         return preparation.withLock {
+            ensureOwnerActive()
             try {
-                store.read(invitation)?.let { return@withLock prepared(it, invitation, community, ttlMillis, maxUses) }
+                val existing = store.read(invitation)
+                ensureOwnerActive()
+                existing?.let {
+                    return@withLock publishPreparation(prepared(it, invitation, community, ttlMillis, maxUses))
+                }
+                ensureOwnerActive()
                 val secret = try { generator.generate() }
                 catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { return@withLock InvitationDraftPreparation.Failed(InvitationDraftFailure.SECRET_UNAVAILABLE) }
+                catch (_: Exception) {
+                    return@withLock publishPreparation(
+                        InvitationDraftPreparation.Failed(InvitationDraftFailure.SECRET_UNAVAILABLE),
+                    )
+                }
+                ensureOwnerActive()
                 val candidate = InvitationCreationDraft(actor, invitation, community, ttlMillis, maxUses, secret)
                 // Another owner may have won the store's atomic retain; always use its payload.
-                prepared(store.retain(candidate), invitation, community, ttlMillis, maxUses)
+                ensureOwnerActive()
+                val retained = store.retain(candidate)
+                ensureOwnerActive()
+                publishPreparation(prepared(retained, invitation, community, ttlMillis, maxUses))
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { InvitationDraftPreparation.Failed(InvitationDraftFailure.STORAGE_UNAVAILABLE) }
+            catch (_: Exception) {
+                publishPreparation(InvitationDraftPreparation.Failed(InvitationDraftFailure.STORAGE_UNAVAILABLE))
+            }
         }
     }
 
     suspend fun execute(invitation: String): InvitationDraftExecution {
         invitationDraftId(invitation)
-        val draft = try { preparation.withLock { store.read(invitation) } }
+        ensureOwnerActive()
+        val draft = try {
+            preparation.withLock {
+                ensureOwnerActive()
+                val stored = store.read(invitation)
+                ensureOwnerActive()
+                stored
+            }
+        }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { return InvitationDraftExecution.Failed(InvitationDraftFailure.STORAGE_UNAVAILABLE) }
-            ?: return InvitationDraftExecution.Failed(InvitationDraftFailure.MISSING_DRAFT)
+        catch (_: Exception) {
+            return publishExecution(InvitationDraftExecution.Failed(InvitationDraftFailure.STORAGE_UNAVAILABLE))
+        } ?: return publishExecution(InvitationDraftExecution.Failed(InvitationDraftFailure.MISSING_DRAFT))
         if (draft.actorId != actor || draft.invitationId != invitation)
-            return InvitationDraftExecution.Failed(InvitationDraftFailure.INVALID_RESPONSE)
+            return publishExecution(InvitationDraftExecution.Failed(InvitationDraftFailure.INVALID_RESPONSE))
+        ensureOwnerActive()
         val result = try { port.create(draft.communityId, draft.invitationId, draft.secret.reveal(), draft.ttlMillis, draft.maxUses) }
         catch (cancelled: CancellationException) { throw cancelled }
-        catch (_: Exception) { return InvitationDraftExecution.Failed(InvitationDraftFailure.UNAVAILABLE) }
-        return when (result) {
+        catch (_: Exception) {
+            return publishExecution(InvitationDraftExecution.Failed(InvitationDraftFailure.UNAVAILABLE))
+        }
+        ensureOwnerActive()
+        return publishExecution(when (result) {
             is InvitationCreationCommandResult.Created -> if (matches(result.receipt, draft))
                 InvitationDraftExecution.Created(draft, result.receipt)
             else InvitationDraftExecution.Failed(InvitationDraftFailure.INVALID_RESPONSE)
@@ -52,7 +91,22 @@ class InvitationCreationDraftOwner(
                 InvitationCommandFailure.UNAVAILABLE -> InvitationDraftFailure.UNAVAILABLE
                 InvitationCommandFailure.INVALID_RESPONSE -> InvitationDraftFailure.INVALID_RESPONSE
             })
-        }
+        })
+    }
+
+    private suspend fun ensureOwnerActive() {
+        currentCoroutineContext().ensureActive()
+        if (retired.value) throw CancellationException("Invitation creation owner retired")
+    }
+
+    private suspend fun publishPreparation(result: InvitationDraftPreparation): InvitationDraftPreparation {
+        ensureOwnerActive()
+        return result
+    }
+
+    private suspend fun publishExecution(result: InvitationDraftExecution): InvitationDraftExecution {
+        ensureOwnerActive()
+        return result
     }
 
     private fun prepared(draft: InvitationCreationDraft, invitation: String, community: String, ttl: Long, uses: Int): InvitationDraftPreparation = when {
