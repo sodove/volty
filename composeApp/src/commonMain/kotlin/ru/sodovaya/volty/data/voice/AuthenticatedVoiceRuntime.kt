@@ -21,11 +21,13 @@ internal class AuthenticatedVoiceRuntime private constructor(
     private val mayAllocateAudio: () -> Boolean,
 ) {
     private val admissionRetired = MutableStateFlow(false)
+    private val audioFactory = factory as? VoiceSessionAudioFactory
+    private var audioPreparation: Any? = null
     val retired = admissionRetired.asStateFlow()
     private val retirementFailure = MutableStateFlow(false)
     val retirementFailed = retirementFailure.asStateFlow()
     private val runtime = VoiceRuntime(cleanupScope, queuedDispatcher, control, factory, pulses,
-        monotonicMillis, sharingDispatch, ::allowsPositiveWork)
+        monotonicMillis, sharingDispatch, ::allowsAudioWork)
     val state = runtime.state
     val failedLocalCleanup = runtime.failedLocalCleanup
     val nativeInFlight = runtime.nativeInFlight
@@ -42,15 +44,41 @@ internal class AuthenticatedVoiceRuntime private constructor(
     }
 
     suspend fun join(channel: String, operation: VoiceOperationId, replace: Boolean = false): Boolean = withContext(queuedDispatcher) {
-        if (!allowsPositiveWork()) return@withContext false
+        audioPreparation = null
+        if (!allowsAudioWork()) return@withContext false
         invitationDraftId(channel)
         invitationDraftId(operation.value)
         val accepted = runtime.join(channel, operation, replace)
         accepted && !admissionRetired.value && account.job.isActive
     }
 
+    suspend fun joinWithAudio(channel: String, operation: VoiceOperationId, replace: Boolean = false,
+                              readPreferences: suspend () -> VoiceAudioPreferences): Boolean {
+        val audio = audioFactory?.takeIf { it.requiresPreparation } ?: return false
+        val ticket = withContext(queuedDispatcher) {
+            if (!allowsPositiveWork()) return@withContext null
+            invitationDraftId(channel)
+            invitationDraftId(operation.value)
+            Any().also { audioPreparation = it }
+        } ?: return false
+        val snapshot = readPreferences()
+        return withContext(queuedDispatcher) {
+            if (audioPreparation !== ticket || !allowsPositiveWork()) return@withContext false
+            audio.prepare(snapshot)
+            val accepted = runtime.join(channel, operation, replace)
+            accepted && audioPreparation === ticket && !admissionRetired.value && account.job.isActive
+        }
+    }
+
     /** Disconnect preserves membership and authentication; submission survives caller cancellation. */
-    suspend fun disconnect() = withContext(NonCancellable) { runtime.disconnect() }
+    suspend fun disconnect() = withContext(NonCancellable) {
+        // Combining NonCancellable with a dispatcher change throws on return to an already
+        // cancelled caller. Keep its outer boundary and move only the owned command inside.
+        withContext(queuedDispatcher) {
+            audioPreparation = null
+            runtime.disconnect()
+        }
+    }
 
     suspend fun setMuted(value: Boolean): Boolean = positiveCommand { runtime.setMuted(value) }
     suspend fun setDeafened(value: Boolean): Boolean = positiveCommand { runtime.setDeafened(value) }
@@ -85,6 +113,8 @@ internal class AuthenticatedVoiceRuntime private constructor(
 
     private fun allowsPositiveWork(): Boolean = !admissionRetired.value && account.job.isActive &&
         try { mayAllocateAudio() } catch (_: Exception) { false }
+
+    private fun allowsAudioWork(): Boolean = allowsPositiveWork() && audioFactory?.ready != false
 
     companion object {
         suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,

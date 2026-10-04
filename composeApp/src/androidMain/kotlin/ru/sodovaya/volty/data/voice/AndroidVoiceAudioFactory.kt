@@ -11,4 +11,9 @@ internal class AndroidVoiceAudioFactory(context: Context) {
         VoiceSessionAudioFactory(preferences) { tag, chosen, diagnostics, emit ->
             AndroidVoiceSdkSession(application, tag, chosen, diagnostics, emit)
         }
+
+    fun createPrepared(): VoiceSessionAudioFactory =
+        VoiceSessionAudioFactory({ error("Prepared audio has no default preference source") }, requiresPreparation = true) { tag, chosen, diagnostics, emit ->
+            AndroidVoiceSdkSession(application, tag, chosen, diagnostics, emit)
+        }
 }
