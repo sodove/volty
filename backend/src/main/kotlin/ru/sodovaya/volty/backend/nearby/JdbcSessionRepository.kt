@@ -12,6 +12,8 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     override fun begin(actor: String, operation: String, destination: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, replace: Boolean): SessionJournalResult =
         locked(actor) { c ->
             val existing = read(c, actor, operation)
+            if (access != null && existing?.operation?.terminal != true && hasCallReservation(c, actor))
+                return@locked SessionJournalResult(null, OperationRejection.CLAIM_BUSY)
             val observedAt = now()
             val decision = policy.begin(existing?.operation, actor, operation, destination, session, observedAt)
             if (existing != null) {
@@ -249,6 +251,11 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     private fun read(c: Connection, actor: String, operation: String): SessionJournalEntry? =
         c.prepareStatement("SELECT * FROM nearby_session_operations WHERE actor_id=?::uuid AND operation_id=?::uuid").use {
             it.setString(1, actor); it.setString(2, operation); it.executeQuery().use { rows -> if (rows.next()) rows.entry() else null }
+        }
+
+    private fun hasCallReservation(c: Connection, actor: String): Boolean =
+        c.prepareStatement("SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
+            it.setString(1, actor); it.executeQuery().use {r -> r.next() && r.getString(1) != null}
         }
 
     private fun claim(c: Connection, actor: String): SessionClaim? =

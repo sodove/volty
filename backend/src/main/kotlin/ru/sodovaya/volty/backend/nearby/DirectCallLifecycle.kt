@@ -2,7 +2,7 @@ package ru.sodovaya.volty.backend.nearby
 
 enum class DirectCallPhase { RINGING, ACCEPTED, DECLINED, CANCELLED, MISSED, ENDED }
 enum class DirectCallOutcome { CALLEE_DECLINED, CALLER_CANCELLED, CALLEE_CANCELLED, RING_TIMEOUT, CALLER_ENDED, CALLEE_ENDED, FRIENDSHIP_REVOKED }
-enum class DirectCallRejection { NOT_FRIENDS, IDENTITY_MISMATCH, ACCESS_DENIED, REVISION_MISMATCH, TERMINAL, NOT_RINGING }
+enum class DirectCallRejection { NOT_FRIENDS, IDENTITY_MISMATCH, ACCESS_DENIED, REVISION_MISMATCH, TERMINAL, NOT_RINGING, CLAIM_BUSY }
 
 data class DirectCallRecord(
     val callId: String, val callerId: String, val calleeId: String,
