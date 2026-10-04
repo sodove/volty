@@ -29,6 +29,8 @@ class SessionService(
     fun join(actor: String, operation: String, destination: String, replace: Boolean = false): SessionAction {
         val existing = repository.get(actor, operation)
         if (existing != null && existing.operation.terminal) return SessionAction.Ended(existing)
+        if (existing?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+            return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (existing != null && existing.operation.destinationId != destination) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         val room = resolveRoom(actor, destination)
         if (room == null) { stop(actor, operation); return SessionAction.Denied(SessionDenial.MEMBERSHIP) }
@@ -50,6 +52,7 @@ class SessionService(
             return SessionAction.Denied(SessionDenial.MEMBERSHIP)
         }
         if (begun.rejection == OperationRejection.CLAIM_BUSY) return SessionAction.Denied(SessionDenial.BUSY)
+        if (begun.rejection != null && begun.state == null) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         val row = checkNotNull(begun.state)
         if (row.operation.terminal) return SessionAction.Ended(row)
         if (begun.rejection != null) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)

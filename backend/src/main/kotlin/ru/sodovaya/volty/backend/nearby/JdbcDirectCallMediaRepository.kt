@@ -108,6 +108,22 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
     internal fun stopSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
         sessionAction(actor, operation) {call -> stop(actor, call, now)}
 
+    internal fun stopCallerOperation(actor: String, operation: String, now: () -> Long): SessionJournalResult? {
+        canonical(actor); canonical(operation)
+        val id = source.connection.use {c -> c.prepareStatement("SELECT call_id FROM nearby_direct_calls WHERE caller_id=?::uuid AND caller_operation_id=?::uuid").use {
+            it.setString(1, actor); it.setString(2, operation); it.executeQuery().use {r -> if (r.next()) r.getString(1) else null}
+        }} ?: return null
+        val decision = owned(actor, id) {c, current ->
+            check(current.callerId == actor && current.callerOperationId == operation)
+            val at = now()
+            val stopped = expireAccepted(c, current, at) ?: retireLostClaims(c, current, at)
+                ?: persist(c, policy.stop(current, actor, at), at)
+            sessions.cancelOriginalOperation(c, actor, operation, at)
+            stopped
+        }
+        return SessionJournalResult(sessions.get(actor, operation), if (decision.call == null) OperationRejection.ACCESS_DENIED else null)
+    }
+
     internal fun reconcileSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
         sessionAction(actor, operation) {call -> reconcile(actor, call, now)}
 

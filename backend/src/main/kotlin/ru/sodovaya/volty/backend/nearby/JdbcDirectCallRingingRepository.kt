@@ -67,6 +67,17 @@ class JdbcDirectCallRingingRepository(private val source: DataSource) {
                 return@locked persist(c, decision)
             }
             if (!friend) return@locked DirectCallDecision(null, DirectCallRejection.NOT_FRIENDS)
+            val originalOperation = JdbcSessionRepository(source, JdbcChannelAccess()).operationInTransaction(c, caller, operation)
+            if (originalOperation != null) {
+                if (originalOperation.operation.phase != OperationPhase.CANCELLED || originalOperation.operation.sessionId != null)
+                    return@locked DirectCallDecision(null, DirectCallRejection.IDENTITY_MISMATCH)
+                // Earlier creation ignored a destinationless original-operation stop and
+                // briefly advertised an incoming ring. Retain a caller-private cancellation.
+                val at = now()
+                val cancelled = policy.stop(checkNotNull(policy.create(null, callId, caller, callee, key, operation, at, true).call), caller, at)
+                return@locked if (insert(c, cancelled.call!!, false)) cancelled
+                    else DirectCallDecision(null, DirectCallRejection.IDENTITY_MISMATCH)
+            }
             val slot = c.prepareStatement("SELECT session_id,reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
                 it.setString(1, caller); it.executeQuery().use {r -> check(r.next()); r.getString(1) to r.getString(2)}
             }

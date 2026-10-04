@@ -17,6 +17,9 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
             if (access != null && existing?.operation?.terminal != true &&
                 existing?.operation?.destinationKind != VoiceDestinationKind.DIRECT_CALL && hasCallMediaClaim(c, actor))
                 return@locked SessionJournalResult(null, OperationRejection.CLAIM_BUSY)
+            if (access != null && existing?.operation?.terminal != true &&
+                existing?.operation?.destinationKind != VoiceDestinationKind.DIRECT_CALL && callerCallId(c, actor, operation) != null)
+                return@locked SessionJournalResult(existing, OperationRejection.DESTINATION_MISMATCH)
             val observedAt = now()
             val decision = policy.begin(existing?.operation, actor, operation, destination, session, observedAt)
             if (existing != null) {
@@ -51,11 +54,20 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         // acquire the complete actor set before any revision write; no nested transaction.
         if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
             JdbcDirectCallMediaRepository(source).stopSession(actor, operation, now)?.let {return it}
-        return locked(actor) { c ->
+        if (access != null) JdbcDirectCallMediaRepository(source).stopCallerOperation(actor, operation, now)?.let {return it}
+        val step = locked(actor) { c ->
+            // A creation may commit while this cancellation waits for the actor. Release
+            // this single-actor transaction without mutation, then reacquire the whole pair.
+            if (access != null && callerCallId(c, actor, operation) != null) return@locked CancelStep(null, true)
             val existing = read(c, actor, operation)
-            persist(c, existing, policy.cancel(existing?.operation, actor, operation, now()))
+            CancelStep(persist(c, existing, policy.cancel(existing?.operation, actor, operation, now())), false)
         }
+        if (step.pairHandoff) return JdbcDirectCallMediaRepository(source).stopCallerOperation(actor, operation, now)
+            ?: SessionJournalResult(null, OperationRejection.NOT_FOUND)
+        return checkNotNull(step.result)
     }
+
+    private data class CancelStep(val result: SessionJournalResult?, val pairHandoff: Boolean)
 
     override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
         mediaChange(actor, operation, session, sfuEpoch, now) { current, at -> policy.admit(current, session, at, confirmedDeadline) }
@@ -176,6 +188,13 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
 
     /** Call owner already holds UPDATE fence and all participant actor locks. */
     internal fun operationInTransaction(c: Connection, actor: String, operation: String) = read(c, actor, operation)
+
+    /** Original pair locks are already held; a ringing stop and its nonce tombstone commit together. */
+    internal fun cancelOriginalOperation(c: Connection, actor: String, operation: String, at: Long): SessionJournalEntry {
+        check(access != null && !c.autoCommit)
+        val original = read(c, actor, operation)
+        return checkNotNull(persist(c, original, policy.cancel(original?.operation, actor, operation, at)).state)
+    }
 
     internal fun claimInTransaction(c: Connection, actor: String) = claim(c, actor)
 
@@ -311,6 +330,11 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
     private fun hasCallReservation(c: Connection, actor: String): Boolean =
         c.prepareStatement("SELECT reserved_call_id FROM nearby_actor_claims WHERE actor_id=?::uuid").use {
             it.setString(1, actor); it.executeQuery().use {r -> r.next() && r.getString(1) != null}
+        }
+
+    private fun callerCallId(c: Connection, actor: String, operation: String): String? =
+        c.prepareStatement("SELECT call_id FROM nearby_direct_calls WHERE caller_id=?::uuid AND caller_operation_id=?::uuid").use {
+            it.setString(1, actor); it.setString(2, operation); it.executeQuery().use {r -> if (r.next()) r.getString(1) else null}
         }
 
     private fun hasCallMediaClaim(c: Connection, actor: String): Boolean =
