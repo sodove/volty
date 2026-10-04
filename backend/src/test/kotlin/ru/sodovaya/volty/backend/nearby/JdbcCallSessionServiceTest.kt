@@ -21,9 +21,11 @@ class JdbcCallSessionServiceTest {
     private val epoch = SfuEpoch("volty-call-$call", "node")
     private val sfu = RecordingSfu()
     private var tokens = 0
+    private var failTokens = false
     private val service = SessionService(repository, sfu, {_, _ -> error("CALL reached channel resolver")},
         SessionCredentialIssuer {row ->
             tokens++
+            if (failTokens) error("deliberate signing failure")
             SessionCredentials("ws://test", "opaque", row.operation.sessionId!!, row.sfuEpoch!!.roomEpoch, row.operation.deadlineEpochMillis!!)
         }, {at}, resolveTypedRoom = {actor, destination, kind ->
             epoch.roomEpoch.takeIf {actor in listOf(caller, callee) && destination == call && kind == VoiceDestinationKind.DIRECT_CALL}
@@ -141,10 +143,69 @@ class JdbcCallSessionServiceTest {
         assertEquals(2, tokens)
     }
 
+    @Test fun rejectedRegistrationEndsPairAsMediaLossWithoutInventingUserStop() {
+        sfu.registrationFailure = SfuFailure.REJECTED
+        assertIs<SessionAction.Ended>(service.resumeCall(caller, callerOperation, call))
+        assertEquals("MEDIA_LOST", outcome()); assertPairClosed()
+    }
+
+    @Test fun rejectedCurrentObservationEndsPairAsMediaLoss() {
+        assertIs<SessionAction.Ready>(service.resumeCall(caller, callerOperation, call))
+        sfu.observationFailure = SfuFailure.REJECTED
+        assertIs<SessionAction.Ended>(service.refreshMedia(caller, callerOperation))
+        assertEquals("MEDIA_LOST", outcome()); assertPairClosed()
+    }
+
+    @Test fun missingTypedResolverIsMediaLossRatherThanUserCancellation() {
+        assertIs<SessionAction.Ready>(service.resumeCall(caller, callerOperation, call))
+        val channelOnly = SessionService(repository, sfu, {_, _ -> error("unexpected channel resolution")},
+            SessionCredentialIssuer {error("unexpected signing")}, {at})
+        assertIs<SessionAction.Ended>(channelOnly.resumeCall(caller, callerOperation, call))
+        assertEquals("MEDIA_LOST", outcome()); assertPairClosed()
+    }
+
+    @Test fun signingFailureIsMediaLossRatherThanUserCancellation() {
+        failTokens = true
+        assertIs<SessionAction.Unavailable>(service.resumeCall(caller, callerOperation, call))
+        assertEquals("MEDIA_LOST", outcome()); assertPairClosed()
+    }
+
+    @Test fun explicitUserStopRetainsItsCauseAfterLateAutonomousInvalidation() {
+        assertIs<SessionAction.Ready>(service.resumeCall(caller, callerOperation, call))
+        assertIs<SessionAction.Ended>(service.stop(caller, callerOperation))
+        assertEquals("CALLER_ENDED", outcome())
+        repository.invalidateMedia(callee, calleeOperation, {at})
+        assertEquals("CALLER_ENDED", outcome()); assertPairClosed()
+        assertIs<SessionAction.Ended>(service.resumeCall(callee, calleeOperation, call))
+        assertEquals(1, tokens)
+    }
+
+    @Test fun actualOriginalExpiryHasPrecedenceOverLaterMediaLossEvidence() {
+        at = 15_101
+        assertTrue(repository.invalidateMedia(caller, callerOperation, {at}).state!!.operation.terminal)
+        assertEquals("MEDIA_TIMEOUT", outcome()); assertPairClosed()
+    }
+
+    @Test fun actualFriendshipRevocationHasPrecedenceOverMediaLossEvidence() {
+        source.connection.use {c -> c.createStatement().use {it.execute("DELETE FROM friendships")}}
+        assertTrue(repository.invalidateMedia(caller, callerOperation, {at}).state!!.operation.terminal)
+        assertEquals("FRIENDSHIP_REVOKED", outcome()); assertPairClosed()
+    }
+
+    private fun assertPairClosed() {
+        assertNull(repository.currentClaim(caller)); assertNull(repository.currentClaim(callee))
+        assertTrue(repository.get(caller, callerOperation)!!.operation.terminal)
+        assertTrue(repository.get(callee, calleeOperation)!!.operation.terminal)
+    }
+    private fun outcome(): String? = source.connection.use {c -> c.prepareStatement("SELECT outcome FROM nearby_direct_calls WHERE call_id=?::uuid").use {
+        it.setString(1, call); it.executeQuery().use {r -> assertTrue(r.next()); r.getString(1)}
+    }}
+
     private inner class RecordingSfu : SfuLeaseClient, SfuConnectedLeaseClient {
         val calls = mutableListOf<String>(); val rooms = mutableSetOf<String>()
         var beforeRegisterAck: () -> Unit = {}
         var registrationFailure: SfuFailure? = null
+        var observationFailure: SfuFailure? = null
         var media = SfuParticipantObservation(null, null)
         override fun inspect(room: String): SfuReply<SfuNodeStatus> = error("prepared call must keep accepted node epoch")
         override fun register(room: String, session: String, expectedNodeEpoch: String): SfuReply<LeaseReceipt> {
@@ -156,6 +217,7 @@ class JdbcCallSessionServiceTest {
         override fun renew(room: String, session: String, expectedNodeEpoch: String): SfuReply<LeaseReceipt> = error("unobserved renewal")
         override fun observeParticipant(room: String, session: String, expectedNodeEpoch: String): SfuReply<SfuParticipantObservation> {
             assertEquals(epoch.roomEpoch, room); rooms += room; calls += "observe:$session"
+            observationFailure?.let {return SfuReply.Rejected(it)}
             return SfuReply.Accepted(media)
         }
         override fun renewConnected(room: String, session: String, expectedNodeEpoch: String, expectedParticipantSid: String): SfuReply<LeaseReceipt> {

@@ -69,6 +69,12 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
 
     private data class CancelStep(val result: SessionJournalResult?, val pairHandoff: Boolean)
 
+    override fun invalidateMedia(actor: String, operation: String, now: () -> Long): SessionJournalResult {
+        if (get(actor, operation)?.operation?.destinationKind == VoiceDestinationKind.DIRECT_CALL)
+            JdbcDirectCallMediaRepository(source).invalidateSession(actor, operation, now)?.let {return it}
+        return cancel(actor, operation, now)
+    }
+
     override fun admit(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch, now: () -> Long, confirmedDeadline: Long) =
         mediaChange(actor, operation, session, sfuEpoch, now) { current, at -> policy.admit(current, session, at, confirmedDeadline) }
 

@@ -127,6 +127,21 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
     internal fun reconcileSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
         sessionAction(actor, operation) {call -> reconcile(actor, call, now)}
 
+    /** Actual internal service failure, not an untrusted public media-loss command. */
+    internal fun invalidateSession(actor: String, operation: String, now: () -> Long): SessionJournalResult? =
+        sessionAction(actor, operation) {call ->
+            owned(actor, call) {c, current ->
+                val at = now()
+                expireAccepted(c, current, at)?.let {return@owned it}
+                if (!friends(c, current) && !current.terminal)
+                    return@owned persist(c, policy.revokeFriendship(current, at), at)
+                retireLostClaims(c, current, at)?.let {return@owned it}
+                // CALL operations are created only by accepted-pair preparation.
+                check(current.phase == DirectCallPhase.ACCEPTED || current.terminal)
+                persist(c, policy.loseMedia(current, at), at)
+            }
+        }
+
     internal data class PairExecution<T>(val value: T)
 
     /** Positive work shares the same pair ownership as stop; the block performs no network IO. */

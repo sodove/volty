@@ -15,7 +15,7 @@ data class SessionCredentials(
     override fun toString() = "SessionCredentials(sessionId=$sessionId, participantToken=<redacted>, deadlineEpochMillis=$deadlineEpochMillis)"
 }
 
-/** Must not perform I/O: issuance is authorized under the repository's actor lock. */
+/** No I/O: issuance holds original actor ownership, including both participants for calls. */
 fun interface SessionCredentialIssuer { fun issue(row: SessionJournalEntry): SessionCredentials }
 
 class JwtSessionCredentialIssuer(private val serverUrl: String, private val apiKey: String, private val secret: String) : SessionCredentialIssuer {

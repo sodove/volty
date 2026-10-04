@@ -36,7 +36,7 @@ class SessionService(
         val current = checkNotNull(repository.expire(actor, operation, now).state)
         if (current.operation.terminal) {cleanup(current); return result(checkNotNull(repository.get(actor, operation)), false)}
         // Earlier implementation skipped room resolution on ACTIVE replay, unlike channel join.
-        if (roomFor(current) != current.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        if (roomFor(current) != current.sfuEpoch!!.roomEpoch) return endMedia(actor, operation)
         return result(advancePending(current), credentials = true)
     }
 
@@ -47,7 +47,7 @@ class SessionService(
             return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (existing != null && existing.operation.destinationId != destination) return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         val room = resolveRoom(actor, destination)
-        if (room == null) { stop(actor, operation); return SessionAction.Denied(SessionDenial.MEMBERSHIP) }
+        if (room == null) { endMedia(actor, operation); return SessionAction.Denied(SessionDenial.MEMBERSHIP) }
         val observed = sfu.inspect(room)
         if (observed is SfuReply.Rejected) {
             if (existing == null) repository.cancel(actor, operation, now)
@@ -59,7 +59,7 @@ class SessionService(
             return SessionAction.Unavailable(SfuFailure.UNAVAILABLE)
         }
         val epoch = SfuEpoch(room, status.nodeEpoch)
-        if (existing != null && existing.sfuEpoch != epoch) return stop(actor, operation)
+        if (existing != null && existing.sfuEpoch != epoch) return endMedia(actor, operation)
         val begun = repository.begin(actor, operation, destination, UUID.randomUUID().toString(), epoch, now, replace)
         if (begun.rejection == OperationRejection.ACCESS_DENIED) {
             begun.state?.let(::cleanup)
@@ -85,12 +85,20 @@ class SessionService(
         return SessionAction.Ended(checkNotNull(repository.get(actor, operation)))
     }
 
+    // Earlier revisions used explicit user stop for autonomous failures, falsely attributing
+    // accepted-call media loss to the caller/callee. Keep intent and internal loss distinct.
+    private fun endMedia(actor: String, operation: String): SessionAction.Ended {
+        val row = checkNotNull(repository.invalidateMedia(actor, operation, now).state)
+        cleanup(row)
+        return SessionAction.Ended(checkNotNull(repository.get(actor, operation)))
+    }
+
     fun heartbeat(actor: String, operation: String): SessionAction {
         val row = repository.expire(actor, operation, now).state
             ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return endMedia(actor, operation)
         val observed = observeCurrent(row)
         if (observed is SfuReply.Rejected) return SessionAction.Unavailable(observed.reason)
         val current = (observed as SfuReply.Accepted).value
@@ -121,7 +129,7 @@ class SessionService(
             ?: return SessionAction.Denied(SessionDenial.OPERATION_CONFLICT)
         if (row.operation.terminal) { cleanup(row); return result(checkNotNull(repository.get(actor, operation)), false) }
         if (row.operation.phase != OperationPhase.ACTIVE) return SessionAction.Pending(row)
-        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation)
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return endMedia(actor, operation)
         return when (val observed = observeCurrent(row)) {
             is SfuReply.Accepted -> result(observed.value, false)
             is SfuReply.Rejected -> SessionAction.Unavailable(observed.reason)
@@ -135,7 +143,7 @@ class SessionService(
         val observed = mediaClient.observeParticipant(epoch.roomEpoch, row.operation.sessionId!!, epoch.nodeEpoch)
         if (observed is SfuReply.Rejected) {
             // Unlike a conditional renewal SID mismatch, gate observation rejection means no valid admission.
-            if (observed.reason == SfuFailure.REJECTED) return SfuReply.Accepted(stop(row.operation.actorId, row.operation.operationId).state)
+            if (observed.reason == SfuFailure.REJECTED) return SfuReply.Accepted(endMedia(row.operation.actorId, row.operation.operationId).state)
             return observed
         }
         val recorded = repository.observeMedia(row.operation.actorId, row.operation.operationId, row.operation.sessionId,
@@ -168,16 +176,16 @@ class SessionService(
         var row = checkNotNull(repository.expire(actor, operation, now).state)
         if (row.operation.terminal) { cleanup(row); return checkNotNull(repository.get(actor, operation)) }
         if (row.operation.phase == OperationPhase.ACTIVE) return row
-        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return stop(actor, operation).state
+        if (roomFor(row) != row.sfuEpoch!!.roomEpoch) return endMedia(actor, operation).state
         repository.pendingCleanup(actor, 1).firstOrNull()?.let { cleanup(it) }
         if (repository.pendingCleanup(actor, 1).isNotEmpty()) return checkNotNull(repository.get(actor, operation))
         row = checkNotNull(repository.expire(actor, operation, now).state)
         if (row.operation.terminal) { cleanup(row); return checkNotNull(repository.get(actor, operation)) }
         val expected = SessionClaim(operation, row.operation.sessionId!!, row.sfuEpoch!!)
-        if (repository.currentClaim(actor) != expected) return stop(actor, operation).state
+        if (repository.currentClaim(actor) != expected) return endMedia(actor, operation).state
         val registered = sfu.register(row.sfuEpoch.roomEpoch, row.operation.sessionId, row.sfuEpoch.nodeEpoch)
         if (registered is SfuReply.Rejected) {
-            if (registered.reason == SfuFailure.REJECTED) return stop(actor, operation).state
+            if (registered.reason == SfuFailure.REJECTED) return endMedia(actor, operation).state
             return checkNotNull(repository.get(actor, operation))
         }
         val receipt = (registered as SfuReply.Accepted).value
@@ -226,14 +234,14 @@ class SessionService(
                 }
             }
         } catch (_: Exception) {
-            stop(row.operation.actorId, row.operation.operationId)
+            endMedia(row.operation.actorId, row.operation.operationId)
             return SessionAction.Unavailable(SfuFailure.UNAVAILABLE)
         }
         if (authorized is SessionAction.Unavailable) {
-            stop(row.operation.actorId, row.operation.operationId)
+            endMedia(row.operation.actorId, row.operation.operationId)
             return authorized
         }
         if (authorized != null) return authorized
-        return stop(row.operation.actorId, row.operation.operationId)
+        return endMedia(row.operation.actorId, row.operation.operationId)
     }
 }
