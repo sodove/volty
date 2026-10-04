@@ -62,6 +62,7 @@ class VoiceControlOwner(
             is Command.Join -> {
                 if (stateOutput.value.operationId == command.operation) return
                 val transition = VoiceSessionReducer.reduce(stateOutput.value, VoiceSessionEvent.Join(command.operation))
+                port.rememberJoinIntent(command.operation, transition.state.generation, command.channel, command.replace)
                 attempt = Attempt(command.operation, transition.state.generation, command.channel, command.replace)
                 apply(transition)
             }

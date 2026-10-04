@@ -4,6 +4,8 @@ import ru.sodovaya.volty.domain.voice.*
 
 /** Replies carry validated identity and request-start monotonic lease provenance. */
 interface VoiceSessionControlPort {
+    /** Pure intent registration before scheduling a producer that may never start. */
+    fun rememberJoinIntent(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean) = Unit
     suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean = false): VoiceHttpReply
     suspend fun status(operation: VoiceOperationId, generation: VoiceGeneration): VoiceHttpReply
     suspend fun heartbeat(tag: VoiceSessionTag): VoiceHttpReply
