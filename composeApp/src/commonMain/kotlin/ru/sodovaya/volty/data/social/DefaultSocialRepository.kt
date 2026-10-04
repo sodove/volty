@@ -53,6 +53,10 @@ class DefaultSocialRepository(
     private val _credentials = MutableStateFlow<SocialCredentials?>(null)
     private val _activeSharing = MutableStateFlow<SharingSession?>(null)
     private val refreshMutex = Mutex()
+    private class AuthenticationGeneration
+    private val authenticationGeneration = MutableStateFlow(AuthenticationGeneration())
+    private val sessionMutex = Mutex()
+    private val credentialMutex = Mutex()
     override val activeSharing: StateFlow<SharingSession?> = _activeSharing.asStateFlow()
 
     init { scope.launch { restoreSession() } }
@@ -64,11 +68,10 @@ class DefaultSocialRepository(
         authenticate { transport.login(request) }
 
     override suspend fun logout(): SocialResult<Unit> {
-        val stored = _credentials.value ?: credentials.read()
-        val result = stored?.let { transport.logout(it.accessToken) }
+        // Retire local ownership before any storage or remote wait.
+        val stored = clearLocalSession()
+        return stored?.let { transport.logout(it.accessToken) }
             ?: SocialResult.Success(Unit)
-        clearLocalSession()
-        return result
     }
 
     override suspend fun verifyEmail(token: String): SocialResult<Unit> = transport.verifyEmail(token)
@@ -273,31 +276,62 @@ class DefaultSocialRepository(
     private suspend fun authenticate(
         request: suspend () -> SocialResult<SessionCredentials>,
     ): SocialResult<Unit> {
-        _session.value = SocialSession.Authenticating
+        val generation = sessionMutex.withLock {
+            AuthenticationGeneration().also {
+                authenticationGeneration.value = it
+                _credentials.value = null
+                _activeSharing.value = null
+                _session.value = SocialSession.Authenticating
+            }
+        }
         return when (val result = request()) {
             is SocialResult.Failure -> {
-                clearLocalSession()
+                if (!ownsAuthentication(generation)) return unauthorized()
+                clearLocalSession(generation)
                 result
             }
-            is SocialResult.Success -> finishAuthentication(result.value)
+            is SocialResult.Success -> {
+                if (!ownsAuthentication(generation)) return unauthorized()
+                finishAuthentication(result.value, generation)
+            }
         }
     }
 
-    private suspend fun finishAuthentication(session: SessionCredentials): SocialResult<Unit> {
+    private suspend fun finishAuthentication(
+        session: SessionCredentials,
+        generation: AuthenticationGeneration,
+    ): SocialResult<Unit> {
         val stored = session.toStored()
         return when (val profile = transport.getProfile(stored.accessToken)) {
-            is SocialResult.Success -> {
+            is SocialResult.Success -> credentialMutex.withLock {
+                if (!ownsAuthentication(generation)) return@withLock unauthorized()
                 credentials.write(stored)
-                _credentials.value = stored
-                _session.value = profile.value
-                SocialResult.Success(Unit)
+                val published = sessionMutex.withLock {
+                    if (authenticationGeneration.value !== generation) false
+                    else {
+                        _credentials.value = stored
+                        _session.value = profile.value
+                        true
+                    }
+                }
+                if (published) SocialResult.Success(Unit)
+                else {
+                    // A newer login cannot write while this credential lock is held.
+                    // Earlier code denied the profile but left its already-written token behind.
+                    credentials.clear()
+                    unauthorized()
+                }
             }
             is SocialResult.Failure -> {
-                clearLocalSession()
+                if (!ownsAuthentication(generation)) return unauthorized()
+                clearLocalSession(generation)
                 profile
             }
         }
     }
+
+    private suspend fun ownsAuthentication(generation: AuthenticationGeneration): Boolean =
+        sessionMutex.withLock { authenticationGeneration.value === generation }
 
     private suspend fun restoreSession() {
         val saved = credentials.read() ?: return
@@ -385,11 +419,23 @@ class DefaultSocialRepository(
         if (result is SocialResult.Success) _session.value = result.value
     }
 
-    private suspend fun clearLocalSession() {
-        credentials.clear()
-        _credentials.value = null
-        _activeSharing.value = null
-        _session.value = SocialSession.LoggedOut
+    private suspend fun clearLocalSession(expected: AuthenticationGeneration? = null): SocialCredentials? {
+        val retired = sessionMutex.withLock {
+            if (expected != null && authenticationGeneration.value !== expected) return@withLock null
+            val previous = _credentials.value
+            val next = AuthenticationGeneration()
+            authenticationGeneration.value = next
+            _credentials.value = null
+            _activeSharing.value = null
+            _session.value = SocialSession.LoggedOut
+            next to previous
+        } ?: return null
+        return credentialMutex.withLock {
+            if (!ownsAuthentication(retired.first)) return@withLock retired.second
+            val stored = retired.second ?: credentials.read()
+            if (ownsAuthentication(retired.first)) credentials.clear()
+            stored
+        }
     }
 
     private fun SessionCredentials.toStored() = SocialCredentials(

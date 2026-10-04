@@ -4,6 +4,9 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
@@ -12,6 +15,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.social.FriendRequest
 import ru.sodovaya.volty.domain.social.FriendSummary
 import ru.sodovaya.volty.domain.social.LoginRequest
@@ -36,6 +40,62 @@ import ru.sodovaya.volty.domain.social.ParticipantSnapshot
 import ru.sodovaya.volty.domain.social.PresenceStatus
 
 class DefaultSocialRepositoryTest {
+    @Test
+    fun supersededLoginWriteCannotLeaveItsTokenWhileNewLoginIsStillPending() = runTest {
+        val restoreRead = CompletableDeferred<Unit>()
+        val writeStarted = CompletableDeferred<Unit>()
+        val releaseWrite = CompletableDeferred<Unit>()
+        val newerProfileStarted = CompletableDeferred<Unit>()
+        val releaseNewerProfile = CompletableDeferred<Unit>()
+        var stored: SocialCredentials? = null
+        var written = 0
+        var cleared = 0
+        val store = object : SocialCredentialStore {
+            override suspend fun read(): SocialCredentials? {
+                val snapshot = stored
+                restoreRead.complete(Unit)
+                return snapshot
+            }
+            override suspend fun write(credentials: SocialCredentials) {
+                writeStarted.complete(Unit)
+                withContext(NonCancellable) { releaseWrite.await() }
+                stored = credentials
+                written++
+            }
+            override suspend fun clear() { cleared++; stored = null }
+        }
+        val transport = object : SocialTransport by FakeTransport() {
+            override suspend fun login(request: LoginRequest) = SocialResult.Success(
+                SessionCredentials(request.email, "refresh-${request.email}", Long.MAX_VALUE),
+            )
+            override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> {
+                if (accessToken == "new@example.com") {
+                    newerProfileStarted.complete(Unit)
+                    releaseNewerProfile.await()
+                }
+                return SocialResult.Success(authenticatedProfile())
+            }
+        }
+        val repository = DefaultSocialRepository(transport, store)
+        restoreRead.await()
+        val old = async { repository.login(LoginRequest("old@example.com", "password")) }
+        writeStarted.await()
+        val newer = async { repository.login(LoginRequest("new@example.com", "password")) }
+        try {
+            newerProfileStarted.await()
+            assertEquals(SocialSession.Authenticating, repository.session.value)
+            releaseWrite.complete(Unit)
+            assertEquals(SocialResult.Failure(SocialFailure.Unauthorized), old.await())
+            assertEquals(1, written, "The stale store write must actually commit before cleanup is judged")
+            assertNull(stored, "Discarding the stale in-memory profile must also discard its persisted token")
+            assertEquals(1, cleared)
+            assertTrue(!newer.isCompleted, "Newer login must still be pending; its cancellation cannot clear the token for us")
+        } finally {
+            releaseWrite.complete(Unit)
+            newer.cancel()
+            releaseNewerProfile.complete(Unit)
+        }
+    }
     @Test
     fun subscriptionTerminationDoesNotEscapeTransportCatchOrReconnect() = runTest {
         val transport = CatchingTerminalTransport()
@@ -72,6 +132,91 @@ class DefaultSocialRepositoryTest {
             repository.session.value,
         )
         assertEquals(SocialCredentials("access", "refresh", 10_000L), credentials.value)
+    }
+
+    @Test
+    fun lateLoginProfileCannotRestoreSessionAfterLogout() = runTest {
+        val credentials = RestoreAwareCredentials()
+        val lateProfile = authenticatedProfile().copy(
+            userId = ru.sodovaya.volty.domain.social.SocialUserId("late-user"),
+            displayName = "Late Rider",
+        )
+        val transport = ControlledAuthenticationTransport(
+            credentialsByEmail = mapOf(
+                "late@example.com" to SessionCredentials("late-token", "late-refresh", Long.MAX_VALUE),
+            ),
+            profilesByToken = mapOf("late-token" to lateProfile),
+            heldProfileToken = "late-token",
+        )
+        val repository = DefaultSocialRepository(transport, credentials)
+        credentials.restoreStarted.await()
+
+        val login = async {
+            repository.login(LoginRequest("late@example.com", "password"))
+        }
+        transport.heldProfileStarted.await()
+
+        try {
+            assertEquals(SocialResult.Success(Unit), repository.logout())
+            assertEquals(SocialSession.LoggedOut, repository.session.value)
+            assertNull(credentials.value)
+        } finally {
+            transport.releaseHeldProfile.complete(Unit)
+        }
+        val lateLoginResult = login.await()
+        assertTrue(transport.heldProfileReturned.isCompleted)
+        assertEquals(SocialResult.Failure(SocialFailure.Unauthorized), lateLoginResult)
+        assertEquals(SocialSession.LoggedOut, repository.session.value)
+        assertNull(credentials.value)
+    }
+
+    @Test
+    fun lateFirstLoginCannotReplaceSecondAccount() = runTest {
+        val credentials = RestoreAwareCredentials()
+        val firstProfile = authenticatedProfile().copy(
+            userId = ru.sodovaya.volty.domain.social.SocialUserId("first-user"),
+            displayName = "First Rider",
+        )
+        val secondProfile = authenticatedProfile().copy(
+            userId = ru.sodovaya.volty.domain.social.SocialUserId("second-user"),
+            displayName = "Second Rider",
+        )
+        val firstCredentials = SessionCredentials("first-token", "first-refresh", Long.MAX_VALUE)
+        val secondCredentials = SessionCredentials("second-token", "second-refresh", Long.MAX_VALUE)
+        val transport = ControlledAuthenticationTransport(
+            credentialsByEmail = mapOf(
+                "first@example.com" to firstCredentials,
+                "second@example.com" to secondCredentials,
+            ),
+            profilesByToken = mapOf(
+                "first-token" to firstProfile,
+                "second-token" to secondProfile,
+            ),
+            heldProfileToken = "first-token",
+        )
+        val repository = DefaultSocialRepository(transport, credentials)
+        credentials.restoreStarted.await()
+
+        val firstLogin = async {
+            repository.login(LoginRequest("first@example.com", "password"))
+        }
+        transport.heldProfileStarted.await()
+
+        try {
+            assertEquals(
+                SocialResult.Success(Unit),
+                repository.login(LoginRequest("second@example.com", "password")),
+            )
+            assertEquals(secondProfile, repository.session.value)
+            assertEquals(secondCredentials.toStoredCredentials(), credentials.value)
+        } finally {
+            transport.releaseHeldProfile.complete(Unit)
+        }
+        val lateFirstLoginResult = firstLogin.await()
+        assertTrue(transport.heldProfileReturned.isCompleted)
+        assertEquals(SocialResult.Failure(SocialFailure.Unauthorized), lateFirstLoginResult)
+        assertEquals(secondProfile, repository.session.value)
+        assertEquals(secondCredentials.toStoredCredentials(), credentials.value)
     }
 
     @Test
@@ -311,6 +456,50 @@ class DefaultSocialRepositoryTest {
         override suspend fun clear() { value = null }
     }
 
+    private class RestoreAwareCredentials : SocialCredentialStore {
+        val restoreStarted = CompletableDeferred<Unit>()
+        var value: SocialCredentials? = null
+
+        override suspend fun read(): SocialCredentials? {
+            val snapshot = value
+            restoreStarted.complete(Unit)
+            return snapshot
+        }
+
+        override suspend fun write(credentials: SocialCredentials) {
+            value = credentials
+        }
+
+        override suspend fun clear() {
+            value = null
+        }
+    }
+
+    private class ControlledAuthenticationTransport(
+        private val credentialsByEmail: Map<String, SessionCredentials>,
+        private val profilesByToken: Map<String, SocialSession.Authenticated>,
+        private val heldProfileToken: String,
+    ) : SocialTransport by FakeTransport() {
+        val heldProfileStarted = CompletableDeferred<Unit>()
+        val releaseHeldProfile = CompletableDeferred<Unit>()
+        val heldProfileReturned = CompletableDeferred<Unit>()
+
+        override suspend fun login(request: LoginRequest): SocialResult<SessionCredentials> =
+            SocialResult.Success(credentialsByEmail.getValue(request.email))
+
+        override suspend fun getProfile(accessToken: String): SocialResult<SocialSession.Authenticated> {
+            if (accessToken == heldProfileToken) {
+                heldProfileStarted.complete(Unit)
+                withContext(NonCancellable) {
+                    releaseHeldProfile.await()
+                }
+            }
+            return SocialResult.Success(profilesByToken.getValue(accessToken)).also {
+                if (accessToken == heldProfileToken) heldProfileReturned.complete(Unit)
+            }
+        }
+    }
+
     private class CatchingTerminalTransport : FakeTransport() {
         var observeCalls = 0
 
@@ -430,5 +619,11 @@ class DefaultSocialRepositoryTest {
         displayName = "Rider",
         tokenState = ru.sodovaya.volty.domain.social.SessionTokenState.ACTIVE,
         emailVerified = true,
+    )
+
+    private fun SessionCredentials.toStoredCredentials() = SocialCredentials(
+        accessToken = accessToken,
+        refreshToken = refreshToken,
+        expiresAtEpochMillis = expiresAtEpochMillis,
     )
 }
