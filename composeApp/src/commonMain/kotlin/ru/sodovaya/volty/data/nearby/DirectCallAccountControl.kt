@@ -8,11 +8,12 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.update
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.voice.*
+import ru.sodovaya.volty.data.voice.VoiceLeaseRequestSequence
 
 /** Admission may retire immediately; original terminal cleanup survives until root-owned drain. */
 internal class DirectCallAccountControl private constructor(
     private val account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
-    monotonicMillis: () -> Long, initialBearer: String,
+    monotonicMillis: () -> Long, initialBearer: String, leaseRequests: VoiceLeaseRequestSequence,
 ) : DirectCallControlPort {
     private sealed interface Intent {
         val operation: VoiceOperationId
@@ -33,11 +34,11 @@ internal class DirectCallAccountControl private constructor(
         if (token != null) capability.update {if (it.closed || it.retired) it else it.copy(bearer = token)}
         ensureLive()
         token
-    }, monotonicMillis)
+    }, monotonicMillis, leaseRequests)
     private val cleanup = DirectCallHttpPort(account.userId.value, client, baseUrl, {
         ensureOpen()
         capability.value.bearer
-    }, monotonicMillis)
+    }, monotonicMillis, leaseRequests)
 
     fun rememberOutgoing(call: String, callee: String, key: String, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
         if (!valid(call, callee, key, operation.value) || callee == account.userId.value || generation.value < 0) return false
@@ -141,14 +142,18 @@ internal class DirectCallAccountControl private constructor(
 
     companion object {
         private const val RETIRED = "Authenticated call control retired"
-        suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String, monotonicMillis: () -> Long): DirectCallAccountControl {
+        suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String, monotonicMillis: () -> Long,
+            leaseRequests: VoiceLeaseRequestSequence): DirectCallAccountControl {
             currentCoroutineContext().ensureActive()
             check(account.job.isActive) {RETIRED}
             directCallId(account.userId.value); nearbyHttpsApiBaseUrl(baseUrl)
             val token = account.bearer()?.takeIf {it.isNotBlank()} ?: throw CancellationException(RETIRED)
             currentCoroutineContext().ensureActive()
             check(account.job.isActive) {RETIRED}
-            return DirectCallAccountControl(account, client, baseUrl, monotonicMillis, token)
+            return DirectCallAccountControl(account, client, baseUrl, monotonicMillis, token, leaseRequests)
         }
+        suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
+            monotonicMillis: () -> Long): DirectCallAccountControl =
+            create(account, client, baseUrl, monotonicMillis, VoiceLeaseRequestSequence())
     }
 }

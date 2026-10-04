@@ -6,25 +6,24 @@ import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.*
 import io.ktor.utils.io.readRemaining
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.io.readByteArray
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.*
 import ru.sodovaya.volty.domain.voice.*
+import ru.sodovaya.volty.data.voice.VoiceLeaseRequestSequence
 
 /** Owned bounded HTTP child; caller owns account retirement and original call intent. */
 class DirectCallHttpPort(private val actor: String, client: HttpClient, baseUrl: String,
-    private val bearer: suspend () -> String?, private val monotonicMillis: () -> Long) : DirectCallControlPort {
+    private val bearer: suspend () -> String?, private val monotonicMillis: () -> Long,
+    leaseRequests: VoiceLeaseRequestSequence? = null) : DirectCallControlPort {
     private val base = nearbyHttpsApiBaseUrl(baseUrl)
     init {directCallId(actor)}
     private val http = client.config {followRedirects = false; expectSuccess = false}
     private val json = Json {ignoreUnknownKeys = true}
     private val decoder = DirectCallResponseDecoder(actor)
-    private val mutex = Mutex()
-    private var ordinal = 0L
+    private val requests = leaseRequests ?: VoiceLeaseRequestSequence()
 
     override suspend fun create(call: String, callee: String, key: String, operation: VoiceOperationId) =
         outgoing(call, callee, key, operation, "create")
@@ -71,10 +70,7 @@ class DirectCallHttpPort(private val actor: String, client: HttpClient, baseUrl:
         decode: (JsonObject, HttpStatusCode, VoiceLeaseRequestId, Long, Long) -> T): T = try {
         withTimeoutOrNull(10_000) {
             val token = bearer()?.takeIf {it.isNotBlank()} ?: return@withTimeoutOrNull failure(DirectCallFailure.UNAUTHORIZED)
-            val (requestId, started) = mutex.withLock {
-                check(ordinal < Long.MAX_VALUE)
-                VoiceLeaseRequestId(ordinal++) to monotonicMillis().also {require(it >= 0)}
-            }
+            val (requestId, started) = requests.reserve(monotonicMillis)
             http.prepareRequest("$base/calls/$path") {
                 this.method = method; bearerAuth(token); header(HttpHeaders.Accept, ContentType.Application.Json.toString())
                 url {query.forEach {(key, value) -> parameters.append(key, value)}}

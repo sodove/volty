@@ -7,8 +7,6 @@ import io.ktor.http.*
 import io.ktor.utils.io.readRemaining
 import kotlinx.io.readByteArray
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
@@ -26,12 +24,12 @@ class VoiceSessionHttpPort(
     baseUrl: String,
     private val bearer: suspend () -> String?,
     private val monotonicMillis: () -> Long,
+    leaseRequests: VoiceLeaseRequestSequence? = null,
 ) : VoiceSessionControlPort {
     private val base = nearbyHttpsApiBaseUrl(baseUrl)
     private val http = client.config { followRedirects = false; expectSuccess = false }
     private val json = Json { ignoreUnknownKeys = true }
-    private val requestMutex = Mutex()
-    private var nextOrdinal = 0L
+    private val requests = leaseRequests ?: VoiceLeaseRequestSequence()
 
     override suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean): VoiceHttpReply {
         requireId(operation.value); requireId(channel)
@@ -63,10 +61,7 @@ class VoiceSessionHttpPort(
             withTimeoutOrNull(REQUEST_TIMEOUT) {
                 val token = bearer()?.takeIf { it.isNotBlank() }
                     ?: return@withTimeoutOrNull VoiceHttpReply.Failed(VoiceHttpFailure.UNAUTHORIZED)
-                val (ordinal, started) = requestMutex.withLock {
-                    check(nextOrdinal < Long.MAX_VALUE)
-                    VoiceLeaseRequestId(nextOrdinal++) to monotonicMillis().also { require(it >= 0) }
-                }
+                val (ordinal, started) = requests.reserve(monotonicMillis)
                 http.prepareRequest("$base/$path") {
                     this.method = method
                     bearerAuth(token)

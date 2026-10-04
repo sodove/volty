@@ -18,6 +18,7 @@ internal class VoiceSessionAccountControl private constructor(
     baseUrl: String,
     monotonicMillis: () -> Long,
     initialBearer: String,
+    leaseRequests: VoiceLeaseRequestSequence,
 ) : VoiceSessionControlPort {
     private data class Intent(val generation: VoiceGeneration, val channel: String, val replace: Boolean)
     private data class Capability(
@@ -36,12 +37,12 @@ internal class VoiceSessionAccountControl private constructor(
         if (token != null) capability.update { if (it.closed || it.retired) it else it.copy(bearer = token) }
         ensureLive()
         token
-    }, monotonicMillis)
+    }, monotonicMillis, leaseRequests)
     private val cleanup = VoiceSessionHttpPort(client, baseUrl, {
         ensureOpen()
         // No refresh wait, new-account token or auth Job dependency in terminal cleanup.
         capability.value.bearer
-    }, monotonicMillis)
+    }, monotonicMillis, leaseRequests)
 
     override fun rememberJoinIntent(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean) {
         // Pure owner metadata, not permission to join. Malformed intent never earns cleanup.
@@ -131,7 +132,11 @@ internal class VoiceSessionAccountControl private constructor(
 
         /** Capture original cleanup credentials before allocating adapters or accepting intent. */
         suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
-                           monotonicMillis: () -> Long): VoiceSessionAccountControl {
+                           monotonicMillis: () -> Long): VoiceSessionAccountControl =
+            create(account, client, baseUrl, monotonicMillis, VoiceLeaseRequestSequence())
+
+        suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
+                           monotonicMillis: () -> Long, leaseRequests: VoiceLeaseRequestSequence): VoiceSessionAccountControl {
             currentCoroutineContext().ensureActive()
             check(account.job.isActive) { RETIRED }
             invitationDraftId(account.userId.value)
@@ -139,7 +144,7 @@ internal class VoiceSessionAccountControl private constructor(
             val token = account.bearer()?.takeIf { it.isNotBlank() } ?: throw CancellationException(RETIRED)
             currentCoroutineContext().ensureActive()
             check(account.job.isActive) { RETIRED }
-            return VoiceSessionAccountControl(account, client, baseUrl, monotonicMillis, token)
+            return VoiceSessionAccountControl(account, client, baseUrl, monotonicMillis, token, leaseRequests)
         }
     }
 }
