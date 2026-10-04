@@ -79,7 +79,7 @@ class JdbcSessionLegacyRetirementTest {
         assertEquals(revision, JdbcRosterJournal(source).revision())
         assertEquals(listOf(native), communities.memberships(owner).map { it.id })
         assertNull(communities.detail(owner, late)); assertEquals(2, count("groups"))
-        assertEquals(1, count("friendships")); assertEquals(12, count("schema_migrations"))
+        assertEquals(1, count("friendships")); assertEquals(13, count("schema_migrations"))
     }
     private fun legacy() {
         SchemaMigrator(source, listOf(1 to "/db/migration/V1__initial.sql")).migrate()

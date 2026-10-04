@@ -102,6 +102,7 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         val claim = claim(c, actor) ?: return emptyList()
         val row = checkNotNull(read(c, actor, claim.operationId))
         check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        if (row.operation.destinationKind != VoiceDestinationKind.CHANNEL) return emptyList()
         val affected = c.prepareStatement("SELECT 1 FROM nearby_voice_channels WHERE id=?::uuid AND community_id=?::uuid").use {
             it.setString(1, row.operation.destinationId); it.setString(2, community); it.executeQuery().use { rows -> rows.next() }
         }
@@ -122,6 +123,7 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         val claim = claim(c, actor) ?: return emptyList()
         val row = checkNotNull(read(c, actor, claim.operationId))
         check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        if (row.operation.destinationKind != VoiceDestinationKind.CHANNEL) return emptyList()
         if (row.operation.destinationId != channel) {
             // A room-selected candidate cannot be skipped merely because the
             // journal destination disagrees: retract that earlier assumption.
@@ -149,6 +151,7 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         val claim = claim(c, actor) ?: return
         val row = checkNotNull(read(c, actor, claim.operationId))
         check(row.operation.sessionId == claim.sessionId && row.sfuEpoch == claim.sfuEpoch && !row.operation.terminal)
+        if (row.operation.destinationKind != VoiceDestinationKind.CHANNEL) return
         val imported = c.prepareStatement("""
             SELECT 1 FROM nearby_voice_channels v JOIN nearby_communities g ON g.id=v.community_id
             WHERE v.id=?::uuid AND g.create_request_hash IS NULL AND g.state='ACTIVE'
@@ -211,7 +214,11 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
 
     private fun allowed(c: Connection, actor: String, destination: String, epoch: SfuEpoch?) =
         access?.allows(c, actor, destination, epoch?.roomEpoch) != false
-    private fun allowed(c: Connection, row: SessionJournalEntry) = allowed(c, row.operation.actorId, checkNotNull(row.operation.destinationId), row.sfuEpoch)
+    // Earlier access relied on UUID/room alone. A call row cannot earn channel credentials
+    // even if its metadata has a channel-shaped room. Call access is not enabled yet.
+    private fun allowed(c: Connection, row: SessionJournalEntry) =
+        row.operation.destinationKind == VoiceDestinationKind.CHANNEL &&
+            allowed(c, row.operation.actorId, checkNotNull(row.operation.destinationId), row.sfuEpoch)
     private fun denied(c: Connection, row: SessionJournalEntry, at: Long): SessionJournalResult =
         persist(c, row, policy.cancel(row.operation, row.operation.actorId, row.operation.operationId, at)).copy(rejection = OperationRejection.ACCESS_DENIED)
 
@@ -233,8 +240,8 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
 
     private fun save(c: Connection, row: SessionJournalEntry) {
         c.prepareStatement("""
-            INSERT INTO nearby_session_operations(actor_id,operation_id,destination_id,session_id,room_epoch,node_epoch,phase,deadline_epoch_millis,admission_pending,cleanup_pending,participant_sid,media_state,media_observation_version)
-            VALUES (?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?,?,?,?,?,?)
+            INSERT INTO nearby_session_operations(actor_id,operation_id,destination_id,session_id,room_epoch,node_epoch,phase,deadline_epoch_millis,admission_pending,cleanup_pending,participant_sid,media_state,media_observation_version,destination_kind)
+            VALUES (?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(actor_id,operation_id) DO UPDATE SET phase=EXCLUDED.phase,
             deadline_epoch_millis=EXCLUDED.deadline_epoch_millis,admission_pending=EXCLUDED.admission_pending,cleanup_pending=EXCLUDED.cleanup_pending,
             participant_sid=EXCLUDED.participant_sid,media_state=EXCLUDED.media_state,media_observation_version=EXCLUDED.media_observation_version
@@ -244,6 +251,7 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
             it.setString(4, op.sessionId); it.setString(5, row.sfuEpoch?.roomEpoch); it.setString(6, row.sfuEpoch?.nodeEpoch); it.setString(7, op.phase.name)
             it.setObject(8, op.deadlineEpochMillis); it.setBoolean(9, row.admissionPending); it.setBoolean(10, row.cleanupPending)
             it.setString(11, row.media.participantSid); it.setString(12, row.media.state?.name); it.setLong(13, row.media.observationVersion)
+            it.setString(14, op.destinationKind?.name)
             it.executeUpdate()
         }
     }
@@ -282,7 +290,8 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
 
     private fun ResultSet.entry() = SessionJournalEntry(
         SessionOperation(getString("actor_id"), getString("operation_id"), getString("destination_id"), getString("session_id"),
-            OperationPhase.valueOf(getString("phase")), getLong("deadline_epoch_millis").takeUnless { wasNull() }),
+            OperationPhase.valueOf(getString("phase")), getLong("deadline_epoch_millis").takeUnless { wasNull() },
+            getString("destination_kind")?.let(VoiceDestinationKind::valueOf)),
         getString("room_epoch")?.let { SfuEpoch(it, getString("node_epoch")) }, getBoolean("admission_pending"), getBoolean("cleanup_pending"),
         SessionMedia(getString("participant_sid"), getString("media_state")?.let(SfuParticipantState::valueOf), getLong("media_observation_version")))
 

@@ -33,7 +33,7 @@ class JdbcChannelDeletionRepository(private val source: DataSource) {
             val actors = c.prepareStatement("""
                 SELECT a.actor_id FROM nearby_actor_claims a LEFT JOIN nearby_session_operations o
                 ON o.actor_id=a.actor_id AND o.operation_id=a.operation_id
-                WHERE o.destination_id=?::uuid OR a.room_epoch=? ORDER BY a.actor_id
+                WHERE (o.destination_kind='CHANNEL' AND o.destination_id=?::uuid) OR a.room_epoch=? ORDER BY a.actor_id
             """.trimIndent()).use {
                 it.setString(1, channel); it.setString(2, "volty-channel-$channel")
                 it.executeQuery().use { rows -> buildList { while (rows.next()) add(rows.getString(1)) } }

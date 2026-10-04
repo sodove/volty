@@ -30,7 +30,7 @@ class JdbcCommunityDeletionRepository(private val source: DataSource) {
                 UNION
                 SELECT a.actor_id::text AS actor FROM nearby_actor_claims a
                 JOIN nearby_session_operations o ON o.actor_id=a.actor_id AND o.operation_id=a.operation_id
-                JOIN nearby_voice_channels v ON v.id=o.destination_id WHERE v.community_id=?::uuid
+                JOIN nearby_voice_channels v ON v.id=o.destination_id AND o.destination_kind='CHANNEL' WHERE v.community_id=?::uuid
                 ORDER BY actor
             """.trimIndent()).use {
                 it.setString(1, community); it.setString(2, community)

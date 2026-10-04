@@ -24,7 +24,7 @@ class JdbcAccountDeletionRepository(private val source: DataSource) {
                 UNION
                 SELECT a.actor_id::text FROM nearby_actor_claims a
                 JOIN nearby_session_operations o ON o.actor_id=a.actor_id AND o.operation_id=a.operation_id
-                JOIN nearby_voice_channels v ON v.id=o.destination_id JOIN nearby_communities g ON g.id=v.community_id
+                JOIN nearby_voice_channels v ON v.id=o.destination_id AND o.destination_kind='CHANNEL' JOIN nearby_communities g ON g.id=v.community_id
                 WHERE g.owner_id=?::uuid AND g.state='ACTIVE'
             """.trimIndent(), actor, actor) + actor
             // Acquire ALL actor locks before any cancellation increments the roster revision.

@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.backend.nearby
 
 enum class OperationPhase { PENDING, ACTIVE, CANCELLED, EXPIRED }
+enum class VoiceDestinationKind { CHANNEL, DIRECT_CALL }
 enum class OperationRejection { IDENTITY_MISMATCH, DESTINATION_MISMATCH, SESSION_MISMATCH, TERMINAL, NOT_ACTIVE, NOT_FOUND, CLAIM_MISMATCH, EPOCH_MISMATCH, CLAIM_BUSY, OBSERVATION_CHANGED, ACCESS_DENIED }
 
 /** Stored under an actor/operation lock. Terminal rows retain session ownership for cleanup. */
@@ -11,10 +12,12 @@ data class SessionOperation(
     val sessionId: String?,
     val phase: OperationPhase,
     val deadlineEpochMillis: Long?,
+    val destinationKind: VoiceDestinationKind? = if (destinationId == null) null else VoiceDestinationKind.CHANNEL,
 ) {
     init {
         require(actorId.isNotBlank() && operationId.isNotBlank())
         require((destinationId == null) == (sessionId == null))
+        require((destinationId == null) == (destinationKind == null))
         require(destinationId == null || destinationId.isNotBlank())
         require(sessionId == null || sessionId.isNotBlank())
         if (phase == OperationPhase.PENDING || phase == OperationPhase.ACTIVE) {
@@ -33,6 +36,7 @@ class SessionOperationPolicy {
     fun begin(
         existing: SessionOperation?, actorId: String, operationId: String,
         destinationId: String, sessionId: String, nowEpochMillis: Long,
+        destinationKind: VoiceDestinationKind = VoiceDestinationKind.CHANNEL,
     ): OperationDecision {
         validateTime(nowEpochMillis)
         require(actorId.isNotBlank() && operationId.isNotBlank() && destinationId.isNotBlank() && sessionId.isNotBlank())
@@ -40,11 +44,12 @@ class SessionOperationPolicy {
             if (!existing.matches(actorId, operationId)) return rejected(existing, OperationRejection.IDENTITY_MISMATCH)
             val current = expiredAt(existing, nowEpochMillis)
             if (current.terminal) return rejected(current, OperationRejection.TERMINAL)
-            if (current.destinationId != destinationId) return rejected(current, OperationRejection.DESTINATION_MISMATCH)
+            if (current.destinationId != destinationId || current.destinationKind != destinationKind)
+                return rejected(current, OperationRejection.DESTINATION_MISMATCH)
             return OperationDecision(current)
         }
         return OperationDecision(SessionOperation(actorId, operationId, destinationId, sessionId,
-            OperationPhase.PENDING, Math.addExact(nowEpochMillis, PENDING_TTL_MILLIS)))
+            OperationPhase.PENDING, Math.addExact(nowEpochMillis, PENDING_TTL_MILLIS), destinationKind))
     }
 
     fun cancel(existing: SessionOperation?, actorId: String, operationId: String, nowEpochMillis: Long): OperationDecision {

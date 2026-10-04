@@ -8,6 +8,7 @@ data class RosterJournalEvent(
     val revision: Long, val actorId: String, val operationId: String, val destinationId: String,
     val sessionId: String, val phase: OperationPhase, val deadlineEpochMillis: Long,
     val participantSid: String? = null, val mediaState: SfuParticipantState? = null,
+    val destinationKind: VoiceDestinationKind = VoiceDestinationKind.CHANNEL,
 )
 
 interface RosterJournalReader {
@@ -33,7 +34,8 @@ class JdbcRosterJournal(private val source: DataSource) : RosterJournalReader {
                     while (rows.next()) add(RosterJournalEvent(rows.getLong("revision"), rows.getString("actor_id"),
                         rows.getString("operation_id"), rows.getString("destination_id"), rows.getString("session_id"),
                         OperationPhase.valueOf(rows.getString("phase")), rows.getLong("deadline_epoch_millis"),
-                        rows.getString("participant_sid"), rows.getString("media_state")?.let(SfuParticipantState::valueOf)))
+                        rows.getString("participant_sid"), rows.getString("media_state")?.let(SfuParticipantState::valueOf),
+                        VoiceDestinationKind.valueOf(rows.getString("destination_kind"))))
                 } }
             }
         }
@@ -49,10 +51,11 @@ internal fun appendRosterChange(c: Connection, row: SessionJournalEntry) {
             check(rows.next()); rows.getLong(1)
         }
     }
-    c.prepareStatement("INSERT INTO nearby_roster_outbox(revision,actor_id,operation_id,destination_id,session_id,phase,deadline_epoch_millis,participant_sid,media_state) VALUES (?,?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?)").use {
+    c.prepareStatement("INSERT INTO nearby_roster_outbox(revision,actor_id,operation_id,destination_id,session_id,phase,deadline_epoch_millis,participant_sid,media_state,destination_kind) VALUES (?,?::uuid,?::uuid,?::uuid,?::uuid,?,?,?,?,?)").use {
         it.setLong(1, revision); it.setString(2, operation.actorId); it.setString(3, operation.operationId)
         it.setString(4, operation.destinationId); it.setString(5, checkNotNull(operation.sessionId))
         it.setString(6, operation.phase.name); it.setLong(7, checkNotNull(operation.deadlineEpochMillis))
-        it.setString(8, row.media.participantSid); it.setString(9, row.media.state?.name); it.executeUpdate()
+        it.setString(8, row.media.participantSid); it.setString(9, row.media.state?.name)
+        it.setString(10, checkNotNull(operation.destinationKind).name); it.executeUpdate()
     }
 }

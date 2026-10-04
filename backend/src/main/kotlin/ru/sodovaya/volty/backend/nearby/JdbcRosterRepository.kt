@@ -33,7 +33,7 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
                 FROM nearby_session_operations o JOIN nearby_actor_claims c
                   ON c.actor_id=o.actor_id AND c.operation_id=o.operation_id AND c.session_id=o.session_id
                  AND c.room_epoch=o.room_epoch AND c.node_epoch=o.node_epoch
-                WHERE o.destination_id=?::uuid AND o.phase IN ('PENDING','ACTIVE')
+                WHERE o.destination_kind='CHANNEL' AND o.destination_id=?::uuid AND o.phase IN ('PENDING','ACTIVE')
                 ORDER BY o.actor_id
             """.trimIndent()).use {
                 it.setString(1, channel)
