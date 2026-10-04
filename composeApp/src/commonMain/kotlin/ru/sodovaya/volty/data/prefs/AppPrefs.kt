@@ -14,6 +14,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.stateIn
 import ru.sodovaya.volty.domain.alert.AlarmMusicMode
 import ru.sodovaya.volty.domain.alert.AlarmModalities
@@ -21,6 +22,9 @@ import ru.sodovaya.volty.domain.navigation.routing.NavigationPreferencesStore
 import ru.sodovaya.volty.domain.navigation.routing.RouteStyle
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
+import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.util.UnitSystem
 
 class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreferencesStore {
@@ -165,6 +169,22 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     suspend fun setVoiceMicrophoneSource(source: VoiceMicrophoneSource) = store.edit {
         it[Keys.VOICE_MICROPHONE_SOURCE] = source.name
     }
+    /** Native preparation waits for one actual snapshot; UI StateFlow's initial AUTO is not a read. */
+    suspend fun readVoiceAudioPreferences(): VoiceAudioPreferences {
+        val snapshot = store.data.first()
+        val input = when (VoiceMicrophoneSource.fromPersisted(snapshot[Keys.VOICE_MICROPHONE_SOURCE])) {
+            VoiceMicrophoneSource.AUTO -> VoiceInputPreference.AUTO
+            VoiceMicrophoneSource.PHONE -> VoiceInputPreference.PHONE
+            VoiceMicrophoneSource.HEADSET -> VoiceInputPreference.HEADSET
+        }
+        val output = VoiceOutputPreference.entries.firstOrNull {
+            it.name == snapshot[Keys.VOICE_OUTPUT_PREFERENCE]
+        } ?: VoiceOutputPreference.AUTO
+        return VoiceAudioPreferences(input, output)
+    }
+    suspend fun setVoiceOutputPreference(preference: VoiceOutputPreference) = store.edit {
+        it[Keys.VOICE_OUTPUT_PREFERENCE] = preference.name
+    }
     suspend fun setOfflineSkipMeteredConfirmation(skip: Boolean) = store.edit {
         it[Keys.OFFLINE_SKIP_METERED_CONFIRMATION] = skip
     }
@@ -211,6 +231,7 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         val DASHBOARD_STYLE = stringPreferencesKey("dashboard_style")
         val FAULT_DISPLAY_DURATION_SEC = intPreferencesKey("fault_display_duration_sec")
         val VOICE_MICROPHONE_SOURCE = stringPreferencesKey("voice_microphone_source")
+        val VOICE_OUTPUT_PREFERENCE = stringPreferencesKey("voice_output_preference")
         val OFFLINE_SKIP_METERED_CONFIRMATION =
             booleanPreferencesKey("offline_skip_metered_confirmation")
         val NAVIGATION_ROUTE_STYLE = stringPreferencesKey("navigation_route_style")
