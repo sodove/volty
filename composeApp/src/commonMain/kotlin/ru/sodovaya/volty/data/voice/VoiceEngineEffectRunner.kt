@@ -31,6 +31,7 @@ class VoiceEngineEffectRunner(
     private val cleanup = MutableStateFlow<Set<VoiceGeneration>>(emptySet())
     val failedCleanup = cleanup.asStateFlow()
     private val workCount = MutableStateFlow(0)
+    private val workJobs = MutableStateFlow<Set<Job>>(emptySet())
     /** Cancelled-but-incomplete producers still hold this count, even after Stopped. */
     val inFlight = workCount.asStateFlow()
 
@@ -58,7 +59,13 @@ class VoiceEngineEffectRunner(
         }
         val record = Start(effect.tag)
         starts[effect.tag.generation] = record
+        // An earlier revision trusted successful Stop/driver release for same-account
+        // handoff. Those can finish while cancelled connect/preferences still run.
+        val predecessors = workJobs.value.toList()
         record.job = launchWork {
+            // Fixed prior snapshot, cancellable wait, outside driver/state mutexes. Never
+            // wait for permanent collectors or for cleanup work submitted after this start.
+            for (older in predecessors) older.join()
             val state = currentState()
             val intent = if (state.sessionId == effect.tag.sessionId && state.generation == effect.tag.generation)
                 effect.copy(muted = state.muted, deafened = state.deafened) else effect
@@ -106,8 +113,12 @@ class VoiceEngineEffectRunner(
         workCount.update { check(it < Int.MAX_VALUE); it + 1 }
         val job = try { scope.launch(block = block) }
         catch (failure: Throwable) { workCount.update { it - 1 }; throw failure }
+        workJobs.update { it + job }
         // A cancelled queued job may never enter its body/finally. Completion is the fence.
-        job.invokeOnCompletion { workCount.update { it - 1 } }
+        job.invokeOnCompletion {
+            workJobs.update { it - job }
+            workCount.update { it - 1 }
+        }
         return job
     }
 
