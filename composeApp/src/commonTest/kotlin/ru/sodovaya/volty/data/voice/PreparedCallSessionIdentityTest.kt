@@ -44,7 +44,7 @@ class PreparedCallSessionIdentityTest {
             val grant = assertIs<VoiceHttpReply.Credentials>(assertIs<DirectCallReply.Ready>(calls.resume(call, operation, generation)).session)
             assertEquals(VoiceHttpFailure.ACCESS_DENIED, assertIs<VoiceHttpReply.Failed>(journal.heartbeat(grant.tag)).reason)
             assertFalse(journal.rememberPreparedCallSession(call, operation, generation, grant))
-            journal.rememberJoinIntent(operation, generation, call, false)
+            assertTrue(journal.rememberPreparedCallIntent(call, operation, generation))
             assertFalse(journal.rememberPreparedCallSession(peer, operation, generation, grant))
             assertFalse(journal.rememberPreparedCallSession(call, VoiceOperationId(peer), generation, grant))
             assertFalse(journal.rememberPreparedCallSession(call, operation, VoiceGeneration(6), grant))
@@ -78,7 +78,7 @@ class PreparedCallSessionIdentityTest {
         val journal = VoiceSessionAccountControl.create(account, http, base, {clock}, sequence)
         val calls = DirectCallHttpPort(actor, http, base, {"original-account-token"}, {clock}, sequence)
         try {
-            journal.rememberJoinIntent(operation, generation, call, false)
+            assertTrue(journal.rememberPreparedCallIntent(call, operation, generation))
             val expired = assertIs<VoiceHttpReply.Expired>(assertIs<DirectCallReply.Ready>(calls.resume(call, operation, generation)).session)
             job.cancel(); journal.retireAdmission()
             assertTrue(journal.rememberPreparedCallSession(call, operation, generation, expired))
@@ -87,5 +87,29 @@ class PreparedCallSessionIdentityTest {
             assertFalse(journal.rememberPreparedCallSession(call, operation, generation, expired))
             assertEquals(listOf("/v2/nearby/calls/$call/resume", "/v2/nearby/sessions/${session.value}/disconnect"), issued)
         } finally {journal.close(); calls.close(); http.close(); root.cancel()}
+    }
+
+    @Test fun identicalUuidAndOperationCannotReinterpretChannelIntentAsCall() = runTest {
+        val root = Job(); val job = Job(root); val dispatcher = StandardTestDispatcher(testScheduler)
+        val account = SocialAuthenticatedAccount(SocialUserId(actor), job, root + dispatcher) {"original-account-token"}
+        val issued = mutableListOf<String>()
+        val http = HttpClient(MockEngine) {engine {
+            this.dispatcher = dispatcher
+            addHandler {issued += it.url.encodedPath; respond(grant())}
+        }}
+        val sequence = VoiceLeaseRequestSequence()
+        val channelJournal = VoiceSessionAccountControl.create(account, http, base, {100}, sequence)
+        val callJournal = VoiceSessionAccountControl.create(account, http, base, {100}, sequence)
+        val calls = DirectCallHttpPort(actor, http, base, {"original-account-token"}, {100}, sequence)
+        try {
+            val grant = assertIs<VoiceHttpReply.Credentials>(assertIs<DirectCallReply.Ready>(calls.resume(call, operation, generation)).session)
+            channelJournal.rememberJoinIntent(operation, generation, call, false)
+            assertFalse(channelJournal.rememberPreparedCallSession(call, operation, generation, grant))
+            assertFalse(channelJournal.rememberPreparedCallIntent(call, operation, generation))
+            assertTrue(callJournal.rememberPreparedCallIntent(call, operation, generation))
+            assertEquals(VoiceHttpFailure.ACCESS_DENIED, assertIs<VoiceHttpReply.Failed>(callJournal.join(operation, generation, call)).reason)
+            assertTrue(callJournal.rememberPreparedCallSession(call, operation, generation, grant))
+            assertEquals(listOf("/v2/nearby/calls/$call/resume"), issued)
+        } finally {channelJournal.close(); callJournal.close(); calls.close(); http.close(); root.cancel()}
     }
 }

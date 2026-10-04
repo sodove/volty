@@ -20,7 +20,9 @@ internal class VoiceSessionAccountControl private constructor(
     initialBearer: String,
     leaseRequests: VoiceLeaseRequestSequence,
 ) : VoiceSessionControlPort {
-    private data class Intent(val generation: VoiceGeneration, val channel: String, val replace: Boolean)
+    private enum class IntentKind { CHANNEL, DIRECT_CALL }
+    private data class Intent(val generation: VoiceGeneration, val channel: String, val replace: Boolean,
+        val kind: IntentKind = IntentKind.CHANNEL)
     private data class Capability(
         val retired: Boolean = false,
         val closed: Boolean = false,
@@ -53,6 +55,18 @@ internal class VoiceSessionAccountControl private constructor(
         }
     }
 
+    internal fun rememberPreparedCallIntent(call: String, operation: VoiceOperationId, generation: VoiceGeneration): Boolean {
+        if (!ID.matches(call) || !ID.matches(operation.value) || generation.value < 0) return false
+        val intent = Intent(generation, call, false, IntentKind.DIRECT_CALL)
+        while (true) {
+            val current = capability.value
+            if (current.closed) return false
+            val original = current.intents[operation]
+            if (original != null) return original == intent
+            if (capability.compareAndSet(current, current.copy(intents = current.intents + (operation to intent)))) return true
+        }
+    }
+
     /** Validated call transport supplied this identity; recording it never authorizes audio.
      * Retired original owners can still learn what to stop, while closed owners stay empty. */
     internal fun rememberPreparedCallSession(call: String, operation: VoiceOperationId,
@@ -70,7 +84,9 @@ internal class VoiceSessionAccountControl private constructor(
         if (tag.generation != generation || !ID.matches(tag.sessionId.value)) return false
         while (true) {
             val current = capability.value
-            if (current.closed || current.intents[operation] != Intent(generation, call, false)) return false
+            // Earlier receipt matching used bare destination UUID; a channel intent with
+            // identical UUID/operation could then acquire an unrelated call session identity.
+            if (current.closed || current.intents[operation] != Intent(generation, call, false, IntentKind.DIRECT_CALL)) return false
             if (tag in current.sessions) return true
             if (capability.compareAndSet(current, current.copy(sessions = current.sessions + tag))) return true
         }
