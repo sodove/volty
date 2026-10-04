@@ -83,18 +83,20 @@ class DefaultSocialRepository(
     override suspend fun resetPassword(token: String, newPassword: String): SocialResult<Unit> =
         transport.resetPassword(token, newPassword)
 
-    override suspend fun deleteAccount(): SocialResult<Unit> = authorized { accessToken ->
-        transport.deleteAccount(accessToken).also { result ->
-            if (result is SocialResult.Success) clearLocalSession()
-        }
+    override suspend fun deleteAccount(): SocialResult<Unit> {
+        val generation = authenticationGeneration.value
+        val result = authorized(generation) { accessToken -> transport.deleteAccount(accessToken) }
+        // The successful current deletion retires its own generation after result validation.
+        if (result is SocialResult.Success) clearLocalSession(generation)
+        return result
     }
 
-    override suspend fun getProfile(): SocialResult<SocialSession.Authenticated> = authorized { accessToken ->
-        transport.getProfile(accessToken).also(::publishProfile)
+    override suspend fun getProfile(): SocialResult<SocialSession.Authenticated> = authorized(publish = ::publishProfile) { accessToken ->
+        transport.getProfile(accessToken)
     }
 
     override suspend fun updateProfile(request: ProfileUpdate): SocialResult<SocialSession.Authenticated> =
-        authorized { accessToken -> transport.updateProfile(accessToken, request).also(::publishProfile) }
+        authorized(publish = ::publishProfile) { accessToken -> transport.updateProfile(accessToken, request) }
 
     override suspend fun listFriends(): SocialResult<List<FriendSummary>> =
         authorized { accessToken -> transport.listFriends(accessToken) }
@@ -118,21 +120,17 @@ class DefaultSocialRepository(
         authorized { accessToken -> transport.joinGroup(accessToken, inviteCode) }
 
     override suspend fun leaveGroup(groupId: RideGroupId): SocialResult<Unit> =
-        authorized { accessToken ->
-            transport.leaveGroup(accessToken, groupId).also { result ->
-                if (result is SocialResult.Success && _activeSharing.value?.groupId == groupId) {
-                    _activeSharing.value = null
-                }
-            }
+        authorized(publish = {
+            if (_activeSharing.value?.groupId == groupId) _activeSharing.value = null
+        }) { accessToken ->
+            transport.leaveGroup(accessToken, groupId)
         }
 
     override suspend fun deleteGroup(groupId: RideGroupId): SocialResult<Unit> =
-        authorized { accessToken ->
-            transport.deleteGroup(accessToken, groupId).also { result ->
-                if (result is SocialResult.Success && _activeSharing.value?.groupId == groupId) {
-                    _activeSharing.value = null
-                }
-            }
+        authorized(publish = {
+            if (_activeSharing.value?.groupId == groupId) _activeSharing.value = null
+        }) { accessToken ->
+            transport.deleteGroup(accessToken, groupId)
         }
 
     override fun observeGroup(groupId: RideGroupId): Flow<SocialLiveEvent> {
@@ -206,10 +204,8 @@ class DefaultSocialRepository(
         if (request.ttlMillis <= 0L || request.ttlMillis > LocationSharePolicy.maxTtlMillis) {
             return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing TTL is outside the allowed range"))
         }
-        return authorized { accessToken ->
-            transport.startSharing(accessToken, request).also { result ->
-                if (result is SocialResult.Success) _activeSharing.value = result.value
-            }
+        return authorized(publish = { _activeSharing.value = it }) { accessToken ->
+            transport.startSharing(accessToken, request)
         }
     }
 
@@ -245,19 +241,15 @@ class DefaultSocialRepository(
         if (request.ttlMillis <= 0L || request.ttlMillis > LocationSharePolicy.maxTtlMillis) {
             return SocialResult.Failure(SocialFailure.InvalidRequest("Sharing TTL is outside the allowed range"))
         }
-        return authorized { accessToken ->
-            transport.renewSharing(accessToken, request).also { result ->
-                if (result is SocialResult.Success) _activeSharing.value = result.value
-            }
+        return authorized(publish = { _activeSharing.value = it }) { accessToken ->
+            transport.renewSharing(accessToken, request)
         }
     }
 
-    override suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit> = authorized { accessToken ->
-        transport.stopSharing(accessToken, groupId).also { result ->
-            if (result is SocialResult.Success && _activeSharing.value?.groupId == groupId) {
-                _activeSharing.value = null
-            }
-        }
+    override suspend fun stopSharing(groupId: RideGroupId): SocialResult<Unit> = authorized(publish = {
+        if (_activeSharing.value?.groupId == groupId) _activeSharing.value = null
+    }) { accessToken ->
+        transport.stopSharing(accessToken, groupId)
     }
 
     override suspend fun joinVoice(groupId: RideGroupId): SocialResult<VoiceRoomCredentials> =
@@ -383,22 +375,37 @@ class DefaultSocialRepository(
     }
 
     private suspend fun <T> authorized(
+        generation: AuthenticationGeneration = authenticationGeneration.value,
+        publish: ((T) -> Unit)? = null,
         request: suspend (accessToken: String) -> SocialResult<T>,
     ): SocialResult<T> {
-        val generation = authenticationGeneration.value
         if (SocialSessionPolicy.requiresAuthentication(_session.value)) return unauthorized()
         val saved = _credentials.value ?: return unauthorized()
         val accessToken = when (val fresh = ensureFreshAccessToken(saved, generation)) {
             is SocialResult.Failure -> return fresh
             is SocialResult.Success -> fresh.value
         }
-        val result = request(accessToken)
+        if (!ownsAuthentication(generation)) return unauthorized()
+        val result = publishAuthorized(generation, request(accessToken), publish)
         if (result !is SocialResult.Failure || result.error != SocialFailure.Unauthorized) return result
         val refreshed = when (val retryToken = refreshAccessToken(saved, generation)) {
             is SocialResult.Failure -> return retryToken
             is SocialResult.Success -> retryToken.value
         }
-        return request(refreshed)
+        if (!ownsAuthentication(generation)) return unauthorized()
+        return publishAuthorized(generation, request(refreshed), publish)
+    }
+
+    private suspend fun <T> publishAuthorized(
+        generation: AuthenticationGeneration,
+        result: SocialResult<T>,
+        publish: ((T) -> Unit)?,
+    ): SocialResult<T> = sessionMutex.withLock {
+        if (authenticationGeneration.value !== generation) unauthorized()
+        else {
+            if (result is SocialResult.Success) publish?.invoke(result.value)
+            result
+        }
     }
 
     private suspend fun currentAccessToken(): String? = when (val result = authorized { accessToken -> SocialResult.Success(accessToken) }) {
@@ -446,9 +453,8 @@ class DefaultSocialRepository(
 
     private fun <T> unauthorized(): SocialResult<T> = SocialResult.Failure(SocialFailure.Unauthorized)
 
-    private fun publishProfile(result: SocialResult<SocialSession.Authenticated>) {
-        if (result is SocialResult.Success) _session.value = result.value
-    }
+    /** Called only inside the generation-checked publication lock. */
+    private fun publishProfile(profile: SocialSession.Authenticated) { _session.value = profile }
 
     private suspend fun clearLocalSession(expected: AuthenticationGeneration? = null): SocialCredentials? {
         val retired = sessionMutex.withLock {
