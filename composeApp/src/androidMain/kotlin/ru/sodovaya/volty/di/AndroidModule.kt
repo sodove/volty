@@ -2,6 +2,7 @@ package ru.sodovaya.volty.di
 
 import android.content.Context
 import android.os.Build
+import android.os.SystemClock
 import io.ktor.client.HttpClient
 import io.ktor.client.engine.okhttp.OkHttp
 import io.ktor.client.plugins.HttpTimeout
@@ -43,6 +44,7 @@ import ru.sodovaya.volty.data.social.SocialCredentialStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationDraftStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
 import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
+import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -63,6 +65,8 @@ import org.koin.dsl.onClose
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.flow
 import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
@@ -87,6 +91,16 @@ val androidModule = module {
             baseUrl = NEARBY_API_BASE_URL,
             storeForActor = { actor -> AndroidInvitationDraftStore(context, actor) },
             generator = AndroidInvitationSecretGenerator(),
+        )
+    }
+    single {
+        VoiceRosterAccountFactory(
+            client = get(named(NEARBY_HTTP_CLIENT)),
+            baseUrl = NEARBY_API_BASE_URL,
+            queuedDispatcher = Dispatchers.Main,
+            monotonicMillis = SystemClock::elapsedRealtime,
+            // Cold per-subscription source. Cancellation belongs to the roster owner.
+            pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
         )
     }
     // Use the same Android OkHttp stack as navigation for the social REST/WS
