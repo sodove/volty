@@ -45,6 +45,7 @@ import ru.sodovaya.volty.data.nearby.AndroidInvitationDraftStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
 import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
+import ru.sodovaya.volty.data.voice.VoiceAccountCoordinator
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -101,6 +102,16 @@ val androidModule = module {
             monotonicMillis = SystemClock::elapsedRealtime,
             // Cold per-subscription source. Cancellation belongs to the roster owner.
             pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
+        )
+    }
+    single {
+        VoiceAccountCoordinator(
+            client = get(named(NEARBY_HTTP_CLIENT)),
+            baseUrl = NEARBY_API_BASE_URL,
+            queuedDispatcher = Dispatchers.Main,
+            // Each runtime receives its own cadence; ticks must not be divided among owners.
+            pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
+            monotonicMillis = SystemClock::elapsedRealtime,
         )
     }
     // Use the same Android OkHttp stack as navigation for the social REST/WS
