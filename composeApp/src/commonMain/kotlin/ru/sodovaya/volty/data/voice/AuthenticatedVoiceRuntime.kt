@@ -29,6 +29,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
     val state = runtime.state
     val failedLocalCleanup = runtime.failedLocalCleanup
     val nativeInFlight = runtime.nativeInFlight
+    val controlInFlight = runtime.controlInFlight
     val pendingRemoteStops = runtime.pendingRemoteStops
     val unconfirmedStops = runtime.unconfirmedStops
 

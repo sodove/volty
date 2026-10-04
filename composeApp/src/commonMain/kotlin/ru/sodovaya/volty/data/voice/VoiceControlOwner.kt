@@ -4,6 +4,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.selects.select
 import ru.sodovaya.volty.domain.voice.*
 
@@ -34,6 +35,9 @@ class VoiceControlOwner(
     private val remoteStopsOutput = MutableStateFlow<Set<VoiceStopRequest>>(emptySet())
     /** Unknown/missing cleanup status remains pending independently of engine release. */
     val pendingRemoteStops = remoteStopsOutput.asStateFlow()
+    private val workCount = MutableStateFlow(0)
+    /** Application-owned producers including reply delivery; zero is not mailbox/socket idle. */
+    val inFlight = workCount.asStateFlow()
     private var attempt: Attempt? = null
     private var joinJob: Job? = null
     private var heartbeatJob: Job? = null
@@ -77,7 +81,7 @@ class VoiceControlOwner(
                 if (s.wanted && s.sessionId != null && heartbeatJob?.isActive != true) {
                     val tag = VoiceSessionTag(s.sessionId, s.generation)
                     if (command.expected != null && command.expected != tag) return
-                    heartbeatJob = scope.launch { deliver(Command.HeartbeatReply(tag, network { port.heartbeat(tag) })) }
+                    heartbeatJob = launchWork { deliver(Command.HeartbeatReply(tag, network { port.heartbeat(tag) })) }
                 }
             }
             Command.RetryStops -> (stopsOutput.value + remoteStopsOutput.value).forEach(::requestStop)
@@ -154,7 +158,7 @@ class VoiceControlOwner(
     }
 
     private fun requestJoin(request: Attempt) {
-        joinJob = scope.launch { deliver(Command.JoinReply(request,
+        joinJob = launchWork { deliver(Command.JoinReply(request,
             network { port.join(request.operation, request.generation, request.channel, request.replace) })) }
     }
 
@@ -162,13 +166,22 @@ class VoiceControlOwner(
         stopsOutput.value += request
         remoteStopsOutput.value += request
         if (!stopping.add(request)) return
-        scope.launch {
+        launchWork {
             val reply = network { when (request) {
                 is VoiceStopRequest.Operation -> port.cancel(request.operation, request.generation)
                 is VoiceStopRequest.Session -> port.disconnect(request.tag)
             } }
             deliver(Command.StopReply(request, reply))
         }
+    }
+
+    private fun launchWork(block: suspend CoroutineScope.() -> Unit): Job {
+        workCount.update { check(it < Int.MAX_VALUE); it + 1 }
+        val job = try { scope.launch(block = block) }
+        catch (failure: Throwable) { workCount.update { it - 1 }; throw failure }
+        // Cancelled queued jobs may never enter a body/finally. Only actual completion drains.
+        job.invokeOnCompletion { workCount.update { it - 1 } }
+        return job
     }
 
     private suspend fun network(block: suspend () -> VoiceHttpReply): VoiceHttpReply = try {
