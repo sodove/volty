@@ -15,6 +15,7 @@ internal interface NearbyVoiceSwitchGuard {
     fun requiresConfirmation(operation: VoiceOperationId?): Boolean
     fun withdrawSharing(operation: VoiceOperationId?)
     suspend fun awaitSharingCleanup(operation: VoiceOperationId?): Boolean
+    suspend fun waitSharingCleanup(operation: VoiceOperationId?): Boolean
 }
 enum class NearbyVoiceError { MICROPHONE_DENIED, NOT_VISIBLE, CLEANUP_REQUIRED, UNAVAILABLE }
 enum class NearbyVoiceUiPhase { IDLE, PREPARING, ACTIVE, FAILED }
@@ -167,7 +168,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             switches.withdrawSharing(request.original)
             request.original?.let {voice.stop(it)}
             if(!selected(work)) return
-            if(!switches.awaitSharingCleanup(request.original)) {
+            if(!switches.waitSharingCleanup(request.original)) {
                 if(selected(work)) failure=request.account to NearbyVoiceError.CLEANUP_REQUIRED
                 return
             }

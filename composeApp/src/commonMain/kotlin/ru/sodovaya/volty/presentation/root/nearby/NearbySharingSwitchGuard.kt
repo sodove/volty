@@ -28,6 +28,12 @@ internal class NearbySharingSwitchGuard(private val repository: DefaultSocialRep
     override fun withdrawSharing(operation: VoiceOperationId?) {
         handles[operation]?.toList()?.forEach {it.requestHide()}
     }
+    override suspend fun waitSharingCleanup(operation: VoiceOperationId?):Boolean=withContext(queued) {
+        for(handle in handles[operation]?.toList().orEmpty()) {
+            if(!handle.waitLocalCleanup()) return@withContext false
+        }
+        awaitSharingCleanup(operation)
+    }
     override suspend fun awaitSharingCleanup(operation: VoiceOperationId?):Boolean=withContext(queued) {
         val originals=handles[operation]?.toList().orEmpty()
         var clean=true

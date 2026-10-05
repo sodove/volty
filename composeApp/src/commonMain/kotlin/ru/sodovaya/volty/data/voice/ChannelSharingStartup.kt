@@ -96,6 +96,21 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
     }
     /** Native and child cleanup only; originalRevoke separately carries remote business result. */
     suspend fun close(): Boolean = withContext(NonCancellable+queued) {requestHide();cleanupOwned()}
+    /** Cancellable waiter only: original preparation/native/negative producers remain independently owned. */
+    internal suspend fun waitLocalCleanup():Boolean=withContext(queued) {
+        requestHide()
+        if(mutableState.value.preparing) result.await()
+        currentCoroutineContext().ensureActive()
+        mutableCapture.value?.let {capture ->
+            capture.locationForegroundState.first {it.nativeInFlight==0 || it.cleanupFailed}
+        }
+        currentCoroutineContext().ensureActive()
+        close()
+        val child=control
+        if(mutableState.value.childCleanupPending && child!=null && !child.closed.value) child.closed.first {it}
+        currentCoroutineContext().ensureActive()
+        close()
+    }
     /** Retry durable original negatives after owned control closes; never restores capture or voice. */
     internal suspend fun recoverOriginalCleanup():Boolean=withContext(queued) {
         val state=mutableState.value
