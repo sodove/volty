@@ -44,7 +44,12 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     private var observation: DirectCallRingObservation? = null
     private val ticketOwner = Any()
     private val issuedIds = mutableSetOf<String>()
+    private var publishingTicket: IncomingCallNotificationTicket? = null
     internal fun belongsTo(candidate: SocialAuthenticatedAccount): Boolean = account === candidate
+    /** Called synchronously by native actions on this same queued serial owner. */
+    internal fun mayIssueAction(ticket: IncomingCallNotificationTicket): Boolean =
+        lifetime.isActive && account.job.isActive && ticket.owner === ticketOwner &&
+            (publishingTicket === ticket || output.value.ticket === ticket)
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -139,7 +144,9 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         val id = nextId().also(::invitationDraftId)
         require(issuedIds.add(id)) {"Notification ticket cannot be reused"}
         val ticket = IncomingCallNotificationTicket(id, ticketOwner)
+        publishingTicket = ticket
         val shown = try {port.show(ticket, reply.call, reply.observation.deadlineMillis - now)} catch (_: Exception) {false}
+            finally {publishingTicket = null}
         if (!shown || !lifetime.isActive || !account.job.isActive) {
             cancelIssued(ticket); return
         }

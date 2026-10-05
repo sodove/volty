@@ -20,6 +20,39 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun partiallyFailedNativeShowCannotKeepItsActionIssuanceSlot() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, notifications)
+            var attempted: IncomingCallNotificationTicket? = null
+            port.onShow = {attempted = it; assertSame(binding, registry.bindingFor(it)); error("native show failed")}
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(attempted)
+            assertNull(notifications.state.value.ticket); assertEquals(listOf(ticket), port.cancelled)
+            assertNull(registry.bindingFor(ticket)); assertNull(registry.accept(binding.id, ticket.id))
+            assertEquals(1, f.paths.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {registry.close(); notifications.close(); f.close()}
+    }
+
+    @Test fun verifiedPublicationCanMintOnlyItsCurrentOriginalNativeActionBinding() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, notifications)
+            var duringShow: IncomingCallActionBinding? = null
+            port.onShow = {duringShow = registry.bindingFor(it)}
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            assertSame(binding, duringShow); assertSame(binding, registry.bindingFor(ticket))
+            assertNull(registry.bindingFor(IncomingCallNotificationTicket(ticket.id, ticket.owner)))
+            assertNotNull(registry.accept(binding.id, ticket.id))
+            assertNull(registry.bindingFor(ticket)); assertEquals(2, f.paths.size)
+        } finally {registry.close(); notifications.close(); f.close()}
+    }
+
     @Test fun actionRegistryResolvesOnlyOriginalBindingAndTicketBeforeExplicitStartup() = runTest {
         val f = Fixture(this); val port = Notifications()
         val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
@@ -268,11 +301,12 @@ class VoiceConversationStartupTest {
     private class Notifications : IncomingCallNotificationPort {
         var allowed = true
         var throwOnCancel = false
+        var onShow: (IncomingCallNotificationTicket) -> Unit = {}
         val shown = mutableListOf<IncomingCallNotificationTicket>()
         val cancelled = mutableListOf<IncomingCallNotificationTicket>()
         val remaining = mutableListOf<Long>()
         override fun show(ticket: IncomingCallNotificationTicket, call: DirectCallSnapshot, remainingMillis: Long): Boolean {
-            shown += ticket; remaining += remainingMillis; return allowed
+            shown += ticket; remaining += remainingMillis; onShow(ticket); return allowed
         }
         override fun cancel(ticket: IncomingCallNotificationTicket) {cancelled += ticket; if (throwOnCancel) error("cancel failed")}
     }
