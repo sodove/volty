@@ -24,6 +24,145 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun rootAcceptedFriendCallNeedsExplicitPermissionAndUsesTypedActualCallStartup()=runTest {
+        val f=Fixture(this);val root=voiceController(f,Switches());val ui=SupervisorJob(backgroundScope.coroutineContext[Job])
+        val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();f.callMode=true
+            val friend=FriendSummary(FriendshipId("friendship"),SocialUserId(f.peer),"Rider",FriendshipState.ACCEPTED)
+            val request=assertNotNull(root.requestFriendCall(account,friend));runCurrent()
+            assertEquals("Rider",assertNotNull(root.state.value.pending).label)
+            assertEquals(NearbyConversationKind.CALL,assertNotNull(root.state.value.pending).kind)
+            assertTrue(f.paths.isEmpty());assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+            // The generated call identity is distinct from the permission/conversation operation.
+            f.callDestination="80000000-0000-0000-0000-000000000002"
+            root.begin(request,true,boundary);runCurrent()
+            val target=assertIs<VoiceConversationTarget.OutgoingCall>(f.owner.state.value.target)
+            assertEquals(f.peer,target.calleeId);assertEquals(f.callDestination,target.destinationId)
+            assertEquals(request,target.idempotencyKey);assertNotEquals(request,target.destinationId)
+            assertEquals(1,f.launches);assertEquals(1,f.published);assertEquals(listOf(phone),f.allocated)
+            assertTrue(f.paths.contains("/v2/nearby/calls/${f.callDestination}/create"))
+            assertTrue(f.paths.contains("/v2/nearby/calls/${f.callDestination}/resume"))
+            assertEquals(1,f.rosters.size);assertTrue(f.sharingAuthorizations.isEmpty())
+            assertEquals(NearbyConversationKind.CALL,root.state.value.kind)
+            assertEquals(1,assertNotNull(root.state.value.callRoster).connectedCount)
+            root.disconnect(VoiceOperationId(request));runCurrent()
+            assertFalse(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun rootFriendCallRejectsUnacceptedSelfMalformedAndRetiredAuthorityBeforeEntropyOrHttp()=runTest {
+        val f=Fixture(this);var entropy=0
+        val root=NearbyVoiceController(f.repository,f.owner,f.dispatcher,{entropy++;f.key},{phone},Switches())
+        try {
+            val account=f.login();val friend=FriendSummary(FriendshipId("friendship"),SocialUserId(f.peer),"Rider",FriendshipState.ACCEPTED)
+            for(state in listOf(FriendshipState.REQUEST_SENT,FriendshipState.REQUEST_RECEIVED,FriendshipState.BLOCKED)) {
+                assertNull(root.requestFriendCall(account,friend.copy(state=state)))
+            }
+            assertNull(root.requestFriendCall(account,friend.copy(userId=account.userId)))
+            assertNull(root.requestFriendCall(account,friend.copy(userId=SocialUserId("invalid"))))
+            account.job.cancel();assertNull(root.requestFriendCall(account,friend));runCurrent()
+            assertEquals(0,entropy);assertTrue(f.paths.isEmpty());assertEquals(0,f.launches);assertNull(f.runtime)
+        } finally {root.close();f.close()}
+    }
+
+    @Test fun rootIncomingCallCancellationKeepsCurrentConversationAndOnlyFreshAcceptanceIssuesHttp()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val original=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(original,true,boundary);runCurrent();val ticket=f.gate.current.value;val withdrawn=guard.withdrawn.size
+            f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+            val ring=DirectCallSnapshot(channel,f.peer,actor,DirectCallPhase.RINGING,2,45100,null)
+            val cancelled=assertNotNull(root.requestIncomingCall(account,ring,"Incoming"));runCurrent()
+            root.cancelRequest(cancelled);runCurrent();root.begin(cancelled,true,boundary);runCurrent()
+            assertSame(ticket,f.gate.current.value);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(withdrawn,guard.withdrawn.size);assertFalse(f.paths.any {"/calls/" in it})
+            val accepted=assertNotNull(root.requestIncomingCall(account,ring,"Incoming"));runCurrent()
+            root.begin(accepted,true,boundary);runCurrent()
+            assertIs<VoiceConversationTarget.IncomingCall>(f.owner.state.value.target)
+            assertTrue(f.paths.contains("/v2/nearby/calls/$channel/accept"),
+                "Issued=${f.paths}; startup=${f.owner.state.value.phase}; runtime=${f.runtime?.state?.value?.phase}; failure=${root.state.value.error}")
+            assertEquals(2,f.published)
+            assertEquals("Incoming",root.state.value.label);assertTrue(f.sharingAuthorizations.isEmpty())
+            assertEquals(NearbyConversationKind.CALL,root.state.value.kind)
+            root.disconnect(VoiceOperationId(original));runCurrent()
+            assertEquals(VoiceOperationId(accepted),f.owner.state.value.operationId);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun rootIncomingCallRejectsForeignOutgoingTerminalAndIncoherentSnapshotsBeforeEntropy()=runTest {
+        val f=Fixture(this);var entropy=0
+        val root=NearbyVoiceController(f.repository,f.owner,f.dispatcher,{entropy++;f.key},{phone},Switches())
+        try {
+            val account=f.login();val ring=DirectCallSnapshot(channel,f.peer,actor,DirectCallPhase.RINGING,2,45100,null)
+            for(invalid in listOf(ring.copy(calleeId=f.peer),ring.copy(callerId=actor),ring.copy(callId="invalid"),
+                ring.copy(phase=DirectCallPhase.ACCEPTED),ring.copy(phase=DirectCallPhase.CANCELLED),
+                ring.copy(revision=-1),ring.copy(outcome=DirectCallOutcome.CALLEE_DECLINED))) {
+                assertNull(root.requestIncomingCall(account,invalid,"Incoming"))
+            }
+            runCurrent();assertEquals(0,entropy);assertTrue(f.paths.isEmpty());assertEquals(0,f.launches);assertNull(root.state.value.pending)
+        } finally {root.close();f.close()}
+    }
+
+    @Test fun rootExpiredIncomingCallCannotStopCurrentConversationAfterPermissionReturns()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val original=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(original,true,boundary);runCurrent();val ticket=f.gate.current.value;val withdrawn=guard.withdrawn.size
+            f.callMode=true;f.incomingMode=true;f.statusPhase="ENDED"
+            val ring=DirectCallSnapshot(channel,f.peer,actor,DirectCallPhase.RINGING,2,45100,null)
+            val request=assertNotNull(root.requestIncomingCall(account,ring,"Expired"));runCurrent()
+            root.begin(request,true,boundary);runCurrent()
+            assertSame(ticket,f.gate.current.value);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(withdrawn,guard.withdrawn.size);assertEquals(1,f.published)
+            assertEquals(listOf("/v2/nearby/calls/$channel"),f.paths.filter {"/calls/" in it})
+            assertEquals(NearbyVoiceError.UNAVAILABLE,root.state.value.error)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun rootIncomingCallMissingOrExpiredRelativeCreditPreservesCurrentVoice()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val original=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(original,true,boundary);runCurrent();val ticket=f.gate.current.value;val withdrawn=guard.withdrawn.size
+            f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+            val ring=DirectCallSnapshot(channel,f.peer,actor,DirectCallPhase.RINGING,2,45100,null)
+            for(missing in listOf(true,false)) {
+                f.statusRingCredit=if(missing) null else 1000;f.statusElapsed=if(missing) 0 else 1000
+                val request=assertNotNull(root.requestIncomingCall(account,ring,"Incoming"));runCurrent()
+                root.begin(request,true,boundary);runCurrent()
+                assertSame(ticket,f.gate.current.value);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+                assertEquals(withdrawn,guard.withdrawn.size);assertEquals(1,f.published)
+                assertEquals(NearbyVoiceError.UNAVAILABLE,root.state.value.error)
+            }
+            assertEquals(listOf("/v2/nearby/calls/$channel","/v2/nearby/calls/$channel"),f.paths.filter {"/calls/" in it})
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun rootIncomingCallLateStatusAfterReplacementCannotWithdrawOriginalOrAcceptObsoleteRequest()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();val original=assertNotNull(root.requestChannel(account,channel,"Channel"));runCurrent()
+            root.begin(original,true,boundary);runCurrent();val ticket=f.gate.current.value;val withdrawn=guard.withdrawn.size
+            f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING";f.statusRelease=CompletableDeferred()
+            val ring=DirectCallSnapshot(channel,f.peer,actor,DirectCallPhase.RINGING,2,45100,null)
+            val incoming=assertNotNull(root.requestIncomingCall(account,ring,"Incoming"));runCurrent()
+            root.begin(incoming,true,boundary);runCurrent();assertTrue(f.statusEntered.isCompleted)
+            val replacement=assertNotNull(root.requestChannel(account,channel,"Latest"));runCurrent()
+            f.statusRelease!!.complete(Unit);runCurrent();assertTrue(f.statusHandlerFinished)
+            assertSame(ticket,f.gate.current.value);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(withdrawn,guard.withdrawn.size);assertEquals(replacement,assertNotNull(root.state.value.pending).id)
+            assertEquals(listOf("/v2/nearby/calls/$channel"),f.paths.filter {"/calls/" in it})
+            root.begin(replacement,true,boundary);runCurrent()
+            assertEquals(VoiceOperationId(replacement),f.owner.state.value.operationId);assertEquals(2,f.published)
+            assertEquals("Latest",root.state.value.label);assertNull(root.state.value.callRoster)
+        } finally {f.statusRelease?.complete(Unit);runCurrent();boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     private inner class SharingFixture(val f: Fixture) {
         val source=CaptureLocationRepository()
         val foreground=CaptureForegroundPort()
@@ -2239,9 +2378,10 @@ class VoiceConversationStartupTest {
         val declineEntered = CompletableDeferred<Unit>()
         val peer = "70000000-0000-0000-0000-000000000007"
         val key = "80000000-0000-0000-0000-000000000008"
+        var callDestination=channel
         private fun callSnapshot(phase: String, outcome: String = "null") =
-            """{"callId":"$channel","callerId":"${if (incomingMode) peer else actor}","calleeId":"${if (incomingMode) actor else peer}","phase":"$phase","revision":2,"ringDeadlineEpochMillis":45100,"outcome":$outcome}"""
-        private fun callGrant() = """{"phase":"CONNECTING","sessionId":"40000000-0000-0000-0000-000000000004","remainingLeaseMillis":10000,"credentials":{"serverUrl":"wss://media.test","participantToken":"secret","roomEpoch":"volty-call-$channel"}}"""
+            """{"callId":"$callDestination","callerId":"${if (incomingMode) peer else actor}","calleeId":"${if (incomingMode) actor else peer}","phase":"$phase","revision":2,"ringDeadlineEpochMillis":45100,"outcome":$outcome}"""
+        private fun callGrant() = """{"phase":"CONNECTING","sessionId":"40000000-0000-0000-0000-000000000004","remainingLeaseMillis":10000,"credentials":{"serverUrl":"wss://media.test","participantToken":"secret","roomEpoch":"volty-call-$callDestination"}}"""
         var published = 0; var closes = 0
         val mutes = mutableListOf<Boolean>(); val deafens = mutableListOf<Boolean>()
         val paths = mutableListOf<String>()
@@ -2291,7 +2431,7 @@ class VoiceConversationStartupTest {
                     }
                     if (it.url.encodedPath.endsWith("roster")) {
                         if (rosterDenied) return@addHandler respond("{}", HttpStatusCode.Forbidden)
-                        return@addHandler respond("""{"callId":"$channel","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$actor","sessionId":"40000000-0000-0000-0000-000000000004","phase":"CONNECTING","deadlineEpochMillis":110000,"mediaPresence":"UNKNOWN"},{"actorId":"$peer","sessionId":"60000000-0000-0000-0000-000000000006","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]}""")
+                        return@addHandler respond("""{"callId":"$callDestination","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$actor","sessionId":"40000000-0000-0000-0000-000000000004","phase":"CONNECTING","deadlineEpochMillis":110000,"mediaPresence":"UNKNOWN"},{"actorId":"$peer","sessionId":"60000000-0000-0000-0000-000000000006","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]}""")
                     }
                     if (it.url.encodedPath.endsWith("decline")) {
                         declineEntered.complete(Unit); declineRelease?.await()

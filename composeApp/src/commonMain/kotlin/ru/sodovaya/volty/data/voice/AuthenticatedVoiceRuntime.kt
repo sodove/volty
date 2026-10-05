@@ -69,6 +69,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
         }
     suspend fun incomingCalls(after: String? = null, limit: Int = 20) = control.incoming(after, limit)
     suspend fun callStatus(call: String) = control.callStatus(call)
+    internal suspend fun verifyIncomingCall(call: String)=IncomingCallHintVerifier(account,this,monotonicMillis).verify(call)
     /** The UI owns only its waiter. Rejection runs on the original cleanup root without audio. */
     fun requestDeclineIncomingCall(call: DirectCallSnapshot, operation: VoiceOperationId): Deferred<DirectCallReply> =
         cleanupScope.async {

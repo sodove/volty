@@ -69,6 +69,22 @@ internal class VoiceConversationStartup(
     private var rootJob: Job? = null
     private val issuedOperations = mutableSetOf<String>()
 
+    /** Read-only incoming preflight before a caller withdraws its current allowed conversation. */
+    internal suspend fun prepareIncoming(account: SocialAuthenticatedAccount,original: DirectCallSnapshot):DirectCallSnapshot?=withContext(queuedDispatcher) {
+        currentCoroutineContext().ensureActive()
+        if(!account.job.isActive || original.phase!=DirectCallPhase.RINGING || original.calleeId!=account.userId.value ||
+            original.callerId==account.userId.value) return@withContext null
+        invitationDraftId(original.callId);invitationDraftId(original.callerId)
+        val runtime=acquire(account)
+        currentCoroutineContext().ensureActive()
+        if(!account.job.isActive || runtime.retired.value || !runtime.belongsTo(account)) return@withContext null
+        val ring=runtime.verifyIncomingCall(original.callId) as? IncomingCallHintReply.Ringing ?: return@withContext null
+        currentCoroutineContext().ensureActive()
+        if(!account.job.isActive || runtime.retired.value || ring.call.callerId!=original.callerId ||
+            ring.call.calleeId!=original.calleeId || ring.call.revision<original.revision) return@withContext null
+        ring.call
+    }
+
     suspend fun start(account: SocialAuthenticatedAccount, channel: String, operation: VoiceOperationId,
                       replace: Boolean = false, readPreferences: suspend () -> VoiceAudioPreferences,
                       launch: (VoiceForegroundTicket) -> Boolean) =

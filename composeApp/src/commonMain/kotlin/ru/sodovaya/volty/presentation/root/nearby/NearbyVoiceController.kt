@@ -6,6 +6,10 @@ import ru.sodovaya.volty.data.social.*
 import ru.sodovaya.volty.data.voice.*
 import ru.sodovaya.volty.domain.voice.*
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
+import ru.sodovaya.volty.domain.social.FriendSummary
+import ru.sodovaya.volty.domain.social.FriendshipState
+import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
+import ru.sodovaya.volty.data.nearby.DirectCallPhase
 
 internal interface NearbyVoiceSwitchGuard {
     fun requiresConfirmation(operation: VoiceOperationId?): Boolean
@@ -14,12 +18,15 @@ internal interface NearbyVoiceSwitchGuard {
 }
 enum class NearbyVoiceError { MICROPHONE_DENIED, NOT_VISIBLE, CLEANUP_REQUIRED, UNAVAILABLE }
 enum class NearbyVoiceUiPhase { IDLE, PREPARING, ACTIVE, FAILED }
+enum class NearbyConversationKind { CHANNEL, CALL }
 data class NearbyPendingVoiceView(val id: String,val label: String,
-    val confirmationRequired: Boolean=false,val confirmed: Boolean=false)
+    val confirmationRequired: Boolean=false,val confirmed: Boolean=false,
+    val kind: NearbyConversationKind=NearbyConversationKind.CHANNEL)
 data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: String="",
     val operation: VoiceOperationId?=null,val phase: NearbyVoiceUiPhase=NearbyVoiceUiPhase.IDLE,
     val voice: VoiceSessionState?=null,val error: NearbyVoiceError?=null,
-    val starting: NearbyPendingVoiceView?=null)
+    val starting: NearbyPendingVoiceView?=null,val kind: NearbyConversationKind?=null,
+    val callRoster: DirectCallRosterPresenceView?=null)
 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
@@ -30,10 +37,11 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
     init {require(root.isActive && queued.isDispatchNeeded(parent.coroutineContext))}
     private val lifetime=SupervisorJob(root)
     private val scope=CoroutineScope(parent.coroutineContext+lifetime+queued)
-    private data class Request(val id: String,val account: SocialAuthenticatedAccount,val channel: String,
+    private data class Request(val id: String,val account: SocialAuthenticatedAccount,val target: VoiceConversationTarget,
         val label: String,val original: VoiceOperationId?,val confirmation: Boolean,val confirmed: Boolean) {
         val operation get()=VoiceOperationId(id)
-        fun view()=NearbyPendingVoiceView(id,label,confirmation,confirmed)
+        val kind get()=if(target is VoiceConversationTarget.Channel) NearbyConversationKind.CHANNEL else NearbyConversationKind.CALL
+        fun view()=NearbyPendingVoiceView(id,label,confirmation,confirmed,kind)
     }
     private class Start(val request: Request) {var job: Job?=null}
     private var pending: Request?=null
@@ -87,18 +95,36 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
                 owner!=null && source.phase==VoiceConversationPhase.FAILED -> NearbyVoiceUiPhase.FAILED
                 else -> NearbyVoiceUiPhase.IDLE
             },voice=source.voice.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
-            error=failure?.takeIf {current(it.first)}?.second,starting=preparing?.view())
+            error=failure?.takeIf {current(it.first)}?.second,starting=preparing?.view(),kind=visible?.kind,
+            callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
         if(!current(account) || runCatching {invitationDraftId(channel)}.isFailure) return null
+        return request(account,label) {VoiceConversationTarget.Channel(channel)}
+    }
+    fun requestFriendCall(account: SocialAuthenticatedAccount,friend: FriendSummary):String? {
+        if(!current(account) || friend.state!=FriendshipState.ACCEPTED || friend.userId==account.userId ||
+            runCatching {invitationDraftId(friend.userId.value)}.isFailure) return null
+        return request(account,friend.displayName) {operation ->
+            VoiceConversationTarget.OutgoingCall(nextId().also(::invitationDraftId),friend.userId.value,operation)
+        }
+    }
+    fun requestIncomingCall(account: SocialAuthenticatedAccount,call: DirectCallSnapshot,label: String):String? {
+        if(!current(account) || call.calleeId!=account.userId.value || call.callerId==account.userId.value ||
+            call.phase!=DirectCallPhase.RINGING || call.revision<0 || call.ringDeadlineEpochMillis<0 || call.outcome!=null ||
+            runCatching {invitationDraftId(call.callId);invitationDraftId(call.callerId)}.isFailure) return null
+        return request(account,label) {VoiceConversationTarget.IncomingCall(call)}
+    }
+    private fun request(account: SocialAuthenticatedAccount,label: String,target: (String)->VoiceConversationTarget):String {
         val id=nextId().also(::invitationDraftId)
+        val destination=target(id)
         scope.launch {
             if(!current(account)) return@launch
             if(!issued.add(id)) {failure=account to NearbyVoiceError.UNAVAILABLE;render();return@launch}
             starting?.job?.cancel();starting=null
             val original=voice.state.value.operationId
             val confirm=switches.requiresConfirmation(original)
-            pending=Request(id,account,channel,label.take(160).filterNot {it.isISOControl()},original,confirm,!confirm)
+            pending=Request(id,account,destination,label.take(160).filterNot {it.isISOControl()},original,confirm,!confirm)
             failure=null;render()
         }
         return id
@@ -125,6 +151,19 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         val request=work.request;var submitted=false
         try {
             if(!selected(work) || !boundary.available || voice.state.value.operationId!=request.original) return
+            val destination=when(val target=request.target) {
+                is VoiceConversationTarget.IncomingCall -> {
+                    val verified=voice.prepareIncoming(request.account,target.call)
+                    if(verified==null) {
+                        if(selected(work)) failure=request.account to NearbyVoiceError.UNAVAILABLE
+                        return
+                    }
+                    VoiceConversationTarget.IncomingCall(verified)
+                }
+                else -> target
+            }
+            if(!selected(work) || voice.state.value.operationId!=request.original) return
+            if(!boundary.available) {failure=request.account to NearbyVoiceError.NOT_VISIBLE;return}
             switches.withdrawSharing(request.original)
             request.original?.let {voice.stop(it)}
             if(!selected(work)) return
@@ -134,7 +173,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             }
             if(!selected(work) || voice.state.value.operationId!=request.original) return
             if(!boundary.available) {failure=request.account to NearbyVoiceError.NOT_VISIBLE;return}
-            voice.start(request.account,request.channel,request.operation,readPreferences=readPreferences,launch=boundary::launchVoice)
+            voice.start(request.account,destination,request.operation,readPreferences=readPreferences,launch=boundary::launchVoice)
             if(!selected(work) || voice.state.value.operationId!=request.operation) return
             committed=request;submitted=true
         } catch(cancelled: CancellationException) {
