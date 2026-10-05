@@ -29,6 +29,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
 
     <application
         android:name=".VoltyApplication"
@@ -70,6 +71,8 @@
         <service android:name=".data.voice.NearbyVoiceService"
             android:foregroundServiceType="microphone" android:exported="false" />
         <receiver android:name=".data.voice.IncomingCallDeclineReceiver" android:exported="false" />
+        <service android:name=".data.voice.NearbyChannelLocationService"
+            android:foregroundServiceType="location" android:exported="false" />
 
         <!-- Shares the exported logcat file with the chosen app (see LogExporter). -->
         <provider

@@ -1,0 +1,5 @@
+<resources>
+    <string name="nearby_location_notification_title">Location sharing</string>
+    <string name="nearby_location_notification_body">Location sharing is active or being prepared</string>
+    <string name="nearby_location_notification_hide">Hide location</string>
+</resources>

@@ -1,0 +1,5 @@
+<resources>
+    <string name="nearby_location_notification_title">Передача позиции</string>
+    <string name="nearby_location_notification_body">Передача позиции включена или подготавливается</string>
+    <string name="nearby_location_notification_hide">Скрыть позицию</string>
+</resources>

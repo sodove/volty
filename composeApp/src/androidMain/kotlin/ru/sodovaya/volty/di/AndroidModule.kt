@@ -160,6 +160,14 @@ val androidModule = module {
     single<LocationProvider> { AndroidLocationProvider(get()) }
     single { AndroidVoiceAudioFactory(androidContext()) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
+    single {
+        val application=androidContext()
+        ru.sodovaya.volty.data.voice.ChannelLocationForegroundAuthority(
+            permission={ru.sodovaya.volty.data.voice.channelLocationPermission(application)},
+            nextId={java.util.UUID.randomUUID().toString()})
+    }
+    single {ru.sodovaya.volty.data.voice.AndroidChannelLocationForegroundController(androidContext(),get())}
+    single {ru.sodovaya.volty.data.voice.NearbyLocationDemandCoordinator(get())}
     single { IncomingCallActionRegistry(Dispatchers.Main) {java.util.UUID.randomUUID().toString()} }
     single {
         AndroidIncomingCallAccountFactory(androidContext(), get(), Dispatchers.Main,
