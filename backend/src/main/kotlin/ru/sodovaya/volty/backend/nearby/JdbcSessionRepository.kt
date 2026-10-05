@@ -273,6 +273,26 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         producer(authorized)
     }
 
+    /** Sharing SQL joins this original fenced actor transaction, never a nested connection. */
+    internal fun <T> withChannelSharingActor(actor: String, block: (Connection) -> T): T {
+        check(access != null) {"Channel sharing requires actual SQL access policy"}
+        return locked(actor, block)
+    }
+
+    /** Caller holds SHARE fence and actor lock. Reject calls before any pair-owned mutation. */
+    internal fun activeChannelSharingSession(c: Connection, actor: String, session: String, at: Long): SessionJournalEntry? {
+        val row = c.prepareStatement("SELECT * FROM nearby_session_operations WHERE actor_id=?::uuid AND session_id=?::uuid").use {
+            it.setString(1, actor); it.setString(2, session)
+            it.executeQuery().use {rows -> if (rows.next()) rows.entry() else null}
+        } ?: return null
+        if (row.operation.destinationKind != VoiceDestinationKind.CHANNEL) return null
+        val current = checkNotNull(persist(c, row, policy.expire(row.operation, at)).state)
+        if (current.operation.phase != OperationPhase.ACTIVE) return null
+        if (!allowed(c, current)) {denied(c, current, at); return null}
+        val expected = SessionClaim(current.operation.operationId, session, checkNotNull(current.sfuEpoch))
+        return current.takeIf {claim(c, actor) == expected}
+    }
+
     override fun completeCleanup(actor: String, operation: String, session: String, sfuEpoch: SfuEpoch): Boolean = lockedOperation(actor, operation, null) { c ->
         c.prepareStatement("UPDATE nearby_session_operations SET cleanup_pending=FALSE WHERE actor_id=?::uuid AND operation_id=?::uuid AND session_id=?::uuid AND room_epoch=? AND node_epoch=? AND phase IN ('CANCELLED','EXPIRED')").use {
             it.setString(1, actor); it.setString(2, operation); it.setString(3, session); it.setString(4, sfuEpoch.roomEpoch); it.setString(5, sfuEpoch.nodeEpoch); it.executeUpdate() == 1
@@ -323,6 +343,10 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         save(c, row)
         if (existing?.operation != row.operation) appendRosterChange(c, row)
         if (next.terminal && next.sessionId != null) {
+            // Exact original session only: delayed cleanup must not revoke a replacement trip.
+            c.prepareStatement("UPDATE nearby_channel_sharing_consent SET phase='REVOKED' WHERE actor_id=?::uuid AND session_id=?::uuid AND phase='ACTIVE'").use {
+                it.setString(1, next.actorId); it.setString(2, next.sessionId); it.executeUpdate()
+            }
             c.prepareStatement("UPDATE nearby_actor_claims SET operation_id=NULL,session_id=NULL,room_epoch=NULL,node_epoch=NULL WHERE actor_id=?::uuid AND operation_id=?::uuid AND session_id=?::uuid").use {
                 it.setString(1, next.actorId); it.setString(2, next.operationId); it.setString(3, next.sessionId); it.executeUpdate()
             }
