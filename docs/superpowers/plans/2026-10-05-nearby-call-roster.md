@@ -32,3 +32,11 @@ The pair has one equal clipped lease, bounded to 30 seconds; no credentials or o
 are serialized. Client transport must require explicit call/own actor/expected peer identities,
 strict numeric fields and transport consistency, bounded body/time and no redirects. Return
 a dedicated call observation with issuance ordinal/start/receive times; no channel tag or fake nonce.
+
+Trusted account read owner borrows only the captured SocialAuthenticatedAccount and parent client.
+Pin the original call/peer/subscription generation, guard before and after token/HTTP suspension,
+and close only this read child on explicit retirement or account cancellation. This has no original
+negative media cleanup permission; the account voice runtime retains that separate capability.
+Tests use actual HTTP with held replies, same-account refresh, same-user new account, mismatched
+tag zero HTTP, and borrowed account/client survival. A cancelled old reader cannot revive through
+a new login or publish a held result. No polling loop or notification-triggered capture here.
