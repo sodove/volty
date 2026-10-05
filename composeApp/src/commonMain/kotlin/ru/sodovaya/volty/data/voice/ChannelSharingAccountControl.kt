@@ -17,7 +17,8 @@ import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 internal class ChannelSharingAccountControl private constructor(private val account: SocialAuthenticatedAccount,
     private val runtime: AuthenticatedVoiceRuntime, private val original: VoiceSessionTag, private val client: HttpClient,
     private val baseUrl: String, private val queuedDispatcher: CoroutineDispatcher, private val clock: () -> Long,
-    initialBearer: String, private val channel: String) {
+    initialBearer: String, private val channel: String, private val journal: ChannelSharingRevokeJournal?,
+    private val nextJournalRequestId: (() -> String)?) {
     private data class Capability(val retired: Boolean = false, val closed: Boolean = false,
         val bearer: String? = null, val generations: Set<String> = emptySet(),
         val withdrawn: Set<String> = emptySet(), val consents: Map<String,ChannelSharingObservation> = emptyMap(),
@@ -48,6 +49,10 @@ internal class ChannelSharingAccountControl private constructor(private val acco
     val cleanupFailed = cleanupFailure.asStateFlow()
     private val mutableClosed=MutableStateFlow(false)
     internal val closed=mutableClosed.asStateFlow()
+    private val journalIntents = mutableMapOf<String, ChannelSharingRevokeIntent>()
+    private val negativeProof = mutableMapOf<String, ChannelSharingReply.Negative>()
+    private val mutableJournalPending = MutableStateFlow(false)
+    val journalCleanupPending = mutableJournalPending.asStateFlow()
     private var pendingRevokes = 0
     private val revokes = mutableMapOf<String, Deferred<ChannelSharingReply>>()
     private val accountGuardian = account.scope().launch(start = CoroutineStart.UNDISPATCHED) {
@@ -65,7 +70,8 @@ internal class ChannelSharingAccountControl private constructor(private val acco
         if (generation in capability.value.withdrawn) return@withContext denied()
         // Record before issue: even an unknown/cancelled response may have committed remotely.
         capability.update {if (it.closed || it.retired) it else it.copy(generations = it.generations + generation)}
-        ensurePositive()
+        rememberOriginal(generation)
+        ensurePositive(); ensureGeneration(generation)
         val reply = positive.start(tag(generation), mode, ttl)
         ensurePositive(); ensureGeneration(generation)
         rememberConsent(generation,reply,mode)
@@ -100,7 +106,9 @@ internal class ChannelSharingAccountControl private constructor(private val acco
             return@withContext CompletableDeferred(ChannelSharingReply.Failed(ChannelSharingFailure.RETIRED))
         revokes[generation]?.takeIf {!it.isCompleted}?.let {return@withContext it}
         pendingRevokes++
-        val task = cleanupScope.async(start = CoroutineStart.LAZY) {negative.revoke(tag(generation))}
+        val task = cleanupScope.async(start = CoroutineStart.LAZY) {
+            negative.revoke(tag(generation)).also {acknowledgeOriginal(generation, it)}
+        }
         revokes[generation] = task
         // Count admitted queued work, including producers cancelled before their body starts.
         task.invokeOnCompletion {
@@ -128,6 +136,31 @@ internal class ChannelSharingAccountControl private constructor(private val acco
         publications.clear()
         mutableClosed.value=true
         accountGuardian.cancel(); rootGuardian?.cancel(); lifetime.complete()
+    }
+    private suspend fun rememberOriginal(generation: String) {
+        val durable = journal ?: return
+        val candidate = ChannelSharingRevokeIntent(account.userId.value, tag(generation), checkNotNull(nextJournalRequestId).invoke())
+        // A failed write may have committed. Keep the exact candidate until confirmed cleanup.
+        journalIntents[generation] = candidate
+        mutableJournalPending.value = true
+        val stored = durable.record(candidate)
+        check(stored.actorId == candidate.actorId && stored.tag == candidate.tag) {"Journal returned another original sharing intent"}
+        journalIntents[generation] = stored
+        negativeProof[generation]?.let {acknowledgeOriginal(generation, it)}
+    }
+    private suspend fun acknowledgeOriginal(generation: String, reply: ChannelSharingReply) {
+        val durable = journal ?: return
+        if (reply !is ChannelSharingReply.Negative || reply.tag != tag(generation)) return
+        negativeProof[generation] = reply
+        val intent = journalIntents[generation] ?: return
+        // Storage failure cannot replace an actual remote negative result with a transport failure.
+        val removed = try {durable.acknowledge(intent, account.userId.value, reply)}
+            catch (_: Exception) {false}
+        if (removed && journalIntents[generation] == intent) {
+            journalIntents.remove(generation)
+            negativeProof.remove(generation)
+        }
+        mutableJournalPending.value = journalIntents.isNotEmpty()
     }
     private fun tag(generation: String) = ChannelSharingTag(original.sessionId.value, generation)
     internal fun belongsTo(account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime, original: VoiceSessionTag) =
@@ -176,9 +209,17 @@ internal class ChannelSharingAccountControl private constructor(private val acco
             throw CancellationException("Original sharing session retired")
     }
     companion object {
+        suspend fun createDurable(account: SocialAuthenticatedAccount,runtime: AuthenticatedVoiceRuntime,
+            original: VoiceSessionTag,client: HttpClient,baseUrl: String,queuedDispatcher: CoroutineDispatcher,
+            clock: ()->Long,journal: ChannelSharingRevokeJournal,nextRequestId: ()->String): ChannelSharingAccountControl =
+            createOwned(account,runtime,original,client,baseUrl,queuedDispatcher,clock,journal,nextRequestId)
         suspend fun create(account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime,
             original: VoiceSessionTag, client: HttpClient, baseUrl: String, queuedDispatcher: CoroutineDispatcher,
-            clock: () -> Long): ChannelSharingAccountControl {
+            clock: () -> Long): ChannelSharingAccountControl =
+            createOwned(account,runtime,original,client,baseUrl,queuedDispatcher,clock,null,null)
+        private suspend fun createOwned(account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime,
+            original: VoiceSessionTag, client: HttpClient, baseUrl: String, queuedDispatcher: CoroutineDispatcher,
+            clock: () -> Long, journal: ChannelSharingRevokeJournal?, nextRequestId: (() -> String)?): ChannelSharingAccountControl {
             currentCoroutineContext().ensureActive()
             require(runtime.belongsTo(account)) {"Sharing runtime belongs to another account"}
             check(account.job.isActive && runtime.canShare(original)) {"Actual active channel session required"}
@@ -191,7 +232,7 @@ internal class ChannelSharingAccountControl private constructor(private val acco
             val token = account.bearer()?.takeIf {it.isNotBlank()} ?: throw CancellationException("Sharing account retired")
             currentCoroutineContext().ensureActive()
             check(account.job.isActive && root.isActive && runtime.sharingChannel(original)==channel) {"Original channel session retired"}
-            return ChannelSharingAccountControl(account, runtime, original, client, baseUrl, queuedDispatcher, clock, token, channel)
+            return ChannelSharingAccountControl(account, runtime, original, client, baseUrl, queuedDispatcher, clock, token, channel, journal, nextRequestId)
         }
     }
 }

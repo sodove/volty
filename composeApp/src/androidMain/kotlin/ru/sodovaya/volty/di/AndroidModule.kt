@@ -184,7 +184,8 @@ val androidModule = module {
         ru.sodovaya.volty.data.voice.ChannelSharingStartup(get(named(NEARBY_HTTP_CLIENT)),NEARBY_API_BASE_URL,
             Dispatchers.Main,get(),get(),get<ru.sodovaya.volty.data.voice.AndroidChannelLocationForegroundController>(),
             SystemClock::elapsedRealtime,System::currentTimeMillis,
-            {telemetry.value.latest.value ?: ru.sodovaya.volty.domain.social.EarnedTelemetry()}) {account ->
+            {telemetry.value.latest.value ?: ru.sodovaya.volty.domain.social.EarnedTelemetry()},
+            get<ru.sodovaya.volty.data.voice.ChannelSharingRevokeJournal>(),{java.util.UUID.randomUUID().toString()}) {account ->
             coordinator.acquireBound(account,audio.createPrepared())
         }
     }

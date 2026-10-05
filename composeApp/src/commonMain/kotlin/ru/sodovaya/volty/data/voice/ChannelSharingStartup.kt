@@ -111,6 +111,7 @@ internal class ChannelSharingStartup(private val client: HttpClient,private val 
     private val queued: CoroutineDispatcher,private val repository: RideLocationRepository,
     private val demand: NearbyLocationDemandCoordinator,private val foreground: ChannelLocationForegroundPort,
     private val clock: ()->Long,private val epoch: ()->Long,private val telemetry: ()->EarnedTelemetry,
+    private val journal: ChannelSharingRevokeJournal,private val nextRequestId: ()->String,
     private val acquire: suspend (SocialAuthenticatedAccount)->VoiceAccountRuntimeBinding) {
     private val base=nearbyHttpsApiBaseUrl(baseUrl)
     private val issued=mutableSetOf<String>()
@@ -128,7 +129,7 @@ internal class ChannelSharingStartup(private val client: HttpClient,private val 
             val binding=acquire(account);handle.ensureWanted()
             require(binding.voice.belongsTo(account)) {"Voice binding belongs to another account"}
             check(!binding.sharing.retired.value && binding.voice.canShare(original) && !binding.voice.state.value.sharingEnabled)
-            val control=ChannelSharingAccountControl.create(account,binding.voice,original,client,base,queued,clock)
+            val control=ChannelSharingAccountControl.createDurable(account,binding.voice,original,client,base,queued,clock,journal,nextRequestId)
             handle.own(control);handle.ensureWanted()
             val capture=ChannelSharingCaptureOwner.create(account,binding.voice,original,control,generation,mode,ttl,
                 repository,demand,foreground,queued,clock,epoch,telemetry)
