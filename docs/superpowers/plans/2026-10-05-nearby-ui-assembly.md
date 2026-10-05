@@ -30,6 +30,7 @@
 
 ## Task 2 — server screen and shell
 
+- [x] Build reusable `ServerWorkspacePresenter`, `ServerWorkspaceScreen` and forms: owned projection, private-by-default creation, catalog join, channels, target-bound removal dialog; 7 finite presenter tests plus existing workspace/account/browser suite. Full Android 3122 exact zero bad. This is compiled UI code, not a visual/device check or root activation.
 - [ ] Before activating owner departure UI, provide an authoritative paginated member directory for successor selection. Current community details contain owner/channels but no member list. Never ask users to copy a user UUID or infer server membership from friendships/voice roster.
 
 - [ ] Introduce the new Decompose Nearby component with auth/profile/friends from the existing social repository and v2 server workspace from the verified `SocialAuthenticatedAccount`.

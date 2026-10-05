@@ -36,6 +36,10 @@ class CommunityWorkspace(
     private val output = MutableStateFlow(CommunityWorkspaceState())
     val state = output.asStateFlow()
     val browser = CommunityBrowser(scope, communities)
+    val active: Boolean get() = positive()
+    private val retiredState = MutableStateFlow(false)
+    /** Permission withdrawal, not proof that a cancellation-ignoring HTTP producer returned. */
+    val retired = retiredState.asStateFlow()
     private var closed = false
     private sealed interface Request {
         data class Create(val name: String, val description: String, val visibility: CommunityVisibility): Request
@@ -108,6 +112,7 @@ class CommunityWorkspace(
         mutex.withLock {
             if (closed) return@withLock
             closed = true
+            retiredState.value = true
             output.value = CommunityWorkspaceState(); retry = null
             lifetime.cancel(); accountGuardian?.cancel()
             browser.close()
