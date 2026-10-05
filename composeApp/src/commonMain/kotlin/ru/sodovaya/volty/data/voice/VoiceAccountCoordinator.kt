@@ -7,6 +7,8 @@ import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 
+internal data class VoiceAccountRuntimeBinding(val voice: AuthenticatedVoiceRuntime,val sharing: ChannelSharingCoordinator)
+
 /** One queued serial owner. Pulses must be cold or broadcast, not distributed between readers.
  * Holds retired runtimes until a separate drain can dispose them. */
 internal class VoiceAccountCoordinator(
@@ -19,8 +21,9 @@ internal class VoiceAccountCoordinator(
 ) {
     private val root = nearbyHttpsApiBaseUrl(baseUrl)
     private class Entry(val account: SocialAuthenticatedAccount) {
-        lateinit var result: Deferred<AuthenticatedVoiceRuntime>
+        lateinit var result: Deferred<VoiceAccountRuntimeBinding>
         var runtime: AuthenticatedVoiceRuntime? = null
+        var binding: VoiceAccountRuntimeBinding? = null
         var obsolete = false
         var failed = false
     }
@@ -28,8 +31,15 @@ internal class VoiceAccountCoordinator(
     private var current: Entry? = null
     private var rootJob: Job? = null
 
+    suspend fun acquireBound(account: SocialAuthenticatedAccount,factory: VoiceSdkSessionFactory): VoiceAccountRuntimeBinding =
+        acquireBinding(account,factory,null)
+
     suspend fun acquire(account: SocialAuthenticatedAccount, factory: VoiceSdkSessionFactory,
-                        sharingDispatch: (VoiceSharingDispatch) -> Unit): AuthenticatedVoiceRuntime {
+                        sharingDispatch: (VoiceSharingDispatch) -> Unit): AuthenticatedVoiceRuntime =
+        acquireBinding(account,factory,sharingDispatch).voice
+
+    private suspend fun acquireBinding(account: SocialAuthenticatedAccount,factory: VoiceSdkSessionFactory,
+                                      observer: ((VoiceSharingDispatch)->Unit)?): VoiceAccountRuntimeBinding {
         val result = withContext(queuedDispatcher) {
             check(account.job.isActive) { "Authenticated account retired" }
             invitationDraftId(account.userId.value)
@@ -45,7 +55,7 @@ internal class VoiceAccountCoordinator(
 
             // Revoke older positive permission before any builder/token suspension.
             val predecessors = entries.toList()
-            predecessors.forEach { it.obsolete = true }
+            predecessors.forEach { it.obsolete = true;it.binding?.sharing?.requestRetire() }
             val entry = Entry(account)
             entries += entry
             current = entry
@@ -57,12 +67,27 @@ internal class VoiceAccountCoordinator(
                     // delayed builder then retired newer owners. Capture predecessors at selection.
                     for (older in predecessors) older.runtime?.retire()
                     val runtime = AuthenticatedVoiceRuntime.create(account, client, root, queuedDispatcher,
-                        factory, pulses, monotonicMillis, sharingDispatch, { mayAllocate(entry) })
+                        factory, pulses, monotonicMillis, {effect ->
+                            val sharing=entry.binding?.sharing
+                            if(sharing!=null) sharing.dispatch(effect)
+                            else check(effect.original==null && effect.effect!=VoiceSharingEffect.ADD_DEMAND) {
+                                "Earned sharing effect before original account binding"
+                            }
+                            observer?.invoke(effect)
+                        }, { mayAllocate(entry) })
                     entry.runtime = runtime
-                    if (current !== entry || entry.obsolete || !account.job.isActive) runtime.retire()
-                    runtime
+                    val binding=VoiceAccountRuntimeBinding(runtime,ChannelSharingCoordinator.create(account,runtime,queuedDispatcher))
+                    entry.binding=binding
+                    if (current !== entry || entry.obsolete || !account.job.isActive) {
+                        binding.sharing.requestRetire();runtime.retire()
+                    }
+                    binding
                 } catch (failure: Throwable) {
                     entry.failed = true
+                    withContext(NonCancellable+queuedDispatcher) {
+                        entry.binding?.sharing?.requestRetire()
+                        try {entry.runtime?.retire()} catch(cleanup: Throwable) {failure.addSuppressed(cleanup)}
+                    }
                     throw failure
                 }
             }
@@ -78,7 +103,7 @@ internal class VoiceAccountCoordinator(
     suspend fun retireAll() = withContext(NonCancellable + queuedDispatcher) {
         val retiring = entries.toList()
         current = null
-        retiring.forEach { it.obsolete = true }
+        retiring.forEach { it.obsolete = true;it.binding?.sharing?.requestRetire() }
         for (entry in retiring) entry.runtime?.retire()
         // Pending builders retire their result when they return; never join held work here.
     }

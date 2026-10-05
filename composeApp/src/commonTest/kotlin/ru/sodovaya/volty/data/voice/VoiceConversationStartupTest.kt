@@ -23,6 +23,25 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun boundAccountRuntimePublishesSharingThroughOwnedCallbackWithoutUiRelay() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true
+        f.sharingDispatch={error("Bound runtime must use its own sharing callback")}
+        var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val bound=assertNotNull(f.boundRuntime);val runtime=bound.voice;assertSame(runtime,f.runtime)
+            val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(bound.sharing.enable(original,owner).await());runCurrent()
+            f.time=101;source.emitFix(1001,101);runCurrent();assertEquals(listOf(0L),f.packetSequences)
+            runtime.hidePosition();runCurrent();assertNull(bound.sharing.publisher.value);assertNull(owner.packet.value)
+            assertEquals(listOf(true,false),source.issued);assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+        } finally {capture?.close();sharing?.close();f.close()}
+    }
+
     @Test fun sharingCoordinatorMissingVoiceCallbackTimesOutAndClearsOnlyOriginalSharingFlag() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var coordinator: ChannelSharingCoordinator?=null
         val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
@@ -1616,6 +1635,8 @@ class VoiceConversationStartupTest {
         val allocated = mutableListOf<VoiceAudioPreferences>()
         val emitters = mutableListOf<Pair<VoiceSessionTag, (VoiceSessionEvent) -> Unit>>()
         var runtime: AuthenticatedVoiceRuntime? = null
+        var useBoundRuntime=false
+        var boundRuntime: VoiceAccountRuntimeBinding?=null
         var sharingDispatch: (VoiceSharingDispatch)->Unit = {}
         var afterAcquire: suspend () -> Unit = {}
         val client = HttpClient(MockEngine) {engine {
@@ -1705,7 +1726,8 @@ class VoiceConversationStartupTest {
                     override suspend fun close() {closes++}
                 }
             }
-            return coordinator.acquire(account, audio, {sharingDispatch(it)}).also {runtime = it; afterAcquire()}
+            return (if(useBoundRuntime) coordinator.acquireBound(account,audio).also {boundRuntime=it}.voice
+                else coordinator.acquire(account, audio, {sharingDispatch(it)})).also {runtime = it; afterAcquire()}
         }
         fun launch(ticket: VoiceForegroundTicket): Boolean {launches++; if (acknowledgeLaunch) assertTrue(gate.acknowledge(ticket, service)); return true}
         suspend fun login(): SocialAuthenticatedAccount {

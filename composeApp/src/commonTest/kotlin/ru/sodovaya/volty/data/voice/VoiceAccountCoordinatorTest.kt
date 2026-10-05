@@ -19,6 +19,39 @@ class VoiceAccountCoordinatorTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val root = "https://example.test/v2/nearby"
 
+    @Test fun boundAcquisitionCoalescesVoiceAndSharingWithoutAllocatingAudioAndRetiresOriginalPair() = runTest {
+        val f=Fixture(this);val sdk=Session();var allocated=0
+        try {
+            runCurrent();f.login();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val audio=VoiceSdkSessionFactory {_,_ -> allocated++;sdk}
+            val one=async {f.coordinator.acquireBound(account,audio)};val two=async {f.coordinator.acquireBound(account,audio)}
+            runCurrent();val bound=one.await();assertSame(bound,two.await())
+            assertSame(bound,f.coordinator.acquireBound(account,audio));assertSame(bound.voice,f.coordinator.acquire(account,audio,{}))
+            assertEquals(0,allocated);assertTrue(f.wire.headers.isEmpty());assertFalse(bound.sharing.retired.value)
+            assertTrue(bound.voice.join(channel,first));runCurrent();assertEquals(1,allocated)
+            f.repository.logout();runCurrent();assertTrue(bound.sharing.retired.value);assertTrue(bound.voice.retired.value)
+            f.login();val next=f.coordinator.acquireBound(assertNotNull(f.repository.authenticatedAccount.value),factory(Session()))
+            assertNotSame(bound,next);assertNotSame(bound.sharing,next.sharing);assertFalse(next.sharing.retired.value)
+            assertFalse(next.voice.retired.value);assertTrue(bound.sharing.retired.value)
+            f.coordinator.retireAll();runCurrent()
+            assertTrue(next.sharing.retired.value);assertTrue(next.voice.retired.value)
+            assertTrue(assertNotNull(f.repository.authenticatedAccount.value).job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun boundAcquisitionHeldRefreshSurvivesCancelledWaiterAndReturnsOriginalCachedPair() = runTest {
+        val transport=Transport(expired=true);val f=Fixture(this,transport);val sdk=Session()
+        try {
+            runCurrent();f.login();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val waiter=async {f.coordinator.acquireBound(account,factory(sdk))};runCurrent()
+            assertTrue(transport.entered.isCompleted);waiter.cancel()
+            val retry=async {f.coordinator.acquireBound(account,factory(sdk))};runCurrent();assertFalse(retry.isCompleted)
+            transport.release.complete(Unit);runCurrent();val bound=retry.await()
+            assertSame(bound,f.coordinator.acquireBound(account,factory(sdk)));assertFalse(bound.sharing.retired.value)
+            assertTrue(account.job.isActive);assertEquals(0,sdk.connects);assertEquals(listOf("refresh-1"),transport.refreshes)
+        } finally {transport.release.complete(Unit);f.close()}
+    }
+
     @Test fun replacementWaitsForActualOldProducerCompletionEvenAfterSuccessfulClose() = runTest {
         val f = Fixture(this); val oldSdk = Session(holdConnect = true); val freshSdk = Session()
         try {

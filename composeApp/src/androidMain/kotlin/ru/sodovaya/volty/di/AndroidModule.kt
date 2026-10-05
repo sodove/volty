@@ -48,6 +48,7 @@ import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
 import ru.sodovaya.volty.di.nearby.DirectCallRosterAccountFactory
 import ru.sodovaya.volty.data.voice.VoiceConversationCallRosterFactory
 import ru.sodovaya.volty.data.voice.VoiceAccountCoordinator
+import ru.sodovaya.volty.data.voice.VoiceConversationStartup
 import ru.sodovaya.volty.data.voice.AndroidVoiceAudioFactory
 import ru.sodovaya.volty.data.voice.VoiceForegroundGate
 import ru.sodovaya.volty.data.voice.AndroidVoiceForegroundController
@@ -160,6 +161,14 @@ val androidModule = module {
     single<LocationProvider> { AndroidLocationProvider(get()) }
     single { AndroidVoiceAudioFactory(androidContext()) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
+    single {
+        val coordinator=get<VoiceAccountCoordinator>()
+        val audio=get<AndroidVoiceAudioFactory>()
+        VoiceConversationStartup(Dispatchers.Main,get<AndroidVoiceForegroundController>(),
+            get<VoiceConversationCallRosterFactory>()) {account ->
+            coordinator.acquireBound(account,audio.createPrepared()).voice
+        }
+    }
     single {
         val application=androidContext()
         ru.sodovaya.volty.data.voice.ChannelLocationForegroundAuthority(

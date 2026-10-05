@@ -18,7 +18,8 @@ internal class ChannelSharingCoordinator private constructor(private val account
     private val scope=CoroutineScope(account.retirementParentScope().coroutineContext+lifetime+queued)
     private val selected=MutableStateFlow<Entry?>(null)
     private val entries=mutableListOf<Entry>()
-    private val retired=MutableStateFlow(false)
+    private val mutableRetired=MutableStateFlow(false)
+    val retired=mutableRetired.asStateFlow()
     private val mutablePublisher=MutableStateFlow<ChannelSharingPacketPublisher?>(null)
     val publisher=mutablePublisher.asStateFlow()
     private val mutableCleanupPending=MutableStateFlow(false)
@@ -97,10 +98,13 @@ internal class ChannelSharingCoordinator private constructor(private val account
         }}
     }
     private fun fence() {
-        retired.value=true;selected.value=null;mutablePublisher.value=null
+        mutableRetired.value=true;selected.value=null;mutablePublisher.value=null
         entries.toList().forEach {it.ready.complete(false);it.capture.requestHide()}
+        updateCleanupPending()
         accountGuardian?.cancel();lifetime.cancel()
     }
+    /** Fence now; original root guardian drains native cleanup without blocking a new account. */
+    internal fun requestRetire()=fence()
     /** Native cleanup result only. Remote original revoke is exposed by each capture separately. */
     suspend fun close(): Boolean = withContext(NonCancellable+queued) {
         selected.value?.let {hideVoice(it)}
