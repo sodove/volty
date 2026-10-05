@@ -16,6 +16,10 @@ internal interface VoiceConversationForegroundPort {
 }
 
 internal enum class VoiceConversationPhase { STOPPED, PREPARING, JOIN_SUBMITTED, FAILED }
+internal fun interface VoiceConversationCallRosterFactory {
+    suspend fun create(account: SocialAuthenticatedAccount, tag: DirectCallRosterTag,
+                       own: VoiceSessionTag): AuthenticatedCallRosterOwner
+}
 internal sealed interface VoiceConversationTarget {
     val destinationId: String
     data class Channel(override val destinationId: String) : VoiceConversationTarget
@@ -31,6 +35,7 @@ internal data class VoiceConversationState(
     /** Actual matching runtime evidence only; absent during preparation or withdrawn intent. */
     val voice: VoiceSessionState? = null,
     val target: VoiceConversationTarget? = null,
+    val callRoster: DirectCallRosterPresenceView? = null,
 )
 
 /** One process conversation intent. All selection/foreground operations run on queued Main.
@@ -38,8 +43,12 @@ internal data class VoiceConversationState(
 internal class VoiceConversationStartup(
     private val queuedDispatcher: CoroutineDispatcher,
     private val foreground: VoiceConversationForegroundPort,
+    private val callRosters: VoiceConversationCallRosterFactory?,
     private val acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime,
 ) {
+    constructor(queuedDispatcher: CoroutineDispatcher, foreground: VoiceConversationForegroundPort,
+                acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime) :
+        this(queuedDispatcher, foreground, null, acquire)
     private val mutableState = MutableStateFlow(VoiceConversationState())
     val state = mutableState.asStateFlow()
     private class Intent(val account: SocialAuthenticatedAccount, val target: VoiceConversationTarget,
@@ -52,6 +61,9 @@ internal class VoiceConversationStartup(
         var work: Job? = null
         var guardian: Job? = null
         var foregroundObserver: Job? = null
+        var rosterSession: VoiceSessionTag? = null
+        var roster: AuthenticatedCallRosterOwner? = null
+        var rosterWork: Job? = null
     }
     private var selected: Intent? = null
     private var rootJob: Job? = null
@@ -70,6 +82,7 @@ internal class VoiceConversationStartup(
         invitationDraftId(account.userId.value)
         invitationDraftId(target.destinationId)
         invitationDraftId(operation.value)
+        require(target is VoiceConversationTarget.Channel || callRosters != null) { "Call roster owner required" }
         when (target) {
             is VoiceConversationTarget.Channel -> Unit
             is VoiceConversationTarget.OutgoingCall -> {
@@ -157,8 +170,11 @@ internal class VoiceConversationStartup(
                     voice.operationId == intent.operation && !voice.wanted ->
                         if (voice.phase == VoicePhase.FAILED) VoiceConversationPhase.FAILED else VoiceConversationPhase.STOPPED
                     else -> {
-                        if (voice.operationId == intent.operation)
+                        if (voice.operationId == intent.operation) {
+                            observeCallRoster(intent, scope, voice)
+                            if (!isCurrent(intent)) return@combine VoiceConversationPhase.STOPPED
                             mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, voice)
+                        }
                         null
                     }
                 }
@@ -177,7 +193,52 @@ internal class VoiceConversationStartup(
 
     private fun isCurrent(intent: Intent) = selected === intent && intent.account.job.isActive
     private fun conversationState(intent: Intent, phase: VoiceConversationPhase, voice: VoiceSessionState? = null) =
-        VoiceConversationState(phase, intent.channel, intent.operation, voice, intent.target)
+        VoiceConversationState(phase, intent.channel, intent.operation, voice, intent.target,
+            intent.roster?.takeIf {voice != null && matchesSession(intent, it.ownSession)}?.state?.value)
+
+    private fun matchesSession(intent: Intent, own: VoiceSessionTag): Boolean {
+        val voice = intent.runtime?.state?.value ?: return false
+        return isCurrent(intent) && intent.runtime?.retired?.value == false && foreground.current.value === intent.ticket &&
+            voice.wanted && voice.operationId == intent.operation && voice.sessionId == own.sessionId && voice.generation == own.generation
+    }
+
+    private fun observeCallRoster(intent: Intent, scope: CoroutineScope, voice: VoiceSessionState) {
+        val peer = when (val target = intent.target) {
+            is VoiceConversationTarget.Channel -> return
+            is VoiceConversationTarget.OutgoingCall -> target.calleeId
+            is VoiceConversationTarget.IncomingCall -> target.call.callerId
+        }
+        val own = VoiceSessionTag(voice.sessionId ?: return, voice.generation)
+        if (!voice.wanted) return
+        intent.rosterSession?.let {
+            if (it != own) finish(intent, VoiceConversationPhase.FAILED)
+            return
+        }
+        intent.rosterSession = own
+        val tag = DirectCallRosterTag(intent.channel, peer, own.generation.value)
+        intent.rosterWork = scope.launch {
+            var reader: AuthenticatedCallRosterOwner? = null
+            try {
+                val created = requireNotNull(callRosters).create(intent.account, tag, own)
+                reader = created
+                if (!matchesSession(intent, own)) return@launch
+                check(created.tag == tag && created.ownSession == own) {"Call roster factory returned another session"}
+                intent.roster = created
+                created.state.collect {presence ->
+                    if (!matchesSession(intent, own)) return@collect
+                    if (presence.retired) finish(intent, VoiceConversationPhase.STOPPED)
+                    else mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, intent.runtime?.state?.value)
+                }
+            } catch (_: CancellationException) {
+                // Replacement already withdrew its view; the unique reader still closes below.
+                if (matchesSession(intent, own)) finish(intent, VoiceConversationPhase.FAILED)
+            } catch (_: Exception) {
+                if (matchesSession(intent, own)) finish(intent, VoiceConversationPhase.FAILED)
+            } finally {
+                withContext(NonCancellable) {reader?.close()}
+            }
+        }
+    }
 
     // No suspension here: an Activity-bound callback cannot be spilled into the long-lived
     // readiness/preferences/active-conversation continuation frame.
@@ -194,6 +255,7 @@ internal class VoiceConversationStartup(
         mutableState.value = conversationState(intent, phase)
         intent.guardian?.cancel()
         intent.foregroundObserver?.cancel()
+        intent.rosterWork?.cancel()
         intent.work?.cancel()
         val stopped = intent.ticket?.let(foreground::stop) == true
         if (!stopped) intent.runtime?.requestDisconnect()

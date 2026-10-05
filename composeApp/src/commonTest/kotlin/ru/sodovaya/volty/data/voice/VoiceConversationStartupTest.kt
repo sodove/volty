@@ -20,6 +20,102 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun cancelledRosterFactoryFailsOriginalCallInsteadOfLeavingItWithoutPresence() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true
+            f.beforeRoster = {throw CancellationException("Reader creation cancelled")}
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(1, f.published)
+            assertEquals(VoiceConversationPhase.FAILED, f.owner.state.value.phase)
+            assertNull(f.owner.state.value.callRoster); assertNull(f.gate.current.value)
+            assertFalse(assertNotNull(f.runtime).state.value.wanted); assertTrue(account.job.isActive)
+            assertTrue(f.paths.contains("/v2/nearby/calls/$channel/cancel-outgoing"))
+            assertTrue(f.paths.contains("/v2/nearby/sessions/40000000-0000-0000-0000-000000000004/disconnect"))
+        } finally {f.close()}
+    }
+
+    @Test fun missingCallRosterBindingRejectsAdmissionBeforeReplacingExistingChannel() = runTest {
+        val f = Fixture(this)
+        val channelOnly = VoiceConversationStartup(f.dispatcher, f.foreground, f::acquire)
+        try {
+            val account = f.login()
+            channelOnly.start(account, channel, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val ticket = assertNotNull(f.gate.current.value)
+            assertEquals(1, f.published)
+            assertFailsWith<IllegalArgumentException> {
+                channelOnly.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), second,
+                    readPreferences = {phone}, launch = f::launch)
+            }
+            runCurrent(); assertSame(ticket, f.gate.current.value)
+            assertEquals(first, channelOnly.state.value.operationId); assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(listOf("/v2/nearby/operations/${first.value}/join"), f.paths)
+        } finally {channelOnly.stop(); f.close()}
+    }
+
+    @Test fun earnedCallRosterIsPublishedAtRootAndLogoutWithdrawsIt() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(2, assertNotNull(f.owner.state.value.callRoster?.peers).size)
+            assertEquals(1, f.owner.state.value.callRoster?.connectedCount)
+            assertEquals(assertNotNull(f.runtime).state.value.sessionId, f.rosters.single().ownSession.sessionId)
+            f.repository.logout(); runCurrent()
+            assertNull(f.owner.state.value.callRoster); assertTrue(f.rosters.single().state.value.retired)
+            assertEquals(VoiceConversationPhase.STOPPED, f.owner.state.value.phase)
+        } finally {f.close()}
+    }
+
+    @Test fun ringingNeverAllocatesRosterOrAudio() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.callRinging = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(listOf("/v2/nearby/calls/$channel/create"), f.paths)
+            assertTrue(f.rosters.isEmpty()); assertTrue(f.allocated.isEmpty()); assertNull(f.owner.state.value.callRoster)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted)
+        } finally {f.close()}
+    }
+
+    @Test fun obsoleteHeldRosterFactoryCannotPopulateOrStopSameUuidChannelReplacement() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
+        try {
+            val account = f.login(); f.callMode = true
+            f.afterRoster = {withContext(NonCancellable) {entered.complete(Unit); release.await()}}
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertTrue(entered.isCompleted); assertEquals(2, assertNotNull(f.rosters.single().state.value.peers).size)
+            assertNull(f.owner.state.value.callRoster)
+            f.owner.start(account, channel, second, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val ticket = assertNotNull(f.gate.current.value)
+            assertEquals(second, assertNotNull(f.runtime).state.value.operationId)
+            release.complete(Unit); runCurrent()
+            assertTrue(f.rosters.single().state.value.retired); assertNull(f.owner.state.value.callRoster)
+            assertSame(ticket, f.gate.current.value); assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(second, f.owner.state.value.operationId)
+            assertEquals(VoiceConversationPhase.JOIN_SUBMITTED, f.owner.state.value.phase)
+        } finally {release.complete(Unit); f.close()}
+    }
+
+    @Test fun actualRosterAccessLossStopsOriginalCallAndWithdrawsRootPresence() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(2, assertNotNull(f.owner.state.value.callRoster?.peers).size)
+            f.rosterDenied = true; assertTrue(f.rosters.single().refresh()); runCurrent()
+            assertNull(f.owner.state.value.callRoster); assertNull(f.gate.current.value)
+            assertEquals(VoiceConversationPhase.STOPPED, f.owner.state.value.phase)
+            assertFalse(assertNotNull(f.runtime).state.value.wanted); assertTrue(account.job.isActive)
+            assertTrue(f.paths.contains("/v2/nearby/calls/$channel/cancel-outgoing"))
+        } finally {f.close()}
+    }
+
     @Test fun explicitOutgoingCallWaitsForForegroundAndKeepsPhoneMicHeadsetPreferences() = runTest {
         val f = Fixture(this)
         try {
@@ -32,7 +128,7 @@ class VoiceConversationStartupTest {
             assertTrue(f.gate.acknowledge(ticket, f.service)); runCurrent()
             assertEquals(listOf(phone), f.allocated); assertEquals(1, f.published)
             assertEquals(target, f.owner.state.value.target)
-            assertEquals(listOf("/v2/nearby/calls/$channel/create", "/v2/nearby/calls/$channel/resume"), f.paths)
+            assertEquals(listOf("/v2/nearby/calls/$channel/create", "/v2/nearby/calls/$channel/resume", "/v2/nearby/calls/$channel/roster"), f.paths)
             f.owner.stop(); runCurrent()
             assertEquals(listOf("/v2/nearby/calls/$channel/cancel-outgoing", "/v2/nearby/sessions/40000000-0000-0000-0000-000000000004/disconnect"), f.paths.takeLast(2))
             assertTrue(account.job.isActive); assertNull(f.gate.current.value)
@@ -62,7 +158,7 @@ class VoiceConversationStartupTest {
             f.owner.start(account, target, first, readPreferences = {phone}, launch = f::launch); runCurrent()
             assertEquals(1, f.launches); assertEquals(1, f.published)
             assertEquals(target, f.owner.state.value.target)
-            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$channel/accept"), f.paths)
+            assertEquals(listOf("/v2/nearby/calls/incoming", "/v2/nearby/calls/$channel/accept", "/v2/nearby/calls/$channel/roster"), f.paths)
             f.owner.stop(); runCurrent()
             assertEquals(listOf("/v2/nearby/calls/$channel/stop", "/v2/nearby/sessions/40000000-0000-0000-0000-000000000004/disconnect"), f.paths.takeLast(2))
         } finally {f.close()}
@@ -418,6 +514,10 @@ class VoiceConversationStartupTest {
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
         var launches = 0; var acknowledgeLaunch = true; var rejectJoin = false
         var callMode = false; var incomingMode = false
+        var callRinging = false; var rosterDenied = false
+        val rosters = mutableListOf<AuthenticatedCallRosterOwner>()
+        var beforeRoster: suspend () -> Unit = {}
+        var afterRoster: suspend () -> Unit = {}
         var declineRelease: CompletableDeferred<Unit>? = null
         var declineConflict = false
         val declineEntered = CompletableDeferred<Unit>()
@@ -438,6 +538,10 @@ class VoiceConversationStartupTest {
             addHandler {
                 paths += it.url.encodedPath
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
+                    if (it.url.encodedPath.endsWith("roster")) {
+                        if (rosterDenied) return@addHandler respond("{}", HttpStatusCode.Forbidden)
+                        return@addHandler respond("""{"callId":"$channel","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$actor","sessionId":"40000000-0000-0000-0000-000000000004","phase":"CONNECTING","deadlineEpochMillis":110000,"mediaPresence":"UNKNOWN"},{"actorId":"$peer","sessionId":"60000000-0000-0000-0000-000000000006","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]}""")
+                    }
                     if (it.url.encodedPath.endsWith("decline")) {
                         declineEntered.complete(Unit); declineRelease?.await()
                         if (declineConflict) return@addHandler respond("""{"code":"call_not_ringing"}""", HttpStatusCode.Conflict)
@@ -445,7 +549,7 @@ class VoiceConversationStartupTest {
                     }
                     return@addHandler respond(when {
                         it.url.encodedPath.endsWith("incoming") -> """{"calls":[${callSnapshot("RINGING") }]}"""
-                        it.url.encodedPath.endsWith("create") -> """{"call":${callSnapshot("ACCEPTED")}}"""
+                        it.url.encodedPath.endsWith("create") -> """{"call":${callSnapshot(if (callRinging) "RINGING" else "ACCEPTED")}}"""
                         it.url.encodedPath.endsWith("accept") || it.url.encodedPath.endsWith("resume") -> """{"call":${callSnapshot("ACCEPTED")},"session":${callGrant()}}"""
                         else -> """{"call":${callSnapshot("ENDED", if (incomingMode) "\"CALLEE_ENDED\"" else "\"CALLER_ENDED\"")}}"""
                     })
@@ -467,7 +571,11 @@ class VoiceConversationStartupTest {
                 when {selected !== ticket -> false; ready === ticket -> gate.allows(ticket.owner); else -> null}
             }.filterNotNull().first()
         }
-        val owner = VoiceConversationStartup(dispatcher, foreground, ::acquire)
+        val owner = VoiceConversationStartup(dispatcher, foreground, VoiceConversationCallRosterFactory {account, tag, own ->
+            beforeRoster()
+            AuthenticatedCallRosterOwner.create(account, client, "https://example.test/v2/nearby", tag, own,
+                dispatcher, MutableSharedFlow(), {100}).also {rosters += it; afterRoster()}
+        }, ::acquire)
         suspend fun acquire(account: SocialAuthenticatedAccount): AuthenticatedVoiceRuntime {
             val audio = VoiceSessionAudioFactory({error("Must prepare")}, requiresPreparation = true) {tag, prefs, _, emit ->
                 allocated += prefs
