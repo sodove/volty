@@ -20,7 +20,8 @@ import ru.sodovaya.volty.data.nearby.nearbyHttpsApiBaseUrl
 internal enum class ChannelSharingForegroundLaunch { STARTED, PERMISSION_REQUIRED, NOT_VISIBLE, REJECTED }
 internal data class ChannelSharingStartupState(val wanted: Boolean=true,val preparing: Boolean=true,
     val active: Boolean=false,val launchResult: ChannelSharingForegroundLaunch?=null,
-    val nativeCleanupPending: Boolean=false,val childCleanupPending: Boolean=false)
+    val nativeCleanupPending: Boolean=false,val childCleanupPending: Boolean=false,
+    val originalCleanupPending: Boolean=false)
 /** Own capture/control and actual preparation producer; borrower of voice/auth/navigation. */
 internal class ChannelSharingStartHandle internal constructor(private val account: SocialAuthenticatedAccount,
     private val queued: CoroutineDispatcher,launch: (ChannelLocationForegroundTicket)->ChannelSharingForegroundLaunch,
@@ -62,6 +63,7 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
         result.start()
     }
     internal fun own(value: ChannelSharingAccountControl) {control=value}
+    internal fun recoveryPending() {mutableState.update {it.copy(originalCleanupPending=true)}}
     internal fun own(value: ChannelSharingCaptureOwner) {
         mutableCapture.value=value
         captureObserver=scope.launch {
@@ -114,6 +116,10 @@ internal class ChannelSharingStartup(private val client: HttpClient,private val 
     private val journal: ChannelSharingRevokeJournal,private val nextRequestId: ()->String,
     private val acquire: suspend (SocialAuthenticatedAccount)->VoiceAccountRuntimeBinding) {
     private val base=nearbyHttpsApiBaseUrl(baseUrl)
+    private val recovery=ChannelSharingRevokeRecovery(client,base,queued,clock,journal)
+    private val admission=Mutex()
+    private data class Preparation(val actor: String,val tag: ChannelSharingTag,val handle: ChannelSharingStartHandle)
+    private val preparations=mutableListOf<Preparation>()
     private val issued=mutableSetOf<String>()
     private var rootJob: Job?=null
     suspend fun start(account: SocialAuthenticatedAccount,original: VoiceSessionTag,generation: String,
@@ -125,17 +131,30 @@ internal class ChannelSharingStartup(private val client: HttpClient,private val 
         require(root!==account.job && root.isActive && account.job.isActive && queued.isDispatchNeeded(parent.coroutineContext))
         require(demand.owns(repository));require(rootJob==null || rootJob===root)
         require(issued.add(generation)) {"Sharing preparation generation cannot be reused"};rootJob=root
-        ChannelSharingStartHandle(account,queued,launch) {handle ->
+        val prepared=ChannelSharingStartHandle(account,queued,launch) {handle ->
             val binding=acquire(account);handle.ensureWanted()
-            require(binding.voice.belongsTo(account)) {"Voice binding belongs to another account"}
-            check(!binding.sharing.retired.value && binding.voice.canShare(original) && !binding.voice.state.value.sharingEnabled)
-            val control=ChannelSharingAccountControl.createDurable(account,binding.voice,original,client,base,queued,clock,journal,nextRequestId)
-            handle.own(control);handle.ensureWanted()
-            val capture=ChannelSharingCaptureOwner.create(account,binding.voice,original,control,generation,mode,ttl,
-                repository,demand,foreground,queued,clock,epoch,telemetry)
-            handle.own(capture);handle.ensureWanted()
-            if(handle.launch(capture.foregroundTicket)!=ChannelSharingForegroundLaunch.STARTED) false
-            else {handle.ensureWanted();binding.sharing.enable(original,capture).await()}
+            admission.withLock {
+                handle.ensureWanted()
+                require(binding.voice.belongsTo(account)) {"Voice binding belongs to another account"}
+                check(!binding.sharing.retired.value && binding.voice.canShare(original) && !binding.voice.state.value.sharingEnabled)
+                val protected=preparations.filter {entry ->
+                    entry.actor==account.userId.value && entry.handle!==handle && entry.handle.state.value.let {it.wanted || it.preparing}
+                }.map {it.tag}.toSet()
+                if(!recovery.drain(account,protected)) {handle.recoveryPending();return@withLock false}
+                handle.ensureWanted()
+                check(!binding.sharing.retired.value && binding.voice.canShare(original) && !binding.voice.state.value.sharingEnabled)
+                val control=ChannelSharingAccountControl.createDurable(account,binding.voice,original,client,base,queued,clock,journal,nextRequestId)
+                handle.own(control);handle.ensureWanted()
+                val capture=ChannelSharingCaptureOwner.create(account,binding.voice,original,control,generation,mode,ttl,
+                    repository,demand,foreground,queued,clock,epoch,telemetry)
+                handle.own(capture);handle.ensureWanted()
+                if(handle.launch(capture.foregroundTicket)!=ChannelSharingForegroundLaunch.STARTED) false
+                else {handle.ensureWanted();binding.sharing.enable(original,capture).await()}
+            }
         }
+        // Queued root body starts after registration. Hidden held producers remain protected.
+        preparations.removeAll {entry -> entry.handle.state.value.let {!it.wanted && !it.preparing}}
+        preparations+=Preparation(account.userId.value,ChannelSharingTag(original.sessionId.value,generation),prepared)
+        prepared
     }
 }

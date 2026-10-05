@@ -160,6 +160,78 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
+    @Test fun sharingStartupRecoversOldIntentBeforeForegroundAndNewConsent() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;f.sharingRevokeRelease=CompletableDeferred();var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();val journal=RecordingRevokeJournal();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val old=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.peer),first.value);journal.record(old)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()},journal,{f.peer}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {ticket ->
+                launches++;foreground.authority.acknowledge(ticket,Any());ChannelSharingForegroundLaunch.STARTED
+            };handle=started;runCurrent()
+            assertTrue(f.sharingRevokeEntered.isCompleted);assertEquals(0,launches);assertTrue(source.issued.isEmpty());assertFalse(started.result.isCompleted)
+            assertEquals(listOf(old),journal.rows.values.toList());assertEquals(1,f.sharingAuthorizations.size)
+            f.sharingRevokeRelease!!.complete(Unit);assertTrue(started.result.await());runCurrent()
+            assertEquals(1,launches);assertEquals(ChannelSharingTag(original.sessionId.value,f.key),journal.rows.values.single().tag)
+            assertEquals(listOf("/v2/nearby/sharing/$channel/${f.peer}/revoke","/v2/nearby/sharing/${original.sessionId.value}/${f.key}/start"),f.paths.filter {"/sharing/" in it})
+            assertTrue(runtime.state.value.wanted)
+        } finally {f.sharingRevokeRelease!!.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
+    @Test fun sharingStartupFailedOldRecoveryPreventsForegroundConsentAndGps() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;f.sharingRevokeStatus=HttpStatusCode.ServiceUnavailable;var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();val journal=RecordingRevokeJournal();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val old=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.peer),first.value);journal.record(old)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()},journal,{f.peer}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {launches++;ChannelSharingForegroundLaunch.STARTED};handle=started
+            assertFalse(started.result.await());assertTrue(started.state.value.originalCleanupPending);assertEquals(0,launches);assertTrue(source.issued.isEmpty())
+            assertEquals(listOf(old),journal.rows.values.toList());assertEquals(1,f.sharingAuthorizations.size)
+            assertTrue(runtime.state.value.wanted);assertFalse(runtime.state.value.sharingEnabled);assertTrue(account.job.isActive)
+        } finally {handle?.close();f.close()}
+    }
+
+    @Test fun concurrentSharingPreparationsCannotRevokeOrReplaceFirstAdmittedSharing() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val handles=mutableListOf<ChannelSharingStartHandle>()
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();val journal=RecordingRevokeJournal();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()},journal,{f.peer}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val launch: (ChannelLocationForegroundTicket)->ChannelSharingForegroundLaunch={ticket -> launches++;foreground.authority.acknowledge(ticket,Any());ChannelSharingForegroundLaunch.STARTED}
+            val a=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,launch);handles+=a
+            val b=startup.start(account,original,f.peer,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,launch);handles+=b
+            assertTrue(a.result.await());assertFalse(b.result.await());runCurrent()
+            assertEquals(1,launches);assertEquals(ChannelSharingTag(original.sessionId.value,f.key),journal.rows.values.single().tag)
+            assertEquals(1,f.sharingAuthorizations.size);assertTrue(runtime.state.value.sharingEnabled)
+        } finally {handles.forEach {it.close()};f.close()}
+    }
+
+    @Test fun sharingStartupHiddenDuringRecoveryCannotLaunchAfterLateNegative() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;f.sharingRevokeRelease=CompletableDeferred();var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();val journal=RecordingRevokeJournal();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            journal.record(ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.peer),first.value))
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()},journal,{f.peer}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {launches++;ChannelSharingForegroundLaunch.STARTED};handle=started
+            runCurrent();assertTrue(f.sharingRevokeEntered.isCompleted)
+            started.requestHide();assertFalse(started.close());assertTrue(started.state.value.preparing)
+            f.sharingRevokeRelease!!.complete(Unit);assertFalse(started.result.await());runCurrent()
+            assertEquals(0,launches);assertTrue(source.issued.isEmpty());assertTrue(journal.rows.isEmpty())
+            assertEquals(1,f.sharingAuthorizations.size);assertTrue(started.close());assertTrue(runtime.state.value.wanted)
+        } finally {f.sharingRevokeRelease!!.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
     private class RecordingRevokeJournal : ChannelSharingRevokeJournal {
         val rows=linkedMapOf<Pair<String,ChannelSharingTag>,ChannelSharingRevokeIntent>()
         val entered=CompletableDeferred<Unit>();var gate: CompletableDeferred<Unit>?=null;var failRecord=false;var failAcknowledge=false;var returnForeign=false
