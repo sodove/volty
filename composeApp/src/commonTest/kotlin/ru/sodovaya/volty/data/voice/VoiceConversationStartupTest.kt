@@ -24,6 +24,186 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    private fun sharingController(f: Fixture,sharing: SharingFixture,guard: NearbySharingSwitchGuard):NearbySharingController {
+        var nonce=0
+        return NearbySharingController(f.repository,f.owner,sharing.startup,guard,f.dispatcher,
+            {"a0000000-0000-0000-0000-${(++nonce).toString().padStart(12,'0')}"})
+    }
+    private fun sharingBoundary(f: Fixture,sharing: SharingFixture,ui: Job)=NearbyVisibleLaunchBoundary(
+        CoroutineScope(f.test.backgroundScope.coroutineContext+ui),{true},f::launch,{ticket ->
+            sharing.launches++;sharing.foreground.authority.acknowledge(ticket,Any());ChannelSharingForegroundLaunch.STARTED
+        })
+
+    @Test fun processSharingNeedsSeparateLocationPermissionAndHidePreservesVoiceNavigationAndAccount()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(sharing.source.issued.isEmpty());assertEquals(0,sharing.launches)
+            val denied=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            assertEquals(denied,assertNotNull(root.state.value.pending).id)
+            assertTrue(sharing.source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty())
+            root.begin(denied,false,boundary);runCurrent()
+            assertEquals(NearbySharingError.LOCATION_DENIED,root.state.value.error);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent()
+            assertEquals(1,sharing.launches);assertEquals(listOf(true),sharing.source.issued)
+            assertTrue(root.state.value.active);assertTrue(root.state.value.wanted);assertEquals(request,root.state.value.generation)
+            assertEquals(ChannelSharingMode.LOCATION,root.state.value.mode);assertEquals(ChannelSharingTtl.HALF_HOUR,root.state.value.ttl)
+            ui.cancel();boundary.close();runCurrent();assertTrue(root.state.value.active)
+            f.time=101;sharing.source.emitFix(1001,101);runCurrent();assertEquals(listOf(0L),f.packetSequences)
+            root.hide(first,request);runCurrent()
+            assertFalse(root.state.value.wanted);assertFalse(root.state.value.active);assertFalse(root.state.value.serverConfirmationPending)
+            assertEquals(setOf(LocationConsumer.NAVIGATION),sharing.source.state.value.demands)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertNotNull(f.gate.current.value)
+            assertEquals(0,f.closes);assertTrue(account.job.isActive)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingOldPermissionAndOldHideCannotAffectReplacementVoiceTrip()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val old=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            f.owner.start(account,channel,second,replace=true,readPreferences={phone},launch=f::launch);runCurrent()
+            root.begin(old,true,boundary);runCurrent();assertEquals(0,sharing.launches);assertTrue(sharing.source.issued.isEmpty())
+            val fresh=assertNotNull(root.request(second,ChannelSharingMode.LOCATION,ChannelSharingTtl.TWO_HOURS));runCurrent()
+            root.begin(fresh,true,boundary);runCurrent();assertTrue(root.state.value.active);val ticket=sharing.foreground.current.value
+            assertEquals(ChannelSharingTtl.TWO_HOURS,root.state.value.ttl)
+            root.hide(first,old);root.retryCleanup(first,old);runCurrent()
+            assertTrue(root.state.value.active);assertEquals(fresh,root.state.value.generation);assertSame(ticket,sharing.foreground.current.value)
+            assertEquals(listOf(true),sharing.source.issued);assertEquals(second,assertNotNull(f.runtime).state.value.operationId)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingCancelledHeldAcquisitionCannotLaunchLateOrStopBorrowedVoice()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false
+        sharing.beforeAcquire={withContext(NonCancellable) {entered.complete(Unit);release.await();returned=true}}
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertTrue(entered.isCompleted);assertTrue(root.state.value.preparing)
+            root.cancelRequest(request);runCurrent();assertFalse(root.state.value.wanted);assertTrue(root.state.value.localCleanupPending)
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(0,sharing.launches);assertTrue(sharing.source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty())
+            assertFalse(root.state.value.localCleanupPending);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertTrue(account.job.isActive)
+        } finally {release.complete(Unit);runCurrent();boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingFailedRemoteCleanupIsVisibleAndExactRetryCannotHideLaterTripInSameVoice()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val old=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(old,true,boundary);runCurrent();assertTrue(root.state.value.active)
+            f.sharingRevokeStatus=HttpStatusCode.ServiceUnavailable;root.hide(first,old);runCurrent()
+            assertFalse(root.state.value.wanted);assertFalse(root.state.value.localCleanupPending)
+            assertTrue(root.state.value.serverConfirmationPending);assertEquals(NearbySharingError.CLEANUP_REQUIRED,root.state.value.error)
+            assertEquals(1,sharing.journal.rows.size);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            f.sharingRevokeStatus=HttpStatusCode.OK;root.retryCleanup(first,old);runCurrent()
+            assertFalse(root.state.value.serverConfirmationPending);assertNull(root.state.value.error);assertTrue(sharing.journal.rows.isEmpty())
+            val fresh=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.TWO_HOURS));runCurrent()
+            root.begin(fresh,true,boundary);runCurrent();assertTrue(root.state.value.active);val ticket=sharing.foreground.current.value
+            root.hide(first,old);root.retryCleanup(first,old);runCurrent()
+            assertTrue(root.state.value.active);assertEquals(fresh,root.state.value.generation);assertSame(ticket,sharing.foreground.current.value)
+            assertEquals(listOf(true,false,true),sharing.source.issued);assertEquals(1,f.published);assertTrue(account.job.isActive)
+        } finally {boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingLostVisibleActivityDuringHeldAcquisitionCannotLaunchGpsAfterFactoryReturns()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false
+        sharing.beforeAcquire={withContext(NonCancellable) {entered.complete(Unit);release.await();returned=true}}
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertTrue(entered.isCompleted)
+            ui.cancel();boundary.close();runCurrent();release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(0,sharing.launches);assertTrue(sharing.source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty())
+            assertFalse(root.state.value.wanted);assertFalse(root.state.value.active);assertEquals(NearbySharingError.NOT_VISIBLE,root.state.value.error)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {release.complete(Unit);runCurrent();boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingRetiredAccountClearsPresentationBeforeUnrelatedAccountChildCompletes()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        val release=CompletableDeferred<Unit>()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertTrue(root.state.value.active)
+            account.scope().launch(start=CoroutineStart.UNDISPATCHED) {withContext(NonCancellable) {release.await()}}
+            account.job.cancel();runCurrent();assertFalse(account.job.isCompleted)
+            assertEquals(NearbySharingView(),root.state.value);assertEquals(setOf(LocationConsumer.NAVIGATION),sharing.source.state.value.demands)
+            root.begin(request,true,boundary);runCurrent();assertEquals(1,sharing.launches)
+            assertNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR))
+        } finally {release.complete(Unit);runCurrent();boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingRejectsActualDirectCallBeforeEntropyAndClosingItsOwnerPreservesCall()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var entropy=0
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        val root=NearbySharingController(f.repository,f.owner,sharing.startup,guard,f.dispatcher,{entropy++;f.key})
+        try {
+            val account=f.login();f.callMode=true
+            f.owner.start(account,VoiceConversationTarget.OutgoingCall(channel,f.peer,f.key),first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);val ticket=f.gate.current.value
+            assertNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            assertEquals(0,entropy);assertEquals(0,sharing.launches);assertTrue(sharing.source.issued.isEmpty())
+            root.close();runCurrent();assertTrue(account.job.isActive);assertTrue(f.repository.applicationScope().coroutineContext[Job]!!.isActive)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertSame(ticket,f.gate.current.value)
+        } finally {root.close();f.close()}
+    }
+
+    @Test fun processSharingNativeCleanupFailureDoesNotPretendServerAcknowledgementIsStillPending()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertTrue(root.state.value.active)
+            sharing.source.failStop=true;root.hide(first,request);runCurrent()
+            assertTrue(sharing.journal.rows.isEmpty());assertTrue(f.paths.any {it.endsWith("/revoke")})
+            assertTrue(root.state.value.localCleanupPending);assertFalse(root.state.value.serverConfirmationPending)
+            assertEquals(NearbySharingError.CLEANUP_REQUIRED,root.state.value.error)
+            sharing.source.failStop=false;root.retryCleanup(first,request);runCurrent()
+            assertFalse(root.state.value.localCleanupPending);assertNull(root.state.value.error)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {sharing.source.failStop=false;boundary.close();ui.cancel();root.close();f.close()}
+    }
+
+    @Test fun processSharingFailedDurableAckRemainsServerPendingAfterActualLocalGpsRelease()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val root=sharingController(f,sharing,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=sharingBoundary(f,sharing,ui)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val request=assertNotNull(root.request(first,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR));runCurrent()
+            root.begin(request,true,boundary);runCurrent();sharing.journal.failAcknowledge=true
+            root.hide(first,request);runCurrent()
+            assertFalse(root.state.value.localCleanupPending);assertTrue(root.state.value.serverConfirmationPending)
+            assertEquals(1,sharing.journal.rows.size);assertEquals(NearbySharingError.CLEANUP_REQUIRED,root.state.value.error)
+            assertEquals(setOf(LocationConsumer.NAVIGATION),sharing.source.state.value.demands)
+            sharing.journal.failAcknowledge=false;root.retryCleanup(first,request);runCurrent()
+            assertFalse(root.state.value.serverConfirmationPending);assertTrue(sharing.journal.rows.isEmpty());assertNull(root.state.value.error)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertEquals(0,f.closes);assertTrue(account.job.isActive)
+        } finally {sharing.journal.failAcknowledge=false;boundary.close();ui.cancel();root.close();f.close()}
+    }
+
     @Test fun rootAcceptedFriendCallNeedsExplicitPermissionAndUsesTypedActualCallStartup()=runTest {
         val f=Fixture(this);val root=voiceController(f,Switches());val ui=SupervisorJob(backgroundScope.coroutineContext[Job])
         val boundary=launchBoundary(f,ui)
@@ -266,6 +446,8 @@ class VoiceConversationStartupTest {
             val before=f.paths.count {it.endsWith("/revoke")};f.sharingRevokeStatus=HttpStatusCode.OK
             assertTrue(guard.awaitSharingCleanup(first));runCurrent()
             assertEquals(before+1,f.paths.count {it.endsWith("/revoke")});assertTrue(sharing.journal.rows.isEmpty())
+            assertFalse(started.state.value.journalCleanupPending)
+            assertTrue(started.close());assertFalse(started.state.value.journalCleanupPending)
             assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
         } finally {handle?.close();f.close()}
     }

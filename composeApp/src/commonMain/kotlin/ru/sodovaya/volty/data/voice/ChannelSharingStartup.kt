@@ -21,7 +21,7 @@ internal enum class ChannelSharingForegroundLaunch { STARTED, PERMISSION_REQUIRE
 internal data class ChannelSharingStartupState(val wanted: Boolean=true,val preparing: Boolean=true,
     val active: Boolean=false,val launchResult: ChannelSharingForegroundLaunch?=null,
     val nativeCleanupPending: Boolean=false,val childCleanupPending: Boolean=false,
-    val originalCleanupPending: Boolean=false)
+    val originalCleanupPending: Boolean=false,val journalCleanupPending: Boolean=false)
 /** Own capture/control and actual preparation producer; borrower of voice/auth/navigation. */
 internal class ChannelSharingStartHandle internal constructor(private val account: SocialAuthenticatedAccount,
     private val original: VoiceSessionTag,
@@ -44,6 +44,8 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
     private var rootGuardian: Job?=null
     private var captureObserver: Job?=null
     private var childDrain: Job?=null
+    private var journalObserver: Job?=null
+    private var recoveryConfirmed=false
     val result: Deferred<Boolean> = scope.async(start=CoroutineStart.LAZY) {
         var active=false
         try {ensureWanted();active=prepare(this@ChannelSharingStartHandle);ensureWanted()
@@ -65,7 +67,12 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
         }
         result.start()
     }
-    internal fun own(value: ChannelSharingAccountControl) {control=value}
+    internal fun own(value: ChannelSharingAccountControl) {
+        control=value
+        journalObserver=scope.launch {
+            value.journalCleanupPending.collect {pending -> mutableState.update {it.copy(journalCleanupPending=!recoveryConfirmed && pending)}}
+        }
+    }
     internal fun recoveryPending() {mutableState.update {it.copy(originalCleanupPending=true)}}
     internal fun own(value: ChannelSharingCaptureOwner) {
         mutableCapture.value=value
@@ -115,20 +122,25 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
     internal suspend fun recoverOriginalCleanup():Boolean=withContext(queued) {
         val state=mutableState.value
         if(state.wanted || state.preparing || state.nativeCleanupPending || state.childCleanupPending) return@withContext false
-        recover().also {if(it) mutableState.update {state -> state.copy(originalCleanupPending=false)}}
+        recover().also {clean ->
+            if(clean) recoveryConfirmed=true
+            mutableState.update {state -> state.copy(originalCleanupPending=!clean,
+                journalCleanupPending=if(recoveryConfirmed) false else state.journalCleanupPending)}
+        }
     }
     private suspend fun cleanupOwned(): Boolean = cleanup.withLock {
         val nativeClean=mutableCapture.value?.close() ?: true
         mutableRevoke.value=mutableCapture.value?.originalRevoke?.value
         val childClean=control?.close() ?: true
-        mutableState.update {it.copy(nativeCleanupPending=!nativeClean,childCleanupPending=!childClean)}
+        mutableState.update {it.copy(nativeCleanupPending=!nativeClean,childCleanupPending=!childClean,
+            journalCleanupPending=!recoveryConfirmed && control?.journalCleanupPending?.value==true)}
         val child=control
         if(!childClean && child!=null && !child.closed.value && childDrain==null && lifetime.isActive) {
             childDrain=scope.launch {child.closed.first {it};cleanupOwned()}
         }
         val clean=nativeClean && childClean && !mutableState.value.preparing
         if(clean && !mutableState.value.wanted) {
-            accountGuardian?.cancel();captureObserver?.cancel();rootGuardian?.cancel();lifetime.complete()
+            accountGuardian?.cancel();captureObserver?.cancel();journalObserver?.cancel();rootGuardian?.cancel();lifetime.complete()
         }
         clean
     }
