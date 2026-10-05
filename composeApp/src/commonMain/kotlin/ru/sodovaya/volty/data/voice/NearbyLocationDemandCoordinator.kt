@@ -24,6 +24,7 @@ internal class NearbyLocationDemandCoordinator(private val repository: RideLocat
     val cleanupPending=pending.asStateFlow()
     // Allocate before positive work, so cancelled/partly committed native work stays revocable.
     fun newTicket()=NearbyLocationDemandTicket(authority)
+    internal fun owns(repository: RideLocationRepository)=this.repository===repository
     suspend fun acquire(ticket: NearbyLocationDemandTicket): Boolean {
         require(ticket.belongsTo(authority)) {"Location demand belongs to another coordinator"}
         currentCoroutineContext().ensureActive()

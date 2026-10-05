@@ -20,7 +20,8 @@ internal class ChannelSharingAccountControl private constructor(private val acco
     initialBearer: String, private val channel: String) {
     private data class Capability(val retired: Boolean = false, val closed: Boolean = false,
         val bearer: String? = null, val generations: Set<String> = emptySet(),
-        val withdrawn: Set<String> = emptySet(), val consents: Map<String,ChannelSharingObservation> = emptyMap())
+        val withdrawn: Set<String> = emptySet(), val consents: Map<String,ChannelSharingObservation> = emptyMap(),
+        val captureGenerations: Set<String> = emptySet())
     private val capability = MutableStateFlow(Capability(bearer = initialBearer))
     private val lifetime = SupervisorJob(checkNotNull(account.retirementParentScope().coroutineContext[Job]))
     private val cleanupScope = CoroutineScope(account.retirementParentScope().coroutineContext + lifetime + queuedDispatcher)
@@ -130,6 +131,16 @@ internal class ChannelSharingAccountControl private constructor(private val acco
         this.account===account && this.runtime===runtime && this.original==original
     internal suspend fun canReadAudience() = capability.value.let {
         !it.closed && !it.retired && lifetime.isActive && account.job.isActive && runtime.canShare(original)
+    }
+    internal suspend fun canCapture(generation: String)=canReadAudience() && activeConsent(generation)!=null
+    internal suspend fun reserveCaptureGeneration(generation: String): Boolean = withContext(queuedDispatcher) {
+        invitationDraftId(generation);ensurePositive()
+        var reserved=false
+        capability.update {
+            reserved=!it.closed && !it.retired && generation !in it.captureGenerations && generation !in it.withdrawn
+            if(reserved) it.copy(captureGenerations=it.captureGenerations+generation) else it
+        }
+        ensurePositive();reserved
     }
     internal fun canObserve(peer: ObservedChannelSharingPeer) =
         peer.actorId!=account.userId.value || peer.tag.sessionId!=original.sessionId.value || peer.tag.generation !in capability.value.withdrawn

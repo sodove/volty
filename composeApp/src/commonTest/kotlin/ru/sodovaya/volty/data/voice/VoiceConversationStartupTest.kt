@@ -11,6 +11,8 @@ import ru.sodovaya.volty.data.social.*
 import ru.sodovaya.volty.domain.social.*
 import ru.sodovaya.volty.domain.voice.*
 import ru.sodovaya.volty.domain.nearby.*
+import ru.sodovaya.volty.domain.location.*
+import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -20,6 +22,128 @@ class VoiceConversationStartupTest {
     private val first = VoiceOperationId("30000000-0000-0000-0000-000000000003")
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
+
+    @Test fun rootLocationCaptureRideStripsUnearnedValuesAndExpiresPacketWithoutStoppingHealthyVoice() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
+        f.sharingCredit=30_000;f.voiceGrantMillis=20_000;f.sharingMode="RIDE"
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.RIDE,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},
+                {EarnedTelemetry(speedKmh=TelemetryNumber.known(0.0),powerW=TelemetryNumber(true,false,4200.0),packVoltageV=TelemetryNumber.known(99.0))});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(owner.begin().await())
+            f.time=101;source.emitFix(1001,101);runCurrent()
+            val telemetry=assertNotNull(assertNotNull(owner.packet.value).telemetry)
+            assertEquals(0.0,telemetry.speedKmh.value);assertFalse(telemetry.powerW.known);assertNull(telemetry.powerW.value)
+            assertFalse(telemetry.packVoltageV.supported);assertNull(telemetry.packVoltageV.value)
+            f.time=15_101;owner.tick();assertNull(owner.packet.value)
+            assertTrue(owner.locationForegroundState.value.wanted);assertTrue(owner.locationForegroundState.value.nativeOwned)
+            assertTrue(runtime.canShare(original));assertEquals(listOf(true),source.issued)
+        } finally {capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun rootLocationCaptureRequiresForegroundAndOwnsFreshFixAfterCancelledUiWaiter() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var duplicate: ChannelSharingCaptureOwner?=null
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source)
+        val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            val started=owner.begin();val waiter=async {started.await()};runCurrent();waiter.cancel()
+            assertTrue(source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty());assertFalse(started.isCompleted)
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(started.await())
+            assertEquals(listOf(true),source.issued);assertTrue(owner.locationForegroundState.value.nativeOwned)
+            f.time=101;source.emitFix(1001,101);runCurrent()
+            val packet=assertNotNull(owner.packet.value);assertEquals(0,packet.sequence);assertEquals(0.0,packet.location!!.latitude);assertNull(packet.telemetry)
+            source.emitFix(1001,null);runCurrent();assertEquals(packet,owner.packet.value)
+            f.time=102;source.emitFix(1002,101);runCurrent()
+            assertEquals(1002,(source.state.value.status as RideLocationStatus.Available).fix.capturedAtEpochMillis)
+            assertEquals(packet,owner.packet.value)
+            source.emitFix(1000,99);runCurrent();assertEquals(packet,owner.packet.value)
+            source.emitFix(1003,103);runCurrent();assertEquals(packet,owner.packet.value)
+            f.time=104;source.emitFix(1004,104);runCurrent()
+            assertEquals(1,assertNotNull(owner.packet.value).sequence)
+            assertFailsWith<IllegalStateException> {duplicate=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()})}
+            assertSame(owner.foregroundTicket,foreground.current.value);assertTrue(foreground.allows(owner))
+            assertTrue(owner.close());runCurrent();assertNull(owner.packet.value)
+            assertEquals(setOf(LocationConsumer.NAVIGATION),source.state.value.demands)
+            assertTrue(f.paths.any {it.endsWith("/revoke")});assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+        } finally {duplicate?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun rootLocationCaptureHeldPartialActivationRemainsOwnedUntilActualNativeRelease() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());source.startRelease=CompletableDeferred()
+            val started=owner.begin();runCurrent();assertEquals(listOf(true),source.issued)
+            owner.requestHide();runCurrent();assertFalse(owner.locationForegroundState.value.wanted)
+            assertTrue(owner.locationForegroundState.value.nativeOwned);assertEquals(1,owner.locationForegroundState.value.nativeInFlight)
+            assertFalse(canReleaseChannelLocationForeground(false,listOf(owner.locationForegroundState.value)))
+            source.startRelease!!.complete(Unit);runCurrent();assertTrue(started.isCancelled);assertTrue(owner.close())
+            assertEquals(listOf(true,false),source.issued);assertFalse(owner.locationForegroundState.value.nativeOwned)
+            assertEquals(0,owner.locationForegroundState.value.nativeInFlight);assertTrue(runtime.state.value.wanted)
+        } finally {source.startRelease?.complete(Unit);runCurrent();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun rootLocationCaptureFailedNativeStopIsRetryableAndForeignSourceCannotReplaceOwner() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(owner.begin().await())
+            assertFailsWith<IllegalArgumentException> {ChannelSharingCaptureOwner.create(account,runtime,original,control,f.peer,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                CaptureLocationRepository(),demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()})}
+            assertSame(owner.foregroundTicket,foreground.current.value)
+            source.failStop=true;assertFalse(owner.close());assertTrue(owner.locationForegroundState.value.nativeOwned)
+            assertTrue(owner.locationForegroundState.value.cleanupFailed);assertTrue(demand.cleanupPending.value)
+            assertFalse(canReleaseChannelLocationForeground(false,listOf(owner.locationForegroundState.value)))
+            source.failStop=false;assertTrue(owner.close());assertFalse(owner.locationForegroundState.value.nativeOwned)
+            assertFalse(demand.cleanupPending.value);assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+        } finally {source.failStop=false;capture?.close();sharing?.close();f.close()}
+    }
+
+    private class CaptureLocationRepository : RideLocationRepository {
+        override val requiredPermissions=emptyList<String>()
+        override val state=MutableStateFlow(RideLocationState(demands=setOf(LocationConsumer.NAVIGATION)))
+        val issued=mutableListOf<Boolean>();var startRelease: CompletableDeferred<Unit>?=null;var failStop=false
+        override suspend fun refreshPermissionAndProviders()=Unit
+        override suspend fun setDemand(consumer: LocationConsumer,enabled: Boolean) {
+            assertEquals(LocationConsumer.NEARBY_CHANNEL_SHARING,consumer);issued+=enabled
+            if(enabled) withContext(NonCancellable) {startRelease?.await()}
+            state.value=state.value.copy(demands=if(enabled) state.value.demands+consumer else state.value.demands-consumer)
+            if(!enabled && failStop) error("Native stop failed")
+        }
+        fun emitFix(epoch: Long,elapsed: Long?) {
+            state.value=state.value.copy(status=RideLocationStatus.Available(RideLocationFix(GeoCoordinate(0.0,0.0),0.0,null,null,epoch,elapsed,LocationSource.GPS)))
+        }
+    }
+    private inner class CaptureForegroundPort : ChannelLocationForegroundPort {
+        var ids=0;val authority=ChannelLocationForegroundAuthority({true},{"90000000-0000-0000-0000-${(++ids).toString().padStart(12,'0')}"})
+        override val current=authority.current
+        override fun request(owner: ChannelLocationForegroundOwner)=authority.request(owner)
+        override fun allows(owner: ChannelLocationForegroundOwner)=authority.allows(owner)
+        override fun stop(ticket: ChannelLocationForegroundTicket)=authority.stop(ticket)
+        override suspend fun awaitReady(ticket: ChannelLocationForegroundTicket)=combine(authority.current,authority.ready) {current,ready ->
+            when {current!==ticket -> false;ready===ticket -> authority.allows(ticket.owner as ChannelLocationForegroundOwner);else -> null}
+        }.filterNotNull().first()
+    }
 
     @Test fun rootSharingAudienceCoalescesReadsAndSurvivesCancelledUiWaiterThenExpiresWithoutHttp() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var audience: ChannelSharingAudienceOwner?=null
@@ -1276,6 +1400,9 @@ class VoiceConversationStartupTest {
         val sharingRevokeEntered = CompletableDeferred<Unit>()
         var sharingAudienceBody: String? = null
         var sharingAudienceStatus = HttpStatusCode.OK
+        var sharingCredit=1000L
+        var sharingMode="LOCATION"
+        var voiceGrantMillis=10000L
         val service = Any()
         var nonce = 0
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
@@ -1322,7 +1449,7 @@ class VoiceConversationStartupTest {
                     else withContext(NonCancellable) {sharingPositiveEntered.complete(Unit); sharingPositiveRelease?.await()}
                     val parts = it.url.encodedPath.split('/')
                     if(it.url.encodedPath.endsWith("/packet")) return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","sequence":7,"remainingMillis":1000}""")
-                    return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","phase":"${if (negative) "REVOKED" else "ACTIVE"}","mode":${if (negative) "null" else "\"LOCATION\""},"remainingMillis":${if (negative) 0 else 1000}}""")
+                    return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","phase":"${if (negative) "REVOKED" else "ACTIVE"}","mode":${if (negative) "null" else "\"$sharingMode\""},"remainingMillis":${if (negative) 0 else sharingCredit}}""")
                 }
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
                     if (it.url.encodedPath in listOf("/v2/nearby/calls/$channel", "/v2/nearby/calls/${second.value}") && statusPhase != null) {
@@ -1351,7 +1478,7 @@ class VoiceConversationStartupTest {
                 val operation = it.url.encodedPath.removeSuffix("/join").substringAfterLast('/')
                 if (rejectJoin && it.url.encodedPath.endsWith("/join")) respond("{}", HttpStatusCode.Forbidden)
                 else respond(if (it.url.encodedPath.endsWith("/join"))
-                    """{"phase":"CONNECTING","operationId":"$operation","sessionId":"40000000-0000-0000-0000-000000000004","remainingLeaseMillis":10000,"credentials":{"serverUrl":"wss://sfu.example.test","participantToken":"secret","roomEpoch":"room"}}"""
+                    """{"phase":"CONNECTING","operationId":"$operation","sessionId":"40000000-0000-0000-0000-000000000004","remainingLeaseMillis":$voiceGrantMillis,"credentials":{"serverUrl":"wss://sfu.example.test","participantToken":"secret","roomEpoch":"room"}}"""
                 else """{"phase":"CANCELLED","sessionId":"40000000-0000-0000-0000-000000000004","cleanupPending":false}""")
             }
         }}
