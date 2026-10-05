@@ -44,7 +44,7 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
 
     override suspend fun setDemand(consumer: LocationConsumer, enabled: Boolean) =
         withContext(Dispatchers.Main.immediate) {
-            val navigationWasEnabled = LocationConsumer.NAVIGATION in policyState.demands
+            val previousRequest = LocationUpdatePolicy.requestFor(policyState.demands)
             val transition = LocationDemandPolicy.setDemand(policyState, consumer, enabled)
             if (!transition.changed) return@withContext
 
@@ -58,7 +58,7 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
                     publishState()
                     stopPlatformUpdates()
                 }
-                navigationWasEnabled != (LocationConsumer.NAVIGATION in policyState.demands) && platformStarted -> {
+                previousRequest != LocationUpdatePolicy.requestFor(policyState.demands) && platformStarted -> {
                     stopPlatformUpdates()
                     policyState = LocationDemandPolicy.restart(policyState)
                     publishState()
