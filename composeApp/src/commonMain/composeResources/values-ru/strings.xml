@@ -843,4 +843,11 @@
     <string name="nearby_servers_action_failed">Не удалось выполнить действие. Попробуйте снова.</string>
     <string name="nearby_servers_successor_required">Перед выходом передайте владение другому участнику.</string>
     <string name="nearby_servers_delete_required">Вы последний участник. Удалите сервер, чтобы выйти.</string>
+    <string name="nearby_shell_servers">Серверы</string>
+    <string name="nearby_shell_description">Войдите, чтобы находить серверы, подключаться к голосовым каналам и звонить друзьям. Мониторинг транспорта работает без аккаунта.</string>
+    <string name="nearby_shell_call">Позвонить</string>
+    <string name="nearby_shell_invalid_form">Проверьте поля. Для регистрации нужны имя из 2–80 символов и пароль из 12–128 символов.</string>
+    <string name="nearby_shell_conflict">Данные изменились. Обновите экран и повторите попытку.</string>
+    <string name="nearby_shell_rate_limited">Слишком много запросов. Попробуйте позже.</string>
+    <string name="nearby_shell_unavailable">Не удалось загрузить данные. Проверьте соединение и повторите попытку.</string>
 </resources>

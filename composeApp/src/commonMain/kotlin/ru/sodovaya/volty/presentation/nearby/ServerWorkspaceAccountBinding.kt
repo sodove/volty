@@ -33,6 +33,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                 var consumer: NearbyCommunityAccount? = null
                 var presenter: ServerWorkspacePresenter? = null
                 var binding: Binding? = null
+                var retirementGuardian: Job? = null
                 try {
                     consumer = factory.create(account)
                     if (!current(account)) return@collectLatest
@@ -44,13 +45,20 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     selected = binding
                     output.value = ServerWorkspaceBindingState(presenter)
                     presenter.openMine()
-                    account.job.join()
+                    // Cancellation withdraws access now; completion may wait for unrelated held producers.
+                    val retired = CompletableDeferred<Unit>()
+                    retirementGuardian = CoroutineScope(scope.coroutineContext + account.job)
+                        .launch(start = CoroutineStart.UNDISPATCHED) {
+                            try { awaitCancellation() } finally { retired.complete(Unit) }
+                        }
+                    retired.await()
                 } catch (failure: CancellationException) {
                     if (!currentCoroutineContext().isActive) throw failure
                     if (current(account)) output.value = ServerWorkspaceBindingState(failed = true)
                 } catch (_: Exception) {
                     if (current(account)) output.value = ServerWorkspaceBindingState(failed = true)
                 } finally {
+                    retirementGuardian?.cancel()
                     if (selected === binding) {
                         selected = null
                         if (!output.value.failed) output.value = ServerWorkspaceBindingState()

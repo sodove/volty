@@ -83,15 +83,17 @@ class ServerWorkspaceAccountBindingTest {
     }
 
     @Test fun accountCancellationBeforeFlowUpdateWithdrawsWorkspaceAndBlocksConnectionImmediately()=runTest {
-        val f=Fixture(this)
+        val f=Fixture(this);val release=CompletableDeferred<Unit>()
         try {
             f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
             val presenter=assertNotNull(f.binding.state.value.presenter)
             presenter.openServer(server);runCurrent()
+            account.scope().launch(start=CoroutineStart.UNDISPATCHED) {withContext(NonCancellable) {release.await()}}
             account.job.cancel();presenter.connect(channel);runCurrent()
+            assertFalse(account.job.isCompleted,"A held child must keep account completion pending")
             assertTrue(f.connected.isEmpty());assertNull(f.binding.state.value.presenter)
             assertTrue(f.screen.isActive)
-        } finally {f.close();runCurrent()}
+        } finally {release.complete(Unit);f.close();runCurrent()}
     }
 
     @Test fun cancelledScreenBeforeFirstDispatchNeverConstructsConsumerOrIssuesHttp()=runTest {
@@ -137,5 +139,4 @@ class ServerWorkspaceAccountBindingTest {
         override suspend fun logout(accessToken: String)=SocialResult.Success(Unit)
     }
 }
-
 

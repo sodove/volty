@@ -845,4 +845,11 @@
     <string name="nearby_servers_action_failed">Could not complete the action. Try again.</string>
     <string name="nearby_servers_successor_required">Transfer ownership to another member before leaving.</string>
     <string name="nearby_servers_delete_required">You are the last member. Delete the server to leave.</string>
+    <string name="nearby_shell_servers">Servers</string>
+    <string name="nearby_shell_description">Log in to find servers, join voice channels and call friends. Vehicle monitoring works without an account.</string>
+    <string name="nearby_shell_call">Call</string>
+    <string name="nearby_shell_invalid_form">Check the fields. Registration needs a name of 2–80 characters and a password of 12–128 characters.</string>
+    <string name="nearby_shell_conflict">The data changed. Refresh and try again.</string>
+    <string name="nearby_shell_rate_limited">Too many requests. Try again later.</string>
+    <string name="nearby_shell_unavailable">Could not load the data. Check your connection and try again.</string>
 </resources>
