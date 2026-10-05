@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.backend.nearby
 
 interface DirectCallEndpointPort {
+    fun roster(actor: String, call: String): DirectCallRosterSnapshot?
     fun create(actor: String, callee: String, call: String, key: String, operation: String): DirectCallDecision
     fun status(actor: String, call: String): DirectCallDecision
     fun incoming(actor: String, limit: Int, cursor: String?): IncomingCallPage
@@ -12,6 +13,7 @@ interface DirectCallEndpointPort {
 }
 
 class DirectCallServiceEndpointPort(private val service: DirectCallService) : DirectCallEndpointPort {
+    override fun roster(actor: String, call: String) = service.roster(actor, call)
     override fun create(actor: String, callee: String, call: String, key: String, operation: String) = service.create(actor, callee, call, key, operation)
     override fun status(actor: String, call: String) = service.status(actor, call)
     override fun incoming(actor: String, limit: Int, cursor: String?) = service.incoming(actor, limit, cursor)

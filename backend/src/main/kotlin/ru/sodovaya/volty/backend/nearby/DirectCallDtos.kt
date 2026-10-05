@@ -18,3 +18,12 @@ import kotlinx.serialization.Serializable
 }
 @Serializable data class DirectCallResponse(val call: DirectCallSnapshotDto, val session: SessionStateResponse? = null, val retryableFailure: String? = null)
 @Serializable data class IncomingCallsResponse(val calls: List<DirectCallSnapshotDto>, val nextCursor: String? = null)
+
+/** Transport peers deliberately omit both original participant operation nonces. */
+@Serializable data class DirectCallRosterResponse(
+    val callId: String, val revision: Long, val serverTimeEpochMillis: Long, val peers: List<DirectCallRosterPeerDto>,
+)
+@Serializable data class DirectCallRosterPeerDto(
+    val actorId: String, val sessionId: String, val phase: String, val deadlineEpochMillis: Long,
+    val mediaPresence: String, val participantSid: String? = null,
+)

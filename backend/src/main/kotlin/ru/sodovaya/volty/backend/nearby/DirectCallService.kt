@@ -11,6 +11,7 @@ class DirectCallService(
     private val sfu: SfuLeaseClient,
     private val now: () -> Long = System::currentTimeMillis,
 ) {
+    fun roster(actor: String, call: String): DirectCallRosterSnapshot? = media.roster(actor, call, now)
     fun create(actor: String, callee: String, call: String, key: String, operation: String): DirectCallDecision =
         cleanupTerminal(actor, reconcileAccepted(actor, ringing.create(actor, callee, call, key, operation, now)))
 

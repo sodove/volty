@@ -25,3 +25,10 @@ and credentials. The earlier generic channel-peer reuse is not a wire serializat
 Use a dedicated call participant DTO/client model rather than inventing operation IDs to fit
 the channel replica. Call target and original expected pair remain explicit. This preserves
 the existing rule that original caller nonce is absent from peer call snapshots.
+
+HTTP uses GET calls/{callId}/roster on the same explicit call endpoint dependency. Null read
+is 404; invalid binding/cardinality/actor/session/phase/credit evidence is 503 with no peer data.
+The pair has one equal clipped lease, bounded to 30 seconds; no credentials or operation IDs
+are serialized. Client transport must require explicit call/own actor/expected peer identities,
+strict numeric fields and transport consistency, bounded body/time and no redirects. Return
+a dedicated call observation with issuance ordinal/start/receive times; no channel tag or fake nonce.

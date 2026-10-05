@@ -15,6 +15,16 @@ import java.util.UUID
 fun Route.installNearbyDirectCallRoutes(dependencies: AppDependencies) {
     authenticate("auth-jwt") {
         route("/v2/nearby/calls") {
+            get("/{callId}/roster") {
+                val actor = call.nearbyActor(dependencies); val id = call.nearbyId("callId")
+                val port = dependencies.nearbyCalls ?: unavailableCalls()
+                val snapshot = withContext(Dispatchers.IO) {port.roster(actor, id)}
+                    ?: throw ApiException(HttpStatusCode.NotFound, "call_roster_unavailable", "Call roster unavailable")
+                if (!validCallRoster(snapshot, actor, id)) unavailableCalls()
+                call.respond(DirectCallRosterResponse(snapshot.callId, snapshot.revision, snapshot.serverTimeEpochMillis,
+                    snapshot.peers.map {DirectCallRosterPeerDto(it.actorId, it.sessionId, it.phase.name,
+                        it.deadlineEpochMillis, it.mediaPresence.name, it.participantSid)}))
+            }
             get("/incoming") {
                 val actor = call.nearbyActor(dependencies)
                 val port = dependencies.nearbyCalls ?: unavailableCalls()
@@ -71,6 +81,20 @@ fun Route.installNearbyDirectCallRoutes(dependencies: AppDependencies) {
             }
         }
     }
+}
+
+private fun validCallRoster(snapshot: DirectCallRosterSnapshot, actor: String, call: String): Boolean {
+    val peers = snapshot.peers
+    fun canonical(value: String) = try {UUID.fromString(value).toString() == value} catch (_: IllegalArgumentException) {false}
+    return snapshot.callId == call && snapshot.revision >= 0 && snapshot.serverTimeEpochMillis >= 0 &&
+        peers.size == 2 && peers.map {it.actorId}.distinct().size == 2 && peers.any {it.actorId == actor} &&
+        peers.map {it.sessionId}.distinct().size == 2 && peers.map {it.deadlineEpochMillis}.distinct().size == 1 && peers.all {
+            canonical(it.actorId) && canonical(it.sessionId) && it.deadlineEpochMillis > snapshot.serverTimeEpochMillis &&
+                it.deadlineEpochMillis - snapshot.serverTimeEpochMillis <= 30_000 &&
+                (it.phase == RosterConnectionPhase.CONNECTED) == (it.mediaPresence == MediaPresence.CONNECTED) &&
+                (it.participantSid == null || (it.participantSid.length in 1..256 && it.participantSid.isNotBlank() && it.participantSid.none(Char::isISOControl))) &&
+                (it.phase != RosterConnectionPhase.CONNECTED || it.participantSid != null)
+        }
 }
 
 private fun callId(value: String): String = try {

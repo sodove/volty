@@ -22,6 +22,7 @@ class DirectCallRoutesTest {
             assertEquals(HttpStatusCode.Unauthorized, client.post("/v2/nearby/calls/$call/$action").status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/v2/nearby/calls/$call").status)
         assertEquals(HttpStatusCode.Unauthorized, client.get("/v2/nearby/calls/incoming").status)
+        assertEquals(HttpStatusCode.Unauthorized, client.get("/v2/nearby/calls/$call/roster").status)
     }
 
     @Test fun authenticatedDisabledCallsReturnUnavailableWithoutCredentials() = testApplication {
@@ -29,6 +30,49 @@ class DirectCallRoutesTest {
         val response = client.get("/v2/nearby/calls/incoming") {bearerAuth(deps.tokenService.issueAccessToken(actor))}
         assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
         assertFalse(response.bodyAsText().contains("participantToken"))
+        assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/v2/nearby/calls/$call/roster") {
+            bearerAuth(deps.tokenService.issueAccessToken(actor))
+        }.status)
+    }
+
+    @Test fun callRosterUsesLiveActorAndOmitsAllOriginalOperationsAndCredentials() = testApplication {
+        val port = RecordingPort(); val deps = dependencies(port); application {module(deps)}
+        val response = client.get("/v2/nearby/calls/$call/roster?actorId=$peer") {
+            bearerAuth(deps.tokenService.issueAccessToken(actor))
+        }
+        assertEquals(HttpStatusCode.OK, response.status)
+        assertEquals(listOf("roster:$actor:$call"), port.calls)
+        val body = response.bodyAsText()
+        assertTrue(body.contains("\"callId\":\"$call\"")); assertFalse(body.contains("channelId"))
+        assertTrue(body.contains(actor)); assertTrue(body.contains(peer)); assertTrue(body.contains("CONNECTED"))
+        for (private in listOf(key, operation, callerOperation, "operationId", "participantToken", "nodeEpoch", "idempotencyKey"))
+            assertFalse(body.contains(private))
+        assertEquals("no-store", response.headers[HttpHeaders.CacheControl])
+    }
+
+    @Test fun absentCallRosterIsNotFoundAndMalformedIdDoesNotReachPort() = testApplication {
+        val port = RecordingPort().apply {rosterSnapshot = null}; val deps = dependencies(port); application {module(deps)}
+        val token = deps.tokenService.issueAccessToken(actor)
+        assertEquals(HttpStatusCode.NotFound, client.get("/v2/nearby/calls/$call/roster") {bearerAuth(token)}.status)
+        assertEquals(listOf("roster:$actor:$call"), port.calls)
+        assertEquals(HttpStatusCode.BadRequest, client.get("/v2/nearby/calls/not-a-uuid/roster") {bearerAuth(token)}.status)
+        assertEquals(1, port.calls.size)
+    }
+
+    @Test fun misboundOrIncoherentCallRosterNeverPublishesParticipantData() = testApplication {
+        val port = RecordingPort(); val deps = dependencies(port); application {module(deps)}
+        val original = assertNotNull(port.rosterSnapshot)
+        for (invalid in listOf(original.copy(callId = id()), original.copy(peers = original.peers.take(1)),
+            original.copy(peers = listOf(original.peers.first(), original.peers.first())),
+            original.copy(peers = original.peers.map {it.copy(actorId = id())}),
+            original.copy(peers = original.peers.map {it.copy(deadlineEpochMillis = 30101)}),
+            original.copy(peers = listOf(original.peers.first(), original.peers.last().copy(deadlineEpochMillis = 15099))),
+            original.copy(peers = original.peers.map {it.copy(phase = RosterConnectionPhase.CONNECTED, participantSid = null)}))) {
+            port.rosterSnapshot = invalid
+            val response = client.get("/v2/nearby/calls/$call/roster") {bearerAuth(deps.tokenService.issueAccessToken(actor))}
+            assertEquals(HttpStatusCode.ServiceUnavailable, response.status)
+            assertFalse(response.bodyAsText().contains("participantSid"))
+        }
     }
 
     @Test fun creationBindsLiveActorAndOmitsPrivateOriginalCallerPayloadFromSnapshot() = testApplication {
@@ -170,6 +214,12 @@ class DirectCallRoutesTest {
         var terminal = false
         var failure: SfuFailure? = null
         var sessionOverride: SessionAction? = null
+        var rosterSnapshot: DirectCallRosterSnapshot? = DirectCallRosterSnapshot(call, 7, 100, listOf(
+            ChannelRosterPeer(actor, id(), operation, RosterConnectionPhase.CONNECTING, 15100),
+            ChannelRosterPeer(peer, id(), callerOperation, RosterConnectionPhase.CONNECTED, 15100, MediaPresence.CONNECTED, "observed-sid")))
+        override fun roster(actor: String, call: String): DirectCallRosterSnapshot? {
+            calls += "roster:$actor:$call"; return rosterSnapshot
+        }
         private fun record(phase: DirectCallPhase = DirectCallPhase.RINGING) = DirectCallRecord(call, peer, actor, key, callerOperation,
             phase, 45_100, if (phase == DirectCallPhase.RINGING) 0 else 1,
             if (phase == DirectCallPhase.DECLINED) DirectCallOutcome.CALLEE_DECLINED else if (phase == DirectCallPhase.ENDED) DirectCallOutcome.CALLEE_ENDED else null)
