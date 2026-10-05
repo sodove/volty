@@ -23,6 +23,93 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun rootPacketPublisherExpiredSampleDoesNotWithdrawConsentButAccessDenialHidesOriginalCapture() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var publisher: ChannelSharingPacketPublisher?=null
+        f.sharingCredit=30_000;f.voiceGrantMillis=20_000;f.packetElapsed=1001
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(owner.begin().await())
+            val sending=ChannelSharingPacketPublisher.create(account,owner,f.dispatcher);publisher=sending
+            f.time=101;source.emitFix(1001,101);runCurrent()
+            assertEquals(listOf(0L),f.packetSequences);assertEquals(ChannelSharingFailure.EXPIRED,sending.state.value.failure)
+            assertTrue(owner.locationForegroundState.value.wanted);assertFalse(sending.state.value.retired)
+            assertFalse(f.paths.any {it.endsWith("/revoke")})
+            f.packetElapsed=0;f.time=1103;source.emitFix(2003,1103);runCurrent()
+            assertEquals(listOf(0L,1L),f.packetSequences);assertEquals(1L,sending.state.value.publishedSequence);assertNull(sending.state.value.failure)
+            f.packetStatus=HttpStatusCode.Forbidden;f.time=1104;source.emitFix(2004,1104);runCurrent()
+            assertEquals(listOf(0L,1L,2L),f.packetSequences);assertTrue(sending.state.value.retired)
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED,sending.state.value.failure)
+            assertFalse(owner.locationForegroundState.value.wanted);assertNull(owner.packet.value)
+            assertTrue(f.paths.any {it.endsWith("/revoke")});assertTrue(runtime.state.value.wanted)
+        } finally {publisher?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun rootPacketPublisherDropsExpiredPendingSampleAndClosePreservesBorrowedCapture() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
+        var publisher: ChannelSharingPacketPublisher?=null;var duplicate: ChannelSharingPacketPublisher?=null
+        f.sharingCredit=30_000;f.voiceGrantMillis=20_000
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(owner.begin().await())
+            val sending=ChannelSharingPacketPublisher.create(account,owner,f.dispatcher);publisher=sending
+            assertFailsWith<IllegalStateException> {duplicate=ChannelSharingPacketPublisher.create(account,owner,f.dispatcher)}
+            val gate=CompletableDeferred<Unit>();f.packetRelease=gate
+            f.time=101;source.emitFix(1001,101);runCurrent();assertEquals(listOf(0L),f.packetSequences)
+            f.time=102;source.emitFix(1002,102);runCurrent();assertEquals(1L,assertNotNull(owner.packet.value).sequence)
+            f.time=15_102;owner.tick();assertNull(owner.packet.value)
+            f.packetRelease=null;gate.complete(Unit);runCurrent()
+            assertEquals(listOf(0L),f.packetSequences);assertNull(sending.state.value.publishedSequence)
+            assertTrue(owner.locationForegroundState.value.wanted)
+            f.time=15_103;source.emitFix(16_003,15_103);runCurrent()
+            assertEquals(listOf(0L,2L),f.packetSequences);assertEquals(2L,sending.state.value.publishedSequence)
+            sending.close();runCurrent();assertTrue(sending.state.value.retired)
+            f.time=15_104;source.emitFix(16_004,15_104);runCurrent()
+            assertEquals(listOf(0L,2L),f.packetSequences);assertEquals(3L,assertNotNull(owner.packet.value).sequence)
+            assertTrue(owner.locationForegroundState.value.nativeOwned);assertTrue(runtime.state.value.wanted)
+            assertFalse(f.paths.any {it.endsWith("/revoke")})
+        } finally {f.packetRelease?.complete(Unit);runCurrent();duplicate?.close();publisher?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun rootPacketPublisherSerializesAndConflatesActualSamplesThenFencesHeldHideResponse() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var publisher: ChannelSharingPacketPublisher?=null
+        f.sharingCredit=30_000;f.voiceGrantMillis=20_000
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(owner.begin().await())
+            val sending=ChannelSharingPacketPublisher.create(account,owner,f.dispatcher);publisher=sending
+            val gate=CompletableDeferred<Unit>();f.packetRelease=gate
+            f.time=101;source.emitFix(1001,101);runCurrent()
+            assertEquals(listOf(0L),f.packetSequences);assertEquals(1,sending.state.value.inFlight)
+            f.time=102;source.emitFix(1002,102);runCurrent();f.time=103;source.emitFix(1003,103);runCurrent()
+            assertEquals(listOf(0L),f.packetSequences)
+            f.packetRelease=null;gate.complete(Unit);runCurrent()
+            assertEquals(listOf(0L,2L),f.packetSequences);assertEquals(2L,sending.state.value.publishedSequence);assertEquals(0,sending.state.value.inFlight)
+            f.packetRelease=CompletableDeferred();f.time=104;source.emitFix(1004,104);runCurrent()
+            assertEquals(listOf(0L,2L,3L),f.packetSequences);assertEquals(1,sending.state.value.inFlight)
+            owner.requestHide();runCurrent();assertTrue(sending.state.value.retired);assertNull(sending.state.value.publishedSequence)
+            // Ktor cancels our await before the deliberately uncancellable engine callback finishes.
+            assertEquals(0,sending.state.value.inFlight);assertEquals(listOf(0L,2L),f.packetCompletions)
+            f.packetRelease!!.complete(Unit);runCurrent();assertEquals(listOf(0L,2L,3L),f.packetCompletions)
+            assertEquals(0,sending.state.value.inFlight);assertNull(sending.state.value.publishedSequence)
+            assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive);assertEquals(setOf(LocationConsumer.NAVIGATION),source.state.value.demands)
+        } finally {f.packetRelease?.complete(Unit);runCurrent();publisher?.close();capture?.close();sharing?.close();f.close()}
+    }
+
     @Test fun rootLocationCaptureRideStripsUnearnedValuesAndExpiresPacketWithoutStoppingHealthyVoice() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null
         f.sharingCredit=30_000;f.voiceGrantMillis=20_000;f.sharingMode="RIDE"
@@ -1403,6 +1490,12 @@ class VoiceConversationStartupTest {
         var sharingCredit=1000L
         var sharingMode="LOCATION"
         var voiceGrantMillis=10000L
+        var packetRelease: CompletableDeferred<Unit>?=null
+        val packetSequences=mutableListOf<Long>()
+        val packetCompletions=mutableListOf<Long>()
+        var packetCredit=1000L
+        var packetElapsed=0L
+        var packetStatus=HttpStatusCode.OK
         val service = Any()
         var nonce = 0
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
@@ -1444,11 +1537,22 @@ class VoiceConversationStartupTest {
                 }
                 if (it.url.encodedPath.startsWith("/v2/nearby/sharing/")) {
                     sharingAuthorizations += it.headers[io.ktor.http.HttpHeaders.Authorization]
+                    if(it.url.encodedPath.endsWith("/packet")) {
+                        val body=(it.body as io.ktor.http.content.TextContent).text
+                        val sequence=kotlinx.serialization.json.Json.parseToJsonElement(body).let {value ->
+                            (value as kotlinx.serialization.json.JsonObject).getValue("sequence").toString().toLong()
+                        }
+                        packetSequences+=sequence
+                        withContext(NonCancellable) {sharingPositiveEntered.complete(Unit);sharingPositiveRelease?.await();packetRelease?.await()}
+                        packetCompletions+=sequence
+                        time+=packetElapsed
+                        val parts=it.url.encodedPath.split('/')
+                        return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","sequence":$sequence,"remainingMillis":$packetCredit}""",packetStatus)
+                    }
                     val negative = it.url.encodedPath.endsWith("/revoke")
                     if (negative) {sharingRevokeEntered.complete(Unit); sharingRevokeRelease?.await()}
                     else withContext(NonCancellable) {sharingPositiveEntered.complete(Unit); sharingPositiveRelease?.await()}
                     val parts = it.url.encodedPath.split('/')
-                    if(it.url.encodedPath.endsWith("/packet")) return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","sequence":7,"remainingMillis":1000}""")
                     return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","phase":"${if (negative) "REVOKED" else "ACTIVE"}","mode":${if (negative) "null" else "\"$sharingMode\""},"remainingMillis":${if (negative) 0 else sharingCredit}}""")
                 }
                 if (callMode && it.url.encodedPath.contains("/calls/")) {

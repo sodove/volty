@@ -33,6 +33,7 @@ internal class ChannelSharingCaptureOwner private constructor(private val accoun
     private val positiveScope=CoroutineScope(scope.coroutineContext+positives)
     private val cleanupMutex=Mutex()
     private var started: Deferred<Boolean>?=null
+    private var publisherReserved=false
     private var foregroundGranted=false
     private var consentGranted=false
     private var fixFloor=0L
@@ -122,6 +123,18 @@ internal class ChannelSharingCaptureOwner private constructor(private val accoun
             }
         } catch(_: CancellationException) {requestHide()}
             catch(_: Exception) {requestHide()}
+    }
+    internal fun belongsTo(account: SocialAuthenticatedAccount)=this.account===account
+    internal suspend fun reservePublisher(): Boolean = withContext(queued) {
+        ensureSession()
+        if(publisherReserved) false else {publisherReserved=true;true}
+    }
+    internal suspend fun publishSnapshot(sample: ChannelSharingPacket): ChannelSharingPacketReply? = withContext(queued) {
+        tick();ensureSession()
+        if(mutablePacket.value!==sample) return@withContext null
+        val reply=control.publish(generation,sample)
+        tick();ensureSession()
+        if(mutablePacket.value==null) null else reply
     }
     private fun finishIfReleased() {
         val state=mutableResources.value
