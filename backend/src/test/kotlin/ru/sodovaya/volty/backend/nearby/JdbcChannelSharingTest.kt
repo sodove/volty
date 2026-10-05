@@ -145,6 +145,27 @@ class JdbcChannelSharingTest {
         } finally {launch.countDown(); pool.shutdownNow()}
     }
 
+    @Test fun actualEndpointCreditUsesOriginalDeadlineAndNegativeWorksAfterVoiceDisconnect() {
+        join(); val endpoint = JdbcChannelSharingEndpoint(shares) {now}
+        val first = assertNotNull(endpoint.start(actor, session, generation, ChannelSharingMode.LOCATION, ChannelSharingTtl.HALF_HOUR))
+        assertEquals(1_800_000, first.remainingMillis)
+        now += 1000
+        val replay = assertNotNull(endpoint.start(actor, session, generation, ChannelSharingMode.FULL, ChannelSharingTtl.EIGHT_HOURS))
+        assertEquals(first.consent, replay.consent); assertEquals(1_799_000, replay.remainingMillis)
+        assertEquals(replay, endpoint.status(actor, session, generation))
+        sessions.cancel(actor, operation, {now})
+        val negative = assertNotNull(endpoint.revoke(actor, session, generation))
+        assertEquals(0, negative.remainingMillis); assertEquals(ChannelSharingPhase.REVOKED, negative.consent.phase)
+        assertNull(endpoint.status(actor, session, generation)); assertNull(sessions.currentClaim(actor))
+    }
+
+    @Test fun responsePreparationPastOriginalConsentDeadlineCannotOfferPositiveCredit() {
+        join(); var reads = 0
+        val endpoint = JdbcChannelSharingEndpoint(shares) {if (++reads == 1) now else now + 1_800_000}
+        assertNull(endpoint.start(actor, session, generation, ChannelSharingMode.LOCATION, ChannelSharingTtl.HALF_HOUR))
+        assertEquals(2, reads); assertEquals(session, sessions.currentClaim(actor)?.sessionId)
+    }
+
     private fun rawPhase(): String? = source.connection.use {c -> c.prepareStatement("SELECT phase FROM nearby_channel_sharing_consent WHERE actor_id=?::uuid AND session_id=?::uuid AND generation_id=?::uuid").use {
         it.setString(1, actor); it.setString(2, session); it.setString(3, generation)
         it.executeQuery().use {rows -> if (rows.next()) rows.getString(1) else null}
