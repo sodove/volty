@@ -76,6 +76,7 @@ import ru.sodovaya.volty.backend.nearby.DirectCallEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyDirectCallRoutes
 import ru.sodovaya.volty.backend.nearby.ChannelSharingEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyChannelSharingRoutes
+import ru.sodovaya.volty.backend.nearby.installNearbySharingPacketRoutes
 
 private const val ISSUER = "volty"
 private const val AUDIENCE = "volty-app"
@@ -96,6 +97,7 @@ class AppDependencies(
     val nearbyInvitations: InvitationEndpointPort? = null,
     val nearbyCalls: DirectCallEndpointPort? = null,
     val nearbyChannelSharing: ChannelSharingEndpointPort? = null,
+    val nearbySharingPackets: ru.sodovaya.volty.backend.nearby.ChannelSharingPacketEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -285,6 +287,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         installNearbyInvitationRoutes(dependencies)
         installNearbyDirectCallRoutes(dependencies)
         installNearbyChannelSharingRoutes(dependencies)
+        installNearbySharingPacketRoutes(dependencies)
         installOfflineRegionRoutes(dependencies)
         get("/health") { call.respond(HealthResponse("ok", "volty-backend", "0.1.0")) }
             route("/v1") {

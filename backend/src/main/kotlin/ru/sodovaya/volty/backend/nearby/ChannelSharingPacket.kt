@@ -9,6 +9,6 @@ data class ChannelSharingPacket(val sequence: Long, val capturedAtEpochMillis: L
     val location: LocationDto?, val telemetry: SharedTelemetryDto? = null)
 data class StoredChannelSharingPacket(val packet: ChannelSharingPacket, val deadlineEpochMillis: Long)
 data class ChannelSharingAudiencePeer(val actorId: String, val sessionId: String, val generation: String,
-    val packet: ChannelSharingPacket, val deadlineEpochMillis: Long)
+    val mode: ChannelSharingMode, val packet: ChannelSharingPacket, val deadlineEpochMillis: Long)
 data class ChannelSharingAudience(val channelId: String, val serverTimeEpochMillis: Long,
     val peers: List<ChannelSharingAudiencePeer>)

@@ -43,6 +43,30 @@ class JdbcChannelSharingPacketsTest {
     private fun audience() = assertNotNull(packets.snapshot(viewer, viewerSession, {now}))
     private fun count(): Int = source.connection.use {c -> c.createStatement().use {s -> s.executeQuery("SELECT COUNT(*) FROM nearby_channel_sharing_packets WHERE actor_id='$actor'").use {it.next(); it.getInt(1)}}}
 
+    @Test fun endpointCreditUsesOriginalCaptureAndReplayDoesNotRenewIt() {
+        join(); consent(); join(viewer, viewerOperation, viewerSession)
+        val original = packet(); var calls = 0
+        val endpoint = JdbcChannelSharingPacketEndpoint(packets) { if (calls++ == 0) now else now + 5 }
+        val ack = assertNotNull(endpoint.publish(actor, session, generation, original))
+        assertEquals(ChannelSharingPacketAcknowledgement(session, generation, 0, 14_995), ack)
+        now += 10
+        val repeated = assertNotNull(JdbcChannelSharingPacketEndpoint(packets) {now}.publish(actor, session, generation, original))
+        assertEquals(14_990, repeated.remainingMillis)
+        val snapshot = assertNotNull(endpoint.audience(viewer, viewerSession))
+        assertEquals(ChannelSharingMode.LOCATION, snapshot.peers.single().mode)
+        assertEquals(original.capturedAtEpochMillis + 15_000, snapshot.peers.single().deadlineEpochMillis)
+    }
+
+    @Test fun packetExpiredWhilePreparingAcknowledgementCannotEarnSuccessCredit() {
+        join(); consent(); join(viewer, viewerOperation, viewerSession)
+        val original = packet(); var calls = 0
+        val endpoint = JdbcChannelSharingPacketEndpoint(packets) { if (calls++ == 0) now else now + 15_000 }
+        assertNull(endpoint.publish(actor, session, generation, original))
+        assertEquals(1, count())
+        assertTrue(assertNotNull(endpoint.audience(viewer, viewerSession)).peers.isEmpty())
+        assertEquals(session, sessions.currentClaim(actor)?.sessionId)
+    }
+
     @Test fun originalPacketReplayDoesNotRefreshAndConflictingOrLowerSequenceCannotOverwrite() {
         join(); consent(); join(viewer, viewerOperation, viewerSession)
         val original = packet(1); val first = assertNotNull(publish(original)); now += 10

@@ -76,7 +76,7 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
                         } catch (_: IllegalArgumentException) {continue}
                         val deadline = minOf(rows.getLong("peer_deadline"), sampleDeadline(packet))
                         if (deadline > at) add(ChannelSharingAudiencePeer(rows.getString("actor_id"), rows.getString("session_id"),
-                            rows.getString("generation_id"), packet, deadline))
+                            rows.getString("generation_id"), ChannelSharingMode.valueOf(rows.getString("mode")), packet, deadline))
                     }
                 }}
             }
