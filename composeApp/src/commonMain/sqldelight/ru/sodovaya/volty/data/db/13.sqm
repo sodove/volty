@@ -1,0 +1,7 @@
+CREATE TABLE ChannelSharingRevokeRow (
+    actorId TEXT NOT NULL,
+    sessionId TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    requestId TEXT NOT NULL,
+    PRIMARY KEY (actorId, sessionId, generation)
+);

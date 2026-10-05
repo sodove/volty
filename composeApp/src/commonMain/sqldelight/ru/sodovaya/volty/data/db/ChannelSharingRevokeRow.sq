@@ -1,0 +1,27 @@
+-- Durable original negative only; never persist auth, location, telemetry or a live lease.
+CREATE TABLE ChannelSharingRevokeRow (
+    actorId TEXT NOT NULL,
+    sessionId TEXT NOT NULL,
+    generation TEXT NOT NULL,
+    requestId TEXT NOT NULL,
+    PRIMARY KEY (actorId, sessionId, generation)
+);
+
+selectOriginal:
+SELECT * FROM ChannelSharingRevokeRow
+WHERE actorId = :actorId AND sessionId = :sessionId AND generation = :generation;
+
+selectPending:
+SELECT * FROM ChannelSharingRevokeRow WHERE actorId = :actorId
+ORDER BY sessionId, generation LIMIT :batchSize;
+
+countActor:
+SELECT count(*) FROM ChannelSharingRevokeRow WHERE actorId = :actorId;
+
+insertOriginal:
+INSERT OR IGNORE INTO ChannelSharingRevokeRow(actorId, sessionId, generation, requestId)
+VALUES (:actorId, :sessionId, :generation, :requestId);
+
+deleteAcknowledged:
+DELETE FROM ChannelSharingRevokeRow
+WHERE actorId = :actorId AND sessionId = :sessionId AND generation = :generation AND requestId = :requestId;

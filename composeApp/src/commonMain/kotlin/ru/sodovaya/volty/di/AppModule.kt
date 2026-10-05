@@ -37,6 +37,9 @@ import org.koin.dsl.module
 
 val appModule = module {
     single { VoltyDatabaseProvider(get<SqlDriverFactory>().create()) }
+    single<ru.sodovaya.volty.data.voice.ChannelSharingRevokeJournal> {
+        ru.sodovaya.volty.data.db.SqlDelightChannelSharingRevokeJournal(get(),kotlinx.coroutines.Dispatchers.IO)
+    }
     single { AppPrefs(get<DataStoreFactory>().create()) }
     singleOf(::SqlDelightVehicleRepository) bind VehicleRepository::class
     singleOf(::SqlDelightRideHistoryRepository) bind RideHistoryRepository::class
