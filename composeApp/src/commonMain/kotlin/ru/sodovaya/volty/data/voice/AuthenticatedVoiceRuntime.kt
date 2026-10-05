@@ -122,7 +122,11 @@ internal class AuthenticatedVoiceRuntime private constructor(
     suspend fun setDeafened(value: Boolean): Boolean = positiveCommand { runtime.setDeafened(value) }
     suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean = positiveCommand { runtime.setMuted(operation, value) }
     suspend fun setDeafened(operation: VoiceOperationId, value: Boolean): Boolean = positiveCommand { runtime.setDeafened(operation, value) }
-    suspend fun enableSharing(): Boolean = positiveCommand { runtime.enableSharing() }
+    suspend fun enableSharing(): Boolean = withContext(queuedDispatcher) {
+        val operation = runtime.state.value.operationId
+        if (!allowsPositiveWork() || operation == null || !control.allowsSharing(operation)) false
+        else {runtime.enableSharing(); true}
+    }
     suspend fun hidePosition() = withContext(NonCancellable) { runtime.hidePosition() }
 
     /** Fence admission first, then request actual cleanup; cancelling auth is never a stop ACK. */

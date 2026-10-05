@@ -32,6 +32,9 @@ internal class VoiceSessionAccountControl private constructor(
     )
     // One atomic capability prevents late token/identity writers resurrecting a closed owner.
     private val capability = MutableStateFlow(Capability(bearer = initialBearer))
+    override fun allowsSharing(operation: VoiceOperationId): Boolean = capability.value.let {
+        !it.closed && !it.retired && account.job.isActive && it.intents[operation]?.kind == IntentKind.CHANNEL
+    }
     private val positive = VoiceSessionHttpPort(client, baseUrl, {
         ensureLive()
         val token = account.bearer()

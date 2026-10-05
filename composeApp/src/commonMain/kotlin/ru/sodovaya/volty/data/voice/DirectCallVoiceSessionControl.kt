@@ -15,6 +15,7 @@ internal class DirectCallVoiceSessionControl private constructor(
     private val account: SocialAuthenticatedAccount, private val calls: DirectCallAccountControl,
     private val journal: VoiceSessionAccountControl,
 ) : VoiceSessionControlPort {
+    override fun allowsSharing(operation: VoiceOperationId) = false
     private sealed interface Mode {
         val call: String
         data class Outgoing(override val call: String, val callee: String, val key: String) : Mode

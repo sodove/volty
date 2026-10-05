@@ -70,7 +70,14 @@ class VoiceControlOwner(
                 attempt = Attempt(command.operation, transition.state.generation, command.channel, command.replace)
                 apply(transition)
             }
-            is Command.Event -> apply(VoiceSessionReducer.reduce(stateOutput.value, command.event))
+            is Command.Event -> {
+                if (command.event is VoiceSessionEvent.EnableSharing) {
+                    val operation = stateOutput.value.operationId ?: return
+                    val permitted = try {port.allowsSharing(operation)} catch (_: Exception) {false}
+                    if (!permitted) return
+                }
+                apply(VoiceSessionReducer.reduce(stateOutput.value, command.event))
+            }
             is Command.RetryJoin -> {
                 val s = stateOutput.value
                 if (s.wanted && s.sessionId == null && joinJob?.isActive != true &&

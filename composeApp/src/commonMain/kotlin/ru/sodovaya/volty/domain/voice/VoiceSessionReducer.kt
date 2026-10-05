@@ -16,7 +16,7 @@ object VoiceSessionReducer {
         is VoiceSessionEvent.Tick -> if (hasExpiredLease(state, event.nowMillis)) stop(state) else unchanged(state)
         is VoiceSessionEvent.SetMuted -> if (admitsControl(state, event.operationId)) setMuted(state, event.value) else unchanged(state)
         is VoiceSessionEvent.SetDeafened -> if (admitsControl(state, event.operationId)) setDeafened(state, event.value) else unchanged(state)
-        VoiceSessionEvent.EnableSharing -> if (state.activeTag() != null && !state.sharingEnabled) {
+        is VoiceSessionEvent.EnableSharing -> if (admitsControl(state, event.operationId) && state.activeTag() != null && !state.sharingEnabled) {
             VoiceTransition(state.copy(sharingEnabled = true), listOf(VoiceSessionEffect.AddNearbyDemand))
         } else unchanged(state)
         VoiceSessionEvent.HidePosition -> hidePosition(state)

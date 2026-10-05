@@ -66,8 +66,8 @@ class VoiceRuntime(
     suspend fun enableSharing() = command {
         val state = owner.state.value
         val tag = state.sessionId?.let { VoiceSessionTag(it, state.generation) }
-        if (!retiring && tag != null && state.authorizesEngine(tag, monotonicMillis()))
-            owner.event(VoiceSessionEvent.EnableSharing)
+        if (!retiring && tag != null && state.operationId != null && state.authorizesEngine(tag, monotonicMillis()))
+            owner.event(VoiceSessionEvent.EnableSharing(state.operationId))
     }
     suspend fun hidePosition() = command { owner.event(VoiceSessionEvent.HidePosition) }
 

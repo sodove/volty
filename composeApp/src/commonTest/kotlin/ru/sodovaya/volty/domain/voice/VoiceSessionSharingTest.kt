@@ -6,6 +6,14 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VoiceSessionSharingTest {
+    @Test fun originalSharingCommandCannotEnableNewerConversation() {
+        val original = VoiceOperationId("old-operation"); val current = VoiceOperationId("current-operation")
+        val state = active().copy(operationId = current)
+        assertEquals(VoiceTransition(state, emptyList()), reduce(state, VoiceSessionEvent.EnableSharing(original)))
+        val accepted = reduce(state, VoiceSessionEvent.EnableSharing(current))
+        assertTrue(accepted.state.sharingEnabled)
+        assertEquals(listOf(VoiceSessionEffect.AddNearbyDemand), accepted.effects)
+    }
     private val tag = VoiceSessionTag(VoiceSessionId("s1"), VoiceGeneration(1))
     private fun active() = VoiceSessionState(
         generation = tag.generation, sessionId = tag.sessionId, wanted = true,
@@ -33,15 +41,15 @@ class VoiceSessionSharingTest {
             VoiceSessionState(), VoiceSessionState(wanted = true, phase = VoicePhase.JOINING),
             active().copy(wanted = false, phase = VoicePhase.STOPPING),
         )
-        states.forEach { state -> assertEquals(VoiceTransition(state, emptyList()), reduce(state, VoiceSessionEvent.EnableSharing)) }
+        states.forEach { state -> assertEquals(VoiceTransition(state, emptyList()), reduce(state, VoiceSessionEvent.EnableSharing())) }
     }
 
     @Test
     fun activeEnableIssuesOnlyNearbyDemandAndIsIdempotent() {
-        val enabled = reduce(active(), VoiceSessionEvent.EnableSharing)
+        val enabled = reduce(active(), VoiceSessionEvent.EnableSharing())
         assertTrue(enabled.state.sharingEnabled)
         assertEquals(listOf(VoiceSessionEffect.AddNearbyDemand), enabled.effects)
-        assertEquals(VoiceTransition(enabled.state, emptyList()), reduce(enabled.state, VoiceSessionEvent.EnableSharing))
+        assertEquals(VoiceTransition(enabled.state, emptyList()), reduce(enabled.state, VoiceSessionEvent.EnableSharing()))
     }
 
     @Test
@@ -76,7 +84,7 @@ class VoiceSessionSharingTest {
         assertFalse(restored.wanted)
         assertFalse(restored.sharingEnabled)
         assertFalse(restored.captureStarted)
-        assertEquals(VoiceTransition(restored, emptyList()), reduce(restored, VoiceSessionEvent.EnableSharing))
+        assertEquals(VoiceTransition(restored, emptyList()), reduce(restored, VoiceSessionEvent.EnableSharing()))
     }
 
     @Test

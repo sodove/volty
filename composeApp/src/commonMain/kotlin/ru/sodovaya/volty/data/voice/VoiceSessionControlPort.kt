@@ -4,6 +4,8 @@ import ru.sodovaya.volty.domain.voice.*
 
 /** Replies carry validated identity and request-start monotonic lease provenance. */
 interface VoiceSessionControlPort {
+    /** Pure destination permission, checked when a queued sharing request is consumed. */
+    fun allowsSharing(operation: VoiceOperationId): Boolean = true
     /** Pure intent registration before scheduling a producer that may never start. */
     fun rememberJoinIntent(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean) = Unit
     suspend fun join(operation: VoiceOperationId, generation: VoiceGeneration, channel: String, replace: Boolean = false): VoiceHttpReply

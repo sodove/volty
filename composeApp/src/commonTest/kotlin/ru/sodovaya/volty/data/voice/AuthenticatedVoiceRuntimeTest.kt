@@ -34,6 +34,24 @@ class AuthenticatedVoiceRuntimeTest {
     }}
     private fun TestScope.repository() = DefaultSocialRepository(Transport(actor), Store(), backgroundScope)
 
+    @Test fun originalChannelSessionStillDispatchesSharingDemandAndHideKeepsVoice() = runTest {
+        val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
+        val account = assertNotNull(repository.authenticatedAccount.value)
+        val wire = Wire(); val client = client(wire); val effects = mutableListOf<VoiceSharingEffect>()
+        val pulses = Channel<Unit>(Channel.UNLIMITED)
+        val runtime = AuthenticatedVoiceRuntime.create(account, client, root, StandardTestDispatcher(testScheduler),
+            VoiceSdkSessionFactory {_, _ -> Session()}, pulses.receiveAsFlow(), {100}, {effects += it}, {true})
+        try {
+            assertTrue(runtime.join(channel, operation)); runCurrent(); assertNotNull(runtime.state.value.sessionId)
+            assertTrue(runtime.enableSharing()); runCurrent()
+            assertTrue(runtime.state.value.sharingEnabled); assertEquals(listOf(VoiceSharingEffect.ADD_DEMAND), effects)
+            runtime.hidePosition(); runCurrent()
+            assertFalse(runtime.state.value.sharingEnabled); assertTrue(runtime.state.value.wanted)
+            assertEquals(listOf(VoiceSharingEffect.ADD_DEMAND, VoiceSharingEffect.REMOVE_DEMAND, VoiceSharingEffect.CLEAR_QUEUE), effects)
+            assertTrue(account.job.isActive)
+        } finally {runtime.retire(); pulses.close(); client.close(); runCurrent()}
+    }
+
     @Test fun sharedAccountRuntimeRingsWithoutNativeAudioThenStopsOriginalCallAfterLogout() = runTest {
         val repository = repository(); runCurrent(); repository.login(LoginRequest("rider", "password"))
         val authority = assertNotNull(repository.authenticatedAccount.value)
@@ -66,6 +84,8 @@ class AuthenticatedVoiceRuntimeTest {
             accepted = true
             now = 1100; pulses.send(Unit); runCurrent()
             assertEquals(1, sdk.connects); assertEquals(1, sdk.publishes)
+            assertFalse(runtime.enableSharing())
+            runCurrent(); assertFalse(runtime.state.value.sharingEnabled)
             repository.logout(); runCurrent()
             assertEquals(1, sdk.closes)
             assertEquals(listOf("/v2/nearby/calls/$channel/cancel-outgoing", "/v2/nearby/sessions/$session/disconnect"), paths.takeLast(2))
