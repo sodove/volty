@@ -20,6 +20,81 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun incomingHintSubmissionSurvivesWaiterCancellationAndUsesOneActualOwner() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; val port = Notifications()
+        var creations = 0; var actualOwner: IncomingCallNotificationOwner? = null
+        val notifications = IncomingCallAccountCoordinator(f.dispatcher, registry, IncomingCallNotificationFactory {account, runtime ->
+            creations++
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+            actualOwner = owner; IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+        })
+        val dispatch = IncomingCallHintDispatch(f.dispatcher, {f.repository.authenticatedAccount.value}, notifications) {account ->
+            entered.complete(Unit); release.await(); f.acquire(account)
+        }
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            f.statusRelease = CompletableDeferred()
+            val submitted = assertNotNull(dispatch.submit(account, channel)); val waiter = async {submitted.await()}
+            runCurrent(); assertTrue(entered.isCompleted); waiter.cancel(); release.complete(Unit); runCurrent()
+            assertTrue(submitted.await()); assertEquals(1, creations); assertTrue(f.statusEntered.isCompleted)
+            assertFalse(assertNotNull(dispatch.submit(account, channel)).await()); runCurrent()
+            assertEquals(1, creations); assertEquals(1, f.paths.size)
+            f.statusRelease!!.complete(Unit); runCurrent()
+            assertNotNull(assertNotNull(actualOwner).state.value.ticket)
+            assertEquals(1, port.shown.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit); f.statusRelease?.complete(Unit); notifications.retireAll(); registry.close(); f.close()}
+    }
+
+    @Test fun malformedOrStaleAccountHintDoesNotAcquireRuntimeOrWithdrawCurrentNotification() = runTest {
+        val f = Fixture(this); val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; var acquisitions = 0
+        var actualOwner: IncomingCallNotificationOwner? = null
+        val notifications = IncomingCallAccountCoordinator(f.dispatcher, registry, IncomingCallNotificationFactory {account, runtime ->
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, Notifications(), {f.key})
+            actualOwner = owner; IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+        })
+        val dispatch = IncomingCallHintDispatch(f.dispatcher, {f.repository.authenticatedAccount.value}, notifications) {account ->
+            acquisitions++; f.acquire(account)
+        }
+        try {
+            val old = f.login(); f.repository.logout(); runCurrent(); val account = f.login()
+            assertEquals(old.userId, account.userId); assertNotSame(old, account)
+            f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            assertTrue(assertNotNull(dispatch.submit(account, channel)).await()); runCurrent()
+            val ticket = assertNotNull(assertNotNull(actualOwner).state.value.ticket)
+            assertNull(dispatch.submit(old, channel)); assertNull(dispatch.submit(account, "../../call"))
+            assertEquals(1, acquisitions); assertEquals(1, f.paths.size)
+            assertSame(ticket, assertNotNull(actualOwner).state.value.ticket)
+        } finally {notifications.retireAll(); registry.close(); f.close()}
+    }
+
+    @Test fun lateOldAccountHintCannotAcquireNotificationsAfterSameUserRelogin() = runTest {
+        val f = Fixture(this); val entered = CompletableDeferred<Unit>(); val release = CompletableDeferred<Unit>()
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; var creations = 0
+        var actualOwner: IncomingCallNotificationOwner? = null
+        val notifications = IncomingCallAccountCoordinator(f.dispatcher, registry, IncomingCallNotificationFactory {account, runtime ->
+            creations++
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, Notifications(), {f.key})
+            actualOwner = owner; IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+        })
+        val oldAccount = f.login(); val oldRuntime = f.acquire(oldAccount)
+        val dispatch = IncomingCallHintDispatch(f.dispatcher, {f.repository.authenticatedAccount.value}, notifications) {account ->
+            if (account === oldAccount) withContext(NonCancellable) {entered.complete(Unit); release.await(); oldRuntime}
+            else f.acquire(account)
+        }
+        try {
+            val old = assertNotNull(dispatch.submit(oldAccount, channel)); runCurrent(); assertTrue(entered.isCompleted)
+            f.repository.logout(); runCurrent(); val account = f.login()
+            f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            assertTrue(assertNotNull(dispatch.submit(account, channel)).await()); runCurrent()
+            val ticket = assertNotNull(assertNotNull(actualOwner).state.value.ticket)
+            release.complete(Unit); runCurrent(); assertTrue(old.isCompleted)
+            assertEquals(1, creations); assertEquals(1, f.paths.size)
+            assertSame(ticket, assertNotNull(actualOwner).state.value.ticket)
+            assertFalse(assertNotNull(f.runtime).retired.value); assertEquals(0, f.launches)
+        } finally {release.complete(Unit); notifications.retireAll(); registry.close(); f.close()}
+    }
+
     @Test fun retiredBorrowedRuntimeWithdrawsIncomingNotificationEvenWithLiveAccount() = runTest {
         val f = Fixture(this); val port = Notifications(); val pulses = MutableSharedFlow<Unit>()
         val account = f.login(); val runtime = f.acquire(account)
