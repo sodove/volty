@@ -23,3 +23,9 @@ sealed interface DirectCallRosterReply {
 fun interface DirectCallRosterPort {
     suspend fun snapshot(tag: DirectCallRosterTag): DirectCallRosterReply
 }
+
+data class DirectCallRosterPresenceView(
+    val revision: Long? = null, val peers: List<DirectCallRosterPeer>? = null,
+    val connectedCount: Int? = null, val unknown: VoiceRosterUnknown? = VoiceRosterUnknown.INITIAL,
+    val retired: Boolean = false,
+)

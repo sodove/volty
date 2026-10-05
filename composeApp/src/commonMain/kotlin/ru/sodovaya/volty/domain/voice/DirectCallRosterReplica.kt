@@ -6,6 +6,7 @@ data class DirectCallRosterReplica(
     private val observation: DirectCallRosterObservation? = null,
     val retired: Boolean = false, val resyncRequired: Boolean = false,
 ) {
+    val revision: Long? get() = observation?.revision
     fun receive(reply: DirectCallRosterReply): DirectCallRosterReplica {
         if (retired) return this
         if (reply is DirectCallRosterReply.Failed) return when (reply.reason) {

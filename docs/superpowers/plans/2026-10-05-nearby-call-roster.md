@@ -48,3 +48,12 @@ same call cannot replace earned identity. Presence is unknown until an actual va
 when resync is needed, after retirement or at lease expiry. Transport-confirmed rows are a
 separate subset and do not imply heard speech. Access/auth denial retires permanently;
 temporary failures withdraw current presence and retain high-water evidence for retry.
+
+Owned roster runtime uses a queued serial dispatcher and borrowed parent Job, one read producer
+at a time, bounded request timeout, broadcast/cold scheduling pulses and coalesced explicit refresh.
+Tick freshness independently of a held request; close/account parent cancellation immediately
+withdraws rows while an ignored-cancellation producer remains counted until actual completion.
+Late producer results cannot resurrect a closed subscription. Clock reset, pulse failure/completion
+and access denial fail closed. Runtime owns its child lifetime, not the port or parent account.
+Start it at root only after the selected call has earned an original session identity; RING and
+incoming discovery do not get a media roster or microphone permission.
