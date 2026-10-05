@@ -19,7 +19,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
     private val queuedDispatcher: CoroutineDispatcher,
     factory: VoiceSdkSessionFactory,
     pulses: Flow<Unit>,
-    monotonicMillis: () -> Long,
+    private val monotonicMillis: () -> Long,
     sharingDispatch: (VoiceSharingEffect) -> Unit,
     private val mayAllocateAudio: () -> Boolean,
 ) {
@@ -128,6 +128,15 @@ internal class AuthenticatedVoiceRuntime private constructor(
         val operation = runtime.state.value.operationId
         if (!allowsPositiveWork() || operation == null || !control.allowsSharing(operation)) false
         else {runtime.enableSharing(); true}
+    }
+    /** Exact earned channel session, not the destination UUID or a similarly named call. */
+    internal suspend fun canShare(original: VoiceSessionTag): Boolean = withContext(queuedDispatcher) {
+        val current = runtime.state.value
+        val operation = current.operationId ?: return@withContext false
+        val now = try {monotonicMillis()} catch (_: Exception) {return@withContext false}
+        allowsPositiveWork() && current.wanted && !current.cleanupPending &&
+            current.sessionId == original.sessionId && current.generation == original.generation &&
+            now >= 0 && current.leaseDeadlineMillis?.let {now < it} == true && control.allowsSharing(operation)
     }
     suspend fun hidePosition() = withContext(NonCancellable) { runtime.hidePosition() }
 

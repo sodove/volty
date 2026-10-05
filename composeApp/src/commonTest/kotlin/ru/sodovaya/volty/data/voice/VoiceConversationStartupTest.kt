@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.*
 import ru.sodovaya.volty.data.social.*
 import ru.sodovaya.volty.domain.social.*
 import ru.sodovaya.volty.domain.voice.*
+import ru.sodovaya.volty.domain.nearby.*
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -19,6 +20,89 @@ class VoiceConversationStartupTest {
     private val first = VoiceOperationId("30000000-0000-0000-0000-000000000003")
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
+
+    @Test fun expiredEarnedVoiceLeaseCannotIssueSharingEvenWhileLocalVoiceRemainsWanted() = runTest {
+        val f = Fixture(this); var sharing: ChannelSharingAccountControl? = null
+        try {
+            val account = f.login(); f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val runtime = assertNotNull(f.runtime); val state = runtime.state.value
+            val original = VoiceSessionTag(assertNotNull(state.sessionId), state.generation)
+            val control = ChannelSharingAccountControl.create(account, runtime, original, f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})
+            sharing = control; assertTrue(runtime.canShare(original))
+            val issued = f.paths.size; f.time = assertNotNull(state.leaseDeadlineMillis)
+            assertTrue(runtime.state.value.wanted); assertFalse(runtime.canShare(original))
+            assertFailsWith<CancellationException> {control.start(f.key, ChannelSharingMode.FULL, ChannelSharingTtl.EIGHT_HOURS)}
+            assertEquals(issued, f.paths.size); assertTrue(f.sharingAuthorizations.isEmpty())
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED, assertIs<ChannelSharingReply.Failed>(control.requestRevoke(f.key).await()).reason)
+            assertTrue(control.close()); assertFalse(control.cleanupFailed.value)
+            assertTrue(account.job.isActive); assertTrue(runtime.state.value.wanted); assertFalse(runtime.retired.value)
+        } finally {sharing?.close(); f.close()}
+    }
+
+    @Test fun originalSharingRevokeSurvivesVoiceDisconnectLogoutAndCancelledUiWaiter() = runTest {
+        val f = Fixture(this); var sharing: ChannelSharingAccountControl? = null
+        try {
+            val account = f.login(); f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val runtime = assertNotNull(f.runtime); val state = runtime.state.value
+            val original = VoiceSessionTag(assertNotNull(state.sessionId), state.generation)
+            val control = ChannelSharingAccountControl.create(account, runtime, original, f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})
+            sharing = control
+            assertIs<ChannelSharingReply.Active>(control.start(f.key, ChannelSharingMode.LOCATION, ChannelSharingTtl.HALF_HOUR))
+            f.owner.stop(); runCurrent(); control.retireAdmission(); f.repository.logout(); runCurrent()
+            f.authToken = "replacement-token"; f.login(); f.sharingRevokeRelease = CompletableDeferred()
+            val negative = control.requestRevoke(f.key); val waiter = async {negative.await()}; runCurrent()
+            assertTrue(f.sharingRevokeEntered.isCompleted); waiter.cancel()
+            val issued = f.paths.size
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED, assertIs<ChannelSharingReply.Failed>(control.requestRevoke(f.peer).await()).reason)
+            assertEquals(issued, f.paths.size); assertFalse(control.close())
+            f.sharingRevokeRelease!!.complete(Unit); runCurrent()
+            assertIs<ChannelSharingReply.Negative>(negative.await())
+            assertEquals<List<String?>>(listOf("Bearer token", "Bearer token"), f.sharingAuthorizations)
+            assertTrue(control.close())
+            assertTrue(assertNotNull(f.repository.authenticatedAccount.value).job.isActive)
+        } finally {f.sharingRevokeRelease?.complete(Unit); runCurrent(); sharing?.close(); f.close()}
+    }
+
+    @Test fun oldHeldSharingPositiveCannotReturnPermissionAfterReloginButRemainsOriginallyRevocable() = runTest {
+        val f = Fixture(this); var sharing: ChannelSharingAccountControl? = null
+        try {
+            val account = f.login(); f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val runtime = assertNotNull(f.runtime); val state = runtime.state.value
+            val control = ChannelSharingAccountControl.create(account, runtime, VoiceSessionTag(assertNotNull(state.sessionId), state.generation),
+                f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})
+            sharing = control; f.sharingPositiveRelease = CompletableDeferred()
+            val positive = async {control.start(f.key, ChannelSharingMode.LOCATION, ChannelSharingTtl.HALF_HOUR)}
+            runCurrent(); assertTrue(f.sharingPositiveEntered.isCompleted)
+            f.repository.logout(); runCurrent(); f.authToken = "new-login-token"; val current = f.login()
+            f.owner.start(current, channel, second, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val freshRuntime = assertNotNull(f.runtime)
+            f.sharingPositiveRelease!!.complete(Unit); runCurrent(); assertTrue(positive.isCancelled)
+            assertIs<ChannelSharingReply.Negative>(control.requestRevoke(f.key).await())
+            assertEquals<List<String?>>(listOf("Bearer token", "Bearer token"), f.sharingAuthorizations)
+            assertTrue(current.job.isActive); assertFalse(freshRuntime.retired.value); assertTrue(freshRuntime.state.value.wanted)
+            assertTrue(control.close()); assertTrue(freshRuntime.state.value.wanted)
+        } finally {f.sharingPositiveRelease?.complete(Unit); runCurrent(); sharing?.close(); f.close()}
+    }
+
+    @Test fun sharingControlRejectsWrongAccountOriginalTagAndTypedCallBeforeSharingHttp() = runTest {
+        val f = Fixture(this); val wrongJob = Job()
+        try {
+            val account = f.login(); f.owner.start(account, channel, first, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val runtime = assertNotNull(f.runtime); val state = runtime.state.value
+            val original = VoiceSessionTag(assertNotNull(state.sessionId), state.generation)
+            val wrong = SocialAuthenticatedAccount(account.userId, wrongJob, backgroundScope.coroutineContext) {"wrong"}
+            val issued = f.paths.size
+            assertFailsWith<IllegalArgumentException> {ChannelSharingAccountControl.create(wrong, runtime, original, f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})}
+            assertFailsWith<IllegalStateException> {ChannelSharingAccountControl.create(account, runtime, original.copy(sessionId = VoiceSessionId(channel)), f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})}
+            assertEquals(issued, f.paths.size)
+            f.owner.stop(); runCurrent(); f.callMode = true
+            f.owner.start(account, VoiceConversationTarget.OutgoingCall(channel, f.peer, f.key), second, readPreferences = {phone}, launch = f::launch); runCurrent()
+            val callState = runtime.state.value; val callTag = VoiceSessionTag(assertNotNull(callState.sessionId), callState.generation)
+            assertEquals(original.sessionId, callTag.sessionId, "Same UUID fixture must not substitute for typed CHANNEL authority")
+            assertFailsWith<IllegalStateException> {ChannelSharingAccountControl.create(account, runtime, callTag, f.client, "https://example.test/v2/nearby", f.dispatcher, {f.time})}
+            assertTrue(f.sharingAuthorizations.isEmpty()); assertTrue(runtime.state.value.wanted)
+        } finally {wrongJob.cancel(); f.close()}
+    }
 
     @Test fun incomingHintSubmissionSurvivesWaiterCancellationAndUsesOneActualOwner() = runTest {
         val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
@@ -1043,7 +1127,13 @@ class VoiceConversationStartupTest {
     private inner class Fixture(val test: TestScope) {
         var time = 100L
         val dispatcher = StandardTestDispatcher(test.testScheduler)
-        val repository = DefaultSocialRepository(Transport(), Store(), test.backgroundScope)
+        var authToken = "token"
+        val repository = DefaultSocialRepository(Transport {authToken}, Store(), test.backgroundScope)
+        val sharingAuthorizations = mutableListOf<String?>()
+        var sharingPositiveRelease: CompletableDeferred<Unit>? = null
+        var sharingRevokeRelease: CompletableDeferred<Unit>? = null
+        val sharingPositiveEntered = CompletableDeferred<Unit>()
+        val sharingRevokeEntered = CompletableDeferred<Unit>()
         val service = Any()
         var nonce = 0
         val gate = VoiceForegroundGate({true}, {"50000000-0000-0000-0000-${(++nonce).toString().padStart(12, '0')}"})
@@ -1078,6 +1168,14 @@ class VoiceConversationStartupTest {
             dispatcher = this@Fixture.dispatcher
             addHandler {
                 paths += it.url.encodedPath
+                if (it.url.encodedPath.startsWith("/v2/nearby/sharing/")) {
+                    sharingAuthorizations += it.headers[io.ktor.http.HttpHeaders.Authorization]
+                    val negative = it.url.encodedPath.endsWith("/revoke")
+                    if (negative) {sharingRevokeEntered.complete(Unit); sharingRevokeRelease?.await()}
+                    else withContext(NonCancellable) {sharingPositiveEntered.complete(Unit); sharingPositiveRelease?.await()}
+                    val parts = it.url.encodedPath.split('/')
+                    return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","phase":"${if (negative) "REVOKED" else "ACTIVE"}","mode":${if (negative) "null" else "\"LOCATION\""},"remainingMillis":${if (negative) 0 else 1000}}""")
+                }
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
                     if (it.url.encodedPath in listOf("/v2/nearby/calls/$channel", "/v2/nearby/calls/${second.value}") && statusPhase != null) {
                         withContext(NonCancellable) {statusEntered.complete(Unit); statusRelease?.await(); statusHandlerFinished = true}
@@ -1151,8 +1249,8 @@ class VoiceConversationStartupTest {
         override suspend fun write(credentials: SocialCredentials) {value = credentials}
         override suspend fun clear() {value = null}
     }
-    private inner class Transport : SocialTransport by UnavailableSocialTransport() {
-        override suspend fun login(request: LoginRequest) = SocialResult.Success(SessionCredentials("token", "refresh", Long.MAX_VALUE))
+    private inner class Transport(private val token: () -> String = {"token"}) : SocialTransport by UnavailableSocialTransport() {
+        override suspend fun login(request: LoginRequest) = SocialResult.Success(SessionCredentials(token(), "refresh", Long.MAX_VALUE))
         override suspend fun getProfile(accessToken: String) = SocialResult.Success(SocialSession.Authenticated(SocialUserId(actor), "Rider", SessionTokenState.ACTIVE, true))
     }
 }
