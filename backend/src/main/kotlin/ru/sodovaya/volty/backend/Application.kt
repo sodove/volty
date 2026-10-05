@@ -112,10 +112,39 @@ class AppDependencies(
 
     companion object {
         fun create(config: AppConfig = AppConfig.fromEnvironment()): AppDependencies {
+            config.nearby.validate(config)
             val dataSource = createDataSource(config)
-            prepareBackendSchema(dataSource)
+            try {
+                prepareBackendSchema(dataSource, config.nearby.mode)
+                return fromPreparedDatabase(config, dataSource)
+            } catch (failure: Throwable) {
+                try { dataSource.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
+                throw failure
+            }
+        }
+
+        /** Borrowed source, already bootstrapped. Assembly itself performs no database/network I/O. */
+        internal fun fromPreparedDatabase(config: AppConfig, dataSource: DataSource): AppDependencies {
+            config.nearby.validate(config)
             val json = backendJson()
-            return AppDependencies(config, JdbcStore(dataSource, json), json = json)
+            val store = JdbcStore(dataSource, json)
+            if (config.nearby.mode == ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY) {
+                return AppDependencies(config, store, json = json)
+            }
+            val media = checkNotNull(config.liveKitConfigOrNull())
+            val sfu = ru.sodovaya.volty.backend.nearby.HttpSfuLeaseClient(
+                checkNotNull(config.nearby.controlOrigin), media.apiKey, media.apiSecret)
+            val graph = ru.sodovaya.volty.backend.nearby.NearbyBackendComponents.create(
+                dataSource, sfu,
+                ru.sodovaya.volty.backend.nearby.JwtSessionCredentialIssuer(media.serverUrl, media.apiKey, media.apiSecret),
+                ru.sodovaya.volty.backend.nearby.MediaWebhookVerifier(media.apiKey, media.apiSecret),
+                ::nowMillis, config.nearby.singletonOrigin)
+            return AppDependencies(config, store, json = json,
+                nearbySessions = graph.sessions, nearbyRoster = graph.roster, nearbyMediaWebhook = graph.mediaWebhook,
+                nearbyCommunities = graph.communities, nearbyCommunityRemoval = graph.removal,
+                nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
+                nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
+                nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph)
         }
 
         fun forTests() = AppDependencies(AppConfig.forTests(), object : BackendStore {}, testMode = true)

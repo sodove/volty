@@ -63,6 +63,35 @@ the server/container environment.
 
 The `livekit` Compose entrypoint validates the values before rendering `livekit.yaml`: `LIVEKIT_API_KEY` and `LIVEKIT_API_SECRET` must use the base64url alphabet (`A-Z`, `a-z`, `0-9`, `-`, `_`, with optional `=` padding), and `VOLTY_PUBLIC_IP` may contain only digits and dots (the deployment expects a public IPv4 literal). This preserves generated base64url secrets while failing fast on `sed` metacharacters instead of silently producing a corrupted config. Do not quote, escape, or add shell syntax to these three `.env` values.
 
+## Nearby voice spaces cutover
+
+`VOLTY_NEARBY_MODE=legacy` is the default, including when LiveKit is configured.
+For the new API, set `VOLTY_NEARBY_MODE=voice_spaces`, configure the existing
+LiveKit credentials and `VOLTY_NEARBY_SFU_CONTROL_ORIGIN` to the HTTP(S) origin
+of the **protocol-4 patched SFU**. The checked-in stock LiveKit Compose image
+does not implement this protocol: do not activate the new mode against it.
+The complete server/channel/call/roster/sharing/webhook graph and its bounded
+maintenance worker are installed together. Credentials alone do not prove
+that Android audio works.
+
+`VOLTY_NEARBY_SINGLETON_ORIGIN=false` keeps conservative cleanup semantics.
+Set it to `true` only when deployment guarantees one SFU origin and that the
+previous process is gone; readiness from one node behind a load balancer
+cannot prove this. This is an operator guarantee, not automatic discovery.
+
+During coordinated cutover, stop old backend writers and the old SFU process
+before exposing the new backend/SFU and compatible clients. Startup revokes
+legacy sharing sessions and removes their ephemeral live positions in one
+transaction. It retains account/friend/group history and native new-server
+consent; legacy groups are not imported. Old voice/sharing write endpoints
+return `409 client_upgrade_required`. Database locks serialize the startup
+transaction but cannot prevent an old backend node from writing afterwards.
+Restarting the patched SFU retires the previous media process; the backend's
+SQL cleanup alone cannot retire already connected legacy audio. Rollback to
+legacy does not restore revoked consent: users must explicitly share again.
+
+This configuration is prepared for review; no production cutover is implied.
+
 ## One-command VPS deploy
 
 1. Point both `volty.sodove.ru` and `voice.sodove.ru` at the VPS public IPv4.
