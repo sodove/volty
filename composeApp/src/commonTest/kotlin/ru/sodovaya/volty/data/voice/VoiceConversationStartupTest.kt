@@ -91,15 +91,84 @@ class VoiceConversationStartupTest {
         } finally {control?.close();f.close()}
     }
 
+    @Test fun originalRevokeRecoveryRemovesOnlyOwnUnprotectedTagWithoutVoiceOrPositiveHttp() = runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login();val journal=RecordingRevokeJournal()
+            val obsolete=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.key),first.value)
+            val live=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.peer),second.value)
+            val foreign=ChannelSharingRevokeIntent(f.peer,obsolete.tag,f.key)
+            journal.record(obsolete);journal.record(live);journal.record(foreign)
+            val recovery=ChannelSharingRevokeRecovery(f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time},journal)
+            assertTrue(recovery.drain(account,setOf(live.tag)))
+            assertEquals(setOf(live,foreign),journal.rows.values.toSet())
+            assertEquals(listOf("/v2/nearby/sharing/$channel/${f.key}/revoke"),f.paths)
+            assertEquals<List<String?>>(listOf("Bearer token"),f.sharingAuthorizations)
+            assertNull(f.runtime);assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun originalRevokeRecoveryFailureRetainsIntentAndOnlyExactRetryCompletes() = runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login();val journal=RecordingRevokeJournal()
+            val intent=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.key),first.value);journal.record(intent)
+            val recovery=ChannelSharingRevokeRecovery(f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time},journal)
+            f.sharingRevokeStatus=HttpStatusCode.ServiceUnavailable
+            assertFalse(recovery.drain(account,emptySet()));assertEquals(listOf(intent),journal.rows.values.toList())
+            f.sharingRevokeStatus=HttpStatusCode.OK
+            assertTrue(recovery.drain(account,emptySet()));assertTrue(journal.rows.isEmpty())
+            assertEquals(2,f.paths.size);assertTrue(f.paths.all {it.endsWith("/revoke")});assertNull(f.runtime)
+        } finally {f.close()}
+    }
+
+    @Test fun originalRevokeRecoveryRetiredAccountCannotAcknowledgeHeldResponse() = runTest {
+        val f=Fixture(this);f.sharingRevokeRelease=CompletableDeferred()
+        try {
+            val account=f.login();val journal=RecordingRevokeJournal()
+            val intent=ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,f.key),first.value);journal.record(intent)
+            val recovery=ChannelSharingRevokeRecovery(f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time},journal)
+            val draining=async {recovery.drain(account,emptySet())};runCurrent();assertTrue(f.sharingRevokeEntered.isCompleted)
+            account.job.cancel();f.sharingRevokeRelease!!.complete(Unit)
+            assertFailsWith<CancellationException> {draining.await()};assertEquals(listOf(intent),journal.rows.values.toList())
+            assertEquals(1,f.paths.size);assertNull(f.runtime)
+        } finally {f.sharingRevokeRelease!!.complete(Unit);runCurrent();f.close()}
+    }
+
+    @Test fun originalRevokeRecoveryBoundedBatchCannotClaimUnseenTailComplete() = runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login();val journal=RecordingRevokeJournal()
+            repeat(65) {index ->
+                val generation="90000000-0000-0000-0000-${index.toString().padStart(12,'0')}"
+                journal.record(ChannelSharingRevokeIntent(actor,ChannelSharingTag(channel,generation),first.value))
+            }
+            val recovery=ChannelSharingRevokeRecovery(f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time},journal)
+            assertFalse(recovery.drain(account,emptySet()));assertEquals(64,f.paths.size);assertEquals(1,journal.rows.size)
+            assertTrue(recovery.drain(account,emptySet()));assertEquals(65,f.paths.size);assertTrue(journal.rows.isEmpty())
+        } finally {f.close()}
+    }
+
+    @Test fun originalRevokeRecoveryRejectsForeignJournalBatchBeforeAnyHttp() = runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login();val journal=RecordingRevokeJournal();journal.returnForeign=true
+            journal.record(ChannelSharingRevokeIntent(f.peer,ChannelSharingTag(channel,f.key),first.value))
+            val recovery=ChannelSharingRevokeRecovery(f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time},journal)
+            assertFailsWith<IllegalArgumentException> {recovery.drain(account,emptySet())}
+            assertTrue(f.paths.isEmpty());assertEquals(1,journal.rows.size);assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
     private class RecordingRevokeJournal : ChannelSharingRevokeJournal {
         val rows=linkedMapOf<Pair<String,ChannelSharingTag>,ChannelSharingRevokeIntent>()
-        val entered=CompletableDeferred<Unit>();var gate: CompletableDeferred<Unit>?=null;var failRecord=false;var failAcknowledge=false
+        val entered=CompletableDeferred<Unit>();var gate: CompletableDeferred<Unit>?=null;var failRecord=false;var failAcknowledge=false;var returnForeign=false
         override suspend fun record(intent: ChannelSharingRevokeIntent): ChannelSharingRevokeIntent {
             withContext(NonCancellable) {entered.complete(Unit);gate?.await()}
             check(!failRecord) {"Disk write failed"}
             return rows.getOrPut(intent.actorId to intent.tag) {intent}
         }
-        override suspend fun pending(actorId: String,limit: Int)=rows.values.filter {it.actorId==actorId}.take(limit)
+        override suspend fun pending(actorId: String,limit: Int)=rows.values.filter {returnForeign || it.actorId==actorId}.take(limit)
         override suspend fun acknowledge(intent: ChannelSharingRevokeIntent,authenticatedActorId: String,reply: ChannelSharingReply): Boolean {
             check(!failAcknowledge) {"Disk ACK failed"}
             if(authenticatedActorId!=intent.actorId || reply !is ChannelSharingReply.Negative || reply.tag!=intent.tag ||
