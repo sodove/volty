@@ -23,6 +23,74 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun taggedDisconnectWithdrawsOriginalIntentButCannotStopReplacementConversation()=runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login()
+            f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(1,f.published);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertTrue(f.owner.stop(first));runCurrent()
+            assertEquals(VoiceConversationPhase.STOPPED,f.owner.state.value.phase)
+            assertFalse(assertNotNull(f.runtime).state.value.wanted)
+            f.owner.start(account,channel,second,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(2,f.published)
+            val ticket=assertNotNull(f.gate.current.value);val issued=f.paths.toList();val closes=f.closes
+            assertFalse(f.owner.stop(first));runCurrent()
+            assertSame(ticket,f.gate.current.value);assertEquals(issued,f.paths);assertEquals(closes,f.closes)
+            assertEquals(second,f.owner.state.value.operationId);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertTrue(f.owner.stop(second));runCurrent();assertFalse(f.owner.stop(second))
+            assertFalse(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun taggedDisconnectDuringHeldPreferencesClosesOriginalForegroundAndPreventsLateMedia()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false
+        try {
+            val account=f.login()
+            f.owner.start(account,channel,first,readPreferences={withContext(NonCancellable) {
+                entered.complete(Unit);release.await();returned=true;phone
+            }},launch=f::launch);runCurrent()
+            assertTrue(entered.isCompleted);assertEquals(VoiceConversationPhase.PREPARING,f.owner.state.value.phase)
+            // Earlier test expected zero launches; preferences deliberately follow visible foreground ACK.
+            assertEquals(1,f.launches);assertNotNull(f.gate.current.value)
+            assertTrue(f.owner.stop(first));runCurrent();assertFalse(returned)
+            assertNull(f.gate.current.value)
+            assertEquals(VoiceConversationPhase.STOPPED,f.owner.state.value.phase)
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(1,f.launches);assertTrue(f.allocated.isEmpty());assertEquals(0,f.published)
+            assertNull(f.gate.current.value);assertTrue(account.job.isActive)
+        } finally {release.complete(Unit);f.close()}
+    }
+
+    @Test fun taggedDisconnectBeforeHeldAcquisitionReturnsNeverLaunchesForegroundOrAudio()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false
+        f.afterAcquire={withContext(NonCancellable) {entered.complete(Unit);release.await();returned=true}}
+        try {
+            val account=f.login()
+            f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(entered.isCompleted);assertEquals(0,f.launches)
+            assertTrue(f.owner.stop(first));runCurrent();assertFalse(returned)
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty());assertEquals(0,f.published)
+            assertNull(f.gate.current.value);assertTrue(account.job.isActive)
+            assertEquals(VoiceConversationPhase.STOPPED,f.owner.state.value.phase)
+        } finally {release.complete(Unit);f.close()}
+    }
+
+    @Test fun taggedNegativeDisconnectStillExecutesWhenUiCallerIsAlreadyCancelled()=runTest {
+        val f=Fixture(this);val caller=Job().apply {cancel()}
+        try {
+            val account=f.login()
+            f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            CoroutineScope(coroutineContext+caller).launch(start=CoroutineStart.UNDISPATCHED) {f.owner.stop(first)}
+            runCurrent()
+            assertFalse(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(VoiceConversationPhase.STOPPED,f.owner.state.value.phase);assertNull(f.gate.current.value)
+            assertEquals(1,f.closes);assertTrue(account.job.isActive)
+        } finally {caller.cancel();f.close()}
+    }
+
     @Test fun durableConsentMustFinishJournalBeforeHttpAndOnlyConfirmedRevokeRemovesIntent() = runTest {
         val f=Fixture(this);var control: ChannelSharingAccountControl?=null
         try {

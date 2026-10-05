@@ -42,6 +42,7 @@
 
 ## Task 3 — root conversation panel and activation
 
+- [x] Add original-operation disconnect admission to `VoiceConversationStartup`: stale/repeated commands cannot withdraw a replacement intent; works during held acquisition/preferences and from a cancelled UI caller. Four finite tests, scoped 103 and full Android 3143 exact zero bad. True means intent withdrawal, not native/remote cleanup acknowledgement. UI panel/Root activation remain open.
 - [ ] Add root-owned projection/commands around existing `VoiceConversationStartup` and `ChannelSharingStartup`; identity-bound actions cannot affect a later conversation.
 - [ ] Joining a channel requests microphone permission and visible foreground launch once; starting a trip separately requests location permission/foreground launch. Denial keeps existing allowed state.
 - [ ] Panel above root navigation: target, actual connection phase, mute and visible `Отключиться`; expanded view includes deafen, independent input/output and `Не показывать позицию`.

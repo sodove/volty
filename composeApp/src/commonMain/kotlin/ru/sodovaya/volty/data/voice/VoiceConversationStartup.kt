@@ -122,6 +122,15 @@ internal class VoiceConversationStartup(
         withContext(queuedDispatcher) { selected?.let {finish(it, VoiceConversationPhase.STOPPED)} }
     }
 
+    /** Withdraws only this original intent, including preparation. True is admission, not native cleanup ACK. */
+    suspend fun stop(operation: VoiceOperationId): Boolean = withContext(NonCancellable) {
+        withContext(queuedDispatcher) {
+            val intent = selected?.takeIf {it.operation == operation} ?: return@withContext false
+            finish(intent, VoiceConversationPhase.STOPPED)
+            true
+        }
+    }
+
     /** True is command admission, not evidence of capture/rendering or native effect completion. */
     suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean =
         control(operation) {it.setMuted(operation, value)}
