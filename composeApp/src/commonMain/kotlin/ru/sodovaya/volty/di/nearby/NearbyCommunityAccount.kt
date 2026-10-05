@@ -4,6 +4,7 @@ import io.ktor.client.HttpClient
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
@@ -62,6 +63,8 @@ class NearbyCommunityAccount private constructor(
         nearbyHttpsApiBaseUrl(baseUrl)
     }
 
+    private val workspaceLifetime = SupervisorJob(accountJob)
+
     val api = apiFactory(accountJob)
     val invitations = InvitationCreationDraftOwner(
         actorId,
@@ -91,6 +94,9 @@ class NearbyCommunityAccount private constructor(
 
     fun refresh(credentials: NearbyAccountCredentials) = api.refresh(credentials)
 
+    fun workspace(screen: CoroutineScope, nextId: () -> String) =
+        ru.sodovaya.volty.presentation.nearby.CommunityWorkspace(screen, workspaceLifetime, api.communities, api.removals, nextId)
+
     suspend fun retire() {
         // Fence preparation and HTTP permissions before reaching the first suspension point.
         retireSynchronously()
@@ -99,6 +105,7 @@ class NearbyCommunityAccount private constructor(
     }
 
     private fun retireSynchronously() {
+        workspaceLifetime.cancel()
         try {
             invitations.retire()
         } catch (_: Throwable) {

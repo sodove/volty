@@ -25,6 +25,47 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun workspaceClosesItsOwnBrowserWithoutRetiringBorrowedAccountOrSiblingBrowser() = runTest {
+        val parent = Job(); val screen = SupervisorJob(parent)
+        val headers = mutableListOf<String?>()
+        val client = HttpClient(MockEngine) { engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { headers += it.headers[HttpHeaders.Authorization]; respond(privatePage()) }
+        } }
+        val account = NearbyCommunityAccount(CoroutineScope(coroutineContext + parent),
+            NearbyAccountCredentials(actor, "original"), Store(actor), InvitationSecretGenerator { error("Unused") }, client, root)
+        val workspace = account.workspace(CoroutineScope(coroutineContext + screen)) { community }
+        try {
+            account.browser.refreshMemberships(); workspace.browser.refreshMemberships(); runCurrent()
+            assertEquals(2, headers.size); assertTrue(headers.all { it == "Bearer original" })
+            screen.cancel(); runCurrent()
+            assertEquals(CommunityBrowserState(), workspace.browser.state.value)
+            assertEquals(community, account.browser.state.value.memberships.items?.single()?.id)
+            assertTrue(parent.isActive)
+            assertIs<CommunityResult.Ready<*>>(account.api.communities.memberships())
+            assertEquals(3, headers.size)
+        } finally { workspace.close(); account.retire(); screen.cancel(); parent.cancel(); client.close(); runCurrent() }
+    }
+
+    @Test fun consumerRetirementImmediatelyFencesWorkspaceAdmissionWithoutCancellingAuthentication() = runTest {
+        val parent = Job(); val screen = SupervisorJob(parent); var issued = 0
+        val client = HttpClient(MockEngine) { engine {
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { issued++; respond(privatePage()) }
+        } }
+        val account = NearbyCommunityAccount(CoroutineScope(coroutineContext + parent),
+            NearbyAccountCredentials(actor, "original"), Store(actor), InvitationSecretGenerator { error("Unused") }, client, root)
+        val workspace = account.workspace(CoroutineScope(coroutineContext + screen)) { community }
+        try {
+            workspace.browser.refreshMemberships(); runCurrent(); assertEquals(1, issued)
+            account.retire()
+            assertFalse(workspace.join(community), "Consumer retirement must fence command admission before another queued task")
+            runCurrent(); assertEquals(CommunityBrowserState(), workspace.browser.state.value)
+            assertTrue(parent.isActive); assertTrue(screen.isActive); assertEquals(1, issued)
+            assertFailsWith<IllegalArgumentException> { account.workspace(CoroutineScope(coroutineContext + screen)) {community} }
+        } finally { workspace.close(); account.retire(); screen.cancel(); parent.cancel(); client.close(); runCurrent() }
+    }
+
     @Test fun parentCancellationClearsPrivateCacheAndFencesHeldReadWithoutWaitingForCompletion() = runTest {
         val parent = Job()
         val release = CompletableDeferred<Unit>()
