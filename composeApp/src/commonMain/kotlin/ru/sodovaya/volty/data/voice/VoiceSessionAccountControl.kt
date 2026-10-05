@@ -35,6 +35,10 @@ internal class VoiceSessionAccountControl private constructor(
     override fun allowsSharing(operation: VoiceOperationId): Boolean = capability.value.let {
         !it.closed && !it.retired && account.job.isActive && it.intents[operation]?.kind == IntentKind.CHANNEL
     }
+    override fun sharingChannel(operation: VoiceOperationId): String? = capability.value.let {
+        if (it.closed || it.retired || !account.job.isActive) null
+        else it.intents[operation]?.takeIf {intent -> intent.kind == IntentKind.CHANNEL}?.channel
+    }
     private val positive = VoiceSessionHttpPort(client, baseUrl, {
         ensureLive()
         val token = account.bearer()

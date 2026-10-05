@@ -21,6 +21,82 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun sharingPacketsRequireEarnedConsentAndLocalHideFencesGenerationWithoutStoppingVoice() = runTest {
+        val f=Fixture(this); var sharing: ChannelSharingAccountControl?=null
+        try {
+            val account=f.login(); f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime); val state=runtime.state.value
+            val control=ChannelSharingAccountControl.create(account,runtime,VoiceSessionTag(assertNotNull(state.sessionId),state.generation),f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            sharing=control
+            val packet=ChannelSharingPacket(7,1000,null)
+            val issued=f.paths.size
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED,assertIs<ChannelSharingPacketReply.Failed>(control.publish(f.key,packet)).reason)
+            assertEquals(issued,f.paths.size)
+            assertIs<ChannelSharingReply.Active>(control.start(f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR))
+            assertIs<ChannelSharingPacketReply.Published>(control.publish(f.key,packet))
+            assertEquals(channel,assertIs<ChannelSharingPacketReply.Audience>(control.audience()).channelId)
+            assertIs<ChannelSharingReply.Negative>(control.requestRevoke(f.key).await())
+            val afterHide=f.paths.size
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED,assertIs<ChannelSharingPacketReply.Failed>(control.publish(f.key,packet)).reason)
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED,assertIs<ChannelSharingReply.Failed>(control.start(f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR)).reason)
+            assertEquals(afterHide,f.paths.size);assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+            val fresh=assertIs<ChannelSharingReply.Active>(control.start(f.peer,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR)).observation
+            assertIs<ChannelSharingPacketReply.Published>(control.publish(f.peer,packet))
+            assertIs<ChannelSharingReply.Negative>(control.requestRevoke(f.key).await())
+            assertIs<ChannelSharingPacketReply.Published>(control.publish(f.peer,packet))
+            f.time=fresh.deadlineMillis;val beforeExpiry=f.paths.size
+            assertEquals(ChannelSharingFailure.ACCESS_DENIED,assertIs<ChannelSharingPacketReply.Failed>(control.publish(f.peer,packet)).reason)
+            assertEquals(beforeExpiry,f.paths.size);assertTrue(runtime.canShare(VoiceSessionTag(assertNotNull(state.sessionId),state.generation)))
+            assertTrue(control.close());assertFalse(runtime.retired.value)
+        } finally {sharing?.close();f.close()}
+    }
+
+    @Test fun heldSharingPacketCannotSurviveLocalGenerationWithdrawal() = runTest {
+        val f=Fixture(this); var sharing: ChannelSharingAccountControl?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value
+            val control=ChannelSharingAccountControl.create(account,runtime,VoiceSessionTag(assertNotNull(state.sessionId),state.generation),f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            sharing=control;assertIs<ChannelSharingReply.Active>(control.start(f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR))
+            f.sharingPositiveRelease=CompletableDeferred()
+            val pending=async {control.publish(f.key,ChannelSharingPacket(7,1000,null))};runCurrent()
+            assertTrue(f.paths.last().endsWith("/packet"));assertFalse(pending.isCompleted)
+            assertIs<ChannelSharingReply.Negative>(control.requestRevoke(f.key).await())
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent();assertTrue(pending.isCancelled)
+            assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();sharing?.close();f.close()}
+    }
+
+    @Test fun oldHeldSharingAudienceCannotReturnAfterSameUserRelogin() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value
+            val control=ChannelSharingAccountControl.create(account,runtime,VoiceSessionTag(assertNotNull(state.sessionId),state.generation),f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            sharing=control;f.sharingPositiveRelease=CompletableDeferred()
+            val pending=async {control.audience()};runCurrent();assertTrue(f.sharingPositiveEntered.isCompleted)
+            f.repository.logout();runCurrent();f.authToken="replacement-token";val replacement=f.login()
+            f.owner.start(replacement,channel,second,readPreferences={phone},launch=f::launch);runCurrent();val newer=assertNotNull(f.runtime)
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent();assertTrue(pending.isCancelled)
+            assertTrue(newer.state.value.wanted);assertTrue(replacement.job.isActive)
+            assertTrue(control.close());assertFalse(newer.retired.value)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();sharing?.close();f.close()}
+    }
+
+    @Test fun explicitSharingChildCloseFencesHeldAudienceAndPreservesBorrowedVoice() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value
+            val control=ChannelSharingAccountControl.create(account,runtime,VoiceSessionTag(assertNotNull(state.sessionId),state.generation),f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            sharing=control;f.sharingPositiveRelease=CompletableDeferred()
+            val pending=async {control.audience()};runCurrent();assertTrue(f.sharingPositiveEntered.isCompleted)
+            assertTrue(control.close());assertFalse(control.cleanupFailed.value)
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent();assertTrue(pending.isCancelled)
+            assertTrue(account.job.isActive);assertTrue(runtime.state.value.wanted);assertFalse(runtime.retired.value)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();sharing?.close();f.close()}
+    }
+
     @Test fun expiredEarnedVoiceLeaseCannotIssueSharingEvenWhileLocalVoiceRemainsWanted() = runTest {
         val f = Fixture(this); var sharing: ChannelSharingAccountControl? = null
         try {
@@ -1168,12 +1244,18 @@ class VoiceConversationStartupTest {
             dispatcher = this@Fixture.dispatcher
             addHandler {
                 paths += it.url.encodedPath
+                if(it.url.encodedPath.endsWith("/sharing/audience")) {
+                    sharingAuthorizations += it.headers[io.ktor.http.HttpHeaders.Authorization]
+                    withContext(NonCancellable) {sharingPositiveEntered.complete(Unit);sharingPositiveRelease?.await()}
+                    return@addHandler respond("""{"channelId":"$channel","serverTimeEpochMillis":1100,"peers":[]}""")
+                }
                 if (it.url.encodedPath.startsWith("/v2/nearby/sharing/")) {
                     sharingAuthorizations += it.headers[io.ktor.http.HttpHeaders.Authorization]
                     val negative = it.url.encodedPath.endsWith("/revoke")
                     if (negative) {sharingRevokeEntered.complete(Unit); sharingRevokeRelease?.await()}
                     else withContext(NonCancellable) {sharingPositiveEntered.complete(Unit); sharingPositiveRelease?.await()}
                     val parts = it.url.encodedPath.split('/')
+                    if(it.url.encodedPath.endsWith("/packet")) return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","sequence":7,"remainingMillis":1000}""")
                     return@addHandler respond("""{"sessionId":"${parts[4]}","generation":"${parts[5]}","phase":"${if (negative) "REVOKED" else "ACTIVE"}","mode":${if (negative) "null" else "\"LOCATION\""},"remainingMillis":${if (negative) 0 else 1000}}""")
                 }
                 if (callMode && it.url.encodedPath.contains("/calls/")) {

@@ -139,6 +139,9 @@ internal class AuthenticatedVoiceRuntime private constructor(
             now >= 0 && current.leaseDeadlineMillis?.let {now < it} == true && control.allowsSharing(operation)
     }
     suspend fun hidePosition() = withContext(NonCancellable) { runtime.hidePosition() }
+    internal suspend fun sharingChannel(original: VoiceSessionTag): String? = withContext(queuedDispatcher) {
+        if (!canShare(original)) null else runtime.state.value.operationId?.let(control::sharingChannel)
+    }
 
     /** Fence admission first, then request actual cleanup; cancelling auth is never a stop ACK. */
     suspend fun retire() {

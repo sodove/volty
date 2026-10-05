@@ -11,6 +11,7 @@ internal class AccountVoiceSessionControl private constructor(
     private val calls: DirectCallVoiceSessionControl,
 ) : VoiceSessionControlPort {
     override fun allowsSharing(operation: VoiceOperationId) = original(operation).allowsSharing(operation)
+    override fun sharingChannel(operation: VoiceOperationId) = original(operation).sharingChannel(operation)
     fun registerOutgoing(call: String, callee: String, key: String, operation: VoiceOperationId) =
         calls.registerOutgoing(call, callee, key, operation)
     fun registerIncoming(call: DirectCallSnapshot, operation: VoiceOperationId) = calls.registerIncoming(call, operation)
