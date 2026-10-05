@@ -160,7 +160,12 @@ class JdbcDirectCallRingingRepository(private val source: DataSource) {
                 Mode.CANCEL -> policy.stop(current, actor, at)
                 Mode.DECLINE -> policy.decline(current, actor, at)
             }
-            persist(c, decision)
+            val persisted = persist(c, decision)
+            if (mode == Mode.STATUS && persisted.rejection == null && persisted.call?.phase == DirectCallPhase.RINGING) {
+                // Original server credit checked under this pair lock, never phone epoch time.
+                persisted.copy(remainingRingMillis = if (at < 0) 0 else
+                    (persisted.call.ringDeadlineMillis - at).coerceIn(0, 45_000))
+            } else persisted
         }
     }
 

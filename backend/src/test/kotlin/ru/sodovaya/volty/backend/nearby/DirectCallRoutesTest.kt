@@ -16,6 +16,22 @@ class DirectCallRoutesTest {
         override fun isAccessActive(userId: String, issuedAtEpochSeconds: Long) = userId == actor
     }, testMode = true, nearbyCalls = port)
 
+    @Test fun statusCarriesOnlyBoundedRingingCreditAndNeverAddsItToTerminalResponse() = testApplication {
+        val port = RecordingPort(); val deps = dependencies(port); application {module(deps)}
+        val token = deps.tokenService.issueAccessToken(actor)
+        port.statusRingCredit = 25_000
+        val ring = client.get("/v2/nearby/calls/$call") {bearerAuth(token)}
+        assertEquals(HttpStatusCode.OK, ring.status)
+        assertTrue(ring.bodyAsText().contains("\"remainingRingMillis\":25000"))
+        assertFalse(ring.bodyAsText().contains(callerOperation)); assertFalse(ring.bodyAsText().contains(key))
+        port.terminal = true
+        val terminal = client.get("/v2/nearby/calls/$call") {bearerAuth(token)}
+        assertEquals(HttpStatusCode.OK, terminal.status)
+        assertFalse(terminal.bodyAsText().contains("\"remainingRingMillis\":25000"))
+        port.terminal = false; port.statusRingCredit = 45_001
+        assertEquals(HttpStatusCode.ServiceUnavailable, client.get("/v2/nearby/calls/$call") {bearerAuth(token)}.status)
+    }
+
     @Test fun everyCallPathRequiresAuthenticationEvenWhenDisabled() = testApplication {
         application {module(dependencies())}
         for (action in listOf("create", "accept", "resume", "decline", "stop", "cancel-outgoing"))
@@ -212,6 +228,7 @@ class DirectCallRoutesTest {
         val calls = mutableListOf<String>()
         var denial: DirectCallRejection? = null
         var terminal = false
+        var statusRingCredit: Long? = null
         var failure: SfuFailure? = null
         var sessionOverride: SessionAction? = null
         var rosterSnapshot: DirectCallRosterSnapshot? = DirectCallRosterSnapshot(call, 7, 100, listOf(
@@ -226,7 +243,7 @@ class DirectCallRoutesTest {
         override fun create(actor: String, callee: String, call: String, key: String, operation: String): DirectCallDecision {
             calls += "create:$actor:$callee:$call:$key:$operation"; return DirectCallDecision(record().copy(callerId = actor, calleeId = callee))
         }
-        override fun status(actor: String, call: String): DirectCallDecision {calls += "status:$actor:$call"; return DirectCallDecision(record())}
+        override fun status(actor: String, call: String): DirectCallDecision {calls += "status:$actor:$call"; return DirectCallDecision(record(if (terminal) DirectCallPhase.ENDED else DirectCallPhase.RINGING), remainingRingMillis = statusRingCredit)}
         override fun incoming(actor: String, limit: Int, cursor: String?): IncomingCallPage {calls += "incoming:$actor:$limit:$cursor"; return IncomingCallPage(listOf(record()), null)}
         override fun accept(actor: String, call: String, operation: String, revision: Long): DirectCallAction {calls += "accept:$actor:$call:$operation:$revision"; return ready()}
         override fun resume(actor: String, call: String, operation: String): DirectCallAction {calls += "resume:$actor:$call:$operation"; return ready()}

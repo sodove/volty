@@ -23,7 +23,8 @@ data class DirectCallRecord(
     }
     val terminal get() = phase != DirectCallPhase.RINGING && phase != DirectCallPhase.ACCEPTED
 }
-data class DirectCallDecision(val call: DirectCallRecord?, val rejection: DirectCallRejection? = null)
+data class DirectCallDecision(val call: DirectCallRecord?, val rejection: DirectCallRejection? = null,
+    val remainingRingMillis: Long? = null)
 
 /** Pure decisions under the future repository's call/claim locks. ACCEPTED is not a media
  * credential or SFU permission; original friendship and both claims require SQL validation. */

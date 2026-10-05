@@ -40,5 +40,10 @@ internal suspend fun ApplicationCall.directCallResponse(action: DirectCallAction
     }
     val status = if (failure != null) HttpStatusCode.ServiceUnavailable
         else if (permittedSession is SessionAction.Pending) HttpStatusCode.Accepted else HttpStatusCode.OK
-    respond(status, DirectCallResponse(DirectCallSnapshotDto.from(original), session, failure?.name))
+    val ringCredit = decision.remainingRingMillis.takeIf {
+        original.phase == DirectCallPhase.RINGING && decision.rejection == null && failure == null
+    }
+    if (ringCredit != null && ringCredit !in 0..45_000)
+        throw ApiException(HttpStatusCode.ServiceUnavailable, "invalid_ring_credit", "Call status unavailable")
+    respond(status, DirectCallResponse(DirectCallSnapshotDto.from(original), session, failure?.name, ringCredit))
 }

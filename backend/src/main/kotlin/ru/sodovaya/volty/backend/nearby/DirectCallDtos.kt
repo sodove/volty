@@ -16,7 +16,8 @@ import kotlinx.serialization.Serializable
             value.phase.name, value.revision, value.ringDeadlineMillis, value.outcome?.name)
     }
 }
-@Serializable data class DirectCallResponse(val call: DirectCallSnapshotDto, val session: SessionStateResponse? = null, val retryableFailure: String? = null)
+@Serializable data class DirectCallResponse(val call: DirectCallSnapshotDto, val session: SessionStateResponse? = null,
+    val retryableFailure: String? = null, val remainingRingMillis: Long? = null)
 @Serializable data class IncomingCallsResponse(val calls: List<DirectCallSnapshotDto>, val nextCursor: String? = null)
 
 /** Transport peers deliberately omit both original participant operation nonces. */

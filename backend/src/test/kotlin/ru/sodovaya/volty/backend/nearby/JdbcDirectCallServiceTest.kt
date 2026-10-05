@@ -45,6 +45,34 @@ class JdbcDirectCallServiceTest {
         assertTrue(sfu.calls.isEmpty()); assertEquals(0, tokens)
     }
 
+    @Test fun ringingStatusEarnsOnlyRemainingOriginalServerDeadlineCredit() {
+        ring(); at = 20_100
+        val own = service.status(caller, call); val incoming = service.status(callee, call)
+        assertEquals(DirectCallPhase.RINGING, own.call?.phase)
+        assertEquals(25_000, own.remainingRingMillis)
+        assertEquals(own.remainingRingMillis, incoming.remainingRingMillis)
+        assertEquals(45_100, incoming.call?.ringDeadlineMillis)
+        assertNull(service.status(outsider, call).remainingRingMillis)
+        assertTrue(sfu.calls.isEmpty()); assertEquals(0, tokens)
+    }
+
+    @Test fun elapsedAndRevokedRingsNeverKeepNotificationCredit() {
+        ring(); at = 45_100
+        val expired = service.status(callee, call)
+        assertEquals(DirectCallPhase.MISSED, expired.call?.phase); assertNull(expired.remainingRingMillis)
+        assertNull(repository.currentClaim(caller)); assertTrue(sfu.calls.isEmpty())
+    }
+
+    @Test fun acceptedAndFriendshipRevokedStatusHaveNoRingingCredit() {
+        ring(); at = 101
+        service.accept(callee, call, calleeOperation, 0)
+        assertEquals(DirectCallPhase.ACCEPTED, service.status(callee, call).call?.phase)
+        assertNull(service.status(callee, call).remainingRingMillis)
+        source.connection.use {c -> c.createStatement().use {it.execute("DELETE FROM friendships")}}
+        val revoked = service.status(callee, call)
+        assertTrue(assertNotNull(revoked.call).terminal); assertNull(revoked.remainingRingMillis)
+    }
+
     @Test fun acceptedOriginalPairSupportsCalleeThenCallerAdmissionWithShortestPeerCredit() {
         ring(); at = 101
         val accepted = service.accept(callee, call, calleeOperation, 0)
