@@ -126,6 +126,13 @@ internal class ChannelSharingAccountControl private constructor(private val acco
         accountGuardian.cancel(); rootGuardian?.cancel(); lifetime.complete()
     }
     private fun tag(generation: String) = ChannelSharingTag(original.sessionId.value, generation)
+    internal fun belongsTo(account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime, original: VoiceSessionTag) =
+        this.account===account && this.runtime===runtime && this.original==original
+    internal suspend fun canReadAudience() = capability.value.let {
+        !it.closed && !it.retired && lifetime.isActive && account.job.isActive && runtime.canShare(original)
+    }
+    internal fun canObserve(peer: ObservedChannelSharingPeer) =
+        peer.actorId!=account.userId.value || peer.tag.sessionId!=original.sessionId.value || peer.tag.generation !in capability.value.withdrawn
     private fun denied() = ChannelSharingReply.Failed(ChannelSharingFailure.ACCESS_DENIED)
     private fun ensureGeneration(generation: String) {
         if (generation in capability.value.withdrawn) throw CancellationException("Original sharing generation withdrawn")
