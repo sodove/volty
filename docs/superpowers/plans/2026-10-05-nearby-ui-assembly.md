@@ -44,6 +44,9 @@
 
 - [x] Add original-operation disconnect admission to `VoiceConversationStartup`: stale/repeated commands cannot withdraw a replacement intent; works during held acquisition/preferences and from a cancelled UI caller. Four finite tests, scoped 103 and full Android 3143 exact zero bad. True means intent withdrawal, not native/remote cleanup acknowledgement. UI panel/Root activation remain open.
 - [ ] Add root-owned projection/commands around existing `VoiceConversationStartup` and `ChannelSharingStartup`; identity-bound actions cannot affect a later conversation.
+  - Voice request owner borrows the actual social repository/application Job, not an Activity/Decompose Job. Pending permission/switch decisions retain the exact account and original conversation operation; queued/late results cannot replace a newer request.
+  - Activity launch boundary owns only its callback references and availability. Closing that boundary withdraws future foreground launches and releases Activity references, while an already-earned conversation stays with the process owner.
+  - Sharing switch guard is mandatory: original sharing is withdrawn before stopping voice, and cleanup admission is checked before a replacement starts. Permission refusal or an unavailable visible boundary preserves the current allowed conversation/trip.
 - [ ] Joining a channel requests microphone permission and visible foreground launch once; starting a trip separately requests location permission/foreground launch. Denial keeps existing allowed state.
 - [ ] Panel above root navigation: target, actual connection phase, mute and visible `Отключиться`; expanded view includes deafen, independent input/output and `Не показывать позицию`.
 - [ ] Channel switch/accept call during a trip confirms ending original trip, revokes original sharing and stops original voice before new admission. Membership remains.

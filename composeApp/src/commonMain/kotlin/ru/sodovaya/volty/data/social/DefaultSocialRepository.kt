@@ -70,6 +70,8 @@ class DefaultSocialRepository(
     private val accountParentJob = requireNotNull(scope.coroutineContext[Job]) {
         "Social repository requires a parent Job"
     }
+    /** Process consumers borrow the real application owner, never an Activity or authentication child. */
+    internal fun applicationScope(): CoroutineScope = CoroutineScope(scope.coroutineContext)
     override val activeSharing: StateFlow<SharingSession?> = _activeSharing.asStateFlow()
 
     init {

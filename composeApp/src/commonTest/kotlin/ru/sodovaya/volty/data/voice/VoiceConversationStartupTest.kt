@@ -14,6 +14,7 @@ import ru.sodovaya.volty.domain.nearby.*
 import ru.sodovaya.volty.domain.location.*
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import kotlin.test.*
+import ru.sodovaya.volty.presentation.root.nearby.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class VoiceConversationStartupTest {
@@ -22,6 +23,136 @@ class VoiceConversationStartupTest {
     private val first = VoiceOperationId("30000000-0000-0000-0000-000000000003")
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
+
+    private class Switches: NearbyVoiceSwitchGuard {
+        var confirm=false
+        val withdrawn=mutableListOf<VoiceOperationId?>()
+        val awaited=mutableListOf<VoiceOperationId?>()
+        var reply: suspend ()->Boolean={true}
+        override fun requiresConfirmation(operation: VoiceOperationId?)=confirm
+        override fun withdrawSharing(operation: VoiceOperationId?) {withdrawn+=operation}
+        override suspend fun awaitSharingCleanup(operation: VoiceOperationId?):Boolean {awaited+=operation;return reply()}
+    }
+    private fun voiceController(f: Fixture,switches: Switches):NearbyVoiceController {
+        var nonce=0
+        return NearbyVoiceController(f.repository,f.owner,f.dispatcher,
+            {"80000000-0000-0000-0000-${(++nonce).toString().padStart(12,'0')}"},{phone},switches)
+    }
+    private fun launchBoundary(f: Fixture,ui: Job)=NearbyVisibleLaunchBoundary(
+        CoroutineScope(f.test.backgroundScope.coroutineContext+ui),{true},f::launch,{ChannelSharingForegroundLaunch.REJECTED})
+
+    @Test fun processVoiceRequestWaitsForExplicitPermissionAndSurvivesUiBoundaryDisposalAfterJoin()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job])
+        val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent()
+            val request=assertNotNull(root.requestChannel(account,channel,"General"));runCurrent()
+            assertEquals(request,root.state.value.pending?.id);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+            root.begin(request,true,boundary);runCurrent()
+            assertEquals(1,f.launches);assertEquals(1,f.published)
+            assertEquals("General",root.state.value.label);assertNotNull(root.state.value.voice)
+            assertFalse(assertNotNull(root.state.value.voice).transportConnected,"SDK calls alone are not connection evidence")
+            ui.cancel();runCurrent();assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertNotNull(f.gate.current.value);assertEquals("General",root.state.value.label)
+            assertTrue(account.job.isActive)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun latePermissionForReplacedRequestCannotStartOrRejectCurrentRequest()=runTest {
+        val f=Fixture(this);val root=voiceController(f,Switches());val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent()
+            val old=assertNotNull(root.requestChannel(account,channel,"Old"));runCurrent()
+            val current=assertNotNull(root.requestChannel(account,channel,"New"));runCurrent()
+            root.begin(old,false,boundary);runCurrent()
+            assertEquals(current,root.state.value.pending?.id);assertNull(root.state.value.error);assertEquals(0,f.launches)
+            root.begin(current,true,boundary);runCurrent();root.begin(old,true,boundary);runCurrent()
+            assertEquals(1,f.published);assertEquals("New",root.state.value.label)
+            assertEquals(VoiceOperationId(current),assertNotNull(f.runtime).state.value.operationId)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun microphoneRefusalAfterSwitchConfirmationPreservesEarnedVoiceAndDoesNotWithdrawSharing()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent();val firstRequest=assertNotNull(root.requestChannel(account,channel,"First"));runCurrent()
+            root.begin(firstRequest,true,boundary);runCurrent();val originalTicket=f.gate.current.value
+            val withdrawn=guard.withdrawn.toList();guard.confirm=true
+            val request=assertNotNull(root.requestChannel(account,channel,"Other"));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertEquals(request,root.state.value.pending?.id)
+            assertEquals(1,f.published)
+            root.confirmSwitch(request);root.begin(request,false,boundary);runCurrent()
+            assertEquals(withdrawn,guard.withdrawn);assertSame(originalTicket,f.gate.current.value)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertEquals(1,f.published)
+            assertEquals(NearbyVoiceError.MICROPHONE_DENIED,root.state.value.error)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun cancellationIgnoringOldSwitchWaitCannotStartAfterNewerRequestHasJoined()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false;var waits=0
+        guard.reply={if(++waits==1) withContext(NonCancellable) {entered.complete(Unit);release.await();returned=true};true}
+        try {
+            val account=f.login();runCurrent()
+            val old=assertNotNull(root.requestChannel(account,channel,"Old"));runCurrent();root.begin(old,true,boundary);runCurrent()
+            assertTrue(entered.isCompleted);assertEquals(0,f.launches)
+            val fresh=assertNotNull(root.requestChannel(account,channel,"Fresh"));runCurrent();root.begin(fresh,true,boundary);runCurrent()
+            assertEquals(1,f.published);val ticket=f.gate.current.value
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(1,f.published);assertSame(ticket,f.gate.current.value);assertEquals("Fresh",root.state.value.label)
+            assertEquals(VoiceOperationId(fresh),assertNotNull(f.runtime).state.value.operationId)
+        } finally {release.complete(Unit);boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun retiredOriginalAccountCannotUsePermissionReplyAfterSameUserRelogin()=runTest {
+        val f=Fixture(this);val root=voiceController(f,Switches());val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent();val old=assertNotNull(root.requestChannel(account,channel,"Private"));runCurrent()
+            f.repository.logout();val fresh=f.login();runCurrent();root.begin(old,true,boundary);runCurrent()
+            assertEquals(0,f.launches);assertNull(root.state.value.pending);assertEquals("",root.state.value.label)
+            assertNull(root.requestChannel(account,channel,"Retired"))
+            val current=assertNotNull(root.requestChannel(fresh,channel,"Current"));runCurrent();root.begin(current,true,boundary);runCurrent()
+            assertEquals(1,f.published);assertEquals("Current",root.state.value.label)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun unavailableVisibleBoundaryCannotWithdrawCurrentVoiceBeforeReplacementAdmission()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent();val firstRequest=assertNotNull(root.requestChannel(account,channel,"First"));runCurrent()
+            root.begin(firstRequest,true,boundary);runCurrent();val original=f.gate.current.value;val withdrawn=guard.withdrawn.toList()
+            val secondRequest=assertNotNull(root.requestChannel(account,channel,"Second"));runCurrent();boundary.close()
+            root.begin(secondRequest,true,boundary);runCurrent()
+            assertSame(original,f.gate.current.value);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(withdrawn,guard.withdrawn);assertEquals(1,f.published)
+            assertEquals(NearbyVoiceError.NOT_VISIBLE,root.state.value.error)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun cancelledRootStartCannotIssueForegroundAfterHeldSwitchProducerActuallyReturns()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var returned=false
+        guard.reply={withContext(NonCancellable) {entered.complete(Unit);release.await();returned=true;true}}
+        try {
+            val account=f.login();runCurrent();val request=assertNotNull(root.requestChannel(account,channel,"Cancelled"));runCurrent()
+            root.begin(request,true,boundary);runCurrent();assertTrue(entered.isCompleted)
+            assertEquals(request,root.state.value.starting?.id)
+            root.cancelRequest(request);runCurrent();assertNull(root.state.value.starting);assertFalse(returned)
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty());assertEquals(0,f.published);assertTrue(account.job.isActive)
+        } finally {release.complete(Unit);boundary.close();root.close();ui.cancel();f.close()}
+    }
+
+    @Test fun failedOriginalSharingCleanupDoesNotAdmitReplacementVoice()=runTest {
+        val f=Fixture(this);val guard=Switches();val root=voiceController(f,guard);val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+        try {
+            val account=f.login();runCurrent();val request=assertNotNull(root.requestChannel(account,channel,"Blocked"));runCurrent()
+            guard.reply={false};root.begin(request,true,boundary);runCurrent()
+            assertEquals(NearbyVoiceError.CLEANUP_REQUIRED,root.state.value.error)
+            assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty());assertEquals(0,f.published)
+            assertEquals(1,guard.withdrawn.size);assertEquals(1,guard.awaited.size);assertTrue(account.job.isActive)
+        } finally {boundary.close();root.close();ui.cancel();f.close()}
+    }
 
     @Test fun taggedDisconnectWithdrawsOriginalIntentButCannotStopReplacementConversation()=runTest {
         val f=Fixture(this)
