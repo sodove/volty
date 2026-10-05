@@ -46,6 +46,8 @@ internal class ChannelSharingAccountControl private constructor(private val acco
     private var closeRequested = false
     private val cleanupFailure = MutableStateFlow(false)
     val cleanupFailed = cleanupFailure.asStateFlow()
+    private val mutableClosed=MutableStateFlow(false)
+    internal val closed=mutableClosed.asStateFlow()
     private var pendingRevokes = 0
     private val revokes = mutableMapOf<String, Deferred<ChannelSharingReply>>()
     private val accountGuardian = account.scope().launch(start = CoroutineStart.UNDISPATCHED) {
@@ -124,6 +126,7 @@ internal class ChannelSharingAccountControl private constructor(private val acco
         try {audiencePort.close()} catch (_: Throwable) {cleanupFailure.value = true}
         publications.toList().forEach {try {it.close()} catch (_: Throwable) {cleanupFailure.value=true}}
         publications.clear()
+        mutableClosed.value=true
         accountGuardian.cancel(); rootGuardian?.cancel(); lifetime.complete()
     }
     private fun tag(generation: String) = ChannelSharingTag(original.sessionId.value, generation)

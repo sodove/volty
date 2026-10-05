@@ -177,6 +177,17 @@ val androidModule = module {
     }
     single {ru.sodovaya.volty.data.voice.AndroidChannelLocationForegroundController(androidContext(),get())}
     single {ru.sodovaya.volty.data.voice.NearbyLocationDemandCoordinator(get())}
+    single {
+        val coordinator=get<VoiceAccountCoordinator>()
+        val audio=get<AndroidVoiceAudioFactory>()
+        val telemetry=lazy {get<ru.sodovaya.volty.domain.social.SocialTelemetrySource>()}
+        ru.sodovaya.volty.data.voice.ChannelSharingStartup(get(named(NEARBY_HTTP_CLIENT)),NEARBY_API_BASE_URL,
+            Dispatchers.Main,get(),get(),get<ru.sodovaya.volty.data.voice.AndroidChannelLocationForegroundController>(),
+            SystemClock::elapsedRealtime,System::currentTimeMillis,
+            {telemetry.value.latest.value ?: ru.sodovaya.volty.domain.social.EarnedTelemetry()}) {account ->
+            coordinator.acquireBound(account,audio.createPrepared())
+        }
+    }
     single { IncomingCallActionRegistry(Dispatchers.Main) {java.util.UUID.randomUUID().toString()} }
     single {
         AndroidIncomingCallAccountFactory(androidContext(), get(), Dispatchers.Main,

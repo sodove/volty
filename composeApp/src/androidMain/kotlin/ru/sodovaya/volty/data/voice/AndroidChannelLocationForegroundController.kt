@@ -47,6 +47,13 @@ internal class AndroidChannelLocationForegroundController(context: Context,
             }.filterNotNull().first()
         } ?: run {authority.stop(ticket);false}
     }
+    fun launchSharing(activity: ComponentActivity,ticket: ChannelLocationForegroundTicket): ChannelSharingForegroundLaunch =
+        when(launch(activity,ticket)) {
+            VoiceForegroundLaunchResult.REQUESTED,VoiceForegroundLaunchResult.ALREADY_READY -> ChannelSharingForegroundLaunch.STARTED
+            VoiceForegroundLaunchResult.PERMISSION_REQUIRED -> ChannelSharingForegroundLaunch.PERMISSION_REQUIRED
+            VoiceForegroundLaunchResult.NOT_VISIBLE -> ChannelSharingForegroundLaunch.NOT_VISIBLE
+            VoiceForegroundLaunchResult.OBSOLETE,VoiceForegroundLaunchResult.REJECTED -> ChannelSharingForegroundLaunch.REJECTED
+        }
     override fun allows(owner: ChannelLocationForegroundOwner): Boolean {mainOwner();return authority.allows(owner)}
     fun find(id: String): ChannelLocationForegroundTicket? {mainOwner();return authority.find(id)}
     fun acknowledge(ticket: ChannelLocationForegroundTicket,service: Any): Boolean {mainOwner();return authority.acknowledge(ticket,service)}

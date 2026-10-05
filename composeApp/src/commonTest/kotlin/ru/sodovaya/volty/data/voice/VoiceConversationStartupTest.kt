@@ -23,6 +23,72 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun sharingStartupOneShotVisibleLauncherThenActualForegroundPublishesDespiteCancelledUiWaiter() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();var launches=0;var ticket: ChannelLocationForegroundTicket?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {issued ->
+                launches++;ticket=issued;ChannelSharingForegroundLaunch.STARTED
+            };handle=started
+            val waiter=async {started.result.await()};runCurrent();waiter.cancel()
+            assertEquals(1,launches);assertFalse(started.result.isCompleted);assertTrue(f.sharingAuthorizations.isEmpty());assertTrue(source.issued.isEmpty())
+            foreground.authority.acknowledge(assertNotNull(ticket),Any());assertTrue(started.result.await());runCurrent()
+            f.time=101;source.emitFix(1001,101);runCurrent();assertEquals(listOf(0L),f.packetSequences)
+            f.sharingRevokeRelease=CompletableDeferred()
+            started.requestHide();runCurrent();assertFalse(runtime.state.value.sharingEnabled);assertTrue(runtime.state.value.wanted)
+            assertTrue(f.sharingRevokeEntered.isCompleted);assertTrue(started.state.value.childCleanupPending)
+            assertFalse(started.close());assertFalse(started.state.value.nativeCleanupPending)
+            f.sharingRevokeRelease!!.complete(Unit);runCurrent();assertFalse(started.state.value.childCleanupPending)
+            assertTrue(started.close());assertEquals(1,launches);assertEquals(setOf(LocationConsumer.NAVIGATION),source.state.value.demands)
+            assertTrue(account.job.isActive)
+        } finally {f.sharingRevokeRelease?.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
+    @Test fun sharingStartupPermissionRejectionNeverAdmitsConsentOrNativeAndGenerationCannotBeReused() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()}) {captured -> f.acquire(captured);assertNotNull(f.boundRuntime)}
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {
+                launches++;ChannelSharingForegroundLaunch.PERMISSION_REQUIRED
+            };handle=started
+            assertFalse(started.result.await());assertEquals(ChannelSharingForegroundLaunch.PERMISSION_REQUIRED,started.state.value.launchResult)
+            assertTrue(f.sharingAuthorizations.isEmpty());assertTrue(source.issued.none {it});assertTrue(runtime.state.value.wanted)
+            assertFailsWith<IllegalArgumentException> {startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {
+                launches++;ChannelSharingForegroundLaunch.STARTED
+            }}
+            assertEquals(1,launches);assertTrue(started.close())
+        } finally {handle?.close();f.close()}
+    }
+
+    @Test fun sharingStartupHideDuringHeldAcquisitionKeepsActualPreparationOwnedAndCannotLaunchLate() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;var handle: ChannelSharingStartHandle?=null
+        val source=CaptureLocationRepository();val foreground=CaptureForegroundPort();val gate=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>();var launches=0
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,NearbyLocationDemandCoordinator(source),foreground,
+                {f.time},{f.time+900},{EarnedTelemetry()}) {captured ->
+                withContext(NonCancellable) {entered.complete(Unit);gate.await()}
+                f.acquire(captured);assertNotNull(f.boundRuntime)
+            }
+            val started=startup.start(account,original,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {
+                launches++;ChannelSharingForegroundLaunch.STARTED
+            };handle=started;runCurrent();assertTrue(entered.isCompleted)
+            started.requestHide();assertFalse(started.close());assertTrue(started.state.value.preparing)
+            gate.complete(Unit);assertFalse(started.result.await());runCurrent()
+            assertFalse(started.state.value.preparing);assertTrue(started.close());assertEquals(0,launches)
+            assertTrue(source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty());assertTrue(runtime.state.value.wanted)
+        } finally {gate.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
     @Test fun boundAccountRuntimePublishesSharingThroughOwnedCallbackWithoutUiRelay() = runTest {
         val f=Fixture(this);f.useBoundRuntime=true
         f.sharingDispatch={error("Bound runtime must use its own sharing callback")}
