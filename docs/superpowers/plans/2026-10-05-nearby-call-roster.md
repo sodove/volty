@@ -40,3 +40,11 @@ negative media cleanup permission; the account voice runtime retains that separa
 Tests use actual HTTP with held replies, same-account refresh, same-user new account, mismatched
 tag zero HTTP, and borrowed account/client survival. A cancelled old reader cannot revive through
 a new login or publish a held result. No polling loop or notification-triggered capture here.
+
+Pure projection accepts only the pinned call/peer/subscription and original observed session
+pair. Drop older request ordinals or older journal revisions without adding credit. Equal
+revision with different rows or raw lease deadline requires resync; a new session ID under the
+same call cannot replace earned identity. Presence is unknown until an actual valid snapshot,
+when resync is needed, after retirement or at lease expiry. Transport-confirmed rows are a
+separate subset and do not imply heard speech. Access/auth denial retires permanently;
+temporary failures withdraw current presence and retain high-water evidence for retry.
