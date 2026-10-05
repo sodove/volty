@@ -20,7 +20,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
     factory: VoiceSdkSessionFactory,
     pulses: Flow<Unit>,
     private val monotonicMillis: () -> Long,
-    sharingDispatch: (VoiceSharingEffect) -> Unit,
+    sharingDispatch: (VoiceSharingDispatch) -> Unit,
     private val mayAllocateAudio: () -> Boolean,
 ) {
     /** Exact authentication generation, including replacement login of the same actor. */
@@ -178,7 +178,7 @@ internal class AuthenticatedVoiceRuntime private constructor(
         suspend fun create(account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String,
                            queuedDispatcher: CoroutineDispatcher, factory: VoiceSdkSessionFactory,
                            pulses: Flow<Unit>, monotonicMillis: () -> Long,
-                           sharingDispatch: (VoiceSharingEffect) -> Unit,
+                           sharingDispatch: (VoiceSharingDispatch) -> Unit,
                            mayAllocateAudio: () -> Boolean): AuthenticatedVoiceRuntime {
             currentCoroutineContext().ensureActive()
             check(account.job.isActive) { "Authenticated account retired" }

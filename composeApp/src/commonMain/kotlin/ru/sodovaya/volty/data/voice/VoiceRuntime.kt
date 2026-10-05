@@ -7,6 +7,9 @@ import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.voice.*
 
 enum class VoiceSharingEffect { ADD_DEMAND, REMOVE_DEMAND, CLEAR_QUEUE }
+data class VoiceSharingDispatch(val effect: VoiceSharingEffect,val original: VoiceSessionTag?) {
+    init {require(effect!=VoiceSharingEffect.ADD_DEMAND || original!=null)}
+}
 
 /**
  * One account-bound composition. Supply the SAME queued serial dispatcher to all
@@ -22,7 +25,7 @@ class VoiceRuntime(
     factory: VoiceSdkSessionFactory,
     pulses: Flow<Unit>,
     private val monotonicMillis: () -> Long,
-    private val sharingDispatch: (VoiceSharingEffect) -> Unit,
+    private val sharingDispatch: (VoiceSharingDispatch) -> Unit,
     private val accountPermission: () -> Boolean = { true },
 ) {
     private val scope = run {
@@ -86,9 +89,9 @@ class VoiceRuntime(
         when (command.effect) {
             is VoiceSessionEffect.StartEngine, is VoiceSessionEffect.StopEngine,
             is VoiceSessionEffect.SetMuted, is VoiceSessionEffect.SetDeafened -> engine.dispatch(command)
-            VoiceSessionEffect.AddNearbyDemand -> sharingDispatch(VoiceSharingEffect.ADD_DEMAND)
-            VoiceSessionEffect.RemoveNearbyDemand -> sharingDispatch(VoiceSharingEffect.REMOVE_DEMAND)
-            VoiceSessionEffect.ClearSharingQueue -> sharingDispatch(VoiceSharingEffect.CLEAR_QUEUE)
+            VoiceSessionEffect.AddNearbyDemand -> sharingDispatch(VoiceSharingDispatch(VoiceSharingEffect.ADD_DEMAND,command.sharingOrigin))
+            VoiceSessionEffect.RemoveNearbyDemand -> sharingDispatch(VoiceSharingDispatch(VoiceSharingEffect.REMOVE_DEMAND,command.sharingOrigin))
+            VoiceSessionEffect.ClearSharingQueue -> sharingDispatch(VoiceSharingDispatch(VoiceSharingEffect.CLEAR_QUEUE,command.sharingOrigin))
             else -> error("Control effect escaped owner")
         }
     }

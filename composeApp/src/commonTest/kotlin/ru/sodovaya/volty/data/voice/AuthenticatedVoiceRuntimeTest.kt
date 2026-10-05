@@ -40,7 +40,7 @@ class AuthenticatedVoiceRuntimeTest {
         val wire = Wire(); val client = client(wire); val effects = mutableListOf<VoiceSharingEffect>()
         val pulses = Channel<Unit>(Channel.UNLIMITED)
         val runtime = AuthenticatedVoiceRuntime.create(account, client, root, StandardTestDispatcher(testScheduler),
-            VoiceSdkSessionFactory {_, _ -> Session()}, pulses.receiveAsFlow(), {100}, {effects += it}, {true})
+            VoiceSdkSessionFactory {_, _ -> Session()}, pulses.receiveAsFlow(), {100}, {effects += it.effect}, {true})
         try {
             assertTrue(runtime.join(channel, operation)); runCurrent(); assertNotNull(runtime.state.value.sessionId)
             assertTrue(runtime.enableSharing()); runCurrent()

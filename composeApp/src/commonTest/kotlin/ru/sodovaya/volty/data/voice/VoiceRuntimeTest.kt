@@ -39,8 +39,9 @@ class VoiceRuntimeTest {
         val port = Port { now }; val session = Session()
         val pulses = Channel<Unit>(Channel.UNLIMITED)
         val sharing = mutableListOf<VoiceSharingEffect>()
+        val sharingDispatches=mutableListOf<VoiceSharingDispatch>()
         val runtime = VoiceRuntime(scope, dispatcher, port, VoiceSdkSessionFactory { _, _ -> session },
-            pulses.receiveAsFlow(), { now }, sharing::add)
+            pulses.receiveAsFlow(), { now }, {sharing+=it.effect;sharingDispatches+=it})
     }
     @Test fun inlineDispatcherIsRejectedBeforeTheOwnerOrSdkStarts() = runTest {
         var created = 0
@@ -98,6 +99,8 @@ class VoiceRuntimeTest {
         assertEquals(listOf(VoiceSharingEffect.ADD_DEMAND), f.sharing)
         backgroundScope.launch { f.runtime.hidePosition() }; runCurrent()
         assertEquals(listOf(VoiceSharingEffect.ADD_DEMAND, VoiceSharingEffect.REMOVE_DEMAND, VoiceSharingEffect.CLEAR_QUEUE), f.sharing)
+        val original=VoiceSessionTag(assertNotNull(f.runtime.state.value.sessionId),f.runtime.state.value.generation)
+        assertEquals(listOf(original,original,original),f.sharingDispatches.map {it.original})
         assertTrue(f.runtime.state.value.wanted); assertEquals(0, f.session.closes)
     }
     @Test fun sleepJumpExpiresAndClosesTheActuallyConnectedSession() = runTest {

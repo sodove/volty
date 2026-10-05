@@ -29,7 +29,7 @@ internal class VoiceAccountCoordinator(
     private var rootJob: Job? = null
 
     suspend fun acquire(account: SocialAuthenticatedAccount, factory: VoiceSdkSessionFactory,
-                        sharingDispatch: (VoiceSharingEffect) -> Unit): AuthenticatedVoiceRuntime {
+                        sharingDispatch: (VoiceSharingDispatch) -> Unit): AuthenticatedVoiceRuntime {
         val result = withContext(queuedDispatcher) {
             check(account.job.isActive) { "Authenticated account retired" }
             invitationDraftId(account.userId.value)

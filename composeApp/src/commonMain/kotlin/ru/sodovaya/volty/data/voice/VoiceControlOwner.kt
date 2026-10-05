@@ -14,7 +14,8 @@ sealed interface VoiceStopRequest {
     data class Session(val tag: VoiceSessionTag) : VoiceStopRequest
 }
 
-data class VoiceControlDispatch(val effect: VoiceSessionEffect, val credentials: VoiceConnectionCredentials? = null)
+data class VoiceControlDispatch(val effect: VoiceSessionEffect, val credentials: VoiceConnectionCredentials? = null,
+    val sharingOrigin: VoiceSessionTag? = null)
 
 /**
  * Mailbox foundation; caller owns lifetime and a NONBLOCKING engine/sharing
@@ -142,6 +143,8 @@ class VoiceControlOwner(
     }
 
     private fun apply(transition: VoiceTransition, grant: VoiceHttpReply.Credentials? = null) {
+        val preceding=stateOutput.value
+        val previousTag=preceding.sessionId?.let {VoiceSessionTag(it,preceding.generation)}
         stateOutput.value = transition.state
         for (effect in transition.effects) when (effect) {
             is VoiceSessionEffect.RequestJoin -> requestJoin(checkNotNull(attempt).also {
@@ -160,6 +163,10 @@ class VoiceControlOwner(
                 check(grant?.tag == effect.tag)
                 dispatch(VoiceControlDispatch(effect, grant.connection))
             }
+            VoiceSessionEffect.AddNearbyDemand -> dispatch(VoiceControlDispatch(effect,sharingOrigin=
+                transition.state.sessionId?.let {VoiceSessionTag(it,transition.state.generation)}))
+            VoiceSessionEffect.RemoveNearbyDemand,VoiceSessionEffect.ClearSharingQueue ->
+                dispatch(VoiceControlDispatch(effect,sharingOrigin=previousTag))
             else -> dispatch(VoiceControlDispatch(effect))
         }
     }

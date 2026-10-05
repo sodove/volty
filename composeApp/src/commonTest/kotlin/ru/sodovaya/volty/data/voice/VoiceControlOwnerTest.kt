@@ -18,6 +18,25 @@ class VoiceControlOwnerTest {
         VoiceConnectionCredentials("wss://example.invalid", "secret"),
         VoiceLeaseGrant(VoiceLeaseRequestId(ordinal), 0, 1, 5000))
 
+    @Test fun sharingReplacementDispatchRetainsOldOriginAfterPublicStateChanges() = runTest {
+        val port=FakePort();val effects=mutableListOf<VoiceControlDispatch>()
+        val owner=VoiceControlOwner(backgroundScope,port,effects::add)
+        owner.join("channel-one",op1);runCurrent();port.joinReplies.getValue(op1).complete(grant(1));runCurrent()
+        owner.event(VoiceSessionEvent.EnableSharing(op1));runCurrent()
+        assertTrue(owner.state.value.sharingEnabled)
+        assertEquals(tag(1),effects.last {it.effect==VoiceSessionEffect.AddNearbyDemand}.sharingOrigin)
+        effects.clear();owner.join("channel-two",op2);runCurrent()
+        assertEquals(VoiceGeneration(2),owner.state.value.generation)
+        val removed=effects.filter {it.effect==VoiceSessionEffect.RemoveNearbyDemand || it.effect==VoiceSessionEffect.ClearSharingQueue}
+        assertEquals(listOf(VoiceSessionEffect.RemoveNearbyDemand,VoiceSessionEffect.ClearSharingQueue),removed.map {it.effect})
+        assertEquals(listOf(tag(1),tag(1)),removed.map {it.sharingOrigin})
+        port.joinReplies.getValue(op2).complete(grant(2));runCurrent();owner.event(VoiceSessionEvent.EnableSharing(op2));runCurrent()
+        assertEquals(tag(2),effects.last {it.effect==VoiceSessionEffect.AddNearbyDemand}.sharingOrigin)
+        effects.clear();owner.event(VoiceSessionEvent.HidePosition);runCurrent()
+        assertEquals(listOf(tag(2),tag(2)),effects.map {it.sharingOrigin})
+        assertTrue(owner.state.value.wanted);assertFalse(owner.state.value.sharingEnabled)
+    }
+
     @Test fun stopCancelsIssuedJoinAndDoesNotWaitForNetwork() = runTest {
         val port = FakePort()
         val effects = mutableListOf<VoiceControlDispatch>()
@@ -32,6 +51,8 @@ class VoiceControlOwnerTest {
         assertFalse(owner.state.value.wanted)
         assertTrue(effects.any { it.effect == VoiceSessionEffect.StopEngine(VoiceGeneration(1)) })
         assertFalse(effects.any { it.effect is VoiceSessionEffect.StartEngine })
+        val sharingCleanup=effects.filter {it.effect==VoiceSessionEffect.RemoveNearbyDemand || it.effect==VoiceSessionEffect.ClearSharingQueue}
+        assertEquals(2,sharingCleanup.size);assertTrue(sharingCleanup.all {it.sharingOrigin==null})
     }
 
     @Test fun lateGrantAfterReplacementDisconnectsOnlyItsOldSession() = runTest {
