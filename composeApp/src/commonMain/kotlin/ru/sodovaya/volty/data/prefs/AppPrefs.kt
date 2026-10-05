@@ -75,6 +75,9 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
     val voiceMicrophoneSource: StateFlow<VoiceMicrophoneSource> = store.data
         .map { VoiceMicrophoneSource.fromPersisted(it[Keys.VOICE_MICROPHONE_SOURCE]) }
         .stateIn(scope, SharingStarted.Eagerly, VoiceMicrophoneSource.AUTO)
+    /** One stored pair, with no synthetic loaded value before DataStore emits. */
+    val voiceAudioPreferences: Flow<VoiceAudioPreferences>
+        get() = store.data.map(::decodeVoiceAudioPreferences)
 
     /** Allow automatic offline-region downloads over mobile data without a prompt. */
     val offlineSkipMeteredConfirmation: StateFlow<Boolean> = store.data
@@ -170,8 +173,8 @@ class AppPrefs(private val store: DataStore<Preferences>) : NavigationPreference
         it[Keys.VOICE_MICROPHONE_SOURCE] = source.name
     }
     /** Native preparation waits for one actual snapshot; UI StateFlow's initial AUTO is not a read. */
-    suspend fun readVoiceAudioPreferences(): VoiceAudioPreferences {
-        val snapshot = store.data.first()
+    suspend fun readVoiceAudioPreferences(): VoiceAudioPreferences = voiceAudioPreferences.first()
+    private fun decodeVoiceAudioPreferences(snapshot: Preferences): VoiceAudioPreferences {
         val input = when (VoiceMicrophoneSource.fromPersisted(snapshot[Keys.VOICE_MICROPHONE_SOURCE])) {
             VoiceMicrophoneSource.AUTO -> VoiceInputPreference.AUTO
             VoiceMicrophoneSource.PHONE -> VoiceInputPreference.PHONE

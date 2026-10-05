@@ -5,6 +5,10 @@ import androidx.datastore.preferences.core.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.test.*
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
@@ -15,6 +19,43 @@ import kotlin.test.*
 class VoiceAudioPreferencesReadTest {
     private val input = stringPreferencesKey("voice_microphone_source")
     private val output = stringPreferencesKey("voice_output_preference")
+
+    @Test fun panelPreferencesWaitForActualStorageAndNeverPublishInitialAutoAsLoaded()=runTest {
+        val store=Store(mutablePreferencesOf(input to "PHONE",output to "HEADSET"),ready=false)
+        val prefs=AppPrefs(store)
+        val reader=async {prefs.voiceAudioPreferences.first()}
+        try {
+            runCurrent();assertFalse(reader.isCompleted)
+            store.loaded.complete(Unit)
+            assertEquals(VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET),reader.await())
+        } finally {store.loaded.complete(Unit);reader.cancelAndJoin()}
+    }
+
+    @Test fun panelPreferencesObserveOneAtomicSnapshotAndSeparateInputOutputWrites()=runTest {
+        val current=MutableStateFlow<Preferences>(mutablePreferencesOf(output to "HEADSET"))
+        val store=object:DataStore<Preferences> {
+            override val data:Flow<Preferences> = current
+            override suspend fun updateData(transform:suspend (Preferences)->Preferences):Preferences = transform(current.value).also {current.value=it}
+        }
+        val prefs=AppPrefs(store);val samples=mutableListOf<VoiceAudioPreferences>()
+        val reader=launch {prefs.voiceAudioPreferences.take(3).toList(samples)}
+        try {
+            runCurrent();assertEquals(listOf(VoiceAudioPreferences(VoiceInputPreference.AUTO,VoiceOutputPreference.HEADSET)),samples)
+            prefs.setVoiceMicrophoneSource(VoiceMicrophoneSource.PHONE);runCurrent()
+            prefs.setVoiceOutputPreference(VoiceOutputPreference.SPEAKER);runCurrent();reader.join()
+            assertEquals(listOf(VoiceAudioPreferences(VoiceInputPreference.AUTO,VoiceOutputPreference.HEADSET),
+                VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET),
+                VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.SPEAKER)),samples)
+            assertEquals(samples.last(),prefs.readVoiceAudioPreferences())
+        } finally {reader.cancelAndJoin()}
+    }
+
+    @Test fun panelMalformedPersistedPreferenceDoesNotEraseTheOtherValidChoice()=runTest {
+        assertEquals(VoiceAudioPreferences(VoiceInputPreference.AUTO,VoiceOutputPreference.HEADSET),
+            AppPrefs(Store(mutablePreferencesOf(input to "invalid",output to "HEADSET"))).voiceAudioPreferences.first())
+        assertEquals(VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.AUTO),
+            AppPrefs(Store(mutablePreferencesOf(input to "PHONE",output to "invalid"))).voiceAudioPreferences.first())
+    }
 
     @Test fun nativeSnapshotWaitsForStorageInsteadOfUsingInitialAuto() = runTest {
         val store = Store(mutablePreferencesOf(input to "PHONE", output to "HEADSET"), ready = false)

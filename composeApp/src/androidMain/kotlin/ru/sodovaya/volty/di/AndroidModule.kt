@@ -55,6 +55,9 @@ import ru.sodovaya.volty.data.voice.AndroidVoiceForegroundController
 import ru.sodovaya.volty.data.voice.IncomingCallActionRegistry
 import ru.sodovaya.volty.data.voice.AndroidIncomingCallAccountFactory
 import ru.sodovaya.volty.data.voice.IncomingCallAccountCoordinator
+import ru.sodovaya.volty.presentation.root.nearby.NearbySharingSwitchGuard
+import ru.sodovaya.volty.presentation.root.nearby.NearbyVoiceController
+import ru.sodovaya.volty.presentation.root.nearby.NearbySharingController
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -190,6 +193,14 @@ val androidModule = module {
         }
     }
     single { IncomingCallActionRegistry(Dispatchers.Main) {java.util.UUID.randomUUID().toString()} }
+    // Process owners. Screens/Activity borrow these and dispose only their launch boundaries.
+    single { NearbySharingSwitchGuard(get(),get(),Dispatchers.Main) }
+    single {
+        val prefs=get<AppPrefs>()
+        NearbyVoiceController(get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()},
+            prefs::readVoiceAudioPreferences,get())
+    }
+    single { NearbySharingController(get(),get(),get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()}) }
     single {
         AndroidIncomingCallAccountFactory(androidContext(), get(), Dispatchers.Main,
             flow {while (true) {delay(1_000L); emit(Unit)}}, SystemClock::elapsedRealtime,
