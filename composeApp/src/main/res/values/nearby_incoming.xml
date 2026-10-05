@@ -1,0 +1,7 @@
+<resources>
+    <string name="nearby_incoming_notification_channel">Incoming voice calls</string>
+    <string name="nearby_incoming_notification_title">Incoming voice call</string>
+    <string name="nearby_incoming_notification_body">Open to answer</string>
+    <string name="nearby_incoming_notification_accept">Accept</string>
+    <string name="nearby_incoming_notification_decline">Decline</string>
+</resources>

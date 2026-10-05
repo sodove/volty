@@ -1,0 +1,7 @@
+<resources>
+    <string name="nearby_incoming_notification_channel">Входящие голосовые вызовы</string>
+    <string name="nearby_incoming_notification_title">Входящий голосовой вызов</string>
+    <string name="nearby_incoming_notification_body">Откройте, чтобы ответить</string>
+    <string name="nearby_incoming_notification_accept">Принять</string>
+    <string name="nearby_incoming_notification_decline">Отклонить</string>
+</resources>
