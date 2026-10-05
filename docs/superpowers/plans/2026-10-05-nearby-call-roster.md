@@ -57,3 +57,21 @@ Late producer results cannot resurrect a closed subscription. Clock reset, pulse
 and access denial fail closed. Runtime owns its child lifetime, not the port or parent account.
 Start it at root only after the selected call has earned an original session identity; RING and
 incoming discovery do not get a media roster or microphone permission.
+
+Authenticated call roster owner composes the pinned account reader and owned runtime. Require
+the actual original own VoiceSessionTag, and reject snapshots whose own participant session
+does not match it. Expose only view, read producer count and cleanup failure; no raw HTTP port.
+Runtime terminal retirement also fences/closes this read child. Explicit close survives UI
+cancellation and closes the child/guardian without cancelling the borrowed account or client.
+Factory checks active caller/account, queued dispatcher and original session ID before allocation.
+
+Root integration requires an explicit authenticated call roster factory for CALL admission;
+legacy three-argument startup remains valid for CHANNEL only. Read allocation waits for this
+intent's actual wanted voice session and generation, never discovery/RING. Root owns a unique
+read child, checks selection/account/foreground/original session again after suspended creation,
+and closes obsolete returned readers without retiring the shared cached voice runtime. Publish
+only matching original session presence; terminal read loss stops this original conversation,
+while transient unavailable/expired presence stays unknown. Replacement/stop/logout withdraw
+root rows immediately and dispose the reader on application cleanup scope, surviving UI cancel.
+Tests exercise real HTTP and a deliberately cancellation-ignoring held factory return after a
+same-UUID channel replacement, plus account and ACL loss; no microphone/audibility claims.
