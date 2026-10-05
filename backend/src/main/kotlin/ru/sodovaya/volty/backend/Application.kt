@@ -98,6 +98,7 @@ class AppDependencies(
     val nearbyCalls: DirectCallEndpointPort? = null,
     val nearbyChannelSharing: ChannelSharingEndpointPort? = null,
     val nearbySharingPackets: ru.sodovaya.volty.backend.nearby.ChannelSharingPacketEndpointPort? = null,
+    val nearbyCompatibility: ru.sodovaya.volty.backend.nearby.NearbyCompatibility = ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -420,14 +421,15 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                     call.respond(mapOf("left" to true))
                 }
                 delete("/groups/{groupId}") { val groupId = call.groupId(); dependencies.store.deleteGroup(call.user(dependencies).id, groupId); dependencies.liveHub.revokeGroup(groupId); call.respond(HttpStatusCode.NoContent) }
-                post("/sharing/start") { handleStartSharing(call, dependencies, call.receive()) }
-                post("/groups/{groupId}/sharing") { handleSharingPost(call, dependencies) }
-                post("/groups/{groupId}/sharing/renew") { handleRenewSharing(call, dependencies) }
-                post("/groups/{groupId}/sharing/update") { handlePublishSharing(call, dependencies) }
-                post("/groups/{groupId}/sharing/stop") { handleStopSharing(call, dependencies) }
-                delete("/groups/{groupId}/sharing") { handleStopSharing(call, dependencies) }
+                post("/sharing/start") { dependencies.requireLegacyVoiceSharing(); handleStartSharing(call, dependencies, call.receive()) }
+                post("/groups/{groupId}/sharing") { dependencies.requireLegacyVoiceSharing(); handleSharingPost(call, dependencies) }
+                post("/groups/{groupId}/sharing/renew") { dependencies.requireLegacyVoiceSharing(); handleRenewSharing(call, dependencies) }
+                post("/groups/{groupId}/sharing/update") { dependencies.requireLegacyVoiceSharing(); handlePublishSharing(call, dependencies) }
+                post("/groups/{groupId}/sharing/stop") { dependencies.requireLegacyVoiceSharing(); handleStopSharing(call, dependencies) }
+                delete("/groups/{groupId}/sharing") { dependencies.requireLegacyVoiceSharing(); handleStopSharing(call, dependencies) }
                 get("/voice/provider") { call.respond(dependencies.voiceService.providerResponse()) }
                 post("/groups/{groupId}/voice/join") {
+                    dependencies.requireLegacyVoiceSharing()
                     val user = call.user(dependencies)
                     val groupId = call.groupId()
                     if (!dependencies.store.isGroupMember(user.id, groupId)) {
@@ -435,7 +437,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                     }
                     call.respond(dependencies.voiceService.issueJoin(user, groupId))
                 }
-                post("/groups/{groupId}/voice/leave") { call.respond(mapOf("left" to true)) }
+                post("/groups/{groupId}/voice/leave") { dependencies.requireLegacyVoiceSharing(); call.respond(mapOf("left" to true)) }
             }
         }
         authenticate("auth-jwt") {
@@ -453,6 +455,12 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         }
         monitor.subscribe(io.ktor.server.application.ApplicationStopped) { scope.cancel() }
     }
+}
+
+/** V1 has no original SID/generation; it cannot safely address a v2 trip. */
+private fun AppDependencies.requireLegacyVoiceSharing() {
+    if (nearbyCompatibility == ru.sodovaya.volty.backend.nearby.NearbyCompatibility.VOICE_SPACES)
+        throw ApiException(HttpStatusCode.Conflict, "client_upgrade_required", "Update the app to use voice and trip sharing")
 }
 
 private suspend fun handleStartSharing(call: ApplicationCall, dependencies: AppDependencies, body: StartSharingRequest) {
