@@ -20,6 +20,66 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun incomingHintUsesActualStatusAndOnlyExplicitAcceptanceStartsForeground() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            val runtime = f.acquire(account)
+            val verifier = IncomingCallHintVerifier(account, runtime)
+            val ring = assertIs<IncomingCallHintReply.Ringing>(verifier.verify(channel)).call
+            assertEquals(listOf("/v2/nearby/calls/$channel"), f.paths)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty()); assertTrue(f.rosters.isEmpty())
+            f.owner.start(account, VoiceConversationTarget.IncomingCall(ring), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(1, f.launches); assertEquals(1, f.published)
+            assertTrue(f.paths.contains("/v2/nearby/calls/$channel/accept"))
+        } finally {f.close()}
+    }
+
+    @Test fun acceptedTerminalAndOutgoingHintsCannotBecomeIncomingRings() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account))
+            for (phase in listOf("ACCEPTED", "ENDED", "CANCELLED")) {
+                f.statusPhase = phase
+                assertEquals(IncomingCallHintReply.Gone, verifier.verify(channel))
+            }
+            f.statusPhase = "RINGING"; f.incomingMode = false
+            assertEquals(IncomingCallHintReply.Gone, verifier.verify(channel))
+            assertEquals(4, f.paths.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+            assertFalse(assertNotNull(f.runtime).state.value.wanted)
+        } finally {f.close()}
+    }
+
+    @Test fun hintCannotBorrowRuntimeFromAnotherAccountObjectWithSameUserId() = runTest {
+        val f = Fixture(this)
+        val replacementJob = Job()
+        try {
+            val account = f.login(); val runtime = f.acquire(account)
+            val replacement = SocialAuthenticatedAccount(account.userId, replacementJob, backgroundScope.coroutineContext) {"new-token"}
+            assertFailsWith<IllegalArgumentException> {IncomingCallHintVerifier(replacement, runtime)}
+            val verifier = IncomingCallHintVerifier(account, runtime)
+            assertFailsWith<IllegalArgumentException> {verifier.verify("invalid")}
+            assertTrue(f.paths.isEmpty()); assertEquals(0, f.launches)
+        } finally {replacementJob.cancel(); f.close()}
+    }
+
+    @Test fun heldActualHintResponseCannotOfferRingAfterLogout() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>()
+        var offered = false
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            f.statusRelease = release
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account))
+            val task = async {runCatching {verifier.verify(channel).also {offered = true}}}
+            runCurrent(); assertTrue(f.statusEntered.isCompleted)
+            f.repository.logout(); runCurrent(); release.complete(Unit); runCurrent()
+            assertIs<CancellationException>(task.await().exceptionOrNull()); assertFalse(offered)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit); f.close()}
+    }
+
     @Test fun cancelledRosterFactoryFailsOriginalCallInsteadOfLeavingItWithoutPresence() = runTest {
         val f = Fixture(this)
         try {
@@ -515,6 +575,9 @@ class VoiceConversationStartupTest {
         var launches = 0; var acknowledgeLaunch = true; var rejectJoin = false
         var callMode = false; var incomingMode = false
         var callRinging = false; var rosterDenied = false
+        var statusPhase: String? = null
+        var statusRelease: CompletableDeferred<Unit>? = null
+        val statusEntered = CompletableDeferred<Unit>()
         val rosters = mutableListOf<AuthenticatedCallRosterOwner>()
         var beforeRoster: suspend () -> Unit = {}
         var afterRoster: suspend () -> Unit = {}
@@ -538,6 +601,10 @@ class VoiceConversationStartupTest {
             addHandler {
                 paths += it.url.encodedPath
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
+                    if (it.url.encodedPath == "/v2/nearby/calls/$channel" && statusPhase != null) {
+                        withContext(NonCancellable) {statusEntered.complete(Unit); statusRelease?.await()}
+                        return@addHandler respond("""{"call":${callSnapshot(statusPhase!!, if (statusPhase == "ENDED") "\"CALLER_ENDED\"" else if (statusPhase == "CANCELLED") "\"CALLER_CANCELLED\"" else "null")}}""")
+                    }
                     if (it.url.encodedPath.endsWith("roster")) {
                         if (rosterDenied) return@addHandler respond("{}", HttpStatusCode.Forbidden)
                         return@addHandler respond("""{"callId":"$channel","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$actor","sessionId":"40000000-0000-0000-0000-000000000004","phase":"CONNECTING","deadlineEpochMillis":110000,"mediaPresence":"UNKNOWN"},{"actorId":"$peer","sessionId":"60000000-0000-0000-0000-000000000006","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]}""")

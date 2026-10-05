@@ -23,6 +23,8 @@ internal class AuthenticatedVoiceRuntime private constructor(
     sharingDispatch: (VoiceSharingEffect) -> Unit,
     private val mayAllocateAudio: () -> Boolean,
 ) {
+    /** Exact authentication generation, including replacement login of the same actor. */
+    internal fun belongsTo(candidate: SocialAuthenticatedAccount): Boolean = account === candidate
     private val admissionRetired = MutableStateFlow(false)
     private val audioFactory = factory as? VoiceSessionAudioFactory
     private var audioPreparation: Any? = null
