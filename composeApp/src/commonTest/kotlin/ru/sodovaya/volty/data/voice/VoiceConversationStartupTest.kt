@@ -20,6 +20,63 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun actionRegistryResolvesOnlyOriginalBindingAndTicketBeforeExplicitStartup() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, notifications)
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            assertNull(registry.accept(channel, ticket.id)); assertEquals(1, f.paths.size)
+            assertNull(registry.accept(binding.id, channel)); assertEquals(1, f.paths.size)
+            assertEquals(channel, assertNotNull(registry.accept(binding.id, ticket.id)).callId)
+            assertEquals(2, f.paths.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+            assertNull(registry.accept(binding.id, ticket.id)); assertEquals(2, f.paths.size)
+        } finally {registry.close(); notifications.close(); f.close()}
+    }
+
+    @Test fun sameUserReloginAndDeliberatelyIdenticalTicketCannotReuseOldActionBinding() = runTest {
+        val f = Fixture(this); val port = Notifications(); var nonce = 0
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val oldOwner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {if (nonce++ == 0) f.peer else first.value}
+        var newOwner: IncomingCallNotificationOwner? = null
+        try {
+            val oldBinding = registry.bind(account, oldOwner)
+            oldOwner.hint(channel); runCurrent(); val oldTicket = assertNotNull(oldOwner.state.value.ticket)
+            f.repository.logout(); runCurrent(); val replacement = f.login()
+            assertEquals(account.userId, replacement.userId); assertNotSame(account, replacement)
+            val owner = IncomingCallNotificationOwner(replacement, f.acquire(replacement), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+            newOwner = owner
+            val binding = registry.bind(replacement, owner)
+            owner.hint(channel); runCurrent(); val ticket = assertNotNull(owner.state.value.ticket)
+            assertEquals(oldTicket.id, ticket.id); assertNotEquals(oldBinding.id, binding.id)
+            val issued = f.paths.size
+            assertNull(registry.accept(oldBinding.id, oldTicket.id))
+            assertNull(registry.decline(oldBinding.id, oldTicket.id, first))
+            assertFalse(registry.detach(oldBinding)); assertSame(ticket, owner.state.value.ticket)
+            assertEquals(issued, f.paths.size)
+            assertNotNull(registry.accept(binding.id, ticket.id)); assertEquals(issued + 1, f.paths.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {registry.close(); newOwner?.close(); oldOwner.close(); f.close()}
+    }
+
+    @Test fun mismatchedAccountRegistryBindingCannotWithdrawCurrentNotification() = runTest {
+        val f = Fixture(this); val port = Notifications(); val wrongJob = Job()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, notifications)
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            val wrong = SocialAuthenticatedAccount(account.userId, wrongJob, backgroundScope.coroutineContext) {"replacement"}
+            assertFailsWith<IllegalArgumentException> {registry.bind(wrong, notifications)}
+            assertSame(ticket, notifications.state.value.ticket); assertTrue(port.cancelled.isEmpty())
+            assertNotNull(registry.accept(binding.id, ticket.id)); assertEquals(2, f.paths.size)
+        } finally {wrongJob.cancel(); registry.close(); notifications.close(); f.close()}
+    }
+
     @Test fun ringExpiringAtAcceptanceReturnCannotBecomeActivityTarget() = runTest {
         val f = Fixture(this); val port = Notifications(); var reads = 0; var expire = false
         val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"

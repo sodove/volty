@@ -44,6 +44,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     private var observation: DirectCallRingObservation? = null
     private val ticketOwner = Any()
     private val issuedIds = mutableSetOf<String>()
+    internal fun belongsTo(candidate: SocialAuthenticatedAccount): Boolean = account === candidate
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
