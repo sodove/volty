@@ -343,6 +343,9 @@ class JdbcSessionRepository(private val source: DataSource, private val access: 
         save(c, row)
         if (existing?.operation != row.operation) appendRosterChange(c, row)
         if (next.terminal && next.sessionId != null) {
+            c.prepareStatement("DELETE FROM nearby_channel_sharing_packets WHERE actor_id=?::uuid AND session_id=?::uuid").use {
+                it.setString(1, next.actorId); it.setString(2, next.sessionId); it.executeUpdate()
+            }
             // Exact original session only: delayed cleanup must not revoke a replacement trip.
             c.prepareStatement("UPDATE nearby_channel_sharing_consent SET phase='REVOKED' WHERE actor_id=?::uuid AND session_id=?::uuid AND phase='ACTIVE'").use {
                 it.setString(1, next.actorId); it.setString(2, next.sessionId); it.executeUpdate()
