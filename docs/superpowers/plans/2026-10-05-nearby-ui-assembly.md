@@ -34,6 +34,7 @@
 - [ ] Before activating owner departure UI, provide an authoritative paginated member directory for successor selection. Current community details contain owner/channels but no member list. Never ask users to copy a user UUID or infer server membership from friendships/voice roster.
 
 - [ ] Introduce the new Decompose Nearby component with auth/profile/friends from the existing social repository and v2 server workspace from the verified `SocialAuthenticatedAccount`.
+- [x] Bind the server presenter to the actual repository's authenticated-account flow and actual community factory. Same-user relogin replaces the consumer, stale callbacks retain the original authority, screen closure preserves authentication, failed construction has a bounded explicit retry. Five actual-repository/HTTP tests; full Android 3127 exact zero bad. Decompose shell and Root activation remain open.
 - [ ] Main view: `Мои серверы` and `Друзья`; `Найти сервер` opens searchable public catalog. Empty/loading/error states are distinct. Creating a server opens a small explicit public/private form.
 - [ ] Server view: title and channels first, creation/invites/leave/delete in secondary actions. Opening or joining a server does not start voice. No fabricated per-channel participant counts.
 - [ ] Owner leave reports successor selection or explicit deletion; destructive actions require target-bound confirmation. No automatic delete after a leave rejection.
