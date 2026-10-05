@@ -24,6 +24,127 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    private inner class SharingFixture(val f: Fixture) {
+        val source=CaptureLocationRepository()
+        val foreground=CaptureForegroundPort()
+        val journal=RecordingRevokeJournal()
+        var beforeAcquire: suspend ()->Unit={}
+        var launches=0
+        val startup=ChannelSharingStartup(f.client,"https://example.test/v2/nearby",f.dispatcher,source,
+            NearbyLocationDemandCoordinator(source),foreground,{f.time},{f.time+900},{EarnedTelemetry()},journal,{f.peer}) {account ->
+            beforeAcquire();f.acquire(account);assertNotNull(f.boundRuntime)
+        }
+        suspend fun start(account: SocialAuthenticatedAccount,generation: String=f.key):ChannelSharingStartHandle {
+            val state=assertNotNull(f.runtime).state.value
+            return startup.start(account,VoiceSessionTag(assertNotNull(state.sessionId),state.generation),generation,
+                ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) {ticket ->
+                launches++;foreground.authority.acknowledge(ticket,Any());ChannelSharingForegroundLaunch.STARTED
+            }
+        }
+    }
+
+    @Test fun actualSharingSwitchGuardWithdrawsPositionSynchronouslyAndWaitsForOriginalRemoteRevoke()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var handle: ChannelSharingStartHandle?=null
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val started=sharing.start(account);handle=started;assertTrue(started.result.await());runCurrent()
+            assertFalse(guard.remember(account,second,started));assertTrue(guard.remember(account,first,started))
+            assertTrue(guard.requiresConfirmation(first));assertFalse(guard.requiresConfirmation(second))
+            f.time=101;sharing.source.emitFix(1001,101);runCurrent();assertEquals(listOf(0L),f.packetSequences)
+            f.sharingRevokeRelease=CompletableDeferred()
+            guard.withdrawSharing(first)
+            assertFalse(started.state.value.wanted);assertNull(assertNotNull(started.capture.value).packet.value)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertFalse(guard.awaitSharingCleanup(first));runCurrent();assertTrue(f.sharingRevokeEntered.isCompleted)
+            f.sharingRevokeRelease!!.complete(Unit);runCurrent()
+            assertTrue(guard.awaitSharingCleanup(first));assertFalse(guard.requiresConfirmation(first))
+            assertEquals(setOf(LocationConsumer.NAVIGATION),sharing.source.state.value.demands)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {f.sharingRevokeRelease?.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
+    @Test fun actualSharingSwitchGuardCannotCallHeldPreparationCleanOrLaunchItAfterWithdrawal()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var handle: ChannelSharingStartHandle?=null
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>()
+        sharing.beforeAcquire={withContext(NonCancellable) {entered.complete(Unit);release.await()}}
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val started=sharing.start(account);handle=started;runCurrent();assertTrue(entered.isCompleted)
+            assertTrue(guard.remember(account,first,started));assertTrue(guard.requiresConfirmation(first))
+            guard.withdrawSharing(first);assertFalse(guard.awaitSharingCleanup(first));assertTrue(started.state.value.preparing)
+            release.complete(Unit);assertFalse(started.result.await());runCurrent()
+            assertTrue(guard.awaitSharingCleanup(first));assertEquals(0,sharing.launches)
+            assertTrue(sharing.source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty())
+            assertTrue(assertNotNull(f.runtime).state.value.wanted)
+        } finally {release.complete(Unit);runCurrent();handle?.close();f.close()}
+    }
+
+    @Test fun actualSharingSwitchGuardDoesNotTreatRemoteRevokeAsNativeCleanupSuccess()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var handle: ChannelSharingStartHandle?=null
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val started=sharing.start(account);handle=started;assertTrue(started.result.await());runCurrent()
+            assertTrue(guard.remember(account,first,started));sharing.source.failStop=true
+            guard.withdrawSharing(first);runCurrent();assertFalse(guard.awaitSharingCleanup(first));runCurrent()
+            assertIs<ChannelSharingReply.Negative>(assertNotNull(started.originalRevoke.value).await())
+            assertTrue(started.state.value.nativeCleanupPending)
+            sharing.source.failStop=false;assertTrue(guard.awaitSharingCleanup(first));assertTrue(account.job.isActive)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted)
+        } finally {sharing.source.failStop=false;runCurrent();handle?.close();f.close()}
+    }
+
+    @Test fun actualSharingSwitchGuardOldWithdrawalCannotHideNewConversationSharing()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);val handles=mutableListOf<ChannelSharingStartHandle>()
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val old=sharing.start(account);handles+=old;assertTrue(old.result.await());runCurrent();assertTrue(guard.remember(account,first,old))
+            guard.withdrawSharing(first);runCurrent();assertTrue(guard.awaitSharingCleanup(first))
+            f.owner.start(account,channel,second,replace=true,readPreferences={phone},launch=f::launch);runCurrent()
+            val fresh=sharing.start(account,f.peer);handles+=fresh;assertTrue(fresh.result.await());runCurrent()
+            assertTrue(guard.remember(account,second,fresh));val ticket=sharing.foreground.current.value
+            guard.withdrawSharing(first);assertTrue(guard.awaitSharingCleanup(first));runCurrent()
+            assertTrue(fresh.state.value.wanted);assertTrue(fresh.state.value.active)
+            assertSame(ticket,sharing.foreground.current.value);assertTrue(guard.requiresConfirmation(second))
+            assertEquals(second,assertNotNull(f.runtime).state.value.operationId)
+        } finally {handles.forEach {it.close()};f.close()}
+    }
+
+    @Test fun actualSharingSwitchGuardFailedRemoteRevokeRemainsBlockedUntilDurableRecoverySucceeds()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var handle: ChannelSharingStartHandle?=null
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val started=sharing.start(account);handle=started;assertTrue(started.result.await());runCurrent()
+            assertTrue(guard.remember(account,first,started));f.sharingRevokeStatus=HttpStatusCode.ServiceUnavailable
+            guard.withdrawSharing(first);runCurrent()
+            assertTrue(started.close());assertIs<ChannelSharingReply.Failed>(assertNotNull(started.originalRevoke.value).await())
+            assertFalse(guard.awaitSharingCleanup(first));assertEquals(1,sharing.journal.rows.size)
+            val before=f.paths.count {it.endsWith("/revoke")};f.sharingRevokeStatus=HttpStatusCode.OK
+            assertTrue(guard.awaitSharingCleanup(first));runCurrent()
+            assertEquals(before+1,f.paths.count {it.endsWith("/revoke")});assertTrue(sharing.journal.rows.isEmpty())
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {handle?.close();f.close()}
+    }
+
+    @Test fun actualSharingSwitchGuardRemoteNegativeCannotHideFailedDurableAcknowledgement()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val sharing=SharingFixture(f);var handle: ChannelSharingStartHandle?=null
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val started=sharing.start(account);handle=started;assertTrue(started.result.await());runCurrent()
+            assertTrue(guard.remember(account,first,started));sharing.journal.failAcknowledge=true
+            guard.withdrawSharing(first);runCurrent();assertTrue(started.close())
+            assertIs<ChannelSharingReply.Negative>(assertNotNull(started.originalRevoke.value).await())
+            assertEquals(1,sharing.journal.rows.size);assertFalse(guard.awaitSharingCleanup(first))
+            sharing.journal.failAcknowledge=false;assertTrue(guard.awaitSharingCleanup(first));assertTrue(sharing.journal.rows.isEmpty())
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {sharing.journal.failAcknowledge=false;handle?.close();f.close()}
+    }
+
     private class Switches: NearbyVoiceSwitchGuard {
         var confirm=false
         val withdrawn=mutableListOf<VoiceOperationId?>()

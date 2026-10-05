@@ -24,7 +24,9 @@ internal data class ChannelSharingStartupState(val wanted: Boolean=true,val prep
     val originalCleanupPending: Boolean=false)
 /** Own capture/control and actual preparation producer; borrower of voice/auth/navigation. */
 internal class ChannelSharingStartHandle internal constructor(private val account: SocialAuthenticatedAccount,
+    private val original: VoiceSessionTag,
     private val queued: CoroutineDispatcher,launch: (ChannelLocationForegroundTicket)->ChannelSharingForegroundLaunch,
+    private val recover: suspend ()->Boolean,
     prepare: suspend (ChannelSharingStartHandle)->Boolean) {
     private val mutableState=MutableStateFlow(ChannelSharingStartupState())
     val state=mutableState.asStateFlow()
@@ -32,6 +34,7 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
     val capture=mutableCapture.asStateFlow()
     private val mutableRevoke=MutableStateFlow<Deferred<ChannelSharingReply>?>(null)
     val originalRevoke=mutableRevoke.asStateFlow()
+    internal fun belongsTo(account: SocialAuthenticatedAccount,original: VoiceSessionTag)=this.account===account && this.original==original
     private var control: ChannelSharingAccountControl?=null
     private val launcher=MutableStateFlow<((ChannelLocationForegroundTicket)->ChannelSharingForegroundLaunch)?>(launch)
     private val lifetime=SupervisorJob(checkNotNull(account.retirementParentScope().coroutineContext[Job]))
@@ -93,6 +96,12 @@ internal class ChannelSharingStartHandle internal constructor(private val accoun
     }
     /** Native and child cleanup only; originalRevoke separately carries remote business result. */
     suspend fun close(): Boolean = withContext(NonCancellable+queued) {requestHide();cleanupOwned()}
+    /** Retry durable original negatives after owned control closes; never restores capture or voice. */
+    internal suspend fun recoverOriginalCleanup():Boolean=withContext(queued) {
+        val state=mutableState.value
+        if(state.wanted || state.preparing || state.nativeCleanupPending || state.childCleanupPending) return@withContext false
+        recover().also {if(it) mutableState.update {state -> state.copy(originalCleanupPending=false)}}
+    }
     private suspend fun cleanupOwned(): Boolean = cleanup.withLock {
         val nativeClean=mutableCapture.value?.close() ?: true
         mutableRevoke.value=mutableCapture.value?.originalRevoke?.value
@@ -131,7 +140,15 @@ internal class ChannelSharingStartup(private val client: HttpClient,private val 
         require(root!==account.job && root.isActive && account.job.isActive && queued.isDispatchNeeded(parent.coroutineContext))
         require(demand.owns(repository));require(rootJob==null || rootJob===root)
         require(issued.add(generation)) {"Sharing preparation generation cannot be reused"};rootJob=root
-        val prepared=ChannelSharingStartHandle(account,queued,launch) {handle ->
+        val tag=ChannelSharingTag(original.sessionId.value,generation)
+        val prepared=ChannelSharingStartHandle(account,original,queued,launch,recover={
+            admission.withLock {
+                val protected=preparations.filter {entry ->
+                    entry.actor==account.userId.value && entry.tag!=tag && entry.handle.state.value.let {it.wanted || it.preparing}
+                }.map {it.tag}.toSet()
+                recovery.drain(account,protected)
+            }
+        }) {handle ->
             val binding=acquire(account);handle.ensureWanted()
             admission.withLock {
                 handle.ensureWanted()
