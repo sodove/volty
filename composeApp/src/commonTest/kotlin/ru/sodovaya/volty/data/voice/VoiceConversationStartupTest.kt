@@ -23,6 +23,97 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun sharingCoordinatorMissingVoiceCallbackTimesOutAndClearsOnlyOriginalSharingFlag() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var coordinator: ChannelSharingCoordinator?=null
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            val root=ChannelSharingCoordinator.create(account,runtime,f.dispatcher);coordinator=root
+            val started=root.enable(original,owner);runCurrent();assertTrue(runtime.state.value.sharingEnabled)
+            assertFalse(started.isCompleted);assertTrue(source.issued.isEmpty())
+            advanceTimeBy(30_001);runCurrent();assertFalse(started.await())
+            assertFalse(owner.locationForegroundState.value.wanted);assertFalse(runtime.state.value.sharingEnabled)
+            assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive);assertTrue(f.sharingAuthorizations.isEmpty())
+        } finally {coordinator?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun sharingCoordinatorReplacementDuringPartialNativeStartPreservesNewVoiceAndRetriesOldCleanup() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var coordinator: ChannelSharingCoordinator?=null
+        f.sharingDispatch={coordinator?.dispatch(it)}
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            val root=ChannelSharingCoordinator.create(account,runtime,f.dispatcher);coordinator=root
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());source.startRelease=CompletableDeferred()
+            val started=root.enable(original,owner);runCurrent()
+            assertEquals(listOf(true),source.issued);assertEquals(1,owner.locationForegroundState.value.nativeInFlight)
+            source.failStop=true
+            f.owner.start(account,channel,second,readPreferences={phone},launch=f::launch);runCurrent()
+            assertNotEquals(original.generation,runtime.state.value.generation);assertTrue(runtime.state.value.wanted)
+            assertFalse(owner.locationForegroundState.value.wanted);assertTrue(root.cleanupPending.value)
+            source.startRelease!!.complete(Unit);runCurrent();assertFalse(started.await())
+            assertTrue(owner.locationForegroundState.value.cleanupFailed);assertTrue(root.cleanupPending.value)
+            assertNull(root.publisher.value);assertTrue(f.packetSequences.isEmpty())
+            assertFalse(root.close());source.failStop=false;assertTrue(root.close());runCurrent()
+            assertFalse(root.cleanupPending.value);assertEquals(setOf(LocationConsumer.NAVIGATION),source.state.value.demands)
+            assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+        } finally {source.failStop=false;source.startRelease?.complete(Unit);runCurrent();coordinator?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun sharingCoordinatorUsesActualVoiceEffectsAndSurvivesCancelledUiWaiter() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var coordinator: ChannelSharingCoordinator?=null
+        f.sharingDispatch={coordinator?.dispatch(it)}
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            val root=ChannelSharingCoordinator.create(account,runtime,f.dispatcher);coordinator=root
+            val started=root.enable(original,owner);val waiter=async {started.await()};runCurrent();waiter.cancel()
+            assertTrue(runtime.state.value.sharingEnabled);assertFalse(started.isCompleted)
+            assertTrue(source.issued.isEmpty());assertTrue(f.sharingAuthorizations.isEmpty())
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());assertTrue(started.await());runCurrent()
+            assertNotNull(root.publisher.value);f.time=101;source.emitFix(1001,101);runCurrent()
+            assertEquals(listOf(0L),f.packetSequences)
+            root.dispatch(VoiceSharingDispatch(VoiceSharingEffect.REMOVE_DEMAND,VoiceSessionTag(original.sessionId,VoiceGeneration(99))))
+            runCurrent();assertTrue(owner.locationForegroundState.value.wanted)
+            runtime.hidePosition();runCurrent();assertNull(root.publisher.value);assertNull(owner.packet.value)
+            assertFalse(owner.locationForegroundState.value.wanted);assertEquals(listOf(true,false),source.issued)
+            assertTrue(f.paths.any {it.endsWith("/revoke")});assertTrue(runtime.state.value.wanted);assertTrue(account.job.isActive)
+            assertTrue(root.close())
+        } finally {coordinator?.close();capture?.close();sharing?.close();f.close()}
+    }
+
+    @Test fun sharingCoordinatorHideDuringHeldConsentCannotAcquireNativeOrPublishLate() = runTest {
+        val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var coordinator: ChannelSharingCoordinator?=null
+        f.sharingDispatch={coordinator?.dispatch(it)}
+        val source=CaptureLocationRepository();val demand=NearbyLocationDemandCoordinator(source);val foreground=CaptureForegroundPort()
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingCaptureOwner.create(account,runtime,original,control,f.key,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR,
+                source,demand,foreground,f.dispatcher,{f.time},{f.time+900},{EarnedTelemetry()});capture=owner
+            val root=ChannelSharingCoordinator.create(account,runtime,f.dispatcher);coordinator=root
+            foreground.authority.acknowledge(owner.foregroundTicket,Any());f.sharingPositiveRelease=CompletableDeferred()
+            val started=root.enable(original,owner);runCurrent();assertTrue(f.sharingPositiveEntered.isCompleted)
+            runtime.hidePosition();runCurrent();assertFalse(owner.locationForegroundState.value.wanted)
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent()
+            assertFalse(started.await());assertNull(root.publisher.value);assertTrue(source.issued.none {it})
+            assertTrue(f.packetSequences.isEmpty());assertTrue(runtime.state.value.wanted);assertFalse(runtime.state.value.sharingEnabled)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();coordinator?.close();capture?.close();sharing?.close();f.close()}
+    }
+
     @Test fun rootPacketPublisherExpiredSampleDoesNotWithdrawConsentButAccessDenialHidesOriginalCapture() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var capture: ChannelSharingCaptureOwner?=null;var publisher: ChannelSharingPacketPublisher?=null
         f.sharingCredit=30_000;f.voiceGrantMillis=20_000;f.packetElapsed=1001
@@ -1525,6 +1616,7 @@ class VoiceConversationStartupTest {
         val allocated = mutableListOf<VoiceAudioPreferences>()
         val emitters = mutableListOf<Pair<VoiceSessionTag, (VoiceSessionEvent) -> Unit>>()
         var runtime: AuthenticatedVoiceRuntime? = null
+        var sharingDispatch: (VoiceSharingDispatch)->Unit = {}
         var afterAcquire: suspend () -> Unit = {}
         val client = HttpClient(MockEngine) {engine {
             dispatcher = this@Fixture.dispatcher
@@ -1613,7 +1705,7 @@ class VoiceConversationStartupTest {
                     override suspend fun close() {closes++}
                 }
             }
-            return coordinator.acquire(account, audio, {}).also {runtime = it; afterAcquire()}
+            return coordinator.acquire(account, audio, {sharingDispatch(it)}).also {runtime = it; afterAcquire()}
         }
         fun launch(ticket: VoiceForegroundTicket): Boolean {launches++; if (acknowledgeLaunch) assertTrue(gate.acknowledge(ticket, service)); return true}
         suspend fun login(): SocialAuthenticatedAccount {

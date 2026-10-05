@@ -34,6 +34,7 @@ internal class ChannelSharingCaptureOwner private constructor(private val accoun
     private val cleanupMutex=Mutex()
     private var started: Deferred<Boolean>?=null
     private var publisherReserved=false
+    private var coordinatorReserved=false
     private var foregroundGranted=false
     private var consentGranted=false
     private var fixFloor=0L
@@ -125,6 +126,12 @@ internal class ChannelSharingCaptureOwner private constructor(private val accoun
             catch(_: Exception) {requestHide()}
     }
     internal fun belongsTo(account: SocialAuthenticatedAccount)=this.account===account
+    internal suspend fun reserveCoordinator(account: SocialAuthenticatedAccount,runtime: AuthenticatedVoiceRuntime,
+        original: VoiceSessionTag): Boolean = withContext(queued) {
+        require(control.belongsTo(account,runtime,original)) {"Capture belongs to another original session"}
+        ensureSession()
+        if(coordinatorReserved || publisherReserved) false else {coordinatorReserved=true;true}
+    }
     internal suspend fun reservePublisher(): Boolean = withContext(queued) {
         ensureSession()
         if(publisherReserved) false else {publisherReserved=true;true}
