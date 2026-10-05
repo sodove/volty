@@ -4,9 +4,11 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
 import ru.sodovaya.volty.data.nearby.DirectCallFailure
+import ru.sodovaya.volty.data.nearby.DirectCallReply
 import ru.sodovaya.volty.data.nearby.DirectCallRingObservation
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
+import ru.sodovaya.volty.domain.voice.VoiceOperationId
 
 internal class IncomingCallNotificationTicket internal constructor(val id: String, internal val owner: Any)
 internal interface IncomingCallNotificationPort {
@@ -17,7 +19,7 @@ internal data class IncomingCallNotificationState(val ticket: IncomingCallNotifi
     val call: DirectCallSnapshot? = null, val retired: Boolean = false)
 
 /** Queued SERIAL account-owned notifications. Borrows runtime; never controls media. */
-internal class IncomingCallNotificationOwner(private val account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime,
+internal class IncomingCallNotificationOwner(private val account: SocialAuthenticatedAccount, private val runtime: AuthenticatedVoiceRuntime,
     private val queuedDispatcher: CoroutineDispatcher, pulses: Flow<Unit>, private val clock: () -> Long,
     private val port: IncomingCallNotificationPort, private val nextId: () -> String) {
     private val verifier = IncomingCallHintVerifier(account, runtime, clock)
@@ -70,6 +72,39 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     }
 
     suspend fun close() = withContext(NonCancellable) {withContext(queuedDispatcher) {closeOwned()}}
+    /** Metadata only: the caller still needs visible Activity admission to join the call. */
+    suspend fun acceptTarget(ticket: IncomingCallNotificationTicket): DirectCallSnapshot? = withContext(queuedDispatcher) {
+        val action = consume(ticket) ?: return@withContext null
+        if (!lifetime.isActive) return@withContext null
+        val reply = try {
+            reads.update {it + 1}
+            verifier.verify(action.call.callId)
+        } finally {reads.update {it - 1}}
+        val now = tick() ?: return@withContext null
+        if (latest !== action.marker || reply !is IncomingCallHintReply.Ringing || !reply.observation.isFresh(now))
+            return@withContext null
+        reply.call
+    }
+
+    /** Original negative submission; UI owns the returned waiter, not its cleanup producer. */
+    suspend fun decline(ticket: IncomingCallNotificationTicket, operation: VoiceOperationId): Deferred<DirectCallReply>? =
+        withContext(queuedDispatcher) {
+            invitationDraftId(operation.value)
+            val action = consume(ticket) ?: return@withContext null
+            runtime.requestDeclineIncomingCall(action.call, operation)
+        }
+
+    private class Action(val call: DirectCallSnapshot, val marker: Hint)
+    private fun consume(ticket: IncomingCallNotificationTicket): Action? {
+        if (tick() == null || ticket.owner !== ticketOwner || output.value.ticket !== ticket) return null
+        val call = output.value.call ?: return null
+        val evidence = observation ?: return null
+        if (evidence.callId != call.callId || evidence.revision != call.revision) return null
+        val marker = Hint(call.callId)
+        withdraw(); pending = null; latest = marker
+        // Failed notification cancellation cannot abort an already authorized negative action.
+        return Action(call, marker)
+    }
 
     private fun startReader() {
         readerJob = scope.launch {

@@ -20,6 +20,102 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun ringExpiringAtAcceptanceReturnCannotBecomeActivityTarget() = runTest {
+        val f = Fixture(this); val port = Notifications(); var reads = 0; var expire = false
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val clock = {if (expire && ++reads >= 3) 1100L else 100L}
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), clock, port, {f.key})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            expire = true
+            assertNull(notifications.acceptTarget(ticket)); assertEquals(2, f.paths.size)
+            assertTrue(reads >= 3); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {notifications.close(); f.close()}
+    }
+
+    @Test fun authorizedDeclineStillSubmitsOriginalNegativeWhenNotificationCancelThrows() = runTest {
+        val f = Fixture(this); val port = Notifications().apply {throwOnCancel = true}
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            val result = assertNotNull(notifications.decline(ticket, first))
+            assertEquals(DirectCallPhase.DECLINED, assertIs<DirectCallReply.Ready>(result.await()).call.phase)
+            assertTrue(notifications.cleanupFailed.value); assertTrue(notifications.state.value.retired)
+            assertEquals(listOf("/v2/nearby/calls/$channel", "/v2/nearby/calls/$channel/decline"), f.paths)
+            assertTrue(account.job.isActive); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {notifications.close(); f.close()}
+    }
+
+    @Test fun newerHintFencesHeldAcceptanceResolutionWithoutTakingItsNotification() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>(); val port = Notifications(); var nonce = 0
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port,
+            {if (nonce++ == 0) f.key else f.peer})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            f.statusRelease = release
+            val target = async {notifications.acceptTarget(ticket)}; runCurrent(); assertEquals(2, f.paths.size)
+            notifications.hint(second.value); runCurrent(); assertEquals(3, f.paths.size)
+            release.complete(Unit); runCurrent(); assertNull(target.await())
+            assertEquals(second.value, notifications.state.value.call?.callId)
+            assertNotNull(notifications.state.value.ticket); assertEquals(2, port.shown.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit); notifications.close(); f.close()}
+    }
+
+    @Test fun notificationAcceptanceConsumesTicketRechecksStatusAndStillNeedsExplicitForeground() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            val target = assertNotNull(notifications.acceptTarget(ticket))
+            assertEquals(channel, target.callId); assertEquals(2, f.paths.size)
+            assertNull(notifications.state.value.ticket); assertEquals(listOf(ticket), port.cancelled)
+            assertNull(notifications.acceptTarget(ticket)); assertEquals(2, f.paths.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+            f.owner.start(account, VoiceConversationTarget.IncomingCall(target), first,
+                readPreferences = {phone}, launch = f::launch); runCurrent()
+            assertEquals(1, f.launches); assertEquals(1, f.published)
+            assertTrue(f.paths.contains("/v2/nearby/calls/$channel/accept"))
+        } finally {notifications.close(); f.close()}
+    }
+
+    @Test fun oldNotificationActionsCannotConsumeReplacementTicketOrIssueHttp() = runTest {
+        val f = Fixture(this); val port = Notifications(); var nonce = 0
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port,
+            {if (nonce++ == 0) f.key else f.peer})
+        try {
+            notifications.hint(channel); runCurrent(); val old = assertNotNull(notifications.state.value.ticket)
+            notifications.hint(channel); runCurrent(); val current = assertNotNull(notifications.state.value.ticket)
+            assertNotSame(old, current); val issued = f.paths.size
+            assertNull(notifications.acceptTarget(old)); assertNull(notifications.decline(old, first))
+            assertEquals(issued, f.paths.size); assertSame(current, notifications.state.value.ticket)
+            f.statusPhase = "ACCEPTED"
+            assertNull(notifications.acceptTarget(current)); assertEquals(issued + 1, f.paths.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {notifications.close(); f.close()}
+    }
+
+    @Test fun notificationDeclineSurvivesCancelledUiWaiterCloseAndLogoutOnOriginalCleanupRoot() = runTest {
+        val f = Fixture(this); val port = Notifications(); val release = CompletableDeferred<Unit>()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            f.declineRelease = release
+            val result = assertNotNull(notifications.decline(ticket, first))
+            val waiter = launch {result.await()}; runCurrent(); assertTrue(f.declineEntered.isCompleted)
+            waiter.cancel(); notifications.close(); f.repository.logout(); runCurrent()
+            release.complete(Unit); runCurrent()
+            assertEquals(DirectCallPhase.DECLINED, assertIs<DirectCallReply.Ready>(result.await()).call.phase)
+            assertEquals(listOf("/v2/nearby/calls/$channel", "/v2/nearby/calls/$channel/decline"), f.paths)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty()); assertEquals(0, f.published)
+        } finally {release.complete(Unit); notifications.close(); f.close()}
+    }
+
     @Test fun latestHintPublishesOnlyItsOwnActualStatusAfterOlderHeldResponse() = runTest {
         val f = Fixture(this); val release = CompletableDeferred<Unit>(); val port = Notifications()
         val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"; f.statusRelease = release
