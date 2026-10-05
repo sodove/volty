@@ -16,9 +16,9 @@ internal class NearbyBackendComponents private constructor(
     val mediaWebhook: MediaWebhookEndpoint,
     private val voice: SessionService,
     private val webhooks: MediaWebhookReconciler,
-) {
-    fun reconcileSession()=voice.reconcileNext()
-    fun reconcileWebhook()=webhooks.reconcileNext()
+) : NearbyMaintenancePort {
+    override fun reconcileSession()=voice.reconcileNext()
+    override fun reconcileWebhook()=webhooks.reconcileNext()
     companion object {
         fun create(source: DataSource,sfu: SfuLeaseClient,issuer: SessionCredentialIssuer,
             verifier: MediaWebhookVerifier,now: ()->Long,singletonOrigin: Boolean=false): NearbyBackendComponents {

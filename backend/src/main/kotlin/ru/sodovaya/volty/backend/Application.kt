@@ -99,6 +99,7 @@ class AppDependencies(
     val nearbyChannelSharing: ChannelSharingEndpointPort? = null,
     val nearbySharingPackets: ru.sodovaya.volty.backend.nearby.ChannelSharingPacketEndpointPort? = null,
     val nearbyCompatibility: ru.sodovaya.volty.backend.nearby.NearbyCompatibility = ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY,
+    val nearbyMaintenance: ru.sodovaya.volty.backend.nearby.NearbyMaintenancePort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -216,7 +217,7 @@ fun main() {
 
 fun Application.module(dependencies: AppDependencies = AppDependencies.create()) {
     val logger = LoggerFactory.getLogger("VoltyBackend")
-    val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    val scope = CoroutineScope(SupervisorJob(coroutineContext[kotlinx.coroutines.Job]) + Dispatchers.IO)
 
     install(CallLogging)
     install(CallId) {
@@ -447,14 +448,20 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     if (!dependencies.testMode) {
+        dependencies.nearbyMaintenance?.let {port ->
+            ru.sodovaya.volty.backend.nearby.NearbyMaintenanceOwner.start(scope,
+                kotlinx.coroutines.flow.flow {
+                    while (kotlinx.coroutines.currentCoroutineContext().isActive) {emit(Unit);delay(500)}
+                },port)
+        }
         scope.launch {
             while (isActive) {
                 delay(LIVE_LOCATION_FRESHNESS_MILLIS)
                 dependencies.store.expireShares(nowMillis()).forEach { expireAndBroadcast(dependencies, it) }
             }
         }
-        monitor.subscribe(io.ktor.server.application.ApplicationStopped) { scope.cancel() }
     }
+    monitor.subscribe(io.ktor.server.application.ApplicationStopping) { scope.cancel() }
 }
 
 /** V1 has no original SID/generation; it cannot safely address a v2 trip. */
