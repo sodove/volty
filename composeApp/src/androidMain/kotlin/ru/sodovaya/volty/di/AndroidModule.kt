@@ -53,6 +53,7 @@ import ru.sodovaya.volty.data.voice.VoiceForegroundGate
 import ru.sodovaya.volty.data.voice.AndroidVoiceForegroundController
 import ru.sodovaya.volty.data.voice.IncomingCallActionRegistry
 import ru.sodovaya.volty.data.voice.AndroidIncomingCallAccountFactory
+import ru.sodovaya.volty.data.voice.IncomingCallAccountCoordinator
 import ru.sodovaya.volty.diagnostics.LogExporter
 import ru.sodovaya.volty.notification.AlarmPreview
 import ru.sodovaya.volty.notification.AndroidNotifier
@@ -165,6 +166,7 @@ val androidModule = module {
             flow {while (true) {delay(1_000L); emit(Unit)}}, SystemClock::elapsedRealtime,
             {java.util.UUID.randomUUID().toString()})
     }
+    single { IncomingCallAccountCoordinator(Dispatchers.Main, get(), get<AndroidIncomingCallAccountFactory>()) }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
     single { AndroidOfflineRoutingPackageManager(androidContext()) }
     single { AndroidOfflineNavigationConfig.from(androidContext()) }

@@ -19,6 +19,9 @@ internal class IncomingCallActionRegistry(private val queuedDispatcher: Coroutin
     /** Same queued serial caller as the notification port; never a cross-thread token lookup. */
     fun bindingFor(ticket: IncomingCallNotificationTicket): IncomingCallActionBinding? =
         selected?.takeIf {live(it) && it.owner.mayIssueAction(ticket)}?.binding
+    internal fun matches(binding: IncomingCallActionBinding, account: SocialAuthenticatedAccount,
+                         owner: IncomingCallNotificationOwner): Boolean =
+        selected?.let {it.binding === binding && it.account === account && it.owner === owner && live(it)} == true
 
     suspend fun bind(account: SocialAuthenticatedAccount, owner: IncomingCallNotificationOwner): IncomingCallActionBinding =
         withContext(queuedDispatcher) {

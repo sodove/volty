@@ -155,7 +155,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     }
 
     private fun tick(): Long? {
-        if (!lifetime.isActive || !account.job.isActive) {closeOwned(); return null}
+        if (!lifetime.isActive || !account.job.isActive || runtime.retired.value) {closeOwned(); return null}
         val now = try {clock()} catch (_: Exception) {-1}
         if (now < 0 || lastTime?.let {now < it} == true) {closeOwned(); return null}
         lastTime = now

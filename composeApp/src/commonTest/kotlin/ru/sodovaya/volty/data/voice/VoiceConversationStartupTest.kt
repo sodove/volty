@@ -20,6 +20,91 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun retiredBorrowedRuntimeWithdrawsIncomingNotificationEvenWithLiveAccount() = runTest {
+        val f = Fixture(this); val port = Notifications(); val pulses = MutableSharedFlow<Unit>()
+        val account = f.login(); val runtime = f.acquire(account)
+        f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val notifications = IncomingCallNotificationOwner(account, runtime, f.dispatcher, pulses, {f.time}, port, {f.key})
+        try {
+            notifications.hint(channel); runCurrent(); val ticket = assertNotNull(notifications.state.value.ticket)
+            runtime.retire(); runCurrent(); assertTrue(runtime.retired.value); assertTrue(account.job.isActive)
+            pulses.emit(Unit); runCurrent()
+            assertTrue(notifications.state.value.retired); assertNull(notifications.state.value.ticket)
+            assertEquals(listOf(ticket), port.cancelled); assertFalse(notifications.hint(channel))
+            assertEquals(1, f.paths.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {notifications.close(); f.close()}
+    }
+
+    @Test fun incomingCoordinatorCachesRootBuilderWhenUiWaiterCancels() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; var creations = 0
+        val account = f.login(); val runtime = f.acquire(account)
+        val factory = IncomingCallNotificationFactory {ownedAccount, ownedRuntime ->
+            creations++
+            val owner = IncomingCallNotificationOwner(ownedAccount, ownedRuntime, f.dispatcher, MutableSharedFlow(), {f.time}, Notifications(), {f.key})
+            val result = IncomingCallNotificationAttachment(owner, registry.bind(ownedAccount, owner))
+            entered.complete(Unit); release.await(); result
+        }
+        val coordinator = IncomingCallAccountCoordinator(f.dispatcher, registry, factory)
+        try {
+            val waiter = async {coordinator.acquire(account, runtime)}; runCurrent(); assertTrue(entered.isCompleted)
+            waiter.cancel(); val actual = async {coordinator.acquire(account, runtime)}; runCurrent()
+            assertEquals(1, creations); assertTrue(f.paths.isEmpty())
+            release.complete(Unit); runCurrent(); val attachment = actual.await()
+            assertSame(attachment, coordinator.acquire(account, runtime)); assertEquals(1, creations)
+            f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            attachment.owner.hint(channel); runCurrent(); assertNotNull(attachment.owner.state.value.ticket)
+            coordinator.retireAll(); runCurrent(); assertTrue(attachment.owner.state.value.retired)
+            assertFalse(runtime.retired.value); assertTrue(account.job.isActive); assertEquals(0, f.launches)
+        } finally {release.complete(Unit); coordinator.retireAll(); registry.close(); f.close()}
+    }
+
+    @Test fun obsoleteIncomingFactoryReturnCannotCloseNewLoginNotificationOrRuntime() = runTest {
+        val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
+        var nonce = 0; var creations = 0
+        val registry = IncomingCallActionRegistry(f.dispatcher) {if (nonce++ == 0) f.peer else first.value}
+        val factory = IncomingCallNotificationFactory {account, runtime ->
+            val firstBuild = creations++ == 0
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, Notifications(), {f.key})
+            val result = IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+            if (firstBuild) withContext(NonCancellable) {entered.complete(Unit); release.await()}
+            result
+        }
+        val coordinator = IncomingCallAccountCoordinator(f.dispatcher, registry, factory)
+        try {
+            val oldAccount = f.login(); val old = async {coordinator.acquire(oldAccount, f.acquire(oldAccount))}
+            runCurrent(); assertTrue(entered.isCompleted)
+            f.repository.logout(); runCurrent(); val account = f.login(); val runtime = f.acquire(account)
+            val current = coordinator.acquire(account, runtime)
+            f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            current.owner.hint(channel); runCurrent(); val ticket = assertNotNull(current.owner.state.value.ticket)
+            release.complete(Unit); runCurrent(); assertTrue(old.await().owner.state.value.retired)
+            assertSame(ticket, current.owner.state.value.ticket); assertFalse(runtime.retired.value)
+            assertNotNull(registry.accept(current.binding.id, ticket.id)); assertTrue(account.job.isActive)
+            assertEquals(2, creations); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit); coordinator.retireAll(); registry.close(); f.close()}
+    }
+
+    @Test fun incomingCoordinatorRejectsWrongAccountRuntimeBeforeReplacingEarnedNotification() = runTest {
+        val f = Fixture(this); val wrongJob = Job(); var creations = 0
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val factory = IncomingCallNotificationFactory {account, runtime ->
+            creations++
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, Notifications(), {f.key})
+            IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+        }
+        val coordinator = IncomingCallAccountCoordinator(f.dispatcher, registry, factory)
+        try {
+            val account = f.login(); val runtime = f.acquire(account); val attachment = coordinator.acquire(account, runtime)
+            f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            attachment.owner.hint(channel); runCurrent(); val ticket = assertNotNull(attachment.owner.state.value.ticket)
+            val wrong = SocialAuthenticatedAccount(account.userId, wrongJob, backgroundScope.coroutineContext) {"replacement"}
+            assertFailsWith<IllegalArgumentException> {coordinator.acquire(wrong, runtime)}
+            assertSame(ticket, attachment.owner.state.value.ticket); assertEquals(1, creations)
+            assertEquals(1, f.paths.size); assertFalse(runtime.retired.value)
+        } finally {wrongJob.cancel(); coordinator.retireAll(); registry.close(); f.close()}
+    }
+
     @Test fun partiallyFailedNativeShowCannotKeepItsActionIssuanceSlot() = runTest {
         val f = Fixture(this); val port = Notifications()
         val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
