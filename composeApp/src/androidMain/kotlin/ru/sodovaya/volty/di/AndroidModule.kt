@@ -45,6 +45,8 @@ import ru.sodovaya.volty.data.nearby.AndroidInvitationDraftStore
 import ru.sodovaya.volty.data.nearby.AndroidInvitationSecretGenerator
 import ru.sodovaya.volty.di.nearby.NearbyCommunityAccountFactory
 import ru.sodovaya.volty.di.nearby.VoiceRosterAccountFactory
+import ru.sodovaya.volty.di.nearby.DirectCallRosterAccountFactory
+import ru.sodovaya.volty.data.voice.VoiceConversationCallRosterFactory
 import ru.sodovaya.volty.data.voice.VoiceAccountCoordinator
 import ru.sodovaya.volty.data.voice.AndroidVoiceAudioFactory
 import ru.sodovaya.volty.data.voice.VoiceForegroundGate
@@ -117,6 +119,15 @@ val androidModule = module {
             pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
             monotonicMillis = SystemClock::elapsedRealtime,
             nativeEnvironment = { gate.allows(it) },
+        )
+    }
+    single<VoiceConversationCallRosterFactory> {
+        DirectCallRosterAccountFactory(
+            client = get(named(NEARBY_HTTP_CLIENT)),
+            baseUrl = NEARBY_API_BASE_URL,
+            queuedDispatcher = Dispatchers.Main,
+            monotonicMillis = SystemClock::elapsedRealtime,
+            pulses = flow { while (true) { delay(1_000L); emit(Unit) } },
         )
     }
     single {
