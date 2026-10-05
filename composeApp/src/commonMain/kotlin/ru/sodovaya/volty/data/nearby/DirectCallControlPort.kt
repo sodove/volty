@@ -13,8 +13,13 @@ data class DirectCallSnapshot(val callId: String, val callerId: String, val call
     val terminal get() = phase != DirectCallPhase.RINGING && phase != DirectCallPhase.ACCEPTED
 }
 sealed interface DirectCallReply {
-    data class Ready(val call: DirectCallSnapshot, val session: VoiceHttpReply? = null, val retryableFailure: String? = null) : DirectCallReply
+    data class Ready(val call: DirectCallSnapshot, val session: VoiceHttpReply? = null, val retryableFailure: String? = null,
+        val ringObservation: DirectCallRingObservation? = null) : DirectCallReply
     data class Failed(val reason: DirectCallFailure) : DirectCallReply
+}
+data class DirectCallRingObservation(val callId: String, val revision: Long, val requestId: VoiceLeaseRequestId,
+    val requestStartedMillis: Long, val responseReceivedMillis: Long, val deadlineMillis: Long) {
+    fun isFresh(now: Long) = now >= responseReceivedMillis && now < deadlineMillis
 }
 sealed interface IncomingCallReply {
     data class Ready(val calls: List<DirectCallSnapshot>, val nextCursor: String?) : IncomingCallReply

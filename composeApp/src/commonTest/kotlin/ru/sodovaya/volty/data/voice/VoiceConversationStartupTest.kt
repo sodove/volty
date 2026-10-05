@@ -20,12 +20,35 @@ class VoiceConversationStartupTest {
     private val second = VoiceOperationId("30000000-0000-0000-0000-000000000005")
     private val phone = VoiceAudioPreferences(VoiceInputPreference.PHONE, VoiceOutputPreference.HEADSET)
 
+    @Test fun hintWithoutServerRelativeCreditCannotOfferTimedIncomingRing() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            f.statusRingCredit = null
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account)) {f.time}
+            assertEquals(DirectCallFailure.INVALID_RESPONSE, assertIs<IncomingCallHintReply.Failed>(verifier.verify(channel)).reason)
+            assertEquals(1, f.paths.size); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {f.close()}
+    }
+
+    @Test fun delayedActualHintCannotReplenishExpiredNotificationTime() = runTest {
+        val f = Fixture(this)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            f.statusElapsed = 1000
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account)) {f.time}
+            assertEquals(IncomingCallHintReply.Gone, verifier.verify(channel))
+            assertEquals(1100, f.time); assertEquals(1, f.paths.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {f.close()}
+    }
+
     @Test fun incomingHintUsesActualStatusAndOnlyExplicitAcceptanceStartsForeground() = runTest {
         val f = Fixture(this)
         try {
             val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
             val runtime = f.acquire(account)
-            val verifier = IncomingCallHintVerifier(account, runtime)
+            val verifier = IncomingCallHintVerifier(account, runtime) {f.time}
             val ring = assertIs<IncomingCallHintReply.Ringing>(verifier.verify(channel)).call
             assertEquals(listOf("/v2/nearby/calls/$channel"), f.paths)
             assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty()); assertTrue(f.rosters.isEmpty())
@@ -40,7 +63,7 @@ class VoiceConversationStartupTest {
         val f = Fixture(this)
         try {
             val account = f.login(); f.callMode = true; f.incomingMode = true
-            val verifier = IncomingCallHintVerifier(account, f.acquire(account))
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account)) {f.time}
             for (phase in listOf("ACCEPTED", "ENDED", "CANCELLED")) {
                 f.statusPhase = phase
                 assertEquals(IncomingCallHintReply.Gone, verifier.verify(channel))
@@ -58,8 +81,8 @@ class VoiceConversationStartupTest {
         try {
             val account = f.login(); val runtime = f.acquire(account)
             val replacement = SocialAuthenticatedAccount(account.userId, replacementJob, backgroundScope.coroutineContext) {"new-token"}
-            assertFailsWith<IllegalArgumentException> {IncomingCallHintVerifier(replacement, runtime)}
-            val verifier = IncomingCallHintVerifier(account, runtime)
+            assertFailsWith<IllegalArgumentException> {IncomingCallHintVerifier(replacement, runtime) {f.time}}
+            val verifier = IncomingCallHintVerifier(account, runtime) {f.time}
             assertFailsWith<IllegalArgumentException> {verifier.verify("invalid")}
             assertTrue(f.paths.isEmpty()); assertEquals(0, f.launches)
         } finally {replacementJob.cancel(); f.close()}
@@ -71,7 +94,7 @@ class VoiceConversationStartupTest {
         try {
             val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
             f.statusRelease = release
-            val verifier = IncomingCallHintVerifier(account, f.acquire(account))
+            val verifier = IncomingCallHintVerifier(account, f.acquire(account)) {f.time}
             val task = async {runCatching {verifier.verify(channel).also {offered = true}}}
             runCurrent(); assertTrue(f.statusEntered.isCompleted)
             f.repository.logout(); runCurrent(); release.complete(Unit); runCurrent()
@@ -567,6 +590,7 @@ class VoiceConversationStartupTest {
     }
 
     private inner class Fixture(val test: TestScope) {
+        var time = 100L
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         val repository = DefaultSocialRepository(Transport(), Store(), test.backgroundScope)
         val service = Any()
@@ -576,6 +600,8 @@ class VoiceConversationStartupTest {
         var callMode = false; var incomingMode = false
         var callRinging = false; var rosterDenied = false
         var statusPhase: String? = null
+        var statusRingCredit: Long? = 1000
+        var statusElapsed = 0L
         var statusRelease: CompletableDeferred<Unit>? = null
         val statusEntered = CompletableDeferred<Unit>()
         val rosters = mutableListOf<AuthenticatedCallRosterOwner>()
@@ -603,7 +629,8 @@ class VoiceConversationStartupTest {
                 if (callMode && it.url.encodedPath.contains("/calls/")) {
                     if (it.url.encodedPath == "/v2/nearby/calls/$channel" && statusPhase != null) {
                         withContext(NonCancellable) {statusEntered.complete(Unit); statusRelease?.await()}
-                        return@addHandler respond("""{"call":${callSnapshot(statusPhase!!, if (statusPhase == "ENDED") "\"CALLER_ENDED\"" else if (statusPhase == "CANCELLED") "\"CALLER_CANCELLED\"" else "null")}}""")
+                        time += statusElapsed
+                        return@addHandler respond("""{"call":${callSnapshot(statusPhase!!, if (statusPhase == "ENDED") "\"CALLER_ENDED\"" else if (statusPhase == "CANCELLED") "\"CALLER_CANCELLED\"" else "null")},"remainingRingMillis":${if (statusPhase == "RINGING") statusRingCredit else "null"}}""")
                     }
                     if (it.url.encodedPath.endsWith("roster")) {
                         if (rosterDenied) return@addHandler respond("{}", HttpStatusCode.Forbidden)
@@ -629,7 +656,7 @@ class VoiceConversationStartupTest {
             }
         }}
         val coordinator = VoiceAccountCoordinator(client, "https://example.test/v2/nearby", dispatcher,
-            MutableSharedFlow<Unit>(), {100}, gate::allows)
+            MutableSharedFlow<Unit>(), {time}, gate::allows)
         val foreground = object : VoiceConversationForegroundPort {
             override val current = gate.current
             override fun request(runtime: AuthenticatedVoiceRuntime) = gate.request(runtime, runtime::requestDisconnect)

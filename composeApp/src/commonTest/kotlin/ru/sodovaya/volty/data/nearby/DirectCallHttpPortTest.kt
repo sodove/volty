@@ -26,6 +26,54 @@ class DirectCallHttpPortTest {
     private fun TestScope.client(handler: suspend MockRequestHandleScope.(io.ktor.client.request.HttpRequestData) -> HttpResponseData) =
         HttpClient(MockEngine) {engine {dispatcher = StandardTestDispatcher(testScheduler); addHandler(handler)}}
 
+    @Test fun ringingCreditUsesOriginalRequestStartAndNotPhoneEpochDeadline() = runTest {
+        var clock = 100L
+        val http = client {clock = 400; respond("""{"call":${snapshot()},"remainingRingMillis":1000}""")}
+        val port = DirectCallHttpPort(actor, http, "https://api.test/v2/nearby", {"token"}, {clock})
+        try {
+            val observation = assertNotNull(assertIs<DirectCallReply.Ready>(port.status(call)).ringObservation)
+            assertEquals(call, observation.callId); assertEquals(1, observation.revision)
+            assertEquals(100, observation.requestStartedMillis); assertEquals(400, observation.responseReceivedMillis)
+            assertEquals(1100, observation.deadlineMillis)
+            assertTrue(observation.isFresh(1099)); assertFalse(observation.isFresh(1100)); assertFalse(observation.isFresh(399))
+        } finally {port.close(); http.close()}
+    }
+
+    @Test fun delayedOrZeroRingingCreditNeverRenewsOnReceipt() = runTest {
+        for (credit in listOf(1000, 0)) {
+            var clock = 100L
+            val http = client {clock = 1100; respond("""{"call":${snapshot()},"remainingRingMillis":$credit}""")}
+            val port = DirectCallHttpPort(actor, http, "https://api.test/v2/nearby", {"token"}, {clock})
+            try {
+                val observation = assertNotNull(assertIs<DirectCallReply.Ready>(port.status(call)).ringObservation)
+                assertFalse(observation.isFresh(clock)); assertEquals(100L + credit, observation.deadlineMillis)
+            } finally {port.close(); http.close()}
+        }
+    }
+
+    @Test fun malformedOrNonRingingCreditCannotProduceTimerEvidence() = runTest {
+        for (credit in listOf("-1", "45001", "\"1000\"", "0.1", Long.MAX_VALUE.toString())) {
+            val http = client {respond("""{"call":${snapshot()},"remainingRingMillis":$credit}""")}
+            val port = DirectCallHttpPort(actor, http, "https://api.test/v2/nearby", {"token"}, {100})
+            try {assertEquals(DirectCallFailure.INVALID_RESPONSE, assertIs<DirectCallReply.Failed>(port.status(call)).reason)}
+            finally {port.close(); http.close()}
+        }
+        val http = client {respond("""{"call":${snapshot("ACCEPTED")},"remainingRingMillis":1000}""")}
+        val port = DirectCallHttpPort(actor, http, "https://api.test/v2/nearby", {"token"}, {100})
+        try {assertEquals(DirectCallFailure.INVALID_RESPONSE, assertIs<DirectCallReply.Failed>(port.status(call)).reason)}
+        finally {port.close(); http.close()}
+    }
+
+    @Test fun overflowOrBackwardClockCannotProduceRingingCredit() = runTest {
+        for ((started, received) in listOf(Long.MAX_VALUE - 100 to Long.MAX_VALUE - 50, 100L to 99L)) {
+            var clock = started
+            val http = client {clock = received; respond("""{"call":${snapshot()},"remainingRingMillis":1000}""")}
+            val port = DirectCallHttpPort(actor, http, "https://api.test/v2/nearby", {"token"}, {clock})
+            try {assertEquals(DirectCallFailure.INVALID_RESPONSE, assertIs<DirectCallReply.Failed>(port.status(call)).reason)}
+            finally {port.close(); http.close()}
+        }
+    }
+
     @Test fun outgoingCreationAndEarlyCancellationKeepOriginalPayloadAndBearer() = runTest {
         val issued = mutableListOf<String>()
         val http = client { request ->

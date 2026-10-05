@@ -29,7 +29,13 @@ internal class DirectCallResponseDecoder(private val actor: String) {
         }
         require(status != HttpStatusCode.Accepted || (call.phase == DirectCallPhase.ACCEPTED &&
             media is ru.sodovaya.volty.data.voice.VoiceHttpReply.Pending))
-        return DirectCallReply.Ready(call, media, failure)
+        val ring = root["remainingRingMillis"]?.takeUnless {it == JsonNull}?.let {
+            val remaining = long(root, "remainingRingMillis")
+            require(call.phase == DirectCallPhase.RINGING && failure == null && remaining in 0..45_000)
+            require(started >= 0 && received >= started && started <= Long.MAX_VALUE - remaining)
+            DirectCallRingObservation(call.callId, call.revision, ordinal, started, received, started + remaining)
+        }
+        return DirectCallReply.Ready(call, media, failure, ring)
     }
 
     fun incoming(root: JsonObject, after: String?, limit: Int): IncomingCallReply.Ready {
