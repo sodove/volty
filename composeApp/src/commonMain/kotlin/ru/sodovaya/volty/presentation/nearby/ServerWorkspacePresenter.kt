@@ -26,6 +26,8 @@ data class ServerWorkspaceUiState(
     val acceptance: InvitationAcceptanceState = InvitationAcceptanceState(),
     val invitationManagementCommunity:String?=null,
     val invitationManagement:InvitationManagementState=InvitationManagementState(),
+    val ownerDepartureCommunity:String?=null,
+    val ownerDeparture:OwnerDepartureState=OwnerDepartureState(),
 )
 
 /** Screen projection/commands; connecting is delegated to the root conversation owner. */
@@ -33,6 +35,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     private val actorId: String, private val creation: ChannelCreationWorkspace,
     private val invitations: InvitationCreationWorkspace, private val acceptance:InvitationAcceptanceWorkspace,
     private val management:InvitationManagementWorkspace,
+    private val departure:OwnerDepartureWorkspace,
     private val connectChannel: (String) -> Unit) {
     init { invitationDraftId(actorId);require(parent.coroutineContext[Job]?.isActive == true && workspace.active) }
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
@@ -41,8 +44,10 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         val returnTo: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
         val query: String = "", val draft: ServerCreationDraft = ServerCreationDraft(),
         val channel: ChannelCreationForm = ChannelCreationForm(),val invitation:InvitationCreationForm=InvitationCreationForm(),
-        val acceptance:InvitationAcceptanceForm=InvitationAcceptanceForm(),val managementCommunity:String?=null)
+        val acceptance:InvitationAcceptanceForm=InvitationAcceptanceForm(),val managementCommunity:String?=null,
+        val departureCommunity:String?=null)
     private var managementVersion=0L
+    private var departureVersion=0L
     private val form = MutableStateFlow(Form())
     private val output = MutableStateFlow(ServerWorkspaceUiState(actorId = actorId))
     val state = output.asStateFlow()
@@ -62,7 +67,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
                         channel=if(current.channel.community!=selected || !owner) ChannelCreationForm() else current.channel,
                         invitation=if(current.invitation.community!=selected || !owner) InvitationCreationForm() else current.invitation,
                         acceptance=if(lostAcceptance) InvitationAcceptanceForm() else current.acceptance,
-                        managementCommunity=current.managementCommunity.takeIf {it==selected && owner})
+                        managementCommunity=current.managementCommunity.takeIf {it==selected && owner},
+                        departureCommunity=current.departureCommunity.takeIf {it==selected && owner})
                     if (selected != null) next.copy(section = ServerWorkspaceSection.SERVER)
                     else if (next.section == ServerWorkspaceSection.SERVER) next.copy(section = next.returnTo)
                     else next
@@ -74,11 +80,13 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
             combine(form, workspace.browser.state, workspace.state, creation.state, invitations.state) { form, browser, commands, channel, invite ->
                 ServerWorkspaceUiState(actorId,form.section,form.query,form.draft,browser,commands,form.returnTo,form.channel,channel,form.invitation,
                     invite.copy(created=invite.created.takeIf {form.invitation.visible && form.invitation.submitted}),form.acceptance,
-                    invitationManagementCommunity=form.managementCommunity)
+                    invitationManagementCommunity=form.managementCommunity,ownerDepartureCommunity=form.departureCommunity)
             }.combine(acceptance.state) { ui, result ->
                 ui.copy(acceptance=result.copy(accepted=result.accepted.takeIf {ui.acceptanceForm.visible && ui.acceptanceForm.submitted}))
             }.combine(management.state) {ui,result ->
                 ui.copy(invitationManagement=result)
+            }.combine(departure.state) {ui,result ->
+                ui.copy(ownerDeparture=result)
             }.collect { if(lifetime.isActive) output.value=it }
         }
         scope.launch {
@@ -102,9 +110,31 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
             }
         }
     }
+    private fun currentDeparture(community:String,version:Long,allowBusy:Boolean=false)=
+        lifetime.isActive && workspace.active && (allowBusy || enabled()) && departureVersion==version &&
+        form.value.departureCommunity==community && ownedDetail()?.community?.id==community
+    private fun departureAction(allowBusy:Boolean=false,work:suspend ()->Unit) {
+        val community=form.value.departureCommunity ?: return
+        val version=departureVersion
+        if(!currentDeparture(community,version,allowBusy)) return
+        scope.launch {if(currentDeparture(community,version,allowBusy)) work()}
+    }
+    fun chooseOwnerSuccessor(userId:String)=departureAction {departure.requestSuccessor(userId)}
+    fun confirmOwnerDeparture() {
+        val original=departure.state.value.confirmation ?: return
+        departureAction {if(departure.state.value.confirmation==original) departure.confirmDeparture()}
+    }
+    fun refreshOwnerMembers()=departureAction {departure.refresh()}
+    fun loadMoreOwnerMembers()=departureAction {departure.loadMore()}
+    fun dismissOwnerConfirmation()=departureAction(true) {departure.dismissConfirmation()}
+    fun dismissOwnerDeparture() {
+        departureVersion++;form.update {it.copy(departureCommunity=null)}
+        scope.launch {departure.clearPresentation()}
+    }
     fun openInvitationManagement() {
         if(!enabled(true) || form.value.section!=ServerWorkspaceSection.SERVER) return
         val community=ownedDetail()?.community?.id ?: return
+        dismissOwnerDeparture()
         val version=++managementVersion
         form.update {it.copy(managementCommunity=community,channel=ChannelCreationForm(),
             invitation=InvitationCreationForm(),acceptance=InvitationAcceptanceForm())}
@@ -136,6 +166,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     fun dismissInvitationRevocation()=managementAction {management.dismissRevocation()}
     fun openInvitationAcceptance() {
         if(!enabled()) return
+        dismissOwnerDeparture()
         dismissInvitationManagement()
         form.update {it.copy(channel=ChannelCreationForm(),invitation=InvitationCreationForm(),
             acceptance=InvitationAcceptanceForm(true,workspace.browser.state.value.selectedCommunity))}
@@ -163,10 +194,11 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         scope.launch {acceptance.clearPresentation()}
     }
     private suspend fun withdrawAcceptance() {
-        managementVersion++
-        form.update {it.copy(acceptance=InvitationAcceptanceForm(),managementCommunity=null)}
+        managementVersion++;departureVersion++
+        form.update {it.copy(acceptance=InvitationAcceptanceForm(),managementCommunity=null,departureCommunity=null)}
         acceptance.clearPresentation()
         management.clearPresentation()
+        departure.clearPresentation()
     }
     private fun enabled(allowCreation: Boolean = false) = lifetime.isActive && workspace.active &&
         !workspace.state.value.busy && (allowCreation || (!creation.state.value.busy && !invitations.state.value.busy && !acceptance.state.value.busy && !management.state.value.revoking))
@@ -179,6 +211,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     fun openInvitationCreation() {
         if(!enabled() || form.value.section!=ServerWorkspaceSection.SERVER) return
         val detail=ownedDetail() ?: return
+        dismissOwnerDeparture()
         dismissInvitationManagement()
         form.update {it.copy(channel=ChannelCreationForm(),invitation=InvitationCreationForm(true,detail.community.id),acceptance=InvitationAcceptanceForm())}
         scope.launch {invitations.clearPresentation();acceptance.clearPresentation()}
@@ -218,6 +251,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         val browser=workspace.browser.state.value
         val detail=browser.detail?.takeIf {!browser.detailLoading && browser.detailError==null &&
             it.community.id==browser.selectedCommunity && it.ownerId==actorId} ?: return
+        dismissOwnerDeparture()
         dismissInvitationManagement()
         form.update {it.copy(channel=ChannelCreationForm(true,detail.community.id),invitation=InvitationCreationForm(),acceptance=InvitationAcceptanceForm())}
         scope.launch {invitations.clearPresentation();acceptance.clearPresentation()}
@@ -279,13 +313,34 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     fun refreshList(catalog: Boolean) = action {
         if(catalog) workspace.browser.search(form.value.query) else workspace.browser.refreshMemberships()
     }
-    fun requestLeave() = action {workspace.browser.state.value.selectedCommunity?.let {workspace.requestRemoval(it,false)}}
+    fun requestLeave() {
+        if(!enabled()) return
+        val browser=workspace.browser.state.value
+        val detail=browser.detail?.takeIf {!browser.detailLoading && browser.detailError==null && it.community.id==browser.selectedCommunity} ?: return
+        val community=detail.community.id
+        if(detail.ownerId!=actorId) {
+            action {if(workspace.browser.state.value.selectedCommunity==community) workspace.requestRemoval(community,false)}
+            return
+        }
+        val version=++departureVersion
+        dismissInvitationManagement()
+        form.update {it.copy(departureCommunity=community,channel=ChannelCreationForm(),invitation=InvitationCreationForm(),acceptance=InvitationAcceptanceForm())}
+        scope.launch {
+            if(currentDeparture(community,version)) {
+                workspace.dismissRemoval();invitations.clearPresentation();acceptance.clearPresentation()
+                departure.clearPresentation();departure.refresh()
+            }
+        }
+    }
     fun requestDelete() = action {
         val detail=workspace.browser.state.value.detail ?: return@action
         if(detail.ownerId==actorId) workspace.requestRemoval(detail.community.id,true)
     }
     fun dismissRemoval() = action {workspace.dismissRemoval()}
-    fun confirmRemoval() = action {workspace.confirmRemoval()}
+    fun confirmRemoval() {
+        val original=workspace.state.value.confirmation ?: return
+        action {workspace.confirmRemoval(expected=original)}
+    }
     fun refresh() = action {
         when(form.value.section) {
             ServerWorkspaceSection.SERVER -> workspace.browser.state.value.selectedCommunity?.let {workspace.browser.openCommunity(it)}
@@ -306,6 +361,6 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         if(!browser.detailLoading && detail.community.id==browser.selectedCommunity && detail.channels.any {it.id==channel}) connectChannel(channel)
     }
     suspend fun close(): Unit = withContext(NonCancellable) {
-        lifetime.cancel();management.close();acceptance.close();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
+        lifetime.cancel();departure.close();management.close();acceptance.close();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
     }
 }

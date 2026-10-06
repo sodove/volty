@@ -909,4 +909,10 @@
     <string name="nearby_invitations_revoked">Revoked</string>
     <string name="nearby_invitations_revoke">Revoke invitation</string>
     <string name="nearby_invitations_revoke_confirm">Revoke invitation %1$d? Its code will no longer allow people to join. Current members stay in the server.</string>
+    <string name="nearby_owner_departure_title">Transfer ownership and leave</string>
+    <string name="nearby_owner_departure_help">Choose a new owner. The server will stay available to its other members after you leave.</string>
+    <string name="nearby_owner_departure_no_candidates">No eligible member is available. Refresh the list, or close this window. Deleting the server is a separate action.</string>
+    <string name="nearby_owner_departure_choose">Choose</string>
+    <string name="nearby_owner_departure_confirm">Leave server “%1$s” and transfer ownership to %2$s?</string>
+    <string name="nearby_owner_departure_submit">Transfer and leave</string>
 </resources>

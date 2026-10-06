@@ -22,6 +22,11 @@ class ServerWorkspacePresenterTest {
         val acceptRequests=mutableListOf<Pair<String,InvitationSecret>>()
         val invitationReads=mutableListOf<Pair<String,String?>>()
         val revocations=mutableListOf<Pair<String,String>>()
+        val memberReads=mutableListOf<Pair<String,String?>>()
+        val departures=mutableListOf<Triple<String,String,String?>>()
+        val candidate=CommunityMemberSummary(channel,"Member",100)
+        var memberReply:suspend (String,String?)->CommunityResult<CommunityMembersPage> = {community,_->CommunityResult.Ready(CommunityMembersPage(community,server,listOf(candidate)))}
+        var departureReply:suspend (String,String,String?)->CommunityRemovalResult={community,operation,_->CommunityRemovalResult.Removed(CommunityRemovalReceipt(operation,community,2,false))}
         val metadata=InvitationMetadata(channel,server,100,900100,10,0,null,1,null)
         var metadataReply:suspend (String,String?)->InvitationListingCommandResult={_,_->InvitationListingCommandResult.Listed(listOf(metadata))}
         var revocationReply:suspend (String,String)->InvitationRevocationCommandResult={community,invitation ->
@@ -63,7 +68,7 @@ class ServerWorkspacePresenterTest {
                 issued+="create:$name:$visibility";return reply()
             }
             override suspend fun joinPublic(community: String): CommunityResult<CommunityDetails> {issued+="join:$community";return reply()}
-            override suspend fun leave(community: String,operation: String,successor: String?): CommunityRemovalResult {issued+="leave";return CommunityRemovalResult.Removed(CommunityRemovalReceipt(operation,community,2,false))}
+            override suspend fun leave(community: String,operation: String,successor: String?): CommunityRemovalResult {issued+="leave";departures+=Triple(community,operation,successor);return departureReply(community,operation,successor)}
             override suspend fun delete(community: String,operation: String): CommunityRemovalResult {issued+="delete";return CommunityRemovalResult.Removed(CommunityRemovalReceipt(operation,community,2,false))}
         }
         val workspace=CommunityWorkspace(scope,account,ports,ports) {server}
@@ -76,8 +81,80 @@ class ServerWorkspacePresenterTest {
         val invites=InvitationCreationWorkspace(scope,account,server,workspace,drafts) {"00000000-0000-0000-0000-000000000004"}
         val acceptance=InvitationAcceptanceWorkspace(scope,account,workspace,ports) {"00000000-0000-0000-0000-000000000005"}
         val management=InvitationManagementWorkspace(scope,account,server,workspace,ports,ports)
-        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,management,connected::add)
+        val members=object:CommunityMembersPort {
+            override suspend fun list(community:String,after:String?,limit:Int):CommunityResult<CommunityMembersPage> {
+                assertEquals(20,limit);memberReads+=community to after;return memberReply(community,after)
+            }
+        }
+        val departure=OwnerDepartureWorkspace(scope,account,server,workspace,members)
+        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,management,departure,connected::add)
         suspend fun close() {presenter.close();screen.cancel();account.cancel()}
+    }
+    @Test fun ownerLeaveChoosesActualNamedMemberThenConfirmsDepartureWithoutVoice()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent()
+            assertEquals(server,f.presenter.state.value.ownerDepartureCommunity)
+            assertEquals(listOf(f.candidate),f.presenter.state.value.ownerDeparture.items)
+            assertNull(f.presenter.state.value.commands.confirmation);assertTrue(f.departures.isEmpty())
+            f.presenter.chooseOwnerSuccessor(server);runCurrent();assertNull(f.presenter.state.value.ownerDeparture.confirmation)
+            f.presenter.chooseOwnerSuccessor(channel);runCurrent()
+            assertEquals(OwnerDepartureConfirmation(server,f.candidate),f.presenter.state.value.ownerDeparture.confirmation)
+            assertTrue(f.departures.isEmpty());f.presenter.confirmOwnerDeparture();runCurrent()
+            assertEquals(listOf(Triple<String,String,String?>(server,server,channel)),f.departures)
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,f.presenter.state.value.section)
+            assertNull(f.presenter.state.value.ownerDepartureCommunity);assertFalse("delete" in f.issued);assertTrue(f.connected.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun dismissedAndReopenedOwnerPickerRejectsQueuedOldDepartureConfirmation()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent()
+            f.presenter.chooseOwnerSuccessor(channel);runCurrent();assertNotNull(f.presenter.state.value.ownerDeparture.confirmation)
+            f.presenter.confirmOwnerDeparture();f.presenter.dismissOwnerDeparture();f.presenter.requestLeave();runCurrent()
+            assertTrue(f.departures.isEmpty());assertFalse("delete" in f.issued)
+            assertEquals(2,f.memberReads.size);assertNull(f.presenter.state.value.ownerDeparture.confirmation)
+            assertEquals(server,f.presenter.state.value.ownerDepartureCommunity)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun ownerLossWithdrawsHeldPickerReadBeforeItActuallyReturns()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.memberReply={community,_->withContext(NonCancellable) {held.await()};returned=true;CommunityResult.Ready(CommunityMembersPage(community,server,listOf(f.candidate)))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent();assertEquals(1,f.memberReads.size)
+            f.reply={CommunityResult.Ready(details.copy(ownerId=channel))};f.presenter.refresh();runCurrent()
+            assertNull(f.presenter.state.value.ownerDepartureCommunity)
+            held.complete(Unit);runCurrent();assertTrue(returned);assertEquals(OwnerDepartureState(),f.presenter.state.value.ownerDeparture)
+            f.presenter.chooseOwnerSuccessor(channel);f.presenter.confirmOwnerDeparture();runCurrent();assertTrue(f.departures.isEmpty())
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun ownerDialogsCanCloseDuringActualDepartureAndLateReplyCannotReopenThem()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.departureReply={community,operation,_->withContext(NonCancellable) {held.await()};returned=true
+            CommunityRemovalResult.Removed(CommunityRemovalReceipt(operation,community,2,false))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent()
+            f.presenter.chooseOwnerSuccessor(channel);runCurrent();f.presenter.confirmOwnerDeparture();runCurrent()
+            assertEquals(1,f.departures.size);assertTrue(f.presenter.state.value.commands.busy)
+            f.presenter.dismissOwnerConfirmation();runCurrent();assertNull(f.presenter.state.value.ownerDeparture.confirmation)
+            f.presenter.dismissOwnerDeparture();runCurrent();assertNull(f.presenter.state.value.ownerDepartureCommunity)
+            assertTrue(f.account.isActive);assertTrue(f.screen.isActive);assertEquals(1,f.departures.size)
+            held.complete(Unit);runCurrent();assertTrue(returned)
+            assertNull(f.presenter.state.value.ownerDepartureCommunity);assertEquals(OwnerDepartureState(),f.presenter.state.value.ownerDeparture)
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,f.presenter.state.value.section);assertTrue(f.connected.isEmpty())
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun noEligibleSuccessorNeverDeletesServerOrIssuesOwnerLeaveAutomatically()=runTest {
+        val f=Fixture(this)
+        f.memberReply={community,_->CommunityResult.Ready(CommunityMembersPage(community,server,listOf(CommunityMemberSummary(server,"Owner",100))))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent()
+            f.presenter.chooseOwnerSuccessor(server);f.presenter.confirmOwnerDeparture();runCurrent()
+            assertTrue(f.departures.isEmpty());assertFalse("delete" in f.issued)
+            f.presenter.dismissOwnerDeparture();runCurrent();f.presenter.requestDelete();runCurrent()
+            assertEquals(CommunityRemovalConfirmation(server,true),f.presenter.state.value.commands.confirmation)
+            assertFalse("delete" in f.issued);assertTrue(f.connected.isEmpty())
+        } finally {f.close();runCurrent()}
     }
     @Test fun ownerManagementListsActualRowsAndConfirmsExactSelectedInvitationOnly()=runTest {
         val f=Fixture(this)
@@ -411,6 +488,7 @@ class ServerWorkspacePresenterTest {
     }
     @Test fun serverDepartureIsSeparateConfirmedMutationAndNeverConnectsVoice()=runTest {
         val f=Fixture(this)
+        f.reply={CommunityResult.Ready(details.copy(ownerId=channel))}
         try {
             f.presenter.openServer(server);runCurrent();f.presenter.requestLeave();runCurrent()
             assertNotNull(f.presenter.state.value.commands.confirmation);assertTrue(f.issued.isEmpty())

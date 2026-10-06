@@ -9,3 +9,5 @@ Follow-up to the approved Nearby UI assembly. Preserve server membership when di
 5. Wire bounded member picker into owner departure UI, explicit confirmation naming successor and server, both locales. No raw UUID entry, silent deletion, automatic voice connection or fabricated participant count. Last-owner deletion is a separate explicit confirmation. Compile, full fresh Android tests before commits, then visual/device verification at the existing APK gate.
 
 Use existing borrowed account lifetime/API, own only screen consumers. Closing a dialog or navigating must fence held reads and queued old confirmations. No production deployment or Root activation claim from fixture tests.
+
+Implementation status: steps 1–5 are implemented and wired in the reusable UI/account graph. Fresh verification: backend 224, PostgreSQL 334, Android 3292, all zero failures/errors/skips. Visual/device verification remains at the existing signed-APK gate; the new screen is not yet activated in Root. See the execution ledger for failing-test evidence, source rulings and commits.

@@ -62,7 +62,7 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
     }
     val confirmation=state.commands.confirmation
     val target=state.browser.detail?.takeIf {it.community.id==confirmation?.community}
-    if(confirmation!=null && target!=null) AlertDialog(
+    if(confirmation!=null && target!=null && state.ownerDepartureCommunity==null) AlertDialog(
         onDismissRequest=presenter::dismissRemoval,
         title={Text(stringResource(if(confirmation.delete) Res.string.nearby_servers_delete else Res.string.nearby_servers_leave))},
         text={Text(stringResource(if(confirmation.delete) Res.string.nearby_servers_delete_confirm else Res.string.nearby_servers_leave_confirm,target.community.name))},
@@ -79,6 +79,8 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
         InvitationAcceptanceDialog(state,presenter)
     if(state.invitationManagementCommunity!=null && state.invitationManagementCommunity==state.browser.selectedCommunity)
         InvitationManagementDialog(state,presenter)
+    if(state.ownerDepartureCommunity!=null && state.ownerDepartureCommunity==state.browser.selectedCommunity)
+        OwnerDepartureDialog(state,presenter)
 }
 
 @Composable

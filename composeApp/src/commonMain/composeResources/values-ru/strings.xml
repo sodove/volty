@@ -907,4 +907,10 @@
     <string name="nearby_invitations_revoked">Отозвано</string>
     <string name="nearby_invitations_revoke">Отозвать приглашение</string>
     <string name="nearby_invitations_revoke_confirm">Отозвать приглашение %1$d? По его коду больше нельзя будет вступить. Текущие участники останутся на сервере.</string>
+    <string name="nearby_owner_departure_title">Передать владение и выйти</string>
+    <string name="nearby_owner_departure_help">Выберите нового владельца. После вашего выхода сервер останется доступен остальным участникам.</string>
+    <string name="nearby_owner_departure_no_candidates">Сейчас некому передать владение. Обновите список или закройте это окно. Удаление сервера — отдельное действие.</string>
+    <string name="nearby_owner_departure_choose">Выбрать</string>
+    <string name="nearby_owner_departure_confirm">Выйти с сервера «%1$s» и передать владение участнику %2$s?</string>
+    <string name="nearby_owner_departure_submit">Передать и выйти</string>
 </resources>

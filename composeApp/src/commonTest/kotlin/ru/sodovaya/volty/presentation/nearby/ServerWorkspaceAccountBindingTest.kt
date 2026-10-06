@@ -41,6 +41,30 @@ class ServerWorkspaceAccountBindingTest {
         suspend fun close() {binding.close();screen.cancel();client.close()}
     }
 
+    @Test fun ownerPickerPostsOriginalAccountAndExactChosenSuccessorWithoutVoiceOrDeletion()=runTest {
+        val f=Fixture(this)
+        f.reply={path -> when {
+            path.endsWith("/members") -> """{"communityId":"$server","ownerId":"$actor","items":[{"userId":"$channel","displayName":"Member","joinedAtMillis":100}]}"""
+            path.endsWith("/leave") -> """{"operationId":"$server","communityId":"$server","revision":2,"cleanupPending":false}"""
+            path.endsWith(server) -> detail()
+            else -> page()
+        }}
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val presenter=assertNotNull(f.binding.state.value.presenter)
+            presenter.openServer(server);runCurrent();presenter.requestLeave();runCurrent()
+            assertEquals(server,presenter.state.value.ownerDepartureCommunity)
+            presenter.chooseOwnerSuccessor(channel);runCurrent();assertEquals(3,f.paths.size)
+            assertEquals("Member",presenter.state.value.ownerDeparture.confirmation?.successor?.displayName)
+            presenter.confirmOwnerDeparture();runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities","GET /v2/nearby/communities/$server",
+                "GET /v2/nearby/communities/$server/members","POST /v2/nearby/communities/$server/leave","GET /v2/nearby/communities"),f.paths)
+            assertTrue(f.headers.all {it=="Bearer token-1"});assertTrue(f.connected.isEmpty())
+            assertNull(presenter.state.value.browser.selectedCommunity);assertNull(presenter.state.value.ownerDepartureCommunity)
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,presenter.state.value.section)
+            f.binding.close();runCurrent();assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive)
+        } finally {f.close();runCurrent()}
+    }
     @Test fun managementUsesOriginalHttpAndClosingPreservesAuthentication()=runTest {
         val f=Fixture(this)
         val metadata="""{"items":[{"invitationId":"$channel","communityId":"$server","createdAtMillis":100,"expiresAtMillis":900100,"maxUses":10,"uses":0,"revokedAtMillis":null,"creationRevision":1,"revocationRevision":null}]}"""
