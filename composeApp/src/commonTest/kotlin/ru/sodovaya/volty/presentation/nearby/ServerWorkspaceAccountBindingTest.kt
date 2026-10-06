@@ -26,13 +26,14 @@ class ServerWorkspaceAccountBindingTest {
         val paths=mutableListOf<String>()
         val connected=mutableListOf<SocialAuthenticatedAccount>()
         var rejectFactory=false
+        var entropy:()->InvitationSecret={error("No invitation entropy")}
         var reply: suspend (String)->String={path->if(path.endsWith(server)) detail() else page()}
         val client=HttpClient(MockEngine) {engine {
             dispatcher=StandardTestDispatcher(test.testScheduler)
             addHandler {headers+=it.headers[HttpHeaders.Authorization];paths+="${it.method.value} ${it.url.encodedPath}";respond(reply(it.url.encodedPath))}
         }}
         val factory=NearbyCommunityAccountFactory(client,"https://example.test/v2/nearby",
-            {if(rejectFactory) error("Private implementation details");Drafts(it)},InvitationSecretGenerator {error("No invitation entropy")})
+            {if(rejectFactory) error("Private implementation details");Drafts(it)},InvitationSecretGenerator {entropy()})
         val binding=ServerWorkspaceAccountBinding(scope,repository.authenticatedAccount,factory,{server}) {account,id->
             assertEquals(channel,id);connected+=account
         }
@@ -56,6 +57,27 @@ class ServerWorkspaceAccountBindingTest {
             assertFalse(presenter.state.value.channelForm.visible);assertTrue(f.connected.isEmpty())
             assertTrue(f.headers.all {it=="Bearer token-1"})
             f.binding.close();runCurrent();assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive)
+        } finally {f.close();runCurrent()}
+    }
+
+    @Test fun invitationFormCreatesThroughOriginalHttpAndClosingDoesNotRetireAuthentication()=runTest {
+        val f=Fixture(this);val copied=mutableListOf<String>()
+        f.entropy={InvitationSecret.fromToken("A".repeat(43))}
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val presenter=assertNotNull(f.binding.state.value.presenter)
+            presenter.openServer(server);runCurrent();presenter.openInvitationCreation()
+            presenter.setInvitationTtl(900_000);presenter.setInvitationUses("4")
+            f.reply={path -> if(path.endsWith("/invitations/$server"))
+                """{"communityId":"$server","invitationId":"$server","createdAtMillis":100,"expiresAtMillis":900100,"maxUses":4,"uses":0,"creationRevision":1,"revokedAtMillis":null,"revocationRevision":null}"""
+                else if(path.endsWith(server)) detail() else page()}
+            presenter.submitInvitationCreation();runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities","GET /v2/nearby/communities/$server",
+                "PUT /v2/nearby/communities/$server/invitations/$server"),f.paths)
+            assertTrue(presenter.copyInvitation(copied::add));assertEquals(listOf("A".repeat(43)),copied)
+            assertTrue(f.headers.all {it=="Bearer token-1"});assertTrue(f.connected.isEmpty())
+            f.binding.close();runCurrent();assertFalse(presenter.copyInvitation(copied::add))
+            assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive);assertTrue(f.screen.isActive)
         } finally {f.close();runCurrent()}
     }
 
@@ -143,8 +165,9 @@ class ServerWorkspaceAccountBindingTest {
     }
 
     private class Drafts(override val actorId: String):InvitationDraftStore {
-        override suspend fun read(invitationId: String):InvitationCreationDraft?=null
-        override suspend fun retain(draft: InvitationCreationDraft)=draft
+        private val saved=mutableMapOf<String,InvitationCreationDraft>()
+        override suspend fun read(invitationId: String)=saved[invitationId]
+        override suspend fun retain(draft: InvitationCreationDraft)=saved.getOrPut(draft.invitationId) {draft}
     }
     private class Credentials:SocialCredentialStore {
         var value:SocialCredentials?=null

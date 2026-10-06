@@ -882,4 +882,15 @@
     <string name="nearby_channels_invalid_input">Enter a channel name of 1–80 characters.</string>
     <string name="nearby_channels_conflict">The channel could not be created because the server changed. Refresh and try again.</string>
     <string name="nearby_channels_limit">This server has reached its channel limit.</string>
+    <string name="nearby_invitations_create">Create invitation</string>
+    <string name="nearby_invitations_created">Invitation created. Copy the code and send it to the person you want to invite.</string>
+    <string name="nearby_invitations_lifetime">Expires after</string>
+    <string name="nearby_invitations_15_minutes">15 minutes</string>
+    <string name="nearby_invitations_day">1 day</string>
+    <string name="nearby_invitations_week">7 days</string>
+    <string name="nearby_invitations_uses">Maximum uses</string>
+    <string name="nearby_invitations_uses_help">From 1 to 1000</string>
+    <string name="nearby_invitations_invalid">Check the lifetime and maximum uses.</string>
+    <string name="nearby_invitations_copy">Copy invitation code</string>
+    <string name="nearby_invitations_conflict">Could not create the invitation because the server changed. Refresh and try again.</string>
 </resources>

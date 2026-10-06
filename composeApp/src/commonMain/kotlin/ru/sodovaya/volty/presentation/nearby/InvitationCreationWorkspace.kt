@@ -21,6 +21,7 @@ class InvitationCreationWorkspace(parent:CoroutineScope,private val account:Job,
     val state=output.asStateFlow()
     private data class Request(val community:String,val invitation:String,val ttl:Long,val uses:Int)
     private var retry:Request?=null
+    private var disclosureVersion=0L
     private var closed=false
     private var guardian:Job?=null
     init {
@@ -53,6 +54,7 @@ class InvitationCreationWorkspace(parent:CoroutineScope,private val account:Job,
         val request=retry?.takeIf {it.community==community && it.ttl==ttlMillis && it.uses==maxUses}
             ?: Request(community,nextId().also(::invitationDraftId),ttlMillis,maxUses).also {retry=it}
         output.value=InvitationCreationState(community,busy=true)
+        val disclosure=++disclosureVersion
         scope.launch {
             // Selection may have changed between admission and actual storage/HTTP dispatch.
             mutex.withLock {
@@ -70,6 +72,7 @@ class InvitationCreationWorkspace(parent:CoroutineScope,private val account:Job,
             } catch(_:Exception) {InvitationDraftExecution.Failed(InvitationDraftFailure.UNAVAILABLE)}
             mutex.withLock {
                 if(!active()) return@withLock
+                if(disclosure!=disclosureVersion) {output.value=InvitationCreationState();return@withLock}
                 if(ownedCommunity()!=request.community) {output.value=InvitationCreationState();return@withLock}
                 when(result) {
                     is InvitationDraftExecution.Failed -> output.value=InvitationCreationState(request.community,error=result.reason)
@@ -86,6 +89,12 @@ class InvitationCreationWorkspace(parent:CoroutineScope,private val account:Job,
             }
         }
         true
+    }
+    /** Hides disclosure; an issued write may still finish with its retained original retry payload. */
+    suspend fun clearPresentation():Unit=mutex.withLock {
+        if(!active()) return@withLock
+        disclosureVersion++
+        output.value=if(output.value.busy) InvitationCreationState(output.value.community,busy=true) else InvitationCreationState()
     }
     suspend fun close():Unit=withContext(NonCancellable) {
         mutex.withLock {

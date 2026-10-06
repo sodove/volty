@@ -880,4 +880,15 @@
     <string name="nearby_channels_invalid_input">Введите название канала длиной от 1 до 80 символов.</string>
     <string name="nearby_channels_conflict">Не удалось создать канал: сервер изменился. Обновите данные и повторите попытку.</string>
     <string name="nearby_channels_limit">На сервере достигнут лимит каналов.</string>
+    <string name="nearby_invitations_create">Создать приглашение</string>
+    <string name="nearby_invitations_created">Приглашение создано. Скопируйте код и передайте тому, кого хотите пригласить.</string>
+    <string name="nearby_invitations_lifetime">Срок действия</string>
+    <string name="nearby_invitations_15_minutes">15 минут</string>
+    <string name="nearby_invitations_day">1 день</string>
+    <string name="nearby_invitations_week">7 дней</string>
+    <string name="nearby_invitations_uses">Количество использований</string>
+    <string name="nearby_invitations_uses_help">От 1 до 1000</string>
+    <string name="nearby_invitations_invalid">Проверьте срок действия и количество использований.</string>
+    <string name="nearby_invitations_copy">Скопировать код приглашения</string>
+    <string name="nearby_invitations_conflict">Не удалось создать приглашение: сервер изменился. Обновите данные и повторите попытку.</string>
 </resources>

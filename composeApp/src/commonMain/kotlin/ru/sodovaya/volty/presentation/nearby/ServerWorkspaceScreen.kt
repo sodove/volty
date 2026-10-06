@@ -20,7 +20,7 @@ import volty.composeapp.generated.resources.*
 fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifier = Modifier) {
     val state by presenter.state.collectAsState()
     val enabled = !state.commands.busy && state.actorId != null
-    val mutationEnabled = enabled && !state.channelCreation.busy
+    val mutationEnabled = enabled && !state.channelCreation.busy && !state.invitations.busy
     Scaffold(modifier = modifier, topBar = {
         TopAppBar(title = {
             Text(when(state.section) {
@@ -45,7 +45,7 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
             }
             state.commands.error?.let { Text(stringResource(it.workspaceMessage()),color=MaterialTheme.colorScheme.error) }
             if(state.commands.cleanupPending) Text(stringResource(Res.string.nearby_servers_cleanup_pending))
-            if(state.commands.busy || state.channelCreation.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if(state.commands.busy || state.channelCreation.busy || state.invitations.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
                 when {
                     state.section == ServerWorkspaceSection.CREATE -> ServerCreationForm(state,presenter)
@@ -72,6 +72,8 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
     )
     if(state.channelForm.visible && state.channelForm.community==state.browser.selectedCommunity)
         ChannelCreationDialog(state,presenter)
+    if(state.invitationForm.visible && state.invitationForm.community==state.browser.selectedCommunity)
+        InvitationCreationDialog(state,presenter)
 }
 
 @Composable
@@ -96,7 +98,7 @@ private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorksp
                     Text(stringResource(if(server.visibility==CommunityVisibility.PUBLIC) Res.string.nearby_servers_public else Res.string.nearby_servers_private),
                         style=MaterialTheme.typography.labelMedium)
                     if(server.description.isNotBlank()) Text(server.description,maxLines=3,overflow=TextOverflow.Ellipsis)
-                    TextButton(onClick={if(catalog) presenter.joinPublic(server.id) else presenter.openServer(server.id)},enabled=enabled && (!catalog || !state.channelCreation.busy)) {
+                    TextButton(onClick={if(catalog) presenter.joinPublic(server.id) else presenter.openServer(server.id)},enabled=enabled && (!catalog || (!state.channelCreation.busy && !state.invitations.busy))) {
                         Text(stringResource(if(catalog) Res.string.nearby_servers_join else Res.string.nearby_servers_open))
                     }
                 }
@@ -109,7 +111,7 @@ private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorksp
 @Composable
 private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter,modifier: Modifier) {
     val browser=state.browser
-    val enabled=!state.commands.busy && !state.channelCreation.busy && state.actorId!=null
+    val enabled=!state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && state.actorId!=null
     LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         if(browser.detailLoading) item {LinearProgressIndicator(Modifier.fillMaxWidth())}
         if(browser.detailError!=null) item {
@@ -136,6 +138,9 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
                 }
             }
             item {
+                if(detail.ownerId==state.actorId) TextButton(onClick=presenter::openInvitationCreation,enabled=enabled && !browser.detailLoading && browser.detailError==null) {
+                    Text(stringResource(Res.string.nearby_invitations_create))
+                }
                 if(detail.ownerId==state.actorId) TextButton(onClick=presenter::openChannelCreation,enabled=enabled && !browser.detailLoading && browser.detailError==null) {
                     Text(stringResource(Res.string.nearby_channels_create))
                 }

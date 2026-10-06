@@ -33,6 +33,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                 var consumer: NearbyCommunityAccount? = null
                 var presenter: ServerWorkspacePresenter? = null
                 var creation: ChannelCreationWorkspace? = null
+                var invitations: InvitationCreationWorkspace? = null
                 var binding: Binding? = null
                 var retirementGuardian: Job? = null
                 try {
@@ -40,7 +41,8 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     if (!current(account)) return@collectLatest
                     val workspace = consumer.workspace(scope, nextId)
                     creation = consumer.channelCreation(scope, workspace, nextId)
-                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value, creation) { channel ->
+                    invitations = consumer.invitationCreation(scope, workspace, nextId)
+                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value, creation, invitations) { channel ->
                         if (current(account) && selected?.account === account) connect(account, channel)
                     }
                     binding = Binding(account, consumer, presenter)
@@ -68,6 +70,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     withContext(NonCancellable) {
                         presenter?.close()
                         creation?.close()
+                        invitations?.close()
                         consumer?.retire()
                     }
                 }

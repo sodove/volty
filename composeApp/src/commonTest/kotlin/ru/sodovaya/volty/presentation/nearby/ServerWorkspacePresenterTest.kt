@@ -7,7 +7,7 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerWorkspacePresenterTest {
-    private interface Ports: CommunityPort, CommunityRemovalPort, ChannelCommandsPort
+    private interface Ports: CommunityPort, CommunityRemovalPort, ChannelCommandsPort, InvitationPort
     private val server="00000000-0000-0000-0000-000000000001"
     private val channel="00000000-0000-0000-0000-000000000002"
     private val summary=CommunitySummary(server,"Riders","",CommunityVisibility.PUBLIC,1)
@@ -17,12 +17,23 @@ class ServerWorkspacePresenterTest {
         val scope=CoroutineScope(test.coroutineContext+screen)
         val issued=mutableListOf<String>();val connected=mutableListOf<String>()
         val catalogAfter=mutableListOf<String?>()
+        val inviteRequests=mutableListOf<InvitationCreationDraft>()
+        val savedInvites=mutableMapOf<String,InvitationCreationDraft>()
+        var inviteReply:suspend (InvitationCreationDraft)->InvitationCreationCommandResult={draft ->
+            InvitationCreationCommandResult.Created(InvitationCreationReceipt(draft.invitationId,draft.communityId,100,100+draft.ttlMillis,draft.maxUses,0,1))
+        }
         var catalogPage=listOf(summary)
         var reply: suspend ()->CommunityResult<CommunityDetails> = {CommunityResult.Ready(details)}
         var channelReply: suspend (String,String,String)->ChannelCreationCommandResult = { community,id,name ->
             ChannelCreationCommandResult.Created(ChannelCreationReceipt(community,id,name,2))
         }
         val ports: Ports=object : Ports {
+            override suspend fun create(community:String,invitation:String,token:String,ttlMillis:Long,maxUses:Int):InvitationCreationCommandResult {
+                val draft=assertNotNull(savedInvites[invitation]);assertEquals(token,draft.secret.reveal())
+                inviteRequests+=draft;return inviteReply(draft)
+            }
+            override suspend fun revoke(community:String,invitation:String):InvitationRevocationCommandResult=error("No revoke")
+            override suspend fun accept(operation:String,token:String):InvitationAcceptanceCommandResult=error("No implicit membership")
             override suspend fun create(community: String,channel: String,name: String): ChannelCreationCommandResult {
                 issued+="channel:$community:$channel:$name";return channelReply(community,channel,name)
             }
@@ -41,8 +52,84 @@ class ServerWorkspacePresenterTest {
         }
         val workspace=CommunityWorkspace(scope,account,ports,ports) {server}
         val creation=ChannelCreationWorkspace(scope,account,server,workspace,ports) {"00000000-0000-0000-0000-000000000003"}
-        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,connected::add)
+        val drafts=InvitationCreationDraftOwner(server,object:InvitationDraftStore {
+            override val actorId=server
+            override suspend fun read(invitationId:String)=savedInvites[invitationId]
+            override suspend fun retain(draft:InvitationCreationDraft)=savedInvites.getOrPut(draft.invitationId) {draft}
+        },InvitationSecretGenerator {InvitationSecret.fromToken("A".repeat(43))},ports,account)
+        val invites=InvitationCreationWorkspace(scope,account,server,workspace,drafts) {"00000000-0000-0000-0000-000000000004"}
+        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,connected::add)
         suspend fun close() {presenter.close();screen.cancel();account.cancel()}
+    }
+    @Test fun invitationFormUsesOriginalRetainedPayloadAndCopiesOnlyEarnedReceipt()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();val copied=mutableListOf<String>()
+        f.inviteReply={held.await();InvitationCreationCommandResult.Failed(InvitationCommandFailure.UNAVAILABLE)}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation();f.presenter.setInvitationTtl(900_000)
+            f.presenter.setInvitationUses("4");runCurrent();assertTrue(f.presenter.state.value.invitationForm.visible)
+            assertFalse(f.presenter.copyInvitation(copied::add));f.presenter.submitInvitationCreation();runCurrent()
+            assertEquals(1,f.inviteRequests.size);assertEquals(900_000L,f.inviteRequests.single().ttlMillis)
+            f.presenter.submitInvitationCreation();f.presenter.openChannelCreation();runCurrent()
+            assertEquals(1,f.inviteRequests.size);assertFalse(f.presenter.state.value.channelForm.visible)
+            held.complete(Unit);runCurrent();assertEquals(InvitationDraftFailure.UNAVAILABLE,f.presenter.state.value.invitations.error)
+            f.inviteReply={draft -> InvitationCreationCommandResult.Created(InvitationCreationReceipt(draft.invitationId,server,100,900_100,4,0,1))}
+            f.presenter.submitInvitationCreation();runCurrent();assertSame(f.inviteRequests.first(),f.inviteRequests.last())
+            assertTrue(f.presenter.copyInvitation(copied::add));assertEquals(listOf("A".repeat(43)),copied)
+            assertTrue(f.connected.isEmpty());f.presenter.dismissInvitationCreation();runCurrent()
+            assertNull(f.presenter.state.value.invitations.created);assertFalse(f.presenter.copyInvitation(copied::add))
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun queuedInvitationCannotMutateReplacementServer()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation();runCurrent()
+            assertTrue(f.presenter.state.value.invitationForm.visible);assertEquals(server,f.presenter.state.value.invitationForm.community)
+            f.presenter.submitInvitationCreation();f.workspace.browser.clearSelection();runCurrent()
+            assertTrue(f.inviteRequests.isEmpty());assertTrue(f.savedInvites.isEmpty());assertFalse(f.presenter.state.value.invitationForm.visible)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun dismissDuringHeldInvitationSuppressesLateDisclosureWithoutClosingAccount()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.inviteReply={draft -> withContext(NonCancellable) {held.await()};returned=true
+            InvitationCreationCommandResult.Created(InvitationCreationReceipt(draft.invitationId,server,100,100+draft.ttlMillis,draft.maxUses,0,1))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation();f.presenter.submitInvitationCreation();runCurrent()
+            assertEquals(1,f.inviteRequests.size);f.presenter.dismissInvitationCreation();runCurrent()
+            assertTrue(f.presenter.state.value.invitations.busy);held.complete(Unit);runCurrent();assertTrue(returned)
+            assertNull(f.presenter.state.value.invitations.created);assertFalse(f.presenter.copyInvitation {error("No late secret")})
+            assertEquals(1,f.savedInvites.size);assertTrue(f.account.isActive);assertTrue(f.workspace.active)
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun invitationCopyRequiresCurrentOwnershipEvenBeforeProjectionUpdates()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openInvitationCreation();runCurrent();assertFalse(f.presenter.state.value.invitationForm.visible)
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation();f.presenter.submitInvitationCreation();runCurrent()
+            assertNotNull(f.presenter.state.value.invitations.created)
+            f.account.cancel();assertFalse(f.presenter.copyInvitation {error("Retired secret")});runCurrent()
+            assertEquals(ServerWorkspaceUiState(),f.presenter.state.value);assertTrue(f.screen.isActive)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun reopeningInvitationFormCannotCopyPreviousReceiptBeforeQueuedClear()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation();f.presenter.submitInvitationCreation();runCurrent()
+            assertNotNull(f.presenter.state.value.invitations.created);assertTrue(f.presenter.copyInvitation {})
+            f.presenter.openInvitationCreation()
+            assertFalse(f.presenter.copyInvitation {error("Old form receipt")})
+            runCurrent();assertNull(f.presenter.state.value.invitations.created)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun invitationInputLimitsRejectBeforeStorageAndInvalidEditsCannotChangeBody()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationCreation()
+            f.presenter.setInvitationTtl(1);f.presenter.setInvitationUses("1001");f.presenter.setInvitationUses("not a number")
+            f.presenter.submitInvitationCreation();runCurrent()
+            assertTrue(f.presenter.state.value.invitations.invalidInput);assertTrue(f.savedInvites.isEmpty());assertTrue(f.inviteRequests.isEmpty())
+            assertEquals(86_400_000L,f.presenter.state.value.invitationForm.ttlMillis)
+            assertEquals("1001",f.presenter.state.value.invitationForm.maxUses)
+        } finally {f.close();runCurrent()}
     }
     @Test fun ownerCreatesTrimmedChannelOnceWithoutStartingVoice()=runTest {
         val f=Fixture(this);val held=CompletableDeferred<Unit>()
