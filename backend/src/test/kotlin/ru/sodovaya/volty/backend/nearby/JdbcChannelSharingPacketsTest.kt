@@ -57,6 +57,18 @@ class JdbcChannelSharingPacketsTest {
         assertEquals(original.capturedAtEpochMillis + 15_000, snapshot.peers.single().deadlineEpochMillis)
     }
 
+    @Test fun audienceReadsCurrentUserNameWithoutRepublishingOrRenewingPacket() {
+        join();consent();join(viewer,viewerOperation,viewerSession)
+        val original=packet();assertNotNull(publish(original));val first=audience().peers.single()
+        assertEquals("test",first.displayName)
+        source.connection.use {c -> c.prepareStatement("UPDATE users SET display_name=? WHERE id=?::uuid").use {
+            it.setString(1,"Саша");it.setString(2,actor);assertEquals(1,it.executeUpdate())
+        }}
+        now+=10;val renamed=audience().peers.single()
+        assertEquals("Саша",renamed.displayName);assertEquals(first.packet,renamed.packet)
+        assertEquals(first.deadlineEpochMillis,renamed.deadlineEpochMillis);assertEquals(1,count())
+        assertNull(packets.snapshot(member,viewerSession,{now}))
+    }
     @Test fun packetExpiredWhilePreparingAcknowledgementCannotEarnSuccessCredit() {
         join(); consent(); join(viewer, viewerOperation, viewerSession)
         val original = packet(); var calls = 0

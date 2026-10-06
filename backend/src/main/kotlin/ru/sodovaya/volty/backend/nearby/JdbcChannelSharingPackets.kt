@@ -45,7 +45,7 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
             val viewer = sessions.activeChannelSharingSession(c, actor, session, at) ?: return@withChannelSharingActor null
             val channel = checkNotNull(viewer.operation.destinationId)
             val peers = c.prepareStatement("""
-                SELECT p.actor_id,p.session_id,p.generation_id,p.payload_json,p.sequence,p.captured_at,s.mode,s.started_at,
+                SELECT p.actor_id,p.session_id,p.generation_id,p.payload_json,p.sequence,p.captured_at,s.mode,s.started_at,u.display_name,
                     LEAST(o.deadline_epoch_millis,s.deadline_epoch_millis,p.deadline_epoch_millis,?) AS peer_deadline
                 FROM nearby_channel_sharing_packets p
                 JOIN nearby_channel_sharing_consent s ON s.actor_id=p.actor_id AND s.session_id=p.session_id AND s.generation_id=p.generation_id
@@ -76,7 +76,7 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
                         } catch (_: IllegalArgumentException) {continue}
                         val deadline = minOf(rows.getLong("peer_deadline"), sampleDeadline(packet))
                         if (deadline > at) add(ChannelSharingAudiencePeer(rows.getString("actor_id"), rows.getString("session_id"),
-                            rows.getString("generation_id"), ChannelSharingMode.valueOf(rows.getString("mode")), packet, deadline))
+                            rows.getString("generation_id"), ChannelSharingMode.valueOf(rows.getString("mode")), packet, deadline, rows.getString("display_name")))
                     }
                 }}
             }

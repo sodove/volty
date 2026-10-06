@@ -53,6 +53,18 @@ class NearbyChannelMapStateTest {
         assertEquals("Participant",markers.single().label);assertEquals(55.0,markers.single().latitude)
         assertEquals(60.0,markers.single().longitude);assertEquals(4.0,markers.single().accuracyMeters)
     }
+    @Test fun native_annotations_use_observed_name_without_earning_absent_coordinates() {
+        val named=point.copy(displayName="Саша")
+        val source=source().copy(sharingAudience=ChannelSharingAudienceView(true,listOf(named)))
+        assertEquals("Саша",nearbyChannelMarkers(nearbyChannelMapState(source,operation),"Participant").single().label)
+        for(name in listOf(null," ","x".repeat(81),"bad\nname")) {
+            val invalid=source.copy(sharingAudience=ChannelSharingAudienceView(true,listOf(named.copy(displayName=name))))
+            assertEquals("Participant",nearbyChannelMarkers(nearbyChannelMapState(invalid,operation),"Participant").single().label)
+        }
+        assertTrue(nearbyChannelMarkers(nearbyChannelMapState(source.copy(sharingAudience=ChannelSharingAudienceView(false,listOf(named))),operation),"Participant").isEmpty())
+        assertTrue(nearbyChannelMarkers(nearbyChannelMapState(source.copy(sharingAudience=ChannelSharingAudienceView(true,
+            listOf(named.copy(packet=named.packet.copy(location=null))))),operation),"Participant").isEmpty())
+    }
     @Test fun native_annotations_reject_unobserved_or_detached_payloads() {
         val active=nearbyChannelMapState(source(),operation)
         for(value in listOf(active.copy(observed=false),active.copy(operation=null),active.copy(channelId=null),active.copy(session=null))) {

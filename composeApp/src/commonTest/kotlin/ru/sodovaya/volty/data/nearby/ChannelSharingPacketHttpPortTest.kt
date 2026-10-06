@@ -42,6 +42,22 @@ class ChannelSharingPacketHttpPortTest {
             assertEquals(listOf("/v2/nearby/sharing/$sid/$gen/packet","/v2/nearby/channel-sessions/$sid/sharing/audience"),paths)
         } finally {port.close();http.close()}
     }
+    @Test fun audienceReadsOptionalNameWithoutChangingPacketOrCredit()=runTest {
+        var response=audience(peer().dropLast(1)+",\"displayName\":\"Саша\"}");var issued=0
+        val http=client {issued++;respond(response)}
+        val port=ChannelSharingPacketHttpPort(http,"https://api.test/v2/nearby",{"original"},{100})
+        try {
+            val named=assertIs<ChannelSharingPacketReply.Audience>(port.audience(channel,sid)).peers.single()
+            assertEquals("Саша",named.displayName);assertEquals(1100,named.deadlineMillis)
+            for(raw in listOf("null","false","{}","\" \"", "\""+"x".repeat(81)+"\"","\"bad\\nname\"")) {
+                response=audience(peer().dropLast(1)+",\"displayName\":$raw}")
+                val fallback=assertIs<ChannelSharingPacketReply.Audience>(port.audience(channel,sid)).peers.single()
+                assertNull(fallback.displayName);assertEquals(named.packet,fallback.packet);assertEquals(named.deadlineMillis,fallback.deadlineMillis)
+            }
+            response=audience();assertNull(assertIs<ChannelSharingPacketReply.Audience>(port.audience(channel,sid)).peers.single().displayName)
+            assertEquals(8,issued)
+        } finally {port.close();http.close()}
+    }
     @Test fun misboundAcknowledgementChannelDuplicateAndIncoherentEvidenceFailClosed()=runTest {
         for (body in listOf(ack(session=gen),ack(generation=sid),ack(sequence=8),ack(credit="0"),ack(credit="15001"),ack(credit="\"1000\""))) {
             val http=client {respond(body)};val port=ChannelSharingPacketHttpPort(http,"https://api.test/v2/nearby",{"token"},{100})

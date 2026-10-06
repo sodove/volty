@@ -1511,10 +1511,15 @@ class VoiceConversationStartupTest {
                 f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});audience=reader;runCurrent()
             assertEquals(1,reader.state.value.peers.size)
             assertEquals(55.0,assertNotNull(reader.state.value.peers.single().packet.location).latitude)
+            val original=reader.state.value.peers.single()
+            f.sharingAudienceBody=assertNotNull(f.sharingAudienceBody).replace("\"mode\":\"LOCATION\"", "\"displayName\":\"Саша\",\"mode\":\"LOCATION\"")
+            f.time=500;advanceTimeBy(2001);runCurrent()
+            val renamed=reader.state.value.peers.single();assertEquals("Саша",renamed.displayName)
+            assertEquals(original.packet,renamed.packet);assertEquals(original.deadlineMillis,renamed.deadlineMillis)
             f.sharingAudienceStatus=HttpStatusCode.ServiceUnavailable;f.time=1100
             advanceTimeBy(2000);runCurrent()
             assertTrue(reader.state.value.peers.isEmpty());assertTrue(reader.state.value.observed)
-            assertEquals(2,f.paths.count {it.endsWith("/sharing/audience")})
+            assertEquals(3,f.paths.count {it.endsWith("/sharing/audience")})
             assertTrue(account.job.isActive);assertTrue(runtime.state.value.wanted)
         } finally {audience?.close();f.close()}
     }

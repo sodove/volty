@@ -17,7 +17,7 @@ data class ChannelSharingPacketResponse(val sessionId: String, val generation: S
 data class ChannelSharingAudienceResponse(val channelId: String, val serverTimeEpochMillis: Long, val peers: List<ChannelSharingPeerResponse>)
 @Serializable
 data class ChannelSharingPeerResponse(val actorId: String, val sessionId: String, val generation: String,
-    val mode: String, val packet: ChannelSharingPacket, val remainingMillis: Long)
+    val mode: String, val packet: ChannelSharingPacket, val remainingMillis: Long, val displayName: String? = null)
 
 fun Route.installNearbySharingPacketRoutes(dependencies: AppDependencies) {
     authenticate("auth-jwt") {
@@ -58,7 +58,8 @@ private fun safeAudience(value: ChannelSharingAudience): ChannelSharingAudienceR
         require(peer.deadlineEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= captured + LIVE_LOCATION_FRESHNESS_MILLIS)
         peer.packet.location?.let { require(it.staleAfterEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= it.staleAfterEpochMillis) }
         val safe = peer.packet.copy(telemetry = ChannelSharingTelemetryPolicy.sanitize(peer.mode, peer.packet.telemetry))
-        ChannelSharingPeerResponse(peer.actorId, peer.sessionId, peer.generation, peer.mode.name, safe, peer.deadlineEpochMillis - value.serverTimeEpochMillis)
+        ChannelSharingPeerResponse(peer.actorId, peer.sessionId, peer.generation, peer.mode.name, safe, peer.deadlineEpochMillis - value.serverTimeEpochMillis,
+            peer.displayName?.takeIf {it.length in 2..80 && it.isNotBlank() && it.none(Char::isISOControl)})
     }
     return ChannelSharingAudienceResponse(value.channelId, value.serverTimeEpochMillis, peers)
 }

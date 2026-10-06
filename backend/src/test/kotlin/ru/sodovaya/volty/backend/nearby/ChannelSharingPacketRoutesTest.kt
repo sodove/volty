@@ -48,6 +48,20 @@ class ChannelSharingPacketRoutesTest {
         assertFalse(peers.bodyAsText().contains("deadlineEpochMillis"))
         assertEquals(listOf("publish:$actor:$session:$generation:7", "audience:$actor:$session"), port.calls)
     }
+    @Test fun audienceNamesAreOptionalBoundedMetadataWithOriginalCredit() = testApplication {
+        val port=Port();val deps=deps(port);application {module(deps)};val token=deps.tokenService.issueAccessToken(actor)
+        val original=assertNotNull(port.snapshot);val peer=original.peers.single()
+        for(name in listOf("Саша",null," ","x".repeat(81),"bad\nname")) {
+            port.snapshot=original.copy(peers=listOf(peer.copy(displayName=name)))
+            val response=client.get(audience) {bearerAuth(token)};assertEquals(HttpStatusCode.OK,response.status)
+            val decoded=kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()) as kotlinx.serialization.json.JsonObject
+            val row=(decoded["peers"] as kotlinx.serialization.json.JsonArray).single() as kotlinx.serialization.json.JsonObject
+            assertEquals("500",row["remainingMillis"].toString())
+            if(name=="Саша") assertEquals("\"Саша\"",row["displayName"].toString())
+            else assertTrue(row["displayName"]==null || row["displayName"]==kotlinx.serialization.json.JsonNull)
+        }
+        assertEquals(5,port.calls.size)
+    }
     @Test fun malformedCapturePathAndBoundedBodyNeverReachPort() = testApplication {
         val port = Port(); val deps = deps(port); application {module(deps)}; val token = deps.tokenService.issueAccessToken(actor)
         for (body in listOf("broken", """{"sequence":-1,"capturedAtEpochMillis":1000,"location":null}""", """{"sequence":0,"capturedAtEpochMillis":-1,"location":null}""",

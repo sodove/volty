@@ -44,7 +44,7 @@ internal fun ChannelSharingPacket.sanitized(mode: ChannelSharingMode): ChannelSh
 }
 
 data class ObservedChannelSharingPeer(val actorId: String, val tag: ChannelSharingTag,
-    val mode: ChannelSharingMode, val packet: ChannelSharingPacket, val deadlineMillis: Long)
+    val mode: ChannelSharingMode, val packet: ChannelSharingPacket, val deadlineMillis: Long, val displayName: String? = null)
 
 sealed interface ChannelSharingPacketReply {
     data class Published(val tag: ChannelSharingTag, val sequence: Long, val requestOrdinal: Long,
@@ -52,4 +52,9 @@ sealed interface ChannelSharingPacketReply {
     data class Audience(val channelId: String, val serverTimeEpochMillis: Long, val requestOrdinal: Long,
         val requestStartedMillis: Long, val responseReceivedMillis: Long, val peers: List<ObservedChannelSharingPeer>) : ChannelSharingPacketReply
     data class Failed(val reason: ChannelSharingFailure) : ChannelSharingPacketReply
+}
+
+/** Optional server profile metadata; it earns no position, sample freshness or voice presence. */
+internal fun channelSharingPeerDisplayName(value: String?): String? = value?.takeIf {
+    it.length in 2..80 && it.isNotBlank() && it.none(Char::isISOControl)
 }

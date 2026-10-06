@@ -60,7 +60,8 @@ internal class ChannelSharingPacketHttpPort(client: HttpClient, baseUrl: String,
                 require(credit<=packet.capturedAtEpochMillis+CHANNEL_SHARING_SAMPLE_MILLIS-at)
                 packet.location?.let {require(it.staleAfterEpochMillis>at && credit<=it.staleAfterEpochMillis-at)}
                 val deadline=deadline(credit,start)
-                if(deadline<=receipt) null else ObservedChannelSharingPeer(actor,tag,mode,packet,deadline)
+                if(deadline<=receipt) null else ObservedChannelSharingPeer(actor,tag,mode,packet,deadline,
+                    channelSharingPeerDisplayName((peer["displayName"] as? JsonPrimitive)?.takeIf {it.isString}?.content))
             }
             ChannelSharingPacketReply.Audience(channelId,at,id,start,receipt,peers)
         }

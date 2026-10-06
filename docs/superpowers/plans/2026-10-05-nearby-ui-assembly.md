@@ -87,6 +87,12 @@ The earlier generic-title-only note is superseded for calls from an accepted fri
 
 The exact original offer and account fence late names after consume, expiry, logout or replacement. UI and native acceptance read the earned name from the original registry, not caller-supplied button data. Native name updates preserve the existing ticket/actions, use only remaining server-earned credit and request alert-once behavior. Refused native publication still permits the in-app name, without earning a native action. Names never authorize voice, microphone, foreground service or membership. Android visual/notification delivery and audibility remain device checks; notification permission UX and killed-process push delivery remain open.
 
+## Channel map display-name advance (2026-10-07)
+
+The earlier generic marker/display-name-open note is superseded in source: the existing authenticated sharing audience now includes optional current profile display names for only its already-authorized peers. JDBC reads the existing live users join, without an extra directory endpoint or owner-only member lookup. Names are bounded nonblank metadata; missing or invalid names preserve the existing localized generic marker. Older audience responses without the new field remain readable.
+
+Name-only updates of an unchanged packet preserve the original sample deadline, sequence and coordinates. A name cannot earn a missing location, an unobserved audience, another account/session/operation, voice presence or audibility. Current map projection carries the name to its existing native annotation DTO. Backend/PG and client behavior are verified separately; actual native marker layout and device observation remain open.
+
 ## Review focus
 
 Late result after account/screen disposal; uncertain create/removal retry; channel switch while original capture is pending; destructive confirmation targeting a different server; permissions denied after leaving the visible activity. JVM tests cover command/state behavior, while actual native rendering/audio/foreground service behavior requires devices.
