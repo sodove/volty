@@ -89,9 +89,10 @@ class CommunityWorkspace(
     suspend fun dismissRemoval() = mutex.withLock {
         if (!closed) output.value = output.value.copy(confirmation = null)
     }
-    suspend fun confirmRemoval(successor: String? = null): Boolean = mutex.withLock {
+    suspend fun confirmRemoval(successor: String? = null, expected:CommunityRemovalConfirmation?=null): Boolean = mutex.withLock {
         if (!available()) return@withLock false
         val confirmation = output.value.confirmation ?: return@withLock false
+        if(expected!=null && confirmation!=expected) return@withLock false
         if (browser.state.value.selectedCommunity != confirmation.community) {
             output.value = output.value.copy(confirmation = null)
             return@withLock false

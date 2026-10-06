@@ -4,8 +4,10 @@ import io.ktor.client.HttpClient
 import io.ktor.client.engine.mock.*
 import io.ktor.client.request.get
 import io.ktor.http.*
+import io.ktor.http.content.TextContent
 import kotlinx.coroutines.*
 import kotlinx.coroutines.test.*
+import kotlinx.serialization.json.*
 import ru.sodovaya.volty.data.nearby.NearbyAccountCredentials
 import ru.sodovaya.volty.domain.nearby.community.*
 import ru.sodovaya.volty.presentation.nearby.CommunityBrowserState
@@ -25,6 +27,45 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun ownerDepartureFactoryListsOriginalAccountMembersThenPostsExactSuccessorAndRefreshesMembership()=runTest {
+        val parent=Job();val screen=SupervisorJob(parent);val scope=CoroutineScope(coroutineContext+screen)
+        val operation="40000000-0000-0000-0000-000000000004"
+        val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
+        val detail="""{"revision":1,"community":{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100},"ownerId":"$actor","channels":[]}"""
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request ->
+                paths+="${request.method.value} ${request.url.encodedPath}";headers+=request.headers[HttpHeaders.Authorization]
+                when {
+                    request.method==HttpMethod.Post -> {
+                        val body=Json.parseToJsonElement((request.body as TextContent).text).jsonObject
+                        assertEquals(setOf("operationId","successorId"),body.keys)
+                        assertEquals(operation,body.getValue("operationId").jsonPrimitive.content)
+                        assertEquals(invitation,body.getValue("successorId").jsonPrimitive.content)
+                        respond("""{"operationId":"$operation","communityId":"$community","revision":2,"cleanupPending":false}""")
+                    }
+                    request.url.encodedPath.endsWith("/members") -> respond("""{"communityId":"$community","ownerId":"$actor","items":[{"userId":"$invitation","displayName":"Member","joinedAtMillis":100}]}""")
+                    request.url.encodedPath.endsWith(community) -> respond(detail)
+                    else -> respond("""{"items":[]}""")
+                }
+            }
+        }}
+        fun consumer(bearer:String)=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,bearer),
+            Store(actor),InvitationSecretGenerator {error("No invitation entropy")},client,root)
+        val account=consumer("original");val foreign=consumer("other")
+        val workspace=account.workspace(scope) {operation};val departure=account.ownerDeparture(scope,workspace)
+        try {
+            assertFailsWith<IllegalArgumentException> {foreign.ownerDeparture(scope,workspace)}
+            workspace.browser.openCommunity(community);runCurrent();departure.refresh();runCurrent()
+            assertTrue(departure.requestSuccessor(invitation));assertEquals(2,paths.size)
+            assertTrue(departure.confirmDeparture());runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities/$community","GET /v2/nearby/communities/$community/members",
+                "POST /v2/nearby/communities/$community/leave","GET /v2/nearby/communities"),paths)
+            assertTrue(headers.all {it=="Bearer original"});assertNull(workspace.browser.state.value.selectedCommunity)
+            departure.close();runCurrent();assertTrue(workspace.active);assertTrue(parent.isActive);assertTrue(screen.isActive)
+            assertIs<CommunityResult.Ready<*>>(account.api.communities.detail(community));assertEquals(5,paths.size)
+        } finally {departure.close();workspace.close();foreign.retire();account.retire();screen.cancel();parent.cancel();client.close();runCurrent()}
+    }
     @Test fun managementFactoryBorrowsOriginalAccountAndRefreshesMetadataAfterExactRevoke()=runTest {
         val parent=Job();val screen=SupervisorJob(parent);val scope=CoroutineScope(coroutineContext+screen)
         val paths=mutableListOf<String>();val headers=mutableListOf<String?>()

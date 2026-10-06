@@ -37,6 +37,19 @@ class CommunityWorkspaceTest {
         }
         suspend fun close() {workspace.close();screen.cancel();account.cancel()}
     }
+    @Test fun expectedOriginalRemovalCannotConfirmAReplacementTarget()=runTest {
+        val f=Fixture(this)
+        f.ports.leaveReply={community,op,_->CommunityRemovalResult.Removed(CommunityRemovalReceipt(op,community,2,false))}
+        try {
+            f.workspace.browser.openCommunity(first);runCurrent();f.workspace.requestRemoval(first,false)
+            val original=assertNotNull(f.workspace.state.value.confirmation)
+            f.workspace.browser.openCommunity(second);runCurrent();f.workspace.requestRemoval(second,false)
+            assertFalse(f.workspace.confirmRemoval(successor=first,expected=original));runCurrent()
+            assertTrue(f.ports.issued.isEmpty());assertEquals(0,f.ids)
+            assertTrue(f.workspace.confirmRemoval(successor=first,expected=CommunityRemovalConfirmation(second,false)));runCurrent()
+            assertEquals(listOf("leave:$second:00000000-0000-0000-0000-000000000001:$first"),f.ports.issued)
+        } finally {f.close();runCurrent()}
+    }
     @Test fun uncertainCreateRetriesOriginalIdAndBlocksDoubleSubmit()=runTest {
         val f=Fixture(this);val held=CompletableDeferred<Unit>()
         f.ports.createReply={withContext(NonCancellable) {held.await()};CommunityResult.Failed(CommunityFailure.UNAVAILABLE)}
