@@ -9,7 +9,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import ru.sodovaya.volty.domain.nearby.community.*
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 
-/** Owns five bounded HTTP adapters for one authenticated Nearby account lifetime. */
+/** Owns six bounded HTTP adapters for one authenticated Nearby account lifetime. */
 class NearbyAccountHttpSession private constructor(
     val actorId: String,
     private val binding: NearbyAccountBinding?,
@@ -37,6 +37,7 @@ class NearbyAccountHttpSession private constructor(
     private val channelsHttp = ChannelCommandsHttpPort(client, "$root/communities") { currentBearer() }
     private val invitationsHttp = InvitationHttpPort(client, root) { currentBearer() }
     private val invitationListingHttp = InvitationListingHttpPort(client, root) { currentBearer() }
+    private val membersHttp=CommunityMembersHttpPort(client,root,actorId) {currentBearer()}
 
     val communities: CommunityPort = object : CommunityPort {
         override suspend fun memberships(after: String?, limit: Int) = guarded {
@@ -103,6 +104,10 @@ class NearbyAccountHttpSession private constructor(
         }
     }
 
+    val members:CommunityMembersPort=object:CommunityMembersPort {
+        override suspend fun list(community:String,after:String?,limit:Int)=guarded {membersHttp.list(community,after,limit)}
+    }
+
     fun refresh(credentials: NearbyAccountCredentials) {
         require(credentials.actorId == actorId)
         check(!retired.value && accountJob?.isActive != false) { RETIRED }
@@ -120,6 +125,7 @@ class NearbyAccountHttpSession private constructor(
         try { channelsHttp.close() } catch (_: Throwable) { closeFailed = true }
         try { invitationsHttp.close() } catch (_: Throwable) { closeFailed = true }
         try { invitationListingHttp.close() } catch (_: Throwable) { closeFailed = true }
+        try { membersHttp.close() } catch (_: Throwable) { closeFailed = true }
         if (closeFailed) throw IllegalStateException(CLEANUP_FAILED)
     }
 

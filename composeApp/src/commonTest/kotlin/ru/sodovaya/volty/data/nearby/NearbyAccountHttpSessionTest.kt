@@ -94,6 +94,7 @@ class NearbyAccountHttpSessionTest {
             Intent(HttpMethod.Post, "$base/$community/invitations/$invitation/revoke") { session.invitations.revoke(community, invitation) },
             Intent(HttpMethod.Post, "/v2/nearby/invitations/accept") { session.invitations.accept(operation, token) },
             Intent(HttpMethod.Get, "$base/$community/invitations") { session.invitationListing.list(community) },
+            Intent(HttpMethod.Get, "$base/$community/members") {session.members.list(community)},
         )
     }
     private fun unauthorized(value: Any) = when (value) {
@@ -108,7 +109,7 @@ class NearbyAccountHttpSessionTest {
         else -> false
     }
 
-    @Test fun allThirteenMethodsUseBoundAuthAndExistingWireRoutes() = runTest {
+    @Test fun allFourteenMethodsUseBoundAuthAndExistingWireRoutes() = runTest {
         val requests = mutableListOf<HttpRequestData>()
         val client = HttpClient(MockEngine) { engine {
             dispatcher = StandardTestDispatcher(testScheduler)
@@ -117,10 +118,10 @@ class NearbyAccountHttpSessionTest {
         val session = NearbyAccountHttpSession(NearbyAccountCredentials(actor, "private"), client, "$root/")
         try {
             val calls = intents(session)
-            assertEquals(13, calls.size)
+            assertEquals(14, calls.size)
             for (intent in calls) assertTrue(unauthorized(intent.call()))
             assertEquals(calls.map { it.method to it.path }, requests.map { it.method to it.url.encodedPath })
-            assertEquals(List<String?>(13) { "Bearer private" }, requests.map { it.headers[HttpHeaders.Authorization] })
+            assertEquals(List<String?>(14) { "Bearer private" }, requests.map { it.headers[HttpHeaders.Authorization] })
         } finally { session.retire(); client.close() }
     }
 
@@ -183,6 +184,28 @@ class NearbyAccountHttpSessionTest {
         }
     }
 
+    @Test fun heldMembersReplyCannotPublishAfterAccountCancellationOrRetargetFreshSameActor()=runTest {
+        val account=Job();val release=CompletableDeferred<Unit>();var returned=false;var published=false
+        val headers=mutableListOf<String?>()
+        val body="""{"communityId":"$community","ownerId":"$actor","items":[{"userId":"$other","displayName":"Member","joinedAtMillis":100}]}"""
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request -> headers+=request.headers[HttpHeaders.Authorization]
+                if(headers.size==1) withContext(NonCancellable) {release.await();respond(body).also {returned=true}}
+                else respond(body)
+            }
+        }}
+        val old=NearbyAccountHttpSession(NearbyAccountCredentials(actor,"original"),client,root,account)
+        val fresh=NearbyAccountHttpSession(NearbyAccountCredentials(actor,"fresh"),client,root)
+        try {
+            val request=async {old.members.list(community).also {published=true}};runCurrent();assertEquals(1,headers.size)
+            account.cancel();assertIs<CommunityResult.Ready<*>>(fresh.members.list(community))
+            release.complete(Unit);runCurrent();assertTrue(returned);assertFailsWith<CancellationException> {request.await()};assertFalse(published)
+            assertEquals(listOf<String?>("Bearer original","Bearer fresh"),headers)
+            old.retire();assertIs<CommunityResult.Ready<*>>(fresh.members.list(community))
+            assertEquals(3,headers.size)
+        } finally {release.complete(Unit);old.retire();fresh.retire();account.cancel();client.close();runCurrent()}
+    }
     @Test fun invalidRootIsRejectedBeforeAnyRequests() = runTest {
         var issued = 0
         val client = HttpClient(MockEngine) { engine { addHandler { issued++; respond("[]") } } }
