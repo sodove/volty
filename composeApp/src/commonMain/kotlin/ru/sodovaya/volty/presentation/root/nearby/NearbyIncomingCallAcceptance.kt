@@ -14,10 +14,10 @@ internal class NearbyIncomingCallAcceptance(private val repository:DefaultSocial
     suspend fun accept(address:String,label:String):Boolean = withContext(queued) {
         val target=IncomingCallActionAddress.parse(address)?.takeIf {it.kind==IncomingCallActionKind.ACCEPT}
             ?: return@withContext false
-        verifyAndQueue(label) {registry.accept(target.bindingId,target.ticketId)}
+        verifyAndQueue(registry.callerName(target.bindingId,target.ticketId) ?: label) {registry.accept(target.bindingId,target.ticketId)}
     }
     suspend fun acceptOffer(bindingId:String,offerId:String,label:String):Boolean = withContext(queued) {
-        verifyAndQueue(label) {registry.acceptOffer(bindingId,offerId)}
+        verifyAndQueue(registry.callerName(bindingId,offerId) ?: label) {registry.acceptOffer(bindingId,offerId)}
     }
     private suspend fun verifyAndQueue(label:String,verify:suspend ()->DirectCallSnapshot?):Boolean {
         val account=repository.authenticatedAccount.value?.takeIf {it.job.isActive} ?: return false

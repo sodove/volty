@@ -81,6 +81,12 @@
   - Activation audit found another executable legacy consumer in `LightRideDashboard`: its group sheet reads `SocialRideRuntime` directly and dispatches sharing/voice commands. Root replacement must remove that path together with `RootSocialLiveSession`, the old Nearby child and Activity permission handling. Merely changing Root's marker flow would leave the old group runtime reachable. Compiled replacement map/chrome, display-name projection and actual device verification remain open.
 - [ ] Assemble signed APK, verify compact/expanded visually and test two actual phones: independent microphone/output, Xiaomi bilateral audio, background/lock, disconnect/rejoin, network transitions and roster agreement.
 
+## Incoming caller display-name advance (2026-10-07)
+
+The earlier generic-title-only note is superseded for calls from an accepted friend whose current name can be read. The process incoming owner now starts a separate optional `/v1/friends` lookup under the original account credentials after publishing the ringing offer. A 2s timeout and 64KiB response limit preserve the generic title on missing, ambiguous, invalid or unavailable metadata. This retained accounts/friends API does not read or migrate old groups.
+
+The exact original offer and account fence late names after consume, expiry, logout or replacement. UI and native acceptance read the earned name from the original registry, not caller-supplied button data. Native name updates preserve the existing ticket/actions, use only remaining server-earned credit and request alert-once behavior. Refused native publication still permits the in-app name, without earning a native action. Names never authorize voice, microphone, foreground service or membership. Android visual/notification delivery and audibility remain device checks; notification permission UX and killed-process push delivery remain open.
+
 ## Review focus
 
 Late result after account/screen disposal; uncertain create/removal retry; channel switch while original capture is pending; destructive confirmation targeting a different server; permissions denied after leaving the visible activity. JVM tests cover command/state behavior, while actual native rendering/audio/foreground service behavior requires devices.

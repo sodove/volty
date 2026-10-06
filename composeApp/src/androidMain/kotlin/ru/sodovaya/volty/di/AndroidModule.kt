@@ -212,7 +212,7 @@ val androidModule = module {
     single {
         AndroidIncomingCallAccountFactory(androidContext(), get(), Dispatchers.Main,
             flow {while (true) {delay(1_000L); emit(Unit)}}, SystemClock::elapsedRealtime,
-            {java.util.UUID.randomUUID().toString()})
+            {java.util.UUID.randomUUID().toString()}, get(named(NEARBY_HTTP_CLIENT)), SOCIAL_FRIENDS_API_BASE_URL)
     }
     single { IncomingCallAccountCoordinator(Dispatchers.Main, get(), get<AndroidIncomingCallAccountFactory>()) }
     single { ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallAcceptance(get(),get(),get(),Dispatchers.Main) }
@@ -346,6 +346,8 @@ private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"
 private const val OFFLINE_FIRST_NAVIGATION = "offline-first-navigation"
 private const val APP_VERSION_CODE = "app-version-code"
 private const val NEARBY_HTTP_CLIENT = "nearby-http-client"
+// Accounts/friends are retained on v1; this does not read or migrate legacy groups.
+private const val SOCIAL_FRIENDS_API_BASE_URL = "https://volty.sodove.ru/v1"
 private const val NEARBY_API_BASE_URL = "https://volty.sodove.ru/v2/nearby"
 
 private fun currentAppVersionCode(context: Context): Int {

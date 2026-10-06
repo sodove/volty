@@ -37,21 +37,39 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
             application.getString(R.string.nearby_incoming_notification_channel), NotificationManager.IMPORTANCE_HIGH))
         if (manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return false
         if (tickets.containsKey(ticket.id)) return false
+        // Record before the native call so a partially failed submission remains cancellable.
+        tickets[ticket.id] = ticket
+        post(ticket, remainingMillis, null)
+        return true
+    }
+
+    override fun label(ticket: IncomingCallNotificationTicket, callerName: String, remainingMillis: Long): Boolean {
+        mainOwner()
+        if (tickets[ticket.id] !== ticket || incomingCallDisplayName(callerName) == null) return false
+        require(remainingMillis in 1..45_000)
+        if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(application,
+                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
+        if (!NotificationManagerCompat.from(application).areNotificationsEnabled()) return false
+        if (manager.getNotificationChannel(CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return false
+        post(ticket, remainingMillis, callerName)
+        return true
+    }
+
+    private fun post(ticket: IncomingCallNotificationTicket, remainingMillis: Long, callerName: String?) {
         val accept = actions.accept(ticket)
         val decline = actions.decline(ticket)
         val notification = NotificationCompat.Builder(application, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle(application.getString(R.string.nearby_incoming_notification_title))
-            .setContentText(application.getString(R.string.nearby_incoming_notification_body))
+            .setContentText(if (callerName == null) application.getString(R.string.nearby_incoming_notification_body)
+                else application.getString(R.string.nearby_incoming_notification_named_body, callerName))
+            .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(accept).setAutoCancel(false).setTimeoutAfter(remainingMillis)
             .addAction(android.R.drawable.ic_menu_call, application.getString(R.string.nearby_incoming_notification_accept), accept)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, application.getString(R.string.nearby_incoming_notification_decline), decline)
             .build()
-        // Record before the native call so a partially failed submission remains cancellable.
-        tickets[ticket.id] = ticket
         manager.notify(ticket.id, NOTIFICATION, notification)
-        return true
     }
 
     override fun cancel(ticket: IncomingCallNotificationTicket) {

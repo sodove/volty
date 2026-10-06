@@ -5,6 +5,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.text.style.TextOverflow
 import org.jetbrains.compose.resources.stringResource
 import volty.composeapp.generated.resources.*
 
@@ -16,6 +17,7 @@ internal fun NearbyIncomingCallScreen(view:NearbyIncomingCallView?,actions:Nearb
     Surface(Modifier.fillMaxWidth(),tonalElevation=3.dp) {
         Column(Modifier.padding(horizontal=12.dp,vertical=8.dp),verticalArrangement=Arrangement.spacedBy(4.dp)) {
             Text(title,style=MaterialTheme.typography.titleSmall)
+            view.callerName?.let {Text(it,maxLines=1,overflow=TextOverflow.Ellipsis)}
             Row(Modifier.fillMaxWidth(),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(modifier=Modifier.weight(1f),onClick={actions.decline(view)}) {
                     Text(stringResource(Res.string.nearby_incoming_call_decline))

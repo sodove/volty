@@ -4,4 +4,5 @@
     <string name="nearby_incoming_notification_body">Open to answer</string>
     <string name="nearby_incoming_notification_accept">Accept</string>
     <string name="nearby_incoming_notification_decline">Decline</string>
+    <string name="nearby_incoming_notification_named_body">%1$s is calling</string>
 </resources>

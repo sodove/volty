@@ -73,6 +73,10 @@ internal class IncomingCallActionRegistry(private val queuedDispatcher: Coroutin
             entry.owner.decline(ticket, operation)
         }
 
+    suspend fun callerName(bindingId: String, offerId: String): String? = withContext(queuedDispatcher) {
+        findOffer(bindingId, offerId)?.second?.callerName
+    }
+
     suspend fun acceptOffer(bindingId: String, offerId: String): DirectCallSnapshot? = withContext(queuedDispatcher) {
         val (entry, original) = findOffer(bindingId, offerId) ?: return@withContext null
         val call = entry.owner.acceptOffer(original)

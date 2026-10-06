@@ -12,9 +12,10 @@ import ru.sodovaya.volty.domain.voice.VoiceOperationId
 
 internal class IncomingCallNotificationTicket internal constructor(val id: String, internal val owner: Any)
 internal class IncomingCallOffer internal constructor(internal val ticket: IncomingCallNotificationTicket,
-    val call: DirectCallSnapshot) { val id: String get() = ticket.id }
+    val call: DirectCallSnapshot, val callerName: String? = null) { val id: String get() = ticket.id }
 internal interface IncomingCallNotificationPort {
     fun show(ticket: IncomingCallNotificationTicket, call: DirectCallSnapshot, remainingMillis: Long): Boolean
+    fun label(ticket: IncomingCallNotificationTicket, callerName: String, remainingMillis: Long): Boolean = false
     fun cancel(ticket: IncomingCallNotificationTicket)
 }
 /** Native publication only. An in-app offer cannot fabricate a notification action. */
@@ -24,10 +25,12 @@ internal data class IncomingCallNotificationState(val ticket: IncomingCallNotifi
 /** Queued SERIAL account-owned ringing offers and notifications. Borrows runtime; never controls media. */
 internal class IncomingCallNotificationOwner(private val account: SocialAuthenticatedAccount, private val runtime: AuthenticatedVoiceRuntime,
     private val queuedDispatcher: CoroutineDispatcher, pulses: Flow<Unit>, private val clock: () -> Long,
-    private val port: IncomingCallNotificationPort, private val nextId: () -> String) {
+    private val port: IncomingCallNotificationPort, private val nextId: () -> String,
+    private val callerNames: IncomingCallCallerNames? = null) {
     private val verifier = IncomingCallHintVerifier(account, runtime, clock)
     private val lifetime = run {
         require(queuedDispatcher.isDispatchNeeded(account.scope().coroutineContext)) {"Queued serial dispatcher required"}
+        require(callerNames == null || callerNames.belongsTo(account)) {"Caller names belong to another account"}
         SupervisorJob(account.job)
     }
     private val scope = CoroutineScope(account.scope().coroutineContext + lifetime + queuedDispatcher)
@@ -60,6 +63,8 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     private var observation: DirectCallRingObservation? = null
     private val ticketOwner = Any()
     private val issuedIds = mutableSetOf<String>()
+    private var nameJob: Job? = null
+    private var namesClosed = false
     private var publishingTicket: IncomingCallNotificationTicket? = null
     internal fun belongsTo(candidate: SocialAuthenticatedAccount): Boolean = account === candidate
     /** Called synchronously by native actions on this same queued serial owner. */
@@ -199,6 +204,24 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         observation = reply.observation
         offerOutput.value = IncomingCallOffer(ticket, reply.call)
         if (shown) output.value = IncomingCallNotificationState(ticket, reply.call)
+        enrichName(requireNotNull(offerOutput.value))
+    }
+
+    private fun enrichName(original: IncomingCallOffer) {
+        val names = callerNames ?: return
+        nameJob = scope.launch {
+            val name = try {incomingCallDisplayName(names.lookup(original.call.callerId))}
+                catch (cancelled: CancellationException) {throw cancelled}
+                catch (_: Exception) {null}
+            val now = tick() ?: return@launch
+            if (name == null || offerOutput.value !== original) return@launch
+            offerOutput.value = IncomingCallOffer(original.ticket, original.call, name)
+            if (output.value.ticket === original.ticket) {
+                val remaining = observation?.deadlineMillis?.minus(now) ?: return@launch
+                try {port.label(original.ticket, name, remaining)} catch (_: Exception) { /* Optional metadata. */ }
+                tick()
+            }
+        }
     }
 
     private fun tick(): Long? {
@@ -211,6 +234,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     }
 
     private fun withdraw() {
+        nameJob?.cancel(); nameJob = null
         val ticket = output.value.ticket
         offerOutput.value = null
         output.value = IncomingCallNotificationState(retired = output.value.retired)
@@ -228,5 +252,9 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         withdraw(); pending = null; latest = null
         output.value = IncomingCallNotificationState(retired = true)
         lifetime.cancel()
+        if (!namesClosed) {
+            namesClosed = true
+            try {callerNames?.close()} catch (_: Exception) { /* Metadata cleanup cannot retain an offer. */ }
+        }
     }
 }

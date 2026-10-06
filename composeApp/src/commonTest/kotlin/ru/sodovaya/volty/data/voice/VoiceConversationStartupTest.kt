@@ -2592,7 +2592,112 @@ class VoiceConversationStartupTest {
         } finally {notifications.close(); f.close()}
     }
 
+    private class CallerNames(private val account:SocialAuthenticatedAccount,
+        private val read:suspend ()->String?) : IncomingCallCallerNames {
+        var reads=0;var closes=0
+        override fun belongsTo(account:SocialAuthenticatedAccount)=this.account===account
+        override suspend fun lookup(caller:String):String? {reads++;return read()}
+        override fun close() {closes++}
+    }
+
+    @Test fun incomingNameEnrichmentKeepsOriginalTicketAndOnlyRemainingCredit() = runTest {
+        val f=Fixture(this);val port=Notifications();val release=CompletableDeferred<Unit>()
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val names=CallerNames(account) {release.await();"Саша"}
+        val runtime=f.acquire(account)
+        val owner=IncomingCallNotificationOwner(account,runtime,f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key},names)
+        try {
+            owner.hint(channel);runCurrent();val original=assertNotNull(owner.offer.value)
+            assertNull(original.callerName);assertEquals(1,names.reads);assertEquals(1,port.shown.size)
+            f.time+=400;release.complete(Unit);runCurrent()
+            val labeled=assertNotNull(owner.offer.value);assertEquals("Саша",labeled.callerName)
+            assertSame(original.ticket,labeled.ticket);assertSame(original.ticket,owner.state.value.ticket)
+            assertEquals(listOf(Triple(original.ticket,"Саша",600L)),port.labels);assertEquals(1,port.shown.size)
+            assertNull(owner.acceptOffer(original));assertNotNull(owner.acceptOffer(labeled));assertNull(owner.offer.value)
+            owner.close();owner.close();assertEquals(1,names.closes)
+            assertTrue(account.job.isActive);assertFalse(runtime.retired.value);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit);owner.close();f.close()}
+    }
+
+    @Test fun incomingNameCannotResurrectExpiredOfferAfterCancellationIgnoringRead() = runTest {
+        val f=Fixture(this);val port=Notifications();val release=CompletableDeferred<Unit>();val pulses=MutableSharedFlow<Unit>()
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val names=CallerNames(account) {withContext(NonCancellable) {release.await()};"Late"}
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,pulses,{f.time},port,{f.key},names)
+        try {
+            owner.hint(channel);runCurrent();val original=assertNotNull(owner.offer.value);assertEquals(1,names.reads)
+            f.time+=1000;pulses.emit(Unit);runCurrent();assertNull(owner.offer.value)
+            release.complete(Unit);runCurrent();assertNull(owner.offer.value);assertTrue(port.labels.isEmpty())
+            assertEquals(listOf(original.ticket),port.cancelled);assertEquals(1,port.shown.size)
+            assertTrue(account.job.isActive);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit);owner.close();f.close()}
+        assertEquals(1,names.closes)
+    }
+
+    @Test fun incomingNameStillLabelsInAppOfferWhenNativePublicationWasRefused() = runTest {
+        val f=Fixture(this);val port=Notifications().apply {allowed=false}
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val names=CallerNames(account) {"Rider"}
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key},names)
+        try {
+            owner.hint(channel);runCurrent();assertEquals("Rider",assertNotNull(owner.offer.value).callerName)
+            assertNull(owner.state.value.ticket);assertTrue(port.labels.isEmpty());assertEquals(1,port.shown.size)
+            assertNotNull(owner.acceptOffer(assertNotNull(owner.offer.value)));assertEquals(0,f.launches)
+            assertTrue(f.allocated.isEmpty());assertTrue(account.job.isActive)
+        } finally {owner.close();f.close()}
+        assertEquals(1,names.closes)
+    }
+
+    @Test fun incomingNameUiAndNativeAcceptanceUseEarnedNameInsteadOfCallerSuppliedLabel() = runTest {
+        for (native in listOf(false,true)) {
+            val f=Fixture(this);val root=voiceController(f,Switches());val port=Notifications().apply {allowed=native}
+            val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+            val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+            val names=CallerNames(account) {"Саша"}
+            val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key},names)
+            val acceptance=NearbyIncomingCallAcceptance(f.repository,registry,root,f.dispatcher)
+            val ui=NearbyIncomingCallUi(f.repository,registry,acceptance,f.dispatcher,{first.value})
+            var view:NearbyIncomingCallView?=null;val collector=backgroundScope.launch {ui.state.collect {view=it}}
+            try {
+                val binding=registry.bind(account,owner);owner.hint(channel);runCurrent()
+                val original=assertNotNull(view);assertEquals("Саша",original.callerName)
+                val accepted=if (native) acceptance.accept(IncomingCallActionAddress(binding.id,original.offerId,IncomingCallActionKind.ACCEPT).uri,"Forged")
+                    else ui.accept(original.copy(callerName="Forged"),"Fallback")
+                assertTrue(accepted);runCurrent();assertEquals("Саша",root.state.value.pending?.label)
+                assertNull(view);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+            } finally {collector.cancel();registry.close();owner.close();root.close();f.close()}
+        }
+    }
+
+    @Test fun incomingNameHeldOldLoginCannotRepaintSameUserNewOffer() = runTest {
+        val f=Fixture(this);var bindingNonce=0
+        val registry=IncomingCallActionRegistry(f.dispatcher) {"a0000000-0000-0000-0000-${(++bindingNonce).toString().padStart(12,'0')}"}
+        val old=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val release=CompletableDeferred<Unit>();val oldPort=Notifications()
+        val oldNames=CallerNames(old) {withContext(NonCancellable) {release.await()};"Old"}
+        val oldOwner=IncomingCallNotificationOwner(old,f.acquire(old),f.dispatcher,MutableSharedFlow(),{f.time},oldPort,{f.key},oldNames)
+        var freshOwner:IncomingCallNotificationOwner?=null
+        try {
+            registry.bind(old,oldOwner);oldOwner.hint(channel);runCurrent();assertEquals(1,oldNames.reads)
+            f.repository.logout();runCurrent();val fresh=f.login();assertEquals(old.userId,fresh.userId)
+            val freshNames=CallerNames(fresh) {"Fresh"};val freshPort=Notifications()
+            freshOwner=IncomingCallNotificationOwner(fresh,f.acquire(fresh),f.dispatcher,MutableSharedFlow(),{f.time},freshPort,{f.key},freshNames)
+            val freshRegistry=registry
+            try {
+                freshRegistry.bind(fresh,assertNotNull(freshOwner));freshOwner.hint(channel);runCurrent()
+                assertEquals("Fresh",freshRegistry.offer.value?.original?.callerName)
+                release.complete(Unit);runCurrent()
+                assertEquals("Fresh",freshRegistry.offer.value?.original?.callerName);assertNull(oldOwner.offer.value)
+                assertTrue(oldPort.labels.isEmpty());assertEquals(1,oldNames.closes);assertTrue(fresh.job.isActive)
+            } finally {freshRegistry.close()}
+        } finally {release.complete(Unit);registry.close();oldOwner.close();freshOwner?.close();f.close()}
+    }
+
     private class Notifications : IncomingCallNotificationPort {
+        val labels = mutableListOf<Triple<IncomingCallNotificationTicket,String,Long>>()
+        override fun label(ticket:IncomingCallNotificationTicket,callerName:String,remainingMillis:Long):Boolean {
+            labels += Triple(ticket,callerName,remainingMillis);return allowed
+        }
         var allowed = true
         var throwOnCancel = false
         var onShow: (IncomingCallNotificationTicket) -> Unit = {}

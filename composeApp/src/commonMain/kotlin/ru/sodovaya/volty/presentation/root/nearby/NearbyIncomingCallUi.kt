@@ -7,7 +7,7 @@ import ru.sodovaya.volty.domain.voice.VoiceOperationId
 import ru.sodovaya.volty.data.social.DefaultSocialRepository
 import ru.sodovaya.volty.data.voice.IncomingCallActionRegistry
 
-data class NearbyIncomingCallView(val bindingId:String, val offerId:String)
+data class NearbyIncomingCallView(val bindingId:String, val offerId:String,val callerName:String?=null)
 class NearbyIncomingCallActions(val accept:(NearbyIncomingCallView,String)->Unit, val decline:(NearbyIncomingCallView)->Unit)
 
 /** Borrowed process offer. Screens own collectors/waiters, never the incoming account lifetime. */
@@ -16,7 +16,7 @@ internal class NearbyIncomingCallUi(private val repository:DefaultSocialReposito
     private val queued:CoroutineDispatcher, private val nextOperation:()->String) {
     val state:Flow<NearbyIncomingCallView?> = combine(registry.offer,repository.authenticatedAccount) {offer,account ->
         offer?.takeIf {it.account===account && it.account.job.isActive}
-            ?.let {NearbyIncomingCallView(it.binding.id,it.original.id)}
+            ?.let {NearbyIncomingCallView(it.binding.id,it.original.id,it.original.callerName)}
     }
     suspend fun accept(original:NearbyIncomingCallView,label:String):Boolean =
         acceptance.acceptOffer(original.bindingId,original.offerId,label)
