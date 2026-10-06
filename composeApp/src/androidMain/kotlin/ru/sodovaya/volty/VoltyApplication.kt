@@ -23,6 +23,7 @@ class VoltyApplication : Application() {
             androidContext(this@VoltyApplication)
             modules(appModule, androidModule)
         }
+        koinApp.koin.get<ru.sodovaya.volty.data.voice.IncomingCallDiscovery>().start()
         val alertEngine = koinApp.koin.get<AlertEngine>()
         koinApp.koin.get<OfflineMapPackManager>()
         val appScope = CoroutineScope(Dispatchers.Default + SupervisorJob())

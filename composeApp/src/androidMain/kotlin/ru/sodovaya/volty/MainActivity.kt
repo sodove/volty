@@ -33,6 +33,7 @@ class MainActivity : ComponentActivity() {
         nearbyPermissions = ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge(
             this,getKoin().get(),getKoin().get(),getKoin().get(),getKoin().get(),
         )
+        acceptIncomingCall(intent)
         setContent {
             App(
                 root = rootComponent,
@@ -102,6 +103,25 @@ class MainActivity : ComponentActivity() {
         // drop pathway if we've been stuck on Connected with stale data.
         lifecycleScope.launch {
             runCatching { bmsRepository.onAppResumed() }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        acceptIncomingCall(intent)
+    }
+
+    private fun acceptIncomingCall(incoming: Intent?) {
+        if(incoming?.action != ru.sodovaya.volty.data.voice.AndroidIncomingCallPendingIntents.ACCEPT) return
+        val address=incoming.dataString ?: return
+        // Consume the Activity delivery; the original registry ticket also rejects recreation/replay.
+        incoming.action=null;incoming.data=null
+        lifecycleScope.launch {
+            runCatching {
+                getKoin().get<ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallAcceptance>()
+                    .accept(address,getString(R.string.nearby_incoming_notification_title))
+            }
         }
     }
 

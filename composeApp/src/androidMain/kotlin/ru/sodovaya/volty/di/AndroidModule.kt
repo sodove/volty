@@ -215,6 +215,14 @@ val androidModule = module {
             {java.util.UUID.randomUUID().toString()})
     }
     single { IncomingCallAccountCoordinator(Dispatchers.Main, get(), get<AndroidIncomingCallAccountFactory>()) }
+    single { ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallAcceptance(get(),get(),get(),Dispatchers.Main) }
+    single {
+        val coordinator=get<VoiceAccountCoordinator>()
+        val audio=get<AndroidVoiceAudioFactory>()
+        ru.sodovaya.volty.data.voice.IncomingCallDiscovery(get(),Dispatchers.Main,get()) {account ->
+            coordinator.acquireBound(account,audio.createPrepared()).voice
+        }
+    }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
     single { AndroidOfflineRoutingPackageManager(androidContext()) }
     single { AndroidOfflineNavigationConfig.from(androidContext()) }

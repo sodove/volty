@@ -35,7 +35,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     val readInFlight = reads.asStateFlow()
     private val cancellationFailed = MutableStateFlow(false)
     val cleanupFailed = cancellationFailed.asStateFlow()
-    private class Hint(val callId: String)
+    private class Hint(val callId: String, val consumed: Boolean = false)
     private var pending: Hint? = null
     private var latest: Hint? = null
     private var running: Hint? = null
@@ -77,7 +77,21 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         true
     }
 
+    /** Polling retries failed verification, but never replaces an earned or consumed offer. */
+    suspend fun discoveryHint(callId: String): Boolean = withContext(queuedDispatcher) {
+        invitationDraftId(callId)
+        if (tick() == null || output.value.call?.callId == callId ||
+            latest?.let {it.callId == callId && it.consumed} == true) return@withContext false
+        hint(callId)
+    }
+
     suspend fun close() = withContext(NonCancellable) {withContext(queuedDispatcher) {closeOwned()}}
+    /** A successful discovery response withdrew this exact call, including a held hint read. */
+    suspend fun withdrawCall(callId: String) = withContext(queuedDispatcher) {
+        if (latest?.callId == callId) latest = null
+        if (pending?.callId == callId) pending = null
+        if (output.value.call?.callId == callId) withdraw()
+    }
     /** Metadata only: the caller still needs visible Activity admission to join the call. */
     suspend fun acceptTarget(ticket: IncomingCallNotificationTicket): DirectCallSnapshot? = withContext(queuedDispatcher) {
         val action = consume(ticket) ?: return@withContext null
@@ -106,7 +120,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         val call = output.value.call ?: return null
         val evidence = observation ?: return null
         if (evidence.callId != call.callId || evidence.revision != call.revision) return null
-        val marker = Hint(call.callId)
+        val marker = Hint(call.callId, consumed = true)
         withdraw(); pending = null; latest = marker
         // Failed notification cancellation cannot abort an already authorized negative action.
         return Action(call, marker)
