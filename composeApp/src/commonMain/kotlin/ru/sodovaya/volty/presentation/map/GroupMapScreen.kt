@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.map
 
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
 import androidx.activity.compose.BackHandler
@@ -14,9 +15,12 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.unit.dp
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
@@ -32,11 +36,11 @@ internal fun SocialParticipantMarker.toGroupMapMarker(): ParticipantMarker = Par
     stale = stale,
 )
 
-/** Full-screen group map. It only receives runtime state and never owns it. */
+/** Current-channel map chrome. Root owns the single native surface and earned points. */
 @OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
-internal fun GroupMapScreen(
-    state: GroupMapState,
+internal fun ChannelMapScreen(
+    statusText: String,
     darkTheme: Boolean,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
@@ -58,16 +62,18 @@ internal fun GroupMapScreen(
         ) {
             TopAppBar(
                 title = {
-                    Text("Карта группы")
+                    Column {
+                        Text(stringResource(Res.string.nearby_channel_map_title),maxLines=1,overflow=TextOverflow.Ellipsis)
+                        Text(statusText,style=MaterialTheme.typography.bodySmall,maxLines=2,overflow=TextOverflow.Ellipsis)
+                    }
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Назад")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = stringResource(Res.string.nearby_back))
                     }
                 },
                 actions = {
                     Icon(Icons.Default.Groups, contentDescription = null, modifier = Modifier.padding(end = 16.dp))
-                    Text("${state.participantCount}", modifier = Modifier.padding(end = 16.dp))
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.94f),

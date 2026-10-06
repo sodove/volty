@@ -93,6 +93,9 @@ import ru.sodovaya.volty.presentation.map.platformNavigationGlass
 import ru.sodovaya.volty.presentation.ride.LocalLightHudPalette
 import ru.sodovaya.volty.util.UnitFormatter
 import ru.sodovaya.volty.util.UnitSystem
+import volty.composeapp.generated.resources.nearby_channel_active
+import volty.composeapp.generated.resources.nearby_map_positions
+import volty.composeapp.generated.resources.nearby_map_loading
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.dashboard_light_group_online
 import volty.composeapp.generated.resources.dashboard_light_group_ride
@@ -165,8 +168,7 @@ data class LightNavigationCallbacks(
 )
 
 data class LightNavigationNearby(
-    val participantCount: Int,
-    val onlineParticipantCount: Int,
+    val positionCount: Int?,
 )
 
 private data class LightNavigationGlass(
@@ -862,7 +864,7 @@ private fun GuidanceDockContent(
 
 @Composable
 private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
-    val description = stringResource(Res.string.dashboard_light_group_ride)
+    val description = stringResource(Res.string.nearby_channel_active)
     val palette = LocalLightHudPalette.current
     Row(
         modifier = Modifier
@@ -876,22 +878,22 @@ private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () 
     ) {
         Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan, modifier = Modifier.size(17.dp))
         Column(Modifier.weight(1f)) {
-            Text(stringResource(Res.string.dashboard_light_group_ride), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(stringResource(Res.string.nearby_channel_active), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
             Text(
-                stringResource(Res.string.dashboard_light_group_online, state.onlineParticipantCount),
+                state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 maxLines = 1,
             )
         }
-        Text("${state.participantCount}", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
+        Text(state.positionCount?.toString().orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
         Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp, lineHeight = 18.sp)
     }
 }
 
 @Composable
 private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: () -> Unit) {
-    val description = stringResource(Res.string.dashboard_light_group_ride)
+    val description = stringResource(Res.string.nearby_channel_active)
     val palette = LocalLightHudPalette.current
     Column(
         modifier = Modifier
@@ -901,9 +903,9 @@ private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: 
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(1.dp),
     ) {
-        NavigationNearbyAvatars(state.participantCount)
+        Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan)
         Text(
-            stringResource(Res.string.dashboard_light_group_online, state.onlineParticipantCount),
+            state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
             color = palette.cyan,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,
@@ -912,23 +914,7 @@ private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: 
     }
 }
 
-@Composable
-private fun NavigationNearbyAvatars(participantCount: Int) {
-    val colors = listOf(Color(0xFF2D9CDB), Color(0xFF38B86D), Color(0xFF9D6BD9))
-    val visibleAvatars = participantCount.coerceIn(1, colors.size)
-    Box(modifier = Modifier.size(width = 48.dp, height = 25.dp)) {
-        repeat(visibleAvatars) { index ->
-            Box(
-                modifier = Modifier
-                    .offset(x = (index * 13).dp)
-                    .size(25.dp)
-                    .clip(CircleShape)
-                    .background(colors[index])
-                    .border(1.dp, MaterialTheme.colorScheme.surfaceContainer, CircleShape),
-            )
-        }
-    }
-}
+
 
 @Composable
 private fun GuidanceStopButton(onStop: () -> Unit, description: String) {

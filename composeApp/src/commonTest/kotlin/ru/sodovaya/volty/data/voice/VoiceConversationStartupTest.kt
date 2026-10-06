@@ -1361,6 +1361,72 @@ class VoiceConversationStartupTest {
         }.filterNotNull().first()
     }
 
+    @Test fun rootPresentationDisposalRejectsOldActionsAndPreservesProcessConversation() = runTest {
+        val f=Fixture(this,withAudience=true);f.useBoundRuntime=true;val trip=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val activity=SupervisorJob(backgroundScope.coroutineContext[Job])
+        val boundary=launchBoundary(f,activity)
+        val root=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing)
+        var replacement:NearbyRootPresenter?=null
+        try {
+            val account=f.login();root.connectChannel(account,channel,"Channel");runCurrent()
+            val request=assertNotNull(voice.state.value.pending).id
+            voice.begin(request,true,boundary);runCurrent()
+            val operation=VoiceOperationId(request)
+            assertEquals(operation,root.state.value.voice.operation)
+            assertTrue(root.state.value.voice.channelMap.observed)
+            val mutesBefore=f.mutes.toList();val locationBefore=trip.source.issued.toList()
+            val old=root.actions;root.close();runCurrent();assertEquals(NearbyRootView(),root.state.value)
+            old.disconnect(operation);old.mute(operation,true);old.startTrip(operation);runCurrent()
+            assertEquals(operation,voice.state.value.operation);assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            assertEquals(mutesBefore,f.mutes);assertEquals(locationBefore,trip.source.issued);assertTrue(account.job.isActive)
+            val fresh=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing);replacement=fresh;runCurrent()
+            assertEquals(operation,fresh.state.value.voice.operation)
+            fresh.actions.disconnect(operation);runCurrent();assertFalse(assertNotNull(f.runtime).state.value.wanted)
+            assertNull(fresh.state.value.voice.operation)
+            assertEquals(NearbyPanelConnection.HIDDEN,nearbyConversationPanel(fresh.state.value.voice).connection)
+            assertTrue(account.job.isActive)
+        } finally {replacement?.close();root.close();boundary.close();ui.cancel();activity.cancel();sharing.close();voice.close();f.close()}
+    }
+
+    @Test fun rootPresentationClearsNaturallyStoppedConversationWithoutRetiringAuthentication() = runTest {
+        val f=Fixture(this);val trip=SharingFixture(f);val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+        val activity=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,activity)
+        val root=NearbyRootPresenter(backgroundScope,voice,sharing)
+        try {
+            val account=f.login();root.connectChannel(account,channel,"Channel");runCurrent()
+            val request=assertNotNull(voice.state.value.pending).id;voice.begin(request,true,boundary);runCurrent()
+            assertEquals(VoiceOperationId(request),root.state.value.voice.operation)
+            assertTrue(f.gate.stop(assertNotNull(f.gate.current.value)));runCurrent()
+            assertEquals(VoiceConversationPhase.STOPPED,f.owner.state.value.phase)
+            assertFalse(assertNotNull(f.runtime).state.value.wanted)
+            assertNull(root.state.value.voice.operation)
+            assertEquals(NearbyPanelConnection.HIDDEN,nearbyConversationPanel(root.state.value.voice).connection)
+            assertTrue(account.job.isActive)
+        } finally {root.close();boundary.close();activity.cancel();sharing.close();voice.close();f.close()}
+    }
+
+    @Test fun cancelledRootParentWithdrawsViewBeforeHeldChildCompletesWithoutStoppingVoice() = runTest {
+        val f=Fixture(this);val trip=SharingFixture(f);val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+        val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val activity=SupervisorJob(backgroundScope.coroutineContext[Job])
+        val boundary=launchBoundary(f,activity);val release=CompletableDeferred<Unit>();val entered=CompletableDeferred<Unit>()
+        val parent=CoroutineScope(backgroundScope.coroutineContext+ui)
+        val root=NearbyRootPresenter(parent,voice,sharing)
+        parent.launch {try {awaitCancellation()} finally {withContext(NonCancellable) {entered.complete(Unit);release.await()}}}
+        try {
+            val account=f.login();root.connectChannel(account,channel,"Channel");runCurrent()
+            val request=assertNotNull(voice.state.value.pending).id;voice.begin(request,true,boundary);runCurrent()
+            assertEquals(VoiceOperationId(request),root.state.value.voice.operation)
+            ui.cancel();runCurrent();assertTrue(entered.isCompleted);assertFalse(ui.isCompleted)
+            assertEquals(NearbyRootView(),root.state.value)
+            root.actions.disconnect(VoiceOperationId(request));runCurrent()
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+        } finally {release.complete(Unit);runCurrent();root.close();boundary.close();ui.cancel();activity.cancel();sharing.close();voice.close();f.close()}
+    }
+
     @Test fun conversationPublishesOnlyItsActualChannelAudienceAndWithdrawsOnStop() = runTest {
         val f=Fixture(this,withAudience=true)
         try {

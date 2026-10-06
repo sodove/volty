@@ -46,11 +46,9 @@ import ru.sodovaya.volty.presentation.scanning.DefaultScanningComponent
 import ru.sodovaya.volty.presentation.scanning.ScanningComponent
 import ru.sodovaya.volty.presentation.settings.DefaultSettingsComponent
 import ru.sodovaya.volty.presentation.settings.SettingsComponent
-import ru.sodovaya.volty.presentation.nearby.DefaultNearbyComponent
-import ru.sodovaya.volty.presentation.nearby.NearbyComponent
-import ru.sodovaya.volty.presentation.nearby.SocialLiveSession
-import ru.sodovaya.volty.presentation.nearby.SocialLiveState
-import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
+import ru.sodovaya.volty.presentation.nearby.DefaultVoiceSpacesNearbyComponent
+import ru.sodovaya.volty.presentation.root.nearby.NearbyRootPresentation
+import ru.sodovaya.volty.presentation.root.nearby.NearbyRootPresenter
 import ru.sodovaya.volty.presentation.navigation.DefaultLightNavigationComponent
 import ru.sodovaya.volty.presentation.navigation.LightNavigationComponent
 import ru.sodovaya.volty.presentation.vehicle.DefaultVehicleEditComponent
@@ -92,8 +90,8 @@ interface RootComponent {
     /** True when an active vehicle can show the Ride dashboard. */
     val rideAvailable: Value<Boolean>
 
-    /** Live friends are shared by Nearby controls and the Ride map. */
-    val socialLiveState: StateFlow<SocialLiveState>
+    /** Root borrows the process conversation; navigation never owns voice or sharing. */
+    val nearby: NearbyRootPresentation
 
     fun onBack()
     fun onTab(tab: Tab)
@@ -116,8 +114,8 @@ interface RootComponent {
         data class VehicleEdit(val component: VehicleEditComponent) : Child
         data class VehicleAlerts(val component: VehicleAlertsComponent) : Child
         data class Graph(val component: GraphComponent) : Child
-        data class Nearby(val component: NearbyComponent) : Child
-        /** Retained full-screen group map route. */
+        data class Nearby(val component: DefaultVoiceSpacesNearbyComponent) : Child
+        /** Retained channel map; serialized GroupMap route name remains compatible. */
         data object GroupMap : Child
         data class Settings(val component: SettingsComponent) : Child
     }
@@ -384,12 +382,12 @@ class DefaultRootComponent(
     private val bmsRepository: BmsRepository by inject()
     private val permissionsChecker: PermissionsChecker by inject()
     private val locationRepository: ru.sodovaya.volty.domain.location.RideLocationRepository by inject()
-    private val socialLiveSession: SocialLiveSession = RootSocialLiveSession(get())
-    override val socialLiveState: StateFlow<SocialLiveState> = socialLiveSession.state
 
     // Lightweight scope for cold-start async work (DB reads) and the active
     // vehicle key consumed by the retained navigation component.
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
+    private val nearbyPresenter = NearbyRootPresenter(scope,get(),get())
+    override val nearby: NearbyRootPresentation = nearbyPresenter
     private val navigationVehicleId: StateFlow<String?> = bmsRepository.activeVehicle
         .map { it?.id }
         .stateIn(
@@ -416,7 +414,7 @@ class DefaultRootComponent(
     init {
         lifecycle.doOnDestroy {
             scope.coroutineContext[Job]?.cancel()
-            socialLiveSession.close()
+            nearbyPresenter.close()
             navigation.close()
         }
     }
@@ -771,15 +769,20 @@ class DefaultRootComponent(
                     onBackRequested = { nav.pop() }
                 )
             )
-            is Config.Nearby -> RootComponent.Child.Nearby(
-                DefaultNearbyComponent(
-                    componentContext = context,
-                    socialRepository = get(),
-                    socialRuntime = get(),
-                    onBackRequested = { nav.pop() },
-                    onOpenGroupMapRequested = { onOpenGroupMap() },
-                )
-            )
+            is Config.Nearby -> {
+                lateinit var nearby: DefaultVoiceSpacesNearbyComponent
+                nearby = DefaultVoiceSpacesNearbyComponent(context,scope,get(),get(),
+                    nextId = {get<ru.sodovaya.volty.presentation.root.nearby.NearbyOperationIds>().next()},
+                    connectChannel = { account, channel ->
+                        val browser = nearby.servers.value.presenter?.state?.value?.browser
+                        val detail = browser?.detail
+                        val row = detail?.channels?.firstOrNull {it.id == channel}
+                        if (browser != null && detail != null && !browser.detailLoading && detail.community.id == browser.selectedCommunity && row != null)
+                            nearbyPresenter.connectChannel(account,channel,row.name)
+                    },
+                    call = nearbyPresenter::callFriend, onBack = ::onBack)
+                RootComponent.Child.Nearby(nearby)
+            }
             // The native map surface is hosted once by RootScreen. This child
             // is an explicit route marker for its chrome/back-stack state; it
             // intentionally carries no second map instance or local data.
@@ -802,42 +805,4 @@ class DefaultRootComponent(
                 )
             )
         }
-}
-
-/**
- * Root owns only this UI projection. Closing it detaches collection from the
- * app-scoped runtime; it deliberately never calls [SocialRideRuntime.close].
- */
-private class RootSocialLiveSession(
-    private val runtime: ru.sodovaya.volty.domain.social.SocialRideRuntime,
-) : SocialLiveSession {
-    private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val _state = MutableStateFlow(SocialLiveState())
-    override val state: StateFlow<SocialLiveState> = _state.asStateFlow()
-
-    init {
-        scope.launch {
-            runtime.state.collect { current ->
-                _state.value = SocialLiveState(
-                    groupId = current.selectedGroup?.id,
-                    liveEvent = current.liveEvent,
-                    markers = current.markers.map {
-                        ParticipantMarker(
-                            userId = it.userId,
-                            label = it.label,
-                            latitude = it.latitude,
-                            longitude = it.longitude,
-                            accuracyMeters = it.accuracyMeters,
-                            presence = it.presence,
-                            stale = it.stale,
-                        )
-                    },
-                )
-            }
-        }
-    }
-
-    override fun selectGroup(groupId: ru.sodovaya.volty.domain.social.RideGroupId) = Unit
-    override fun clear() = runtime.clearGroup()
-    override fun close() = scope.cancel()
 }

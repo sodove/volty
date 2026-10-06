@@ -18,16 +18,21 @@ import ru.sodovaya.volty.presentation.root.Config
 import ru.sodovaya.volty.presentation.root.DefaultRootComponent
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
+import org.koin.android.ext.android.getKoin
 
 class MainActivity : ComponentActivity() {
 
     private val bmsRepository: BmsRepository by inject()
     private lateinit var rootComponent: DefaultRootComponent
+    private var nearbyPermissions: ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         rootComponent = DefaultRootComponent(defaultComponentContext())
+        nearbyPermissions = ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge(
+            this,getKoin().get(),getKoin().get(),getKoin().get(),getKoin().get(),
+        )
         setContent {
             App(
                 root = rootComponent,
@@ -98,6 +103,12 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch {
             runCatching { bmsRepository.onAppResumed() }
         }
+    }
+
+    override fun onDestroy() {
+        nearbyPermissions?.close()
+        nearbyPermissions=null
+        super.onDestroy()
     }
 
     override fun onStop() {

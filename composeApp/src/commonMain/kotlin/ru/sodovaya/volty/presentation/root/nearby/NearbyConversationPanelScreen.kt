@@ -5,16 +5,21 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.Dp
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.voice.VoiceOperationId
 import volty.composeapp.generated.resources.*
 
 /** Required callbacks keep screen composition/disposal separate from process ownership. */
-internal class NearbyConversationPanelActions(
+class NearbyConversationPanelActions(
     val disconnect: (VoiceOperationId) -> Unit,
     val mute: (VoiceOperationId, Boolean) -> Unit,
     val deafen: (VoiceOperationId, Boolean) -> Unit,
@@ -29,8 +34,10 @@ internal class NearbyConversationPanelActions(
 @Composable
 internal fun NearbyConversationPanelScreen(
     voice: NearbyVoiceView, sharing: NearbySharingView, expanded: Boolean,
-    actions: NearbyConversationPanelActions, modifier: Modifier = Modifier,
+    actions: NearbyConversationPanelActions, modifier: Modifier = Modifier, maxHeight: Dp = 400.dp,
 ) {
+    var detailsExpanded by remember { mutableStateOf(false) }
+    val showDetails = expanded || detailsExpanded
     val panel = nearbyConversationPanel(voice, sharing)
     val pending = voice.pending
     if (pending != null && pending.confirmationRequired && !pending.confirmed) {
@@ -46,7 +53,7 @@ internal fun NearbyConversationPanelScreen(
     if (panel.connection == NearbyPanelConnection.HIDDEN && request == null && sharing.pending == null &&
         !panel.localCleanupPending && !panel.serverConfirmationPending && voice.error == null && sharing.error == null) return
     Surface(modifier.fillMaxWidth(), tonalElevation = 3.dp) {
-        Column(Modifier.heightIn(max = if (expanded) 400.dp else 280.dp).verticalScroll(rememberScrollState())
+        Column(Modifier.heightIn(max = minOf(maxHeight,if (showDetails) 400.dp else 280.dp)).verticalScroll(rememberScrollState())
             .padding(horizontal = 12.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             if (voice.operation != null) {
                 Text(voice.label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -60,12 +67,15 @@ internal fun NearbyConversationPanelScreen(
                         Text(stringResource(Res.string.nearby_panel_disconnect), color = MaterialTheme.colorScheme.error)
                     } }
                 }
-                if (expanded) {
+                if (!expanded) TextButton(onClick = {detailsExpanded = !detailsExpanded}) {
+                    Text(stringResource(if (detailsExpanded) Res.string.nearby_panel_fewer_controls else Res.string.nearby_panel_more_controls))
+                }
+                if (showDetails) {
                     panel.audioOperation?.let { operation -> TextButton(onClick = { actions.deafen(operation, !panel.deafened) }) {
                         Text(stringResource(if (panel.deafened) Res.string.nearby_panel_undeafen else Res.string.nearby_panel_deafen))
                     } }
                     panel.startTripOperation?.let { operation -> TextButton(onClick = { actions.startTrip(operation) }) {
-                        Text(stringResource(Res.string.nearby_panel_start_trip))
+                        Text(stringResource(Res.string.nearby_panel_start_position_timed))
                     } }
                 }
             }

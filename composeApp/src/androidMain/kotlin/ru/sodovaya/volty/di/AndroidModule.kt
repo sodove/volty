@@ -206,6 +206,9 @@ val androidModule = module {
             prefs::readVoiceAudioPreferences,get())
     }
     single { NearbySharingController(get(),get(),get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()}) }
+    single<ru.sodovaya.volty.presentation.root.nearby.NearbyOperationIds> {
+        ru.sodovaya.volty.presentation.root.nearby.NearbyOperationIds {java.util.UUID.randomUUID().toString()}
+    }
     single {
         AndroidIncomingCallAccountFactory(androidContext(), get(), Dispatchers.Main,
             flow {while (true) {delay(1_000L); emit(Unit)}}, SystemClock::elapsedRealtime,

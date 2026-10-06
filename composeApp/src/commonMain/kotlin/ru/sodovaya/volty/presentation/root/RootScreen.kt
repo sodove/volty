@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
@@ -58,7 +59,9 @@ import ru.sodovaya.volty.presentation.ride.RideDashboardScreen
 import ru.sodovaya.volty.presentation.scanning.ScanningScreen
 import ru.sodovaya.volty.presentation.settings.SettingsScreen
 import ru.sodovaya.volty.presentation.settings.OfflineRegionDisplayNamePolicy
-import ru.sodovaya.volty.presentation.nearby.NearbyScreen
+import ru.sodovaya.volty.presentation.nearby.VoiceSpacesNearbyScreen
+import ru.sodovaya.volty.presentation.root.nearby.NearbyConversationPanelScreen
+import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
 import ru.sodovaya.volty.presentation.map.RideMapScreen
 import ru.sodovaya.volty.presentation.map.rideMapHostState
@@ -67,8 +70,7 @@ import ru.sodovaya.volty.presentation.map.NavigationMapScene
 import ru.sodovaya.volty.presentation.map.MapCameraRequest
 import ru.sodovaya.volty.presentation.map.NavigationTrailPoint
 import ru.sodovaya.volty.presentation.map.RideMapTrailSample
-import ru.sodovaya.volty.presentation.map.GroupMapScreen
-import ru.sodovaya.volty.presentation.map.groupMapState
+import ru.sodovaya.volty.presentation.map.ChannelMapScreen
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.stats.MotionReadings
@@ -82,6 +84,10 @@ import ru.sodovaya.volty.presentation.vehicle.VehicleEditScreen
 import ru.sodovaya.volty.presentation.vehicle.wizard.SetupWizardScreen
 import ru.sodovaya.volty.presentation.welcome.WelcomeScreen
 import org.jetbrains.compose.resources.stringResource
+import volty.composeapp.generated.resources.nearby_map_participant
+import volty.composeapp.generated.resources.nearby_channel_map_unavailable
+import volty.composeapp.generated.resources.nearby_map_loading
+import volty.composeapp.generated.resources.nearby_map_positions
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.tab_battery
 import volty.composeapp.generated.resources.tab_nearby
@@ -105,7 +111,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val stackState by component.stack.subscribeAsState()
     val active = stackState.active.instance
     val darkTheme = LocalVoltyDarkTheme.current
-    val socialLiveState by component.socialLiveState.collectAsState()
+    val nearby by component.nearby.state.collectAsState()
+    val channelMap = nearby.voice.channelMap
+    val markerLabel = stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_participant)
+    val channelMarkers = nearbyChannelMarkers(channelMap,markerLabel)
     val rideAvailable by component.rideAvailable.subscribeAsState()
     val offlineRegions: OfflineRegionPackageRepository = koinInject()
     val offlinePreparation: OfflineRegionPreparationCoordinator = koinInject()
@@ -182,12 +191,12 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     LaunchedEffect(rideMapVisible) {
         component.navigation.onMapVisibilityChanged(rideMapVisible)
     }
-    LaunchedEffect(groupMapVisible, socialLiveState.markers.size) {
-        // The group sheet can open before the live snapshot has delivered all
-        // participants. Re-fit when the marker set first becomes complete, but
+    LaunchedEffect(groupMapVisible, channelMap.operation, channelMap.session, channelMarkers.size) {
+        // The channel audience can arrive after opening the map. Re-fit when the
+        // visible point count changes, but
         // keep the request stable while locations are merely refreshed so a
         // user's manual pan is never snapped back.
-        if (groupMapVisible && socialLiveState.markers.isNotEmpty()) {
+        if (groupMapVisible && channelMarkers.isNotEmpty()) {
             groupMapCameraRequest++
         }
     }
@@ -213,7 +222,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             state = navigationState,
             ownFix = ownFix,
             trail = trail.toList(),
-            participantMarkers = socialLiveState.markers,
+            participantMarkers = channelMarkers,
             cameraSequence = navigationState.requestGeneration,
             recenterSequence = mapRecenterRequest,
         )
@@ -221,7 +230,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         NavigationMapScene(
             ownFix = null,
             trail = emptyList(),
-            participantMarkers = socialLiveState.markers,
+            participantMarkers = channelMarkers,
             routes = emptyList(),
             destination = null,
             // The group map is an exploratory view. Navigation's ride-follow
@@ -237,7 +246,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             cameraRequest = if (groupMapVisible && groupMapCameraRequest > 0L) {
                 MapCameraRequest.FitParticipants(
                     sequence = groupMapCameraRequest,
-                    points = socialLiveState.markers.map {
+                    points = channelMarkers.map {
                         ru.sodovaya.volty.domain.navigation.GeoCoordinate(it.latitude, it.longitude)
                     },
                 )
@@ -246,6 +255,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
             },
         )
     }
+    BoxWithConstraints(Modifier.fillMaxSize()) {
+    // Reserve space for the destination and tab bar even on short landscape windows.
+    val panelMaximumHeight = maxHeight / 2
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             if (mapHost.mounted) {
@@ -291,7 +303,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                             }
                         },
                         gpsSpeedKmh = freshGpsSpeedKmh,
-                        socialLiveState = socialLiveState,
+                        nearbyMap = channelMap,
                         navigationState = navigationState,
                         navigationCallbacks = LightNavigationCallbacks(
                             onOpenPlanner = {
@@ -318,9 +330,13 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                     is RootComponent.Child.VehicleEdit -> VehicleEditScreen(instance.component)
                     is RootComponent.Child.VehicleAlerts -> VehicleAlertsScreen(instance.component)
                     is RootComponent.Child.Graph -> GraphScreen(component = instance.component)
-                    is RootComponent.Child.Nearby -> NearbyScreen(instance.component)
-                    is RootComponent.Child.GroupMap -> GroupMapScreen(
-                        state = groupMapState(socialLiveState.markers),
+                    is RootComponent.Child.Nearby -> VoiceSpacesNearbyScreen(instance.component)
+                    is RootComponent.Child.GroupMap -> ChannelMapScreen(
+                        statusText = when {
+                            channelMap.channelId == null -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_channel_map_unavailable)
+                            !channelMap.observed -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_loading)
+                            else -> stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_positions,channelMarkers.size)
+                        },
                         darkTheme = darkTheme,
                         onBack = component::onBack,
                     )
@@ -328,6 +344,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                 }
             }
         }
+        NearbyConversationPanelScreen(nearby.voice,nearby.sharing,expanded=false,actions=component.nearby.actions,maxHeight=panelMaximumHeight)
         // Persistent bottom tab bar — only for main destinations
         BottomTabBar(
             active = active,
@@ -342,6 +359,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         )
     }
 
+    }
     visibleMeteredApproval?.let { region ->
         AlertDialog(
             onDismissRequest = { dismissedMeteredRegionId = region.region.regionId },

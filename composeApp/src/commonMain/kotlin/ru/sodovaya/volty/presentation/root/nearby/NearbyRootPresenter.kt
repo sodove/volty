@@ -1,0 +1,55 @@
+package ru.sodovaya.volty.presentation.root.nearby
+
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
+import ru.sodovaya.volty.domain.social.FriendSummary
+import ru.sodovaya.volty.domain.nearby.ChannelSharingMode
+import ru.sodovaya.volty.domain.nearby.ChannelSharingTtl
+
+data class NearbyRootView(val voice: NearbyVoiceView = NearbyVoiceView(), val sharing: NearbySharingView = NearbySharingView())
+interface NearbyRootPresentation {
+    val state: StateFlow<NearbyRootView>
+    val actions: NearbyConversationPanelActions
+}
+internal fun interface NearbyOperationIds { fun next(): String }
+
+internal class NearbyRootPresenter(parent: CoroutineScope, private val voice: NearbyVoiceController,
+    private val sharing: NearbySharingController): NearbyRootPresentation {
+    init { require(parent.coroutineContext[Job]?.isActive == true) }
+    private val lifetime = SupervisorJob(parent.coroutineContext[Job])
+    private val scope = CoroutineScope(parent.coroutineContext + lifetime)
+    private var closed = false
+    private val output = MutableStateFlow(NearbyRootView())
+    override val state = output.asStateFlow()
+    private fun enabled() = !closed && lifetime.isActive
+    override val actions = NearbyConversationPanelActions(
+        disconnect = { if (enabled()) voice.disconnect(it) },
+        mute = { operation, value -> if (enabled()) voice.setMuted(operation,value) },
+        deafen = { operation, value -> if (enabled()) voice.setDeafened(operation,value) },
+        startTrip = { if (enabled()) sharing.request(it,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) },
+        hideTrip = { if (enabled()) sharing.hide(it.operation,it.generation) },
+        retryTripCleanup = { if (enabled()) sharing.retryCleanup(it.operation,it.generation) },
+        confirmSwitch = { if (enabled()) voice.confirmSwitch(it) },
+        cancelVoiceRequest = { if (enabled()) voice.cancelRequest(it) },
+        cancelSharingRequest = { if (enabled()) sharing.cancelRequest(it) },
+    )
+    init {
+        scope.launch(start = CoroutineStart.UNDISPATCHED) {try {awaitCancellation()} finally {close()}}
+        scope.launch {combine(voice.state,sharing.state,::NearbyRootView).collect {if (enabled()) output.value=it}}
+    }
+    fun connectChannel(account: SocialAuthenticatedAccount, channel: String, label: String) {
+        if (enabled()) voice.requestChannel(account,channel,label)
+    }
+    fun callFriend(account: SocialAuthenticatedAccount, friend: FriendSummary) {
+        if (enabled()) voice.requestFriendCall(account,friend)
+    }
+    /** Root disposes presentation only. Process conversation/authentication retain their owner. */
+    fun close() {
+        if (closed) return
+        closed=true;output.value=NearbyRootView();lifetime.cancel()
+    }
+}

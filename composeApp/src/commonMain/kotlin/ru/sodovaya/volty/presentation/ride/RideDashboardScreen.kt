@@ -46,7 +46,6 @@ import ru.sodovaya.volty.domain.model.primaryController
 import ru.sodovaya.volty.domain.stats.DutyLevel
 import ru.sodovaya.volty.domain.stats.MotionReadings
 import ru.sodovaya.volty.domain.stats.TempBands
-import ru.sodovaya.volty.domain.social.SocialRideRuntime
 import ru.sodovaya.volty.presentation.common.GraphLinkButton
 import ru.sodovaya.volty.presentation.common.MetricCard
 import ru.sodovaya.volty.presentation.common.NearbyLinkButton
@@ -135,11 +134,10 @@ fun RideDashboardScreen(
     onOpenGroupMap: () -> Unit = {},
     onRecenterMap: () -> Unit = {},
     gpsSpeedKmh: Float? = null,
-    socialLiveState: SocialLiveState = SocialLiveState(),
+    nearbyMap: ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState = ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState(),
     navigationState: LightNavigationState? = null,
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
-    val socialRuntime: SocialRideRuntime = koinInject()
     val state by component.state.collectAsState()
     val vehicle = state.vehicle
     val motion = state.motion
@@ -324,8 +322,7 @@ fun RideDashboardScreen(
                     rideMaxSpeedKmh = sessionMaxSpeedKmh,
                     rideMaxDutyPercent = sessionMaxDutyPercent,
                     gpsSpeedKmh = gpsSpeedKmh,
-                    socialLiveState = socialLiveState,
-                    socialRuntime = socialRuntime,
+                    nearbyMap = nearbyMap,
                     navigationState = navigationState,
                     navigationCallbacks = navigationCallbacks,
                 )

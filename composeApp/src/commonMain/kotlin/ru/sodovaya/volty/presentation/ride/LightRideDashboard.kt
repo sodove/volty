@@ -61,13 +61,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.stats.MotionReadings
-import ru.sodovaya.volty.domain.social.PresenceStatus
-import ru.sodovaya.volty.domain.social.SocialRideRuntime
 import ru.sodovaya.volty.presentation.common.SparklineGraph
 import ru.sodovaya.volty.presentation.common.LocalVoltyDarkTheme
 import ru.sodovaya.volty.presentation.common.SyncLightDashboardSystemBars
-import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
-import ru.sodovaya.volty.presentation.nearby.SocialLiveState
 import ru.sodovaya.volty.presentation.navigation.LightNavigationCallbacks
 import ru.sodovaya.volty.presentation.navigation.LightNavigationDockPolicy
 import ru.sodovaya.volty.presentation.navigation.LightNearbyPlacement
@@ -80,6 +76,10 @@ import ru.sodovaya.volty.presentation.navigation.LightNavigationState
 import ru.sodovaya.volty.presentation.navigation.LightNavigationSurface
 import ru.sodovaya.volty.presentation.navigation.LightNavigationSurfacePolicy
 import ru.sodovaya.volty.presentation.navigation.LightNavigationUiMapper
+import volty.composeapp.generated.resources.nearby_channel_active
+import volty.composeapp.generated.resources.nearby_map_positions
+import volty.composeapp.generated.resources.nearby_map_loading
+import volty.composeapp.generated.resources.nearby_map_open
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.dashboard_light_battery
 import volty.composeapp.generated.resources.dashboard_light_battery_current
@@ -155,19 +155,6 @@ private fun lightTopGraphHeight(layoutMode: LightLayoutMode): Float = when (layo
     LightLayoutMode.WIDE -> 25f
 }
 
-internal data class LightGroupRideUiState(
-    val groupId: ru.sodovaya.volty.domain.social.RideGroupId,
-    val markers: List<ParticipantMarker>,
-) {
-    val participantCount: Int get() = markers.size
-    val onlineParticipantCount: Int get() = markers.count { it.presence == PresenceStatus.ONLINE }
-}
-
-internal fun lightGroupRideUiState(state: SocialLiveState): LightGroupRideUiState? =
-    state.groupId?.let { groupId ->
-        LightGroupRideUiState(groupId = groupId, markers = state.markers)
-    }
-
 @Composable
 internal fun LightRideDashboard(
     component: RideDashboardComponent,
@@ -187,8 +174,7 @@ internal fun LightRideDashboard(
     rideMaxSpeedKmh: Float = 0f,
     rideMaxDutyPercent: Float = 0f,
     gpsSpeedKmh: Float? = null,
-    socialLiveState: SocialLiveState = SocialLiveState(),
-    socialRuntime: SocialRideRuntime? = null,
+    nearbyMap: ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState = ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState(),
     navigationState: LightNavigationState? = null,
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
@@ -213,7 +199,7 @@ internal fun LightRideDashboard(
         }
     }
     val readouts = LightDashboardMapper.map(displayedTelemetry, state.units)
-    val groupRide = lightGroupRideUiState(socialLiveState)
+    val channelRide = lightChannelRideUiState(nearbyMap)
     val navigationSurface = navigationState?.let { currentState ->
         LightNavigationSurfacePolicy.forPhase(
             LightNavigationUiMapper.map(currentState, state.units).phase,
@@ -221,23 +207,16 @@ internal fun LightRideDashboard(
     } ?: LightNavigationSurface.HIDDEN
     val nearbyPlacement = LightNearbyPlacementPolicy.forSurface(
         navigationSurface = navigationSurface,
-        nearbyActive = groupRide != null,
+        nearbyActive = channelRide != null,
     )
     val navigationPanelPlacement = LightNavigationPanelPolicy.forSurface(navigationSurface)
-    val navigationNearby = groupRide?.takeIf {
+    val navigationNearby = channelRide?.takeIf {
         nearbyPlacement == LightNearbyPlacement.PLANNER_ROW ||
             nearbyPlacement == LightNearbyPlacement.GUIDANCE_DOCK
     }?.let { liveGroup ->
         LightNavigationNearby(
-            participantCount = liveGroup.participantCount,
-            onlineParticipantCount = liveGroup.onlineParticipantCount,
+            positionCount = liveGroup.positionCount,
         )
-    }
-    val runtimeState = socialRuntime?.state?.collectAsState()?.value
-    var groupSheetOpen by remember { mutableStateOf(false) }
-    val sheetScope = rememberCoroutineScope()
-    val openGroupSheet = {
-        if (runtimeState?.selectedGroup != null) groupSheetOpen = true else onOpenNearby()
     }
     val motorTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
     val controllerTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
@@ -280,7 +259,7 @@ internal fun LightRideDashboard(
                 statusColor = if (state.connection is ru.sodovaya.volty.domain.model.ConnectionState.Connected) LocalLightHudPalette.current.battery else statusColor,
                 temperature = readouts.controllerTemperature,
                 onPillClick = component::onPillClicked,
-                onNearby = openGroupSheet,
+                onNearby = onOpenNearby,
                 onSettings = component::onOpenSettings,
                 layoutMode = layoutMode,
             )
@@ -348,7 +327,7 @@ internal fun LightRideDashboard(
                         callbacks = navigationCallbacks,
                         units = state.units,
                         nearby = navigationNearby,
-                        onOpenNearby = openGroupSheet,
+                        onOpenNearby = onOpenNearby,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = LightNavigationDockPolicy.guidanceHudGap().dp)
@@ -359,11 +338,11 @@ internal fun LightRideDashboard(
                 Spacer(Modifier.weight(lightDashboardMiddleSpacerWeight()))
             }
 
-            if (nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD) groupRide?.let { liveGroup ->
-                LightGroupRideCard(
+            if (nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD) channelRide?.let { liveGroup ->
+                LightChannelRideCard(
                     state = liveGroup,
                     mapAvailable = mapLayer != null,
-                    onOpenNearby = openGroupSheet,
+                    onOpenMap = onOpenGroupMap,
                 )
             }
 
@@ -410,7 +389,7 @@ internal fun LightRideDashboard(
                     callbacks = navigationCallbacks,
                     units = state.units,
                     nearby = navigationNearby,
-                    onOpenNearby = openGroupSheet,
+                    onOpenNearby = onOpenNearby,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -455,38 +434,7 @@ internal fun LightRideDashboard(
             )
         }
 
-        if (groupSheetOpen && runtimeState != null) {
-            LightGroupSheet(
-                runtime = runtimeState,
-                onDismiss = { groupSheetOpen = false },
-                onStartSharing = { ttlMillis -> socialRuntime?.let { runtime ->
-                    sheetScope.launch { runtime.startSharing(ttlMillis) }
-                } },
-                onRenewSharing = { ttlMillis -> socialRuntime?.let { runtime ->
-                    sheetScope.launch { runtime.renewSharing(ttlMillis) }
-                } },
-                onStopSharing = { socialRuntime?.let { runtime ->
-                    sheetScope.launch { runtime.stopSharing() }
-                } },
-                onJoinVoice = { socialRuntime?.let { runtime ->
-                    val groupId = runtime.state.value.selectedGroup?.id ?: return@let
-                    if (runtime.voicePermissions.isNotEmpty()) runtime.requestVoicePermission(groupId)
-                    else sheetScope.launch { runtime.joinVoice() }
-                } },
-                onToggleMute = { socialRuntime?.let { runtime ->
-                    val voice = runtime.state.value.voice as? ru.sodovaya.volty.domain.social.VoiceRoomState.Joined
-                    if (voice != null) sheetScope.launch { runtime.setMuted(!voice.muted) }
-                } },
-                onLeaveVoice = { socialRuntime?.let { runtime ->
-                    sheetScope.launch { runtime.leaveVoice() }
-                } },
-                onOpenNearby = onOpenNearby,
-                onOpenGroupMap = {
-                    groupSheetOpen = false
-                    onOpenGroupMap()
-                },
-            )
-        }
+
         }
     }
 }
@@ -494,10 +442,10 @@ internal fun LightRideDashboard(
 
 
 @Composable
-private fun LightGroupRideCard(
-    state: LightGroupRideUiState,
+private fun LightChannelRideCard(
+    state: LightChannelRideUiState,
     mapAvailable: Boolean,
-    onOpenNearby: () -> Unit,
+    onOpenMap: () -> Unit,
 ) {
     val palette = LocalLightHudPalette.current
     val shape = RoundedCornerShape(18.dp)
@@ -507,7 +455,7 @@ private fun LightGroupRideCard(
             .clip(shape)
             .background(palette.surfaceStrong)
             .border(1.dp, palette.green.copy(alpha = 0.35f), shape)
-            .clickable(onClick = onOpenNearby)
+            .clickable(onClick = onOpenMap)
             .minimumInteractiveComponentSize()
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -532,7 +480,7 @@ private fun LightGroupRideCard(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = stringResource(Res.string.dashboard_light_group_ride),
+                text = stringResource(Res.string.nearby_channel_active),
                 color = palette.text,
                 fontSize = 11.sp,
                 fontWeight = FontWeight.SemiBold,
@@ -540,9 +488,9 @@ private fun LightGroupRideCard(
             )
             Text(
                 text = if (mapAvailable) {
-                    stringResource(Res.string.dashboard_light_group_map, state.participantCount)
+                    state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading)
                 } else {
-                    stringResource(Res.string.dashboard_light_group_map_unavailable)
+                    stringResource(Res.string.nearby_map_open)
                 },
                 color = palette.muted,
                 fontSize = 8.sp,
@@ -550,16 +498,6 @@ private fun LightGroupRideCard(
             )
         }
         Column(horizontalAlignment = Alignment.End) {
-            Text(
-                text = stringResource(
-                    Res.string.dashboard_light_group_online,
-                    state.onlineParticipantCount,
-                ),
-                color = palette.green,
-                fontSize = 9.sp,
-                fontWeight = FontWeight.Bold,
-                maxLines = 1,
-            )
             Text("›", color = palette.muted, fontSize = 20.sp, lineHeight = 18.sp)
         }
     }

@@ -915,4 +915,14 @@
     <string name="nearby_owner_departure_choose">Choose</string>
     <string name="nearby_owner_departure_confirm">Leave server “%1$s” and transfer ownership to %2$s?</string>
     <string name="nearby_owner_departure_submit">Transfer and leave</string>
+    <string name="nearby_map_participant">Participant</string>
+    <string name="nearby_channel_map_unavailable">Join a voice channel to see shared positions</string>
+    <string name="nearby_map_loading">Loading positions…</string>
+    <string name="nearby_map_positions">Points on map: %1$d</string>
+    <string name="nearby_channel_map_title">Channel map</string>
+    <string name="nearby_map_open">Open channel map</string>
+    <string name="nearby_channel_active">Voice channel</string>
+    <string name="nearby_panel_start_position_timed">Share position · 30 minutes</string>
+    <string name="nearby_panel_more_controls">More controls</string>
+    <string name="nearby_panel_fewer_controls">Collapse controls</string>
 </resources>

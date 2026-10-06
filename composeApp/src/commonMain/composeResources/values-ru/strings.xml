@@ -913,4 +913,14 @@
     <string name="nearby_owner_departure_choose">Выбрать</string>
     <string name="nearby_owner_departure_confirm">Выйти с сервера «%1$s» и передать владение участнику %2$s?</string>
     <string name="nearby_owner_departure_submit">Передать и выйти</string>
+    <string name="nearby_map_participant">Участник</string>
+    <string name="nearby_channel_map_unavailable">Подключитесь к голосовому каналу, чтобы видеть позиции</string>
+    <string name="nearby_map_loading">Получаем позиции…</string>
+    <string name="nearby_map_positions">Точек на карте: %1$d</string>
+    <string name="nearby_channel_map_title">Карта канала</string>
+    <string name="nearby_map_open">Открыть карту канала</string>
+    <string name="nearby_channel_active">Голосовой канал</string>
+    <string name="nearby_panel_start_position_timed">Показывать позицию · 30 минут</string>
+    <string name="nearby_panel_more_controls">Дополнительные действия</string>
+    <string name="nearby_panel_fewer_controls">Свернуть действия</string>
 </resources>

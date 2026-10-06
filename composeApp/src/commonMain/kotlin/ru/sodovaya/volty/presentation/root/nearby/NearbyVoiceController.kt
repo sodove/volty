@@ -27,7 +27,8 @@ data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: 
     val operation: VoiceOperationId?=null,val phase: NearbyVoiceUiPhase=NearbyVoiceUiPhase.IDLE,
     val voice: VoiceSessionState?=null,val error: NearbyVoiceError?=null,
     val starting: NearbyPendingVoiceView?=null,val kind: NearbyConversationKind?=null,
-    val callRoster: DirectCallRosterPresenceView?=null)
+    val callRoster: DirectCallRosterPresenceView?=null,
+    val channelMap: NearbyChannelMapState=NearbyChannelMapState())
 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
@@ -58,6 +59,8 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         scope.launch(start=CoroutineStart.UNDISPATCHED) {try {awaitCancellation()} finally {close()}}
         scope.launch {voice.state.collect {source ->
             pending?.takeIf {it.original!=source.operationId}?.let {pending=null}
+            if (source.phase == VoiceConversationPhase.STOPPED && committed?.operation == source.operationId)
+                committed = null
             render()
         }}
         scope.launch {repository.authenticatedAccount.collectLatest {account ->
@@ -97,7 +100,8 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
                 else -> NearbyVoiceUiPhase.IDLE
             },voice=source.voice.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
             error=failure?.takeIf {current(it.first)}?.second,starting=preparing?.view(),kind=visible?.kind,
-            callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
+            callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
+            channelMap=nearbyChannelMapState(source,owner?.operation))
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
         if(!current(account) || runCatching {invitationDraftId(channel)}.isFailure) return null
@@ -194,6 +198,7 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         val start=starting?.takeIf {it.request.operation==operation || it.request.original==operation}
         val owner=committed?.takeIf {it.operation==operation && voice.state.value.operationId==operation}
         if(start==null && owner==null) return@launch
+        if(owner!=null) committed=null
         if(pending?.original==operation) pending=null
         start?.let {it.job?.cancel();starting=null;voice.stop(it.request.operation)}
         switches.withdrawSharing(owner?.operation ?: start?.request?.original)
