@@ -23,12 +23,13 @@ class ServerWorkspaceAccountBindingTest {
         val screen=SupervisorJob(test.coroutineContext[Job])
         val scope=CoroutineScope(test.coroutineContext+screen)
         val headers=mutableListOf<String?>()
+        val paths=mutableListOf<String>()
         val connected=mutableListOf<SocialAuthenticatedAccount>()
         var rejectFactory=false
         var reply: suspend (String)->String={path->if(path.endsWith(server)) detail() else page()}
         val client=HttpClient(MockEngine) {engine {
             dispatcher=StandardTestDispatcher(test.testScheduler)
-            addHandler {headers+=it.headers[HttpHeaders.Authorization];respond(reply(it.url.encodedPath))}
+            addHandler {headers+=it.headers[HttpHeaders.Authorization];paths+="${it.method.value} ${it.url.encodedPath}";respond(reply(it.url.encodedPath))}
         }}
         val factory=NearbyCommunityAccountFactory(client,"https://example.test/v2/nearby",
             {if(rejectFactory) error("Private implementation details");Drafts(it)},InvitationSecretGenerator {error("No invitation entropy")})
@@ -37,6 +38,25 @@ class ServerWorkspaceAccountBindingTest {
         }
         suspend fun login() {repository.login(LoginRequest("rider","password"))}
         suspend fun close() {binding.close();screen.cancel();client.close()}
+    }
+
+    @Test fun channelFormUsesOriginalAccountHttpAndNeverStartsVoice()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val presenter=assertNotNull(f.binding.state.value.presenter)
+            presenter.openServer(server);runCurrent();presenter.openChannelCreation();presenter.setChannelName("Ride")
+            f.reply={path -> if(path.endsWith("/channels/$server"))
+                """{"communityId":"$server","channel":{"id":"$server","name":"Ride","isDefault":false},"revision":2}"""
+                else if(path.endsWith(server)) detail() else page()}
+            presenter.submitChannelCreation();runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities","GET /v2/nearby/communities/$server",
+                "PUT /v2/nearby/communities/$server/channels/$server","GET /v2/nearby/communities/$server"),f.paths)
+            assertEquals("Ride",presenter.state.value.channelCreation.created?.name)
+            assertFalse(presenter.state.value.channelForm.visible);assertTrue(f.connected.isEmpty())
+            assertTrue(f.headers.all {it=="Bearer token-1"})
+            f.binding.close();runCurrent();assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive)
+        } finally {f.close();runCurrent()}
     }
 
     @Test fun actualLoginCreatesWorkspaceAndClosingScreenPreservesAuthenticationAndBorrowedScreen()=runTest {

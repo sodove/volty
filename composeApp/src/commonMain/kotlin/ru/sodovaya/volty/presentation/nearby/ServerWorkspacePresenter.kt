@@ -7,6 +7,7 @@ import ru.sodovaya.volty.domain.nearby.community.*
 enum class ServerWorkspaceSection { MY_SERVERS, CATALOG, CREATE, SERVER }
 data class ServerCreationDraft(val name: String = "", val description: String = "",
     val visibility: CommunityVisibility = CommunityVisibility.PRIVATE)
+data class ChannelCreationForm(val visible: Boolean = false, val community: String? = null, val name: String = "")
 data class ServerWorkspaceUiState(
     val actorId: String? = null,
     val section: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
@@ -15,17 +16,20 @@ data class ServerWorkspaceUiState(
     val browser: CommunityBrowserState = CommunityBrowserState(),
     val commands: CommunityWorkspaceState = CommunityWorkspaceState(),
     val origin: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
+    val channelForm: ChannelCreationForm = ChannelCreationForm(),
+    val channelCreation: ChannelCreationState = ChannelCreationState(),
 )
 
 /** Screen projection/commands; connecting is delegated to the root conversation owner. */
 class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: CommunityWorkspace,
-    private val actorId: String, private val connectChannel: (String) -> Unit) {
+    private val actorId: String, private val creation: ChannelCreationWorkspace, private val connectChannel: (String) -> Unit) {
     init { invitationDraftId(actorId);require(parent.coroutineContext[Job]?.isActive == true && workspace.active) }
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)
     private data class Form(val section: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
         val returnTo: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
-        val query: String = "", val draft: ServerCreationDraft = ServerCreationDraft())
+        val query: String = "", val draft: ServerCreationDraft = ServerCreationDraft(),
+        val channel: ChannelCreationForm = ChannelCreationForm())
     private val form = MutableStateFlow(Form())
     private val output = MutableStateFlow(ServerWorkspaceUiState(actorId = actorId))
     val state = output.asStateFlow()
@@ -35,30 +39,65 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         }
         scope.launch { workspace.retired.first {it};close() }
         scope.launch {
-            workspace.browser.state.map {it.selectedCommunity}.distinctUntilChanged().collect { selected ->
+            workspace.browser.state.map { browser ->
+                browser.selectedCommunity to (browser.detail?.let {it.community.id==browser.selectedCommunity && it.ownerId==actorId} == true &&
+                    !browser.detailLoading && browser.detailError==null)
+            }.distinctUntilChanged().collect { (selected, owner) ->
                 form.update { current ->
-                    if (selected != null) current.copy(section = ServerWorkspaceSection.SERVER)
-                    else if (current.section == ServerWorkspaceSection.SERVER) current.copy(section = current.returnTo)
-                    else current
+                    val next = if (current.channel.community != selected || !owner) current.copy(channel=ChannelCreationForm()) else current
+                    if (selected != null) next.copy(section = ServerWorkspaceSection.SERVER)
+                    else if (next.section == ServerWorkspaceSection.SERVER) next.copy(section = next.returnTo)
+                    else next
                 }
             }
         }
         scope.launch {
-            combine(form, workspace.browser.state, workspace.state) { form, browser, commands ->
-                ServerWorkspaceUiState(actorId,form.section,form.query,form.draft,browser,commands,form.returnTo)
+            combine(form, workspace.browser.state, workspace.state, creation.state) { form, browser, commands, channel ->
+                ServerWorkspaceUiState(actorId,form.section,form.query,form.draft,browser,commands,form.returnTo,form.channel,channel)
             }.collect { if(lifetime.isActive) output.value=it }
         }
+        scope.launch {
+            creation.state.map {it.created}.distinctUntilChanged().collect { receipt ->
+                if(receipt != null) form.update { current ->
+                    if(current.channel.community==receipt.communityId && current.channel.name.trim()==receipt.name)
+                        current.copy(channel=ChannelCreationForm()) else current
+                }
+            }
+        }
     }
-    private fun enabled() = lifetime.isActive && workspace.active && !workspace.state.value.busy
-    private fun action(work: suspend () -> Unit) {
-        if (!enabled()) return
-        scope.launch { if (enabled()) work() }
+    private fun enabled(allowCreation: Boolean = false) = lifetime.isActive && workspace.active &&
+        !workspace.state.value.busy && (allowCreation || !creation.state.value.busy)
+    fun openChannelCreation() {
+        if(!enabled() || form.value.section!=ServerWorkspaceSection.SERVER) return
+        val browser=workspace.browser.state.value
+        val detail=browser.detail?.takeIf {!browser.detailLoading && browser.detailError==null &&
+            it.community.id==browser.selectedCommunity && it.ownerId==actorId} ?: return
+        form.update {it.copy(channel=ChannelCreationForm(true,detail.community.id))}
     }
-    fun openMine() = action {
+    fun setChannelName(value: String) {
+        if(enabled() && form.value.channel.visible && value.length<=80)
+            form.update {it.copy(channel=it.channel.copy(name=value))}
+    }
+    fun dismissChannelCreation() {if(enabled(true)) form.update {it.copy(channel=ChannelCreationForm())}}
+    fun submitChannelCreation() {
+        if(!enabled()) return
+        // Capture the original form before dispatch, never resolve a replacement server in the queued body.
+        val original=form.value.channel
+        if(!original.visible) return
+        action {
+            if(form.value.channel==original && workspace.browser.state.value.selectedCommunity==original.community)
+                creation.create(original.name)
+        }
+    }
+    private fun action(allowCreation: Boolean = false, work: suspend () -> Unit) {
+        if (!enabled(allowCreation)) return
+        scope.launch { if (enabled(allowCreation)) work() }
+    }
+    fun openMine() = action(true) {
         form.update { it.copy(section=ServerWorkspaceSection.MY_SERVERS,returnTo=ServerWorkspaceSection.MY_SERVERS) }
         workspace.dismissRemoval();workspace.browser.clearSelection();workspace.browser.refreshMemberships()
     }
-    fun openCatalog() = action {
+    fun openCatalog() = action(true) {
         form.update { it.copy(section=ServerWorkspaceSection.CATALOG,returnTo=ServerWorkspaceSection.CATALOG) }
         workspace.dismissRemoval();workspace.browser.clearSelection();workspace.browser.search(form.value.query)
     }
@@ -68,7 +107,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         form.update { it.copy(section=ServerWorkspaceSection.CREATE,returnTo=origin,draft=ServerCreationDraft()) }
         action {workspace.dismissRemoval();workspace.browser.clearSelection()}
     }
-    fun openServer(id: String) = action { workspace.dismissRemoval();workspace.browser.openCommunity(id) }
+    fun openServer(id: String) = action(true) { workspace.dismissRemoval();workspace.browser.openCommunity(id) }
     fun joinPublic(id: String) = action { workspace.join(id) }
     fun setQuery(value: String) {
         if (!enabled() || value.length>80) return
@@ -104,7 +143,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
             else -> workspace.browser.refreshMemberships()
         }
     }
-    fun back() = action {
+    fun back() = action(true) {
         val origin=form.value.returnTo
         form.update {it.copy(section=origin)}
         workspace.dismissRemoval();workspace.browser.clearSelection()
@@ -116,6 +155,6 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         if(!browser.detailLoading && detail.community.id==browser.selectedCommunity && detail.channels.any {it.id==channel}) connectChannel(channel)
     }
     suspend fun close(): Unit = withContext(NonCancellable) {
-        lifetime.cancel();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
+        lifetime.cancel();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
     }
 }

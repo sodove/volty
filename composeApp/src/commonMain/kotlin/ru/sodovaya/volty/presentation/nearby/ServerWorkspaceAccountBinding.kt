@@ -32,13 +32,15 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                 if (account == null || !current(account)) return@collectLatest
                 var consumer: NearbyCommunityAccount? = null
                 var presenter: ServerWorkspacePresenter? = null
+                var creation: ChannelCreationWorkspace? = null
                 var binding: Binding? = null
                 var retirementGuardian: Job? = null
                 try {
                     consumer = factory.create(account)
                     if (!current(account)) return@collectLatest
                     val workspace = consumer.workspace(scope, nextId)
-                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value) { channel ->
+                    creation = consumer.channelCreation(scope, workspace, nextId)
+                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value, creation) { channel ->
                         if (current(account) && selected?.account === account) connect(account, channel)
                     }
                     binding = Binding(account, consumer, presenter)
@@ -65,6 +67,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     }
                     withContext(NonCancellable) {
                         presenter?.close()
+                        creation?.close()
                         consumer?.retire()
                     }
                 }

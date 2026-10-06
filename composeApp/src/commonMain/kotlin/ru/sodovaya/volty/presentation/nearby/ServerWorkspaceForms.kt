@@ -47,3 +47,32 @@ internal fun CommunityWorkspaceError.workspaceMessage(): StringResource = when(t
         else -> Res.string.nearby_servers_action_failed
     }
 }
+
+@Composable
+internal fun ChannelCreationDialog(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter) {
+    val enabled=!state.commands.busy && !state.channelCreation.busy && state.actorId!=null
+    AlertDialog(onDismissRequest=presenter::dismissChannelCreation,
+        title={Text(stringResource(Res.string.nearby_channels_create))},
+        text={Column(Modifier.heightIn(max=320.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+            OutlinedTextField(state.channelForm.name,presenter::setChannelName,enabled=enabled,singleLine=true,
+                modifier=Modifier.fillMaxWidth(),label={Text(stringResource(Res.string.nearby_channels_name))})
+            if(state.channelCreation.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if(state.channelCreation.community==state.channelForm.community) {
+                if(state.channelCreation.invalidInput) Text(stringResource(Res.string.nearby_channels_invalid_input),color=MaterialTheme.colorScheme.error)
+                state.channelCreation.error?.let {Text(stringResource(it.channelMessage()),color=MaterialTheme.colorScheme.error)}
+            }
+        }},
+        confirmButton={TextButton(onClick=presenter::submitChannelCreation,enabled=enabled && state.channelForm.name.isNotBlank()) {
+            Text(stringResource(Res.string.nearby_create))
+        }},
+        dismissButton={TextButton(onClick=presenter::dismissChannelCreation) {Text(stringResource(Res.string.nearby_cancel))}})
+}
+
+private fun ChannelCommandFailure.channelMessage(): StringResource = when(this) {
+    ChannelCommandFailure.UNAUTHORIZED -> Res.string.nearby_servers_auth_required
+    ChannelCommandFailure.ACCESS_DENIED -> Res.string.nearby_servers_access_denied
+    ChannelCommandFailure.CONFLICT -> Res.string.nearby_channels_conflict
+    ChannelCommandFailure.LIMIT_REACHED -> Res.string.nearby_channels_limit
+    ChannelCommandFailure.UNAVAILABLE -> Res.string.nearby_servers_action_failed
+    ChannelCommandFailure.INVALID_RESPONSE -> Res.string.nearby_servers_read_failed
+}

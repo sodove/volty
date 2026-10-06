@@ -877,4 +877,9 @@
     <string name="nearby_panel_switch_confirm">End trip and continue</string>
     <string name="nearby_shell_profile_saved">Profile saved</string>
     <string name="nearby_shell_recovery_requested">If an account exists, check your email for recovery instructions.</string>
+    <string name="nearby_channels_create">Create voice channel</string>
+    <string name="nearby_channels_name">Channel name</string>
+    <string name="nearby_channels_invalid_input">Enter a channel name of 1–80 characters.</string>
+    <string name="nearby_channels_conflict">The channel could not be created because the server changed. Refresh and try again.</string>
+    <string name="nearby_channels_limit">This server has reached its channel limit.</string>
 </resources>

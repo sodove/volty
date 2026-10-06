@@ -875,4 +875,9 @@
     <string name="nearby_panel_switch_confirm">Завершить поездку и продолжить</string>
     <string name="nearby_shell_profile_saved">Профиль сохранён</string>
     <string name="nearby_shell_recovery_requested">Если аккаунт существует, проверьте почту — там будут инструкции для восстановления.</string>
+    <string name="nearby_channels_create">Создать голосовой канал</string>
+    <string name="nearby_channels_name">Название канала</string>
+    <string name="nearby_channels_invalid_input">Введите название канала длиной от 1 до 80 символов.</string>
+    <string name="nearby_channels_conflict">Не удалось создать канал: сервер изменился. Обновите данные и повторите попытку.</string>
+    <string name="nearby_channels_limit">На сервере достигнут лимит каналов.</string>
 </resources>
