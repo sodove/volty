@@ -173,9 +173,14 @@ val androidModule = module {
         val coordinator=get<VoiceAccountCoordinator>()
         val audio=get<AndroidVoiceAudioFactory>()
         VoiceConversationStartup(Dispatchers.Main,get<AndroidVoiceForegroundController>(),
-            get<VoiceConversationCallRosterFactory>(),get<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory>()) {account ->
+            get<VoiceConversationCallRosterFactory>(),get<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory>(),
+            get<ru.sodovaya.volty.data.voice.VoiceConversationChannelRosterFactory>()) {account ->
             coordinator.acquireBound(account,audio.createPrepared()).voice
         }
+    }
+    single<ru.sodovaya.volty.data.voice.VoiceConversationChannelRosterFactory> {
+        val factory=get<VoiceRosterAccountFactory>()
+        ru.sodovaya.volty.data.voice.VoiceConversationChannelRosterFactory {account,tag -> factory.create(account,tag)}
     }
     single {
         val application=androidContext()

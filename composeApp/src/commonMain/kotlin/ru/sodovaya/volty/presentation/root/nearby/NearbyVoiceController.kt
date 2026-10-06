@@ -28,7 +28,8 @@ data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: 
     val voice: VoiceSessionState?=null,val error: NearbyVoiceError?=null,
     val starting: NearbyPendingVoiceView?=null,val kind: NearbyConversationKind?=null,
     val callRoster: DirectCallRosterPresenceView?=null,
-    val channelMap: NearbyChannelMapState=NearbyChannelMapState())
+    val channelMap: NearbyChannelMapState=NearbyChannelMapState(),
+    val channelRoster: VoiceRosterPresenceView?=null)
 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
@@ -101,7 +102,8 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             },voice=source.voice.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
             error=failure?.takeIf {current(it.first)}?.second,starting=preparing?.view(),kind=visible?.kind,
             callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
-            channelMap=nearbyChannelMapState(source,owner?.operation))
+            channelMap=nearbyChannelMapState(source,owner?.operation),
+            channelRoster=source.channelRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
         if(!current(account) || runCatching {invitationDraftId(channel)}.isFailure) return null

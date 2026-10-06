@@ -928,4 +928,10 @@
     <string name="nearby_incoming_call_title">Incoming voice call</string>
     <string name="nearby_incoming_call_accept">Accept</string>
     <string name="nearby_incoming_call_decline">Decline</string>
+    <string name="nearby_panel_roster_count">In channel: %1$d · connected: %2$d</string>
+    <string name="nearby_panel_roster_unknown">Participant list unavailable</string>
+    <string name="nearby_panel_roster_peer">Participant %1$s</string>
+    <string name="nearby_panel_roster_connected">Connected</string>
+    <string name="nearby_panel_roster_connecting">Connecting</string>
+    <string name="nearby_panel_roster_more">%1$d more participants</string>
 </resources>

@@ -93,6 +93,12 @@ The earlier generic marker/display-name-open note is superseded in source: the e
 
 Name-only updates of an unchanged packet preserve the original sample deadline, sequence and coordinates. A name cannot earn a missing location, an unobserved audience, another account/session/operation, voice presence or audibility. Current map projection carries the name to its existing native annotation DTO. Backend/PG and client behavior are verified separately; actual native marker layout and device observation remain open.
 
+## Current channel roster activation (2026-10-07)
+
+The process conversation owner now borrows a fresh account-bound channel roster reader only after its original channel voice session exists. Exact account, conversation operation, foreground ticket and session/generation fence its publication. It closes only that metadata child on replacement, disconnect or retirement. Calls retain their separate call roster even when a call UUID equals the channel UUID. Metadata denial/unavailability retires or invalidates participant evidence; media cleanup remains the voice runtime's authority.
+
+Actual Android DI supplies the existing VoiceRosterAccountFactory. Root projects the matching reader into the persistent panel: fresh session rows and separately confirmed transport count, unknown list without a fake zero, and bounded participant rows in expanded controls. Profile names are absent from the roster protocol today, so these rows explicitly use generic labels with an actor identifier suffix; this is a fallback, not a fabricated nickname. Named roster metadata remains open and cannot simply be embedded in replicated peer equality without considering revision consistency. Real rendering/audibility and two-phone agreement remain device checks.
+
 ## Review focus
 
 Late result after account/screen disposal; uncertain create/removal retry; channel switch while original capture is pending; destructive confirmation targeting a different server; permissions denied after leaving the visible activity. JVM tests cover command/state behavior, while actual native rendering/audio/foreground service behavior requires devices.

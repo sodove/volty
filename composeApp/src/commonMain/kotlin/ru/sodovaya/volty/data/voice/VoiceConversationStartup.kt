@@ -20,6 +20,9 @@ internal fun interface VoiceConversationCallRosterFactory {
     suspend fun create(account: SocialAuthenticatedAccount, tag: DirectCallRosterTag,
                        own: VoiceSessionTag): AuthenticatedCallRosterOwner
 }
+internal fun interface VoiceConversationChannelRosterFactory {
+    suspend fun create(account: SocialAuthenticatedAccount, tag: VoiceRosterTag): VoiceRosterAccountSession
+}
 internal fun interface VoiceConversationChannelAudienceFactory {
     suspend fun create(account: SocialAuthenticatedAccount, runtime: AuthenticatedVoiceRuntime,
         original: VoiceSessionTag): ChannelSharingAudienceSession
@@ -41,6 +44,7 @@ internal data class VoiceConversationState(
     val target: VoiceConversationTarget? = null,
     val callRoster: DirectCallRosterPresenceView? = null,
     val sharingAudience: ChannelSharingAudienceView? = null,
+    val channelRoster: VoiceRosterPresenceView? = null,
 )
 
 /** One process conversation intent. All selection/foreground operations run on queued Main.
@@ -50,15 +54,20 @@ internal class VoiceConversationStartup(
     private val foreground: VoiceConversationForegroundPort,
     private val callRosters: VoiceConversationCallRosterFactory?,
     private val channelAudiences: VoiceConversationChannelAudienceFactory?,
+    private val channelRosters: VoiceConversationChannelRosterFactory?,
     private val acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime,
 ) {
     constructor(queuedDispatcher: CoroutineDispatcher, foreground: VoiceConversationForegroundPort,
+                callRosters: VoiceConversationCallRosterFactory?, channelAudiences: VoiceConversationChannelAudienceFactory?,
+                acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime) :
+        this(queuedDispatcher, foreground, callRosters, channelAudiences, null, acquire)
+    constructor(queuedDispatcher: CoroutineDispatcher, foreground: VoiceConversationForegroundPort,
                 callRosters: VoiceConversationCallRosterFactory?,
                 acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime) :
-        this(queuedDispatcher, foreground, callRosters, null, acquire)
+        this(queuedDispatcher, foreground, callRosters, null, null, acquire)
     constructor(queuedDispatcher: CoroutineDispatcher, foreground: VoiceConversationForegroundPort,
                 acquire: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime) :
-        this(queuedDispatcher, foreground, null, null, acquire)
+        this(queuedDispatcher, foreground, null, null, null, acquire)
     private val mutableState = MutableStateFlow(VoiceConversationState())
     val state = mutableState.asStateFlow()
     private class Intent(val account: SocialAuthenticatedAccount, val target: VoiceConversationTarget,
@@ -74,6 +83,9 @@ internal class VoiceConversationStartup(
         var rosterSession: VoiceSessionTag? = null
         var roster: AuthenticatedCallRosterOwner? = null
         var rosterWork: Job? = null
+        var channelRosterSession: VoiceSessionTag? = null
+        var channelRoster: VoiceRosterAccountSession? = null
+        var channelRosterWork: Job? = null
         var audienceSession: VoiceSessionTag? = null
         var audience: ChannelSharingAudienceSession? = null
         var audienceWork: Job? = null
@@ -211,6 +223,7 @@ internal class VoiceConversationStartup(
                         if (voice.operationId == intent.operation) {
                             observeCallRoster(intent, scope, voice)
                             observeChannelAudience(intent, scope, voice)
+                            observeChannelRoster(intent, scope, voice)
                             if (!isCurrent(intent)) return@combine VoiceConversationPhase.STOPPED
                             mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, voice)
                         }
@@ -235,7 +248,9 @@ internal class VoiceConversationStartup(
         VoiceConversationState(phase, intent.channel, intent.operation, voice, intent.target,
             intent.roster?.takeIf {voice != null && matchesSession(intent, it.ownSession)}?.state?.value,
             intent.audience?.takeIf {voice != null && intent.target is VoiceConversationTarget.Channel &&
-                matchesSession(intent, it.original)}?.state?.value)
+                matchesSession(intent, it.original)}?.state?.value,
+            intent.channelRoster?.takeIf {voice != null && intent.target is VoiceConversationTarget.Channel &&
+                intent.channelRosterSession?.let {own -> matchesSession(intent, own)} == true}?.state?.value)
 
     private fun matchesSession(intent: Intent, own: VoiceSessionTag): Boolean {
         val voice = intent.runtime?.state?.value ?: return false
@@ -277,6 +292,45 @@ internal class VoiceConversationStartup(
                 if (matchesSession(intent, own)) finish(intent, VoiceConversationPhase.FAILED)
             } finally {
                 withContext(NonCancellable) {reader?.close()}
+            }
+        }
+    }
+
+    private fun observeChannelRoster(intent: Intent, scope: CoroutineScope, voice: VoiceSessionState) {
+        val factory = channelRosters ?: return
+        if (intent.target !is VoiceConversationTarget.Channel || !voice.wanted) return
+        val original = VoiceSessionTag(voice.sessionId ?: return, voice.generation)
+        if (intent.channelRosterSession == original) return
+        intent.channelRosterWork?.cancel()
+        intent.channelRoster = null
+        intent.channelRosterSession = original
+        val tag = VoiceRosterTag(intent.channel, original.generation.value)
+        intent.channelRosterWork = scope.launch {
+            var reader: VoiceRosterAccountSession? = null
+            try {
+                val created = factory.create(intent.account, tag)
+                reader = created
+                if (!matchesSession(intent, original)) return@launch
+                check(created.belongsTo(intent.account, tag)) {"Channel roster belongs to another account or subscription"}
+                intent.channelRoster = created
+                created.state.collect {
+                    if (matchesSession(intent, original))
+                        mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, intent.runtime?.state?.value)
+                }
+            } catch (_: CancellationException) {
+                // Obsolete metadata cannot stop or repaint the replacement conversation.
+            } catch (_: Exception) {
+                // A roster read failure earns unknown participants, never an audio stop.
+            } finally {
+                withContext(NonCancellable + queuedDispatcher) {
+                    try {reader?.retire()} finally {
+                        if (intent.channelRoster === reader) {
+                            intent.channelRoster = null
+                            if (matchesSession(intent, original))
+                                mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, intent.runtime?.state?.value)
+                        }
+                    }
+                }
             }
         }
     }
@@ -337,6 +391,7 @@ internal class VoiceConversationStartup(
         intent.foregroundObserver?.cancel()
         intent.rosterWork?.cancel()
         intent.audienceWork?.cancel()
+        intent.channelRosterWork?.cancel()
         intent.work?.cancel()
         val stopped = intent.ticket?.let(foreground::stop) == true
         if (!stopped) intent.runtime?.requestDisconnect()

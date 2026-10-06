@@ -926,4 +926,10 @@
     <string name="nearby_incoming_call_title">Входящий голосовой звонок</string>
     <string name="nearby_incoming_call_accept">Принять</string>
     <string name="nearby_incoming_call_decline">Отклонить</string>
+    <string name="nearby_panel_roster_count">В канале: %1$d · подключены: %2$d</string>
+    <string name="nearby_panel_roster_unknown">Список участников пока недоступен</string>
+    <string name="nearby_panel_roster_peer">Участник %1$s</string>
+    <string name="nearby_panel_roster_connected">Подключён</string>
+    <string name="nearby_panel_roster_connecting">Подключается</string>
+    <string name="nearby_panel_roster_more">Ещё участников: %1$d</string>
 </resources>

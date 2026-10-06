@@ -71,6 +71,9 @@ internal class VoiceRosterAccountSession(
         }
     }
 
+    internal fun belongsTo(candidate: SocialAuthenticatedAccount, expected: VoiceRosterTag): Boolean =
+        account === candidate && tag == expected
+
     suspend fun refresh(): Boolean {
         currentCoroutineContext().ensureActive()
         if (retired.value || !account.job.isActive) return false

@@ -39,6 +39,7 @@ internal fun NearbyConversationPanelScreen(
     var detailsExpanded by remember { mutableStateOf(false) }
     val showDetails = expanded || detailsExpanded
     val panel = nearbyConversationPanel(voice, sharing)
+    val roster = nearbyChannelRosterPanel(voice)
     val pending = voice.pending
     if (pending != null && pending.confirmationRequired && !pending.confirmed) {
         AlertDialog(onDismissRequest = { actions.cancelVoiceRequest(pending.id) },
@@ -58,6 +59,11 @@ internal fun NearbyConversationPanelScreen(
             if (voice.operation != null) {
                 Text(voice.label, style = MaterialTheme.typography.titleSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Text(stringResource(panel.connection.message()), style = MaterialTheme.typography.bodySmall)
+                if (voice.kind == NearbyConversationKind.CHANNEL) {
+                    Text(if(roster.known) stringResource(Res.string.nearby_panel_roster_count,roster.peers.size,roster.connected ?: 0)
+                        else stringResource(Res.string.nearby_panel_roster_unknown),style=MaterialTheme.typography.bodySmall)
+
+                }
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                     val audio = panel.audioOperation
                     TextButton(enabled = audio != null, onClick = { audio?.let { actions.mute(it, !panel.muted) } }) {
@@ -104,6 +110,16 @@ internal fun NearbyConversationPanelScreen(
             } }
             voice.error?.let { Text(stringResource(it.message()), color = MaterialTheme.colorScheme.error) }
             sharing.error?.let { Text(stringResource(it.message()), color = MaterialTheme.colorScheme.error) }
+            // Participant rows follow disconnect, audio and trip controls.
+            if(showDetails && roster.known) {
+                roster.peers.take(12).forEach {row ->
+                    Text(stringResource(Res.string.nearby_panel_roster_peer,row.peer.actorId.take(8)) + " · " +
+                        stringResource(if(row.connected) Res.string.nearby_panel_roster_connected else Res.string.nearby_panel_roster_connecting),
+                        style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
+                }
+                if(roster.peers.size>12) Text(stringResource(Res.string.nearby_panel_roster_more,roster.peers.size-12),
+                    style=MaterialTheme.typography.bodySmall)
+            }
         }
     }
 }
