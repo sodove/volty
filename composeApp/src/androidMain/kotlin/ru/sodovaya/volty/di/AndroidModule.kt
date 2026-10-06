@@ -216,6 +216,8 @@ val androidModule = module {
     }
     single { IncomingCallAccountCoordinator(Dispatchers.Main, get(), get<AndroidIncomingCallAccountFactory>()) }
     single { ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallAcceptance(get(),get(),get(),Dispatchers.Main) }
+    single { ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallUi(get(),get(),get(),Dispatchers.Main,
+        {java.util.UUID.randomUUID().toString()}) }
     single {
         val coordinator=get<VoiceAccountCoordinator>()
         val audio=get<AndroidVoiceAudioFactory>()

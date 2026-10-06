@@ -1970,6 +1970,190 @@ class VoiceConversationStartupTest {
         } finally {release.complete(Unit);registry.close();owner.close();root.close();f.close()}
     }
 
+    @Test fun inAppOfferSurvivesNotificationRefusalWithoutEarningNativeActionAndConsumesOnce() = runTest {
+        val f=Fixture(this);val port=Notifications().apply {allowed=false};val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key})
+        try {
+            val binding=registry.bind(account,owner);owner.hint(channel);runCurrent()
+            val offer=assertNotNull(owner.offer.value);assertEquals(channel,offer.call.callId)
+            assertNull(owner.state.value.ticket);assertNull(registry.bindingFor(offer.ticket))
+            assertNull(registry.accept(binding.id,offer.id));assertFalse(owner.discoveryHint(channel));runCurrent()
+            assertEquals(1,port.shown.size);assertEquals(1,f.paths.size)
+            assertNull(owner.acceptOffer(IncomingCallOffer(offer.ticket,offer.call)))
+            assertEquals(offer.call,owner.acceptOffer(offer));assertNull(owner.offer.value)
+            assertNull(owner.acceptOffer(offer));assertFalse(owner.discoveryHint(channel));runCurrent()
+            assertEquals(2,f.paths.size);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty());assertTrue(account.job.isActive)
+        } finally {registry.close();owner.close();f.close()}
+    }
+
+    @Test fun inAppAcceptanceWithdrawsActualNotificationAndNativeReplayCannotAct() = runTest {
+        val f=Fixture(this);val port=Notifications();val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key})
+        try {
+            val binding=registry.bind(account,owner);owner.hint(channel);runCurrent()
+            val offer=assertNotNull(owner.offer.value);val ticket=assertNotNull(owner.state.value.ticket)
+            assertSame(ticket,offer.ticket);assertNotNull(owner.acceptOffer(offer))
+            assertNull(owner.offer.value);assertNull(owner.state.value.ticket);assertEquals(listOf(ticket),port.cancelled)
+            assertNull(registry.accept(binding.id,ticket.id));assertEquals(2,f.paths.size)
+            assertTrue(f.allocated.isEmpty());assertEquals(0,f.launches)
+        } finally {registry.close();owner.close();f.close()}
+    }
+
+    @Test fun inAppExpiredOfferCannotDeclineOrAcceptAndOriginalDeclineProducerSurvivesUiWaiter() = runTest {
+        val f=Fixture(this);val pulses=MutableSharedFlow<Unit>();val port=Notifications().apply {allowed=false}
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        var nonce=0
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,pulses,{f.time},port,
+            {"a0000000-0000-0000-0000-${(++nonce).toString().padStart(12,'0')}"})
+        val release=CompletableDeferred<Unit>()
+        try {
+            owner.hint(channel);runCurrent();val expired=assertNotNull(owner.offer.value)
+            f.time+=1000;pulses.emit(Unit);runCurrent();assertNull(owner.offer.value)
+            assertNull(owner.acceptOffer(expired));assertNull(owner.declineOffer(expired,first));assertEquals(1,f.paths.size)
+            owner.hint(channel);runCurrent();val fresh=assertNotNull(owner.offer.value)
+            f.declineRelease=release
+            val producer=assertNotNull(owner.declineOffer(fresh,second));val waiter=async {producer.await()};runCurrent()
+            assertTrue(f.declineEntered.isCompleted);waiter.cancel();release.complete(Unit);runCurrent()
+            assertIs<DirectCallReply.Ready>(producer.await());assertNull(owner.offer.value)
+            assertEquals(1,f.paths.count {it.endsWith("/decline")});assertFalse(owner.discoveryHint(channel))
+            assertTrue(account.job.isActive);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+        } finally {release.complete(Unit);owner.close();f.close()}
+    }
+
+    @Test fun incomingUiUsesUnnotifiedOriginalOfferAndAcceptanceOnlyQueuesVisibleAdmission() = runTest {
+        val f=Fixture(this);val root=voiceController(f,Switches());val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},Notifications().apply {allowed=false},{f.key})
+        val ui=NearbyIncomingCallUi(f.repository,registry,NearbyIncomingCallAcceptance(f.repository,registry,root,f.dispatcher),f.dispatcher,{first.value})
+        var view:NearbyIncomingCallView?=null;val collector=backgroundScope.launch {ui.state.collect {view=it}}
+        try {
+            registry.bind(account,owner);owner.hint(channel);runCurrent();val original=assertNotNull(view)
+            assertNull(owner.state.value.ticket);assertEquals(assertNotNull(owner.offer.value).id,original.offerId)
+            assertTrue(ui.accept(original,"Incoming"));runCurrent();assertNull(view)
+            assertEquals(NearbyConversationKind.CALL,root.state.value.pending?.kind)
+            assertFalse(ui.accept(original,"Replay"));assertFalse(ui.decline(original))
+            assertEquals(2,f.paths.size);assertFalse(f.paths.any {it.endsWith("/accept")})
+            assertTrue(f.allocated.isEmpty());assertEquals(0,f.launches);assertTrue(account.job.isActive)
+        } finally {collector.cancel();registry.close();owner.close();root.close();f.close()}
+    }
+
+    @Test fun incomingUiRetiredGenerationCannotDeclineReplacementOfferOrSpendEntropy() = runTest {
+        val f=Fixture(this);val root=voiceController(f,Switches());var bindingNonce=0;var entropy=0
+        val registry=IncomingCallActionRegistry(f.dispatcher) {"a0000000-0000-0000-0000-${(++bindingNonce).toString().padStart(12,'0')}"}
+        val ui=NearbyIncomingCallUi(f.repository,registry,NearbyIncomingCallAcceptance(f.repository,registry,root,f.dispatcher),f.dispatcher,{entropy++;first.value})
+        var view:NearbyIncomingCallView?=null;val collector=backgroundScope.launch {ui.state.collect {view=it}}
+        val owners=mutableListOf<IncomingCallNotificationOwner>()
+        suspend fun bind(account:SocialAuthenticatedAccount):IncomingCallNotificationOwner {
+            val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},Notifications().apply {allowed=false},{f.key})
+            owners+=owner;registry.bind(account,owner);owner.hint(channel);runCurrent();return owner
+        }
+        try {
+            f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING";val oldAccount=f.login();bind(oldAccount)
+            val old=assertNotNull(view);f.repository.logout();runCurrent();assertNull(view)
+            val freshAccount=f.login();val freshOwner=bind(freshAccount);val fresh=assertNotNull(view);val before=f.paths.size
+            assertFalse(ui.decline(old));assertFalse(ui.accept(old,"Old"));assertEquals(0,entropy);assertEquals(before,f.paths.size)
+            assertEquals(fresh,view);assertNotNull(freshOwner.offer.value)
+            assertTrue(ui.decline(fresh));runCurrent();assertEquals(1,entropy);assertNull(view)
+            assertEquals(1,f.paths.count {it.endsWith("/decline")});assertTrue(freshAccount.job.isActive)
+            assertTrue(f.allocated.isEmpty());assertEquals(0,f.launches)
+        } finally {collector.cancel();registry.close();owners.forEach {it.close()};root.close();f.close()}
+    }
+
+    @Test fun incomingRootDisposalPreservesOfferAndRejectsOldButtonsWhileReplacementCanDecline() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val trip=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+        val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer};var entropy=0
+        val incoming=NearbyIncomingCallUi(f.repository,registry,NearbyIncomingCallAcceptance(f.repository,registry,voice,f.dispatcher),f.dispatcher,{entropy++;first.value})
+        val root=NearbyRootPresenter(backgroundScope,voice,sharing,incoming);var replacement:NearbyRootPresenter?=null
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},Notifications().apply {allowed=false},{f.key})
+        val activity=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,activity)
+        try {
+            root.connectChannel(account,channel,"Existing channel");runCurrent()
+            val original=assertNotNull(voice.state.value.pending).id;voice.begin(original,true,boundary);runCurrent()
+            val ticket=f.gate.current.value;assertTrue(assertNotNull(f.runtime).state.value.wanted)
+            registry.bind(account,owner);owner.hint(channel);runCurrent();val view=assertNotNull(root.state.value.incoming)
+            val offer=assertNotNull(owner.offer.value);val actions=root.incomingActions;val before=f.paths.size
+            root.close();actions.accept(view,"Old");actions.decline(view);runCurrent()
+            assertEquals(NearbyRootView(),root.state.value);assertEquals(0,entropy);assertEquals(before,f.paths.size)
+            assertSame(offer,owner.offer.value);assertTrue(account.job.isActive)
+            val fresh=NearbyRootPresenter(backgroundScope,voice,sharing,incoming);replacement=fresh;runCurrent()
+            assertEquals(view,fresh.state.value.incoming);fresh.incomingActions.decline(view);runCurrent()
+            assertNull(fresh.state.value.incoming);assertEquals(1,entropy);assertEquals(1,f.paths.count {it.endsWith("/decline")})
+            assertEquals(VoiceOperationId(original),fresh.state.value.voice.operation)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertSame(ticket,f.gate.current.value)
+            assertEquals(listOf(phone),f.allocated);assertEquals(1,f.launches);assertTrue(account.job.isActive)
+        } finally {boundary.close();activity.cancel();replacement?.close();root.close();registry.close();owner.close();sharing.close();voice.close();f.close()}
+    }
+
+    @Test fun incomingRootDisposalDuringActualAcceptVerificationCannotStartVoiceAfterReply() = runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val trip=SharingFixture(f)
+        val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher);val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+        val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val incoming=NearbyIncomingCallUi(f.repository,registry,NearbyIncomingCallAcceptance(f.repository,registry,voice,f.dispatcher),f.dispatcher,{first.value})
+        val root=NearbyRootPresenter(backgroundScope,voice,sharing,incoming)
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING";val release=CompletableDeferred<Unit>()
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},Notifications().apply {allowed=false},{f.key})
+        try {
+            registry.bind(account,owner);owner.hint(channel);runCurrent();val view=assertNotNull(root.state.value.incoming)
+            f.statusRelease=release;root.incomingActions.accept(view,"Incoming");runCurrent()
+            assertEquals(2,f.paths.size);assertNull(owner.offer.value);assertNull(voice.state.value.pending)
+            root.close();release.complete(Unit);runCurrent();assertTrue(f.statusHandlerFinished)
+            assertNull(voice.state.value.pending);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+            assertTrue(account.job.isActive);assertEquals(NearbyRootView(),root.state.value)
+        } finally {release.complete(Unit);root.close();registry.close();owner.close();sharing.close();voice.close();f.close()}
+    }
+
+    @Test fun incomingUiCleanupFailureWithdrawsRegistryOfferWhileAccountAndRuntimeRemainLive() = runTest {
+        val f=Fixture(this);val voice=voiceController(f,Switches());val registry=IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        val port=Notifications();val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val runtime=f.acquire(account)
+        val owner=IncomingCallNotificationOwner(account,runtime,f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key})
+        var entropy=0
+        val ui=NearbyIncomingCallUi(f.repository,registry,NearbyIncomingCallAcceptance(f.repository,registry,voice,f.dispatcher),f.dispatcher,{entropy++;first.value})
+        var view:NearbyIncomingCallView?=null;val collector=backgroundScope.launch {ui.state.collect {view=it}}
+        try {
+            registry.bind(account,owner);owner.hint(channel);runCurrent();val original=assertNotNull(view)
+            assertNotNull(owner.state.value.ticket);port.throwOnCancel=true
+            owner.withdrawCall(channel);runCurrent();assertTrue(owner.state.value.retired);assertTrue(owner.cleanupFailed.value)
+            assertNull(owner.offer.value);assertNull(registry.offer.value);assertNull(view)
+            assertFalse(ui.accept(original,"Retired"));assertFalse(ui.decline(original));assertEquals(0,entropy)
+            assertTrue(account.job.isActive);assertFalse(runtime.retired.value);assertEquals(1,f.paths.size)
+            assertTrue(f.allocated.isEmpty());assertEquals(0,f.launches)
+        } finally {collector.cancel();registry.close();owner.close();voice.close();f.close()}
+    }
+
+    @Test fun inAppFailedAcceptanceVerificationAllowsNewVerifiedOfferWithNewTicketOnly() = runTest {
+        val f=Fixture(this);val port=Notifications().apply {allowed=false};var nonce=0
+        val account=f.login();f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,
+            {"a0000000-0000-0000-0000-${(++nonce).toString().padStart(12,'0')}"})
+        try {
+            owner.hint(channel);runCurrent();val old=assertNotNull(owner.offer.value)
+            f.statusRingCredit=null;assertNull(owner.acceptOffer(old));assertNull(owner.offer.value)
+            assertEquals(2,f.paths.size);assertNull(owner.acceptOffer(old))
+            f.statusRingCredit=1000;assertTrue(owner.discoveryHint(channel));runCurrent()
+            val fresh=assertNotNull(owner.offer.value);assertNotEquals(old.id,fresh.id)
+            assertNull(owner.acceptOffer(old));assertEquals(3,f.paths.size)
+            assertEquals(fresh.call,owner.acceptOffer(fresh));assertEquals(4,f.paths.size)
+            assertTrue(f.allocated.isEmpty());assertEquals(0,f.launches);assertTrue(account.job.isActive)
+        } finally {owner.close();f.close()}
+    }
+
+    @Test fun inAppOfferCannotPublishCreditSpentDuringNativeNotificationSubmission() = runTest {
+        val f=Fixture(this);val port=Notifications();val account=f.login()
+        f.callMode=true;f.incomingMode=true;f.statusPhase="RINGING"
+        port.onShow={f.time+=1000}
+        val owner=IncomingCallNotificationOwner(account,f.acquire(account),f.dispatcher,MutableSharedFlow(),{f.time},port,{f.key})
+        try {
+            owner.hint(channel);runCurrent();assertEquals(1,port.shown.size)
+            assertNull(owner.offer.value);assertNull(owner.state.value.ticket);assertEquals(port.shown,port.cancelled)
+            assertTrue(account.job.isActive);assertEquals(0,f.launches);assertTrue(f.allocated.isEmpty())
+        } finally {owner.close();f.close()}
+    }
+
     @Test fun incomingHintSubmissionSurvivesWaiterCancellationAndUsesOneActualOwner() = runTest {
         val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
         val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; val port = Notifications()

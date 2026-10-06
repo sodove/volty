@@ -923,4 +923,7 @@
     <string name="nearby_panel_start_position_timed">Показывать позицию · 30 минут</string>
     <string name="nearby_panel_more_controls">Дополнительные действия</string>
     <string name="nearby_panel_fewer_controls">Свернуть действия</string>
+    <string name="nearby_incoming_call_title">Входящий голосовой звонок</string>
+    <string name="nearby_incoming_call_accept">Принять</string>
+    <string name="nearby_incoming_call_decline">Отклонить</string>
 </resources>

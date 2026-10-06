@@ -925,4 +925,7 @@
     <string name="nearby_panel_start_position_timed">Share position · 30 minutes</string>
     <string name="nearby_panel_more_controls">More controls</string>
     <string name="nearby_panel_fewer_controls">Collapse controls</string>
+    <string name="nearby_incoming_call_title">Incoming voice call</string>
+    <string name="nearby_incoming_call_accept">Accept</string>
+    <string name="nearby_incoming_call_decline">Decline</string>
 </resources>

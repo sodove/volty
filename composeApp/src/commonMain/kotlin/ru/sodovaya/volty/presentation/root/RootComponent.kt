@@ -386,7 +386,7 @@ class DefaultRootComponent(
     // Lightweight scope for cold-start async work (DB reads) and the active
     // vehicle key consumed by the retained navigation component.
     private val scope = CoroutineScope(Dispatchers.Main + SupervisorJob())
-    private val nearbyPresenter = NearbyRootPresenter(scope,get(),get())
+    private val nearbyPresenter = NearbyRootPresenter(scope,get(),get(),get())
     override val nearby: NearbyRootPresentation = nearbyPresenter
     private val navigationVehicleId: StateFlow<String?> = bmsRepository.activeVehicle
         .map { it?.id }

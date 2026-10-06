@@ -5,20 +5,23 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flowOf
 import ru.sodovaya.volty.data.social.SocialAuthenticatedAccount
 import ru.sodovaya.volty.domain.social.FriendSummary
 import ru.sodovaya.volty.domain.nearby.ChannelSharingMode
 import ru.sodovaya.volty.domain.nearby.ChannelSharingTtl
 
-data class NearbyRootView(val voice: NearbyVoiceView = NearbyVoiceView(), val sharing: NearbySharingView = NearbySharingView())
+data class NearbyRootView(val voice: NearbyVoiceView = NearbyVoiceView(), val sharing: NearbySharingView = NearbySharingView(),
+    val incoming: NearbyIncomingCallView? = null)
 interface NearbyRootPresentation {
     val state: StateFlow<NearbyRootView>
     val actions: NearbyConversationPanelActions
+    val incomingActions: NearbyIncomingCallActions
 }
 internal fun interface NearbyOperationIds { fun next(): String }
 
 internal class NearbyRootPresenter(parent: CoroutineScope, private val voice: NearbyVoiceController,
-    private val sharing: NearbySharingController): NearbyRootPresentation {
+    private val sharing: NearbySharingController, private val incoming: NearbyIncomingCallUi? = null): NearbyRootPresentation {
     init { require(parent.coroutineContext[Job]?.isActive == true) }
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)
@@ -26,6 +29,14 @@ internal class NearbyRootPresenter(parent: CoroutineScope, private val voice: Ne
     private val output = MutableStateFlow(NearbyRootView())
     override val state = output.asStateFlow()
     private fun enabled() = !closed && lifetime.isActive
+    override val incomingActions = NearbyIncomingCallActions(
+        accept={original,label -> if(enabled()) scope.launch {
+            try {incoming?.accept(original,label)} catch(cancelled:CancellationException) {throw cancelled} catch(_:Exception) {}
+        }},
+        decline={original -> if(enabled()) scope.launch {
+            try {incoming?.decline(original)} catch(cancelled:CancellationException) {throw cancelled} catch(_:Exception) {}
+        }},
+    )
     override val actions = NearbyConversationPanelActions(
         disconnect = { if (enabled()) voice.disconnect(it) },
         mute = { operation, value -> if (enabled()) voice.setMuted(operation,value) },
@@ -39,7 +50,8 @@ internal class NearbyRootPresenter(parent: CoroutineScope, private val voice: Ne
     )
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {try {awaitCancellation()} finally {close()}}
-        scope.launch {combine(voice.state,sharing.state,::NearbyRootView).collect {if (enabled()) output.value=it}}
+        scope.launch {combine(voice.state,sharing.state,incoming?.state ?: flowOf(null),::NearbyRootView)
+            .collect {if (enabled()) output.value=it}}
     }
     fun connectChannel(account: SocialAuthenticatedAccount, channel: String, label: String) {
         if (enabled()) voice.requestChannel(account,channel,label)

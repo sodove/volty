@@ -11,14 +11,17 @@ import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 import ru.sodovaya.volty.domain.voice.VoiceOperationId
 
 internal class IncomingCallNotificationTicket internal constructor(val id: String, internal val owner: Any)
+internal class IncomingCallOffer internal constructor(internal val ticket: IncomingCallNotificationTicket,
+    val call: DirectCallSnapshot) { val id: String get() = ticket.id }
 internal interface IncomingCallNotificationPort {
     fun show(ticket: IncomingCallNotificationTicket, call: DirectCallSnapshot, remainingMillis: Long): Boolean
     fun cancel(ticket: IncomingCallNotificationTicket)
 }
+/** Native publication only. An in-app offer cannot fabricate a notification action. */
 internal data class IncomingCallNotificationState(val ticket: IncomingCallNotificationTicket? = null,
     val call: DirectCallSnapshot? = null, val retired: Boolean = false)
 
-/** Queued SERIAL account-owned notifications. Borrows runtime; never controls media. */
+/** Queued SERIAL account-owned ringing offers and notifications. Borrows runtime; never controls media. */
 internal class IncomingCallNotificationOwner(private val account: SocialAuthenticatedAccount, private val runtime: AuthenticatedVoiceRuntime,
     private val queuedDispatcher: CoroutineDispatcher, pulses: Flow<Unit>, private val clock: () -> Long,
     private val port: IncomingCallNotificationPort, private val nextId: () -> String) {
@@ -30,6 +33,19 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     private val scope = CoroutineScope(account.scope().coroutineContext + lifetime + queuedDispatcher)
     private val output = MutableStateFlow(IncomingCallNotificationState())
     val state = output.asStateFlow()
+    private val offerOutput = MutableStateFlow<IncomingCallOffer?>(null)
+    val offer = offerOutput.asStateFlow()
+    suspend fun acceptOffer(original: IncomingCallOffer): DirectCallSnapshot? = withContext(queuedDispatcher) {
+        if (offerOutput.value !== original) return@withContext null
+        accept(original.ticket, fromOffer = true)
+    }
+    suspend fun declineOffer(original: IncomingCallOffer, operation: VoiceOperationId): Deferred<DirectCallReply>? =
+        withContext(queuedDispatcher) {
+            invitationDraftId(operation.value)
+            if (offerOutput.value !== original) return@withContext null
+            val action = consume(original.ticket, fromOffer = true) ?: return@withContext null
+            runtime.requestDeclineIncomingCall(action.call, operation)
+        }
     private val reads = MutableStateFlow(0)
     /** Actual executing readers only; zero does not establish queue or socket idleness. */
     val readInFlight = reads.asStateFlow()
@@ -80,7 +96,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     /** Polling retries failed verification, but never replaces an earned or consumed offer. */
     suspend fun discoveryHint(callId: String): Boolean = withContext(queuedDispatcher) {
         invitationDraftId(callId)
-        if (tick() == null || output.value.call?.callId == callId ||
+        if (tick() == null || offerOutput.value?.call?.callId == callId ||
             latest?.let {it.callId == callId && it.consumed} == true) return@withContext false
         hint(callId)
     }
@@ -90,17 +106,22 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     suspend fun withdrawCall(callId: String) = withContext(queuedDispatcher) {
         if (latest?.callId == callId) latest = null
         if (pending?.callId == callId) pending = null
-        if (output.value.call?.callId == callId) withdraw()
+        if (offerOutput.value?.call?.callId == callId) withdraw()
     }
     /** Metadata only: the caller still needs visible Activity admission to join the call. */
-    suspend fun acceptTarget(ticket: IncomingCallNotificationTicket): DirectCallSnapshot? = withContext(queuedDispatcher) {
-        val action = consume(ticket) ?: return@withContext null
+    suspend fun acceptTarget(ticket: IncomingCallNotificationTicket): DirectCallSnapshot? = accept(ticket, fromOffer = false)
+    private suspend fun accept(ticket: IncomingCallNotificationTicket, fromOffer: Boolean): DirectCallSnapshot? = withContext(queuedDispatcher) {
+        val action = consume(ticket, fromOffer) ?: return@withContext null
         if (!lifetime.isActive) return@withContext null
         val reply = try {
             reads.update {it + 1}
             verifier.verify(action.call.callId)
+        } catch (failure: Exception) {
+            retryVerification(action)
+            throw failure
         } finally {reads.update {it - 1}}
         val now = tick() ?: return@withContext null
+        if (reply is IncomingCallHintReply.Failed) retryVerification(action)
         if (latest !== action.marker || reply !is IncomingCallHintReply.Ringing || !reply.observation.isFresh(now))
             return@withContext null
         reply.call
@@ -115,9 +136,15 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         }
 
     private class Action(val call: DirectCallSnapshot, val marker: Hint)
-    private fun consume(ticket: IncomingCallNotificationTicket): Action? {
-        if (tick() == null || ticket.owner !== ticketOwner || output.value.ticket !== ticket) return null
-        val call = output.value.call ?: return null
+    /** A failed read earns no offer. A later discovery must verify again and mint a new ticket. */
+    private fun retryVerification(action: Action) {
+        if (latest === action.marker && lifetime.isActive && account.job.isActive && !runtime.retired.value)
+            latest = Hint(action.call.callId)
+    }
+    private fun consume(ticket: IncomingCallNotificationTicket, fromOffer: Boolean = false): Action? {
+        if (tick() == null || ticket.owner !== ticketOwner ||
+            (if (fromOffer) offerOutput.value?.ticket !== ticket else output.value.ticket !== ticket)) return null
+        val call = offerOutput.value?.call ?: return null
         val evidence = observation ?: return null
         if (evidence.callId != call.callId || evidence.revision != call.revision) return null
         val marker = Hint(call.callId, consumed = true)
@@ -161,11 +188,17 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         publishingTicket = ticket
         val shown = try {port.show(ticket, reply.call, reply.observation.deadlineMillis - now)} catch (_: Exception) {false}
             finally {publishingTicket = null}
-        if (!shown || !lifetime.isActive || !account.job.isActive) {
-            cancelIssued(ticket); return
+        if (!shown || !lifetime.isActive || !account.job.isActive) cancelIssued(ticket)
+        if (!lifetime.isActive || !account.job.isActive) return
+        // Native submission can spend the remaining credit; it cannot earn fresh display time.
+        val afterSubmission = tick()
+        if (afterSubmission == null || !reply.observation.isFresh(afterSubmission)) {
+            if (shown) cancelIssued(ticket)
+            return
         }
         observation = reply.observation
-        output.value = IncomingCallNotificationState(ticket, reply.call)
+        offerOutput.value = IncomingCallOffer(ticket, reply.call)
+        if (shown) output.value = IncomingCallNotificationState(ticket, reply.call)
     }
 
     private fun tick(): Long? {
@@ -179,6 +212,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
 
     private fun withdraw() {
         val ticket = output.value.ticket
+        offerOutput.value = null
         output.value = IncomingCallNotificationState(retired = output.value.retired)
         observation = null
         ticket?.let(::cancelIssued)
