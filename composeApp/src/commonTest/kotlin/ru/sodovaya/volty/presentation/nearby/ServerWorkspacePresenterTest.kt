@@ -7,7 +7,7 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ServerWorkspacePresenterTest {
-    private interface Ports: CommunityPort, CommunityRemovalPort, ChannelCommandsPort, InvitationPort
+    private interface Ports: CommunityPort, CommunityRemovalPort, ChannelCommandsPort, InvitationPort, InvitationListingPort
     private val server="00000000-0000-0000-0000-000000000001"
     private val channel="00000000-0000-0000-0000-000000000002"
     private val summary=CommunitySummary(server,"Riders","",CommunityVisibility.PUBLIC,1)
@@ -20,6 +20,12 @@ class ServerWorkspacePresenterTest {
         val inviteRequests=mutableListOf<InvitationCreationDraft>()
         val savedInvites=mutableMapOf<String,InvitationCreationDraft>()
         val acceptRequests=mutableListOf<Pair<String,InvitationSecret>>()
+        val invitationReads=mutableListOf<Pair<String,String?>>()
+        val revocations=mutableListOf<Pair<String,String>>()
+        val metadata=InvitationMetadata(channel,server,100,900100,10,0,null,1,null)
+        var metadataReply:suspend (String,String?)->InvitationListingCommandResult={_,_->InvitationListingCommandResult.Listed(listOf(metadata))}
+        var revocationReply:suspend (String,String)->InvitationRevocationCommandResult={community,invitation ->
+            InvitationRevocationCommandResult.Revoked(InvitationRevocationReceipt(invitation,community,2))}
         var acceptReply:suspend (String)->InvitationAcceptanceCommandResult={operation ->
             InvitationAcceptanceCommandResult.Accepted(InvitationAcceptanceReceipt(operation,channel,server,1,true))}
         var inviteReply:suspend (InvitationCreationDraft)->InvitationCreationCommandResult={draft ->
@@ -35,7 +41,12 @@ class ServerWorkspacePresenterTest {
                 val draft=assertNotNull(savedInvites[invitation]);assertEquals(token,draft.secret.reveal())
                 inviteRequests+=draft;return inviteReply(draft)
             }
-            override suspend fun revoke(community:String,invitation:String):InvitationRevocationCommandResult=error("No revoke")
+            override suspend fun list(community:String,after:String?,limit:Int):InvitationListingCommandResult {
+                assertEquals(20,limit);invitationReads+=community to after;return metadataReply(community,after)
+            }
+            override suspend fun revoke(community:String,invitation:String):InvitationRevocationCommandResult {
+                revocations+=community to invitation;return revocationReply(community,invitation)
+            }
             override suspend fun accept(operation:String,token:String):InvitationAcceptanceCommandResult {
                 acceptRequests+=operation to InvitationSecret.fromToken(token);return acceptReply(operation)
             }
@@ -64,8 +75,80 @@ class ServerWorkspacePresenterTest {
         },InvitationSecretGenerator {InvitationSecret.fromToken("A".repeat(43))},ports,account)
         val invites=InvitationCreationWorkspace(scope,account,server,workspace,drafts) {"00000000-0000-0000-0000-000000000004"}
         val acceptance=InvitationAcceptanceWorkspace(scope,account,workspace,ports) {"00000000-0000-0000-0000-000000000005"}
-        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,connected::add)
+        val management=InvitationManagementWorkspace(scope,account,server,workspace,ports,ports)
+        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,management,connected::add)
         suspend fun close() {presenter.close();screen.cancel();account.cancel()}
+    }
+    @Test fun ownerManagementListsActualRowsAndConfirmsExactSelectedInvitationOnly()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openInvitationManagement();runCurrent();assertTrue(f.invitationReads.isEmpty())
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationManagement();runCurrent()
+            assertEquals(server,f.presenter.state.value.invitationManagementCommunity)
+            assertEquals(listOf(f.metadata),f.presenter.state.value.invitationManagement.items)
+            f.presenter.requestInvitationRevocation(server);runCurrent();assertNull(f.presenter.state.value.invitationManagement.confirmation)
+            f.presenter.requestInvitationRevocation(channel);runCurrent()
+            assertEquals(InvitationRevocationConfirmation(server,channel),f.presenter.state.value.invitationManagement.confirmation)
+            assertTrue(f.revocations.isEmpty());f.presenter.confirmInvitationRevocation();runCurrent()
+            assertEquals(listOf(server to channel),f.revocations);assertEquals(2,f.invitationReads.size)
+            assertNull(f.presenter.state.value.invitationManagement.items?.single()?.revokedAtMillis)
+            assertEquals(setOf(channel),f.presenter.state.value.invitationManagement.confirmedRevocations)
+            assertTrue(f.connected.isEmpty());assertTrue(f.issued.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun dismissedAndReopenedManagementRejectsQueuedOldConfirmation()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationManagement();runCurrent()
+            f.presenter.requestInvitationRevocation(channel);runCurrent();assertNotNull(f.presenter.state.value.invitationManagement.confirmation)
+            f.presenter.confirmInvitationRevocation();f.presenter.dismissInvitationManagement();f.presenter.openInvitationManagement();runCurrent()
+            assertTrue(f.revocations.isEmpty());assertEquals(2,f.invitationReads.size)
+            assertNull(f.presenter.state.value.invitationManagement.confirmation)
+            assertEquals(server,f.presenter.state.value.invitationManagementCommunity)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun navigationWithdrawsHeldRevokeWithoutRedirectOrMetadataRefresh()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.revocationReply={community,invitation -> withContext(NonCancellable) {held.await()};returned=true
+            InvitationRevocationCommandResult.Revoked(InvitationRevocationReceipt(invitation,community,2))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationManagement();runCurrent()
+            f.presenter.requestInvitationRevocation(channel);runCurrent();f.presenter.confirmInvitationRevocation();runCurrent()
+            assertEquals(listOf(server to channel),f.revocations);assertTrue(f.presenter.state.value.invitationManagement.revoking)
+            f.presenter.openCatalog();runCurrent();assertNull(f.presenter.state.value.invitationManagementCommunity)
+            held.complete(Unit);runCurrent();assertTrue(returned);assertEquals(1,f.invitationReads.size)
+            assertEquals(ServerWorkspaceSection.CATALOG,f.presenter.state.value.section)
+            assertTrue(f.presenter.state.value.invitationManagement.confirmedRevocations.isEmpty());assertTrue(f.connected.isEmpty())
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun managementPaginationIssuesEarnedCursorAndOwnerLossWithdrawsWindow()=runTest {
+        val f=Fixture(this)
+        fun row(index:Int)=f.metadata.copy(invitationId="40000000-0000-0000-0000-${index.toString().padStart(12,'0')}")
+        f.metadataReply={_,after -> InvitationListingCommandResult.Listed(if(after==null) (1..20).map(::row) else listOf(row(21)))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationManagement();runCurrent()
+            assertTrue(f.presenter.state.value.invitationManagement.hasMore)
+            f.presenter.loadMoreInvitations();runCurrent()
+            assertEquals(listOf(server to null,server to row(20).invitationId),f.invitationReads)
+            assertEquals((1..21).map(::row),f.presenter.state.value.invitationManagement.items)
+            f.reply={CommunityResult.Ready(details.copy(ownerId=channel))};f.presenter.refresh();runCurrent()
+            assertNull(f.presenter.state.value.invitationManagementCommunity)
+            assertEquals(InvitationManagementState(),f.presenter.state.value.invitationManagement)
+            f.presenter.openInvitationManagement();runCurrent();assertEquals(2,f.invitationReads.size)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun reopenedManagementNeverAdoptsHeldReadFromDismissedWindow()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.metadataReply={_,_->withContext(NonCancellable) {held.await()};returned=true;InvitationListingCommandResult.Listed(listOf(f.metadata))}
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.openInvitationManagement();runCurrent();assertEquals(1,f.invitationReads.size)
+            f.presenter.dismissInvitationManagement();f.presenter.openInvitationManagement()
+            f.metadataReply={_,_->InvitationListingCommandResult.Listed(emptyList())};runCurrent();assertEquals(2,f.invitationReads.size)
+            assertEquals(emptyList(),f.presenter.state.value.invitationManagement.items)
+            held.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(server,f.presenter.state.value.invitationManagementCommunity)
+            assertEquals(emptyList(),f.presenter.state.value.invitationManagement.items)
+        } finally {held.complete(Unit);f.close();runCurrent()}
     }
     @Test fun acceptFormRetriesOriginalCodeAndOpensActualMembershipListWithoutVoice()=runTest {
         val f=Fixture(this);val held=CompletableDeferred<Unit>();val token="A".repeat(43)

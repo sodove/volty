@@ -41,6 +41,31 @@ class ServerWorkspaceAccountBindingTest {
         suspend fun close() {binding.close();screen.cancel();client.close()}
     }
 
+    @Test fun managementUsesOriginalHttpAndClosingPreservesAuthentication()=runTest {
+        val f=Fixture(this)
+        val metadata="""{"items":[{"invitationId":"$channel","communityId":"$server","createdAtMillis":100,"expiresAtMillis":900100,"maxUses":10,"uses":0,"revokedAtMillis":null,"creationRevision":1,"revocationRevision":null}]}"""
+        f.reply={path -> when {
+            path.endsWith("/revoke") -> """{"invitationId":"$channel","communityId":"$server","revision":2}"""
+            path.endsWith("/invitations") -> metadata
+            path.endsWith(server) -> detail()
+            else -> page()
+        }}
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val presenter=assertNotNull(f.binding.state.value.presenter)
+            presenter.openServer(server);runCurrent();presenter.openInvitationManagement();runCurrent()
+            presenter.requestInvitationRevocation(channel);runCurrent();assertEquals(3,f.paths.size)
+            presenter.confirmInvitationRevocation();runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities","GET /v2/nearby/communities/$server",
+                "GET /v2/nearby/communities/$server/invitations","POST /v2/nearby/communities/$server/invitations/$channel/revoke",
+                "GET /v2/nearby/communities/$server/invitations"),f.paths)
+            assertTrue(f.headers.all {it=="Bearer token-1"});assertTrue(f.connected.isEmpty())
+            assertEquals(setOf(channel),presenter.state.value.invitationManagement.confirmedRevocations)
+            assertNull(presenter.state.value.invitationManagement.items?.single()?.revokedAtMillis)
+            f.binding.close();runCurrent();assertEquals(ServerWorkspaceUiState(),presenter.state.value)
+            assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive);assertTrue(f.screen.isActive)
+        } finally {f.close();runCurrent()}
+    }
     @Test fun channelFormUsesOriginalAccountHttpAndNeverStartsVoice()=runTest {
         val f=Fixture(this)
         try {

@@ -896,4 +896,15 @@
     <string name="nearby_invitations_code">Код приглашения</string>
     <string name="nearby_invitations_code_invalid">Проверьте код приглашения и повторите попытку.</string>
     <string name="nearby_invitations_unavailable">Приглашение недоступно. Проверьте код или попросите новое приглашение.</string>
+    <string name="nearby_close">Закрыть</string>
+    <string name="nearby_invitations_manage">Приглашения</string>
+    <string name="nearby_invitations_metadata_help">Код можно скопировать только при создании приглашения. Если код потерян, создайте новое приглашение.</string>
+    <string name="nearby_invitations_empty">Приглашений пока нет.</string>
+    <string name="nearby_invitations_number">Приглашение %1$d</string>
+    <string name="nearby_invitations_created_at">Создано: %1$s</string>
+    <string name="nearby_invitations_expires_at">Срок действия: до %1$s</string>
+    <string name="nearby_invitations_usage_count">Использовано: %1$d из %2$d</string>
+    <string name="nearby_invitations_revoked">Отозвано</string>
+    <string name="nearby_invitations_revoke">Отозвать приглашение</string>
+    <string name="nearby_invitations_revoke_confirm">Отозвать приглашение %1$d? По его коду больше нельзя будет вступить. Текущие участники останутся на сервере.</string>
 </resources>

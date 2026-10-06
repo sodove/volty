@@ -15,7 +15,7 @@ import volty.composeapp.generated.resources.*
 
 @Composable
 internal fun InvitationAcceptanceDialog(state:ServerWorkspaceUiState,presenter:ServerWorkspacePresenter) {
-    val enabled=state.actorId!=null && !state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy
+    val enabled=state.actorId!=null && !state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking
     AlertDialog(onDismissRequest=presenter::dismissInvitationAcceptance,
         title={Text(stringResource(Res.string.nearby_invitations_join))},
         text={Column(Modifier.heightIn(max=320.dp).verticalScroll(rememberScrollState()),verticalArrangement=Arrangement.spacedBy(12.dp)) {

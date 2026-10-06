@@ -20,7 +20,7 @@ import volty.composeapp.generated.resources.*
 @Composable
 internal fun InvitationCreationDialog(state:ServerWorkspaceUiState,presenter:ServerWorkspacePresenter) {
     val clipboard=LocalClipboardManager.current
-    val enabled=state.actorId!=null && !state.commands.busy && !state.channelCreation.busy && !state.invitations.busy
+    val enabled=state.actorId!=null && !state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking
     val result=state.invitations.takeIf {it.community==state.invitationForm.community}
     val created=result?.created!=null
     AlertDialog(onDismissRequest=presenter::dismissInvitationCreation,

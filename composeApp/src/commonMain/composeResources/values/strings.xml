@@ -898,4 +898,15 @@
     <string name="nearby_invitations_code">Invitation code</string>
     <string name="nearby_invitations_code_invalid">Check the invitation code and try again.</string>
     <string name="nearby_invitations_unavailable">This invitation is unavailable. Check the code or ask for a new invitation.</string>
+    <string name="nearby_close">Close</string>
+    <string name="nearby_invitations_manage">Invitations</string>
+    <string name="nearby_invitations_metadata_help">Invitation codes can only be copied when created. Create a new invitation if you have lost its code.</string>
+    <string name="nearby_invitations_empty">No invitations yet.</string>
+    <string name="nearby_invitations_number">Invitation %1$d</string>
+    <string name="nearby_invitations_created_at">Created: %1$s</string>
+    <string name="nearby_invitations_expires_at">Expires: %1$s</string>
+    <string name="nearby_invitations_usage_count">Uses: %1$d of %2$d</string>
+    <string name="nearby_invitations_revoked">Revoked</string>
+    <string name="nearby_invitations_revoke">Revoke invitation</string>
+    <string name="nearby_invitations_revoke_confirm">Revoke invitation %1$d? Its code will no longer allow people to join. Current members stay in the server.</string>
 </resources>
