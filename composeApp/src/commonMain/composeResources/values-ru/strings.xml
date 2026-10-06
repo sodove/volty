@@ -891,4 +891,9 @@
     <string name="nearby_invitations_invalid">Проверьте срок действия и количество использований.</string>
     <string name="nearby_invitations_copy">Скопировать код приглашения</string>
     <string name="nearby_invitations_conflict">Не удалось создать приглашение: сервер изменился. Обновите данные и повторите попытку.</string>
+    <string name="nearby_invitations_join">Вступить по коду</string>
+    <string name="nearby_invitations_join_help">Вставьте код приглашения, чтобы вступить в сервер. Подключение к голосовому каналу выполняется отдельно.</string>
+    <string name="nearby_invitations_code">Код приглашения</string>
+    <string name="nearby_invitations_code_invalid">Проверьте код приглашения и повторите попытку.</string>
+    <string name="nearby_invitations_unavailable">Приглашение недоступно. Проверьте код или попросите новое приглашение.</string>
 </resources>

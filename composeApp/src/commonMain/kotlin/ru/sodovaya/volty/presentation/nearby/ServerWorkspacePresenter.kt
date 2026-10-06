@@ -22,19 +22,23 @@ data class ServerWorkspaceUiState(
     val channelCreation: ChannelCreationState = ChannelCreationState(),
     val invitationForm: InvitationCreationForm = InvitationCreationForm(),
     val invitations: InvitationCreationState = InvitationCreationState(),
+    val acceptanceForm: InvitationAcceptanceForm = InvitationAcceptanceForm(),
+    val acceptance: InvitationAcceptanceState = InvitationAcceptanceState(),
 )
 
 /** Screen projection/commands; connecting is delegated to the root conversation owner. */
 class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: CommunityWorkspace,
     private val actorId: String, private val creation: ChannelCreationWorkspace,
-    private val invitations: InvitationCreationWorkspace, private val connectChannel: (String) -> Unit) {
+    private val invitations: InvitationCreationWorkspace, private val acceptance:InvitationAcceptanceWorkspace,
+    private val connectChannel: (String) -> Unit) {
     init { invitationDraftId(actorId);require(parent.coroutineContext[Job]?.isActive == true && workspace.active) }
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)
     private data class Form(val section: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
         val returnTo: ServerWorkspaceSection = ServerWorkspaceSection.MY_SERVERS,
         val query: String = "", val draft: ServerCreationDraft = ServerCreationDraft(),
-        val channel: ChannelCreationForm = ChannelCreationForm(),val invitation:InvitationCreationForm=InvitationCreationForm())
+        val channel: ChannelCreationForm = ChannelCreationForm(),val invitation:InvitationCreationForm=InvitationCreationForm(),
+        val acceptance:InvitationAcceptanceForm=InvitationAcceptanceForm())
     private val form = MutableStateFlow(Form())
     private val output = MutableStateFlow(ServerWorkspaceUiState(actorId = actorId))
     val state = output.asStateFlow()
@@ -48,20 +52,25 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
                 browser.selectedCommunity to (browser.detail?.let {it.community.id==browser.selectedCommunity && it.ownerId==actorId} == true &&
                     !browser.detailLoading && browser.detailError==null)
             }.distinctUntilChanged().collect { (selected, owner) ->
+                val lostAcceptance=form.value.acceptance.visible && form.value.acceptance.originCommunity!=selected
                 form.update { current ->
                     val next = current.copy(
                         channel=if(current.channel.community!=selected || !owner) ChannelCreationForm() else current.channel,
-                        invitation=if(current.invitation.community!=selected || !owner) InvitationCreationForm() else current.invitation)
+                        invitation=if(current.invitation.community!=selected || !owner) InvitationCreationForm() else current.invitation,
+                        acceptance=if(lostAcceptance) InvitationAcceptanceForm() else current.acceptance)
                     if (selected != null) next.copy(section = ServerWorkspaceSection.SERVER)
                     else if (next.section == ServerWorkspaceSection.SERVER) next.copy(section = next.returnTo)
                     else next
                 }
+                if(lostAcceptance) acceptance.clearPresentation()
             }
         }
         scope.launch {
             combine(form, workspace.browser.state, workspace.state, creation.state, invitations.state) { form, browser, commands, channel, invite ->
                 ServerWorkspaceUiState(actorId,form.section,form.query,form.draft,browser,commands,form.returnTo,form.channel,channel,form.invitation,
-                    invite.copy(created=invite.created.takeIf {form.invitation.visible && form.invitation.submitted}))
+                    invite.copy(created=invite.created.takeIf {form.invitation.visible && form.invitation.submitted}),form.acceptance)
+            }.combine(acceptance.state) { ui, result ->
+                ui.copy(acceptance=result.copy(accepted=result.accepted.takeIf {ui.acceptanceForm.visible && ui.acceptanceForm.submitted}))
             }.collect { if(lifetime.isActive) output.value=it }
         }
         scope.launch {
@@ -72,9 +81,52 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
                 }
             }
         }
+        scope.launch {
+            acceptance.state.map {it.accepted}.distinctUntilChanged().collect { receipt ->
+                val current=form.value.acceptance
+                if(receipt!=null && lifetime.isActive && workspace.active && current.visible && current.submitted &&
+                    workspace.browser.state.value.selectedCommunity==current.originCommunity) {
+                    form.update {it.copy(section=ServerWorkspaceSection.MY_SERVERS,returnTo=ServerWorkspaceSection.MY_SERVERS,
+                        acceptance=InvitationAcceptanceForm())}
+                    workspace.browser.clearSelection()
+                    acceptance.clearPresentation()
+                }
+            }
+        }
+    }
+    fun openInvitationAcceptance() {
+        if(!enabled()) return
+        form.update {it.copy(channel=ChannelCreationForm(),invitation=InvitationCreationForm(),
+            acceptance=InvitationAcceptanceForm(true,workspace.browser.state.value.selectedCommunity))}
+        scope.launch {invitations.clearPresentation();acceptance.clearPresentation()}
+    }
+    fun setInvitationCode(value:String) {
+        if(enabled() && form.value.acceptance.visible && value.length<=80) {
+            form.update {it.copy(acceptance=it.acceptance.copy(code=InvitationCodeInput.fromInput(value),submitted=false))}
+            scope.launch {acceptance.clearPresentation()}
+        }
+    }
+    fun submitInvitationAcceptance() {
+        if(!enabled() || acceptance.state.value.accepted!=null) return
+        val original=form.value.acceptance
+        if(!original.visible) return
+        action {
+            if(form.value.acceptance==original && workspace.browser.state.value.selectedCommunity==original.originCommunity &&
+                acceptance.accept(original.code.reveal()))
+                form.update {if(it.acceptance==original) it.copy(acceptance=original.copy(submitted=true)) else it}
+        }
+    }
+    fun dismissInvitationAcceptance() {
+        if(!enabled(true)) return
+        form.update {it.copy(acceptance=InvitationAcceptanceForm())}
+        scope.launch {acceptance.clearPresentation()}
+    }
+    private suspend fun withdrawAcceptance() {
+        form.update {it.copy(acceptance=InvitationAcceptanceForm())}
+        acceptance.clearPresentation()
     }
     private fun enabled(allowCreation: Boolean = false) = lifetime.isActive && workspace.active &&
-        !workspace.state.value.busy && (allowCreation || (!creation.state.value.busy && !invitations.state.value.busy))
+        !workspace.state.value.busy && (allowCreation || (!creation.state.value.busy && !invitations.state.value.busy && !acceptance.state.value.busy))
     private fun ownedDetail():CommunityDetails? {
         if(!lifetime.isActive || !workspace.active) return null
         val browser=workspace.browser.state.value
@@ -84,8 +136,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     fun openInvitationCreation() {
         if(!enabled() || form.value.section!=ServerWorkspaceSection.SERVER) return
         val detail=ownedDetail() ?: return
-        form.update {it.copy(channel=ChannelCreationForm(),invitation=InvitationCreationForm(true,detail.community.id))}
-        scope.launch {invitations.clearPresentation()}
+        form.update {it.copy(channel=ChannelCreationForm(),invitation=InvitationCreationForm(true,detail.community.id),acceptance=InvitationAcceptanceForm())}
+        scope.launch {invitations.clearPresentation();acceptance.clearPresentation()}
     }
     fun setInvitationTtl(value:Long) {
         if(enabled() && form.value.invitation.visible && invitations.state.value.created==null &&
@@ -122,8 +174,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         val browser=workspace.browser.state.value
         val detail=browser.detail?.takeIf {!browser.detailLoading && browser.detailError==null &&
             it.community.id==browser.selectedCommunity && it.ownerId==actorId} ?: return
-        form.update {it.copy(channel=ChannelCreationForm(true,detail.community.id),invitation=InvitationCreationForm())}
-        scope.launch {invitations.clearPresentation()}
+        form.update {it.copy(channel=ChannelCreationForm(true,detail.community.id),invitation=InvitationCreationForm(),acceptance=InvitationAcceptanceForm())}
+        scope.launch {invitations.clearPresentation();acceptance.clearPresentation()}
     }
     fun setChannelName(value: String) {
         if(enabled() && form.value.channel.visible && value.length<=80)
@@ -145,20 +197,22 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         scope.launch { if (enabled(allowCreation)) work() }
     }
     fun openMine() = action(true) {
+        withdrawAcceptance()
         form.update { it.copy(section=ServerWorkspaceSection.MY_SERVERS,returnTo=ServerWorkspaceSection.MY_SERVERS) }
         workspace.dismissRemoval();workspace.browser.clearSelection();workspace.browser.refreshMemberships()
     }
     fun openCatalog() = action(true) {
+        withdrawAcceptance()
         form.update { it.copy(section=ServerWorkspaceSection.CATALOG,returnTo=ServerWorkspaceSection.CATALOG) }
         workspace.dismissRemoval();workspace.browser.clearSelection();workspace.browser.search(form.value.query)
     }
     fun openCreate() {
         if(!enabled()) return
         val origin=if(form.value.section==ServerWorkspaceSection.CATALOG) ServerWorkspaceSection.CATALOG else ServerWorkspaceSection.MY_SERVERS
-        form.update { it.copy(section=ServerWorkspaceSection.CREATE,returnTo=origin,draft=ServerCreationDraft()) }
-        action {workspace.dismissRemoval();workspace.browser.clearSelection()}
+        form.update { it.copy(section=ServerWorkspaceSection.CREATE,returnTo=origin,draft=ServerCreationDraft(),acceptance=InvitationAcceptanceForm()) }
+        action {withdrawAcceptance();workspace.dismissRemoval();workspace.browser.clearSelection()}
     }
-    fun openServer(id: String) = action(true) { workspace.dismissRemoval();workspace.browser.openCommunity(id) }
+    fun openServer(id: String) = action(true) {withdrawAcceptance();workspace.dismissRemoval();workspace.browser.openCommunity(id)}
     fun joinPublic(id: String) = action { workspace.join(id) }
     fun setQuery(value: String) {
         if (!enabled() || value.length>80) return
@@ -195,6 +249,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         }
     }
     fun back() = action(true) {
+        withdrawAcceptance()
         val origin=form.value.returnTo
         form.update {it.copy(section=origin)}
         workspace.dismissRemoval();workspace.browser.clearSelection()
@@ -206,6 +261,6 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         if(!browser.detailLoading && detail.community.id==browser.selectedCommunity && detail.channels.any {it.id==channel}) connectChannel(channel)
     }
     suspend fun close(): Unit = withContext(NonCancellable) {
-        lifetime.cancel();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
+        lifetime.cancel();acceptance.close();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
     }
 }

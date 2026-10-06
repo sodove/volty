@@ -60,6 +60,25 @@ class ServerWorkspaceAccountBindingTest {
         } finally {f.close();runCurrent()}
     }
 
+    @Test fun acceptanceFormIssuesOriginalPostAndUsesCurrentMembershipReadWithoutInventingServer()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            val presenter=assertNotNull(f.binding.state.value.presenter)
+            presenter.openInvitationAcceptance();presenter.setInvitationCode("A".repeat(43))
+            f.reply={path -> if(path.endsWith("/invitations/accept"))
+                """{"operationId":"$server","invitationId":"$channel","communityId":"$server","revision":1,"membershipChanged":true}"""
+                else """{"items":[]}"""}
+            presenter.submitInvitationAcceptance();runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities","POST /v2/nearby/invitations/accept","GET /v2/nearby/communities"),f.paths)
+            assertTrue(presenter.state.value.browser.memberships.items.orEmpty().isEmpty())
+            assertNull(presenter.state.value.browser.selectedCommunity);assertFalse(presenter.state.value.acceptanceForm.visible)
+            assertEquals("",presenter.state.value.acceptanceForm.code.reveal());assertTrue(f.connected.isEmpty())
+            assertTrue(f.headers.all {it=="Bearer token-1"});assertFalse(presenter.state.value.toString().contains("A".repeat(43)))
+            f.binding.close();runCurrent();assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive)
+        } finally {f.close();runCurrent()}
+    }
+
     @Test fun invitationFormCreatesThroughOriginalHttpAndClosingDoesNotRetireAuthentication()=runTest {
         val f=Fixture(this);val copied=mutableListOf<String>()
         f.entropy={InvitationSecret.fromToken("A".repeat(43))}

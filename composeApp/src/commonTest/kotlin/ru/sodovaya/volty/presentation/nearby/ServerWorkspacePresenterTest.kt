@@ -19,6 +19,9 @@ class ServerWorkspacePresenterTest {
         val catalogAfter=mutableListOf<String?>()
         val inviteRequests=mutableListOf<InvitationCreationDraft>()
         val savedInvites=mutableMapOf<String,InvitationCreationDraft>()
+        val acceptRequests=mutableListOf<Pair<String,InvitationSecret>>()
+        var acceptReply:suspend (String)->InvitationAcceptanceCommandResult={operation ->
+            InvitationAcceptanceCommandResult.Accepted(InvitationAcceptanceReceipt(operation,channel,server,1,true))}
         var inviteReply:suspend (InvitationCreationDraft)->InvitationCreationCommandResult={draft ->
             InvitationCreationCommandResult.Created(InvitationCreationReceipt(draft.invitationId,draft.communityId,100,100+draft.ttlMillis,draft.maxUses,0,1))
         }
@@ -33,7 +36,9 @@ class ServerWorkspacePresenterTest {
                 inviteRequests+=draft;return inviteReply(draft)
             }
             override suspend fun revoke(community:String,invitation:String):InvitationRevocationCommandResult=error("No revoke")
-            override suspend fun accept(operation:String,token:String):InvitationAcceptanceCommandResult=error("No implicit membership")
+            override suspend fun accept(operation:String,token:String):InvitationAcceptanceCommandResult {
+                acceptRequests+=operation to InvitationSecret.fromToken(token);return acceptReply(operation)
+            }
             override suspend fun create(community: String,channel: String,name: String): ChannelCreationCommandResult {
                 issued+="channel:$community:$channel:$name";return channelReply(community,channel,name)
             }
@@ -58,8 +63,76 @@ class ServerWorkspacePresenterTest {
             override suspend fun retain(draft:InvitationCreationDraft)=savedInvites.getOrPut(draft.invitationId) {draft}
         },InvitationSecretGenerator {InvitationSecret.fromToken("A".repeat(43))},ports,account)
         val invites=InvitationCreationWorkspace(scope,account,server,workspace,drafts) {"00000000-0000-0000-0000-000000000004"}
-        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,connected::add)
+        val acceptance=InvitationAcceptanceWorkspace(scope,account,workspace,ports) {"00000000-0000-0000-0000-000000000005"}
+        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,connected::add)
         suspend fun close() {presenter.close();screen.cancel();account.cancel()}
+    }
+    @Test fun acceptFormRetriesOriginalCodeAndOpensActualMembershipListWithoutVoice()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();val token="A".repeat(43)
+        f.acceptReply={held.await();InvitationAcceptanceCommandResult.Failed(InvitationCommandFailure.UNAVAILABLE)}
+        try {
+            f.presenter.openInvitationAcceptance();f.presenter.setInvitationCode("  $token  ");runCurrent()
+            assertTrue(f.presenter.state.value.acceptanceForm.visible)
+            assertFalse(f.presenter.state.value.toString().contains(token))
+            f.presenter.submitInvitationAcceptance();runCurrent();assertEquals(1,f.acceptRequests.size)
+            f.presenter.submitInvitationAcceptance();f.presenter.setInvitationCode("B".repeat(43));runCurrent()
+            assertEquals("  $token  ",f.presenter.state.value.acceptanceForm.code.reveal());assertEquals(1,f.acceptRequests.size)
+            held.complete(Unit);runCurrent();assertEquals(InvitationCommandFailure.UNAVAILABLE,f.presenter.state.value.acceptance.error)
+            f.acceptReply={operation -> InvitationAcceptanceCommandResult.Accepted(InvitationAcceptanceReceipt(operation,channel,server,1,true))}
+            f.presenter.submitInvitationAcceptance();runCurrent()
+            assertEquals(listOf("00000000-0000-0000-0000-000000000005","00000000-0000-0000-0000-000000000005"),f.acceptRequests.map {it.first})
+            assertTrue(f.acceptRequests.all {it.second.reveal()==token});assertEquals(listOf("mine"),f.issued)
+            assertFalse(f.presenter.state.value.acceptanceForm.visible);assertEquals("",f.presenter.state.value.acceptanceForm.code.reveal())
+            assertEquals(ServerWorkspaceSection.MY_SERVERS,f.presenter.state.value.section)
+            assertEquals(listOf(summary),f.presenter.state.value.browser.memberships.items);assertTrue(f.connected.isEmpty())
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun editedInvitationCodeBeforeQueuedSubmitCannotIssueOldCommand()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openInvitationAcceptance();f.presenter.setInvitationCode("A".repeat(43));runCurrent()
+            assertTrue(f.presenter.state.value.acceptanceForm.visible)
+            f.presenter.submitInvitationAcceptance();f.presenter.setInvitationCode("E".repeat(43));runCurrent()
+            assertTrue(f.acceptRequests.isEmpty());assertTrue(f.issued.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun dismissedHeldAcceptanceCannotNavigateOrRefreshCatalog()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.acceptReply={operation -> withContext(NonCancellable) {held.await()};returned=true
+            InvitationAcceptanceCommandResult.Accepted(InvitationAcceptanceReceipt(operation,channel,server,1,true))}
+        try {
+            f.presenter.openCatalog();runCurrent();f.presenter.openInvitationAcceptance();f.presenter.setInvitationCode("A".repeat(43))
+            f.presenter.submitInvitationAcceptance();runCurrent();assertEquals(1,f.acceptRequests.size)
+            f.presenter.dismissInvitationAcceptance();runCurrent();assertTrue(f.presenter.state.value.acceptance.busy)
+            held.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(ServerWorkspaceSection.CATALOG,f.presenter.state.value.section)
+            assertEquals(listOf("catalog:"),f.issued);assertNull(f.presenter.state.value.acceptance.accepted);assertTrue(f.connected.isEmpty())
+        } finally {held.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun invalidAcceptanceCodeIssuesNothingAndRetirementClearsPrivateInput()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openInvitationAcceptance();f.presenter.setInvitationCode("bad");f.presenter.submitInvitationAcceptance();runCurrent()
+            assertTrue(f.presenter.state.value.acceptance.invalidInput);assertTrue(f.acceptRequests.isEmpty())
+            f.presenter.setInvitationCode("A".repeat(43));runCurrent();f.account.cancel();runCurrent()
+            assertEquals(ServerWorkspaceUiState(),f.presenter.state.value);assertTrue(f.screen.isActive)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun navigatingBetweenListsFencesHeldAcceptanceEvenWhenSelectionStaysNull()=runTest {
+        val f=Fixture(this);val held=CompletableDeferred<Unit>();var returned=false
+        f.acceptReply={operation -> withContext(NonCancellable) {held.await()};returned=true
+            InvitationAcceptanceCommandResult.Accepted(InvitationAcceptanceReceipt(operation,channel,server,1,true))}
+        try {
+            f.presenter.openInvitationAcceptance();f.presenter.setInvitationCode("A".repeat(43))
+            f.presenter.submitInvitationAcceptance();runCurrent();assertEquals(1,f.acceptRequests.size)
+            assertNull(f.presenter.state.value.browser.selectedCommunity)
+            f.presenter.openCatalog();runCurrent();assertEquals(listOf("catalog:"),f.issued)
+            assertFalse(f.presenter.state.value.acceptanceForm.visible)
+            held.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals(ServerWorkspaceSection.CATALOG,f.presenter.state.value.section)
+            assertEquals(listOf("catalog:"),f.issued);assertNull(f.presenter.state.value.acceptance.accepted)
+            assertTrue(f.connected.isEmpty());assertTrue(f.account.isActive)
+        } finally {held.complete(Unit);f.close();runCurrent()}
     }
     @Test fun invitationFormUsesOriginalRetainedPayloadAndCopiesOnlyEarnedReceipt()=runTest {
         val f=Fixture(this);val held=CompletableDeferred<Unit>();val copied=mutableListOf<String>()
