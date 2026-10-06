@@ -852,4 +852,27 @@
     <string name="nearby_shell_conflict">The data changed. Refresh and try again.</string>
     <string name="nearby_shell_rate_limited">Too many requests. Try again later.</string>
     <string name="nearby_shell_unavailable">Could not load the data. Check your connection and try again.</string>
+    <string name="nearby_panel_transport_connected">Voice connection established</string>
+    <string name="nearby_panel_reconnecting">Reconnecting voice…</string>
+    <string name="nearby_panel_stopping">Disconnecting…</string>
+    <string name="nearby_panel_disconnect">Disconnect</string>
+    <string name="nearby_panel_mute">Mute microphone</string>
+    <string name="nearby_panel_unmute">Unmute microphone</string>
+    <string name="nearby_panel_deafen">Turn sound off</string>
+    <string name="nearby_panel_undeafen">Turn sound on</string>
+    <string name="nearby_panel_start_trip">Start a shared trip</string>
+    <string name="nearby_panel_hide_position">Hide my position</string>
+    <string name="nearby_panel_trip_active">Position sharing is on</string>
+    <string name="nearby_panel_trip_preparing">Starting position sharing…</string>
+    <string name="nearby_panel_trip_permission">Waiting for location permission</string>
+    <string name="nearby_panel_preparing">Preparing: %1$s</string>
+    <string name="nearby_panel_local_cleanup">Releasing this device’s location resources…</string>
+    <string name="nearby_panel_server_cleanup">Waiting for the server to confirm position removal…</string>
+    <string name="nearby_panel_microphone_denied">Allow microphone access to join voice.</string>
+    <string name="nearby_panel_location_denied">Allow location access to share your position.</string>
+    <string name="nearby_panel_not_visible">Open the app to start this connection.</string>
+    <string name="nearby_panel_cleanup_required">The previous connection still needs cleanup. Retry before reconnecting.</string>
+    <string name="nearby_panel_switch_title">End the current trip?</string>
+    <string name="nearby_panel_switch_text">Joining %1$s will end your current voice connection and position sharing. You will remain a server member.</string>
+    <string name="nearby_panel_switch_confirm">End trip and continue</string>
 </resources>

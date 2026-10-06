@@ -850,4 +850,27 @@
     <string name="nearby_shell_conflict">Данные изменились. Обновите экран и повторите попытку.</string>
     <string name="nearby_shell_rate_limited">Слишком много запросов. Попробуйте позже.</string>
     <string name="nearby_shell_unavailable">Не удалось загрузить данные. Проверьте соединение и повторите попытку.</string>
+    <string name="nearby_panel_transport_connected">Голосовое соединение установлено</string>
+    <string name="nearby_panel_reconnecting">Восстанавливаем голосовое соединение…</string>
+    <string name="nearby_panel_stopping">Отключаемся…</string>
+    <string name="nearby_panel_disconnect">Отключиться</string>
+    <string name="nearby_panel_mute">Выключить микрофон</string>
+    <string name="nearby_panel_unmute">Включить микрофон</string>
+    <string name="nearby_panel_deafen">Выключить звук</string>
+    <string name="nearby_panel_undeafen">Включить звук</string>
+    <string name="nearby_panel_start_trip">Начать совместную поездку</string>
+    <string name="nearby_panel_hide_position">Не показывать позицию</string>
+    <string name="nearby_panel_trip_active">Позиция передаётся</string>
+    <string name="nearby_panel_trip_preparing">Включаем передачу позиции…</string>
+    <string name="nearby_panel_trip_permission">Ожидаем разрешение на геопозицию</string>
+    <string name="nearby_panel_preparing">Подготовка: %1$s</string>
+    <string name="nearby_panel_local_cleanup">Освобождаем ресурсы геопозиции на устройстве…</string>
+    <string name="nearby_panel_server_cleanup">Ожидаем подтверждение удаления позиции от сервера…</string>
+    <string name="nearby_panel_microphone_denied">Разрешите доступ к микрофону для подключения к голосу.</string>
+    <string name="nearby_panel_location_denied">Разрешите доступ к геопозиции для передачи позиции.</string>
+    <string name="nearby_panel_not_visible">Откройте приложение для запуска подключения.</string>
+    <string name="nearby_panel_cleanup_required">Предыдущее подключение ещё требует очистки. Повторите попытку перед подключением.</string>
+    <string name="nearby_panel_switch_title">Завершить текущую поездку?</string>
+    <string name="nearby_panel_switch_text">Подключение к %1$s завершит текущее голосовое соединение и передачу позиции. Членство на сервере сохранится.</string>
+    <string name="nearby_panel_switch_confirm">Завершить поездку и продолжить</string>
 </resources>
