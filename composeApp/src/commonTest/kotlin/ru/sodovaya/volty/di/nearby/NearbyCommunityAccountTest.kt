@@ -25,6 +25,38 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun actualInvitationFactoryUsesRetainedDraftAndOriginalAccountWithoutRetiringBorrowedOwner()=runTest {
+        val parent=Job();val screen=SupervisorJob(parent);val consumerScope=CoroutineScope(coroutineContext+screen)
+        val paths=mutableListOf<String>();val headers=mutableListOf<String?>();val store=Store(actor)
+        val detail="""{"revision":1,"community":{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100},"ownerId":"$actor","channels":[]}"""
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request ->
+                paths+="${request.method.value} ${request.url.encodedPath}";headers+=request.headers[HttpHeaders.Authorization]
+                if(request.method==HttpMethod.Put) {
+                    assertNotNull(store.draft)
+                    respond("""{"communityId":"$community","invitationId":"$invitation","createdAtMillis":100,"expiresAtMillis":900100,"maxUses":4,"uses":0,"creationRevision":1,"revokedAtMillis":null,"revocationRevision":null}""")
+                } else respond(detail)
+            }
+        }}
+        val account=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,"original"),
+            store,InvitationSecretGenerator {InvitationSecret.fromToken("A".repeat(43))},client,root)
+        val foreign=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,"other"),
+            Store(actor),InvitationSecretGenerator {error("No foreign entropy")},client,root)
+        val workspace=account.workspace(consumerScope) {error("No server entropy")}
+        val creation=account.invitationCreation(consumerScope,workspace) {invitation}
+        try {
+            assertFailsWith<IllegalArgumentException> {foreign.invitationCreation(consumerScope,workspace) {error("No foreign entropy")}}
+            workspace.browser.openCommunity(community);runCurrent();assertTrue(creation.create(900_000,4));runCurrent()
+            val result=assertNotNull(creation.state.value.created);assertSame(store.draft,result.draft)
+            assertEquals(listOf("GET /v2/nearby/communities/$community","PUT /v2/nearby/communities/$community/invitations/$invitation"),paths)
+            assertTrue(headers.all {it=="Bearer original"})
+            creation.close();runCurrent();assertTrue(parent.isActive);assertTrue(screen.isActive);assertTrue(workspace.active)
+            assertIs<InvitationDraftExecution.Created>(account.invitations.execute(invitation));assertEquals(3,paths.size)
+            assertTrue(headers.all {it=="Bearer original"})
+        } finally {creation.close();workspace.close();foreign.retire();account.retire();screen.cancel();parent.cancel();client.close();runCurrent()}
+    }
+
     @Test fun actualChannelFactoryUsesOriginalAccountAndWorkspaceWithoutRetiringBorrowedOwners() = runTest {
         val parent=Job();val screen=SupervisorJob(parent);val consumerScope=CoroutineScope(coroutineContext+screen)
         val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
