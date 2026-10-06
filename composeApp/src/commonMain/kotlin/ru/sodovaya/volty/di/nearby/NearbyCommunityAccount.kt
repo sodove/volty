@@ -97,6 +97,10 @@ class NearbyCommunityAccount private constructor(
     fun workspace(screen: CoroutineScope, nextId: () -> String) =
         ru.sodovaya.volty.presentation.nearby.CommunityWorkspace(screen, workspaceLifetime, api.communities, api.removals, nextId)
 
+    fun channelCreation(screen: CoroutineScope, workspace: ru.sodovaya.volty.presentation.nearby.CommunityWorkspace,
+                        nextId: () -> String) =
+        ru.sodovaya.volty.presentation.nearby.ChannelCreationWorkspace(screen, workspaceLifetime, actorId, workspace, api.channels, nextId)
+
     suspend fun retire() {
         // Fence preparation and HTTP permissions before reaching the first suspension point.
         retireSynchronously()

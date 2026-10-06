@@ -37,6 +37,7 @@ class CommunityWorkspace(
     val state = output.asStateFlow()
     val browser = CommunityBrowser(scope, communities)
     val active: Boolean get() = positive()
+    internal fun belongsTo(screen: Job, account: Job) = this.screen === screen && this.account === account && active
     private val retiredState = MutableStateFlow(false)
     /** Permission withdrawal, not proof that a cancellation-ignoring HTTP producer returned. */
     val retired = retiredState.asStateFlow()

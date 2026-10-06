@@ -25,6 +25,42 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun actualChannelFactoryUsesOriginalAccountAndWorkspaceWithoutRetiringBorrowedOwners() = runTest {
+        val parent=Job();val screen=SupervisorJob(parent);val consumerScope=CoroutineScope(coroutineContext+screen)
+        val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
+        val detail="""{"revision":1,"community":{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100},"ownerId":"$actor","channels":[{"id":"40000000-0000-0000-0000-000000000004","name":"Общий","isDefault":true}]}"""
+        val client=HttpClient(MockEngine) { engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request ->
+                paths += "${request.method.value} ${request.url.encodedPath}"
+                headers += request.headers[HttpHeaders.Authorization]
+                if(request.method==HttpMethod.Put) respond("""{"revision":2,"communityId":"$community","channel":{"id":"$invitation","name":"Ride","isDefault":false}}""")
+                else respond(detail)
+            }
+        } }
+        val account=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,"original"),
+            Store(actor),InvitationSecretGenerator {error("Unused")},client,root)
+        val foreign=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,"other"),
+            Store(actor),InvitationSecretGenerator {error("Unused")},client,root)
+        val workspace=account.workspace(consumerScope) {error("No server entropy")}
+        val creation=account.channelCreation(consumerScope,workspace) {invitation}
+        try {
+            assertFailsWith<IllegalArgumentException> {foreign.channelCreation(consumerScope,workspace) {error("No channel entropy")}}
+            workspace.browser.openCommunity(community);runCurrent()
+            assertTrue(creation.create("Ride"));runCurrent()
+            assertEquals(invitation,creation.state.value.created?.channelId)
+            // An accepted command receipt cannot fabricate a row in an older detail reply.
+            assertFalse(workspace.browser.state.value.detail?.channels.orEmpty().any {it.id==invitation})
+            assertEquals(listOf("GET /v2/nearby/communities/$community",
+                "PUT /v2/nearby/communities/$community/channels/$invitation",
+                "GET /v2/nearby/communities/$community"),paths)
+            assertTrue(headers.all {it=="Bearer original"})
+            creation.close();runCurrent();assertTrue(workspace.active);assertTrue(parent.isActive);assertTrue(screen.isActive)
+            assertIs<CommunityResult.Ready<*>>(account.api.communities.detail(community))
+            assertEquals(4,paths.size)
+        } finally {creation.close();workspace.close();foreign.retire();account.retire();screen.cancel();parent.cancel();client.close();runCurrent()}
+    }
+
     @Test fun workspaceClosesItsOwnBrowserWithoutRetiringBorrowedAccountOrSiblingBrowser() = runTest {
         val parent = Job(); val screen = SupervisorJob(parent)
         val headers = mutableListOf<String?>()
