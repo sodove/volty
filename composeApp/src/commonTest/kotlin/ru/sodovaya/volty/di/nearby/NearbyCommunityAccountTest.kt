@@ -25,6 +25,35 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun acceptanceFactoryUsesOriginalAccountHttpThenReadsCurrentMembershipWithoutNavigation()=runTest {
+        val parent=Job();val screen=SupervisorJob(parent);val scope=CoroutineScope(coroutineContext+screen)
+        val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request ->
+                paths+="${request.method.value} ${request.url.encodedPath}";headers+=request.headers[HttpHeaders.Authorization]
+                if(request.method==HttpMethod.Post) respond("""{"operationId":"$invitation","invitationId":"$actor","communityId":"$community","revision":1,"membershipChanged":true}""")
+                else respond("""{"items":[]}""")
+            }
+        }}
+        fun consumer(bearer:String)=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,bearer),
+            Store(actor),InvitationSecretGenerator {error("No creation entropy")},client,root)
+        val account=consumer("original");val foreign=consumer("other")
+        val workspace=account.workspace(scope) {error("No server entropy")}
+        val acceptance=account.invitationAcceptance(scope,workspace) {invitation}
+        try {
+            assertFailsWith<IllegalArgumentException> {foreign.invitationAcceptance(scope,workspace) {error("No foreign entropy")}}
+            assertTrue(acceptance.accept("A".repeat(43)));runCurrent()
+            assertEquals(community,acceptance.state.value.accepted?.communityId)
+            assertEquals(listOf("POST /v2/nearby/invitations/accept","GET /v2/nearby/communities"),paths)
+            assertTrue(headers.all {it=="Bearer original"})
+            assertTrue(workspace.browser.state.value.memberships.items.orEmpty().isEmpty())
+            assertNull(workspace.browser.state.value.selectedCommunity)
+            acceptance.close();runCurrent();assertTrue(workspace.active);assertTrue(parent.isActive);assertTrue(screen.isActive)
+            assertIs<CommunityResult.Ready<*>>(account.api.communities.memberships());assertEquals(3,paths.size)
+        } finally {acceptance.close();workspace.close();foreign.retire();account.retire();screen.cancel();parent.cancel();client.close();runCurrent()}
+    }
+
     @Test fun actualInvitationFactoryUsesRetainedDraftAndOriginalAccountWithoutRetiringBorrowedOwner()=runTest {
         val parent=Job();val screen=SupervisorJob(parent);val consumerScope=CoroutineScope(coroutineContext+screen)
         val paths=mutableListOf<String>();val headers=mutableListOf<String?>();val store=Store(actor)

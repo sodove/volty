@@ -105,6 +105,10 @@ class NearbyCommunityAccount private constructor(
                            nextId: () -> String) =
         ru.sodovaya.volty.presentation.nearby.InvitationCreationWorkspace(screen, workspaceLifetime, actorId, workspace, invitations, nextId)
 
+    fun invitationAcceptance(screen: CoroutineScope, workspace: ru.sodovaya.volty.presentation.nearby.CommunityWorkspace,
+                             nextId: () -> String) =
+        ru.sodovaya.volty.presentation.nearby.InvitationAcceptanceWorkspace(screen, workspaceLifetime, workspace, api.invitations, nextId)
+
     suspend fun retire() {
         // Fence preparation and HTTP permissions before reaching the first suspension point.
         retireSynchronously()
