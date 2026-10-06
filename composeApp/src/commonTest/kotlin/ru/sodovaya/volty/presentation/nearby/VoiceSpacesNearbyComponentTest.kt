@@ -25,6 +25,11 @@ class VoiceSpacesNearbyComponentTest {
         var friends: suspend (String)->SocialResult<List<FriendSummary>> = {SocialResult.Success(listOf(accepted,pending))}
         var search: suspend (String)->SocialResult<List<UserSearchResult>> = {SocialResult.Success(emptyList())}
         var respond: suspend ()->SocialResult<Unit> = {SocialResult.Success(Unit)}
+        var recovery: suspend ()->SocialResult<Unit> = {SocialResult.Success(Unit)}
+        override suspend fun requestPasswordReset(email: String):SocialResult<Unit> {
+            issued += "recovery:$email"
+            return recovery()
+        }
         var profile: suspend (ProfileUpdate)->SocialResult<SocialSession.Authenticated> = { request ->
             SocialResult.Success(SocialSession.Authenticated(SocialUserId(actor),request.displayName,SessionTokenState.ACTIVE,true)) }
         override suspend fun updateProfile(accessToken: String,request: ProfileUpdate):SocialResult<SocialSession.Authenticated> {
@@ -64,6 +69,50 @@ class VoiceSpacesNearbyComponentTest {
         suspend fun close() {component.close();parent.cancel();client.close()}
     }
 
+    @Test fun recovery_uses_email_without_password_and_waits_for_actual_acceptance()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>()
+        f.transport.recovery={release.await();SocialResult.Success(Unit)}
+        try {
+            runCurrent();f.component.requestRecovery();runCurrent()
+            assertEquals(NearbyShellError.INVALID_FORM,f.component.state.value.error)
+            assertTrue(f.transport.issued.isEmpty())
+            f.component.setEmail("  rider@example.test  ");f.component.requestRecovery();f.component.requestRecovery();runCurrent()
+            assertEquals(listOf("recovery:rider@example.test"),f.transport.issued)
+            assertTrue(f.component.state.value.busy);assertFalse(f.component.state.value.auth.recoveryRequested)
+            release.complete(Unit);runCurrent()
+            assertTrue(f.component.state.value.auth.recoveryRequested);assertFalse(f.component.state.value.busy)
+            assertEquals(SocialSession.LoggedOut,f.repository.session.value)
+            assertNull(f.repository.authenticatedAccount.value)
+            f.component.setEmail("other@example.test");runCurrent()
+            assertFalse(f.component.state.value.auth.recoveryRequested)
+        } finally {release.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun failed_recovery_never_claims_instructions_were_sent()=runTest {
+        val f=Fixture(this)
+        f.transport.recovery={SocialResult.Failure(SocialFailure.Server("private backend details"))}
+        try {
+            runCurrent();f.component.setEmail("rider@example.test");f.component.requestRecovery();runCurrent()
+            assertEquals(listOf("recovery:rider@example.test"),f.transport.issued)
+            assertFalse(f.component.state.value.auth.recoveryRequested)
+            assertEquals(NearbyShellError.UNAVAILABLE,f.component.state.value.error)
+            assertFalse(f.component.state.value.busy)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun late_recovery_reply_cannot_publish_into_a_new_logged_out_form()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>();var returned=false
+        f.transport.recovery={withContext(NonCancellable) {release.await();returned=true;SocialResult.Success(Unit)}}
+        try {
+            runCurrent();f.component.setEmail("old@example.test");f.component.requestRecovery();runCurrent()
+            assertEquals(listOf("recovery:old@example.test"),f.transport.issued)
+            f.login();runCurrent();f.repository.logout();runCurrent()
+            f.component.setEmail("fresh@example.test");runCurrent()
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals("fresh@example.test",f.component.state.value.auth.email)
+            assertFalse(f.component.state.value.auth.recoveryRequested)
+            assertFalse(f.component.state.value.busy);assertNull(f.component.state.value.error)
+            assertNull(f.repository.authenticatedAccount.value);assertTrue(f.parent.isActive)
+        } finally {release.complete(Unit);f.close();runCurrent()}
+    }
     @Test fun profile_uses_verified_name_and_exact_original_account_without_duplicate_write()=runTest {
         val f=Fixture(this)
         try {

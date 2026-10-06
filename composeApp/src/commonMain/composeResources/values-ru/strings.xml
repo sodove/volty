@@ -874,4 +874,5 @@
     <string name="nearby_panel_switch_text">Подключение к %1$s завершит текущее голосовое соединение и передачу позиции. Членство на сервере сохранится.</string>
     <string name="nearby_panel_switch_confirm">Завершить поездку и продолжить</string>
     <string name="nearby_shell_profile_saved">Профиль сохранён</string>
+    <string name="nearby_shell_recovery_requested">Если аккаунт существует, проверьте почту — там будут инструкции для восстановления.</string>
 </resources>

@@ -96,6 +96,10 @@ private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoice
         item {Button(onClick=component::submitAuth,enabled=enabled) {
             Text(stringResource(if(state.auth.mode==NearbyAuthMode.LOGIN) Res.string.nearby_login else Res.string.nearby_register))
         }}
+        item {TextButton(onClick=component::requestRecovery,enabled=enabled) {
+            Text(stringResource(Res.string.nearby_recovery))
+        }}
+        if(state.auth.recoveryRequested) item {Text(stringResource(Res.string.nearby_shell_recovery_requested))}
         if(state.session==SocialSession.Authenticating) item {LinearProgressIndicator(Modifier.fillMaxWidth())}
     }
 }

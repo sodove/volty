@@ -13,7 +13,7 @@ enum class NearbyAuthMode { LOGIN, REGISTER }
 enum class NearbyShellSection { SERVERS, FRIENDS, PROFILE }
 enum class NearbyShellError { INVALID_FORM, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE }
 data class NearbyAuthDraft(val mode: NearbyAuthMode=NearbyAuthMode.LOGIN,
-    val email: String="",val password: String="",val displayName: String="") {
+    val email: String="",val password: String="",val displayName: String="",val recoveryRequested: Boolean=false) {
     override fun toString()="NearbyAuthDraft(mode=$mode, email=$email, password=<redacted>, displayName=$displayName)"
 }
 data class NearbyFriendsState(val items: List<FriendSummary>?=null,val loading: Boolean=false,
@@ -79,7 +79,7 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     private fun enabled()=lifetime.isActive && !closed
     private fun edit(change: (NearbyAuthDraft)->NearbyAuthDraft) {
         if(enabled() && !form.value.busy && repository.authenticatedAccount.value==null)
-            form.update {it.copy(auth=change(it.auth),error=null)}
+            form.update {it.copy(auth=change(it.auth).copy(recoveryRequested=false),error=null)}
     }
     fun setAuthMode(value: NearbyAuthMode)=edit {it.copy(mode=value)}
     fun setEmail(value: String) {if(value.length<=254) edit {it.copy(email=value)}}
@@ -97,8 +97,21 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
             else repository.register(RegistrationRequest(draft.email.trim(),draft.password,draft.displayName.trim()))
         }
     }
+    fun requestRecovery() {
+        if(!enabled() || form.value.busy || repository.session.value!=SocialSession.LoggedOut ||
+            repository.authenticatedAccount.value!=null) return
+        val email=form.value.auth.email.trim()
+        if(email.isBlank()) {form.update {it.copy(error=NearbyShellError.INVALID_FORM)};return}
+        form.update {it.copy(auth=it.auth.copy(recoveryRequested=false))}
+        command(null,onSuccess={
+            if(repository.session.value==SocialSession.LoggedOut && repository.authenticatedAccount.value==null)
+                form.update {it.copy(auth=it.auth.copy(recoveryRequested=true))}
+        }) {
+            repository.requestPasswordReset(email)
+        }
+    }
 
-    private fun command(account: SocialAuthenticatedAccount?,work: suspend ()->SocialResult<Unit>) {
+    private fun command(account: SocialAuthenticatedAccount?,onSuccess: ()->Unit={},work: suspend ()->SocialResult<Unit>) {
         if(!enabled() || form.value.busy || (account!=null && !friends.current(account))) return
         val token=++operation
         form.update {it.copy(busy=true,error=null)}
@@ -107,8 +120,10 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
                 if(!enabled() || token!=operation || (account!=null && !friends.current(account))) return@launch
                 if(account==null && (repository.session.value!=SocialSession.LoggedOut || repository.authenticatedAccount.value!=null)) return@launch
                 val result=work()
-                if(enabled() && token==operation && (account==null || friends.current(account)))
+                if(enabled() && token==operation && (account==null || friends.current(account))) {
                     form.update {it.copy(error=(result as? SocialResult.Failure)?.error?.shellError())}
+                    if(result is SocialResult.Success) onSuccess()
+                }
             } catch(cancelled: CancellationException) {throw cancelled}
             catch(_: Exception) {
                 if(enabled() && token==operation && (account==null || friends.current(account)))
