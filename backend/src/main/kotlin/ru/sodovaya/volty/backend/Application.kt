@@ -68,6 +68,7 @@ import ru.sodovaya.volty.backend.nearby.installNearbyMediaWebhookRoutes
 import ru.sodovaya.volty.backend.nearby.CommunityEndpointPort
 import ru.sodovaya.volty.backend.nearby.CommunityRemovalEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyCommunityRoutes
+import ru.sodovaya.volty.backend.nearby.installNearbyCommunityMembersRoutes
 import ru.sodovaya.volty.backend.nearby.ChannelCommandsEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyChannelCommandsRoutes
 import ru.sodovaya.volty.backend.nearby.InvitationEndpointPort
@@ -100,6 +101,7 @@ class AppDependencies(
     val nearbySharingPackets: ru.sodovaya.volty.backend.nearby.ChannelSharingPacketEndpointPort? = null,
     val nearbyCompatibility: ru.sodovaya.volty.backend.nearby.NearbyCompatibility = ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY,
     val nearbyMaintenance: ru.sodovaya.volty.backend.nearby.NearbyMaintenancePort? = null,
+    val nearbyMembers: ru.sodovaya.volty.backend.nearby.CommunityMembersEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -142,6 +144,7 @@ class AppDependencies(
             return AppDependencies(config, store, json = json,
                 nearbySessions = graph.sessions, nearbyRoster = graph.roster, nearbyMediaWebhook = graph.mediaWebhook,
                 nearbyCommunities = graph.communities, nearbyCommunityRemoval = graph.removal,
+                nearbyMembers = graph.members,
                 nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
                 nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
                 nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph)
@@ -314,6 +317,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         installNearbyRosterRoutes(dependencies)
         installNearbyMediaWebhookRoutes(dependencies)
         installNearbyCommunityRoutes(dependencies)
+        installNearbyCommunityMembersRoutes(dependencies)
         installNearbyChannelCommandsRoutes(dependencies)
         installNearbyInvitationRoutes(dependencies)
         installNearbyDirectCallRoutes(dependencies)

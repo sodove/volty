@@ -25,13 +25,13 @@ class NearbyProductionConfigurationTest {
         val config=AppConfig.fromEnvironment(voice-"VOLTY_NEARBY_MODE"-"VOLTY_NEARBY_SFU_CONTROL_ORIGIN")
         val dependencies=AppDependencies.fromPreparedDatabase(config,untouchedSource())
         assertEquals(NearbyCompatibility.LEGACY,dependencies.nearbyCompatibility)
-        assertNull(dependencies.nearbySessions);assertNull(dependencies.nearbyMaintenance)
+        assertNull(dependencies.nearbySessions);assertNull(dependencies.nearbyMaintenance);assertNull(dependencies.nearbyMembers)
     }
     @Test fun activeFactoryInstallsEveryEndpointAndMaintenanceWithoutDatabaseOrNetworkIo() {
         val dependencies=AppDependencies.fromPreparedDatabase(AppConfig.fromEnvironment(voice),untouchedSource())
         assertEquals(NearbyCompatibility.VOICE_SPACES,dependencies.nearbyCompatibility)
         assertNotNull(dependencies.nearbySessions);assertNotNull(dependencies.nearbyRoster)
-        assertNotNull(dependencies.nearbyMediaWebhook);assertNotNull(dependencies.nearbyCommunities)
+        assertNotNull(dependencies.nearbyMediaWebhook);assertNotNull(dependencies.nearbyCommunities);assertNotNull(dependencies.nearbyMembers)
         assertNotNull(dependencies.nearbyCommunityRemoval);assertNotNull(dependencies.nearbyChannelCommands)
         assertNotNull(dependencies.nearbyInvitations);assertNotNull(dependencies.nearbyCalls)
         assertNotNull(dependencies.nearbyChannelSharing);assertNotNull(dependencies.nearbySharingPackets)

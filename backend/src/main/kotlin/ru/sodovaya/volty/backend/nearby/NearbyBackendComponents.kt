@@ -5,6 +5,7 @@ import javax.sql.DataSource
 /** One typed authority graph. Borrowed database/SFU; no I/O during assembly. */
 internal class NearbyBackendComponents private constructor(
     val communities: CommunityEndpointPort,
+    val members: CommunityMembersEndpointPort,
     val removal: CommunityRemovalEndpointPort,
     val channels: ChannelCommandsEndpointPort,
     val invitations: InvitationEndpointPort,
@@ -33,6 +34,7 @@ internal class NearbyBackendComponents private constructor(
             val calls=DirectCallService(JdbcDirectCallRingingRepository(source),JdbcDirectCallMediaRepository(source),repository,voice,sfu,now)
             return NearbyBackendComponents(
                 JdbcCommunityEndpointPort(JdbcCommunityRepository(source),now),
+                JdbcCommunityMembersRepository(source),
                 JdbcCommunityRemovalEndpointPort(JdbcCommunityMembershipRepository(source),JdbcCommunityDeletionRepository(source),now),
                 JdbcChannelCommandsEndpointPort(JdbcChannelCreationRepository(source),JdbcChannelDeletionRepository(source),now),
                 JdbcInvitationEndpointPort(JdbcInvitationRepository(source),JdbcInvitationAcceptanceRepository(source),JdbcInvitationListingRepository(source),now),

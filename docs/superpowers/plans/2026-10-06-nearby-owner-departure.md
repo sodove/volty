@@ -1,0 +1,11 @@
+# Nearby owner departure
+
+Follow-up to the approved Nearby UI assembly. Preserve server membership when disconnecting voice/trips; explicit server departure is a separate confirmed action. Do not migrate legacy groups or change BLE/audio in this task.
+
+1. Provide owner-authorized `GET /v2/nearby/communities/{communityId}/members`, UUID keyset pages (20 default, 1..50 maximum). Return exact community/owner identity and only active, unbanned members' ID, display name and join time. Never return email/password/token, infer membership from friends/voice, or claim a total from one page. Unknown/foreign/deleted server and former owner receive generic denial. Existing transaction/leave endpoint remains authority for atomic successor validation.
+2. Prove route authentication, bounded canonical/unique page arguments and minimal payload using actual Ktor requests. Prove current SQL membership, ordered pages, bans/deleted users, ownership changes, zero read side effects and disappeared successor denial using the disposable PostgreSQL harness. Wire the actual production dependency graph; no schema change required.
+3. Add mandatory original-account guarded client HTTP port and bounded decoder with exact community/owner/row validation. Test real issued URLs, original bearer, malformed pages, denied/unavailable replies and retirement.
+4. Add exact-account/screen/workspace member consumer with refresh/pagination, selection/owner/lifetime fences. Choose only an actually listed eligible member. Capture confirmed server+successor before queued dispatch; retain existing stable removal operation for an uncertain retry. A stale list grants no membership: existing backend leave rechecks atomically.
+5. Wire bounded member picker into owner departure UI, explicit confirmation naming successor and server, both locales. No raw UUID entry, silent deletion, automatic voice connection or fabricated participant count. Last-owner deletion is a separate explicit confirmation. Compile, full fresh Android tests before commits, then visual/device verification at the existing APK gate.
+
+Use existing borrowed account lifetime/API, own only screen consumers. Closing a dialog or navigating must fence held reads and queued old confirmations. No production deployment or Root activation claim from fixture tests.

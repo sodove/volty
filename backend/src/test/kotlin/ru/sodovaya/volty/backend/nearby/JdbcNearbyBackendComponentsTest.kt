@@ -29,6 +29,16 @@ class JdbcNearbyBackendComponentsTest {
     private fun community()=assertIs<CommunityWriteResult.Accepted>(components.communities.create(owner,id(),"Riders","",CommunityVisibility.PUBLIC)).snapshot
     private fun join(actor: String,channel: String)=assertIs<SessionAction.Ready>(components.sessions.join(actor,id(),channel)).credentials.sessionId
 
+    @Test fun assembledMemberDirectoryRequiresCurrentOwnerAndNeverAllocatesVoice() {
+        val group=community()
+        assertIs<CommunityWriteResult.Accepted>(components.communities.join(viewer,group.community.id))
+        val page=assertIs<CommunityMembersResult.Listed>(components.members.list(owner,group.community.id,null,20))
+        assertEquals(group.community.id,page.communityId);assertEquals(owner,page.ownerId)
+        assertEquals(setOf(owner,viewer),page.items.map {it.userId}.toSet())
+        assertEquals(CommunityMembersResult.Denied,components.members.list(viewer,group.community.id,null,20))
+        assertEquals(CommunityMembersResult.Denied,components.members.list(outsider,group.community.id,null,20))
+        assertTrue(sfu.calls.isEmpty());assertEquals(0,tokens)
+    }
     @Test fun assembledChannelSharingDisconnectKeepsMembershipAndConsistentRoster() {
         val group=community();val channel=group.channels.single().id
         assertIs<CommunityWriteResult.Accepted>(components.communities.join(viewer,group.community.id))
