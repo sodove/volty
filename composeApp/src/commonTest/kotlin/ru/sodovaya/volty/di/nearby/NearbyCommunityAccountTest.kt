@@ -25,6 +25,41 @@ class NearbyCommunityAccountTest {
     }
     private fun privatePage() = """{"items":[{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100}]}"""
 
+    @Test fun managementFactoryBorrowsOriginalAccountAndRefreshesMetadataAfterExactRevoke()=runTest {
+        val parent=Job();val screen=SupervisorJob(parent);val scope=CoroutineScope(coroutineContext+screen)
+        val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
+        val detail="""{"revision":1,"community":{"id":"$community","name":"Private","description":"","visibility":"PRIVATE","createdAtEpochMillis":100},"ownerId":"$actor","channels":[]}"""
+        val metadata="""{"items":[{"invitationId":"$invitation","communityId":"$community","createdAtMillis":100,"expiresAtMillis":900100,"maxUses":10,"uses":0,"revokedAtMillis":null,"creationRevision":1,"revocationRevision":null}]}"""
+        val client=HttpClient(MockEngine) {engine {
+            dispatcher=StandardTestDispatcher(testScheduler)
+            addHandler {request ->
+                paths+="${request.method.value} ${request.url.encodedPath}";headers+=request.headers[HttpHeaders.Authorization]
+                when {
+                    request.method==HttpMethod.Post -> respond("""{"invitationId":"$invitation","communityId":"$community","revision":2}""")
+                    request.url.encodedPath.endsWith("/invitations") -> {assertEquals("20",request.url.parameters["limit"]);respond(metadata)}
+                    else -> respond(detail)
+                }
+            }
+        }}
+        fun consumer(bearer:String)=NearbyCommunityAccount(CoroutineScope(coroutineContext+parent),NearbyAccountCredentials(actor,bearer),
+            Store(actor),InvitationSecretGenerator {error("Metadata cannot recover secrets")},client,root)
+        val account=consumer("original");val foreign=consumer("other")
+        val workspace=account.workspace(scope) {error("No entropy")}
+        val management=account.invitationManagement(scope,workspace)
+        try {
+            assertFailsWith<IllegalArgumentException> {foreign.invitationManagement(scope,workspace)}
+            workspace.browser.openCommunity(community);runCurrent()
+            assertTrue(management.refresh());runCurrent();assertTrue(management.requestRevoke(invitation))
+            assertEquals(2,paths.size);assertTrue(management.confirmRevoke());runCurrent()
+            assertEquals(listOf("GET /v2/nearby/communities/$community","GET /v2/nearby/communities/$community/invitations",
+                "POST /v2/nearby/communities/$community/invitations/$invitation/revoke","GET /v2/nearby/communities/$community/invitations"),paths)
+            assertTrue(headers.all {it=="Bearer original"});assertEquals(setOf(invitation),management.state.value.confirmedRevocations)
+            assertNull(management.state.value.items?.single()?.revokedAtMillis)
+            management.close();runCurrent();assertTrue(workspace.active);assertTrue(parent.isActive);assertTrue(screen.isActive)
+            assertIs<CommunityResult.Ready<*>>(account.api.communities.detail(community));assertEquals(5,paths.size)
+        } finally {management.close();workspace.close();foreign.retire();account.retire();screen.cancel();parent.cancel();client.close();runCurrent()}
+    }
+
     @Test fun acceptanceFactoryUsesOriginalAccountHttpThenReadsCurrentMembershipWithoutNavigation()=runTest {
         val parent=Job();val screen=SupervisorJob(parent);val scope=CoroutineScope(coroutineContext+screen)
         val paths=mutableListOf<String>();val headers=mutableListOf<String?>()
