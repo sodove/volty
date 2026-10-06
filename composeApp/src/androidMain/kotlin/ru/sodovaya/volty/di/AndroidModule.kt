@@ -164,11 +164,16 @@ val androidModule = module {
     single<LocationProvider> { AndroidLocationProvider(get()) }
     single { AndroidVoiceAudioFactory(androidContext()) }
     single { AndroidVoiceForegroundController(androidContext(), get()) }
+    single<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory> {
+        ru.sodovaya.volty.di.nearby.ChannelSharingAudienceAccountFactory(
+            get(named(NEARBY_HTTP_CLIENT)), NEARBY_API_BASE_URL, Dispatchers.Main, SystemClock::elapsedRealtime,
+        )
+    }
     single {
         val coordinator=get<VoiceAccountCoordinator>()
         val audio=get<AndroidVoiceAudioFactory>()
         VoiceConversationStartup(Dispatchers.Main,get<AndroidVoiceForegroundController>(),
-            get<VoiceConversationCallRosterFactory>()) {account ->
+            get<VoiceConversationCallRosterFactory>(),get<ru.sodovaya.volty.data.voice.VoiceConversationChannelAudienceFactory>()) {account ->
             coordinator.acquireBound(account,audio.createPrepared()).voice
         }
     }

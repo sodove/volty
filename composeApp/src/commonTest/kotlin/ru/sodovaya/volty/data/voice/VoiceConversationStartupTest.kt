@@ -1361,6 +1361,164 @@ class VoiceConversationStartupTest {
         }.filterNotNull().first()
     }
 
+    @Test fun conversationPublishesOnlyItsActualChannelAudienceAndWithdrawsOnStop() = runTest {
+        val f=Fixture(this,withAudience=true)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(assertNotNull(f.owner.state.value.sharingAudience).observed)
+            assertEquals(1,f.paths.count {it.endsWith("/sharing/audience")})
+            val runtime=assertNotNull(f.runtime);assertFalse(runtime.state.value.sharingEnabled)
+            f.owner.stop();runCurrent();assertNull(f.owner.state.value.sharingAudience)
+            val issued=f.paths.count {it.endsWith("/sharing/audience")};advanceTimeBy(2500);runCurrent()
+            assertEquals(issued,f.paths.count {it.endsWith("/sharing/audience")})
+            assertTrue(account.job.isActive)
+            f.callMode=true
+            f.owner.start(account,VoiceConversationTarget.OutgoingCall(channel,f.peer,f.key),second,
+                readPreferences={phone},launch=f::launch);runCurrent()
+            assertIs<VoiceConversationTarget.OutgoingCall>(f.owner.state.value.target)
+            assertNull(f.owner.state.value.sharingAudience)
+            assertEquals(issued,f.paths.count {it.endsWith("/sharing/audience")})
+        } finally {f.close()}
+    }
+
+    @Test fun obsoleteHeldAudienceFactoryCannotRepaintOrStopReplacementChannel() = runTest {
+        val f=Fixture(this,withAudience=true);val entered=CompletableDeferred<Unit>();val release=CompletableDeferred<Unit>()
+        f.afterAudience={if(f.audiences.size==1) withContext(NonCancellable) {entered.complete(Unit);release.await()}}
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(entered.isCompleted);assertTrue(f.audiences.single().state.value.observed)
+            assertNull(f.owner.state.value.sharingAudience)
+            f.owner.start(account,channel,second,replace=true,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(assertNotNull(f.owner.state.value.sharingAudience).observed)
+            val ticket=assertNotNull(f.gate.current.value)
+            release.complete(Unit);runCurrent()
+            assertFalse(f.audiences.first().state.value.observed)
+            assertTrue(f.audiences.last().state.value.observed)
+            assertEquals(second,f.owner.state.value.operationId);assertSame(ticket,f.gate.current.value)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+            assertEquals(2,f.paths.count {it.endsWith("/sharing/audience")})
+        } finally {release.complete(Unit);runCurrent();f.close()}
+    }
+
+    @Test fun channelAudienceConstructionFailureDoesNotDisconnectBorrowedVoice() = runTest {
+        val f=Fixture(this,withAudience=true);var issued=false
+        f.beforeAudience={issued=true;throw IllegalStateException("reader unavailable")}
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertTrue(issued);assertNull(f.owner.state.value.sharingAudience)
+            assertEquals(VoiceConversationPhase.JOIN_SUBMITTED,f.owner.state.value.phase)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(account.job.isActive)
+            assertNotNull(f.gate.current.value);assertEquals(0,f.closes)
+        } finally {f.close()}
+    }
+
+    @Test fun audienceSessionAutomaticallyReadsOriginalChannelWithoutStartingLocationOrSharing() = runTest {
+        val f=Fixture(this);var audience: ChannelSharingAudienceSession?=null
+        f.authToken="original"
+        val ui=SupervisorJob(backgroundScope.coroutineContext[Job])
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val source=runtime.state.value
+            val original=VoiceSessionTag(assertNotNull(source.sessionId),source.generation)
+            val screen=CoroutineScope(backgroundScope.coroutineContext+ui).async {
+                ChannelSharingAudienceSession.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            }
+            runCurrent();val reader=screen.await();audience=reader;ui.cancel();runCurrent()
+            assertTrue(reader.state.value.observed)
+            assertEquals(listOf<String?>("Bearer original"),f.sharingAuthorizations)
+            assertEquals(listOf("/v2/nearby/channel-sessions/${original.sessionId.value}/sharing/audience"),
+                f.paths.filter {it.contains("/sharing/")})
+            assertFalse(runtime.state.value.sharingEnabled);assertTrue(runtime.state.value.wanted)
+            val issued=f.paths.size;reader.close();runCurrent();advanceTimeBy(2500);runCurrent()
+            assertEquals(issued,f.paths.size);assertFalse(reader.state.value.observed)
+            assertTrue(account.job.isActive);assertFalse(runtime.retired.value);assertEquals(0,f.closes)
+        } finally {ui.cancel();audience?.close();f.close()}
+    }
+
+    @Test fun audienceSessionPollsActualReadsAndExpiresPointsDuringNetworkFailure() = runTest {
+        val f=Fixture(this);var audience: ChannelSharingAudienceSession?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val source=runtime.state.value
+            f.sharingAudienceBody="""{"channelId":"$channel","serverTimeEpochMillis":1100,"peers":[{"actorId":"${f.peer}","sessionId":"${f.peer}","generation":"${f.key}","mode":"LOCATION","packet":{"sequence":7,"capturedAtEpochMillis":1000,"location":{"latitude":55.0,"longitude":60.0,"accuracyMeters":4.0,"capturedAtEpochMillis":1000,"staleAfterEpochMillis":2100}},"remainingMillis":1000}]}"""
+            val reader=ChannelSharingAudienceSession.create(account,runtime,VoiceSessionTag(assertNotNull(source.sessionId),source.generation),
+                f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});audience=reader;runCurrent()
+            assertEquals(1,reader.state.value.peers.size)
+            assertEquals(55.0,assertNotNull(reader.state.value.peers.single().packet.location).latitude)
+            f.sharingAudienceStatus=HttpStatusCode.ServiceUnavailable;f.time=1100
+            advanceTimeBy(2000);runCurrent()
+            assertTrue(reader.state.value.peers.isEmpty());assertTrue(reader.state.value.observed)
+            assertEquals(2,f.paths.count {it.endsWith("/sharing/audience")})
+            assertTrue(account.job.isActive);assertTrue(runtime.state.value.wanted)
+        } finally {audience?.close();f.close()}
+    }
+
+    @Test fun audienceSessionWithdrawsHeldReadOnReplacementWithoutStoppingNewVoice() = runTest {
+        val f=Fixture(this);var audience: ChannelSharingAudienceSession?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val source=runtime.state.value
+            f.sharingPositiveRelease=CompletableDeferred()
+            val reader=ChannelSharingAudienceSession.create(account,runtime,VoiceSessionTag(assertNotNull(source.sessionId),source.generation),
+                f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});audience=reader;runCurrent()
+            assertTrue(f.sharingPositiveEntered.isCompleted)
+            f.owner.start(account,channel,second,replace=true,readPreferences={phone},launch=f::launch);runCurrent()
+            assertFalse(reader.state.value.observed)
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent();advanceTimeBy(2500);runCurrent()
+            assertFalse(reader.state.value.observed);assertTrue(reader.state.value.peers.isEmpty())
+            assertEquals(1,f.paths.count {it.endsWith("/sharing/audience")})
+            assertEquals(second,runtime.state.value.operationId);assertTrue(runtime.state.value.wanted)
+            assertTrue(account.job.isActive)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();audience?.close();f.close()}
+    }
+
+    @Test fun audienceSessionRejectsWrongGenerationAndFriendCallBeforeReading() = runTest {
+        val f=Fixture(this)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val source=runtime.state.value
+            assertFailsWith<IllegalStateException> {
+                ChannelSharingAudienceSession.create(account,runtime,VoiceSessionTag(assertNotNull(source.sessionId),VoiceGeneration(source.generation.value+1)),
+                    f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            }
+            f.callMode=true
+            f.owner.stop();runCurrent()
+            f.owner.start(account,VoiceConversationTarget.OutgoingCall(f.callDestination,f.peer,f.key),second,
+                readPreferences={phone},launch=f::launch);runCurrent()
+            val call=runtime.state.value
+            assertEquals(second,call.operationId)
+            assertIs<VoiceConversationTarget.OutgoingCall>(f.owner.state.value.target)
+            assertFailsWith<IllegalStateException> {
+                ChannelSharingAudienceSession.create(account,runtime,VoiceSessionTag(assertNotNull(call.sessionId),call.generation),
+                    f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time})
+            }
+            assertTrue(f.sharingAuthorizations.isEmpty());assertTrue(account.job.isActive)
+        } finally {f.close()}
+    }
+
+    @Test fun audienceSessionRetiresHeldReadBeforeSameUserLoginAndCannotBorrowFreshBearer() = runTest {
+        val f=Fixture(this);f.authToken="original";var audience: ChannelSharingAudienceSession?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val source=runtime.state.value
+            val reader=ChannelSharingAudienceSession.create(account,runtime,VoiceSessionTag(assertNotNull(source.sessionId),source.generation),
+                f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});audience=reader;runCurrent()
+            assertTrue(reader.state.value.observed)
+            f.sharingPositiveRelease=CompletableDeferred();advanceTimeBy(2000);runCurrent()
+            assertEquals(2,f.paths.count {it.endsWith("/sharing/audience")})
+            f.repository.logout();runCurrent();assertFalse(account.job.isActive)
+            assertFalse(reader.state.value.observed)
+            f.authToken="fresh";val replacement=f.login()
+            assertEquals(account.userId,replacement.userId);assertNotSame(account,replacement)
+            f.owner.start(replacement,channel,second,readPreferences={phone},launch=f::launch);runCurrent()
+            f.sharingPositiveRelease!!.complete(Unit);runCurrent();advanceTimeBy(2500);runCurrent()
+            assertFalse(reader.state.value.observed);assertTrue(reader.state.value.peers.isEmpty())
+            assertEquals(listOf<String?>("Bearer original","Bearer original"),f.sharingAuthorizations)
+            assertEquals(second,assertNotNull(f.runtime).state.value.operationId)
+            assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(replacement.job.isActive)
+        } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();audience?.close();f.close()}
+    }
+
     @Test fun rootSharingAudienceCoalescesReadsAndSurvivesCancelledUiWaiterThenExpiresWithoutHttp() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var audience: ChannelSharingAudienceOwner?=null
         try {
@@ -2604,7 +2762,10 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
-    private inner class Fixture(val test: TestScope) {
+    private inner class Fixture(val test: TestScope,withAudience: Boolean=false) {
+        var beforeAudience: suspend ()->Unit={}
+        var afterAudience: suspend ()->Unit={}
+        val audiences=mutableListOf<ChannelSharingAudienceSession>()
         var time = 100L
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         var authToken = "token"
@@ -2734,7 +2895,11 @@ class VoiceConversationStartupTest {
             beforeRoster()
             AuthenticatedCallRosterOwner.create(account, client, "https://example.test/v2/nearby", tag, own,
                 dispatcher, MutableSharedFlow(), {100}).also {rosters += it; afterRoster()}
-        }, ::acquire)
+        }, if(withAudience) VoiceConversationChannelAudienceFactory {account,runtime,original ->
+            beforeAudience()
+            ChannelSharingAudienceSession.create(account,runtime,original,client,"https://example.test/v2/nearby",dispatcher,{time})
+                .also {audiences+=it;afterAudience()}
+        } else null, ::acquire)
         suspend fun acquire(account: SocialAuthenticatedAccount): AuthenticatedVoiceRuntime {
             val audio = VoiceSessionAudioFactory({error("Must prepare")}, requiresPreparation = true) {tag, prefs, _, emit ->
                 allocated += prefs
