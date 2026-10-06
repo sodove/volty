@@ -25,6 +25,12 @@ class VoiceSpacesNearbyComponentTest {
         var friends: suspend (String)->SocialResult<List<FriendSummary>> = {SocialResult.Success(listOf(accepted,pending))}
         var search: suspend (String)->SocialResult<List<UserSearchResult>> = {SocialResult.Success(emptyList())}
         var respond: suspend ()->SocialResult<Unit> = {SocialResult.Success(Unit)}
+        var profile: suspend (ProfileUpdate)->SocialResult<SocialSession.Authenticated> = { request ->
+            SocialResult.Success(SocialSession.Authenticated(SocialUserId(actor),request.displayName,SessionTokenState.ACTIVE,true)) }
+        override suspend fun updateProfile(accessToken: String,request: ProfileUpdate):SocialResult<SocialSession.Authenticated> {
+            issued += "profile:${request.displayName}:$accessToken"
+            return profile(request)
+        }
         override suspend fun login(request: LoginRequest):SocialResult<SessionCredentials> {
             issued+="login:${request.email}"
             return SocialResult.Success(SessionCredentials("token-${++ordinal}","refresh-$ordinal",Long.MAX_VALUE))
@@ -58,6 +64,55 @@ class VoiceSpacesNearbyComponentTest {
         suspend fun close() {component.close();parent.cancel();client.close()}
     }
 
+    @Test fun profile_uses_verified_name_and_exact_original_account_without_duplicate_write()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            f.component.openProfile();runCurrent()
+            assertEquals(NearbyShellSection.PROFILE,f.component.state.value.section)
+            assertEquals("Rider",f.component.state.value.profile.displayName)
+            f.component.setProfileName("x");f.component.submitProfile();runCurrent()
+            assertEquals(NearbyShellError.INVALID_FORM,f.component.state.value.error)
+            assertFalse(f.transport.issued.any {it.startsWith("profile:")})
+            f.component.setProfileName("  New Rider  ");f.component.submitProfile();f.component.submitProfile();runCurrent()
+            assertEquals(listOf("profile:New Rider:token-1"),f.transport.issued.filter {it.startsWith("profile:")})
+            assertEquals("New Rider",assertIs<SocialSession.Authenticated>(f.component.state.value.session).displayName)
+            assertTrue(f.component.state.value.profile.saved)
+            assertSame(account,f.repository.authenticatedAccount.value)
+            assertTrue(account.job.isActive);assertTrue(f.parent.isActive)
+            assertEquals(listOf(accepted,pending),f.component.state.value.friends.items)
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun held_old_profile_write_cannot_publish_after_same_user_relogin()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>();var returned=false
+        f.transport.profile={withContext(NonCancellable) {
+            release.await();returned=true
+            SocialResult.Success(SocialSession.Authenticated(SocialUserId(actor),"Old edited",SessionTokenState.ACTIVE,true))
+        }}
+        try {
+            f.login();runCurrent();f.component.openProfile();f.component.setProfileName("Old edited")
+            f.component.submitProfile();runCurrent()
+            assertTrue("profile:Old edited:token-1" in f.transport.issued)
+            f.repository.logout();f.login();runCurrent()
+            val fresh=assertNotNull(f.repository.authenticatedAccount.value)
+            release.complete(Unit);runCurrent();assertTrue(returned)
+            assertEquals("Rider",assertIs<SocialSession.Authenticated>(f.component.state.value.session).displayName)
+            assertEquals(NearbyProfileDraft(),f.component.state.value.profile)
+            assertSame(fresh,f.repository.authenticatedAccount.value)
+            assertTrue(fresh.job.isActive)
+        } finally {release.complete(Unit);f.close();runCurrent()}
+    }
+    @Test fun closed_profile_editor_cannot_issue_a_write_or_retire_account()=runTest {
+        val f=Fixture(this)
+        try {
+            f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
+            f.component.openProfile();f.component.setProfileName("Closed editor")
+            runCurrent();assertEquals("Closed editor",f.component.state.value.profile.displayName)
+            f.component.close();f.component.submitProfile();runCurrent()
+            assertFalse(f.transport.issued.any {it.startsWith("profile:")})
+            assertSame(account,f.repository.authenticatedAccount.value);assertTrue(account.job.isActive)
+        } finally {f.close();runCurrent()}
+    }
     @Test fun authValidationAndActualRegistrationClearPasswordAndLoadFriendsWithoutLegacyGroups()=runTest {
         val f=Fixture(this)
         try {
@@ -180,11 +235,14 @@ class VoiceSpacesNearbyComponentTest {
         try {
             f.login();runCurrent();val account=assertNotNull(f.repository.authenticatedAccount.value)
             assertNotNull(f.component.state.value.friends.items)
+            f.component.openProfile();f.component.setProfileName("Private draft");runCurrent()
+            assertEquals("Private draft",f.component.state.value.profile.displayName)
             account.scope().launch(start=CoroutineStart.UNDISPATCHED) {withContext(NonCancellable) {release.await()}}
             account.job.cancel();runCurrent()
             assertFalse(account.job.isCompleted)
             assertEquals(NearbyFriendsState(),f.component.state.value.friends)
             assertEquals(SocialSession.LoggedOut,f.component.state.value.session)
+            assertEquals(NearbyProfileDraft(),f.component.state.value.profile)
             assertNull(f.component.servers.value.presenter);assertTrue(f.parent.isActive)
         } finally {release.complete(Unit);f.close();runCurrent()}
     }

@@ -10,7 +10,7 @@ import ru.sodovaya.volty.domain.social.*
 import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 
 enum class NearbyAuthMode { LOGIN, REGISTER }
-enum class NearbyShellSection { SERVERS, FRIENDS }
+enum class NearbyShellSection { SERVERS, FRIENDS, PROFILE }
 enum class NearbyShellError { INVALID_FORM, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE }
 data class NearbyAuthDraft(val mode: NearbyAuthMode=NearbyAuthMode.LOGIN,
     val email: String="",val password: String="",val displayName: String="") {
@@ -19,9 +19,11 @@ data class NearbyAuthDraft(val mode: NearbyAuthMode=NearbyAuthMode.LOGIN,
 data class NearbyFriendsState(val items: List<FriendSummary>?=null,val loading: Boolean=false,
     val error: NearbyShellError?=null,val query: String="",val results: List<UserSearchResult>?=null,
     val searchLoading: Boolean=false,val searchError: NearbyShellError?=null)
+data class NearbyProfileDraft(val displayName: String = "", val saved: Boolean = false)
 data class VoiceSpacesNearbyState(val session: SocialSession=SocialSession.LoggedOut,
     val auth: NearbyAuthDraft=NearbyAuthDraft(),val section: NearbyShellSection=NearbyShellSection.SERVERS,
-    val busy: Boolean=false,val error: NearbyShellError?=null,val friends: NearbyFriendsState=NearbyFriendsState())
+    val busy: Boolean=false,val error: NearbyShellError?=null,val friends: NearbyFriendsState=NearbyFriendsState(),
+    val profile: NearbyProfileDraft = NearbyProfileDraft())
 
 /** Forms and account-bound reads belong to this screen; conversation commands belong to Root. */
 class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,parent: CoroutineScope,
@@ -49,7 +51,8 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
             repository.authenticatedAccount.collectLatest { account ->
                 if(account !== previous) {
                     previous=account;operation++
-                    form.update {it.copy(auth=NearbyAuthDraft(),section=NearbyShellSection.SERVERS,busy=false,error=null)}
+                    form.update {it.copy(auth=NearbyAuthDraft(),section=NearbyShellSection.SERVERS,busy=false,error=null,
+                        profile=NearbyProfileDraft())}
                 }
                 friends.bind(account)
                 if(account!=null) {
@@ -66,7 +69,8 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
                 val authority=repository.authenticatedAccount.value
                 val visible=if(session is SocialSession.Authenticated &&
                     (authority?.job?.isActive!=true || authority.userId!=session.userId)) SocialSession.LoggedOut else session
-                form.copy(session=visible,friends=page)
+                form.copy(session=visible,friends=page,
+                    profile=if(visible is SocialSession.Authenticated) form.profile else NearbyProfileDraft())
             }
                 .collect {if(lifetime.isActive) output.value=it}
         }
@@ -114,6 +118,34 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     }
 
     fun logout() {repository.authenticatedAccount.value?.let {command(it) {repository.logout()}}}
+    fun openProfile() {
+        val account=repository.authenticatedAccount.value ?: return
+        val profile=repository.session.value as? SocialSession.Authenticated ?: return
+        if(!enabled() || form.value.busy || !friends.current(account) || profile.userId!=account.userId) return
+        form.update {it.copy(section=NearbyShellSection.PROFILE,error=null,profile=NearbyProfileDraft(profile.displayName))}
+    }
+    fun setProfileName(value: String) {
+        val account=repository.authenticatedAccount.value ?: return
+        if(enabled() && !form.value.busy && friends.current(account) &&
+            form.value.section==NearbyShellSection.PROFILE && value.length<=80)
+            form.update {it.copy(profile=NearbyProfileDraft(value))}
+    }
+    fun submitProfile() {
+        val account=repository.authenticatedAccount.value ?: return
+        if(!enabled() || form.value.busy || !friends.current(account) || form.value.section!=NearbyShellSection.PROFILE) return
+        val name=form.value.profile.displayName.trim()
+        if(name.length !in 2..80) {form.update {it.copy(error=NearbyShellError.INVALID_FORM)};return}
+        command(account) {
+            when(val result=repository.updateProfile(ProfileUpdate(name))) {
+                is SocialResult.Failure -> result
+                is SocialResult.Success -> {
+                    if(enabled() && friends.current(account))
+                        form.update {it.copy(profile=NearbyProfileDraft(result.value.displayName,saved=true))}
+                    SocialResult.Success(Unit)
+                }
+            }
+        }
+    }
     fun openServers() {if(enabled()) form.update {it.copy(section=NearbyShellSection.SERVERS)}}
     fun openFriends() {if(enabled()) form.update {it.copy(section=NearbyShellSection.FRIENDS)}}
     fun refreshFriends() {if(enabled()) friends.refresh()}

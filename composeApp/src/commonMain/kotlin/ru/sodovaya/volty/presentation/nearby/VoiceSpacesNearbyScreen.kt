@@ -39,8 +39,11 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                     text={Text(stringResource(Res.string.nearby_shell_servers))})
                 Tab(selected=state.section==NearbyShellSection.FRIENDS,onClick=component::openFriends,
                     text={Text(stringResource(Res.string.nearby_friends_tab))})
+                Tab(selected=state.section==NearbyShellSection.PROFILE,onClick=component::openProfile,enabled=!state.busy,
+                    text={Text(stringResource(Res.string.nearby_profile_title))})
             }
             when(state.section) {
+                NearbyShellSection.PROFILE -> NearbyProfileForm(state,component,Modifier.weight(1f))
                 NearbyShellSection.FRIENDS -> NearbyFriendsView(state,component,Modifier.weight(1f))
                 NearbyShellSection.SERVERS -> {
                     val presenter=servers.presenter
@@ -55,6 +58,19 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier) {
+    LazyColumn(modifier.fillMaxWidth(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        item {OutlinedTextField(state.profile.displayName,component::setProfileName,
+            Modifier.widthIn(max=520.dp).fillMaxWidth(),label={Text(stringResource(Res.string.nearby_name))},
+            singleLine=true,enabled=!state.busy)}
+        item {Button(onClick=component::submitProfile,enabled=!state.busy) {
+            Text(stringResource(Res.string.nearby_profile_save))
+        }}
+        if(state.profile.saved) item {Text(stringResource(Res.string.nearby_shell_profile_saved))}
     }
 }
 
