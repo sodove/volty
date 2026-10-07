@@ -948,4 +948,11 @@
     <string name="nearby_audio_reconnect">Для этого выбора установите микрофон «Авто» в настройках, затем отключитесь от войса и подключитесь снова.</string>
     <string name="nearby_audio_failed">Не удалось изменить устройство. Попробуйте ещё раз.</string>
     <string name="nearby_audio_stale">Подключение изменилось. Выберите устройство ещё раз.</string>
+    <string name="nearby_notifications_title">Уведомления о звонках</string>
+    <string name="nearby_notifications_allowed">Android разрешает уведомления о звонках.</string>
+    <string name="nearby_notifications_blocked">Уведомления о звонках отключены в Android.</string>
+    <string name="nearby_notifications_unknown">Не удалось проверить настройки уведомлений о звонках.</string>
+    <string name="nearby_notifications_hint">Если уведомления отключены, входящие звонки остаются видны в открытом приложении.</string>
+    <string name="nearby_notifications_settings">Настройки уведомлений</string>
+    <string name="nearby_notifications_launch_failed">Не удалось открыть настройки. Откройте настройки уведомлений Volty в Android.</string>
 </resources>

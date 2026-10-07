@@ -71,6 +71,7 @@ private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVo
             Text(stringResource(Res.string.nearby_profile_save))
         }}
         if(state.profile.saved) item {Text(stringResource(Res.string.nearby_shell_profile_saved))}
+        item {NearbyCallNotificationSettings(Modifier.widthIn(max=520.dp).fillMaxWidth())}
     }
 }
 

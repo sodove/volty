@@ -950,4 +950,11 @@
     <string name="nearby_audio_reconnect">For this choice, set the microphone to Auto in settings, then disconnect from voice and reconnect.</string>
     <string name="nearby_audio_failed">Could not change device. Try again.</string>
     <string name="nearby_audio_stale">Connection changed. Choose the device again.</string>
+    <string name="nearby_notifications_title">Call notifications</string>
+    <string name="nearby_notifications_allowed">Android allows call notifications.</string>
+    <string name="nearby_notifications_blocked">Call notifications are disabled in Android.</string>
+    <string name="nearby_notifications_unknown">Could not check call notification settings.</string>
+    <string name="nearby_notifications_hint">When notifications are disabled, incoming calls remain visible in the open app.</string>
+    <string name="nearby_notifications_settings">Notification settings</string>
+    <string name="nearby_notifications_launch_failed">Could not open settings. Open Volty notification settings in Android.</string>
 </resources>
