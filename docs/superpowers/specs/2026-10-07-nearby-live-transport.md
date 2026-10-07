@@ -85,3 +85,82 @@ Windows SDK подключался через `https://volty.sodove.ru` и `wss:
 Временный debug выключен через проверенное восстановление (`c941cy --restore`, actual exit0). Текущий SFU `46633b9b1a5d7051ea2d6f1a86c7a211bf771b26b37e90dd7306186a916a99f0`, прежний image `sha256:bba3a6329d7b3ae09e3094e642136ba17ba1d33545f735a400b8f589bae682b6`; временный `91e663…` и исходный `c050…` удалены. Backend `515506…` и DB `793a…` не менялись. Execution journal `private-debug-c941cy.json` имеет PRIVATE_DEBUG_RESTORED/verified=true. Собственные аккаунты/приватные серверы удалены, временный proxy остановлен по exact executable/listener ownership.
 
 Для следующего сравнения подтверждено read-only TLS соединение к origin 83.222.11.71 с проверкой сертификата и SNI voice.sodove.ru. Можно сравнить публичный Cloudflare путь с прямым origin при тех же TLS/Host, SDK и публичном RTP, не меняя DNS/nginx. Само TLS соединение не проверяет WebSocket/media и не устанавливает причину дефекта. Исправление голосового сбоя по-прежнему не доказано.
+
+## Прямой origin и пассивное наблюдение локального signaling
+
+Сравнение `c941da` выполнено: direct trials 1/2 прошли, trial3 потерял
+receiver1 ← publisher4; public trials 1/2 потеряли поток, trial3 прошёл.
+Все шесть своих серверов/наборов аккаунтов удалены. Прозрачный proxy менял
+только TCP destination; URL, проверка TLS, SNI, Host и содержимое сообщений
+сохранялись. В неудачном direct trial четыре joins и ноль upstream write errors.
+**Гипотеза, что Cloudflare необходим для этого сбоя, опровергнута.** Такое
+малое число прогонов не позволяет сравнивать надёжность маршрутов. DNS/nginx
+и рабочий SFU не изменялись.
+
+Добавлен [пассивный observer](../../../tools/nearby-sfu-gate/probe/wiretrace/README.md)
+для IPv4 TCP lo/127.0.0.1:17880. Его stdout содержит только connection ordinal,
+время, offer/answer и количество audio sections, а также fixed capture counters.
+Нет pcap, raw SDP, HTTP headers, credentials или identities. Захват начинается
+с SYN, буферы/число соединений/время ограничены; неполные кадры не считаются
+доставленными. Девять parser/privacy tests прошли после RED отсутствующих
+реализаций; Linux static build и vet прошли. Это не Android mutation sweep.
+
+Первый запуск `c941db` не начал захват: обычный UID образа не мог выполнить
+смонтированный observer. При этом отдельно начавшийся звонок снова потерял
+поток; аккаунты/сервер удалены. Для последующих запусков используется UID0
+только внутри disposable container: host network, read-only filesystem,
+cap-drop ALL/cap-add NET_RAW, no-new-privileges, 64 MiB/CPU/pid limits,
+единственный read-only mount — собственный executable. Рабочие сервисы
+не перезапускались, debug endpoint не включался.
+
+В `c941dc` observer увидел 12 последовательных соединений трёх успешных
+direct-origin звонков; финальные kernelDrops/unknownPackets/incompleteStreams/
+invalidStreams — все ноль. Offer/answer с тремя audio sections наблюдались
+на loopback. Это подтверждает пригодность измерения, а не исправление сбоя.
+Наблюдение на опубликованном Docker port не доказывает чтение/обработку
+ответа самим SFU; следующий переход — опубликованный port → SFU parser —
+по-прежнему требует доказательства. Отсутствие события само по себе не
+доказывает отсутствие ответа. Нужна корреляция при воспроизведённом сбое.
+
+`c941dd` два публичных звонка прошли; восемь соединений, все четыре final
+capture counters — ноль. После усиления учёта SYN retransmission/повторного
+использования портов окончательный executable отдельно проверен в `c941df`:
+три публичных звонка прошли, observer завершился штатно. Итого восемь звонков
+под пассивным наблюдением без воспроизведения исходного дефекта; это не
+доказательство его устранения или влияния observer на вероятность сбоя.
+Все свои контейнеры, proxy listeners, аккаунты и приватные серверы убраны.
+Read-only live audit снова подтвердил прежние exact app/DB/SFU IDs/images,
+healthy backend, единственный signaling origin, debug disabled, active rooms0
+и readiness protocol4. Свежий Android прогон `c941de`: actual exit0, 3373 теста
+в 334 свежих XML, zero failure/error/skip, 35 executed tasks. Проверки на
+телефонах остаются отложенными по просьбе пользователя.
+
+Узкий read-only review Luna/xhigh выявил ошибки именно observer: обычное
+HTTP body могло быть принято за WebSocket, неконаническая длина кадра
+принималась, server accept не сверялся с client key и данные после Close
+могли учитываться. Все воспроизведены RED и исправлены, fixtures теперь
+имеют полный валидный handshake. Повторный review подтвердил устранение
+найденных проблем. Текущие 17 parser/privacy tests, Linux vet/static build
+прошли; это review инструмента, не всего Nearby и не доказательство
+исправления рабочего голосового дефекта. Дополнительно пояснено, что
+1 MiB ограничивает logical payload, а heap overhead byte-map больше;
+map сбрасывается после drain, общий лимит памяти контейнера — 64 MiB.
+Промежуточная строгая версия `c941dh` отдельно наблюдала ещё один успешный
+звонок: четыре соединения, все capture counters ноль; fixture удалён.
+
+Окончательная reviewed версия отдельно проверена в `c941dj`: публичный
+звонок прошёл, четыре соединения/287 packets, final kernelDrops,
+unknownPackets, incompleteStreams, invalidStreams — ноль; observer exit0.
+Свежий Android после последних правок: exit0/50s/35 executed,
+3373 теста/334 свежих XML/zero failure-error-skip. Все временные процессы,
+контейнеры и свои fixtures удалены, live topology audit снова прошёл.
+
+Дополнительная read-only корреляция `c941dk` подтвердила тот же SFU symptom
+на неудачном **direct-origin** trial3 `c941da`: четверка RTC starts
+18:50:14–18:50:22 UTC, первый receiver потерял publisher4; proxy connection9
+записал успешную отправку answer с тремя audio sections в 18:50:23.527.
+Первый timeout этой четверки — 18:50:38.984: localCurrent2,
+localPending3, remoteCurrent2, remotePending=null. Более ранний timeout
+18:50:07 принадлежит предыдущему разговору и не считается началом этого
+сбоя. Raw SDP/ICE credentials не экспортировались. Ответ не был committed
+на SFU и без Cloudflare; точная граница потери/необработки ещё не установлена.
