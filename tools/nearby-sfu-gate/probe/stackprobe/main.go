@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"github.com/go-logr/logr"
 	"github.com/livekit/protocol/livekit"
@@ -10,6 +11,9 @@ import (
 	lksdk "github.com/livekit/server-sdk-go/v2"
 	"github.com/pion/webrtc/v4"
 	"github.com/pion/webrtc/v4/pkg/media"
+	"io"
+	"net"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -23,7 +27,7 @@ type receiver struct {
 	packets sync.Map
 }
 
-func join(token string) (*receiver, error) {
+func join(token, serverURL string, relay bool) (*receiver, error) {
 	r := &receiver{}
 	cb := lksdk.NewRoomCallback()
 	cb.OnTrackSubscribed = func(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, participant *lksdk.RemoteParticipant) {
@@ -43,7 +47,11 @@ func join(token string) (*receiver, error) {
 		}()
 	}
 	var err error
-	r.room, err = lksdk.ConnectToRoomWithToken("http://127.0.0.1:17881", token, cb)
+	options := []lksdk.ConnectOption{}
+	if relay {
+		options = append(options, lksdk.WithICETransportPolicy(webrtc.ICETransportPolicyRelay))
+	}
+	r.room, err = lksdk.ConnectToRoomWithToken(serverURL, token, cb, options...)
 	return r, err
 }
 func (r *receiver) count(identity string) int64 {
@@ -79,6 +87,27 @@ func publish(r *receiver) (func(), error) {
 }
 
 func main() {
+	flags := flag.NewFlagSet("stackprobe", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	serverURL := flags.String("url", "http://127.0.0.1:17881", "Signaling origin")
+	relay := flags.Bool("relay", false, "Require TURN relay")
+	if flags.Parse(os.Args[1:]) != nil || flags.NArg() != 0 {
+		fmt.Println(`{"error":"invalid_options"}`)
+		os.Exit(2)
+	}
+	origin, parseError := url.Parse(*serverURL)
+	valid := parseError == nil && origin.Hostname() != "" && origin.User == nil &&
+		origin.RawQuery == "" && origin.Fragment == "" && (origin.Path == "" || origin.Path == "/")
+	if valid {
+		ip := net.ParseIP(origin.Hostname())
+		loopback := origin.Hostname() == "localhost" || (ip != nil && ip.IsLoopback())
+		valid = origin.Scheme == "wss" || origin.Scheme == "https" ||
+			(loopback && (origin.Scheme == "ws" || origin.Scheme == "http"))
+	}
+	if !valid {
+		fmt.Println(`{"error":"invalid_server_origin"}`)
+		os.Exit(2)
+	}
 	lksdk.SetLogger(protocolLogger.LogRLogger(logr.Discard()))
 	receivers := map[string]*receiver{}
 	stops := []func(){}
@@ -108,7 +137,7 @@ func main() {
 				fmt.Println(`{"error":"duplicate_identity"}`)
 				return
 			}
-			r, err := join(req.Token)
+			r, err := join(req.Token, *serverURL, *relay)
 			if err != nil {
 				message := strings.ReplaceAll(err.Error(), req.Token, "<redacted>")
 				message = regexp.MustCompile(`(?:https?|wss?)://[^ \t\n]+`).ReplaceAllString(message, "<url>")

@@ -1,5 +1,7 @@
 # Protocol4 SFU candidate artifact
 
+Update 2026-10-07: preparation results below are historical. The exact backend/SFU candidates have since been deployed in the existing production project. See [live transport evidence](../../docs/superpowers/specs/2026-10-07-nearby-live-transport.md); do not repeat cutover. Native Android audibility remains unverified.
+
 This creates an explicit candidate, never a production cutover. Default Compose remains stock/legacy. Existing production services and dirty VPS checkout are not inputs.
 
 1. Run `prepare-overlay.ps1 -Production -Destination <fresh-owned-directory>` against the audited source snapshot. Default mode retains the prototype race hooks; Production excludes them. `test-production-overlay.ps1` creates and checks a fresh Production destination instead. Exact source anchors/hashes reject incompatible source.
