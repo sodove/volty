@@ -60,9 +60,35 @@ class VoiceEngineDriver(
                 checkCommand(requested)
                 Handle(requested, factory.create(effect.tag) { event ->
                     scope.launch {
-                        mutex.withLock {
+                        val restored = mutex.withLock {
                             if (command === requested && current?.command === requested && isAuthorized(requested.tag) && isSdkEvent(event, requested.tag)) {
-                                output.tryEmit(if (event is VoiceSessionEvent.Failed) VoiceSessionEvent.EngineFailed(requested.tag) else event)
+                                val owned = checkNotNull(current)
+                                val reconcile = when (event) {
+                                    is VoiceSessionEvent.Reconnecting, is VoiceSessionEvent.Unpublished -> {
+                                        owned.publicationReady = false
+                                        owned.pendingInitialPublished = false
+                                        owned.publicationVersion++
+                                        false
+                                    }
+                                    is VoiceSessionEvent.Published -> {
+                                        val restored = owned.initialPublicationComplete && !owned.publicationReady
+                                        if (owned.initialPublicationComplete) owned.publicationReady = true
+                                        else owned.pendingInitialPublished = true
+                                        restored
+                                    }
+                                    else -> false
+                                }
+                                // SDK may announce the track before publishMicrophone returns.
+                                // Buffer that evidence until the initial publication succeeds.
+                                if (event !is VoiceSessionEvent.Published || owned.initialPublicationComplete)
+                                    output.tryEmit(if (event is VoiceSessionEvent.Failed) VoiceSessionEvent.EngineFailed(requested.tag) else event)
+                                owned.takeIf { reconcile }
+                            } else null
+                        }
+                        if (restored != null && applyMute(restored).isFailure) {
+                            mutex.withLock {
+                                if (command === requested && current === restored && isAuthorized(requested.tag))
+                                    output.tryEmit(VoiceSessionEvent.EngineFailed(requested.tag))
                             }
                         }
                     }
@@ -78,9 +104,16 @@ class VoiceEngineDriver(
             // Earlier publication used effect.muted captured before connect.
             // That overwrote mute requested while no publication existed yet.
             // Publish closed first, then reconcile the owned latest intent.
+            val publicationVersion = mutex.withLock { checkCommand(requested); handle.publicationVersion }
             if (!handle.session.publishMicrophone(true)) throw VoiceEngineException(VoiceEngineError.PUBLICATION)
             assertOwned(handle)
-            mutex.withLock { checkCommand(requested); handle.publicationReady = true }
+            mutex.withLock {
+                checkCommand(requested)
+                handle.initialPublicationComplete = true
+                handle.publicationReady = handle.publicationVersion == publicationVersion || handle.pendingInitialPublished
+                if (handle.pendingInitialPublished) output.tryEmit(VoiceSessionEvent.Published(requested.tag))
+                handle.pendingInitialPublished = false
+            }
             applyMute(handle).getOrThrow()
             Result.success(Unit)
         } catch (cancelled: CancellationException) {
@@ -134,16 +167,28 @@ class VoiceEngineDriver(
 
     private suspend fun applyMute(handle: Handle): Result<Unit> = try {
         val completed = withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) {
-            handle.controlMutex.withLock {
+            handle.controlMutex.withLock control@{
                 do {
-                    val (muted, version) = mutex.withLock {
+                    val intent = mutex.withLock {
                         checkCommand(handle.command)
                         if (current !== handle) throw CancellationException("Voice session superseded")
-                        handle.command.muted to handle.command.muteVersion
+                        // Reconnect can remove the publication while this control waits.
+                        // Preserve intent; only an owned publication can reopen capture.
+                        if (!handle.publicationReady) return@withLock null
+                        Triple(handle.command.muted, handle.command.muteVersion, handle.publicationVersion)
                     }
-                    if (!handle.session.setMuted(muted)) throw VoiceEngineException(VoiceEngineError.MUTE)
+                    if (intent == null) return@control
+                    val applied = handle.session.setMuted(intent.first)
                     assertOwned(handle)
-                    val settled = mutex.withLock { handle.command.muteVersion == version }
+                    val settled = mutex.withLock {
+                        if (!handle.publicationReady || handle.publicationVersion != intent.third) {
+                            // A delivered removal supersedes this result, including rejection.
+                            true
+                        } else {
+                            if (!applied) throw VoiceEngineException(VoiceEngineError.MUTE)
+                            handle.command.muteVersion == intent.second
+                        }
+                    }
                 } while (!settled)
             }
             true
@@ -249,7 +294,10 @@ class VoiceEngineDriver(
         var audioRequest: Any? = null
         val closeMutex = Mutex()
         val controlMutex = Mutex()
+        var initialPublicationComplete = false
+        var pendingInitialPublished = false
         var publicationReady = false
+        var publicationVersion = 0L
         var closed = false
     }
 

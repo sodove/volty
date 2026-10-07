@@ -164,9 +164,24 @@ internal class AndroidVoiceSdkSession(
         when (event) {
             is RoomEvent.Connected -> { record(VoiceDiagnosticCode.CONNECTED); event(VoiceSessionEvent.TransportConnected(tag)) }
             is RoomEvent.Reconnecting -> { record(VoiceDiagnosticCode.RECONNECTING); event(VoiceSessionEvent.Reconnecting(tag)) }
-            is RoomEvent.Reconnected -> { record(VoiceDiagnosticCode.RECONNECTED); event(VoiceSessionEvent.TransportConnected(tag)) }
+            is RoomEvent.Reconnected -> {
+                record(VoiceDiagnosticCode.RECONNECTED)
+                event(VoiceSessionEvent.TransportConnected(tag))
+                // A soft resume may keep the publication and emit no TrackPublished.
+                // Inspect the actual owned publication; transport alone is not evidence.
+                if (localTrack != null && ownedRoom.localParticipant.trackPublications.values
+                        .any { it is LocalTrackPublication && it.track === localTrack }) {
+                    record(VoiceDiagnosticCode.PUBLISHED)
+                    this.event(VoiceSessionEvent.Published(tag))
+                }
+            }
             is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.EngineFailed(tag)) }
             is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
+            is RoomEvent.TrackPublished -> if (event.participant == ownedRoom.localParticipant &&
+                event.publication.kind == Track.Kind.AUDIO && event.publication.track === localTrack) {
+                record(VoiceDiagnosticCode.PUBLISHED)
+                this.event(VoiceSessionEvent.Published(tag))
+            }
             is RoomEvent.TrackUnpublished -> if (event.participant == ownedRoom.localParticipant && event.publication.kind == Track.Kind.AUDIO) this.event(VoiceSessionEvent.Unpublished(tag))
             is RoomEvent.TrackSubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
                 val peer = event.participant.sid.toString()
