@@ -57,3 +57,14 @@ Windows SDK подключался через `https://volty.sodove.ru` и `wss:
 
 
 После изменения конфигурации `c941c1` сравнил отдельный SDK process на каждого участника (те же закреплённые зависимости, public WSS/RTP): trial1 прошёл, trial2 воспроизвёл пропавшую подписку, actual exit1; trial3 не запускался. Cleanup тестовых аккаунтов/приватного сервера выполнен. Гипотеза влияния нескольких Room в одном Go-процессе не подтверждена. Singleton setting не исправляет этот независимый дефект и не выдаётся за такое исправление.
+
+
+## Границы сигналинга и SFU forwarding
+
+Редкий дефект остаётся открытым. В `c941cf` один receiver не подписался на одного publisher и не принял ни одного пакета, пока другие 11 направлений росли. Прозрачный диагностический proxy видел ACTIVE participant update, offer с тремя audio sections и client answer со всеми тремя audio port9/recvonly. Наблюдение выполнено перед proxy WriteMessage: это не доказательство обработки answer сервером или отправки RTP. Answer ID0 допустим в закреплённом SFU; исправление ID по предположению не выполнялось. Свежий heartbeat credit подтверждён до деградации, поэтому initial lease expiry не объявляется причиной.
+
+Уточнение прежней диагностики: Room.SetLogger не заменяет Pion logger factory, созданную из глобального SDK logger. Старые room-only counters не доказывали отсутствие Pion warnings. Новый global route проверен отдельно (`c941ce`); в неудачном `c941cf` он не зарегистрировал IncomingUnhandledRTP/undeclaredMediaFailure. Это не исключает все низкоуровневые ошибки. Negotiation timeout логируется INFO, а live logging=WARN; отсутствие WARN также не исключает этот путь.
+
+Отдельный стенд с exact backend/SFU images (`c941ci`) подтвердил, что DebugInfo показывает binding и счётчики направления. Повторяемый runner теперь проверяет эти условия приватно: [forwarding evidence](2026-10-07-nearby-full-stack-evidence.md#отправка-каждого-трека-со-стороны-sfu). Production debug endpoints не включались.
+
+Попытки Windows → отдельный стенд через SSH signaling (`c941ch`, `c941cj`, `c941ck`) не установили начальный медиатранспорт и не воспроизвели исходное частичное выпадение уже подключённого трека. В отдельном публичном UDP50020 fixture SFU показывал правильный node IP/порт, но все ICE pairs имели ноль полученных запросов/ответов; TCP18882 был доступен обычному socket, TCP ICE pairs не наблюдались. Причина недоступности этого UDP пути не установлена. Все fixture accounts/servers, контейнеры/сети и собственный SSH tunnel удалены. Это ограничение стенда, а не доказанная причина production-дефекта; live сеть/firewall/DNS не менялись.

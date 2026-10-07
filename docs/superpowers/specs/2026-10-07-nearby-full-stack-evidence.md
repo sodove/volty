@@ -58,3 +58,14 @@ Backend вернулся в healthy в пределах 20-секундного 
 История: первый ad-hoc `c941bm` дал тот же результат. Перенос сценария в optional flag сначала выявил ошибку runner `args` shadowed by Docker argv list (`c941bp`): restart не был вызван, fixture cleanup прошёл. Аргументы контейнера переименованы; исправленный reusable runner прошёл `c941bs`. Android suite после исправления: `c941bt`, actual exit0/55s/35 executed tasks, 3373 теста без failure/error/skip, rerun/no caches.
 
 Для повторения добавить `--restart-backend` к приведённой выше команде. Default по-прежнему выполняет исходные 24 проверки без перезапуска.
+
+
+## Отправка каждого трека со стороны SFU
+
+Runner принимает дополнительный `--observe-forwarding`. Только при этом флаге собственный SFU получает debug listener 17884 с теми же явными bind addresses: loopback и gateway приватной сети стенда. HTTP debug не публикуется наружу. Production config и default runner не меняются.
+
+`c941cq`, actual exit0: сочетание `--observe-forwarding --restart-backend` выполнило ровно 30 проверок и удалило свои контейнеры/сеть. До restart проверены все 12 направлений: один AUDIO publisher track на участника, ровно три различных удалённых subscriber, bound=2, оба muted=false, sender PacketCount >=10. Повторное наблюдение подтвердило рост каждого счётчика. Затем прошли restart backend, прежние SID/rosters, продолжающийся RTP, GPS revoke, disconnect и дружеский звонок.
+
+До реализации CLI проверка `c941cp` завершилась exit2 на неизвестном флаге до Docker actions. `c941cr` исполнил извлечённую из фактического runner функцию на двух намеренно некогерентных контрольных данных: unbound track с положительным packet counter и отсутствующее направление. Оба отвергнуты. Это узкая проверка диагностического условия, а не mutation sweep приложения.
+
+Повторение: добавить `--observe-forwarding`; нужен свободный loopback TCP17884. Без restart ожидаются 26 checks, с restart — 30. Raw room/participant/track/SSRC debug values остаются в памяти; наружу выводятся только фиксированные имена проверок. Счётчик отправки не доказывает физическую слышимость и не заменяет проверку клиентского RTP.

@@ -5,6 +5,7 @@ parser.add_argument('--backend-image',required=True)
 parser.add_argument('--sfu-image',required=True)
 parser.add_argument('--sdk-sha256',required=True)
 parser.add_argument('--restart-backend',action='store_true',help='Restart only this probe-owned backend while four media sessions are connected')
+parser.add_argument('--observe-forwarding',action='store_true',help='Observe bound SFU downtracks and increasing sender packet counts on the private fixture debug listener')
 args=parser.parse_args()
 ROOT=pathlib.Path(args.workspace).resolve()
 if not re.fullmatch(r'/tmp/volty-nearby-stack-[a-z0-9]+',str(ROOT)):raise RuntimeError('Owned workspace required')
@@ -55,7 +56,9 @@ require({p.name for p in ROOT.iterdir()} <= {'probe.py','sdk-probe'},'Fresh work
 require(hashlib.sha256((ROOT/'sdk-probe').read_bytes()).hexdigest()==SDK_HASH,'SDK binary identity')
 for image in (BACKEND,SFU):require(docker('image','inspect',image,'--format','{{.Id}}')==image,'Candidate image identity')
 require(not docker('ps','-aq','--filter','label=volty.nearby.task='+NET),'previous owned containers exist')
-for port,kind in ((18089,socket.SOCK_STREAM),(17881,socket.SOCK_STREAM),(17882,socket.SOCK_STREAM),(17883,socket.SOCK_DGRAM)):
+ports=[(18089,socket.SOCK_STREAM),(17881,socket.SOCK_STREAM),(17882,socket.SOCK_STREAM),(17883,socket.SOCK_DGRAM)]
+if args.observe_forwarding:ports.append((17884,socket.SOCK_STREAM))
+for port,kind in ports:
     with socket.socket(socket.AF_INET,kind) as s:
         s.setsockopt(socket.SOL_SOCKET,socket.SO_REUSEADDR,1)
         s.bind(('127.0.0.1',port))
@@ -72,6 +75,7 @@ keys:
 logging:
   level: warn
 '''
+if args.observe_forwarding:config+='debug_handler:\n  port: 17884\n'
 (ROOT/'sfu.yaml').write_text(config)
 network=None
 try:
@@ -147,6 +151,41 @@ try:
     rosters=[api('GET','/v2/nearby/channels/'+channel+'/roster',u) for u in users]
     projections=[sorted((peer['actorId'],peer['sessionId'],peer['mediaPresence'],peer.get('participantSid'),peer['phase']) for peer in roster['peers']) for roster in rosters]
     check('four_observers_agree_active_roster',all(p==projections[0] for p in projections) and len(projections[0])==4 and all(p[2]=='CONNECTED' and p[3] and p[4]=='CONNECTED' for p in projections[0]))
+    if args.observe_forwarding:
+        def forwarding():
+            # This listener shares the fixture's explicit loopback/private-gateway
+            # bind addresses. Never query a production debug endpoint or emit its
+            # raw room, participant, track or SSRC values.
+            with urllib.request.urlopen('http://127.0.0.1:17884/debug/rooms',timeout=5) as response:
+                rooms=json.load(response)
+            matches=[room for room in rooms if set(room['Participants'])==set(identities)]
+            require(len(matches)==1,'Expected exactly the owned four-participant room')
+            peers=matches[0]['Participants']
+            subscribers={peer['ID']:identity for identity,peer in peers.items()}
+            counts={}
+            for publisher,peer in peers.items():
+                tracks=peer['UpTrackManager']['PublishedTracks']
+                require(len(tracks)==1,'Expected one synthetic audio publication per publisher')
+                track=next(iter(tracks.values()))
+                require(track['Kind']=='AUDIO','Expected synthetic audio publication')
+                for down in track['DownTracks']:
+                    receiver=subscribers.get(down['SubscriberID'])
+                    require(receiver is not None and receiver!=publisher,'Unexpected SFU subscriber')
+                    require((receiver,publisher) not in counts,'Duplicate SFU forwarding direction')
+                    require(down['BindState']==2 and down['Muted'] is False and down['PubMuted'] is False,'SFU downtrack is not bound and unmuted')
+                    counts[(receiver,publisher)]=down['Stats'].get('PacketCount',0)
+            require(len(counts)==12,'Expected all twelve SFU forwarding directions')
+            return counts
+        deadline=time.monotonic()+5
+        while True:
+            sent=forwarding()
+            if all(count>=10 for count in sent.values()):break
+            require(time.monotonic()<deadline,'SFU sender counters did not become available')
+            time.sleep(.2)
+        check('all_twelve_sfu_downtracks_bound_and_sending',True)
+        time.sleep(1)
+        later=forwarding()
+        check('all_twelve_sfu_sender_counters_increase',all(later[pair]>count for pair,count in sent.items()))
     if args.restart_backend:
         identity=docker('inspect',app_container,'--format','{{.Id}}|{{.Image}}|{{index .Config.Labels "volty.nearby.task"}}')
         require(identity==app_container+'|'+BACKEND+'|'+NET,'restart ownership guard')
