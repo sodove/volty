@@ -113,7 +113,7 @@ internal fun NearbyConversationPanelScreen(
             // Participant rows follow disconnect, audio and trip controls.
             if(showDetails && roster.known) {
                 roster.peers.take(12).forEach {row ->
-                    Text(stringResource(Res.string.nearby_panel_roster_peer,row.peer.actorId.take(8)) + " · " +
+                    Text((roster.profileNames[row.peer.actorId] ?: stringResource(Res.string.nearby_panel_roster_peer,row.peer.actorId.take(8))) + " · " +
                         stringResource(if(row.connected) Res.string.nearby_panel_roster_connected else Res.string.nearby_panel_roster_connecting),
                         style=MaterialTheme.typography.bodySmall,maxLines=1,overflow=TextOverflow.Ellipsis)
                 }

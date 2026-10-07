@@ -28,13 +28,18 @@ fun Route.installNearbyRosterRoutes(dependencies: AppDependencies) {
                 ?: throw ApiException(HttpStatusCode.Forbidden, "membership_required", "Channel membership required")
             if (snapshot.channelId != channel) throw ApiException(HttpStatusCode.ServiceUnavailable, "nearby_unavailable", "Nearby unavailable")
             call.respond(RosterSnapshotDto(snapshot.channelId, snapshot.revision, snapshot.serverTimeEpochMillis,
-                snapshot.peers.map { RosterPeerDto(it.actorId, it.sessionId, it.operationId, it.phase.name, it.deadlineEpochMillis, it.mediaPresence.name, it.participantSid) }))
+                snapshot.peers.map { RosterPeerDto(it.actorId, it.sessionId, it.operationId, it.phase.name, it.deadlineEpochMillis, it.mediaPresence.name, it.participantSid) },
+                snapshot.profileNames.filter { (actorId, name) ->
+                    snapshot.peers.any { it.actorId == actorId } && name.length in 2..80 &&
+                        name.isNotBlank() && name.none(Char::isISOControl)
+                }))
         }
     }
 }
 
 @Serializable private data class RosterSnapshotDto(
     val channelId: String, val revision: Long, val serverTimeEpochMillis: Long, val peers: List<RosterPeerDto>,
+    val profileNames: Map<String, String>,
 )
 @Serializable private data class RosterPeerDto(
     val actorId: String, val sessionId: String, val operationId: String,

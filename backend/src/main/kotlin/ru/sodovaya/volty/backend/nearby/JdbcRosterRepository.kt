@@ -28,17 +28,20 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
                 c.commit()
                 return@use null
             }
+            val profileNames = mutableMapOf<String, String>()
             val peers = c.prepareStatement("""
-                SELECT o.actor_id,o.operation_id,o.session_id,o.phase,o.deadline_epoch_millis,o.participant_sid,o.media_state
+                SELECT o.actor_id,o.operation_id,o.session_id,o.phase,o.deadline_epoch_millis,o.participant_sid,o.media_state,u.display_name AS profile_name
                 FROM nearby_session_operations o JOIN nearby_actor_claims c
                   ON c.actor_id=o.actor_id AND c.operation_id=o.operation_id AND c.session_id=o.session_id
                  AND c.room_epoch=o.room_epoch AND c.node_epoch=o.node_epoch
+                LEFT JOIN users u ON u.id=o.actor_id AND u.deleted_at IS NULL
                 WHERE o.destination_kind='CHANNEL' AND o.destination_id=?::uuid AND o.phase IN ('PENDING','ACTIVE')
                 ORDER BY o.actor_id
             """.trimIndent()).use {
                 it.setString(1, channel)
                 it.executeQuery().use { rows -> buildList {
                     while (rows.next()) {
+                        rows.getString("profile_name")?.let { profileNames[rows.getString("actor_id")] = it }
                         val sid = rows.getString("participant_sid")
                         val pending = rows.getString("phase") == "PENDING"
                         val connected = !pending && sid != null && rows.getString("media_state") == "ACTIVE"
@@ -51,7 +54,7 @@ class JdbcRosterRepository(private val source: DataSource, private val now: () -
             // Do not filter using this clock: expiry changes rows/revision through the journal.
             val observedAt = now().also { require(it >= 0) }
             c.commit()
-            ChannelRosterSnapshot(channel, revision, observedAt, peers)
+            ChannelRosterSnapshot(channel, revision, observedAt, peers, profileNames)
         } catch (failure: Throwable) {
             try { c.rollback() } catch (rollback: Throwable) { failure.addSuppressed(rollback) }
             throw failure

@@ -1362,7 +1362,7 @@ class VoiceConversationStartupTest {
     }
 
     @Test fun rootPresentationDisposalRejectsOldActionsAndPreservesProcessConversation() = runTest {
-        val f=Fixture(this,withAudience=true,withChannelRoster=true);f.useBoundRuntime=true;val trip=SharingFixture(f)
+        val f=Fixture(this,withAudience=true,withChannelRoster=true);f.useBoundRuntime=true;f.channelRosterName="Саша";val trip=SharingFixture(f)
         val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
         val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
         val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val activity=SupervisorJob(backgroundScope.coroutineContext[Job])
@@ -1378,6 +1378,7 @@ class VoiceConversationStartupTest {
             assertTrue(root.state.value.voice.channelMap.observed)
             assertEquals(1,root.state.value.voice.channelRoster?.connectedCount)
             assertTrue(nearbyChannelRosterPanel(root.state.value.voice).known)
+            assertEquals(mapOf(f.peer to "Саша"),nearbyChannelRosterPanel(root.state.value.voice).profileNames)
             val mutesBefore=f.mutes.toList();val locationBefore=trip.source.issued.toList()
             val old=root.actions;root.close();runCurrent();assertEquals(NearbyRootView(),root.state.value)
             old.disconnect(operation);old.mute(operation,true);old.startTrip(operation);runCurrent()
@@ -1388,6 +1389,7 @@ class VoiceConversationStartupTest {
             val fresh=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing);replacement=fresh;runCurrent()
             assertEquals(operation,fresh.state.value.voice.operation)
             assertSame(f.channelRosters.single().state.value,fresh.state.value.voice.channelRoster)
+            assertEquals(mapOf(f.peer to "Саша"),nearbyChannelRosterPanel(fresh.state.value.voice).profileNames)
             fresh.actions.disconnect(operation);runCurrent();assertFalse(assertNotNull(f.runtime).state.value.wanted)
             assertNull(fresh.state.value.voice.operation)
             assertNull(fresh.state.value.voice.channelRoster);assertTrue(f.channelRosters.single().state.value.retired)
@@ -1544,17 +1546,19 @@ class VoiceConversationStartupTest {
     @Test fun channelRosterSameUserNewLoginRejectsHeldOriginalAccountReply() = runTest {
         val f=Fixture(this,withChannelRoster=true);val release=CompletableDeferred<Unit>()
         try {
-            val old=f.login();f.channelRosterRelease=release
+            val old=f.login();f.channelRosterRelease=release;f.channelRosterName="Old"
             f.owner.start(old,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
             assertTrue(f.channelRosterEntered.isCompleted)
             f.repository.logout();runCurrent();assertNull(f.owner.state.value.channelRoster)
             val fresh=f.login();assertEquals(old.userId,fresh.userId);assertNotSame(old,fresh)
-            f.channelRosterRelease=null
+            f.channelRosterRelease=null;f.channelRosterName="Fresh"
             f.owner.start(fresh,channel,second,readPreferences={phone},launch=f::launch);runCurrent()
             val reader=f.channelRosters.last();assertSame(reader.state.value,f.owner.state.value.channelRoster)
             assertEquals(1,reader.state.value.connectedCount)
+            assertEquals(mapOf(f.peer to "Fresh"),reader.state.value.profileNames)
             release.complete(Unit);runCurrent()
             assertSame(reader.state.value,f.owner.state.value.channelRoster)
+            assertEquals(mapOf(f.peer to "Fresh"),f.owner.state.value.channelRoster?.profileNames)
             assertEquals(second,f.owner.state.value.operationId);assertTrue(f.channelRosters.first().state.value.retired)
             assertFalse(reader.state.value.retired);assertTrue(fresh.job.isActive);assertEquals(2,f.channelRosterAuthorizations.size)
         } finally {release.complete(Unit);f.close()}
@@ -3396,6 +3400,7 @@ class VoiceConversationStartupTest {
         var statusHandlerFinished = false
         val channelRosters=mutableListOf<VoiceRosterAccountSession>()
         var channelRosterStatus=HttpStatusCode.OK
+        var channelRosterName:String?=null
         var channelRosterRelease:CompletableDeferred<Unit>?=null
         val channelRosterEntered=CompletableDeferred<Unit>()
         val channelRosterAuthorizations=mutableListOf<String?>()
@@ -3429,9 +3434,11 @@ class VoiceConversationStartupTest {
                 if(it.url.encodedPath.startsWith("/v2/nearby/channels/") && it.url.encodedPath.endsWith("/roster")) {
                     channelRosterAuthorizations+=it.headers[io.ktor.http.HttpHeaders.Authorization]
                     val release=channelRosterRelease
+                    val name=channelRosterName
                     withContext(NonCancellable) {channelRosterEntered.complete(Unit);release?.await()}
                     val destination=it.url.encodedPath.removeSuffix("/roster").substringAfterLast('/')
-                    return@addHandler respond("""{"channelId":"$destination","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$peer","sessionId":"$peer","operationId":"${first.value}","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]}""",channelRosterStatus)
+                    val names=name?.let { """, "profileNames":{"$peer":"$it"}""" } ?: ""
+                    return@addHandler respond("""{"channelId":"$destination","revision":8,"serverTimeEpochMillis":100000,"peers":[{"actorId":"$peer","sessionId":"$peer","operationId":"${first.value}","phase":"CONNECTED","deadlineEpochMillis":110000,"mediaPresence":"CONNECTED","participantSid":"observed-peer"}]$names}""",channelRosterStatus)
                 }
                 if(it.url.encodedPath.endsWith("/sharing/audience")) {
                     sharingAuthorizations += it.headers[io.ktor.http.HttpHeaders.Authorization]

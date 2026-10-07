@@ -3,7 +3,7 @@ package ru.sodovaya.volty.presentation.root.nearby
 import ru.sodovaya.volty.domain.voice.*
 
 data class NearbyChannelRosterPanel(val known:Boolean=false,
-    val peers:List<VoiceRosterPresencePeer> = emptyList(),val connected:Int?=null)
+    val peers:List<VoiceRosterPresencePeer> = emptyList(),val connected:Int?=null, val profileNames:Map<String,String> = emptyMap())
 internal fun nearbyChannelRosterPanel(view:NearbyVoiceView):NearbyChannelRosterPanel {
     val voice=view.voice ?: return NearbyChannelRosterPanel()
     val roster=view.channelRoster ?: return NearbyChannelRosterPanel()
@@ -14,5 +14,8 @@ internal fun nearbyChannelRosterPanel(view:NearbyVoiceView):NearbyChannelRosterP
     val peers=roster.peers?.filter {it.leaseFresh}?.map {row ->
         row.copy(connected=row.connected && row.peer.transportConfirmed && row.peer.phase==VoiceRosterPhase.CONNECTED)
     } ?: return NearbyChannelRosterPanel()
-    return NearbyChannelRosterPanel(true,peers,peers.count {it.connected})
+    val names=peers.mapNotNull {row ->
+        voiceRosterProfileName(roster.profileNames[row.peer.actorId])?.let {row.peer.actorId to it}
+    }.toMap()
+    return NearbyChannelRosterPanel(true,peers,peers.count {it.connected},names)
 }

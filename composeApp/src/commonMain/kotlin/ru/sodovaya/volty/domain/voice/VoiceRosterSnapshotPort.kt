@@ -16,6 +16,7 @@ data class VoiceRosterObservation(
     val responseReceivedMillis: Long,
     val serverTimeEpochMillis: Long,
     val peerDeadlines: Map<VoiceSessionId, Long>,
+    val profileNames: Map<String, String> = emptyMap(),
 ) {
     init {
         require(update.revision >= 0 && requestStartedMillis >= 0 && responseReceivedMillis >= requestStartedMillis && serverTimeEpochMillis >= 0)

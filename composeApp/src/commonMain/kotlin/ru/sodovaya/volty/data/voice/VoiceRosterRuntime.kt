@@ -104,7 +104,7 @@ class VoiceRosterRuntime(
     }
 
     private fun clearPublishedState() = output.update {
-        if (it.retired) it else it.copy(peers = null, connectedCount = null, unknown = VoiceRosterUnknown.CLOSED, retired = true)
+        if (it.retired) it else it.copy(peers = null, connectedCount = null, unknown = VoiceRosterUnknown.CLOSED, retired = true, profileNames = emptyMap())
     }
 
     private companion object {

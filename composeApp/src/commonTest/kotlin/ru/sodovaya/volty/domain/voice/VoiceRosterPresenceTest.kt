@@ -24,6 +24,33 @@ class VoiceRosterPresenceTest {
         assertEquals(emptyList(), owner.view.peers)
     }
 
+    @Test fun sameRevisionRenameKeepsReplicaAndOriginalLeaseWhileOldRevisionCannotRepaint() {
+        val owner=VoiceRosterPresence(tag)
+        val first=sample(revision=3).copy(observation=sample(revision=3).observation.copy(profileNames=mapOf("actor" to "Old")))
+        owner.complete(owner.beginRead()!!,first,120);assertEquals(mapOf("actor" to "Old"),owner.view.profileNames)
+        val renamed=sample(revision=3,ordinal=1,start=200,received=220,server=600).let {
+            it.copy(observation=it.observation.copy(profileNames=mapOf("actor" to "Саша","outsider" to "Private")))
+        }
+        owner.complete(owner.beginRead()!!,renamed,220)
+        assertEquals(3L,owner.view.revision);assertEquals(peer(),owner.view.peers!!.single().peer)
+        assertEquals(mapOf("actor" to "Саша"),owner.view.profileNames);assertEquals(1,owner.view.connectedCount)
+        val old=sample(revision=2,ordinal=2,start=300,received=320,server=700).let {
+            it.copy(observation=it.observation.copy(profileNames=mapOf("actor" to "Obsolete")))
+        }
+        owner.complete(owner.beginRead()!!,old,320);assertEquals(mapOf("actor" to "Саша"),owner.view.profileNames)
+        owner.tick(600);assertTrue(owner.view.profileNames.isEmpty());assertEquals(0,owner.view.connectedCount)
+    }
+    @Test fun optionalInvalidNameCannotEarnRowsOrSurviveFailureAndRetirement() {
+        for(name in listOf(" ","x".repeat(81),"bad\nname")) {
+            val owner=VoiceRosterPresence(tag);val reply=sample().let {it.copy(observation=it.observation.copy(profileNames=mapOf("actor" to name)))}
+            owner.complete(owner.beginRead()!!,reply,120);assertTrue(owner.view.profileNames.isEmpty());assertEquals(1,owner.view.connectedCount)
+        }
+        val owner=VoiceRosterPresence(tag);val reply=sample().let {it.copy(observation=it.observation.copy(profileNames=mapOf("actor" to "Rider")))}
+        owner.complete(owner.beginRead()!!,reply,120);assertEquals("Rider",owner.view.profileNames["actor"])
+        owner.complete(owner.beginRead()!!,VoiceRosterSnapshotReply.Failed(VoiceRosterFailure.UNAVAILABLE),130)
+        assertTrue(owner.view.profileNames.isEmpty());assertNull(owner.view.peers)
+        owner.close();assertTrue(owner.view.profileNames.isEmpty())
+    }
     @Test fun onlyFreshConfirmedPeersCountAndExpiryDoesNotChangePersistedRevision() {
         val owner = VoiceRosterPresence(tag)
         owner.complete(owner.beginRead()!!, sample(), 120)

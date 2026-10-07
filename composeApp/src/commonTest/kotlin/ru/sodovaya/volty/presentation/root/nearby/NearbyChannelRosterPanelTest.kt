@@ -18,6 +18,13 @@ class NearbyChannelRosterPanelTest {
         val empty=view().copy(channelRoster=VoiceRosterPresenceView(4,emptyList(),999,null,false))
         assertEquals(0,nearbyChannelRosterPanel(empty).connected);assertTrue(nearbyChannelRosterPanel(empty).known)
     }
+    @Test fun optional_names_belong_only_to_fresh_displayed_rows() {
+        val original=view();val named=original.copy(channelRoster=original.channelRoster!!.copy(
+            profileNames=mapOf("one" to "Саша","expired" to "Old","outsider" to "Private","unconfirmed" to "bad\nname")))
+        assertEquals(mapOf("one" to "Саша"),nearbyChannelRosterPanel(named).profileNames)
+        assertTrue(nearbyChannelRosterPanel(named.copy(channelRoster=named.channelRoster!!.copy(unknown=VoiceRosterUnknown.UNAVAILABLE))).profileNames.isEmpty())
+        assertEquals(nearbyChannelRosterPanel(original).peers,nearbyChannelRosterPanel(named).peers)
+    }
     @Test fun missing_or_detached_evidence_cannot_earn_empty_roster_or_connected_count() {
         val current=view()
         for(candidate in listOf(current.copy(channelRoster=null),current.copy(kind=NearbyConversationKind.CALL),

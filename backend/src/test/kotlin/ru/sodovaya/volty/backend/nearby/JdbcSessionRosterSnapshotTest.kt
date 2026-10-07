@@ -46,6 +46,18 @@ class JdbcSessionRosterSnapshotTest {
         assertTrue(snapshot.peers.none { it.actorId == memberWithoutSession })
     }
 
+    @Test fun profileRenameDoesNotChangeRosterRevisionPeersOrDeadlines() {
+        begin();val original=roster.snapshot(destination)
+        assertEquals(mapOf(actor to "test"),original.profileNames)
+        source.connection.use {c -> c.prepareStatement("UPDATE users SET display_name=? WHERE id=?::uuid").use {
+            it.setString(1,"Саша");it.setString(2,actor);assertEquals(1,it.executeUpdate())
+        }}
+        now+=10;val renamed=roster.snapshot(destination)
+        assertEquals(mapOf(actor to "Саша"),renamed.profileNames)
+        assertEquals(original.revision,renamed.revision);assertEquals(original.peers,renamed.peers)
+        assertFalse(renamed.profileNames.containsKey(memberWithoutSession))
+        sessions.cancel(actor,operation,{now});assertTrue(roster.snapshot(destination).profileNames.isEmpty())
+    }
     @Test fun replacementAndLateCleanupLeaveOnlyCurrentSessionInSnapshot() {
         begin()
         val newOperation = id(); val newSession = id()

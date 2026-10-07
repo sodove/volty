@@ -56,9 +56,14 @@ class VoiceRosterHttpPort(client: HttpClient, baseUrl: String, private val beare
                         require(remaining <= MAX_LEASE_MILLIS && started <= Long.MAX_VALUE - remaining)
                         peer.sessionId to started + remaining
                     }
+                    val names = (root["profileNames"] as? JsonObject).orEmpty().mapNotNull { (actor, value) ->
+                        if (peers.none { it.actorId == actor }) return@mapNotNull null
+                        val text = (value as? JsonPrimitive)?.takeIf { it.isString }?.content
+                        voiceRosterProfileName(text)?.let { actor to it }
+                    }.toMap()
                     val received = monotonicMillis().also { require(it >= started) }
                     VoiceRosterSnapshotReply.Received(VoiceRosterObservation(VoiceRosterUpdate(tag, revision, peers),
-                        ordinal, started, received, serverTime, deadlines))
+                        ordinal, started, received, serverTime, deadlines, names))
                 }
             } ?: failed(VoiceRosterFailure.UNAVAILABLE)
         } catch (cancelled: CancellationException) { throw cancelled }

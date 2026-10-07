@@ -41,6 +41,19 @@ class VoiceRosterHttpPortTest {
             assertEquals("Bearer bearer-secret", requests.single().headers[HttpHeaders.Authorization])
         } finally { port.close(); client.close() }
     }
+    @Test fun optionalProfileNamesDoNotMutateReplicatedPeersOrLeaseCredit() = runTest {
+        var names="{\"$actor\":\"Саша\",\"$other\":\"Unrelated\"}";var issued=0
+        val client=client {issued++;respond(snapshot(peer()).dropLast(1)+",\"profileNames\":$names}")};val port=port(client)
+        try {
+            val first=assertIs<VoiceRosterSnapshotReply.Received>(port.snapshot(tag)).observation
+            assertEquals(mapOf(actor to "Саша"),first.profileNames)
+            for(raw in listOf("null","[]","false","{\"$actor\":false}","{\"$actor\":\" \"}","{\"$actor\":\""+"x".repeat(81)+"\"}","{\"$actor\":\"bad\\nname\"}")) {
+                names=raw;val fallback=assertIs<VoiceRosterSnapshotReply.Received>(port.snapshot(tag)).observation
+                assertTrue(fallback.profileNames.isEmpty());assertEquals(first.update,fallback.update);assertEquals(first.peerDeadlines,fallback.peerDeadlines)
+            }
+            assertEquals(8,issued)
+        } finally {port.close();client.close()}
+    }
     @Test fun expiredAndUnconfirmedRowsNeverEarnFreshOrAudiblePresence() = runTest {
         val client = client { respond(snapshot(peer(99999), peer(101000, "JOINING", "UNKNOWN", "null").replace(actor, other).replace(session, operation))) }; val port = port(client)
         try {

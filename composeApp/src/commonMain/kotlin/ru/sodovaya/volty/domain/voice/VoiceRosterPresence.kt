@@ -8,6 +8,7 @@ data class VoiceRosterPresencePeer(val peer: VoiceRosterPeer, val leaseFresh: Bo
 data class VoiceRosterPresenceView(
     val revision: Long?, val peers: List<VoiceRosterPresencePeer>?, val connectedCount: Int?,
     val unknown: VoiceRosterUnknown?, val retired: Boolean,
+    val profileNames: Map<String, String> = emptyMap(),
 )
 data class VoiceRosterPresenceDecision(val requestResync: Boolean = false)
 
@@ -32,7 +33,10 @@ class VoiceRosterPresence(private val tag: VoiceRosterTag) {
                 val fresh = sample!!.leaseIsFresh(peer.sessionId, lastTime!!)
                 VoiceRosterPresencePeer(peer, fresh, fresh && peer.transportConfirmed && peer.phase == VoiceRosterPhase.CONNECTED)
             }
-        return VoiceRosterPresenceView(replica.revision, rows, rows?.count { it.connected }, unknown, retired)
+        val names = rows.orEmpty().filter { it.leaseFresh }.mapNotNull { row ->
+            voiceRosterProfileName(sample?.profileNames?.get(row.peer.actorId))?.let { row.peer.actorId to it }
+        }.toMap()
+        return VoiceRosterPresenceView(replica.revision, rows, rows?.count { it.connected }, unknown, retired, names)
     }
 
     fun beginRead(): VoiceRosterRead? {

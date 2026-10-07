@@ -14,6 +14,7 @@ data class ChannelRosterPeer(
 data class ChannelRosterSnapshot(
     val channelId: String, val revision: Long, val serverTimeEpochMillis: Long,
     val peers: List<ChannelRosterPeer>,
+    val profileNames: Map<String, String> = emptyMap(),
 )
 
 data class DirectCallRosterSnapshot(

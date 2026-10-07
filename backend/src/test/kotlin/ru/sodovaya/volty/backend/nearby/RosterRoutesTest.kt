@@ -29,6 +29,24 @@ class RosterRoutesTest {
         assertFalse(response.bodyAsText().contains("audible"))
     }
 
+    @Test fun profileNamesAreSeparateOptionalMetadataForOnlySnapshotActors() = testApplication {
+        val outsider=UUID.randomUUID().toString();val session=UUID.randomUUID().toString()
+        val peer=ChannelRosterPeer(actor,session,UUID.randomUUID().toString(),RosterConnectionPhase.CONNECTING,30_100)
+        var names=mapOf(actor to "Саша",outsider to "Private")
+        val deps=dependencies(RosterEndpointPort {_,_->ChannelRosterSnapshot(channel,7,100,listOf(peer),names)})
+        application {module(deps)}
+        val token=deps.tokenService.issueAccessToken(actor)
+        for(name in listOf("Саша", " ","x".repeat(81),"bad\nname")) {
+            names=mapOf(actor to name,outsider to "Private")
+            val response=client.get("/v2/nearby/channels/$channel/roster") {bearerAuth(token)}
+            assertEquals(HttpStatusCode.OK,response.status)
+            val root=kotlinx.serialization.json.Json.parseToJsonElement(response.bodyAsText()) as kotlinx.serialization.json.JsonObject
+            assertEquals("7",root["revision"].toString());assertFalse(response.bodyAsText().contains("Private"))
+            if(name=="Саша") assertTrue(response.bodyAsText().contains("Саша"))
+            else assertFalse(response.bodyAsText().contains("\"$actor\":\""))
+            assertFalse((root["peers"] as kotlinx.serialization.json.JsonArray).single().toString().contains("displayName"))
+        }
+    }
     @Test fun authenticationAndDisabledBoundaryDoNotExposeRoster() = testApplication {
         val deps = dependencies()
         application { module(deps) }

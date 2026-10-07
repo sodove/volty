@@ -120,22 +120,27 @@ class VoiceRosterRuntimeTest {
         var cancelled = false
         val runtime = VoiceRosterRuntime(parent, StandardTestDispatcher(testScheduler), tag,
             port {
-                if (++issued == 1) sample(100)
+                if (++issued == 1) (sample(100) as VoiceRosterSnapshotReply.Received).let {
+                    it.copy(observation=it.observation.copy(profileNames=mapOf("actor" to "Rider")))
+                }
                 else try { awaitCancellation() } finally { cancelled = true }
             }, pulses.receiveAsFlow(), {100})
-        runCurrent()
-        assertEquals(1, runtime.state.value.connectedCount)
-        assertTrue(runtime.refresh()); runCurrent()
-        assertEquals(2, issued)
-        assertFalse(cancelled)
-        parentJob.cancel(); runCurrent()
-        assertTrue(cancelled)
-        assertTrue(runtime.state.value.retired)
-        assertNull(runtime.state.value.connectedCount)
-        pulses.send(Unit); runCurrent()
-        assertFalse(runtime.refresh())
-        assertEquals(2, issued)
-        pulses.close()
+        try {
+            runCurrent()
+            assertEquals(1, runtime.state.value.connectedCount)
+            assertEquals(mapOf("actor" to "Rider"),runtime.state.value.profileNames)
+            assertTrue(runtime.refresh()); runCurrent()
+            assertEquals(2, issued)
+            assertFalse(cancelled)
+            parentJob.cancel(); runCurrent()
+            assertTrue(cancelled)
+            assertTrue(runtime.state.value.retired)
+            assertNull(runtime.state.value.connectedCount)
+            assertTrue(runtime.state.value.profileNames.isEmpty())
+            pulses.send(Unit); runCurrent()
+            assertFalse(runtime.refresh())
+            assertEquals(2, issued)
+        } finally {parentJob.cancel();pulses.close();runtime.close()}
     }
 
     @Test fun rejectedImmediateDispatcherDoesNotAttachAnOrphanChildToParent() = runTest {
