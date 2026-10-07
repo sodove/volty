@@ -19,6 +19,8 @@ internal class OwnedVoiceAudio(
     private val keeper: VoiceCommunicationKeeper,
 ) {
     private var released = false
+    private val evidenceLock = Any()
+    private val mediaEvidence = VoiceNativeAudioEvidence(tag)
     var preferredInputId: Int? = null
         private set
     val module: JavaAudioDeviceModule = JavaAudioDeviceModule.builder(context)
@@ -31,28 +33,18 @@ internal class OwnedVoiceAudio(
         .setPlaybackSamplesReadyCallback { samples -> diagnostics.addRenderBytes(samples.data.size) }
         .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
             override fun onWebRtcAudioRecordStart() {
-                diagnostics.update { it.copy(captureRunning = true) }
-                record(VoiceDiagnosticCode.CAPTURE_STARTED)
-                emit(VoiceSessionEvent.CaptureStarted(tag))
+                captureState(true)
             }
             override fun onWebRtcAudioRecordStop() {
-                diagnostics.update { it.copy(captureRunning = false) }
-                record(VoiceDiagnosticCode.CAPTURE_STOPPED)
-                emit(VoiceSessionEvent.CaptureStopped(tag))
+                captureState(false)
             }
         })
         .setAudioTrackStateCallback(object : JavaAudioDeviceModule.AudioTrackStateCallback {
             override fun onWebRtcAudioTrackStart() {
-                diagnostics.update { it.copy(renderRunning = true) }
-                keeper.onRender(true)
-                record(VoiceDiagnosticCode.RENDER_STARTED)
-                emit(VoiceSessionEvent.RenderStarted(tag))
+                renderState(true)
             }
             override fun onWebRtcAudioTrackStop() {
-                diagnostics.update { it.copy(renderRunning = false) }
-                keeper.onRender(false)
-                record(VoiceDiagnosticCode.RENDER_STOPPED)
-                emit(VoiceSessionEvent.RenderStopped(tag))
+                renderState(false)
             }
         })
         .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
@@ -66,6 +58,45 @@ internal class OwnedVoiceAudio(
             override fun onWebRtcAudioTrackError(errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_RUNTIME_ERROR)
         })
         .createAudioDeviceModule()
+
+    /** Reset and enqueue under the same boundary as native start/stop callbacks. */
+    fun reconnecting(announce: () -> Unit) = synchronized(evidenceLock) {
+        mediaEvidence.reconnecting(diagnostics.state.value)
+        announce()
+    }
+
+    fun refreshMediaEvidence() = synchronized(evidenceLock) {
+        for (event in mediaEvidence.observe(diagnostics.state.value)) emitMediaEvent(event)
+    }
+
+    private fun captureState(started: Boolean) = synchronized(evidenceLock) {
+        // Actual hardware callbacks remain diagnostic facts during release,
+        // even after this owner is fenced from emitting session evidence.
+        diagnostics.update { it.copy(captureRunning = started) }
+        if (mediaEvidence.captureState(started, diagnostics.state.value)) {
+            emitMediaEvent(if (started) VoiceSessionEvent.CaptureStarted(tag) else VoiceSessionEvent.CaptureStopped(tag))
+        } else record(if (started) VoiceDiagnosticCode.CAPTURE_STARTED else VoiceDiagnosticCode.CAPTURE_STOPPED)
+    }
+
+    private fun renderState(started: Boolean) = synchronized(evidenceLock) {
+        diagnostics.update { it.copy(renderRunning = started) }
+        if (mediaEvidence.renderState(started, diagnostics.state.value)) {
+            emitMediaEvent(if (started) VoiceSessionEvent.RenderStarted(tag) else VoiceSessionEvent.RenderStopped(tag))
+        } else record(if (started) VoiceDiagnosticCode.RENDER_STARTED else VoiceDiagnosticCode.RENDER_STOPPED)
+    }
+
+    /** Called only inside evidenceLock, including nonblocking event enqueue. */
+    private fun emitMediaEvent(event: VoiceSessionEvent) {
+        val code = when (event) {
+            is VoiceSessionEvent.CaptureStarted -> VoiceDiagnosticCode.CAPTURE_STARTED
+            is VoiceSessionEvent.CaptureStopped -> VoiceDiagnosticCode.CAPTURE_STOPPED
+            is VoiceSessionEvent.RenderStarted -> { keeper.onRender(true); VoiceDiagnosticCode.RENDER_STARTED }
+            is VoiceSessionEvent.RenderStopped -> { keeper.onRender(false); VoiceDiagnosticCode.RENDER_STOPPED }
+            else -> error("Unexpected native audio evidence")
+        }
+        record(code)
+        emit(event)
+    }
 
     fun applyInput(manager: AudioManager, preference: VoiceInputPreference) {
         if (requestInput(manager, preference) != VoiceAudioChangeResult.REQUESTED) {
@@ -95,6 +126,9 @@ internal class OwnedVoiceAudio(
 
     @Synchronized fun close() {
         if (released) return
+        // Never hold evidenceLock through release: native release can join a
+        // callback thread which must acquire that lock before it can retire.
+        synchronized(evidenceLock) { mediaEvidence.close() }
         module.release()
         released = true
     }

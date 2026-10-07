@@ -47,7 +47,7 @@ internal class AndroidVoiceSdkSession(
     @Volatile private var closing = false
     @Volatile private var deafened = false
     @Volatile private var outputAvailable = preferences.output == VoiceOutputPreference.AUTO
-    private val peerTracks = mutableMapOf<String, MutableSet<String>>()
+    private val remoteEvidence = VoiceRemoteAudioEvidence(tag)
     private val publicationRecovery = VoicePublicationRecovery(scope, object : VoicePublicationRecoveryPort {
         override suspend fun restoreClosed(): Boolean = withContext(Dispatchers.Main.immediate) {
             resources.withLock {
@@ -186,6 +186,7 @@ internal class AndroidVoiceSdkSession(
 
     override suspend fun close() = closeMutex.withLock {
         closing = true
+        remoteEvidence.close()
         publicationRecovery.close()
         scope.coroutineContext.cancelChildren()
         // Each reference clears only after successful release, preserving failed cleanup for retry.
@@ -198,7 +199,6 @@ internal class AndroidVoiceSdkSession(
         try { audio?.close(); audio = null } catch (_: Exception) { failed = true }
         if (failed) throw VoiceEngineException(VoiceEngineError.CLEANUP)
         scope.cancel()
-        peerTracks.clear()
         record(VoiceDiagnosticCode.CLOSED)
         }
     }
@@ -215,7 +215,12 @@ internal class AndroidVoiceSdkSession(
                 // saved publication.muted, which selects its republish path.
                 audio?.module?.setMicrophoneMute(true)
                 publicationRecovery.reconnecting()
-                record(VoiceDiagnosticCode.RECONNECTING); event(VoiceSessionEvent.Reconnecting(tag))
+                remoteEvidence.reconnecting()
+                val announce = {
+                    record(VoiceDiagnosticCode.RECONNECTING)
+                    event(VoiceSessionEvent.Reconnecting(tag))
+                }
+                audio?.reconnecting(announce) ?: announce()
             }
             is RoomEvent.Reconnected -> {
                 record(VoiceDiagnosticCode.RECONNECTED)
@@ -227,6 +232,7 @@ internal class AndroidVoiceSdkSession(
                     record(VoiceDiagnosticCode.PUBLISHED)
                     this.event(VoiceSessionEvent.Published(tag))
                 }
+                reconcileRemoteAudio(ownedRoom)
             }
             is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.EngineFailed(tag)) }
             is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
@@ -243,27 +249,38 @@ internal class AndroidVoiceSdkSession(
                 publicationRecovery.unpublished(event.publication.muted)
             }
             is RoomEvent.TrackSubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
-                val peer = event.participant.sid.toString()
-                peerTracks.getOrPut(peer) { mutableSetOf() }.add(event.publication.sid)
-                record(VoiceDiagnosticCode.SUBSCRIBED)
-                this.event(VoiceSessionEvent.Subscribed(tag, peer))
+                reconcileRemoteAudio(ownedRoom)
             }
             is RoomEvent.TrackUnsubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
-                val peer = event.participant.sid.toString()
-                peerTracks[peer]?.remove(event.publications.sid)
-                if (peerTracks[peer].isNullOrEmpty()) {
-                    peerTracks.remove(peer)
-                    record(VoiceDiagnosticCode.UNSUBSCRIBED)
-                    this.event(VoiceSessionEvent.Unsubscribed(tag, peer))
-                }
+                reconcileRemoteAudio(ownedRoom)
             }
             else -> Unit
+        }
+    }
+
+    private fun reconcileRemoteAudio(ownedRoom: Room) {
+        if (closing) return
+        val observations = ownedRoom.remoteParticipants.values.flatMap { participant ->
+            participant.trackPublications.values.map { publication ->
+                VoiceRemoteAudioObservation(participant.sid.toString(),
+                    audioPublication = publication.kind == Track.Kind.AUDIO,
+                    subscribed = publication.subscribed,
+                    hasAudioTrack = publication.track?.kind == Track.Kind.AUDIO)
+            }
+        }
+        for (observation in remoteEvidence.reconcile(observations)) {
+            record(if (observation is VoiceSessionEvent.Subscribed) VoiceDiagnosticCode.SUBSCRIBED else VoiceDiagnosticCode.UNSUBSCRIBED)
+            event(observation)
         }
     }
 
     private suspend fun pollStats(ownedRoom: Room) {
         while (currentCoroutineContext().isActive) {
             delay(1000)
+            // Actual ADM samples/current SDK tracks remain evidence even if
+            // an unrelated RTC statistics request fails. No new polling loop.
+            audio?.refreshMediaEvidence()
+            reconcileRemoteAudio(ownedRoom)
             try {
                 // Earlier draft assumed whole-PC reports; RTCEngine actually calls
                 // getStats(sender/receiver). Read each receiver and deduplicate internal IDs.
