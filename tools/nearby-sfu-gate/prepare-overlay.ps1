@@ -1,4 +1,5 @@
 param(
+    [switch]$Production,
     [string]$Source = "$PSScriptRoot/../../.superpowers/sdd/2026-10-03-nearby-foundations/sources/livekit-1.13.5",
     [string]$Destination = "$PSScriptRoot/../../.superpowers/sdd/2026-10-03-nearby-sfu-admission/server"
 )
@@ -55,4 +56,15 @@ $auth = Replace-One $auth 'errors.New("invalid token: "+authToken+", error: "+er
 Write-Source 'pkg/service/auth.go' $auth
 & gofmt -w (Join-Path $Destination 'pkg/voltylease/gate.go') (Join-Path $Destination 'pkg/voltylease/readiness.go') (Join-Path $Destination 'pkg/service/voltyreadiness.go') (Join-Path $Destination 'pkg/service/voltyleases.go') (Join-Path $Destination 'pkg/service/voltybarrier.go') (Join-Path $Destination 'pkg/service/roommanager.go') (Join-Path $Destination 'pkg/service/rtcservice.go') (Join-Path $Destination 'pkg/rtc/participant.go') (Join-Path $Destination 'pkg/service/auth.go')
 if ($LASTEXITCODE -ne 0) {throw 'gofmt failed'}
+if ($Production) {
+    $leases = Read-Source 'pkg/service/voltyleases.go'
+    $leases = Replace-One $leases "`tfor _, action := range []string{`"arm`", `"entered`", `"release`", `"revoking`"} {`n`t`tmux.HandleFunc(`"/volty/test/barrier/`"+action, s.voltyBarrierControl)`n`t}`n" ''
+    $leases = Replace-One $leases "`t`tvoltyMarkRevoking(key)`n" ''
+    $leases = Replace-One $leases "`t`tif err := voltyWaitBarrier(ctx, key); err != nil {`n`t`t`treturn lease.Handle{}, err`n`t`t}`n" ''
+    Write-Source 'pkg/service/voltyleases.go' $leases
+    # Destination was freshly created above. Only remove this generated test file.
+    Remove-Item -LiteralPath (Join-Path $Destination 'pkg/service/voltybarrier.go')
+    & gofmt -w (Join-Path $Destination 'pkg/service/voltyleases.go')
+    if ($LASTEXITCODE -ne 0) { throw 'Production gofmt failed' }
+}
 Write-Output $Destination
