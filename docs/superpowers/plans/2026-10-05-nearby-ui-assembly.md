@@ -109,3 +109,8 @@ Late result after account/screen disposal; uncertain create/removal retry; chann
 The previous name-absent note records the earlier milestone. Channel snapshots now carry a separate optional `profileNames` map for only their accepted roster actors. JDBC uses a left profile join in the existing authorized repeatable-read snapshot, preserving rows/revision/deadlines when a profile changes or is unavailable. Route, wire and presentation reject invalid names and unrelated keys; older responses keep the existing localized participant fallback.
 
 Names do not participate in replicated peer equality or earn lease/transport credit. Same-revision identical peers accept refreshed metadata; older revisions and retired original account readers cannot repaint it. Expired/unknown/closed evidence withdraws names, including parent cancellation. Root disposal preserves the process reader and original names; disconnect retires it. Compiled labels remain subject to actual device layout checks; this does not prove audibility.
+
+
+## Independent audio settings selection (2026-10-07)
+
+Settings now expose the already-persisted independent output choice (Auto / Headset / Speaker) beside microphone choice. Both selected values come from one actual storage snapshot; controls remain disabled with no selected default until it arrives. Output writes only the existing output key, input writes only the existing input key. The shared note explicitly says changes apply to the next voice connection. This closes the missing settings affordance, not live session reconfiguration or physical routing/device proof. Live selectors, safe AUTO reset/reallocation and original-operation lifecycle integration remain open.

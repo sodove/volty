@@ -8,6 +8,8 @@ import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.BleDiagnosticsState
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
+import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.domain.repository.BleDiagnosticsRepository
 import ru.sodovaya.volty.domain.repository.BmsRepository
@@ -39,6 +41,7 @@ interface SettingsComponent {
     fun onDefaultDashboardStyleChanged(style: DashboardStyle)
     fun onFaultDisplayDurationChanged(seconds: Int)
     fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource)
+    fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference)
     fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean)
     fun onRefreshOfflineRegions()
     fun onDownloadOfflineRegion(regionId: String)
@@ -67,6 +70,7 @@ interface SettingsComponent {
         val defaultDashboardStyle: DashboardStyle = DashboardStyle.LIGHT,
         val faultDisplayDurationSec: Int = 60,
         val voiceMicrophoneSource: VoiceMicrophoneSource = VoiceMicrophoneSource.AUTO,
+        val voiceOutputPreference: VoiceOutputPreference? = null,
         val offlineSkipMeteredConfirmation: Boolean = false,
         val offlineRegions: List<OfflineRegionPackageState> = emptyList(),
         val offlinePreparation: List<OfflineRegionPreparationState> = emptyList(),
@@ -124,7 +128,15 @@ class DefaultSettingsComponent(
         scope.launch { appPrefs.unitSystem.collect { v -> _state.update { it.copy(unitSystem = v) } } }
         scope.launch { appPrefs.defaultDashboardStyle.collect { v -> _state.update { it.copy(defaultDashboardStyle = v) } } }
         scope.launch { appPrefs.faultDisplayDurationSec.collect { v -> _state.update { it.copy(faultDisplayDurationSec = v) } } }
-        scope.launch { appPrefs.voiceMicrophoneSource.collect { v -> _state.update { it.copy(voiceMicrophoneSource = v) } } }
+        // One actual storage snapshot supplies both choices; initial AUTO is not loaded evidence.
+        scope.launch { appPrefs.voiceAudioPreferences.collect { preferences ->
+            val input = when (preferences.input) {
+                VoiceInputPreference.AUTO -> VoiceMicrophoneSource.AUTO
+                VoiceInputPreference.PHONE -> VoiceMicrophoneSource.PHONE
+                VoiceInputPreference.HEADSET -> VoiceMicrophoneSource.HEADSET
+            }
+            _state.update { it.copy(voiceMicrophoneSource = input, voiceOutputPreference = preferences.output) }
+        } }
         scope.launch { appPrefs.offlineSkipMeteredConfirmation.collect { v -> _state.update { it.copy(offlineSkipMeteredConfirmation = v) } } }
         scope.launch { offlineRegionsRepository.states.collect { v -> _state.update { it.copy(offlineRegions = v) } } }
         scope.launch { offlinePreparationCoordinator.states.collect { v -> _state.update { it.copy(offlinePreparation = v) } } }
@@ -140,6 +152,7 @@ class DefaultSettingsComponent(
     override fun onDefaultDashboardStyleChanged(style: DashboardStyle) { scope.launch { appPrefs.setDefaultDashboardStyle(style) } }
     override fun onFaultDisplayDurationChanged(seconds: Int) { scope.launch { appPrefs.setFaultDisplayDurationSec(seconds) } }
     override fun onVoiceMicrophoneSourceChanged(source: VoiceMicrophoneSource) { scope.launch { appPrefs.setVoiceMicrophoneSource(source) } }
+    override fun onVoiceOutputPreferenceChanged(preference: VoiceOutputPreference) { scope.launch { appPrefs.setVoiceOutputPreference(preference) } }
     override fun onOfflineSkipMeteredConfirmationChanged(enabled: Boolean) {
         scope.launch { appPrefs.setOfflineSkipMeteredConfirmation(enabled) }
     }

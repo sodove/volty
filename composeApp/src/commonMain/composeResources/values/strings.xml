@@ -195,7 +195,7 @@
     <string name="settings_units_metric">Metric</string>
     <string name="settings_units_imperial">Imperial</string>
     <string name="settings_voice_microphone">Nearby microphone</string>
-    <string name="settings_voice_microphone_subtitle">Choose the audio input for voice rooms</string>
+    <string name="settings_voice_microphone_subtitle">Microphone and playback are independent. Changes apply on the next voice connection.</string>
     <string name="settings_voice_microphone_auto">Auto</string>
     <string name="settings_voice_microphone_phone">Phone</string>
     <string name="settings_voice_microphone_headset">Headset</string>
@@ -934,4 +934,9 @@
     <string name="nearby_panel_roster_connected">Connected</string>
     <string name="nearby_panel_roster_connecting">Connecting</string>
     <string name="nearby_panel_roster_more">%1$d more participants</string>
+    <string name="settings_voice_audio">Nearby audio</string>
+    <string name="settings_voice_output">Voice playback</string>
+    <string name="settings_voice_output_auto">Auto</string>
+    <string name="settings_voice_output_headset">Headset</string>
+    <string name="settings_voice_output_speaker">Speaker</string>
 </resources>

@@ -193,7 +193,7 @@
     <string name="settings_units_metric">Метрические</string>
     <string name="settings_units_imperial">Имперские</string>
     <string name="settings_voice_microphone">Микрофон Nearby</string>
-    <string name="settings_voice_microphone_subtitle">Источник звука для голосовых комнат</string>
+    <string name="settings_voice_microphone_subtitle">Микрофон и вывод звука выбираются отдельно. Изменения применятся при следующем подключении к войсу.</string>
     <string name="settings_voice_microphone_auto">Авто</string>
     <string name="settings_voice_microphone_phone">Телефон</string>
     <string name="settings_voice_microphone_headset">Гарнитура</string>
@@ -932,4 +932,9 @@
     <string name="nearby_panel_roster_connected">Подключён</string>
     <string name="nearby_panel_roster_connecting">Подключается</string>
     <string name="nearby_panel_roster_more">Ещё участников: %1$d</string>
+    <string name="settings_voice_audio">Звук Nearby</string>
+    <string name="settings_voice_output">Звук собеседников</string>
+    <string name="settings_voice_output_auto">Авто</string>
+    <string name="settings_voice_output_headset">Наушники</string>
+    <string name="settings_voice_output_speaker">Динамик</string>
 </resources>

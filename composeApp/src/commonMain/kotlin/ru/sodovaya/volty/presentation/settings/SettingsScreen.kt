@@ -60,6 +60,7 @@ import androidx.compose.ui.unit.sp
 import ru.sodovaya.volty.domain.model.DashboardStyle
 import ru.sodovaya.volty.domain.model.Vehicle
 import ru.sodovaya.volty.domain.social.VoiceMicrophoneSource
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageState
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageFailure
 import ru.sodovaya.volty.domain.navigation.region.OfflineRegionPackageStatus
@@ -110,6 +111,11 @@ import volty.composeapp.generated.resources.settings_voice_microphone_auto
 import volty.composeapp.generated.resources.settings_voice_microphone_headset
 import volty.composeapp.generated.resources.settings_voice_microphone_phone
 import volty.composeapp.generated.resources.settings_voice_microphone_subtitle
+import volty.composeapp.generated.resources.settings_voice_audio
+import volty.composeapp.generated.resources.settings_voice_output
+import volty.composeapp.generated.resources.settings_voice_output_auto
+import volty.composeapp.generated.resources.settings_voice_output_headset
+import volty.composeapp.generated.resources.settings_voice_output_speaker
 import volty.composeapp.generated.resources.settings_offline_navigation
 import volty.composeapp.generated.resources.settings_offline_navigation_subtitle
 import volty.composeapp.generated.resources.settings_offline_mobile_data
@@ -269,7 +275,7 @@ fun SettingsScreen(component: SettingsComponent) {
 
             }
             SettingsSection(
-                title = stringResource(Res.string.settings_voice_microphone),
+                title = stringResource(Res.string.settings_voice_audio),
                 initiallyExpanded = false,
             ) {
             SectionLabel(stringResource(Res.string.settings_voice_microphone))
@@ -291,10 +297,28 @@ fun SettingsScreen(component: SettingsComponent) {
             SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
                 microphoneSources.forEachIndexed { idx, source ->
                     SegmentedButton(
-                        selected = state.voiceMicrophoneSource == source,
+                        selected = state.voiceMicrophoneSource == source && state.voiceOutputPreference != null,
+                        enabled = state.voiceOutputPreference != null,
                         onClick = { component.onVoiceMicrophoneSourceChanged(source) },
                         shape = SegmentedButtonDefaults.itemShape(index = idx, count = microphoneSources.size),
                     ) { Text(microphoneLabels[source] ?: source.name) }
+                }
+            }
+            SectionLabel(stringResource(Res.string.settings_voice_output))
+            val outputChoices = VoiceOutputPreference.entries
+            val outputLabels = mapOf(
+                VoiceOutputPreference.AUTO to stringResource(Res.string.settings_voice_output_auto),
+                VoiceOutputPreference.HEADSET to stringResource(Res.string.settings_voice_output_headset),
+                VoiceOutputPreference.SPEAKER to stringResource(Res.string.settings_voice_output_speaker),
+            )
+            SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                outputChoices.forEachIndexed { index, preference ->
+                    SegmentedButton(
+                        selected = state.voiceOutputPreference == preference,
+                        enabled = state.voiceOutputPreference != null,
+                        onClick = { component.onVoiceOutputPreferenceChanged(preference) },
+                        shape = SegmentedButtonDefaults.itemShape(index = index, count = outputChoices.size),
+                    ) { Text(outputLabels.getValue(preference)) }
                 }
             }
 
