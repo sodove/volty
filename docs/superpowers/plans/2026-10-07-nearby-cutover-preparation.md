@@ -48,4 +48,13 @@ docker compose --project-name volty --env-file /home/sodovaya/volty/.env \
 
 Это команда с побочным действием, не диагностическая проверка. Пропуск третьего файла вернёт strict mode, при котором после замены SFU повторный join ждёт подтверждения cleanup. Откат настройки использует прежние первые два файла и пересоздаёт только app; база не восстанавливается. Executor `c941c0-singleton.py` уже выполнен и запрещает повторный запуск при существующем journal. Перед переходом к нескольким SFU/балансировщику необходимо отключить singleton guarantee и внедрить подтверждение retirement прежних origins.
 
-На отдельном стенде `c941bx` проверено: после подтверждённого restart единственного SFU старые четыре сессии CANCELLED, старое медиа молчит, членство сохраняется; четыре новых session identities снова передают пакеты во всех 12 направлениях и имеют согласованный состав. На рабочем SFU restart пока не выполнялся; его восстановление не выдаётся за наблюдение production.
+На отдельном стенде `c941bx` проверено: после подтверждённого restart единственного SFU старые четыре сессии CANCELLED, старое медиа молчит, членство сохраняется; четыре новых session identities снова передают пакеты во всех 12 направлениях и имеют согласованный состав. На момент этого результата рабочий SFU ещё не перезапускался. Обновление: ниже записаны последующие пересоздания при отсутствии active rooms; recovery живого разговора по-прежнему не проверен.
+
+
+## Текущий SFU после временной диагностики
+
+`c941cy` временно добавил private debug listener только в command SFU через in-memory Compose override; source Compose files не менялись. Перед каждым действием подтверждены active_rooms=0, единственный origin, exact image/ports/environment и прежние app/DB. Debug не публиковался и затем был выключен восстановлением исходной команды. `private-debug-c941cy.json` в том же release имеет PRIVATE_DEBUG_RESTORED/verified=true.
+
+Текущий container ID SFU: `46633b9b1a5d7051ea2d6f1a86c7a211bf771b26b37e90dd7306186a916a99f0`, прежний image `sha256:bba3a6329d7b3ae09e3094e642136ba17ba1d33545f735a400b8f589bae682b6`. Первоначальный `c050…` и промежуточный diagnostic `91e663…` удалены. Backend `515506…`, DB `793a…`, singleton=true и перечисленные три обязательных Compose файла сохранены. Начальные cutover/singleton manifests описывают первоначальные экземпляры; для текущего audit учитывать последующий journal и проверять фактический container/image/alias/process mapping.
+
+`c941d7` подтвердил отключённый debug, healthy app, exclusive control origin, единственный SFU process, active_rooms=0 и protocol4 readiness. Эти quiescent replacements не заменяют проверку recovery активного звонка и не устраняют rare lost-answer defect. [Наблюдения и границы](../specs/2026-10-07-nearby-live-transport.md#несогласованный-последний-трек--состояние-рабочего-sfu).
