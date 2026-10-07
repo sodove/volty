@@ -29,7 +29,9 @@
 
 Ранний драйвер неверно ожидал mediaPresence ACTIVE вместо контрактного CONNECTED. Другой драйвер посылал новый operationId в caller resume и правильно получил operation_conflict. Исправлены именно драйверы; серверные контракты не ослаблены. Все неудачные прогоны также удалили свои контейнеры; один preflight остановился до создания ресурсов из-за TCP TIME_WAIT, при отсутствии слушателя. Bind preflight теперь использует SO_REUSEADDR.
 
-Прогон не проверяет миграцию реальной базы с прежними аккаунтами/друзьями, restart/recovery этого полного стека, deployment reverse proxy/TLS/TURN, Android audio capture/rendering, Xiaomi, физическое разделение PHONE+HEADSET, системные уведомления/FGS и UI на устройстве. Killed-process push не реализован. Успешный стенд не означает готовность всех этих сценариев.
+Этот прогон не проверял миграцию реальной базы с прежними аккаунтами/друзьями. Позже snapshot рабочей базы был восстановлен и мигрирован на отдельной копии с сохранением исходных строк; см. `2026-10-07-nearby-database-rehearsal.md`. По-прежнему не проверены restart/recovery этого полного стека, deployment reverse proxy/TLS/TURN, Android audio capture/rendering, Xiaomi, физическое разделение PHONE+HEADSET, системные уведомления/FGS и UI на устройстве. Killed-process push не реализован. Успешный стенд не означает готовность всех этих сценариев.
+
+Дополнительный прогон `c941au`, actual exit0, 24 проверки: добавлен запуск точного `/usr/bin/curl --fail --silent --max-time 5 http://127.0.0.1:8080/health` внутри контейнера backend от пользователя образа. Остальные 23 связные проверки повторно прошли. Это подтверждает новый healthcheck contract для явного backend Compose override; старый BusyBox отсутствует в этом runtime.
 
 ## Повторение
 

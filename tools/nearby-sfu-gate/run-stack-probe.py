@@ -90,7 +90,7 @@ try:
     env={'PORT':'8080','VOLTY_DATABASE_URL':'jdbc:postgresql://fixture-db:5432/volty','VOLTY_DATABASE_USER':'volty','VOLTY_DATABASE_PASSWORD':'fixture-db-password','VOLTY_JWT_SECRET':'fixture-only-hmac-'+secrets.token_hex(32),'VOLTY_VOICE_PROVIDER':'livekit','LIVEKIT_URL':'ws://127.0.0.1:17881','LIVEKIT_API_KEY':'nearby-probe','LIVEKIT_API_SECRET':'local-nearby-probe-secret-not-production-20261003','VOLTY_PUBLIC_IP':'127.0.0.1','VOLTY_NEARBY_MODE':'voice_spaces','VOLTY_NEARBY_SFU_CONTROL_ORIGIN':'http://'+gateway+':17881','VOLTY_NEARBY_SINGLETON_ORIGIN':'false'}
     args=['--memory=768m','--cpus=1','--read-only','--tmpfs','/tmp:rw,size=64m','-p','127.0.0.1:18089:8080']
     for key,value in env.items(): args.extend(['-e',key+'='+value])
-    run(NET+'-app',BACKEND,*args)
+    app_container=run(NET+'-app',BACKEND,*args)
     deadline=time.monotonic()+45
     while time.monotonic()<deadline:
         try:
@@ -99,6 +99,8 @@ try:
         time.sleep(.2)
     else:raise RuntimeError('fixture backend startup failed')
     check('immutable_stack_health',True)
+    health=json.loads(docker('exec',app_container,'/usr/bin/curl','--fail','--silent','--max-time','5','http://127.0.0.1:8080/health'))
+    check('candidate_health_executable',health['status']=='ok')
     users=[register(i) for i in range(4)];a,b,c,d=users
     public,private=uid(),uid()
     detail=api('PUT','/v2/nearby/communities/'+public,a,{'name':'Public '+public,'visibility':'PUBLIC'})
