@@ -1,0 +1,10 @@
+# Nearby live audio controls
+
+Continue the approved independent microphone/output requirement inline using executing-plans, TDD and fresh verification. No new Astra or agents. Phone input must never implicitly select speaker output; selecting preferences does not prove a physical route or audibility.
+
+1. Introduce an optional SDK configureAudio pair command with explicit REQUESTED, UNAVAILABLE, REQUIRES_RECONNECT, FAILED and STALE outcomes. Legacy/default sessions report REQUIRES_RECONNECT. Driver accepts only the exact authorized current published handle, serializes with microphone controls, checks ownership/authorization before and after a suspended native call, keeps only the latest pending pair, and never stops/reallocates audio for a rejected route command. Exception/timeout has bounded typed failure, external cancellation propagates. Tests use actual issued pair calls, held cancellation-resistant replies, expiry and replacement; finite scheduling/finally release.
+2. Add queued engine/runtime original-operation integration; retain in-flight producers for existing cleanup/predecessor barriers. Account/lease/operation fencing must remain exact. UI projection may not report a pending or stale pair as applied.
+3. Native input uses only supported explicit preferred device requests; AUTO reset on an already explicit ADM reports REQUIRES_RECONNECT. Output policy and inventory selection remain independent, owned on routing worker, with explicit headset absence preventing speaker leakage. Close/hotplug fence late work. Inspect pinned SDK/local AAR before asserting API behavior. Native routing results mean preference request, not measured routing.
+4. Expose separate controls on persistent Root panel with current-operation actions and honest status; retain existing next-connection settings. Native/visual/device validation, safe reconnect mode and Xiaomi bilateral audibility remain required before claiming completion.
+
+Task 1 first: stub default and driver denial RED, then actual serialization/ownership implementation, focused tests and full uncached Android before commit. Backend/PG unchanged.

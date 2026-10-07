@@ -15,6 +15,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
 import ru.sodovaya.volty.domain.voice.VoiceGeneration
 import ru.sodovaya.volty.domain.voice.VoiceSessionEffect
 import ru.sodovaya.volty.domain.voice.VoiceSessionEvent
@@ -154,6 +155,36 @@ class VoiceEngineDriver(
         Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
     }
 
+    /** Latest exact-handle pair request. Rejection never changes media admission or cleanup. */
+    suspend fun configureAudio(tag: VoiceSessionTag, preferences: VoiceAudioPreferences): VoiceAudioChangeResult {
+        val request = mutex.withLock {
+            val handle = current?.takeIf {
+                command === it.command && it.command.tag == tag && it.publicationReady && isAuthorized(tag)
+            } ?: return VoiceAudioChangeResult.STALE
+            AudioChange(handle, Any()).also { handle.audioRequest = it.nonce }
+        }
+        return try {
+            withTimeoutOrNull(CONTROL_TIMEOUT_MILLIS) {
+                request.handle.controlMutex.withLock {
+                    currentCoroutineContext().ensureActive()
+                    if (!mutex.withLock { ownsAudioChange(request) }) return@withLock VoiceAudioChangeResult.STALE
+                    val result = request.handle.session.configureAudio(preferences)
+                    currentCoroutineContext().ensureActive()
+                    mutex.withLock { if (ownsAudioChange(request)) result else VoiceAudioChangeResult.STALE }
+                }
+            } ?: VoiceAudioChangeResult.FAILED
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            mutex.withLock { if (ownsAudioChange(request)) VoiceAudioChangeResult.FAILED else VoiceAudioChangeResult.STALE }
+        }
+    }
+
+    /** Called under ownership mutex; no stale command can even supersede current audio work. */
+    private fun ownsAudioChange(request: AudioChange): Boolean = current === request.handle &&
+        command === request.handle.command && request.handle.audioRequest === request.nonce &&
+        request.handle.publicationReady && isAuthorized(request.handle.command.tag)
+
     suspend fun setDeafened(tag: VoiceSessionTag, deafened: Boolean): Result<Unit> {
         return try {
             val accepted = mutex.withLock {
@@ -213,7 +244,9 @@ class VoiceEngineDriver(
     private class Command(val tag: VoiceSessionTag, val job: Job, var muted: Boolean, var deafened: Boolean) {
         var muteVersion = 0L
     }
+    private class AudioChange(val handle: Handle, val nonce: Any)
     private class Handle(val command: Command, val session: VoiceSdkSession) {
+        var audioRequest: Any? = null
         val closeMutex = Mutex()
         val controlMutex = Mutex()
         var publicationReady = false

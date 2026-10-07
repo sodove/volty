@@ -2,16 +2,22 @@ package ru.sodovaya.volty.data.voice
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertTrue
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
+import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
 import ru.sodovaya.volty.domain.voice.VoiceGeneration
 import ru.sodovaya.volty.domain.voice.VoiceSessionEffect
 import ru.sodovaya.volty.domain.voice.VoiceSessionId
@@ -268,6 +274,85 @@ class VoiceEngineDriverTest {
         assertTrue(driver.stop(tag(2).generation).isSuccess); assertEquals(1, session.closeCalls)
     }
 
+    @Test fun audioPairIssuesOnlyToPublishedAuthorizedExactHandleAndKeepsMute() = runTest {
+        var allowed=true
+        val session=FakeSession()
+        val driver=VoiceEngineDriver(backgroundScope,VoiceSdkSessionFactory {_,_->session},{allowed})
+        assertEquals(VoiceAudioChangeResult.STALE,driver.configureAudio(tag(1),pair()))
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1),muted=true,deafened=true),credentials).isSuccess)
+        val before=session.calls.toList()
+        assertEquals(VoiceAudioChangeResult.REQUESTED,driver.configureAudio(tag(1),pair()))
+        assertEquals(listOf(pair()),session.audioPairs);assertEquals(before,session.calls)
+        assertEquals(VoiceAudioChangeResult.STALE,driver.configureAudio(tag(2),pair()))
+        allowed=false;assertEquals(VoiceAudioChangeResult.STALE,driver.configureAudio(tag(1),pair()))
+        assertEquals(1,session.audioPairs.size);assertEquals(0,session.closeCalls)
+        assertTrue(driver.stop(tag(1).generation).isSuccess)
+    }
+    @Test fun latestQueuedAudioPairSkipsIntermediateIntentWithoutChangingOutputImplicitly() = runTest {
+        val session=FakeSession(blockAudio=true);val driver=driver(VoiceSdkSessionFactory {_,_->session})
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)),credentials).isSuccess)
+        val first=async {driver.configureAudio(tag(1),pair())};runCurrent();assertTrue(session.enteredAudio.isCompleted)
+        val intermediate=async {driver.configureAudio(tag(1),pair(VoiceInputPreference.HEADSET))};runCurrent()
+        val latest=async {driver.configureAudio(tag(1),pair(VoiceInputPreference.AUTO))};runCurrent()
+        try {
+            assertEquals(listOf(pair()),session.audioPairs)
+            session.audioGate.complete(Unit);runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,first.await());assertEquals(VoiceAudioChangeResult.STALE,intermediate.await())
+            assertEquals(VoiceAudioChangeResult.REQUESTED,latest.await())
+            assertEquals(listOf(pair(),pair(VoiceInputPreference.AUTO)),session.audioPairs)
+        } finally {session.audioGate.complete(Unit);first.cancel();intermediate.cancel();latest.cancel();driver.stop(tag(1).generation)}
+    }
+    @Test fun heldOldAudioResultCannotAcknowledgeReplacementOrExpiredHandle() = runTest {
+        var allowed=true
+        val old=FakeSession(blockAudio=true,resistAudioCancellation=true);val fresh=FakeSession()
+        val driver=VoiceEngineDriver(backgroundScope,VoiceSdkSessionFactory {t,_->if(t==tag(1))old else fresh},{allowed})
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)),credentials).isSuccess)
+        val pending=async {driver.configureAudio(tag(1),pair())};runCurrent();assertTrue(old.enteredAudio.isCompleted)
+        try {
+            assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(2)),credentials).isSuccess)
+            old.audioGate.complete(Unit);runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,pending.await());assertTrue(fresh.audioPairs.isEmpty());assertEquals(0,fresh.closeCalls)
+            assertEquals(VoiceAudioChangeResult.REQUESTED,driver.configureAudio(tag(2),pair()))
+            val expired=async {driver.configureAudio(tag(2),pair())};allowed=false;runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,expired.await());assertEquals(1,fresh.audioPairs.size)
+        } finally {old.audioGate.complete(Unit);pending.cancel();driver.stop(tag(2).generation)}
+    }
+    @Test fun audioUnavailableReconnectAndExceptionNeverStopCurrentSession() = runTest {
+        val session=FakeSession();val driver=driver(VoiceSdkSessionFactory {_,_->session})
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)),credentials).isSuccess)
+        for(result in listOf(VoiceAudioChangeResult.UNAVAILABLE,VoiceAudioChangeResult.REQUIRES_RECONNECT)) {
+            session.audioResult=result;assertEquals(result,driver.configureAudio(tag(1),pair()))
+        }
+        session.audioThrows=true;assertEquals(VoiceAudioChangeResult.FAILED,driver.configureAudio(tag(1),pair()))
+        assertEquals(0,session.closeCalls);assertTrue(driver.setMuted(tag(1),true).isSuccess)
+        driver.stop(tag(1).generation)
+    }
+    @Test fun audioCancellationAndTimeoutDoNotFabricateRequestSuccess() = runTest {
+        val session=FakeSession(blockAudio=true);val driver=driver(VoiceSdkSessionFactory {_,_->session})
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)),credentials).isSuccess)
+        val cancelled=async {driver.configureAudio(tag(1),pair())};runCurrent();assertTrue(session.enteredAudio.isCompleted)
+        try {
+            cancelled.cancel();runCurrent();assertTrue(cancelled.isCancelled)
+            val timed=async {driver.configureAudio(tag(1),pair())};runCurrent()
+            advanceTimeBy(5_000);runCurrent();assertEquals(VoiceAudioChangeResult.FAILED,timed.await())
+            assertEquals(2,session.audioPairs.size);assertEquals(0,session.closeCalls)
+        } finally {session.audioGate.complete(Unit);cancelled.cancel();driver.stop(tag(1).generation)}
+    }
+    @Test fun audioLeaseExpiresDuringIssuedNativeRequestAndLateResultIsStale() = runTest {
+        var allowed=true;val session=FakeSession(blockAudio=true)
+        val driver=VoiceEngineDriver(backgroundScope,VoiceSdkSessionFactory {_,_->session},{allowed})
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1)),credentials).isSuccess)
+        val pending=async {driver.configureAudio(tag(1),pair())};runCurrent()
+        try {
+            assertTrue(session.enteredAudio.isCompleted);assertEquals(listOf(pair()),session.audioPairs)
+            allowed=false;session.audioGate.complete(Unit);runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,pending.await());assertEquals(0,session.closeCalls)
+            driver.stop(tag(1).generation);assertEquals(1,session.closeCalls)
+        } finally {session.audioGate.complete(Unit);pending.cancel();driver.stop(tag(1).generation)}
+    }
+    private fun pair(input:VoiceInputPreference=VoiceInputPreference.PHONE)=
+        VoiceAudioPreferences(input,VoiceOutputPreference.HEADSET)
+
     private class FakeSession(
         private val blockConnect: Boolean = false,
         private val publishResult: Boolean = true,
@@ -276,6 +361,8 @@ class VoiceEngineDriverTest {
         private val blockFirstMute: Boolean = false,
         private val muteResult: Boolean = true,
         private val blockClose: Boolean = false,
+        private val blockAudio:Boolean=false,
+        private val resistAudioCancellation:Boolean=false,
     ) : VoiceSdkSession {
         val enteredConnect = CompletableDeferred<Unit>()
         val connectGate = CompletableDeferred<Unit>()
@@ -285,6 +372,19 @@ class VoiceEngineDriverTest {
         val muteGate = CompletableDeferred<Unit>()
         val enteredClose = CompletableDeferred<Unit>()
         val closeGate = CompletableDeferred<Unit>()
+        val audioPairs=mutableListOf<VoiceAudioPreferences>()
+        val enteredAudio=CompletableDeferred<Unit>()
+        val audioGate=CompletableDeferred<Unit>()
+        var audioResult=VoiceAudioChangeResult.REQUESTED
+        var audioThrows=false
+        override suspend fun configureAudio(preferences:VoiceAudioPreferences):VoiceAudioChangeResult {
+            audioPairs+=preferences;enteredAudio.complete(Unit)
+            if(blockAudio) {
+                if(resistAudioCancellation) withContext(NonCancellable) {audioGate.await()} else audioGate.await()
+            }
+            if(audioThrows) error("private-test-token")
+            return audioResult
+        }
         val calls = mutableListOf<String>()
         var publishCalls = 0
         var closeCalls = 0
