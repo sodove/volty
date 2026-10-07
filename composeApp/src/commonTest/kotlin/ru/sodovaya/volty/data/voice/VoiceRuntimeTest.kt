@@ -152,6 +152,9 @@ class VoiceRuntimeTest {
             f.runtime.join("one",old);runCurrent();f.runtime.join("two",current,replace=true);runCurrent()
             assertEquals(current,f.runtime.state.value.operationId);assertEquals(2,f.session.connects)
             assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(old,pair));assertTrue(f.session.audioPairs.isEmpty())
+            val actual=f.runtime.state.value
+            val oldTag=VoiceSessionTag(assertNotNull(actual.sessionId),VoiceGeneration(99))
+            assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(current,pair,oldTag));assertTrue(f.session.audioPairs.isEmpty())
             assertEquals(VoiceAudioChangeResult.REQUESTED,f.runtime.configureAudio(current,pair));assertEquals(listOf(pair),f.session.audioPairs)
             f.runtime.beginRetirement();runCurrent()
             assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(current,pair));assertEquals(listOf(pair),f.session.audioPairs)

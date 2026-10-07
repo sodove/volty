@@ -937,4 +937,15 @@
     <string name="settings_voice_output_auto">Авто</string>
     <string name="settings_voice_output_headset">Наушники</string>
     <string name="settings_voice_output_speaker">Динамик</string>
+    <string name="nearby_audio_input">Микрофон</string>
+    <string name="nearby_audio_output">Звук собеседников</string>
+    <string name="nearby_audio_auto">Авто</string>
+    <string name="nearby_audio_phone">Телефон</string>
+    <string name="nearby_audio_headset">Наушники</string>
+    <string name="nearby_audio_speaker">Динамик</string>
+    <string name="nearby_audio_pending">Меняем устройство…</string>
+    <string name="nearby_audio_unavailable">Устройство недоступно. Выберите другое.</string>
+    <string name="nearby_audio_reconnect">Для этого выбора отключитесь от войса и подключитесь снова.</string>
+    <string name="nearby_audio_failed">Не удалось изменить устройство. Попробуйте ещё раз.</string>
+    <string name="nearby_audio_stale">Подключение изменилось. Выберите устройство ещё раз.</string>
 </resources>

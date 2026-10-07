@@ -29,7 +29,8 @@ data class NearbyVoiceView(val pending: NearbyPendingVoiceView?=null,val label: 
     val starting: NearbyPendingVoiceView?=null,val kind: NearbyConversationKind?=null,
     val callRoster: DirectCallRosterPresenceView?=null,
     val channelMap: NearbyChannelMapState=NearbyChannelMapState(),
-    val channelRoster: VoiceRosterPresenceView?=null)
+    val channelRoster: VoiceRosterPresenceView?=null,
+    val audio: VoiceConversationAudioState?=null)
 
 /** All mutations run on the queued process owner. UI supplies explicit permission results and a disposable launcher. */
 internal class NearbyVoiceController(private val repository: DefaultSocialRepository,private val voice: VoiceConversationStartup,
@@ -103,7 +104,8 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
             error=failure?.takeIf {current(it.first)}?.second,starting=preparing?.view(),kind=visible?.kind,
             callRoster=source.callRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
             channelMap=nearbyChannelMapState(source,owner?.operation),
-            channelRoster=source.channelRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
+            channelRoster=source.channelRoster.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED},
+            audio=source.audio.takeIf {owner!=null && source.phase==VoiceConversationPhase.JOIN_SUBMITTED})
     }
     fun requestChannel(account: SocialAuthenticatedAccount,channel: String,label: String):String? {
         if(!current(account) || runCatching {invitationDraftId(channel)}.isFailure) return null
@@ -205,6 +207,11 @@ internal class NearbyVoiceController(private val repository: DefaultSocialReposi
         start?.let {it.job?.cancel();starting=null;voice.stop(it.request.operation)}
         switches.withdrawSharing(owner?.operation ?: start?.request?.original)
         voice.stop(operation);render()
+    }}
+    fun configureAudio(original:VoiceConversationAudioState, preferences:VoiceAudioPreferences) {scope.launch {
+        val owner=committed ?: return@launch
+        if(!current(owner.account) || owner.operation!=original.operation || voice.state.value.audio!=original || original.pending!=null) return@launch
+        voice.configureAudio(original.operation,preferences,original.tag)
     }}
     fun setMuted(operation: VoiceOperationId,value: Boolean) {scope.launch {voice.setMuted(operation,value)}}
     fun setDeafened(operation: VoiceOperationId,value: Boolean) {scope.launch {voice.setDeafened(operation,value)}}

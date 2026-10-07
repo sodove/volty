@@ -3,6 +3,7 @@ package ru.sodovaya.volty.presentation.root.nearby
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -16,6 +17,11 @@ import androidx.compose.ui.unit.Dp
 import org.jetbrains.compose.resources.StringResource
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.domain.voice.VoiceOperationId
+import ru.sodovaya.volty.domain.voice.VoiceInputPreference
+import ru.sodovaya.volty.domain.voice.VoiceOutputPreference
+import ru.sodovaya.volty.domain.voice.VoiceAudioPreferences
+import ru.sodovaya.volty.data.voice.VoiceConversationAudioState
+import ru.sodovaya.volty.data.voice.VoiceAudioChangeResult
 import volty.composeapp.generated.resources.*
 
 /** Required callbacks keep screen composition/disposal separate from process ownership. */
@@ -23,6 +29,7 @@ class NearbyConversationPanelActions(
     val disconnect: (VoiceOperationId) -> Unit,
     val mute: (VoiceOperationId, Boolean) -> Unit,
     val deafen: (VoiceOperationId, Boolean) -> Unit,
+    val configureAudio: (VoiceConversationAudioState, VoiceAudioPreferences) -> Unit,
     val startTrip: (VoiceOperationId) -> Unit,
     val hideTrip: (NearbyTripAction) -> Unit,
     val retryTripCleanup: (NearbyTripAction) -> Unit,
@@ -110,6 +117,9 @@ internal fun NearbyConversationPanelScreen(
             } }
             voice.error?.let { Text(stringResource(it.message()), color = MaterialTheme.colorScheme.error) }
             sharing.error?.let { Text(stringResource(it.message()), color = MaterialTheme.colorScheme.error) }
+            if(showDetails) panel.audio?.let { original ->
+                NearbyAudioControls(original,panel.audioEditable,actions)
+            }
             // Participant rows follow disconnect, audio and trip controls.
             if(showDetails && roster.known) {
                 roster.peers.take(12).forEach {row ->
@@ -142,4 +152,42 @@ private fun NearbySharingError.message(): StringResource = when (this) {
     NearbySharingError.NOT_VISIBLE -> Res.string.nearby_panel_not_visible
     NearbySharingError.CLEANUP_REQUIRED -> Res.string.nearby_panel_cleanup_required
     NearbySharingError.UNAVAILABLE -> Res.string.nearby_shell_unavailable
+}
+
+
+@Composable
+private fun NearbyAudioControls(original:VoiceConversationAudioState, enabled:Boolean, actions:NearbyConversationPanelActions) {
+    Text(stringResource(Res.string.nearby_audio_input),style=MaterialTheme.typography.labelMedium)
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+        VoiceInputPreference.entries.forEach { input ->
+            FilterChip(selected=original.preferences.input==input,enabled=enabled,
+                onClick={actions.configureAudio(original,original.preferences.copy(input=input))},
+                label={Text(stringResource(when(input) {
+                    VoiceInputPreference.AUTO -> Res.string.nearby_audio_auto
+                    VoiceInputPreference.PHONE -> Res.string.nearby_audio_phone
+                    VoiceInputPreference.HEADSET -> Res.string.nearby_audio_headset
+                }))})
+        }
+    }
+    Text(stringResource(Res.string.nearby_audio_output),style=MaterialTheme.typography.labelMedium)
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(4.dp)) {
+        VoiceOutputPreference.entries.forEach { output ->
+            FilterChip(selected=original.preferences.output==output,enabled=enabled,
+                onClick={actions.configureAudio(original,original.preferences.copy(output=output))},
+                label={Text(stringResource(when(output) {
+                    VoiceOutputPreference.AUTO -> Res.string.nearby_audio_auto
+                    VoiceOutputPreference.HEADSET -> Res.string.nearby_audio_headset
+                    VoiceOutputPreference.SPEAKER -> Res.string.nearby_audio_speaker
+                }))})
+        }
+    }
+    if(original.pending!=null) Text(stringResource(Res.string.nearby_audio_pending),style=MaterialTheme.typography.bodySmall)
+    val message=when(original.lastResult) {
+        VoiceAudioChangeResult.UNAVAILABLE -> Res.string.nearby_audio_unavailable
+        VoiceAudioChangeResult.REQUIRES_RECONNECT -> Res.string.nearby_audio_reconnect
+        VoiceAudioChangeResult.FAILED -> Res.string.nearby_audio_failed
+        VoiceAudioChangeResult.STALE -> Res.string.nearby_audio_stale
+        else -> null
+    }
+    message?.let {Text(stringResource(it),style=MaterialTheme.typography.bodySmall)}
 }

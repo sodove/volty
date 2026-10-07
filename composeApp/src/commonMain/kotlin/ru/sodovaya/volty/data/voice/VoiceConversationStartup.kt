@@ -35,6 +35,12 @@ internal sealed interface VoiceConversationTarget {
         override val destinationId get() = call.callId
     }
 }
+/** Requested preferences under an original voice identity, not observed physical routes. */
+data class VoiceConversationAudioState(
+    val operation: VoiceOperationId, val tag: VoiceSessionTag, val preferences: VoiceAudioPreferences,
+    val pending: VoiceAudioPreferences? = null, val lastResult: VoiceAudioChangeResult? = null,
+)
+
 internal data class VoiceConversationState(
     val phase: VoiceConversationPhase = VoiceConversationPhase.STOPPED,
     val channelId: String? = null,
@@ -45,6 +51,7 @@ internal data class VoiceConversationState(
     val callRoster: DirectCallRosterPresenceView? = null,
     val sharingAudience: ChannelSharingAudienceView? = null,
     val channelRoster: VoiceRosterPresenceView? = null,
+    val audio: VoiceConversationAudioState? = null,
 )
 
 /** One process conversation intent. All selection/foreground operations run on queued Main.
@@ -75,6 +82,11 @@ internal class VoiceConversationStartup(
                          val preferences: suspend () -> VoiceAudioPreferences,
                          var launcher: ((VoiceForegroundTicket) -> Boolean)?) {
         val channel get() = target.destinationId
+        var audioPreferences: VoiceAudioPreferences? = null
+        var audioPending: VoiceAudioPreferences? = null
+        var audioPendingTag: VoiceSessionTag? = null
+        var audioNonce: Any? = null
+        var audioResult: Pair<VoiceSessionTag, VoiceAudioChangeResult>? = null
         var runtime: AuthenticatedVoiceRuntime? = null
         var ticket: VoiceForegroundTicket? = null
         var work: Job? = null
@@ -174,18 +186,41 @@ internal class VoiceConversationStartup(
 
     /** True is command admission, not evidence of capture/rendering or native effect completion. */
     /** Exact foreground/account/conversation fences surround the asynchronous route request. */
-    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences,
+                               expectedTag: VoiceSessionTag? = null): VoiceAudioChangeResult = withContext(queuedDispatcher) {
         val intent = selected ?: return@withContext VoiceAudioChangeResult.STALE
         val runtime = intent.runtime ?: return@withContext VoiceAudioChangeResult.STALE
+        val snapshot = runtime.state.value
+        val session = snapshot.sessionId ?: return@withContext VoiceAudioChangeResult.STALE
+        val original = VoiceSessionTag(session, snapshot.generation)
         fun ownsConversation(): Boolean = isCurrent(intent) && intent.operation == operation &&
             mutableState.value.phase == VoiceConversationPhase.JOIN_SUBMITTED &&
             foreground.current.value === intent.ticket && runtime.belongsTo(intent.account) && !runtime.retired.value &&
-            runtime.state.value.operationId == operation && runtime.state.value.wanted && !runtime.state.value.cleanupPending
-        if (!ownsConversation()) return@withContext VoiceAudioChangeResult.STALE
-        val result = runtime.configureAudio(operation, preferences)
-        if (ownsConversation()) result else VoiceAudioChangeResult.STALE
+            runtime.state.value.operationId == operation && runtime.state.value.sessionId == original.sessionId &&
+            runtime.state.value.generation == original.generation && runtime.state.value.wanted && !runtime.state.value.cleanupPending
+        if (!ownsConversation() || intent.audioPreferences == null || expectedTag?.let { it != original } == true)
+            return@withContext VoiceAudioChangeResult.STALE
+        val nonce = Any()
+        intent.audioNonce = nonce; intent.audioPending = preferences; intent.audioPendingTag = original; intent.audioResult = null
+        fun publishAudio() { mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED, runtime.state.value) }
+        publishAudio()
+        var settled = false
+        try {
+            val result = try { runtime.configureAudio(operation, preferences, original) }
+                catch (cancelled: CancellationException) { throw cancelled }
+                catch (_: Exception) { VoiceAudioChangeResult.FAILED }
+            if (!ownsConversation() || intent.audioNonce !== nonce) return@withContext VoiceAudioChangeResult.STALE
+            if (result == VoiceAudioChangeResult.REQUESTED) intent.audioPreferences = preferences
+            intent.audioPending = null; intent.audioPendingTag = null; intent.audioResult = original to result
+            settled = true; publishAudio()
+            result
+        } finally {
+            if (!settled && ownsConversation() && intent.audioNonce === nonce) {
+                intent.audioPending = null; intent.audioPendingTag = null; intent.audioResult = original to VoiceAudioChangeResult.STALE
+                publishAudio()
+            }
+        }
     }
-
     suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean =
         control(operation) {it.setMuted(operation, value)}
     suspend fun setDeafened(operation: VoiceOperationId, value: Boolean): Boolean =
@@ -222,7 +257,9 @@ internal class VoiceConversationStartup(
             }
             // Consume Activity-bound launch before loading preferences or observing a call.
             if (!launchForeground(intent, ticket) || !foreground.awaitReady(ticket) || !isCurrent(intent)) return
-            val accepted = runtime.joinWithAudio(intent.channel, intent.operation, intent.replace, intent.preferences)
+            val accepted = runtime.joinWithAudio(intent.channel, intent.operation, intent.replace) {
+                intent.preferences().also { if (isCurrent(intent)) intent.audioPreferences = it }
+            }
             if (!accepted || !isCurrent(intent)) return
             mutableState.value = conversationState(intent, VoiceConversationPhase.JOIN_SUBMITTED)
             // Earlier terminal/wanted values cannot finish a new pending intent. Only this
@@ -263,7 +300,18 @@ internal class VoiceConversationStartup(
             intent.audience?.takeIf {voice != null && intent.target is VoiceConversationTarget.Channel &&
                 matchesSession(intent, it.original)}?.state?.value,
             intent.channelRoster?.takeIf {voice != null && intent.target is VoiceConversationTarget.Channel &&
-                intent.channelRosterSession?.let {own -> matchesSession(intent, own)} == true}?.state?.value)
+                intent.channelRosterSession?.let {own -> matchesSession(intent, own)} == true}?.state?.value,
+            audioState(intent,phase,voice))
+
+    private fun audioState(intent: Intent, phase: VoiceConversationPhase, voice: VoiceSessionState?): VoiceConversationAudioState? {
+        val session = voice?.sessionId ?: return null
+        val tag = VoiceSessionTag(session,voice.generation)
+        val preferences = intent.audioPreferences ?: return null
+        if (phase != VoiceConversationPhase.JOIN_SUBMITTED || !matchesSession(intent,tag)) return null
+        return VoiceConversationAudioState(intent.operation,tag,preferences,
+            intent.audioPending.takeIf { intent.audioPendingTag == tag },
+            intent.audioResult?.takeIf { it.first == tag }?.second)
+    }
 
     private fun matchesSession(intent: Intent, own: VoiceSessionTag): Boolean {
         val voice = intent.runtime?.state?.value ?: return false

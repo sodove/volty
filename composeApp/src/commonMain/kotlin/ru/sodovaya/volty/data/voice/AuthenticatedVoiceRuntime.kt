@@ -121,10 +121,12 @@ internal class AuthenticatedVoiceRuntime private constructor(
         }
     }
 
-    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences, expectedTag: VoiceSessionTag? = null): VoiceAudioChangeResult = withContext(queuedDispatcher) {
         if (!allowsAudioWork()) return@withContext VoiceAudioChangeResult.STALE
-        val result = runtime.configureAudio(operation, preferences)
-        if (allowsAudioWork()) result else VoiceAudioChangeResult.STALE
+        val result = runtime.configureAudio(operation, preferences, expectedTag)
+        if (!allowsAudioWork() || state.value.operationId != operation) return@withContext VoiceAudioChangeResult.STALE
+        if (result == VoiceAudioChangeResult.REQUESTED) audioFactory?.takeIf { it.requiresPreparation }?.prepare(preferences)
+        result
     }
 
     suspend fun setMuted(value: Boolean): Boolean = positiveCommand { runtime.setMuted(value) }

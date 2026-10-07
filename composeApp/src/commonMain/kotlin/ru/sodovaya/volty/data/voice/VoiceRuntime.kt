@@ -67,10 +67,11 @@ class VoiceRuntime(
         if (!retiring) owner.event(VoiceSessionEvent.SetDeafened(value, operation))
     }
     /** Does not hold admission across SDK work: disconnect must remain available. */
-    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences, expectedTag: VoiceSessionTag? = null): VoiceAudioChangeResult = withContext(queuedDispatcher) {
         val current = state.value
         val session = current.sessionId ?: return@withContext VoiceAudioChangeResult.STALE
         val tag = VoiceSessionTag(session, current.generation)
+        if (expectedTag != null && expectedTag != tag) return@withContext VoiceAudioChangeResult.STALE
         val now = try { monotonicMillis() } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { return@withContext VoiceAudioChangeResult.STALE }
         if (retiring || current.operationId != operation || !current.authorizesEngine(tag, now))

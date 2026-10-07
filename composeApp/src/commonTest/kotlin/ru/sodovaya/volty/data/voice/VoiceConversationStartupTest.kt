@@ -1369,6 +1369,8 @@ class VoiceConversationStartupTest {
         val boundary=launchBoundary(f,activity)
         val root=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing)
         var replacement:NearbyRootPresenter?=null
+        val audioRelease=CompletableDeferred<Unit>()
+        val chosen=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
         try {
             val account=f.login();root.connectChannel(account,channel,"Channel");runCurrent()
             val request=assertNotNull(voice.state.value.pending).id
@@ -1378,10 +1380,21 @@ class VoiceConversationStartupTest {
             assertTrue(root.state.value.voice.channelMap.observed)
             assertEquals(1,root.state.value.voice.channelRoster?.connectedCount)
             assertTrue(nearbyChannelRosterPanel(root.state.value.voice).known)
+            assertEquals(phone,nearbyConversationPanel(root.state.value.voice).audio?.preferences)
             assertEquals(mapOf(f.peer to "Саша"),nearbyChannelRosterPanel(root.state.value.voice).profileNames)
+            val (tag,emit)=f.emitters.single();emit(VoiceSessionEvent.Published(tag));runCurrent()
+            val originalAudio=assertNotNull(nearbyConversationPanel(root.state.value.voice).audio)
+            assertTrue(nearbyConversationPanel(root.state.value.voice).audioEditable)
+            f.audioRelease=audioRelease;root.actions.configureAudio(originalAudio,chosen);runCurrent()
+            assertTrue(f.audioEntered.isCompleted);assertEquals(listOf(chosen),f.audioPairs)
+            assertEquals(chosen,nearbyConversationPanel(root.state.value.voice).audio?.pending)
             val mutesBefore=f.mutes.toList();val locationBefore=trip.source.issued.toList()
             val old=root.actions;root.close();runCurrent();assertEquals(NearbyRootView(),root.state.value)
-            old.disconnect(operation);old.mute(operation,true);old.startTrip(operation);runCurrent()
+            old.disconnect(operation);old.mute(operation,true);old.startTrip(operation)
+            old.configureAudio(originalAudio,chosen.copy(input=VoiceInputPreference.HEADSET));runCurrent()
+            assertEquals(listOf(chosen),f.audioPairs)
+            audioRelease.complete(Unit);runCurrent()
+            assertEquals(chosen,voice.state.value.audio?.preferences);assertNull(voice.state.value.audio?.pending)
             assertEquals(operation,voice.state.value.operation);assertTrue(assertNotNull(f.runtime).state.value.wanted)
             assertFalse(f.channelRosters.single().state.value.retired)
             assertEquals(1,voice.state.value.channelRoster?.connectedCount)
@@ -1389,13 +1402,14 @@ class VoiceConversationStartupTest {
             val fresh=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing);replacement=fresh;runCurrent()
             assertEquals(operation,fresh.state.value.voice.operation)
             assertSame(f.channelRosters.single().state.value,fresh.state.value.voice.channelRoster)
+            assertEquals(chosen,nearbyConversationPanel(fresh.state.value.voice).audio?.preferences)
             assertEquals(mapOf(f.peer to "Саша"),nearbyChannelRosterPanel(fresh.state.value.voice).profileNames)
             fresh.actions.disconnect(operation);runCurrent();assertFalse(assertNotNull(f.runtime).state.value.wanted)
             assertNull(fresh.state.value.voice.operation)
             assertNull(fresh.state.value.voice.channelRoster);assertTrue(f.channelRosters.single().state.value.retired)
             assertEquals(NearbyPanelConnection.HIDDEN,nearbyConversationPanel(fresh.state.value.voice).connection)
             assertTrue(account.job.isActive)
-        } finally {replacement?.close();root.close();boundary.close();ui.cancel();activity.cancel();sharing.close();voice.close();f.close()}
+        } finally {audioRelease.complete(Unit);replacement?.close();root.close();boundary.close();ui.cancel();activity.cancel();sharing.close();voice.close();f.close()}
     }
 
     @Test fun rootPresentationClearsNaturallyStoppedConversationWithoutRetiringAuthentication() = runTest {
@@ -3263,6 +3277,38 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
+    @Test fun liveAudioPresentationUsesEarnedInitialPairAndKeepsChoiceOnRejectedRequest()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true
+        val chosen=VoiceAudioPreferences(VoiceInputPreference.HEADSET,VoiceOutputPreference.HEADSET)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val initial=assertNotNull(f.owner.state.value.audio);assertEquals(phone,initial.preferences)
+            assertEquals(first,initial.operation);assertEquals(assertNotNull(f.runtime).state.value.sessionId,initial.tag.sessionId)
+            assertEquals(VoiceAudioChangeResult.STALE,f.owner.configureAudio(first,chosen,initial.tag.copy(generation=VoiceGeneration(99))))
+            assertTrue(f.audioPairs.isEmpty())
+            f.audioResult=VoiceAudioChangeResult.UNAVAILABLE
+            assertEquals(VoiceAudioChangeResult.UNAVAILABLE,f.owner.configureAudio(first,chosen))
+            assertEquals(phone,f.owner.state.value.audio?.preferences);assertNull(f.owner.state.value.audio?.pending)
+            assertEquals(VoiceAudioChangeResult.UNAVAILABLE,f.owner.state.value.audio?.lastResult)
+            f.audioResult=VoiceAudioChangeResult.REQUESTED
+            assertEquals(VoiceAudioChangeResult.REQUESTED,f.owner.configureAudio(first,chosen))
+            assertEquals(chosen,f.owner.state.value.audio?.preferences);assertNull(f.owner.state.value.audio?.pending)
+            f.owner.stop(first);runCurrent();assertNull(f.owner.state.value.audio)
+        } finally {f.close()}
+    }
+    @Test fun liveAudioPresentationKeepsLastChoiceWhilePendingAndCannotSurviveWithdrawal()=runTest {
+        val f=Fixture(this);val release=CompletableDeferred<Unit>();var pending:Deferred<VoiceAudioChangeResult>?=null
+        val chosen=VoiceAudioPreferences(VoiceInputPreference.HEADSET,VoiceOutputPreference.HEADSET)
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(phone,assertNotNull(f.owner.state.value.audio).preferences)
+            f.audioRelease=release;pending=async {f.owner.configureAudio(first,chosen)};runCurrent();assertTrue(f.audioEntered.isCompleted)
+            assertEquals(phone,f.owner.state.value.audio?.preferences);assertEquals(chosen,f.owner.state.value.audio?.pending)
+            f.owner.stop(first);runCurrent();assertNull(f.owner.state.value.audio)
+            release.complete(Unit);runCurrent();assertEquals(VoiceAudioChangeResult.STALE,pending.await());assertNull(f.owner.state.value.audio)
+        } finally {release.complete(Unit);pending?.cancel();f.close()}
+    }
+
     @Test fun liveAudioPairUsesOriginalConversationAccountAndForegroundWithoutReallocating()=runTest {
         val f=Fixture(this);f.useBoundRuntime=true
         val pair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
@@ -3405,6 +3451,7 @@ class VoiceConversationStartupTest {
         var beforeAudience: suspend ()->Unit={}
         var afterAudience: suspend ()->Unit={}
         val audiences=mutableListOf<ChannelSharingAudienceSession>()
+        var audioResult=VoiceAudioChangeResult.REQUESTED
         val audioPairs=mutableListOf<VoiceAudioPreferences>()
         val audioEntered=CompletableDeferred<Unit>()
         var audioRelease:CompletableDeferred<Unit>?=null
@@ -3573,7 +3620,7 @@ class VoiceConversationStartupTest {
                     override suspend fun configureAudio(preferences:VoiceAudioPreferences):VoiceAudioChangeResult {
                         val release=audioRelease;audioPairs+=preferences
                         withContext(NonCancellable) {audioEntered.complete(Unit);release?.await()}
-                        return VoiceAudioChangeResult.REQUESTED
+                        return audioResult
                     }
                     override suspend fun close() {closes++}
                 }

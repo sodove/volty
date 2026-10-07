@@ -15,7 +15,8 @@ data class NearbyConversationPanelView(
     val cancelTripRequestId: String? = null,
     val retryTripCleanup: NearbyTripAction? = null,
     val tripActive: Boolean = false, val tripPreparing: Boolean = false,
-    val localCleanupPending: Boolean = false, val serverConfirmationPending: Boolean = false)
+    val localCleanupPending: Boolean = false, val serverConfirmationPending: Boolean = false,
+    val audio: ru.sodovaya.volty.data.voice.VoiceConversationAudioState? = null, val audioEditable: Boolean = false)
 
 internal fun nearbyConversationPanel(voice: NearbyVoiceView, sharing: NearbySharingView = NearbySharingView()): NearbyConversationPanelView {
     val operation = voice.operation
@@ -30,6 +31,9 @@ internal fun nearbyConversationPanel(voice: NearbyVoiceView, sharing: NearbyShar
     }
     val trip = sharing.operation?.let { owner -> sharing.generation?.let { NearbyTripAction(owner, it) } }
     val sameConversation = operation != null && sharing.operation == operation && voice.kind == NearbyConversationKind.CHANNEL
+    val currentAudio = voice.audio?.takeIf { original -> voice.phase==NearbyVoiceUiPhase.ACTIVE && evidence?.wanted==true && !evidence.cleanupPending &&
+            connection!=NearbyPanelConnection.STOPPING && connection!=NearbyPanelConnection.FAILED &&
+            original.operation==operation && original.tag.sessionId==evidence.sessionId && original.tag.generation==evidence.generation }
     return NearbyConversationPanelView(
         connection = connection, disconnectOperation = operation,
         audioOperation = operation.takeIf { evidence?.wanted == true && connection != NearbyPanelConnection.STOPPING && connection != NearbyPanelConnection.FAILED },
@@ -42,5 +46,6 @@ internal fun nearbyConversationPanel(voice: NearbyVoiceView, sharing: NearbyShar
         cancelTripRequestId = trip?.generation.takeIf { sameConversation && sharing.wanted && sharing.preparing },
         retryTripCleanup = trip.takeIf { sharing.localCleanupPending || sharing.serverConfirmationPending },
         tripActive = sameConversation && sharing.active, tripPreparing = sameConversation && sharing.preparing,
-        localCleanupPending = sharing.localCleanupPending, serverConfirmationPending = sharing.serverConfirmationPending)
+        localCleanupPending = sharing.localCleanupPending, serverConfirmationPending = sharing.serverConfirmationPending,
+        audio = currentAudio, audioEditable = currentAudio!=null && currentAudio.pending==null && evidence?.published==true)
 }

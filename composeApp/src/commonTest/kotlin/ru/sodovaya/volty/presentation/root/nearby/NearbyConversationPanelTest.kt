@@ -9,6 +9,24 @@ class NearbyConversationPanelTest {
         operation = operation, phase = NearbyVoiceUiPhase.ACTIVE, voice = voice,
         kind = NearbyConversationKind.CHANNEL)
 
+    @Test fun audioChoiceNeedsExactCurrentSessionAndCannotShowPendingAsSelected() {
+        val session=VoiceSessionId("session");val generation=VoiceGeneration(3)
+        val current=VoiceSessionState(operationId=operation,sessionId=session,generation=generation,wanted=true,phase=VoicePhase.CONNECTING,published=true)
+        val chosen=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+        val audio=ru.sodovaya.volty.data.voice.VoiceConversationAudioState(operation,VoiceSessionTag(session,generation),chosen,
+            pending=chosen.copy(input=VoiceInputPreference.HEADSET))
+        val original=view(current).copy(audio=audio)
+        assertEquals(audio,nearbyConversationPanel(original).audio)
+        assertEquals(chosen,nearbyConversationPanel(original).audio?.preferences)
+        assertFalse(nearbyConversationPanel(original).audioEditable)
+        assertTrue(nearbyConversationPanel(original.copy(audio=audio.copy(pending=null))).audioEditable)
+        assertFalse(nearbyConversationPanel(original.copy(audio=audio.copy(pending=null),voice=current.copy(published=false))).audioEditable)
+        for(bad in listOf(audio.copy(operation=VoiceOperationId("old")),audio.copy(tag=audio.tag.copy(generation=VoiceGeneration(2)))))
+            assertNull(nearbyConversationPanel(original.copy(audio=bad)).audio)
+        assertNull(nearbyConversationPanel(original.copy(voice=current.copy(cleanupPending=true))).audio)
+        assertNull(nearbyConversationPanel(original.copy(voice=current.copy(wanted=false))).audio)
+    }
+
     @Test fun admission_without_transport_evidence_is_connecting() {
         val panel = nearbyConversationPanel(view())
         assertEquals(NearbyPanelConnection.CONNECTING, panel.connection)
