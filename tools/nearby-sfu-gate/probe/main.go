@@ -331,6 +331,10 @@ func main() {
 		runRestartMatrix()
 		return
 	}
+	production := len(os.Args) == 2 && os.Args[1] == "production"
+	if production {
+		fmt.Println("probe_mode=production_image")
+	}
 	proxyServer, err := proxy()
 	require(err == nil, "proxy startup failed")
 	defer proxyServer.Close()
@@ -473,40 +477,45 @@ func main() {
 	denied(room, "B", refresh, "revoked_refreshed")
 	require(control("/volty/leases/register", room, "B", adminBearer(room), 30) == 409, "register resurrected revoked session")
 	require(control("/volty/leases/renew", room, "B", adminBearer(room), 30) == 409, "renew resurrected revoked session")
-	// A completed admit raced with a revoke cannot leave a participant after revoke ACK.
-	mustLease("register", room, "R", 30)
-	require(control("/volty/test/barrier/arm", room, "R", adminBearer(room), 0) == 204, "barrier arm failed")
-	raceToken := token(room, "R")
-	raceJoin := make(chan *receiver, 1)
-	go func() {
-		r, e := join(raceToken)
-		if e != nil {
-			raceJoin <- nil
-		} else {
-			raceJoin <- r
+	if !production {
+		// A completed admit raced with a revoke cannot leave a participant after revoke ACK.
+		mustLease("register", room, "R", 30)
+		require(control("/volty/test/barrier/arm", room, "R", adminBearer(room), 0) == 204, "barrier arm failed")
+		raceToken := token(room, "R")
+		raceJoin := make(chan *receiver, 1)
+		go func() {
+			r, e := join(raceToken)
+			if e != nil {
+				raceJoin <- nil
+			} else {
+				raceJoin <- r
+			}
+		}()
+		awaitBarrier(room, "R", "entered")
+		raceRevoke := make(chan int, 1)
+		go func() { raceRevoke <- control("/volty/leases/revoke", room, "R", adminBearer(room), 0) }()
+		awaitBarrier(room, "R", "revoking")
+		select {
+		case <-raceRevoke:
+			panic("revoke acknowledged before pending admission finished")
+		default:
 		}
-	}()
-	awaitBarrier(room, "R", "entered")
-	raceRevoke := make(chan int, 1)
-	go func() { raceRevoke <- control("/volty/leases/revoke", room, "R", adminBearer(room), 0) }()
-	awaitBarrier(room, "R", "revoking")
-	select {
-	case <-raceRevoke:
-		panic("revoke acknowledged before pending admission finished")
-	default:
+		require(control("/volty/test/barrier/release", room, "R", adminBearer(room), 0) == 204, "barrier release failed")
+		require(<-raceRevoke == 204, "race revoke failed")
+		if r := <-raceJoin; r != nil {
+			defer r.room.Disconnect()
+		}
+		roster, err := admin.ListParticipants(context.Background(), &livekit.ListParticipantsRequest{Room: room})
+		require(err == nil, "roster request failed")
+		for _, p := range roster.Participants {
+			require(p.Identity != "R", "raced participant remained after ACK")
+		}
+		denied(room, "R", raceToken, "raced_original")
+		fmt.Println("race_admission_entered=true revoke_entered=true post_ack_participant_absent=true")
+	} else {
+		require(control("/volty/test/barrier/arm", room, "R", adminBearer(room), 0) == 404, "production exposes test barrier")
+		fmt.Println("production_barrier_absent=true deterministic_race_not_run=true")
 	}
-	require(control("/volty/test/barrier/release", room, "R", adminBearer(room), 0) == 204, "barrier release failed")
-	require(<-raceRevoke == 204, "race revoke failed")
-	if r := <-raceJoin; r != nil {
-		defer r.room.Disconnect()
-	}
-	roster, err := admin.ListParticipants(context.Background(), &livekit.ListParticipantsRequest{Room: room})
-	require(err == nil, "roster request failed")
-	for _, p := range roster.Participants {
-		require(p.Identity != "R", "raced participant remained after ACK")
-	}
-	denied(room, "R", raceToken, "raced_original")
-	fmt.Println("race_admission_entered=true revoke_entered=true post_ack_participant_absent=true")
 	// Expiry closes media without any explicit leave request; original JWT is still valid.
 	mustLease("register", room, "D", 8)
 	expiryStart := time.Now()
