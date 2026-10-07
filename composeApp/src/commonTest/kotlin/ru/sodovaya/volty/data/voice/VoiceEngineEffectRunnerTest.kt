@@ -11,8 +11,15 @@ class VoiceEngineEffectRunnerTest {
     private val credentials = VoiceConnectionCredentials("wss://example.invalid", "secret")
     private fun state(tag: VoiceSessionTag = this.tag) = VoiceSessionState(generation = tag.generation, sessionId = tag.sessionId,
         wanted = true, phase = VoicePhase.CONNECTING, leaseDeadlineMillis = 100, lastLeaseRequestId = VoiceLeaseRequestId(0))
-    private class Session(val blockConnect: Boolean = false, var failClose: Boolean = false) : VoiceSdkSession {
+    private class Session(val blockConnect: Boolean = false, var failClose: Boolean = false, val blockAudio:Boolean=false, val resistAudioCancellation:Boolean=false) : VoiceSdkSession {
         val entered = CompletableDeferred<Unit>(); val gate = CompletableDeferred<Unit>()
+        val audioEntered=CompletableDeferred<Unit>();val audioGate=CompletableDeferred<Unit>()
+        val audioPairs=mutableListOf<VoiceAudioPreferences>();var audioResult=VoiceAudioChangeResult.REQUESTED
+        override suspend fun configureAudio(preferences:VoiceAudioPreferences):VoiceAudioChangeResult {
+            audioPairs+=preferences;audioEntered.complete(Unit)
+            if(blockAudio) {if(resistAudioCancellation) withContext(NonCancellable) {audioGate.await()} else audioGate.await()}
+            return audioResult
+        }
         val calls = mutableListOf<String>(); var closes = 0
         override suspend fun connect(credentials: VoiceConnectionCredentials) { calls += "connect"; entered.complete(Unit); if (blockConnect) gate.await() }
         override suspend fun publishMicrophone(muted: Boolean): Boolean { calls += "publish:$muted"; return true }
@@ -160,4 +167,64 @@ class VoiceEngineEffectRunnerTest {
         assertTrue(VoiceSessionEffect.ClearSharingQueue in sharing)
         assertFalse(session.calls.any { it.startsWith("publish:") })
     }
+    private val audioPair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+    @Test fun audioQueuedRequestAndDeniedTagDoNotCancelCurrentNativeRequest()=runTest {
+        val session=Session(blockAudio=true);val events=mutableListOf<VoiceSessionEvent>()
+        val runner=VoiceEngineEffectRunner(backgroundScope,StandardTestDispatcher(testScheduler),VoiceSdkSessionFactory {_,_->session},{state()},{0},events::add)
+        runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StartEngine(tag),credentials));runCurrent()
+        val pending=async {runner.configureAudio(tag,audioPair)}
+        assertTrue(session.audioPairs.isEmpty());runCurrent()
+        try {
+            assertTrue(session.audioEntered.isCompleted);assertEquals(listOf(audioPair),session.audioPairs)
+            val denied=runner.configureAudio(tag.copy(generation=VoiceGeneration(9)),audioPair)
+            assertEquals(VoiceAudioChangeResult.STALE,denied);assertFalse(pending.isCompleted)
+            session.audioGate.complete(Unit);runCurrent();assertEquals(VoiceAudioChangeResult.REQUESTED,pending.await())
+            assertEquals(0,runner.inFlight.value);assertFalse(events.any {it is VoiceSessionEvent.EngineFailed})
+        } finally {session.audioGate.complete(Unit);pending.cancel();runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(tag.generation)));runCurrent()}
+    }
+    @Test fun cancelledAudioProducerBlocksReplacementAllocationUntilActualCompletion()=runTest {
+        var current=state();val next=tag.copy(sessionId=VoiceSessionId("new"),generation=VoiceGeneration(2))
+        val old=Session(blockAudio=true,resistAudioCancellation=true);val fresh=Session();var freshAllocations=0
+        val runner=VoiceEngineEffectRunner(backgroundScope,StandardTestDispatcher(testScheduler),VoiceSdkSessionFactory {t,_->if(t==tag)old else {freshAllocations++;fresh}},{current},{0},{})
+        runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StartEngine(tag),credentials));runCurrent()
+        val pending=async {runner.configureAudio(tag,audioPair)};runCurrent()
+        try {
+            assertTrue(old.audioEntered.isCompleted);assertEquals(1,runner.inFlight.value)
+            current=state(next);runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(tag.generation)))
+            runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StartEngine(next),credentials));runCurrent()
+            assertEquals(1,old.closes);assertEquals(0,freshAllocations);assertTrue(runner.inFlight.value>=2)
+            old.audioGate.complete(Unit);runCurrent();assertEquals(VoiceAudioChangeResult.STALE,pending.await())
+            assertEquals(1,freshAllocations);assertTrue(fresh.audioPairs.isEmpty());assertEquals(0,fresh.closes)
+            assertEquals(0,runner.inFlight.value)
+        } finally {old.audioGate.complete(Unit);pending.cancel();runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(next.generation)));runCurrent()}
+    }
+    @Test fun cancelledCallerAndSupersededPairKeepUnfinishedProducerInBarrier()=runTest {
+        val session=Session(blockAudio=true,resistAudioCancellation=true)
+        val runner=VoiceEngineEffectRunner(backgroundScope,StandardTestDispatcher(testScheduler),VoiceSdkSessionFactory {_,_->session},{state()},{0},{})
+        runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StartEngine(tag),credentials));runCurrent()
+        val cancelled=async {runner.configureAudio(tag,audioPair)};runCurrent()
+        var latest:Deferred<VoiceAudioChangeResult>?=null
+        try {
+            assertTrue(session.audioEntered.isCompleted);cancelled.cancel();runCurrent()
+            assertTrue(cancelled.isCancelled);assertEquals(1,runner.inFlight.value)
+            val replacement=audioPair.copy(input=VoiceInputPreference.HEADSET)
+            latest=async {runner.configureAudio(tag,replacement)};runCurrent();assertEquals(listOf(audioPair),session.audioPairs)
+            assertEquals(VoiceAudioChangeResult.STALE,runner.configureAudio(tag.copy(sessionId=VoiceSessionId("foreign")),audioPair))
+            session.audioGate.complete(Unit);runCurrent()
+            assertEquals(VoiceAudioChangeResult.REQUESTED,latest.await());assertEquals(listOf(audioPair,replacement),session.audioPairs)
+            assertEquals(0,runner.inFlight.value);assertEquals(0,session.closes)
+        } finally {session.audioGate.complete(Unit);cancelled.cancel();latest?.cancel();runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(tag.generation)));runCurrent()}
+    }
+    @Test fun unavailableAudioDoesNotFailVoiceOrAllocateAnotherStack()=runTest {
+        val session=Session();session.audioResult=VoiceAudioChangeResult.UNAVAILABLE
+        var allocations=0;val events=mutableListOf<VoiceSessionEvent>()
+        val runner=VoiceEngineEffectRunner(backgroundScope,StandardTestDispatcher(testScheduler),VoiceSdkSessionFactory {_,_->allocations++;session},{state()},{0},events::add)
+        runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StartEngine(tag),credentials));runCurrent()
+        try {
+            assertEquals(VoiceAudioChangeResult.UNAVAILABLE,runner.configureAudio(tag,audioPair))
+            assertEquals(listOf(audioPair),session.audioPairs);assertEquals(1,allocations);assertEquals(0,session.closes)
+            assertFalse(events.any {it is VoiceSessionEvent.EngineFailed});assertEquals(0,runner.inFlight.value)
+        } finally {runner.dispatch(VoiceControlDispatch(VoiceSessionEffect.StopEngine(tag.generation)));runCurrent()}
+    }
+
 }

@@ -28,6 +28,14 @@ class VoiceRuntimeTest {
     }
     private class Session : VoiceSdkSession {
         var connects = 0; var closes = 0; var failClose = false
+        var blockAudio=false
+        val audioEntered=CompletableDeferred<Unit>();val audioGate=CompletableDeferred<Unit>()
+        val audioPairs=mutableListOf<VoiceAudioPreferences>()
+        override suspend fun configureAudio(preferences:VoiceAudioPreferences):VoiceAudioChangeResult {
+            audioPairs+=preferences;audioEntered.complete(Unit)
+            if(blockAudio) withContext(NonCancellable) {audioGate.await()}
+            return VoiceAudioChangeResult.REQUESTED
+        }
         override suspend fun connect(credentials: VoiceConnectionCredentials) { connects++ }
         override suspend fun publishMicrophone(muted: Boolean) = true
         override suspend fun setMuted(muted: Boolean) = true
@@ -36,12 +44,13 @@ class VoiceRuntimeTest {
     }
     private class Fixture(scope: CoroutineScope, dispatcher: CoroutineDispatcher) {
         var now = 0L
+        var clockUnavailable = false
         val port = Port { now }; val session = Session()
         val pulses = Channel<Unit>(Channel.UNLIMITED)
         val sharing = mutableListOf<VoiceSharingEffect>()
         val sharingDispatches=mutableListOf<VoiceSharingDispatch>()
         val runtime = VoiceRuntime(scope, dispatcher, port, VoiceSdkSessionFactory { _, _ -> session },
-            pulses.receiveAsFlow(), { now }, {sharing+=it.effect;sharingDispatches+=it})
+            pulses.receiveAsFlow(), { if(clockUnavailable) error("clock unavailable") else now }, {sharing+=it.effect;sharingDispatches+=it})
     }
     @Test fun inlineDispatcherIsRejectedBeforeTheOwnerOrSdkStarts() = runTest {
         var created = 0
@@ -121,4 +130,43 @@ class VoiceRuntimeTest {
         f.pulses.send(Unit); runCurrent()
         assertFalse(f.runtime.state.value.wanted); assertEquals(1, f.session.closes)
     }
+    @Test fun heldAudioPairDoesNotBlockDisconnectOrEarnLateSuccess()=runTest {
+        val f=Fixture(backgroundScope,StandardTestDispatcher(testScheduler));val operation=VoiceOperationId("original")
+        f.runtime.join("channel",operation);runCurrent();f.session.blockAudio=true
+        val pair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+        val pending=async {f.runtime.configureAudio(operation,pair)};runCurrent()
+        try {
+            assertTrue(f.session.audioEntered.isCompleted);assertEquals(listOf(pair),f.session.audioPairs)
+            assertEquals(1,f.runtime.nativeInFlight.value)
+            val stop=async {f.runtime.disconnect()};runCurrent();assertTrue(stop.isCompleted)
+            assertFalse(f.runtime.state.value.wanted);assertEquals(1,f.session.closes);assertEquals(1,f.port.disconnects.size)
+            assertFalse(pending.isCompleted);assertEquals(1,f.runtime.nativeInFlight.value)
+            f.session.audioGate.complete(Unit);runCurrent();assertEquals(VoiceAudioChangeResult.STALE,pending.await())
+            assertEquals(0,f.runtime.nativeInFlight.value);assertEquals(1,f.session.connects)
+        } finally {f.session.audioGate.complete(Unit);pending.cancel();f.runtime.disconnect();runCurrent();f.pulses.close()}
+    }
+    @Test fun audioPairRejectsHistoricalOperationAndRetirementWithoutMutatingReplacement()=runTest {
+        val f=Fixture(backgroundScope,StandardTestDispatcher(testScheduler));val old=VoiceOperationId("old");val current=VoiceOperationId("new")
+        val pair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+        try {
+            f.runtime.join("one",old);runCurrent();f.runtime.join("two",current,replace=true);runCurrent()
+            assertEquals(current,f.runtime.state.value.operationId);assertEquals(2,f.session.connects)
+            assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(old,pair));assertTrue(f.session.audioPairs.isEmpty())
+            assertEquals(VoiceAudioChangeResult.REQUESTED,f.runtime.configureAudio(current,pair));assertEquals(listOf(pair),f.session.audioPairs)
+            f.runtime.beginRetirement();runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(current,pair));assertEquals(listOf(pair),f.session.audioPairs)
+            assertEquals(2,f.session.connects)
+        } finally {f.runtime.disconnect();runCurrent();f.pulses.close()}
+    }
+
+    @Test fun audioPairCannotInventAuthorizationWhenClockReadFails()=runTest {
+        val f=Fixture(backgroundScope,StandardTestDispatcher(testScheduler));val operation=VoiceOperationId("original")
+        try {
+            f.runtime.join("channel",operation);runCurrent();assertEquals(1,f.session.connects)
+            f.clockUnavailable=true
+            assertEquals(VoiceAudioChangeResult.STALE,f.runtime.configureAudio(operation,VoiceAudioPreferences()))
+            assertTrue(f.session.audioPairs.isEmpty());assertEquals(0,f.session.closes)
+        } finally {f.clockUnavailable=false;f.runtime.disconnect();runCurrent();f.pulses.close()}
+    }
+
 }

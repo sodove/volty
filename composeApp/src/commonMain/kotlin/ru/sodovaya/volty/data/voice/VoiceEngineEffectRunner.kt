@@ -14,7 +14,7 @@ import ru.sodovaya.volty.domain.voice.*
  */
 class VoiceEngineEffectRunner(
     parent: CoroutineScope,
-    queuedDispatcher: CoroutineDispatcher,
+    private val queuedDispatcher: CoroutineDispatcher,
     factory: VoiceSdkSessionFactory,
     private val currentState: () -> VoiceSessionState,
     private val monotonicMillis: () -> Long,
@@ -28,6 +28,7 @@ class VoiceEngineEffectRunner(
     private val stops = mutableMapOf<VoiceGeneration, Job>()
     private var mute: Control? = null
     private var deafen: Control? = null
+    private var audioChange: AudioControl? = null
     private val cleanup = MutableStateFlow<Set<VoiceGeneration>>(emptySet())
     val failedCleanup = cleanup.asStateFlow()
     private val workCount = MutableStateFlow(0)
@@ -49,6 +50,28 @@ class VoiceEngineEffectRunner(
             is VoiceSessionEffect.SetDeafened -> control(effect.tag, effect.value, microphone = false)
             else -> throw IllegalArgumentException("Engine effect required")
         }
+    }
+
+    /** Awaiting SDK control never holds the runtime admission mailbox or ownership mutex. */
+    suspend fun configureAudio(tag: VoiceSessionTag, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+        if (scope.coroutineContext[Job]?.isActive != true || !authorizes(tag)) return@withContext VoiceAudioChangeResult.STALE
+        audioChange?.job?.cancel()
+        val pending = AudioControl(tag)
+        audioChange = pending
+        pending.job = launchWork {
+            try {
+                val result = if (audioChange === pending && authorizes(tag)) driver.configureAudio(tag, preferences)
+                    else VoiceAudioChangeResult.STALE
+                pending.result.complete(if (audioChange === pending && authorizes(tag)) result else VoiceAudioChangeResult.STALE)
+            } finally { pending.result.complete(VoiceAudioChangeResult.STALE) }
+        }
+        pending.job!!.invokeOnCompletion {
+            // Includes cancellation before a queued producer ever entered its body.
+            pending.result.complete(VoiceAudioChangeResult.STALE)
+            if (audioChange === pending) audioChange = null
+        }
+        try { pending.result.await() }
+        finally { if (!pending.result.isCompleted) pending.job?.cancel() }
     }
 
     private fun start(effect: VoiceSessionEffect.StartEngine, credentials: VoiceConnectionCredentials) {
@@ -79,6 +102,7 @@ class VoiceEngineEffectRunner(
         starts[generation]?.job?.cancel()
         mute?.takeIf { it.tag.generation == generation }?.job?.cancel()
         deafen?.takeIf { it.tag.generation == generation }?.job?.cancel()
+        audioChange?.takeIf { it.tag.generation == generation }?.job?.cancel()
         if (stops[generation]?.isActive == true) return
         stops[generation] = launchWork {
             try {
@@ -122,6 +146,10 @@ class VoiceEngineEffectRunner(
         return job
     }
 
+    private class AudioControl(val tag: VoiceSessionTag) {
+        val result = CompletableDeferred<VoiceAudioChangeResult>()
+        var job: Job? = null
+    }
     private class Start(val tag: VoiceSessionTag) { var job: Job? = null }
     private class Control(val tag: VoiceSessionTag) { var job: Job? = null }
 }

@@ -66,6 +66,24 @@ class VoiceRuntime(
     suspend fun setDeafened(operation: VoiceOperationId, value: Boolean) = command {
         if (!retiring) owner.event(VoiceSessionEvent.SetDeafened(value, operation))
     }
+    /** Does not hold admission across SDK work: disconnect must remain available. */
+    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+        val current = state.value
+        val session = current.sessionId ?: return@withContext VoiceAudioChangeResult.STALE
+        val tag = VoiceSessionTag(session, current.generation)
+        val now = try { monotonicMillis() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return@withContext VoiceAudioChangeResult.STALE }
+        if (retiring || current.operationId != operation || !current.authorizesEngine(tag, now))
+            return@withContext VoiceAudioChangeResult.STALE
+        val result = engine.configureAudio(tag, preferences)
+        val latest = state.value
+        val observedAt = try { monotonicMillis() } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { return@withContext VoiceAudioChangeResult.STALE }
+        if (retiring || latest.operationId != operation || latest.sessionId != tag.sessionId ||
+            latest.generation != tag.generation || !latest.authorizesEngine(tag, observedAt)) VoiceAudioChangeResult.STALE
+        else result
+    }
+
     suspend fun enableSharing() = command {
         val state = owner.state.value
         val tag = state.sessionId?.let { VoiceSessionTag(it, state.generation) }

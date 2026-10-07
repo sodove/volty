@@ -8,3 +8,6 @@ Continue the approved independent microphone/output requirement inline using exe
 4. Expose separate controls on persistent Root panel with current-operation actions and honest status; retain existing next-connection settings. Native/visual/device validation, safe reconnect mode and Xiaomi bilateral audibility remain required before claiming completion.
 
 Task 1 first: stub default and driver denial RED, then actual serialization/ownership implementation, focused tests and full uncached Android before commit. Backend/PG unchanged.
+
+
+Queued core advance: the runner now owns tracked audio-control producers, retaining cancelled-but-incomplete work in the existing in-flight/predecessor barriers. Stop cancels the original audio producer; replacement waits for actual completion. Invalid tags cannot cancel current work. VoiceRuntime uses exact rendered operation and current session/generation/lease before and after a request, and deliberately avoids holding admission while awaiting SDK work so disconnect remains available. Account/startup/foreground integration, native implementation and Root live controls remain open; this core API is not exposed in UI yet.
