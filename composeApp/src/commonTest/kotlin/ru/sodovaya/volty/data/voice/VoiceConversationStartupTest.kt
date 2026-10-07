@@ -3263,6 +3263,46 @@ class VoiceConversationStartupTest {
         } finally {f.close()}
     }
 
+    @Test fun liveAudioPairUsesOriginalConversationAccountAndForegroundWithoutReallocating()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true
+        val pair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+        try {
+            val account=f.login();assertEquals(VoiceAudioChangeResult.STALE,f.owner.configureAudio(first,pair))
+            f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(1,f.published);val ticket=assertNotNull(f.gate.current.value)
+            assertTrue(f.owner.setMuted(first,true));runCurrent();val muted=f.mutes.toList();val deafened=f.deafens.toList()
+            assertEquals(VoiceAudioChangeResult.REQUESTED,f.owner.configureAudio(first,pair))
+            assertEquals(listOf(pair),f.audioPairs);assertEquals(1,f.allocated.size);assertSame(ticket,f.gate.current.value)
+            assertEquals(muted,f.mutes);assertEquals(deafened,f.deafens);assertTrue(account.job.isActive)
+            assertEquals(VoiceAudioChangeResult.STALE,f.owner.configureAudio(second,pair));assertEquals(1,f.audioPairs.size)
+            f.gate.stop(ticket);runCurrent()
+            assertEquals(VoiceAudioChangeResult.STALE,f.owner.configureAudio(first,pair));assertEquals(1,f.audioPairs.size)
+        } finally {f.close()}
+    }
+    @Test fun heldLiveAudioOldLoginCannotAcknowledgeNewAccountOrAutoRetryRejectedAdmission()=runTest {
+        val f=Fixture(this);f.useBoundRuntime=true;val release=CompletableDeferred<Unit>()
+        val pair=VoiceAudioPreferences(VoiceInputPreference.PHONE,VoiceOutputPreference.HEADSET)
+        var pending:Deferred<VoiceAudioChangeResult>?=null
+        try {
+            val old=f.login();f.owner.start(old,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            f.audioRelease=release;pending=async {f.owner.configureAudio(first,pair)};runCurrent()
+            assertTrue(f.audioEntered.isCompleted);assertEquals(listOf(pair),f.audioPairs)
+            f.repository.logout();runCurrent();assertFalse(old.job.isActive)
+            val fresh=f.login();assertEquals(old.userId,fresh.userId);assertNotSame(old,fresh)
+            f.audioRelease=null;f.owner.start(fresh,channel,second,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(1,f.allocated.size);assertEquals(VoiceConversationPhase.FAILED,f.owner.state.value.phase)
+            release.complete(Unit);runCurrent();assertEquals(VoiceAudioChangeResult.STALE,pending.await())
+            assertEquals(1,f.allocated.size);assertEquals(VoiceConversationPhase.FAILED,f.owner.state.value.phase)
+            assertEquals(VoiceAudioChangeResult.STALE,f.owner.configureAudio(second,pair))
+            val retry=VoiceOperationId("30000000-0000-0000-0000-000000000009")
+            f.owner.start(fresh,channel,retry,readPreferences={phone},launch=f::launch);runCurrent()
+            assertEquals(retry,f.owner.state.value.operationId);assertEquals(2,f.allocated.size)
+            val next=pair.copy(input=VoiceInputPreference.HEADSET)
+            assertEquals(VoiceAudioChangeResult.REQUESTED,f.owner.configureAudio(retry,next))
+            assertEquals(listOf(pair,next),f.audioPairs);assertTrue(assertNotNull(f.runtime).state.value.wanted);assertTrue(fresh.job.isActive)
+        } finally {release.complete(Unit);pending?.cancel();f.close()}
+    }
+
     @Test fun rootMuteAndDeafenIssueNativeCommandsAndRestoreMuteIntent() = runTest {
         val f = Fixture(this)
         try {
@@ -3365,6 +3405,9 @@ class VoiceConversationStartupTest {
         var beforeAudience: suspend ()->Unit={}
         var afterAudience: suspend ()->Unit={}
         val audiences=mutableListOf<ChannelSharingAudienceSession>()
+        val audioPairs=mutableListOf<VoiceAudioPreferences>()
+        val audioEntered=CompletableDeferred<Unit>()
+        var audioRelease:CompletableDeferred<Unit>?=null
         var time = 100L
         val dispatcher = StandardTestDispatcher(test.testScheduler)
         var authToken = "token"
@@ -3527,6 +3570,11 @@ class VoiceConversationStartupTest {
                     override suspend fun publishMicrophone(muted: Boolean): Boolean {published++; return true}
                     override suspend fun setMuted(muted: Boolean): Boolean {mutes += muted; return true}
                     override fun setDeafened(deafened: Boolean) {deafens += deafened}
+                    override suspend fun configureAudio(preferences:VoiceAudioPreferences):VoiceAudioChangeResult {
+                        val release=audioRelease;audioPairs+=preferences
+                        withContext(NonCancellable) {audioEntered.complete(Unit);release?.await()}
+                        return VoiceAudioChangeResult.REQUESTED
+                    }
                     override suspend fun close() {closes++}
                 }
             }

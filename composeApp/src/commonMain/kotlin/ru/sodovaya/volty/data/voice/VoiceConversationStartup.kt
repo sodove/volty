@@ -173,6 +173,19 @@ internal class VoiceConversationStartup(
     }
 
     /** True is command admission, not evidence of capture/rendering or native effect completion. */
+    /** Exact foreground/account/conversation fences surround the asynchronous route request. */
+    suspend fun configureAudio(operation: VoiceOperationId, preferences: VoiceAudioPreferences): VoiceAudioChangeResult = withContext(queuedDispatcher) {
+        val intent = selected ?: return@withContext VoiceAudioChangeResult.STALE
+        val runtime = intent.runtime ?: return@withContext VoiceAudioChangeResult.STALE
+        fun ownsConversation(): Boolean = isCurrent(intent) && intent.operation == operation &&
+            mutableState.value.phase == VoiceConversationPhase.JOIN_SUBMITTED &&
+            foreground.current.value === intent.ticket && runtime.belongsTo(intent.account) && !runtime.retired.value &&
+            runtime.state.value.operationId == operation && runtime.state.value.wanted && !runtime.state.value.cleanupPending
+        if (!ownsConversation()) return@withContext VoiceAudioChangeResult.STALE
+        val result = runtime.configureAudio(operation, preferences)
+        if (ownsConversation()) result else VoiceAudioChangeResult.STALE
+    }
+
     suspend fun setMuted(operation: VoiceOperationId, value: Boolean): Boolean =
         control(operation) {it.setMuted(operation, value)}
     suspend fun setDeafened(operation: VoiceOperationId, value: Boolean): Boolean =
