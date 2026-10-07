@@ -68,7 +68,7 @@ internal class AndroidVoiceSdkSession(
         ownedAudio.module.setMicrophoneMute(true) // Initial intent installed before any native capture.
         ownedAudio.module.setSpeakerMute(deafened || !outputAvailable)
         ownedAudio.applyInput(manager, preferences.input)
-        val ownedRoutes = VoiceAudioRouteMonitor(context, manager, preferences, diagnostics, ownedKeeper, ownedAudio.preferredInputId,
+        val ownedRoutes = VoiceAudioRouteMonitor(context, manager, preferences, diagnostics, ownedKeeper, { ownedAudio.preferredInputId },
             outputAllowed = { allowed ->
                 outputAvailable = allowed
                 if (!closing) ownedAudio.module.setSpeakerMute(deafened || !allowed)
@@ -120,6 +120,25 @@ internal class AndroidVoiceSdkSession(
     override fun setDeafened(deafened: Boolean) {
         this.deafened = deafened
         if (!closing) audio?.module?.setSpeakerMute(deafened || !outputAvailable)
+    }
+
+    override suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult = resources.withLock {
+        currentCoroutineContext().ensureActive()
+        if (closing) return@withLock VoiceAudioChangeResult.STALE
+        val ownedAudio = audio ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
+        val ownedRoutes = routes ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
+        if (preferences.input == VoiceInputPreference.AUTO && ownedAudio.preferredInputId != null)
+            return@withLock VoiceAudioChangeResult.REQUIRES_RECONNECT
+        val request = currentCoroutineContext()[Job]
+        val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val result = ownedRoutes.configureOutputAndInput(preferences.output,
+            requestInput = { ownedAudio.requestInput(manager, preferences.input) },
+            currentRequest = { !closing && request?.isActive == true })
+        currentCoroutineContext().ensureActive()
+        if (closing) VoiceAudioChangeResult.STALE else {
+            if (result == VoiceAudioChangeResult.REQUESTED) diagnostics.update { it.copy(preferences = preferences) }
+            result
+        }
     }
 
     override suspend fun close() = closeMutex.withLock {

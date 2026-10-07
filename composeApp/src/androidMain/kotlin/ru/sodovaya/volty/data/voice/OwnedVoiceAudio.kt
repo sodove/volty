@@ -68,20 +68,29 @@ internal class OwnedVoiceAudio(
         .createAudioDeviceModule()
 
     fun applyInput(manager: AudioManager, preference: VoiceInputPreference) {
-        if (preference == VoiceInputPreference.AUTO) return // Fresh ADM, never null setter.
+        if (requestInput(manager, preference) != VoiceAudioChangeResult.REQUESTED) {
+            fail(VoiceDiagnosticCode.INPUT_UNAVAILABLE)
+            throw VoiceEngineException(VoiceEngineError.CONNECTION)
+        }
+    }
+
+    /** A void ADM preference request cannot prove actual capture routing. No null public setter. */
+    @Synchronized fun requestInput(manager: AudioManager, preference: VoiceInputPreference): VoiceAudioChangeResult {
+        if (released) return VoiceAudioChangeResult.STALE
+        if (preference == VoiceInputPreference.AUTO) return if (preferredInputId == null)
+            VoiceAudioChangeResult.REQUESTED else VoiceAudioChangeResult.REQUIRES_RECONNECT
         val device = manager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
             when (preference) {
                 VoiceInputPreference.PHONE -> it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
                 VoiceInputPreference.HEADSET -> isHeadsetInput(it.type)
                 VoiceInputPreference.AUTO -> false
             }
-        }
-        if (device == null) {
-            fail(VoiceDiagnosticCode.INPUT_UNAVAILABLE)
-            throw VoiceEngineException(VoiceEngineError.CONNECTION)
-        }
-        module.setPreferredInputDevice(device)
-        preferredInputId = device.id
+        } ?: return VoiceAudioChangeResult.UNAVAILABLE
+        return try {
+            module.setPreferredInputDevice(device)
+            preferredInputId = device.id
+            VoiceAudioChangeResult.REQUESTED
+        } catch (_: Exception) { VoiceAudioChangeResult.FAILED }
     }
 
     @Synchronized fun close() {

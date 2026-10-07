@@ -19,6 +19,22 @@ class VoiceDiagnosticsTest {
             routes.copy(input = VoiceInputPreference.PHONE).outputPriority().take(2))
     }
 
+    @Test fun explicitHeadsetOutputRejectsSpeakerAndUnknownEvenWithPhoneMicrophone() {
+        for(input in VoiceInputPreference.entries) {
+            val requested=VoiceAudioPreferences(input,VoiceOutputPreference.HEADSET)
+            assertTrue(requested.permitsOutput(VoiceDeviceKind.BLUETOOTH));assertTrue(requested.permitsOutput(VoiceDeviceKind.WIRED))
+            for(kind in listOf(VoiceDeviceKind.SPEAKER,VoiceDeviceKind.EARPIECE,VoiceDeviceKind.UNKNOWN)) assertFalse(requested.permitsOutput(kind))
+        }
+    }
+    @Test fun explicitSpeakerDoesNotAcceptHeadsetAndAutoRemainsAnIndependentChoice() {
+        for(input in VoiceInputPreference.entries) {
+            val requested=VoiceAudioPreferences(input,VoiceOutputPreference.SPEAKER)
+            assertTrue(requested.permitsOutput(VoiceDeviceKind.SPEAKER))
+            for(kind in listOf(VoiceDeviceKind.BLUETOOTH,VoiceDeviceKind.WIRED,VoiceDeviceKind.EARPIECE,VoiceDeviceKind.UNKNOWN)) assertFalse(requested.permitsOutput(kind))
+            for(kind in VoiceDeviceKind.entries) assertTrue(requested.copy(output=VoiceOutputPreference.AUTO).permitsOutput(kind))
+        }
+    }
+
     @Test fun selectionAndSamplesDoNotInventActualStreamRoute() {
         val diagnostics = VoiceDiagnostics(VoiceGeneration(7))
         diagnostics.update { it.copy(selectedOutput = VoiceDeviceKind.WIRED, captureBytes = 960) }

@@ -15,6 +15,7 @@ import com.twilio.audioswitch.AudioSwitch
 import com.twilio.audioswitch.CommDeviceAudioSwitch
 import io.livekit.android.audio.AudioHandler
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.voice.*
@@ -26,7 +27,7 @@ internal class VoiceAudioRouteMonitor(
     private val preferences: VoiceAudioPreferences,
     private val diagnostics: VoiceDiagnostics,
     private val keeper: VoiceCommunicationKeeper,
-    private val preferredInputId: Int?,
+    private val preferredInputId: () -> Int?,
     private val outputAllowed: (Boolean) -> Unit,
     private val inputLost: () -> Unit,
 ) : AudioHandler {
@@ -36,11 +37,13 @@ internal class VoiceAudioRouteMonitor(
     private var deviceRegistered = false
     private var recordingRegistered = false
     private var closed = false
+    @Volatile private var desiredOutput = preferences.output
     private val deviceCallback = object : AudioDeviceCallback() {
         override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) = observe()
         override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
             observe()
-            if (preferredInputId != null && removedDevices.any { it.id == preferredInputId }) {
+            val requestedInput = preferredInputId()
+            if (requestedInput != null && removedDevices.any { it.id == requestedInput }) {
                 // Never silently substitute another explicit microphone after unplugging.
                 inputLost()
             }
@@ -73,19 +76,9 @@ internal class VoiceAudioRouteMonitor(
             switch.audioAttributeUsageType = android.media.AudioAttributes.USAGE_VOICE_COMMUNICATION
             switch.audioAttributeContentType = android.media.AudioAttributes.CONTENT_TYPE_SPEECH
             switch.start { _, selected ->
-                val kind = when (selected) {
-                    is AudioDevice.BluetoothHeadset -> VoiceDeviceKind.BLUETOOTH
-                    is AudioDevice.WiredHeadset -> VoiceDeviceKind.WIRED
-                    is AudioDevice.Speakerphone -> VoiceDeviceKind.SPEAKER
-                    is AudioDevice.Earpiece -> VoiceDeviceKind.EARPIECE
-                    else -> VoiceDeviceKind.UNKNOWN
-                }
+                val kind = outputKind(selected)
                 diagnostics.update { it.copy(selectedOutput = kind) }
-                val allowed = when (preferences.output) {
-                    VoiceOutputPreference.HEADSET -> kind == VoiceDeviceKind.BLUETOOTH || kind == VoiceDeviceKind.WIRED
-                    VoiceOutputPreference.SPEAKER -> kind == VoiceDeviceKind.SPEAKER
-                    VoiceOutputPreference.AUTO -> true
-                }
+                val allowed = VoiceAudioPreferences(output=desiredOutput).permitsOutput(kind)
                 outputAllowed(allowed)
                 record(if (allowed) VoiceDiagnosticCode.ROUTE_CHANGED else VoiceDiagnosticCode.OUTPUT_UNAVAILABLE)
                 observe()
@@ -102,6 +95,52 @@ internal class VoiceAudioRouteMonitor(
             record(VoiceDiagnosticCode.OUTPUT_UNAVAILABLE)
         }
     } }
+
+    /** All native requests finish on the owned worker before their producer can retire. */
+    suspend fun configureOutputAndInput(output: VoiceOutputPreference, requestInput: () -> VoiceAudioChangeResult,
+                                      currentRequest: () -> Boolean): VoiceAudioChangeResult {
+        val completion = CompletableDeferred<VoiceAudioChangeResult>()
+        if (!handler.post {
+            if (closed || !currentRequest()) { completion.complete(VoiceAudioChangeResult.STALE); return@post }
+            try {
+                val switch = audioSwitch
+                if (switch == null) { completion.complete(VoiceAudioChangeResult.UNAVAILABLE); return@post }
+                val selected = when (output) {
+                    VoiceOutputPreference.HEADSET -> switch.availableAudioDevices.firstOrNull {
+                        it is AudioDevice.BluetoothHeadset || it is AudioDevice.WiredHeadset
+                    }
+                    VoiceOutputPreference.SPEAKER -> switch.availableAudioDevices.firstOrNull { it is AudioDevice.Speakerphone }
+                    VoiceOutputPreference.AUTO -> null
+                }
+                if (output != VoiceOutputPreference.AUTO && selected == null) {
+                    completion.complete(VoiceAudioChangeResult.UNAVAILABLE); return@post
+                }
+                // Validate output availability before touching input; input never picks speaker.
+                val inputResult = requestInput()
+                if (inputResult != VoiceAudioChangeResult.REQUESTED) { completion.complete(inputResult); return@post }
+                if (desiredOutput != output) {
+                    desiredOutput = output
+                    outputAllowed(VoiceAudioPreferences(output=output).permitsOutput(outputKind(switch.selectedAudioDevice)))
+                    switch.setPreferredDeviceList(VoiceAudioPreferences(output=output).outputPriority().map { kind -> when(kind) {
+                        VoiceDeviceKind.BLUETOOTH -> AudioDevice.BluetoothHeadset::class.java
+                        VoiceDeviceKind.WIRED -> AudioDevice.WiredHeadset::class.java
+                        VoiceDeviceKind.SPEAKER -> AudioDevice.Speakerphone::class.java
+                        VoiceDeviceKind.EARPIECE -> AudioDevice.Earpiece::class.java
+                        VoiceDeviceKind.UNKNOWN -> error("Unknown output priority")
+                    } })
+                    // Local AAR selectDevice(null) clears user output selection; unlike ADM input reset.
+                    switch.selectDevice(selected)
+                }
+                observe()
+                completion.complete(VoiceAudioChangeResult.REQUESTED)
+            } catch (_: Exception) {
+                record(VoiceDiagnosticCode.ROUTE_OBSERVATION_ERROR)
+                completion.complete(VoiceAudioChangeResult.FAILED)
+            }
+        }) return VoiceAudioChangeResult.FAILED
+        // A cancelled caller does not prove its posted native action has finished. Keep barriers honest.
+        return withContext(NonCancellable) { completion.await() }
+    }
 
     override fun stop() { handler.post {
         try { stopOwned() } catch (_: Exception) { record(VoiceDiagnosticCode.CLEANUP_ERROR) }
@@ -150,6 +189,13 @@ internal class VoiceAudioRouteMonitor(
             diagnostics.update { it.copy(audioMode = null, communicationDeviceType = null, recordingDeviceTypes = emptyList()) }
             record(VoiceDiagnosticCode.ROUTE_OBSERVATION_ERROR)
         }
+    }
+    private fun outputKind(device: AudioDevice?): VoiceDeviceKind = when(device) {
+        is AudioDevice.BluetoothHeadset -> VoiceDeviceKind.BLUETOOTH
+        is AudioDevice.WiredHeadset -> VoiceDeviceKind.WIRED
+        is AudioDevice.Speakerphone -> VoiceDeviceKind.SPEAKER
+        is AudioDevice.Earpiece -> VoiceDeviceKind.EARPIECE
+        else -> VoiceDeviceKind.UNKNOWN
     }
     private fun record(code: VoiceDiagnosticCode) = diagnostics.record(SystemClock.elapsedRealtime(), code)
 }

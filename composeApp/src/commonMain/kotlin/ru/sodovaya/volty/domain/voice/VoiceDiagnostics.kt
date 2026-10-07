@@ -18,6 +18,13 @@ fun VoiceAudioPreferences.outputPriority(): List<VoiceDeviceKind> = when (output
     else -> listOf(VoiceDeviceKind.BLUETOOTH, VoiceDeviceKind.WIRED, VoiceDeviceKind.SPEAKER, VoiceDeviceKind.EARPIECE)
 }
 
+/** Output acceptance never consumes input intent or proves a measured stream route. */
+fun VoiceAudioPreferences.permitsOutput(kind: VoiceDeviceKind): Boolean = when(output) {
+    VoiceOutputPreference.HEADSET -> kind == VoiceDeviceKind.BLUETOOTH || kind == VoiceDeviceKind.WIRED
+    VoiceOutputPreference.SPEAKER -> kind == VoiceDeviceKind.SPEAKER
+    VoiceOutputPreference.AUTO -> true
+}
+
 /** Missing evidence in one receiver must not become an apparently complete total. */
 fun sumCompleteVoiceCounters(counters: List<Long?>): Long? {
     if (counters.isEmpty() || counters.any { it == null || it < 0 }) return null
