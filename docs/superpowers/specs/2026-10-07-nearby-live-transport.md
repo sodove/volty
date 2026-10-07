@@ -47,3 +47,13 @@ Windows SDK подключался через `https://volty.sodove.ru` и `wss:
 Дополнение: диагностические `c941bl` trial2 и `c941br` trial1 снова не прошли даже 60-секундное окно. В момент начального отсутствия потока SDK видел часть опубликованных треков без подписки и иногда не видел удалённого участника; OnTrackSubscriptionFailed не сработал. `br` показал connected и два ICE connected для каждого клиента, без зарегистрированных ошибок сигналинга/ICE в начальной фазе. Позднее heartbeat стал CONNECTING/EXPIRED и чтение ранее работавших треков завершилось. Это наблюдения, не установленная причина. Предшествующие три `c941bn` прошли; один успех или серия успехов не устраняют этот дефект.
 
 Отдельный full-stack стенд теперь проверил восстановление backend при живом SFU (`c941bs`, 28 checks); рабочие сервисы для этого не перезапускались. Результаты — в [full stack evidence](2026-10-07-nearby-full-stack-evidence.md).
+
+
+## Явная гарантия единственного рабочего origin
+
+Обновление: первоначальное описание singleton=false выше относится к первому cutover. `c941bz` подтвердил отдельными Docker network/alias/process/port observations единственный локальный control origin. `c941c0` dry-run и execute завершились actual exit0: третий `singleton.override.yaml` меняет только `VOLTY_NEARBY_SINGLETON_ORIGIN` на true. Новый app `515506f5678aab9124788881a733dd22d9e86110b9bf7f12c43d4caada05fd8a`, прежний exact backend image; остальные environment values сохранены, рабочие SFU/DB IDs не изменились, public health прошёл. Credentials не экспортировались. `singleton-manifest.json` имеет state LIVE_SINGLETON_CONFIG_VERIFIED.
+
+Это включает уже предусмотренное восстановление после замены единственного SFU. Изолированный `c941bx`, actual exit0/17 checks, подтвердил retirement старых сессий, quiet old media, сохранение членства и новые четыре реальные SDK transports во всех 12 направлениях после SFU restart. `c941bw` со singletonOrigin=false дал PENDING вместо выдачи новых credentials; это прежняя operational limitation, а не потеря пользователей. Рабочий SFU не перезапускался. [Команды и границы guarantee](../plans/2026-10-07-nearby-cutover-preparation.md#рабочая-конфигурация-после-проверки-единственного-origin).
+
+
+После изменения конфигурации `c941c1` сравнил отдельный SDK process на каждого участника (те же закреплённые зависимости, public WSS/RTP): trial1 прошёл, trial2 воспроизвёл пропавшую подписку, actual exit1; trial3 не запускался. Cleanup тестовых аккаунтов/приватного сервера выполнен. Гипотеза влияния нескольких Room в одном Go-процессе не подтверждена. Singleton setting не исправляет этот независимый дефект и не выдаётся за такое исправление.

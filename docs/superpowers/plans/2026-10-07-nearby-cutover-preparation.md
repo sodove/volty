@@ -28,3 +28,24 @@ Read-only инвентаризация 2026-10-07: существующий proj
 6. Откат возвращает исходные артефакты, но не восстанавливает автоматически отозванное согласие на передачу геопозиции. Старые ephemeral позиции уже удаляются startup-транзакцией; повторное sharing требует явного действия пользователя.
 
 Проверки только fixture-конфигурации можно повторять через `check-compose-configuration.py --config <fixture-json> --image <exact-id>`; helper не печатает содержимое JSON. Нельзя выдавать его проверку стандартной fixture базы за доказательство, что реальный production volume выбран правильно. Подписанный APK/маршруты/наушники и Xiaomi проверяются по отдельному device acceptance плану.
+
+
+## Рабочая конфигурация после проверки единственного origin
+
+Дополнение 2026-10-07: существующий локальный bridge `volty_default` имеет ровно один target для alias `livekit`; app не задаёт DNS/ExtraHosts overrides, control origin напрямую `http://livekit:7880`, один SFU-процесс без Redis, публичный порт 17880 принадлежит тому же SFU. Это отдельная проверка топологии, а не вывод из readiness singleNode.
+
+На основании этой проверки к release добавлен `singleton.override.yaml` с единственным изменением `VOLTY_NEARBY_SINGLETON_ORIGIN: "true"`. Пересоздан только app из прежнего exact image. База и SFU сохранили IDs. Результат и rollback записаны в `singleton-manifest.json` в существующем release directory. Исходный `nearby.override.yaml` остаётся с conservative false как generic default.
+
+Для следующих операций с рабочим app использовать **все три** Compose-файла:
+
+```text
+docker compose --project-name volty --env-file /home/sodovaya/volty/.env \
+  -f /home/sodovaya/volty/docker-compose.yml \
+  -f /home/sodovaya/volty-nearby-releases/2026-10-07-c941ay/nearby.override.yaml \
+  -f /home/sodovaya/volty-nearby-releases/2026-10-07-c941ay/singleton.override.yaml \
+  up -d --no-deps --no-build --pull never app
+```
+
+Это команда с побочным действием, не диагностическая проверка. Пропуск третьего файла вернёт strict mode, при котором после замены SFU повторный join ждёт подтверждения cleanup. Откат настройки использует прежние первые два файла и пересоздаёт только app; база не восстанавливается. Executor `c941c0-singleton.py` уже выполнен и запрещает повторный запуск при существующем journal. Перед переходом к нескольким SFU/балансировщику необходимо отключить singleton guarantee и внедрить подтверждение retirement прежних origins.
+
+На отдельном стенде `c941bx` проверено: после подтверждённого restart единственного SFU старые четыре сессии CANCELLED, старое медиа молчит, членство сохраняется; четыре новых session identities снова передают пакеты во всех 12 направлениях и имеют согласованный состав. На рабочем SFU restart пока не выполнялся; его восстановление не выдаётся за наблюдение production.
