@@ -11,10 +11,16 @@ class VoiceConnectionCredentials(val serverUrl: String, val token: String) {
 /** REQUESTED is an accepted preference request, never measured routing or audibility. */
 enum class VoiceAudioChangeResult { REQUESTED, UNAVAILABLE, REQUIRES_RECONNECT, FAILED, STALE }
 
+enum class VoiceMuteApplyResult { APPLIED, SUPERSEDED, REJECTED }
+
 interface VoiceSdkSession {
     suspend fun connect(credentials: VoiceConnectionCredentials)
     suspend fun publishMicrophone(muted: Boolean): Boolean
     suspend fun setMuted(muted: Boolean): Boolean
+    /** Recheck current intent after any dispatcher/lock wait, immediately before native writes. */
+    suspend fun setMutedIfCurrent(muted: Boolean, current: () -> Boolean): VoiceMuteApplyResult =
+        if (!current()) VoiceMuteApplyResult.SUPERSEDED
+        else if (setMuted(muted)) VoiceMuteApplyResult.APPLIED else VoiceMuteApplyResult.REJECTED
     fun setDeafened(deafened: Boolean)
     suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult = VoiceAudioChangeResult.REQUIRES_RECONNECT
     suspend fun close()

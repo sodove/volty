@@ -48,6 +48,41 @@ internal class AndroidVoiceSdkSession(
     @Volatile private var deafened = false
     @Volatile private var outputAvailable = preferences.output == VoiceOutputPreference.AUTO
     private val peerTracks = mutableMapOf<String, MutableSet<String>>()
+    private val publicationRecovery = VoicePublicationRecovery(scope, object : VoicePublicationRecoveryPort {
+        override suspend fun restoreClosed(): Boolean = withContext(Dispatchers.Main.immediate) {
+            resources.withLock {
+                if (closing) return@withLock false
+                val ownedRoom = room ?: return@withLock false
+                val track = localTrack ?: return@withLock false
+                val ownedAudio = audio ?: return@withLock false
+                // SDK full reconnect skips its saved muted publication. Reuse
+                // the same track, always closed; the driver alone applies intent.
+                ownedAudio.module.setMicrophoneMute(true)
+                track.enabled = false
+                val existing = ownedPublication(ownedRoom)
+                if (existing != null) {
+                    existing.muted = true
+                    return@withLock true
+                }
+                val restored = ownedRoom.localParticipant.publishAudioTrack(track)
+                currentCoroutineContext().ensureActive()
+                if (closing || !restored) return@withLock false
+                val publication = ownedPublication(ownedRoom) ?: return@withLock false
+                publication.muted = true
+                true
+            }
+        }
+        override fun hasOwnedPublication(): Boolean = !closing && ownedPublication() != null
+    }, published = {
+        record(VoiceDiagnosticCode.PUBLISHED)
+        event(VoiceSessionEvent.Published(tag))
+    }, failed = { event(VoiceSessionEvent.EngineFailed(tag)) })
+
+    private fun ownedPublication(ownedRoom: Room? = room): LocalTrackPublication? {
+        val track = localTrack ?: return null
+        return ownedRoom?.localParticipant?.trackPublications?.values
+            ?.filterIsInstance<LocalTrackPublication>()?.firstOrNull { it.track === track }
+    }
 
     override suspend fun connect(credentials: VoiceConnectionCredentials) {
         val ownedRoom = resources.withLock { allocateRoom() }
@@ -108,13 +143,21 @@ internal class AndroidVoiceSdkSession(
         return published
     }
 
-    override suspend fun setMuted(muted: Boolean): Boolean {
-        if (closing || localTrack == null) return false
-        val publication = room?.localParticipant?.trackPublications?.values
-            ?.filterIsInstance<LocalTrackPublication>()?.firstOrNull { it.track === localTrack } ?: return false
-        checkNotNull(audio).module.setMicrophoneMute(muted)
-        publication.muted = muted
-        return true
+    override suspend fun setMuted(muted: Boolean): Boolean =
+        setMutedIfCurrent(muted) { true } == VoiceMuteApplyResult.APPLIED
+
+    override suspend fun setMutedIfCurrent(muted: Boolean, current: () -> Boolean): VoiceMuteApplyResult = withContext(Dispatchers.Main.immediate) {
+        resources.withLock {
+            if (closing) return@withLock VoiceMuteApplyResult.SUPERSEDED
+            val publication = ownedPublication() ?: return@withLock VoiceMuteApplyResult.REJECTED
+            currentCoroutineContext().ensureActive()
+            // Main dispatch and closed-republish resource locking may suspend.
+            // Recheck intent/lease after both, with no await before native writes.
+            if (!current()) return@withLock VoiceMuteApplyResult.SUPERSEDED
+            checkNotNull(audio).module.setMicrophoneMute(muted)
+            publication.muted = muted
+            VoiceMuteApplyResult.APPLIED
+        }
     }
 
     override fun setDeafened(deafened: Boolean) {
@@ -143,6 +186,7 @@ internal class AndroidVoiceSdkSession(
 
     override suspend fun close() = closeMutex.withLock {
         closing = true
+        publicationRecovery.close()
         scope.coroutineContext.cancelChildren()
         // Each reference clears only after successful release, preserving failed cleanup for retry.
         resources.withLock {
@@ -159,18 +203,27 @@ internal class AndroidVoiceSdkSession(
         }
     }
 
-    private fun onRoomEvent(event: RoomEvent, ownedRoom: Room) {
+    private suspend fun onRoomEvent(event: RoomEvent, ownedRoom: Room) {
         if (closing) return
         when (event) {
-            is RoomEvent.Connected -> { record(VoiceDiagnosticCode.CONNECTED); event(VoiceSessionEvent.TransportConnected(tag)) }
-            is RoomEvent.Reconnecting -> { record(VoiceDiagnosticCode.RECONNECTING); event(VoiceSessionEvent.Reconnecting(tag)) }
+            is RoomEvent.Connected -> {
+                publicationRecovery.connected()
+                record(VoiceDiagnosticCode.CONNECTED); event(VoiceSessionEvent.TransportConnected(tag))
+            }
+            is RoomEvent.Reconnecting -> {
+                // Close native capture across the gap without changing SDK's
+                // saved publication.muted, which selects its republish path.
+                audio?.module?.setMicrophoneMute(true)
+                publicationRecovery.reconnecting()
+                record(VoiceDiagnosticCode.RECONNECTING); event(VoiceSessionEvent.Reconnecting(tag))
+            }
             is RoomEvent.Reconnected -> {
                 record(VoiceDiagnosticCode.RECONNECTED)
                 event(VoiceSessionEvent.TransportConnected(tag))
+                publicationRecovery.connected()
                 // A soft resume may keep the publication and emit no TrackPublished.
                 // Inspect the actual owned publication; transport alone is not evidence.
-                if (localTrack != null && ownedRoom.localParticipant.trackPublications.values
-                        .any { it is LocalTrackPublication && it.track === localTrack }) {
+                if (ownedPublication(ownedRoom) != null && publicationRecovery.sdkPublished()) {
                     record(VoiceDiagnosticCode.PUBLISHED)
                     this.event(VoiceSessionEvent.Published(tag))
                 }
@@ -178,11 +231,17 @@ internal class AndroidVoiceSdkSession(
             is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.EngineFailed(tag)) }
             is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
             is RoomEvent.TrackPublished -> if (event.participant == ownedRoom.localParticipant &&
-                event.publication.kind == Track.Kind.AUDIO && event.publication.track === localTrack) {
+                event.publication.kind == Track.Kind.AUDIO && event.publication.track === localTrack &&
+                ownedPublication(ownedRoom) === event.publication && publicationRecovery.sdkPublished()) {
                 record(VoiceDiagnosticCode.PUBLISHED)
                 this.event(VoiceSessionEvent.Published(tag))
             }
-            is RoomEvent.TrackUnpublished -> if (event.participant == ownedRoom.localParticipant && event.publication.kind == Track.Kind.AUDIO) this.event(VoiceSessionEvent.Unpublished(tag))
+            is RoomEvent.TrackUnpublished -> if (event.participant == ownedRoom.localParticipant &&
+                event.publication.kind == Track.Kind.AUDIO && ownedPublication(ownedRoom) == null) {
+                audio?.module?.setMicrophoneMute(true)
+                this.event(VoiceSessionEvent.Unpublished(tag))
+                publicationRecovery.unpublished(event.publication.muted)
+            }
             is RoomEvent.TrackSubscribed -> if (event.track.kind == Track.Kind.AUDIO) {
                 val peer = event.participant.sid.toString()
                 peerTracks.getOrPut(peer) { mutableSetOf() }.add(event.publication.sid)

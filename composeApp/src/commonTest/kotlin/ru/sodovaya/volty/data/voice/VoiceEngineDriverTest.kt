@@ -458,6 +458,81 @@ class VoiceEngineDriverTest {
         driver.stop(tag(1).generation)
     }
 
+    @Test fun permissionRetiredWhileNativeMuteWaitsCannotOpenMicrophone() = runTest {
+        var authorized = true
+        val session = FakeSession()
+        val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, _ -> session }, { authorized })
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1), muted = true), credentials).isSuccess)
+        session.blockNextMute = true
+        val pending = async { driver.setMuted(tag(1), false) }
+        runCurrent(); assertTrue(session.enteredMuteBoundary.isCompleted)
+        assertEquals(listOf(true), session.muteAttempts)
+        authorized = false
+        session.muteBoundaryGate.complete(Unit); runCurrent()
+        assertTrue(pending.await().isFailure)
+        assertEquals(listOf(true), session.muteAttempts)
+        driver.stop(tag(1).generation)
+    }
+
+    @Test fun newerMuteIntentWhileNativeUnmuteWaitsCannotBrieflyOpenMicrophone() = runTest {
+        val session = FakeSession()
+        val driver = driver(VoiceSdkSessionFactory { _, _ -> session })
+        assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1), muted = true), credentials).isSuccess)
+        session.blockNextMute = true
+        val unmute = async { driver.setMuted(tag(1), false) }
+        runCurrent(); assertTrue(session.enteredMuteBoundary.isCompleted)
+        val mute = async { driver.setMuted(tag(1), true) }; runCurrent()
+        assertEquals(listOf(true), session.muteAttempts)
+        session.muteBoundaryGate.complete(Unit); runCurrent()
+        assertTrue(unmute.await().isSuccess); assertTrue(mute.await().isSuccess)
+        assertTrue(session.muteAttempts.all { it })
+        driver.stop(tag(1).generation)
+    }
+
+    @Test fun closedRecoveryAcknowledgementAppliesLatestDriverIntentOnlyWhileAuthorized() = runTest {
+        for (revokeBeforeAcknowledgement in listOf(false, true)) {
+            var authorized = true
+            lateinit var emit: (VoiceSessionEvent) -> Unit
+            val session = FakeSession()
+            var allocations = 0; var restores = 0; var acknowledgements = 0
+            val enteredRestore = CompletableDeferred<Unit>()
+            val restoreGate = CompletableDeferred<Unit>()
+            val driver = VoiceEngineDriver(backgroundScope, VoiceSdkSessionFactory { _, callback ->
+                allocations++; emit = callback; session
+            }, { authorized })
+            val recovery = VoicePublicationRecovery(backgroundScope, object : VoicePublicationRecoveryPort {
+                override suspend fun restoreClosed(): Boolean {
+                    restores++
+                    session.calls += "restore:true"
+                    enteredRestore.complete(Unit)
+                    restoreGate.await()
+                    session.publicationAvailable = true
+                    return true
+                }
+                override fun hasOwnedPublication(): Boolean = session.publicationAvailable
+            }, {
+                acknowledgements++
+                emit(VoiceSessionEvent.Published(tag(1)))
+            }, { emit(VoiceSessionEvent.EngineFailed(tag(1))) })
+            assertTrue(driver.start(VoiceSessionEffect.StartEngine(tag(1), muted = true), credentials).isSuccess)
+            session.publicationAvailable = false
+            emit(VoiceSessionEvent.Reconnecting(tag(1))); recovery.reconnecting()
+            emit(VoiceSessionEvent.Unpublished(tag(1))); recovery.unpublished(true)
+            emit(VoiceSessionEvent.TransportConnected(tag(1))); recovery.connected(); runCurrent()
+            assertTrue(enteredRestore.isCompleted)
+            assertTrue(driver.setMuted(tag(1), false).isSuccess)
+            assertEquals(listOf(true), session.muteAttempts)
+            assertFalse(recovery.sdkPublished())
+            if (revokeBeforeAcknowledgement) authorized = false
+            restoreGate.complete(Unit); runCurrent()
+            assertEquals(1, acknowledgements); assertEquals(1, restores)
+            assertEquals(if (revokeBeforeAcknowledgement) listOf(true) else listOf(true, false), session.muteAttempts)
+            assertEquals(1, allocations); assertEquals(1, session.publishCalls)
+            assertTrue(session.calls.contains("restore:true"))
+            recovery.close(); driver.stop(tag(1).generation)
+        }
+    }
+
     private class FakeSession(
         private val blockConnect: Boolean = false,
         private val publishResult: Boolean = true,
@@ -496,6 +571,21 @@ class VoiceEngineDriverTest {
         var publicationAvailable = false
         var rejectMute = false
         val muteAttempts = mutableListOf<Boolean>()
+        var blockNextMute = false
+        val enteredMuteBoundary = CompletableDeferred<Unit>()
+        val muteBoundaryGate = CompletableDeferred<Unit>()
+        private suspend fun awaitMuteBoundary() {
+            if (blockNextMute) {
+                blockNextMute = false
+                enteredMuteBoundary.complete(Unit)
+                muteBoundaryGate.await()
+            }
+        }
+        override suspend fun setMutedIfCurrent(muted: Boolean, current: () -> Boolean): VoiceMuteApplyResult {
+            awaitMuteBoundary()
+            if (!current()) return VoiceMuteApplyResult.SUPERSEDED
+            return if (setMuted(muted)) VoiceMuteApplyResult.APPLIED else VoiceMuteApplyResult.REJECTED
+        }
         override suspend fun connect(credentials: VoiceConnectionCredentials) {
             calls += "connect"
             enteredConnect.complete(Unit)
@@ -510,6 +600,7 @@ class VoiceEngineDriverTest {
             return publishResult
         }
         override suspend fun setMuted(muted: Boolean): Boolean {
+            awaitMuteBoundary()
             muteAttempts += muted
             if (!publicationAvailable) return false
             if (!enteredMute.isCompleted) {

@@ -28,8 +28,8 @@ class VoiceEngineDriver(
     private val authorized: (VoiceSessionTag) -> Boolean,
 ) {
     private val mutex = Mutex()
-    private var command: Command? = null
-    private var current: Handle? = null
+    @Volatile private var command: Command? = null
+    @Volatile private var current: Handle? = null
     private val retired = mutableSetOf<Handle>()
     private val output = MutableSharedFlow<VoiceSessionEvent>(extraBufferCapacity = 64)
     val events = output.asSharedFlow()
@@ -155,8 +155,8 @@ class VoiceEngineDriver(
         val (accepted, handle) = mutex.withLock {
             val owned = command?.takeIf { it.tag == tag && isAuthorized(tag) } ?: return@withLock false to null
             check(owned.muteVersion < Long.MAX_VALUE)
-            owned.muted = muted
             owned.muteVersion++
+            owned.muted = muted
             true to current?.takeIf { it.command === owned && it.publicationReady }
         }
         if (!accepted) return Result.failure(VoiceEngineException(VoiceEngineError.MUTE))
@@ -178,15 +178,22 @@ class VoiceEngineDriver(
                         Triple(handle.command.muted, handle.command.muteVersion, handle.publicationVersion)
                     }
                     if (intent == null) return@control
-                    val applied = handle.session.setMuted(intent.first)
+                    val applied = handle.session.setMutedIfCurrent(intent.first) {
+                        command === handle.command && current === handle && handle.publicationReady &&
+                            handle.publicationVersion == intent.third && handle.command.muteVersion == intent.second &&
+                            isAuthorized(handle.command.tag)
+                    }
                     assertOwned(handle)
                     val settled = mutex.withLock {
                         if (!handle.publicationReady || handle.publicationVersion != intent.third) {
                             // A delivered removal supersedes this result, including rejection.
                             true
                         } else {
-                            if (!applied) throw VoiceEngineException(VoiceEngineError.MUTE)
-                            handle.command.muteVersion == intent.second
+                            if (handle.command.muteVersion != intent.second) false
+                            else {
+                                if (applied != VoiceMuteApplyResult.APPLIED) throw VoiceEngineException(VoiceEngineError.MUTE)
+                                true
+                            }
                         }
                     }
                 } while (!settled)
@@ -287,7 +294,7 @@ class VoiceEngineDriver(
     }
 
     private class Command(val tag: VoiceSessionTag, val job: Job, var muted: Boolean, var deafened: Boolean) {
-        var muteVersion = 0L
+        @Volatile var muteVersion = 0L
     }
     private class AudioChange(val handle: Handle, val nonce: Any)
     private class Handle(val command: Command, val session: VoiceSdkSession) {
@@ -296,8 +303,8 @@ class VoiceEngineDriver(
         val controlMutex = Mutex()
         var initialPublicationComplete = false
         var pendingInitialPublished = false
-        var publicationReady = false
-        var publicationVersion = 0L
+        @Volatile var publicationReady = false
+        @Volatile var publicationVersion = 0L
         var closed = false
     }
 
