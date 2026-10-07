@@ -947,7 +947,7 @@
     <string name="nearby_audio_speaker">Speaker</string>
     <string name="nearby_audio_pending">Changing device…</string>
     <string name="nearby_audio_unavailable">Device unavailable. Choose another.</string>
-    <string name="nearby_audio_reconnect">Disconnect from voice and reconnect to use this choice.</string>
+    <string name="nearby_audio_reconnect">For this choice, set the microphone to Auto in settings, then disconnect from voice and reconnect.</string>
     <string name="nearby_audio_failed">Could not change device. Try again.</string>
     <string name="nearby_audio_stale">Connection changed. Choose the device again.</string>
 </resources>

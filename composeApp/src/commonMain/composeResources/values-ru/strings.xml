@@ -945,7 +945,7 @@
     <string name="nearby_audio_speaker">Динамик</string>
     <string name="nearby_audio_pending">Меняем устройство…</string>
     <string name="nearby_audio_unavailable">Устройство недоступно. Выберите другое.</string>
-    <string name="nearby_audio_reconnect">Для этого выбора отключитесь от войса и подключитесь снова.</string>
+    <string name="nearby_audio_reconnect">Для этого выбора установите микрофон «Авто» в настройках, затем отключитесь от войса и подключитесь снова.</string>
     <string name="nearby_audio_failed">Не удалось изменить устройство. Попробуйте ещё раз.</string>
     <string name="nearby_audio_stale">Подключение изменилось. Выберите устройство ещё раз.</string>
 </resources>
