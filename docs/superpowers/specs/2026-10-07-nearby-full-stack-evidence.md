@@ -47,3 +47,14 @@ python3 probe.py --workspace /tmp/volty-nearby-stack-<unique> \
 ```
 
 Runner требует точные image IDs и хеш executable, собственную свежую сеть/каталог, свободные loopback порты 18089/17881/17882 и UDP17883. Использует только известные fixture credentials, resource limits, read-only backend/SFU и tmpfs базы. Этот runner создаёт и удаляет тестовые контейнеры; он не запускает production Compose.
+
+
+## Восстановление backend на отдельном стенде
+
+`c941bs`, actual exit0, 28 проверок: runner с `--restart-backend` перезапустил только собственный backend после согласования четырёх подключённых клиентов. Перед restart повторно проверены container ID, exact image и task label. За пределы стенда действие не выходит.
+
+Backend вернулся в healthy в пределах 20-секундного окна; четыре durable session остались CONNECTED с первоначальными SID и одинаковыми roster. RTP продолжился во всех 12 направлениях. Затем прошли обычные GPS revoke, disconnect/late heartbeat, дружеский звонок и stop. Все контейнеры и сеть удалены. Это перезапуск backend при живом SFU, а не SFU restart и не live restart рабочей системы.
+
+История: первый ad-hoc `c941bm` дал тот же результат. Перенос сценария в optional flag сначала выявил ошибку runner `args` shadowed by Docker argv list (`c941bp`): restart не был вызван, fixture cleanup прошёл. Аргументы контейнера переименованы; исправленный reusable runner прошёл `c941bs`. Android suite после исправления: `c941bt`, actual exit0/55s/35 executed tasks, 3373 теста без failure/error/skip, rerun/no caches.
+
+Для повторения добавить `--restart-backend` к приведённой выше команде. Default по-прежнему выполняет исходные 24 проверки без перезапуска.

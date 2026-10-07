@@ -42,3 +42,8 @@ Windows SDK подключался через `https://volty.sodove.ru` и `wss:
 Подписанный клиент `c8d0c90a`: Volty 0.7.13/code36, APK SHA256 `e39a453a434b6ad9226254c81dc1ebba7af63aa39e6033e66102c9034f5ea70f`. Native client source не менялся после этой сборки. `c941b3` заново выполнил Android suite без caches: 3373 теста, ноль failure/error/skip, 35 executed tasks, actual exit0.
 
 Остаются реальные телефоны: двусторонняя слышимость Xiaomi, PHONE mic + HEADSET output, hotplug, фон/FGS, уведомления и размеры UI. Полный live restart/recovery ещё не проверен. Killed-process push не реализован. Чеклист: [приёмка на телефонах](../plans/2026-10-07-nearby-device-acceptance.md).
+
+
+Дополнение: диагностические `c941bl` trial2 и `c941br` trial1 снова не прошли даже 60-секундное окно. В момент начального отсутствия потока SDK видел часть опубликованных треков без подписки и иногда не видел удалённого участника; OnTrackSubscriptionFailed не сработал. `br` показал connected и два ICE connected для каждого клиента, без зарегистрированных ошибок сигналинга/ICE в начальной фазе. Позднее heartbeat стал CONNECTING/EXPIRED и чтение ранее работавших треков завершилось. Это наблюдения, не установленная причина. Предшествующие три `c941bn` прошли; один успех или серия успехов не устраняют этот дефект.
+
+Отдельный full-stack стенд теперь проверил восстановление backend при живом SFU (`c941bs`, 28 checks); рабочие сервисы для этого не перезапускались. Результаты — в [full stack evidence](2026-10-07-nearby-full-stack-evidence.md).

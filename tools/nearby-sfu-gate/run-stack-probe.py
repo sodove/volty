@@ -4,6 +4,7 @@ parser.add_argument('--workspace',required=True)
 parser.add_argument('--backend-image',required=True)
 parser.add_argument('--sfu-image',required=True)
 parser.add_argument('--sdk-sha256',required=True)
+parser.add_argument('--restart-backend',action='store_true',help='Restart only this probe-owned backend while four media sessions are connected')
 args=parser.parse_args()
 ROOT=pathlib.Path(args.workspace).resolve()
 if not re.fullmatch(r'/tmp/volty-nearby-stack-[a-z0-9]+',str(ROOT)):raise RuntimeError('Owned workspace required')
@@ -88,9 +89,9 @@ try:
     else:raise RuntimeError('fixture PostgreSQL startup failed')
     run(NET+'-sfu',SFU,'--memory=512m','--cpus=1','--read-only','--tmpfs','/tmp:rw,size=16m','--mount','type=bind,src='+str(ROOT/'sfu.yaml')+',dst=/etc/livekit.yaml,readonly','--entrypoint','/livekit-server',command=('--config','/etc/livekit.yaml'),network_mode='host')
     env={'PORT':'8080','VOLTY_DATABASE_URL':'jdbc:postgresql://fixture-db:5432/volty','VOLTY_DATABASE_USER':'volty','VOLTY_DATABASE_PASSWORD':'fixture-db-password','VOLTY_JWT_SECRET':'fixture-only-hmac-'+secrets.token_hex(32),'VOLTY_VOICE_PROVIDER':'livekit','LIVEKIT_URL':'ws://127.0.0.1:17881','LIVEKIT_API_KEY':'nearby-probe','LIVEKIT_API_SECRET':'local-nearby-probe-secret-not-production-20261003','VOLTY_PUBLIC_IP':'127.0.0.1','VOLTY_NEARBY_MODE':'voice_spaces','VOLTY_NEARBY_SFU_CONTROL_ORIGIN':'http://'+gateway+':17881','VOLTY_NEARBY_SINGLETON_ORIGIN':'false'}
-    args=['--memory=768m','--cpus=1','--read-only','--tmpfs','/tmp:rw,size=64m','-p','127.0.0.1:18089:8080']
-    for key,value in env.items(): args.extend(['-e',key+'='+value])
-    app_container=run(NET+'-app',BACKEND,*args)
+    app_args=['--memory=768m','--cpus=1','--read-only','--tmpfs','/tmp:rw,size=64m','-p','127.0.0.1:18089:8080']
+    for key,value in env.items(): app_args.extend(['-e',key+'='+value])
+    app_container=run(NET+'-app',BACKEND,*app_args)
     deadline=time.monotonic()+45
     while time.monotonic()<deadline:
         try:
@@ -146,6 +147,27 @@ try:
     rosters=[api('GET','/v2/nearby/channels/'+channel+'/roster',u) for u in users]
     projections=[sorted((peer['actorId'],peer['sessionId'],peer['mediaPresence'],peer.get('participantSid'),peer['phase']) for peer in roster['peers']) for roster in rosters]
     check('four_observers_agree_active_roster',all(p==projections[0] for p in projections) and len(projections[0])==4 and all(p[2]=='CONNECTED' and p[3] and p[4]=='CONNECTED' for p in projections[0]))
+    if args.restart_backend:
+        identity=docker('inspect',app_container,'--format','{{.Id}}|{{.Image}}|{{index .Config.Labels "volty.nearby.task"}}')
+        require(identity==app_container+'|'+BACKEND+'|'+NET,'restart ownership guard')
+        before_restart=sdk_cmd({'command':'counts'})
+        docker('restart','--time','2',app_container)
+        deadline=time.monotonic()+20
+        while time.monotonic()<deadline:
+            try:
+                if api('GET','/health')['status']=='ok':break
+            except (OSError,RuntimeError):pass
+            time.sleep(.2)
+        else:raise RuntimeError('Owned backend did not recover within lease window')
+        check('owned_backend_restart_healthy',True)
+        phases=[api('POST','/v2/nearby/sessions/'+sid+'/heartbeat',user)['phase'] for user,sid in zip(users,sessions)]
+        check('durable_connected_sessions_survive_backend_restart',all(x=='CONNECTED' for x in phases))
+        time.sleep(1)
+        after_restart=sdk_cmd({'command':'counts'})
+        check('all_pairs_continue_after_backend_restart',all(after_restart[x][y]>before_restart[x][y] for x in identities for y in identities if x!=y))
+        rosters_after=[api('GET','/v2/nearby/channels/'+channel+'/roster',u)['peers'] for u in users]
+        projections_after=[sorted((peer['actorId'],peer['sessionId'],peer['mediaPresence'],peer.get('participantSid'),peer['phase']) for peer in roster) for roster in rosters_after]
+        check('original_sids_and_rosters_survive_backend_restart',all(x==projections[0] for x in projections_after))
     generation=uid();sharing='/v2/nearby/sharing/'+sessions[0]+'/'+generation
     consent=api('POST',sharing+'/start',a,{'mode':'LOCATION','ttl':'HALF_HOUR'})
     revoked=api('POST',sharing+'/revoke',a)
