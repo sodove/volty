@@ -1,6 +1,7 @@
 import java.util.Base64
 import java.util.Properties
 import java.util.zip.ZipFile
+import groovy.json.JsonSlurper
 import org.gradle.api.DefaultTask
 import org.gradle.api.file.RegularFileProperty
 import org.gradle.api.provider.ListProperty
@@ -110,6 +111,8 @@ kotlin {
         }
 
         androidMain.dependencies {
+            implementation(project.dependencies.platform(libs.firebase.bom))
+            implementation(libs.firebase.messaging)
             implementation(libs.activity.compose)
             implementation(libs.koin.android)
             implementation(libs.coroutines.android)
@@ -229,6 +232,33 @@ android {
 
     defaultConfig {
         applicationId = "ru.sodovaya.volty"
+        // Firebase documents direct string resources as an alternative to the
+        // Google-services plugin. Only the matching Android client's fields are used.
+        val firebaseConfig = file("google-services.json")
+        if (firebaseConfig.isFile) {
+            val config = JsonSlurper().parse(firebaseConfig) as Map<*, *>
+            val project = config["project_info"] as Map<*, *>
+            val clients = (config["client"] as List<*>).map {it as Map<*, *>}
+            val matching = clients.filter {client ->
+                val info = client["client_info"] as Map<*, *>
+                (info["android_client_info"] as Map<*, *>)["package_name"] == applicationId
+            }
+            require(matching.size == 1) {"Firebase configuration must match the Volty Android package"}
+            val client = matching.single()
+            val info = client["client_info"] as Map<*, *>
+            val apiKey = (client["api_key"] as List<*>).firstOrNull() as? Map<*, *>
+            val resources = mapOf(
+                "google_app_id" to info["mobilesdk_app_id"],
+                "google_api_key" to apiKey?.get("current_key"),
+                "gcm_defaultSenderId" to project["project_number"],
+                "project_id" to project["project_id"],
+            )
+            resources.forEach {(name, raw) ->
+                val value = raw as? String
+                require(value != null && value.matches(Regex("[A-Za-z0-9_:.-]+"))) {"Invalid Firebase configuration field: $name"}
+                resValue("string", name, value)
+            }
+        }
         minSdk = 26
         targetSdk = 36
         versionCode = appVersionCode

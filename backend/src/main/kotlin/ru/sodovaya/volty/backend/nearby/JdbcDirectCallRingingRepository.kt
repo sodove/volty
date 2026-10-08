@@ -126,6 +126,7 @@ class JdbcDirectCallRingingRepository(private val source: DataSource) {
             }
             val next = policy.create(null, callId, caller, callee, key, operation, at, true).call!!
             if (!insert(c, next, true)) return@locked DirectCallDecision(null, DirectCallRejection.IDENTITY_MISMATCH)
+            journalDirectCallPush(c, next.callId)
             c.prepareStatement("UPDATE nearby_actor_claims SET reserved_call_id=?::uuid WHERE actor_id=?::uuid AND session_id IS NULL AND reserved_call_id IS NULL").use {
                 it.setString(1, callId); it.setString(2, caller); check(it.executeUpdate() == 1)
             }
@@ -178,6 +179,7 @@ class JdbcDirectCallRingingRepository(private val source: DataSource) {
         if (row.terminal) c.prepareStatement("UPDATE nearby_actor_claims SET reserved_call_id=NULL WHERE reserved_call_id=?::uuid AND actor_id IN (?::uuid,?::uuid)").use {
             it.setString(1, row.callId); it.setString(2, row.callerId); it.setString(3, row.calleeId); it.executeUpdate()
         }
+        journalDirectCallPush(c, row.callId)
         return decision
     }
 

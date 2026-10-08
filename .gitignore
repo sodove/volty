@@ -41,6 +41,9 @@ __pycache__/
 /x86-releaseX86-*.png
 .superpowers/
 
+# Firebase project configuration is provisioned locally.
+/composeApp/google-services.json
+
 # Kotlin compiler daemon error dumps — build noise, never source.
 .kotlin/
 

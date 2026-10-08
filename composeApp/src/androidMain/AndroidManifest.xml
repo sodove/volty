@@ -40,6 +40,8 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        <!-- The account-owned push lifecycle will explicitly enable registration. -->
+        <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
         <meta-data
             android:name="ru.sodovaya.volty.offline.catalog_url"
             android:value="${voltyOfflineCatalogUrl}" />

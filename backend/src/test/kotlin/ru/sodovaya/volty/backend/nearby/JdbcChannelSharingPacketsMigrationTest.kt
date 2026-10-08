@@ -32,7 +32,7 @@ class JdbcChannelSharingPacketsMigrationTest {
             s.executeQuery("SELECT phase,started_at,deadline_epoch_millis FROM nearby_channel_sharing_consent").use {
                 assertTrue(it.next()); assertEquals("REVOKED", it.getString(1)); assertNull(it.getObject(2)); assertEquals(1000, it.getLong(3)); assertFalse(it.next())
             }
-            for ((table, expected) in listOf("users" to 2, "friendships" to 1, "schema_migrations" to 17, "nearby_channel_sharing_packets" to 0)) {
+            for ((table, expected) in listOf("users" to 2, "friendships" to 1, "schema_migrations" to 18, "nearby_channel_sharing_packets" to 0)) {
                 s.executeQuery("SELECT COUNT(*) FROM $table").use {assertTrue(it.next()); assertEquals(expected, it.getInt(1))}
             }
         }}

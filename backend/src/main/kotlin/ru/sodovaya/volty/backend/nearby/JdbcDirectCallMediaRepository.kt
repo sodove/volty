@@ -277,6 +277,7 @@ class JdbcDirectCallMediaRepository(private val source: DataSource) {
                 it.setString(1, call.callId); it.setString(2, call.callerId); it.setString(3, call.calleeId); it.executeUpdate()
             }
         }
+        journalDirectCallPush(c, call.callId)
         return decision
     }
 
