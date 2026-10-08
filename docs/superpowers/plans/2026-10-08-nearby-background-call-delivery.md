@@ -172,3 +172,24 @@ worker cancellation. The final full PostgreSQL run has370 tests with zero
 failures/errors/skips; this is software evidence, not handset delivery evidence.
 Application-owned scheduling, OAuth credential consumer, native registration /
 receive lifecycle, service-account provisioning and real sending remain pending.
+
+
+Application ownership boundary (2026-10-08): an optional bounded push-tick port
+now starts in the backend module on a separate application-child IO job. Pulses
+are serial and500ms apart after each slice; no detached/global job and no shared
+SFU maintenance lane. Close/root cancellation interrupts blocking work through
+runInterruptible; producerPending/stopped wait for actual completion even if an
+admitted function ignores interruption. Ordinary private errors count and retry
+on the next pulse without leaking details or cancelling the borrowed root.
+Actual module test holds push work while two SFU slices run, then observes real
+interruption on ApplicationStopping. Default port isNULL: production assembly
+still needs the credential-backed worker factory, so this does not enable real
+FCM sends yet. HTTP client and database remain borrowed by the worker owner.
+
+Credential-consumer references checked2026-10-08:
+[Google service-account credentials](https://docs.cloud.google.com/java/docs/reference/google-auth-library/latest/com.google.auth.oauth2.ServiceAccountCredentials),
+[HTTPv1 authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
+Use a typed service-account credential, validate its project and Google token
+endpoint before loading it; do not accept arbitrary external credential kinds or
+follow credential-supplied URLs. OAuth acquisition must be bounded and precede
+final queue preflight. A server key is separate from Android google-services.json.

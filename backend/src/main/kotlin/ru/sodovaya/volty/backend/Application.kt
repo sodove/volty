@@ -104,6 +104,7 @@ class AppDependencies(
     val nearbyMaintenance: ru.sodovaya.volty.backend.nearby.NearbyMaintenancePort? = null,
     val nearbyMembers: ru.sodovaya.volty.backend.nearby.CommunityMembersEndpointPort? = null,
     val nearbyPushDevices: ru.sodovaya.volty.backend.nearby.PushDeviceEndpointPort? = null,
+    val nearbyPushDelivery: ru.sodovaya.volty.backend.nearby.PushDeliveryTick? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -484,6 +485,12 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     if (!dependencies.testMode) {
+        dependencies.nearbyPushDelivery?.let { port ->
+            ru.sodovaya.volty.backend.nearby.PushDeliveryOwner.start(scope,
+                kotlinx.coroutines.flow.flow {
+                    while (kotlinx.coroutines.currentCoroutineContext().isActive) { emit(Unit); delay(500) }
+                }, port)
+        }
         dependencies.nearbyMaintenance?.let {port ->
             ru.sodovaya.volty.backend.nearby.NearbyMaintenanceOwner.start(scope,
                 kotlinx.coroutines.flow.flow {
