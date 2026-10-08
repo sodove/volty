@@ -91,3 +91,49 @@ by the probe. It must not reload system nginx, reuse production private keys,
 enable production DEBUG, or simultaneously add TURN. Successful shadow TLS
 controls would still not prove the rare production failure fixed or establish
 Cloudflare equivalence.
+
+## Executed TLS/nginx control
+
+The next check was executed as `c941fa` against fresh owned fixture `c941f8`.
+It retained the dedicated UDP range and omitted TURN. Signaling now traversed
+real Internet TLS to a separate host nginx1.22.1 process on17885, then the owned
+loopback SFU port17881. The probe's loopback reverse proxy used a certificate
+pool containing only this fixture's public certificate, with ordinary hostname
+verification and TLS1.2 minimum. No `InsecureSkipVerify`, environment proxy or
+system trust change was used. Its executable hash was
+`8bb56727372b03f5d1c42be0ef715a9745237d14c2969b0be1ce5d7a127e910e`.
+Actual TLS-helper RED failed the unimplemented transport; two final tests passed:
+owned-certificate handshake/empty-root rejection and invalid PEM rejection.
+This is not a claim of a comprehensive TLS implementation test.
+
+The owned nginx used daemon/master off, a private prefix/config/PID path,
+HTTP1.1 Upgrade, one-hour read timeout and buffering off. Access logging was
+disabled and error output discarded. Its temporary private key remained on
+the server and was removed during cleanup; only the public PEM reached the
+probe. System nginx was neither reloaded nor replaced. A requested narrow Luna
+review failed before producing findings because the agent hit its usage limit;
+no successful independent review is claimed. The primary inspected the added
+trust/export/lifetime boundaries before execution.
+
+All three four-peer calls joined successfully, confirmed all eight selected
+public UDP paths and observed further RTP growth in all twelve directions.
+Decoded counts were again39/39/39, with the same section-count distribution
+and no negotiation timeout/failure. Actual driver exit0, attach exit0, capture
+complete, parser/reader counters zero. Audit `c941fc` confirmed owned container
+and network absent, nginx retired, private key absent and no raw log files.
+The first audit `c941fb` used a TCP bind without `SO_REUSEADDR` and hit address
+in use; the corrected bind allows retired TCP TIME_WAIT sockets while still
+rejecting an active listener. Local SDK/proxy processes were absent and both
+probe ports were independently free. Copied semantic JSON matched the server:
+`962fc8b0e9c9dbb26d56ee1b3126e3bcfb983ddbcde0e8dc0defa6883052a0a5`.
+
+Read-only production audit again confirmed the unchanged exact containers and
+images, healthy app, DEBUG disabled, exclusive origin, protocol4 and active0.
+This removes the SSH-only signaling limitation for these three positive calls,
+but still differs from production Cloudflare, application grants, TURN and the
+rider's Android/mobile network. The rare earlier failure remains unresolved.
+
+Final post-TLS Android gate `c941fd` exited0/1m20s,35 tasks executed,
+3407 tests in336 fresh XML suites, zero failures/errors/skips. XML freshness
+was checked against its own nonce log creation time. Only evidence documents
+were changed; the signed native artifact remains unchanged.
