@@ -40,6 +40,57 @@ Primary owns cross-layer implementation. Narrow delegates may review concrete
 boundaries with sufficient context, Luna/xhigh only. No further Astra invocation
 is authorized. Do not alter production or old groups for the initial journal.
 
+## Device registry contract (step2)
+
+- Installation UUID plus a locally generated32-byte capability; store only the
+  capability SHA256 on the server. An account UUID alone cannot take over another
+  installation. The Android implementation must persist the installation identity
+  and increment its generation before queuing a registration/logout request.
+- Generation is strictly increasing per installation across account switches,
+  token changes and logout. A binding UUID identifies that exact request. An
+  exact replay is harmless; an older or conflicting equal-generation request is
+  rejected. Logout keeps a tombstone, including when it arrives before the first
+  registration. It cannot revoke a different account's newer binding.
+- The current JWT actor/issued-at is validated against the locked user row,
+  following the existing inclusive `tokens_revoked_at <= issuedAt` auth contract.
+  This does not change the existing same-second JWT revocation semantics. Target
+  enumeration rechecks deletion and current revocation; expired access tokens
+  must not be used to register, but registration is not limited to access-token TTL.
+- One active FCM token belongs to one installation. A conflicting installation
+  cannot silently steal it; the eventual client must rotate its token after a
+  conflict. Tokens remain opaque, bounded printable strings, not parsed IDs.
+- A transport failure can retire only the exact actor/installation/generation/
+  binding/token-hash it sent to. Retirement keeps the generation; replay must not
+  revive it. Target pagination is bounded and exposes tokens only to the internal
+  delivery adapter. No token/capability in logs, DTOs or errors.
+- Use the existing access fence before user/device locks, no network in the
+  transaction. Registration, deletion and revocation must not cross that lock
+  order. The HTTP mutation route is now wired; client lifecycle remains a later
+  wiring step.
+
+## Current implemented boundary
+
+Step1 journal and step2 registry/API are implemented locally. Migration19 is
+additive, does not backfill device tokens and keeps installation generation
+tombstones after logout or invalid-token retirement. No production migration or
+deployment has been performed for these two steps.
+
+`PUT /v2/nearby/push/device` requires current JWT authentication. JSON fields:
+`installationId`, `installationKey`, `generation`, `bindingId`, `token` (null for
+logout). Actor and issued-at come exclusively from the verified JWT/current user.
+The request is capped8192 bytes, including streams without Content-Length.
+Only generic errors or204 are returned, with no-store.409 codes distinguish
+`push_binding_stale` from `push_token_conflict`; the latter requires token renewal.
+Target enumeration and conditional retirement are backend-module internal and
+have no HTTP listing endpoint. PostgreSQL exception details are redacted before
+the global exception logger because failing rows may contain raw tokens.
+
+Storage verification includes actual9-test RED/GREEN, then an injected SQL
+failure privacy test RED1/GREEN10. Route verification includes actual5-test
+RED/GREEN, JWT actor/issued-at binding, revoked authority, logout, malformed and
+oversized fixed-length/streamed bodies, private response fields and distinct
+conflict codes. The client, FCM adapter/worker and actual delivery remain pending.
+
 References read2026-10-08: [FCM Android setup](https://firebase.google.com/docs/cloud-messaging/android/get-started),
 [receiving](https://firebase.google.com/docs/cloud-messaging/android/receive-messages),
 [token management](https://firebase.google.com/docs/cloud-messaging/manage-tokens),

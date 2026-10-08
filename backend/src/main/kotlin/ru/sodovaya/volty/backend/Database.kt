@@ -704,6 +704,7 @@ class SchemaMigrator(private val dataSource: DataSource, private val migrations:
     16 to "/db/migration/V16__nearby_channel_sharing_consent.sql",
     17 to "/db/migration/V17__nearby_channel_sharing_packets.sql",
     18 to "/db/migration/V18__nearby_direct_call_push_journal.sql",
+    19 to "/db/migration/V19__nearby_push_devices.sql",
 )) {
     fun migrate() {
         dataSource.connection.use { connection ->

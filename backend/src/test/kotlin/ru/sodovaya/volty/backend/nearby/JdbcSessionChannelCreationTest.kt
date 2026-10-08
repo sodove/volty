@@ -31,7 +31,7 @@ class JdbcSessionChannelCreationTest {
         assertEquals(before + 1, result.revision); assertEquals(voice, sessions.currentClaim(owner)!!.sessionId)
         assertEquals(2, communities.detail(member, community)!!.channels.size)
         assertEquals(0, count("sharing_sessions")); assertEquals(1, count("nearby_channel_creations"))
-        assertEquals(18, count("schema_migrations"))
+        assertEquals(19, count("schema_migrations"))
     }
     @Test fun exactReplayHasStableRevisionAndPayloadOrExistingIdConflictCannotMutate() {
         val first = assertIs<ChannelCreationResult.Created>(channels.create(owner, community, channel, "Evening", { 101 }))

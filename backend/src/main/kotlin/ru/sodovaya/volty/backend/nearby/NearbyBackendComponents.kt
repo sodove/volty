@@ -14,6 +14,7 @@ internal class NearbyBackendComponents private constructor(
     val calls: DirectCallEndpointPort,
     val sharing: ChannelSharingEndpointPort,
     val packets: ChannelSharingPacketEndpointPort,
+    val pushDevices: PushDeviceEndpointPort,
     val mediaWebhook: MediaWebhookEndpoint,
     private val voice: SessionService,
     private val webhooks: MediaWebhookReconciler,
@@ -32,6 +33,7 @@ internal class NearbyBackendComponents private constructor(
             val roster=JdbcRosterRepository(source,now)
             val inbox=JdbcMediaWebhookInbox(source)
             val calls=DirectCallService(JdbcDirectCallRingingRepository(source),JdbcDirectCallMediaRepository(source),repository,voice,sfu,now)
+            val pushDevices=JdbcPushDeviceRegistry(source)
             return NearbyBackendComponents(
                 JdbcCommunityEndpointPort(JdbcCommunityRepository(source),now),
                 JdbcCommunityMembersRepository(source),
@@ -43,6 +45,7 @@ internal class NearbyBackendComponents private constructor(
                 DirectCallServiceEndpointPort(calls),
                 JdbcChannelSharingEndpoint(JdbcChannelSharingRepository(repository),now),
                 JdbcChannelSharingPacketEndpoint(JdbcChannelSharingPackets(repository),now),
+                PushDeviceEndpointPort {pushDevices.apply(it,now())},
                 MediaWebhookEndpoint(verifier,inbox),voice,MediaWebhookReconciler(inbox,repository,voice),
             )
         }

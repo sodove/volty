@@ -75,6 +75,7 @@ import ru.sodovaya.volty.backend.nearby.InvitationEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyInvitationRoutes
 import ru.sodovaya.volty.backend.nearby.DirectCallEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyDirectCallRoutes
+import ru.sodovaya.volty.backend.nearby.installNearbyPushDeviceRoutes
 import ru.sodovaya.volty.backend.nearby.ChannelSharingEndpointPort
 import ru.sodovaya.volty.backend.nearby.installNearbyChannelSharingRoutes
 import ru.sodovaya.volty.backend.nearby.installNearbySharingPacketRoutes
@@ -102,6 +103,7 @@ class AppDependencies(
     val nearbyCompatibility: ru.sodovaya.volty.backend.nearby.NearbyCompatibility = ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY,
     val nearbyMaintenance: ru.sodovaya.volty.backend.nearby.NearbyMaintenancePort? = null,
     val nearbyMembers: ru.sodovaya.volty.backend.nearby.CommunityMembersEndpointPort? = null,
+    val nearbyPushDevices: ru.sodovaya.volty.backend.nearby.PushDeviceEndpointPort? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -147,7 +149,7 @@ class AppDependencies(
                 nearbyMembers = graph.members,
                 nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
                 nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
-                nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph)
+                nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph, nearbyPushDevices = graph.pushDevices)
         }
 
         fun forTests() = AppDependencies(AppConfig.forTests(), object : BackendStore {}, testMode = true)
@@ -321,6 +323,7 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
         installNearbyChannelCommandsRoutes(dependencies)
         installNearbyInvitationRoutes(dependencies)
         installNearbyDirectCallRoutes(dependencies)
+        installNearbyPushDeviceRoutes(dependencies)
         installNearbyChannelSharingRoutes(dependencies)
         installNearbySharingPacketRoutes(dependencies)
         installOfflineRegionRoutes(dependencies)

@@ -35,7 +35,7 @@ class JdbcSessionCommunityMigrationTest {
         } }
         val channel = defaultChannel()
         SchemaMigrator(source).migrate()
-        assertEquals(channel, defaultChannel()); assertEquals(1, count("nearby_voice_channels")); assertEquals(18, count("schema_migrations"))
+        assertEquals(channel, defaultChannel()); assertEquals(1, count("nearby_voice_channels")); assertEquals(19, count("schema_migrations"))
     }
 
     @Test fun missingLegacyOwnerMembershipIsRepairedWithoutRemovingExistingMember() {

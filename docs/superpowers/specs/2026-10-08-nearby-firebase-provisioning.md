@@ -22,6 +22,9 @@ authentication or replace Volty accounts/friends for this feature. The Android
 project configuration and the backend private credential are separate artifacts.
 The server credential consumer and its private mount still need implementation.
 The Android JSON does not contain the server service-account private key.
+The backend now has a locally implemented account/installation-owned token
+registry and authenticated mutation API; it is not yet deployed. Android token
+registration and HTTPv1 sending are not wired, so this does not enable push calls.
 
 ## Current Android configuration boundary
 
