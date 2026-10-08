@@ -89,7 +89,40 @@ Storage verification includes actual9-test RED/GREEN, then an injected SQL
 failure privacy test RED1/GREEN10. Route verification includes actual5-test
 RED/GREEN, JWT actor/issued-at binding, revoked authority, logout, malformed and
 oversized fixed-length/streamed bodies, private response fields and distinct
-conflict codes. The client, FCM adapter/worker and actual delivery remain pending.
+conflict codes. The client, OAuth credential consumer, delivery worker and actual
+delivery remain pending.
+
+## HTTPv1 adapter boundary (step3, not delivery wiring)
+
+The local adapter performs one bounded attempt using a borrowed HTTP client.
+Production targets the fixed Google HTTPS endpoint; test injection is limited to
+loopback. Redirects are forbidden. It accepts an already acquired bearer token;
+service-account loading, OAuth minting/caching and worker ownership are not wired.
+
+Only type/call UUID/revision/binding UUID/generation appear as string-valued data.
+Android priority is HIGH, TTL explicitly1..30 seconds and package restriction is
+ru.sodovaya.volty. No notification payload, names, GPS or media credentials. The
+eventual worker must cap TTL by current ring credit and recheck binding/call.
+
+Response buffering is bounded16KiB; total deadline covers the body after headers,
+with cancellation/abort and interrupted-thread restoration. Result types cannot
+carry remote error text or private capabilities. HTTP200 plus matching nonempty
+message name means API acceptance only. Only404 with a typed FcmError/UNREGISTERED
+can retire the exact device target. Generic404, bad payload or wrong sender never
+retires it.429 uses at least60s;5xx uses at least1s and respects Retry-After seconds
+or RFC1123 date. Huge numeric delay saturates instead of retrying early. The worker
+must compare delay with hint lifetime before adding it to wall time.
+
+Actual local HTTP tests cover data shape, error classification, malformed/oversized
+response, Retry-After, no request for invalid input, no redirect and a deliberately
+unfinished body after headers. Initial6-test RED/GREEN; huge-delay test separately
+failed when40 digits fell back to1s, then parser was corrected. No Google sends,
+real credentials, registration on phones or production deployment occurred.
+
+References checked2026-10-08:
+[HTTPv1 authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api),
+[FCM error codes](https://firebase.google.com/docs/cloud-messaging/error-codes),
+[message REST schema](https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages).
 
 References read2026-10-08: [FCM Android setup](https://firebase.google.com/docs/cloud-messaging/android/get-started),
 [receiving](https://firebase.google.com/docs/cloud-messaging/android/receive-messages),

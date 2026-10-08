@@ -25,6 +25,9 @@ The Android JSON does not contain the server service-account private key.
 The backend now has a locally implemented account/installation-owned token
 registry and authenticated mutation API; it is not yet deployed. Android token
 registration and HTTPv1 sending are not wired, so this does not enable push calls.
+A bounded HTTPv1 adapter is implemented and tested against local HTTP fixtures;
+its bearer credential provider and delivery worker remain pending. No actual
+Firebase message was sent or accepted during these fixture tests.
 
 ## Current Android configuration boundary
 
