@@ -2,7 +2,6 @@ package ru.sodovaya.volty.backend.nearby
 
 import java.security.MessageDigest
 import java.sql.Connection
-import java.sql.SQLException
 import java.util.HexFormat
 import javax.sql.DataSource
 
@@ -72,25 +71,11 @@ class JdbcPushDeviceRegistry(private val source: DataSource) {
     internal fun retire(target: PushDeviceTarget, nowMillis: Long): Boolean {
         if (nowMillis < 0) return false
         return persisted(write = true) { c ->
-            c.prepareStatement("""
-                UPDATE nearby_push_devices SET token=NULL,token_hash=NULL,updated_at_millis=?
-                WHERE installation_id=?::uuid AND actor_id=?::uuid AND generation=?
-                    AND binding_id=?::uuid AND token_hash=?
-            """.trimIndent()).use {
-                it.setLong(1, nowMillis); it.setString(2, target.installationId); it.setString(3, target.actorId)
-                it.setLong(4, target.generation); it.setString(5, target.bindingId); it.setString(6, target.tokenHash)
-                it.executeUpdate() == 1
-            }
+            retirePushDevice(c, target, nowMillis)
         }
     }
 
-    private fun <T> persisted(write: Boolean, block: (Connection) -> T): T = try {
-        communityTransaction(source, write, block)
-    } catch (failure: SQLException) {
-        // PostgreSQL errors can include the failing row's raw token. StatusPages
-        // logs exception chains, so retain only non-secret diagnostic codes.
-        throw SQLException("Push device storage unavailable", failure.sqlState, failure.errorCode)
-    }
+    private fun <T> persisted(write: Boolean, block: (Connection) -> T): T = pushStorageTransaction(source, write, block)
 
     private fun activeAuthority(c: Connection, r: PushDeviceRegistration): Boolean = c.prepareStatement("""
         SELECT 1 FROM users WHERE id=?::uuid AND deleted_at IS NULL AND tokens_revoked_at<=? FOR SHARE

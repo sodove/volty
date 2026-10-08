@@ -124,7 +124,51 @@ References checked2026-10-08:
 [FCM error codes](https://firebase.google.com/docs/cloud-messaging/error-codes),
 [message REST schema](https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages).
 
+## Durable delivery queue contract
+
+- Migration20 adds a DB-written event timestamp for new journal rows; existing
+  rows remain timestamp-less and are not backfilled into notifications. Each
+  materialization slice seeds at most100 currently eligible installations and
+  persists its pagination cursor. One pending row per event/installation.
+- Each attempt snapshots the current account/binding/token and uses a fresh UUID
+  claim ticket with a10s lease and target-specific attempt number. Before HTTP, verify current call revision, phase,
+  recipient authority and binding, then extend the lease. No SQL lock spans HTTP.
+  Late or reused tickets cannot complete a replacement attempt: match both ticket
+  and attempt number against the unchanged target. Invalid-token
+  retirement uses the same exact-binding helper as the device registry.
+- A token rotation in the same account requeues a pending installation with its
+  new binding; account switch drops the old account's delivery. The client must
+  refresh incoming calls after successful registration, including a newly added
+  installation after an event's device snapshot has finished. Snapshot creation
+  is not a permanent subscription for future installations.
+- Old call revisions, inactive authority and expired hints are completed without
+  dispatch. Hint lifetime is at most30s from the event and additionally bounded
+  by ring deadline while RINGING. API acceptance marks only that device attempt.
+- Retry due time/backoff/attempt budget and provider cooldown survive restart.
+  The queue enforces reason-specific minimum delays independently of the HTTP
+  producer and rechecks provider pause in final dispatch preflight.
+  Quota, configuration and service Retry-After pause the provider durably even if
+  a particular hint expires. Saturating arithmetic cannot schedule an early send;
+  compare delay with hint lifetime before adding it. Expired rows remain eligible
+  for cleanup during cooldown. No token text in queue rows or exceptions.
+- A worker slice handles one attempt; future production ownership must use a
+  separate application-owned job so slow FCM cannot delay SFU lease maintenance.
+  Credential acquisition precedes final recheck; interrupted/cancelled attempts
+  leave a reclaimable lease rather than reporting delivery.
+
 References read2026-10-08: [FCM Android setup](https://firebase.google.com/docs/cloud-messaging/android/get-started),
 [receiving](https://firebase.google.com/docs/cloud-messaging/android/receive-messages),
 [token management](https://firebase.google.com/docs/cloud-messaging/manage-tokens),
 [HTTPv1](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
+
+
+Implemented queue boundary (2026-10-08): migration20, JDBC materialization,
+claim/preflight/receipt handling and a synchronous one-attempt worker slice.
+Actual PostgreSQL regression tests cover restart/reclaim, obsolete revision,
+revocation/deletion, same-account rotation/account switch, late unregistration,
+expiry, durable cooldown including after claim, incoherent zero quota delay,
+A→B→A ticket reuse, historical NULL events, pagination101 devices and actual
+worker cancellation. The final full PostgreSQL run has370 tests with zero
+failures/errors/skips; this is software evidence, not handset delivery evidence.
+Application-owned scheduling, OAuth credential consumer, native registration /
+receive lifecycle, service-account provisioning and real sending remain pending.
