@@ -15,6 +15,8 @@ sealed interface VoiceSessionEvent {
 
     sealed interface Tagged : VoiceSessionEvent { val tag: VoiceSessionTag }
     data class EngineFailed(override val tag: VoiceSessionTag) : Tagged
+    /** Definitive room/participant closure; engine and remote cleanup still require acknowledgements. */
+    data class EngineClosed(override val tag: VoiceSessionTag) : Tagged
     data class TransportConnected(override val tag: VoiceSessionTag) : Tagged
     data class CaptureStarted(override val tag: VoiceSessionTag) : Tagged
     data class CaptureStopped(override val tag: VoiceSessionTag) : Tagged

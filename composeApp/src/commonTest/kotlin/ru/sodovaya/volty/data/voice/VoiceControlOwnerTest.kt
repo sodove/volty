@@ -11,6 +11,49 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class VoiceControlOwnerTest {
+    @Test fun normal_heartbeat_cancellation_stops_cleanly_without_claiming_remote_cleanup() = runTest {
+        val port = FakePort(cleanupPending = true)
+        val effects = mutableListOf<VoiceControlDispatch>()
+        val owner = VoiceControlOwner(backgroundScope, port, effects::add)
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        owner.heartbeat(); runCurrent()
+        assertEquals(listOf(tag(1)), port.heartbeats)
+        port.heartbeatReply.complete(VoiceHttpReply.Ended(tag(1).generation, tag(1).sessionId, "CANCELLED", true)); runCurrent()
+        assertEquals(VoicePhase.STOPPING, owner.state.value.phase)
+        assertFalse(owner.state.value.wanted)
+        assertEquals(listOf(tag(1)), port.disconnects)
+        assertTrue(effects.any {it.effect == VoiceSessionEffect.StopEngine(tag(1).generation)})
+        assertEquals(setOf(VoiceStopRequest.Session(tag(1))), owner.pendingRemoteStops.value)
+        owner.event(VoiceSessionEvent.Stopped(tag(1).generation)); runCurrent()
+        assertEquals(VoicePhase.IDLE, owner.state.value.phase)
+        assertEquals(setOf(VoiceStopRequest.Session(tag(1))), owner.pendingRemoteStops.value)
+    }
+
+    @Test fun expired_heartbeat_is_still_a_failure() = runTest {
+        val port = FakePort()
+        val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        owner.heartbeat(); runCurrent()
+        port.heartbeatReply.complete(VoiceHttpReply.Ended(tag(1).generation, tag(1).sessionId, "EXPIRED", false)); runCurrent()
+        assertEquals(VoicePhase.FAILED, owner.state.value.phase)
+        assertEquals(listOf(tag(1)), port.disconnects)
+    }
+
+    @Test fun stale_cancelled_heartbeat_cannot_end_the_new_generation() = runTest {
+        val port = FakePort()
+        val owner = VoiceControlOwner(backgroundScope, port) {}
+        owner.join("one", op1); runCurrent()
+        port.joinReplies.getValue(op1).complete(grant(1)); runCurrent()
+        owner.heartbeat(); runCurrent()
+        owner.join("two", op2); runCurrent()
+        port.joinReplies.getValue(op2).complete(grant(2)); runCurrent()
+        port.heartbeatReply.complete(VoiceHttpReply.Ended(tag(1).generation, tag(1).sessionId, "CANCELLED", false)); runCurrent()
+        assertTrue(owner.state.value.wanted)
+        assertEquals(tag(2).sessionId, owner.state.value.sessionId)
+        assertFalse(tag(2) in port.disconnects)
+    }
     private val op1 = VoiceOperationId("one")
     private val op2 = VoiceOperationId("two")
     private fun tag(n: Long) = VoiceSessionTag(VoiceSessionId("s$n"), VoiceGeneration(n))

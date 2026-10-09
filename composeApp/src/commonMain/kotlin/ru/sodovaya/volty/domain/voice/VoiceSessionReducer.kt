@@ -75,6 +75,7 @@ object VoiceSessionReducer {
             return unchanged(state)
         }
         return when (event) {
+            is VoiceSessionEvent.EngineClosed -> stop(state)
             is VoiceSessionEvent.EngineFailed -> {
                 val stopped = stop(state)
                 stopped.copy(state = stopped.state.copy(phase = VoicePhase.FAILED))

@@ -15,11 +15,14 @@ import io.ktor.utils.io.ByteChannel
 import io.ktor.utils.io.writeFully
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
+import kotlinx.coroutines.test.StandardTestDispatcher
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 import ru.sodovaya.volty.domain.navigation.ManeuverKind
 import ru.sodovaya.volty.domain.navigation.NavigationFailure
@@ -261,12 +264,17 @@ class OsmNavigationRepositoryTest {
         assertEquals(2, requests.size)
     }
 
+    @OptIn(ExperimentalCoroutinesApi::class)
     @Test
     fun routes_start_both_providers_in_parallel_when_more_than_one_route_is_requested() = runTest {
         val primaryStarted = CompletableDeferred<Unit>()
         val fallbackStarted = CompletableDeferred<Unit>()
         val release = CompletableDeferred<Unit>()
-        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+        val repository = OsmNavigationRepository(HttpClient(MockEngine) { engine {
+            // Keep request execution and virtual time on one scheduler. The earlier
+            // default MockEngine dispatcher raced runTest's virtual timeout under load.
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
             if (request.url.host == "routing.openstreetmap.de") {
                 primaryStarted.complete(Unit)
             } else {
@@ -277,12 +285,14 @@ class OsmNavigationRepositoryTest {
                 osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary")),
                 headers = jsonHeaders(),
             )
-        }))
+            }
+        } })
         val routeJob = async { repository.routes(testRequest()) }
 
         try {
-            primaryStarted.await()
-            withTimeout(1_000L) { fallbackStarted.await() }
+            runCurrent()
+            assertTrue(primaryStarted.isCompleted, "Primary request was not issued")
+            assertTrue(fallbackStarted.isCompleted, "Fallback request must start before primary response is released")
         } finally {
             release.complete(Unit)
         }

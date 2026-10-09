@@ -6,6 +6,26 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 class VoiceSessionLifecycleTest {
+    @Test fun server_closed_engine_releases_media_without_a_failure_and_keeps_cleanup_pending() {
+        val active = VoiceSessionReducer.reduce(join().state, grant(join().state)).state
+        val ended = VoiceSessionReducer.reduce(active, VoiceSessionEvent.EngineClosed(VoiceSessionTag(session, active.generation)))
+        assertEquals(VoicePhase.STOPPING, ended.state.phase)
+        assertFalse(ended.state.wanted)
+        assertTrue(ended.state.cleanupPending)
+        assertTrue(ended.effects.contains(VoiceSessionEffect.StopEngine(active.generation)))
+        assertTrue(ended.effects.contains(VoiceSessionEffect.StopSession(session)))
+        assertTrue(ended.effects.contains(VoiceSessionEffect.RemoveNearbyDemand))
+        assertTrue(ended.effects.contains(VoiceSessionEffect.ClearSharingQueue))
+        val released = VoiceSessionReducer.reduce(ended.state, VoiceSessionEvent.Stopped(active.generation))
+        assertEquals(VoicePhase.IDLE, released.state.phase)
+    }
+
+    @Test fun an_old_room_closure_cannot_stop_a_new_session() {
+        val active = VoiceSessionReducer.reduce(join().state, grant(join().state)).state
+        val stale = VoiceSessionReducer.reduce(active, VoiceSessionEvent.EngineClosed(VoiceSessionTag(VoiceSessionId("old-session"), active.generation)))
+        assertEquals(active, stale.state)
+        assertTrue(stale.effects.isEmpty())
+    }
     private val op = VoiceOperationId("op1")
     private val session = VoiceSessionId("s1")
 

@@ -234,7 +234,10 @@ internal class AndroidVoiceSdkSession(
                 }
                 reconcileRemoteAudio(ownedRoom)
             }
-            is RoomEvent.Disconnected -> { record(VoiceDiagnosticCode.DISCONNECTED); event(VoiceSessionEvent.EngineFailed(tag)) }
+            is RoomEvent.Disconnected -> {
+                record(VoiceDiagnosticCode.DISCONNECTED)
+                this.event(voiceDisconnectionEvent(tag, event.reason))
+            }
             is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
             is RoomEvent.TrackPublished -> if (event.participant == ownedRoom.localParticipant &&
                 event.publication.kind == Track.Kind.AUDIO && event.publication.track === localTrack &&

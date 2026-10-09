@@ -99,7 +99,14 @@ class VoiceControlOwner(
                 if (!s.wanted || s.generation != command.tag.generation || s.sessionId != command.tag.sessionId) return
                 when (val reply = command.reply) {
                     is VoiceHttpReply.Acknowledged -> apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.LeaseAck(reply.tag, reply.lease)))
-                    is VoiceHttpReply.Expired, is VoiceHttpReply.Ended -> apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(s.generation)))
+                    is VoiceHttpReply.Expired -> apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(s.generation)))
+                    is VoiceHttpReply.Ended -> if (reply.generation == command.tag.generation && reply.sessionId == command.tag.sessionId) {
+                        // An earlier revision treated every terminal receipt as a failure,
+                        // including the normal cancellation caused by a peer hanging up.
+                        // This closes local media; the exact cleanup request still earns its own ACK.
+                        val event = if (reply.phase == "CANCELLED") VoiceSessionEvent.Stop else VoiceSessionEvent.Failed(s.generation)
+                        apply(VoiceSessionReducer.reduce(s, event))
+                    }
                     is VoiceHttpReply.Failed -> if (reply.reason in setOf(VoiceHttpFailure.ACCESS_DENIED, VoiceHttpFailure.UNAUTHORIZED))
                         apply(VoiceSessionReducer.reduce(s, VoiceSessionEvent.Failed(s.generation)))
                     else -> Unit
