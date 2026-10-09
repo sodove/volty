@@ -23,7 +23,7 @@ internal class AccountPushRegistration(private val account: SocialAuthenticatedA
     private val retired = MutableStateFlow(false)
     suspend fun submit(intent: PushRegistrationIntent): PushRegistrationResult {
         ensureLive()
-        if (!valid(intent)) return PushRegistrationResult.INVALID
+        if (!validPushRegistrationIntent(intent)) return PushRegistrationResult.INVALID
         val body = buildJsonObject {
             put("installationId", intent.installationId); put("installationKey", intent.installationKey)
             put("generation", intent.generation); put("bindingId", intent.bindingId)
@@ -69,11 +69,9 @@ internal class AccountPushRegistration(private val account: SocialAuthenticatedA
         currentCoroutineContext().ensureActive()
         if (retired.value || !account.job.isActive) throw CancellationException("Push account retired")
     }
-    private fun valid(r: PushRegistrationIntent) = r.generation > 0 &&
-        UUID.matches(r.installationId) && UUID.matches(r.bindingId) && KEY.matches(r.installationKey) &&
-        (r.token == null || (r.token.length in 1..4096 && r.token.all {it.code in 33..126}))
-    private companion object {
-        val UUID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
-        val KEY = Regex("[0-9a-f]{64}")
-    }
 }
+internal fun validPushRegistrationIntent(r: PushRegistrationIntent) = r.generation > 0 &&
+    PUSH_UUID.matches(r.installationId) && PUSH_UUID.matches(r.bindingId) && PUSH_KEY.matches(r.installationKey) &&
+    (r.token == null || (r.token.length in 1..4096 && r.token.all {it.code in 33..126}))
+private val PUSH_UUID = Regex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+private val PUSH_KEY = Regex("[0-9a-f]{64}")
