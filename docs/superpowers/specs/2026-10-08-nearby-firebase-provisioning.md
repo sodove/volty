@@ -165,3 +165,66 @@ file as UID10001 and could not write it. App/SFU container identities and start
 stamps stayed unchanged. No helper container or temporary plaintext copy remains.
 The actual production credential mount/settings and new server release remain
 pending. Neither provisioned key nor contents are committed or APK inputs.
+
+## Production FCM rollout and API validation 2026-10-09
+
+Retraction of the preceding pending-production-mount status: the new backend
+image has been deployed with the Firebase project settings and a private,
+read-only service-account mount. The runtime runs as UID10001. The database and
+LiveKit containers retained their identities and start times. HTTPS health and
+schema1..20 were checked after rollout; an unauthenticated push-registration
+request is refused. No old groups were imported into new servers.
+
+Before rollout, an isolated restore of a fresh production snapshot preserved
+all twelve account/friend/community tables by comparing full-row fingerprints
+without printing private rows. The previous backend image also started against
+the upgraded snapshot. A separate quiescent backup was verified immediately
+before replacing only the application container. Protected frozen old/new Compose
+models and the backup remain in the private release directory; these models
+contain environment credentials and must never be committed or printed. Future
+application recreation must retain the new FCM settings/mount rather than use
+the older deployment configuration that omits them.
+
+The actual Google FCM API accepted a `validate_only=true` request with Android
+metadata using the production credential loader and OAuth provider. This confirms
+project API/IAM authorization; it sends no message and proves no handset delivery.
+See the [Firebase send API](https://firebase.google.com/docs/reference/fcm/rest/v1/projects.messages/send).
+Physical notification delivery, Xiaomi voice and independent microphone/output
+routing remain device acceptance checks. Cold-process Android receiver ownership
+is undergoing additional regression verification; the0.7.14 candidate predates
+that adjustment.
+
+## Cold-process receiver regression verification 2026-10-09
+
+The receiver now awaits account-owned registration and fresh verified incoming-call
+discovery before evaluating the push binding. Cancellation of the receiver cannot
+cancel the account producer. A failed first cold-start registration triggers one
+explicit wake retry; STALE/token-conflict repairs are bounded to three immediate
+requests per reconciliation. Logout/replacement/close release waiters without
+joining held transport requests. Fresh3457 tests across342 suites passed with
+zero failures, errors or skips. The signed0.7.15/code38 build is in progress;
+physical delivery and Android process scheduling remain unverified.
+
+## Cancelled cold wake correction 2026-10-09
+
+Retraction of the earlier caller-owned initial-failure retry: accepting a cold
+wake now records its retry on the account-owned entry before awaiting anything.
+The runner performs one additional reconciliation after initial failure, even
+when the receiver is cancelled. Close or account replacement fences it out.
+The held-HTTP cancellation regression was observed failing before the fix.
+Fresh 3458 tests in 342 suites pass with zero failures, errors or skips. The
+narrow lifecycle review reports no remaining blockers. The final 0.7.15/code38
+candidate is being rebuilt from this corrected source.
+
+## Signed candidate verified 2026-10-09
+
+Retraction of the preceding rebuild-in-progress status: final 0.7.15/code38 was
+built after the cancelled-cold-wake correction. Release assembly and SQLDelight
+migration verification passed with all 63 tasks executed. APK v2 signing and the
+existing signer identity were verified. Every archive entry was scanned for the
+supplied private key in PEM, JSON-escaped PEM and DER forms; none was present.
+The immutable local acceptance artifact is `volty-nearby-c941iz-release.apk`,
+69,654,142 bytes, SHA256
+`65410b6ccd1a370a71cfcadd812fd2072996bc4450f4db23470548fa325562ef`.
+This candidate supersedes the intermediate 0.7.15 build and the 0.7.14 candidate.
+Physical delivery, Xiaomi audio and microphone/output routing remain unverified.

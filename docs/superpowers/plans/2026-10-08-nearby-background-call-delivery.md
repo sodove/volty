@@ -327,3 +327,49 @@ References checked2026-10-09:
 [Firebase priority and callback lifetime](https://firebase.google.com/docs/cloud-messaging/android-message-priority),
 [WorkManager expedited compatibility and backoff](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work),
 [WorkManager2.12.0 release](https://developer.android.com/jetpack/androidx/releases/work#2.12.0).
+
+## Production backend rollout 2026-10-09
+
+Retraction of the preceding pending-container-settings status: the immutable
+backend with FCM is live, using the private read-only credential mount. Only the
+app container was replaced; database and SFU identities/start times were verified
+unchanged. A quiescent private database backup and frozen old/new Compose models
+provide rollback independent of edits in the original server checkout. An isolated
+snapshot migration and actual old-image startup preserved all twelve original
+account/friend/community tables. Google accepted an FCM `validate_only=true`
+request; no message was delivered. API/IAM readiness is verified, handset delivery
+is still unverified.
+
+Additional cold-process receiver regression is in progress: initial registration
+renews the binding, so a push from the previous process must hold background work
+through registration and fresh verified discovery before rejecting its stale
+binding. Re-registration acknowledgement must await verified publication rather
+than queue submission. Explicit receiver wake retries unavailable requests without
+waiting for the30s pulse, with at most three immediate STALE/token-conflict repairs.
+
+## Cold-process regression verified 2026-10-09
+
+The common production receiver now awaits actual registration and fresh verified
+discovery. Tests hold issued HTTP and discovery independently; also cover caller
+cancellation, failed initial HTTP retry before the timer, owner close, and bounded
+repeated STALE receipts. Fresh3457 tests/342 suites pass without failures/errors/
+skips. Native startup delegates to this tested receiver. The signed0.7.15/code38
+candidate is being rebuilt; no device delivery claim follows from software tests.
+
+## Cancelled cold wake correction 2026-10-09
+
+Retraction: the first cold-failure retry originally depended on the receiver's
+continuation. A cancelled receiver could lose that retry. The account-owned
+runner now records accepted cold wake before any await and performs one bounded
+additional reconciliation after initial failure. Retirement prevents further
+requests. The new held-HTTP cancellation test failed before the fix; fresh 3458
+tests in 342 suites now pass without failures, errors or skips. The narrow
+lifecycle review found no remaining blockers. Final signed rebuild is in progress.
+
+## Final signed candidate verified 2026-10-09
+
+The corrected 0.7.15/code38 release and SQLDelight migration verification passed
+with 63 executed tasks. Its v2 signature matches the existing signer; the actual
+supplied private key is absent from every APK entry. The earlier intermediate
+0.7.15 and 0.7.14 candidates are superseded. Fresh Android suite: 3458 tests in
+342 suites, zero failures/errors/skips. Device acceptance remains deferred.

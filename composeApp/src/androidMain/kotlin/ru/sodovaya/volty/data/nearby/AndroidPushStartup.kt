@@ -11,13 +11,8 @@ internal class AndroidPushEvents {
 /** Application singleton; constructing the repository starts its generation-owned credential restoration. */
 internal class AndroidPushStartup(private val repository: DefaultSocialRepository,
     private val owner: PushRegistrationOwner, private val gate: IncomingCallPushGate, private val events: AndroidPushEvents) {
+    private val receiver = IncomingCallPushWake(repository.authenticatedAccount, owner, gate)
     fun start() = owner.start()
     fun tokenHint() {events.tokens.tryEmit(Unit)}
-    suspend fun receive(data: Map<String, String>): Boolean {
-        val hint = IncomingCallPushHint.decode(data) ?: return false
-        return withTimeoutOrNull(15_000) {
-            repository.authenticatedAccount.filterNotNull().first()
-            gate.receive(hint)
-        } ?: false
-    }
+    suspend fun receive(data: Map<String, String>): Boolean = receiver.receive(data)
 }

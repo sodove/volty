@@ -43,9 +43,10 @@ class PushRegistrationOwnerTest {
         val hints = MutableSharedFlow<Unit>(extraBufferCapacity = 8)
         val clients = mutableListOf<Pair<SocialAuthenticatedAccount, Client>>()
         val registered = mutableListOf<SocialAuthenticatedAccount>()
+        var onRegistered: suspend (SocialAuthenticatedAccount) -> Unit = {}
         var configure: (Client) -> Unit = {}
         val owner = PushRegistrationOwner(accounts, app, dispatcher, pulses, hints, ledger, tokens,
-            {account -> Client().also {configure(it); clients += account to it}}, {registered += it})
+            {account -> Client().also {configure(it); clients += account to it}}, {registered += it; onRegistered(it)})
         fun account(id: String) = SocialAuthenticatedAccount(SocialUserId(id), Job(root), root + dispatcher) {"repository-token"}
         suspend fun close() {owner.close(); root.cancel(); scope.runCurrent()}
     }
@@ -79,13 +80,123 @@ class PushRegistrationOwnerTest {
         f.configure = {c -> c.send = {when(c.issued.size) {1 -> PushRegistrationResult.STALE; 2 -> PushRegistrationResult.TOKEN_CONFLICT; else -> PushRegistrationResult.APPLIED}}}
         try {
             f.owner.start(); runCurrent(); val client = f.clients.single().second
-            assertEquals(1, client.issued.size); assertEquals(2L, f.store.value!!.intent.generation)
-            f.pulses.emit(Unit); runCurrent()
+            assertEquals(3, client.issued.size)
             assertEquals(1, f.tokens.rotations); assertEquals("renewed-token", f.store.value!!.intent.token)
-            f.pulses.emit(Unit); runCurrent()
             assertEquals(3, client.issued.size); assertEquals(3L, client.issued.last().generation); assertTrue(f.store.value!!.acknowledged)
         } finally {f.close()}
     }
+    @Test fun coldWakeWaitsForIssuedRegistrationAndCompletedFreshDiscovery() = runTest {
+        val f = Fixture(this); val account = f.account(a)
+        val http = CompletableDeferred<Unit>(); val discovery = CompletableDeferred<Unit>()
+        val restored = f.ledger.prepare(a, "initial-token"); assertTrue(f.ledger.acknowledge(restored))
+        f.configure = {c -> c.send = {http.await(); PushRegistrationResult.APPLIED}}
+        f.onRegistered = {discovery.await()}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent(); val client = f.clients.single().second
+            assertEquals(1, client.issued.size); assertEquals(2L, f.store.value!!.intent.generation); assertFalse(f.store.value!!.acknowledged)
+            val wake = async {f.owner.wake(account)}; runCurrent(); assertFalse(wake.isCompleted)
+            http.complete(Unit); runCurrent(); assertTrue(f.store.value!!.acknowledged); assertEquals(listOf(account), f.registered)
+            assertFalse(wake.isCompleted); discovery.complete(Unit)
+            assertTrue(wake.await()); assertEquals(1, client.issued.size); assertTrue(account.job.isActive)
+        } finally {http.complete(Unit); discovery.complete(Unit); f.close()}
+    }
+
+    @Test fun pushWakeRetriesFailedDurableIntentWithoutWaitingForPeriodicPulse() = runTest {
+        val f = Fixture(this); val account = f.account(a)
+        f.configure = {c -> c.send = {if(c.issued.size==1) PushRegistrationResult.UNAVAILABLE else PushRegistrationResult.APPLIED}}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent(); val client = f.clients.single().second
+            assertEquals(1, client.issued.size); assertFalse(f.store.value!!.acknowledged)
+            val first = client.issued.single()
+            assertTrue(f.owner.wake(account)); assertEquals(2, client.issued.size)
+            assertEquals(first, client.issued.last()); assertTrue(f.store.value!!.acknowledged); assertEquals(listOf(account), f.registered)
+        } finally {f.close()}
+    }
+
+    @Test fun closingOwnerReleasesHeldWakeWithoutJoiningOrCancellingBorrowedAccount() = runTest {
+        val f = Fixture(this); val independent = Job(); val release = CompletableDeferred<Unit>(); var returned = false
+        val account = SocialAuthenticatedAccount(SocialUserId(a), independent, f.root+f.dispatcher) {"token"}
+        f.configure = {c -> c.send = {if(c.issued.size==1) PushRegistrationResult.APPLIED else withContext(NonCancellable) {release.await(); returned=true; PushRegistrationResult.APPLIED}}}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent(); val client = f.clients.single().second
+            val wake = async {f.owner.wake(account)}; runCurrent(); assertEquals(2, client.issued.size); assertFalse(wake.isCompleted)
+            f.owner.close(); runCurrent(); assertFalse(wake.await()); assertTrue(client.closed); assertTrue(independent.isActive)
+            release.complete(Unit); runCurrent(); assertTrue(returned); assertEquals(listOf(account), f.registered)
+        } finally {release.complete(Unit); independent.cancel(); f.close()}
+    }
+
+    @Test fun wakeArrivingDuringFailedInitialHttpRetriesBeforeItCompletes() = runTest {
+        val f = Fixture(this); val account = f.account(a); val http = CompletableDeferred<Unit>()
+        f.configure = {c -> c.send = {if(c.issued.size==1) {http.await(); PushRegistrationResult.UNAVAILABLE} else PushRegistrationResult.APPLIED}}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent(); val client = f.clients.single().second
+            assertEquals(1, client.issued.size)
+            val wake = async {f.owner.wake(account)}; runCurrent(); assertFalse(wake.isCompleted)
+            http.complete(Unit); assertTrue(wake.await())
+            assertEquals(2, client.issued.size); assertSame(client.issued.first(), client.issued.last())
+            assertTrue(f.store.value!!.acknowledged); assertEquals(listOf(account), f.registered)
+        } finally {http.complete(Unit); f.close()}
+    }
+    @Test fun cancelledColdWakeStillOwnsItsRetryAfterInitialNetworkFailure() = runTest {
+        val f = Fixture(this); val account = f.account(a); val http = CompletableDeferred<Unit>()
+        f.configure = {c -> c.send = {if(c.issued.size==1) {http.await(); PushRegistrationResult.UNAVAILABLE} else PushRegistrationResult.APPLIED}}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent(); val client = f.clients.single().second
+            assertEquals(1, client.issued.size)
+            val wake = async {f.owner.wake(account)}; runCurrent(); assertFalse(wake.isCompleted)
+            wake.cancel(); runCurrent(); assertTrue(wake.isCancelled); assertTrue(account.job.isActive)
+            http.complete(Unit); runCurrent()
+            assertEquals(2, client.issued.size); assertSame(client.issued.first(), client.issued.last())
+            assertTrue(f.store.value!!.acknowledged); assertEquals(listOf(account), f.registered)
+            assertTrue(f.root.isActive); assertTrue(account.job.isActive)
+        } finally {http.complete(Unit); f.close()}
+    }
+    @Test fun actualReceiverWaitsForColdDiscoveryEvenWhenOldPushBindingIsRetired() = runTest {
+        val f = Fixture(this); val account = f.account(a)
+        val http = CompletableDeferred<Unit>(); val discovery = CompletableDeferred<Unit>(); var verified = 0
+        val old = f.ledger.prepare(a, "initial-token"); f.ledger.acknowledge(old)
+        val gate = IncomingCallPushGate({f.accounts.value}, f.ledger) {_, _, _ -> verified++; true}
+        val receiver = IncomingCallPushWake(f.accounts, f.owner, gate)
+        val payload = mapOf("type" to "nearby_call", "callId" to a, "revision" to "1",
+            "bindingId" to old.intent.bindingId, "generation" to old.intent.generation.toString())
+        f.configure = {c -> c.send = {http.await(); PushRegistrationResult.APPLIED}}
+        f.onRegistered = {discovery.await()}
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent()
+            val receive = async {receiver.receive(payload)}; runCurrent()
+            assertEquals(1, f.clients.single().second.issued.size); assertFalse(receive.isCompleted)
+            http.complete(Unit); runCurrent(); assertEquals(listOf(account), f.registered); assertFalse(receive.isCompleted)
+            discovery.complete(Unit); assertFalse(receive.await()); assertEquals(0, verified)
+            assertTrue(account.job.isActive)
+        } finally {http.complete(Unit); discovery.complete(Unit); f.close()}
+    }
+    @Test fun cancellingActualReceiverCannotCancelBorrowedRegistrationAndDiscovery() = runTest {
+        val f = Fixture(this); val account = f.account(a); val http = CompletableDeferred<Unit>()
+        f.configure = {c -> c.send = {http.await(); PushRegistrationResult.APPLIED}}
+        val receiver = IncomingCallPushWake(f.accounts, f.owner,
+            IncomingCallPushGate({f.accounts.value}, f.ledger) {_, _, _ -> true})
+        try {
+            f.accounts.value = account; f.owner.start(); runCurrent()
+            val intent = f.clients.single().second.issued.single()
+            val receive = async {receiver.receive(mapOf("type" to "nearby_call", "callId" to a, "revision" to "1",
+                "bindingId" to intent.bindingId, "generation" to intent.generation.toString()))}
+            runCurrent(); assertFalse(receive.isCompleted); receive.cancel(); runCurrent()
+            assertTrue(receive.isCancelled); assertTrue(account.job.isActive); assertTrue(f.root.isActive)
+            http.complete(Unit); runCurrent(); assertTrue(f.store.value!!.acknowledged)
+            assertEquals(listOf(account), f.registered); assertEquals(1, f.clients.single().second.issued.size)
+        } finally {http.complete(Unit); f.close()}
+    }
+    @Test fun repeatedStaleReceiptsBoundImmediateAttemptsAndNeverAcknowledge() = runTest {
+        val f = Fixture(this); f.accounts.value = f.account(a)
+        f.configure = {c -> c.send = {PushRegistrationResult.STALE}}
+        try {
+            f.owner.start(); runCurrent(); val client = f.clients.single().second
+            assertEquals(3, client.issued.size); assertEquals(4L, f.store.value!!.intent.generation)
+            assertFalse(f.store.value!!.acknowledged); assertTrue(f.registered.isEmpty())
+            runCurrent(); assertEquals(3, client.issued.size)
+        } finally {f.close()}
+    }
+
     @Test fun newAccountRegistersWithoutJoiningAnOldActuallyIssuedUncooperativeRequest() = runTest {
         val f = Fixture(this); val old = f.account(a); val fresh = f.account(b)
         val release = CompletableDeferred<Unit>(); var returned = false

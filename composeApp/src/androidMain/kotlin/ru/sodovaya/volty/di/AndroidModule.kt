@@ -256,15 +256,30 @@ val androidModule = module {
         val hints = get<ru.sodovaya.volty.data.voice.IncomingCallHintDispatch>()
         val coordinator = get<VoiceAccountCoordinator>(); val audio = get<AndroidVoiceAudioFactory>()
         val client = get<HttpClient>(named(NEARBY_HTTP_CLIENT))
+        val ledger = get<ru.sodovaya.volty.data.nearby.PushInstallationLedger>()
         ru.sodovaya.volty.data.nearby.PushRegistrationOwner(repository.authenticatedAccount, repository.applicationScope(),
             Dispatchers.Main, flow {while (true) {delay(30_000); emit(Unit)}},
             get<ru.sodovaya.volty.data.nearby.AndroidPushEvents>().tokens, get(), get(),
             {account -> ru.sodovaya.volty.data.nearby.AccountPushRegistration(account, client, NEARBY_API_BASE_URL)}) {account ->
+            val binding = ledger.current()
             val runtime = coordinator.acquireBound(account, audio.createPrepared()).voice
-            if (repository.authenticatedAccount.value === account && account.job.isActive && !runtime.retired.value) {
+            if (binding != null && binding.acknowledged && binding.intent.token != null &&
+                binding.actorId == account.userId.value && repository.authenticatedAccount.value === account &&
+                account.job.isActive && !runtime.retired.value) {
                 val reply = runtime.incomingCalls(limit = 1)
                 if (reply is ru.sodovaya.volty.data.nearby.IncomingCallReply.Ready)
-                    reply.calls.firstOrNull()?.let {hints.submit(account, it.callId)?.await()}
+                    reply.calls.firstOrNull()?.let {call ->
+                        hints.submit(account, call.callId) {
+                            val latest = ledger.current()
+                            repository.authenticatedAccount.value === account && account.job.isActive && !runtime.retired.value &&
+                                latest != null && latest.acknowledged && latest.actorId == binding.actorId &&
+                                latest.intent.installationId == binding.intent.installationId &&
+                                latest.intent.installationKey == binding.intent.installationKey &&
+                                latest.intent.bindingId == binding.intent.bindingId &&
+                                latest.intent.generation == binding.intent.generation &&
+                                latest.intent.token == binding.intent.token
+                        }?.await()
+                    }
             }
         }
     }
