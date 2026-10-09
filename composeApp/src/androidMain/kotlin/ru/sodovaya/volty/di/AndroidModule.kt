@@ -208,7 +208,7 @@ val androidModule = module {
     single {
         val prefs=get<AppPrefs>()
         NearbyVoiceController(get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()},
-            prefs::readVoiceAudioPreferences,get())
+            prefs::readVoiceAudioPreferences,get<NearbySharingSwitchGuard>())
     }
     single { NearbySharingController(get(),get(),get(),get(),Dispatchers.Main,{java.util.UUID.randomUUID().toString()}) }
     single<ru.sodovaya.volty.presentation.root.nearby.NearbyOperationIds> {

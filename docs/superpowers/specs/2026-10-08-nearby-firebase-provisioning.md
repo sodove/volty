@@ -228,3 +228,12 @@ The immutable local acceptance artifact is `volty-nearby-c941iz-release.apk`,
 `65410b6ccd1a370a71cfcadd812fd2072996bc4450f4db23470548fa325562ef`.
 This candidate supersedes the intermediate 0.7.15 build and the 0.7.14 candidate.
 Physical delivery, Xiaomi audio and microphone/output routing remain unverified.
+
+## Emulator correction and retraction — 2026-10-09
+
+The 0.7.15 candidate is retired: actual Android startup exposed a native DI crash
+despite the earlier build/signature checks. Corrected 0.7.16/code39 starts; the
+replacement signed artifact and actual emulator acceptance are recorded in
+`2026-10-09-nearby-emulator-acceptance.md`. Incoming notification acceptance was
+observed with a background, live process. Process-death delivery and physical
+audio remain unverified, and remote direct-call completion has an open UI defect.

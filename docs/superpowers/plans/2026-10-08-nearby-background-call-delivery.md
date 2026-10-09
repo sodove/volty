@@ -373,3 +373,12 @@ with 63 executed tasks. Its v2 signature matches the existing signer; the actual
 supplied private key is absent from every APK entry. The earlier intermediate
 0.7.15 and 0.7.14 candidates are superseded. Fresh Android suite: 3458 tests in
 342 suites, zero failures/errors/skips. Device acceptance remains deferred.
+
+## Emulator correction and retraction — 2026-10-09
+
+Actual Android startup exposed an unbound voice-switch interface in native DI;
+the previously verified 0.7.15 candidate crashes and is retired. Corrected signed
+0.7.16/code39 starts on both emulators. Background notification acceptance works
+with a live app process; process-death delivery and physical audio remain open.
+Remote direct-call completion incorrectly leaves a failure panel and is also open.
+See `../specs/2026-10-09-nearby-emulator-acceptance.md` for actual checks and limits.

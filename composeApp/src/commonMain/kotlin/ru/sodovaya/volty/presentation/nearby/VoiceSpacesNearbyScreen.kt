@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
@@ -20,7 +21,7 @@ import volty.composeapp.generated.resources.*
 fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier=Modifier) {
     val state by component.state.collectAsState()
     val servers by component.servers.collectAsState()
-    Column(modifier.fillMaxSize()) {
+    Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
         Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
             TextButton(onClick=component::back) {Text(stringResource(Res.string.nearby_back))}
             Text((state.session as? SocialSession.Authenticated)?.displayName ?: stringResource(Res.string.nearby_title),

@@ -3,8 +3,6 @@ package ru.sodovaya.volty.presentation.nearby
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
@@ -36,7 +34,11 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
         })
     }) { insets ->
         Column(Modifier.fillMaxSize().padding(insets).padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            Row(Modifier.horizontalScroll(rememberScrollState()),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
+            FlowRow(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 TextButton(onClick=presenter::openMine,enabled=enabled) {Text(stringResource(Res.string.nearby_servers_mine))}
                 TextButton(onClick=presenter::openCatalog,enabled=enabled) {Text(stringResource(Res.string.nearby_servers_find))}
                 TextButton(onClick=presenter::openInvitationAcceptance,enabled=mutationEnabled) {Text(stringResource(Res.string.nearby_invitations_join))}
