@@ -273,12 +273,20 @@ class JdbcStore(private val dataSource: DataSource, private val json: Json) : Ba
     }
 
     override fun updatePassword(userId: String, passwordHash: String, now: Long) = dataSource.connection.use { connection ->
-        connection.prepareStatement("UPDATE users SET password_hash = ?, tokens_revoked_at = ? WHERE id = ?").use { statement ->
+        connection.autoCommit = false
+        val changed = connection.prepareStatement("UPDATE users SET password_hash = ?, tokens_revoked_at = ? WHERE id = ? AND deleted_at IS NULL").use { statement ->
             statement.setString(1, passwordHash)
             statement.setLong(2, now / 1000)
             statement.setObject(3, UUID.fromString(userId))
             statement.executeUpdate()
         }
+        if (changed == 1) connection.prepareStatement("UPDATE refresh_tokens SET revoked_at = ? WHERE user_id = ? AND revoked_at IS NULL").use { statement ->
+            statement.setLong(1, now / 1000)
+            statement.setObject(2, UUID.fromString(userId))
+            statement.executeUpdate()
+        }
+        connection.commit()
+        changed
     }
 
     override fun markEmailVerified(userId: String) = dataSource.connection.use { connection ->

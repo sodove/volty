@@ -41,7 +41,9 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                     modifier=Modifier.semantics {contentDescription=profileDescription},style=MaterialTheme.typography.titleSmall)
             }
         }
-        state.error?.let {Text(stringResource(it.shellMessage()),Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)}
+        if(state.session is SocialSession.Authenticated) state.error?.let {
+            Text(stringResource(it.shellMessage()),Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)
+        }
         if(state.busy) LinearProgressIndicator(Modifier.fillMaxWidth())
         if(state.session !is SocialSession.Authenticated) {
             NearbyAuthForm(state,component,Modifier.weight(1f))
@@ -93,12 +95,17 @@ private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoice
     val enabled=!state.busy && state.session!=SocialSession.Authenticating
     LazyColumn(modifier.fillMaxWidth(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         item {Text(stringResource(Res.string.nearby_shell_description))}
-        item {Row(horizontalArrangement=Arrangement.spacedBy(12.dp)) {
-            TextButton(onClick={component.setAuthMode(NearbyAuthMode.LOGIN)},enabled=enabled) {Text(stringResource(Res.string.nearby_login))}
-            TextButton(onClick={component.setAuthMode(NearbyAuthMode.REGISTER)},enabled=enabled) {Text(stringResource(Res.string.nearby_register))}
+        item {TabRow(selectedTabIndex=state.auth.mode.ordinal) {
+            Tab(selected=state.auth.mode==NearbyAuthMode.LOGIN,onClick={component.setAuthMode(NearbyAuthMode.LOGIN)},enabled=enabled,
+                text={Text(stringResource(Res.string.nearby_login))})
+            Tab(selected=state.auth.mode==NearbyAuthMode.REGISTER,onClick={component.setAuthMode(NearbyAuthMode.REGISTER)},enabled=enabled,
+                text={Text(stringResource(Res.string.nearby_register))})
         }}
+        item {Text(stringResource(Res.string.nearby_auth_email_hint),style=MaterialTheme.typography.bodySmall,
+            color=MaterialTheme.colorScheme.onSurfaceVariant)}
         item {OutlinedTextField(state.auth.email,component::setEmail,Modifier.widthIn(max=520.dp).fillMaxWidth(),
-            label={Text(stringResource(Res.string.nearby_email))},keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),singleLine=true,enabled=enabled)}
+            label={Text(stringResource(Res.string.nearby_auth_email))},placeholder={Text("name@example.com")},
+            keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),singleLine=true,enabled=enabled)}
         item {OutlinedTextField(state.auth.password,component::setPassword,Modifier.widthIn(max=520.dp).fillMaxWidth(),
             label={Text(stringResource(Res.string.nearby_password))},visualTransformation=PasswordVisualTransformation(),
             keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true,enabled=enabled)}
@@ -107,7 +114,12 @@ private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoice
             item {OutlinedTextField(state.auth.displayName,component::setDisplayName,Modifier.widthIn(max=520.dp).fillMaxWidth(),
                 label={Text(stringResource(Res.string.nearby_name))},singleLine=true,enabled=enabled)}
         }
-        item {Button(onClick=component::submitAuth,enabled=enabled) {
+        state.error?.let {error ->item {Text(stringResource(when {
+            error==NearbyShellError.INVALID_FORM && state.auth.mode==NearbyAuthMode.LOGIN -> Res.string.nearby_auth_login_invalid
+            error==NearbyShellError.CONFLICT && state.auth.mode==NearbyAuthMode.REGISTER -> Res.string.nearby_auth_email_taken
+            else -> error.shellMessage()
+        }),color=MaterialTheme.colorScheme.error)}}
+        item {Button(onClick=component::submitAuth,enabled=enabled,modifier=Modifier.widthIn(max=520.dp).fillMaxWidth()) {
             Text(stringResource(if(state.auth.mode==NearbyAuthMode.LOGIN) Res.string.nearby_login else Res.string.nearby_register))
         }}
         item {TextButton(onClick=component::requestRecovery,enabled=enabled) {
@@ -120,6 +132,7 @@ private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoice
 
 internal fun NearbyShellError.shellMessage(): StringResource = when(this) {
     NearbyShellError.INVALID_FORM -> Res.string.nearby_shell_invalid_form
+    NearbyShellError.INVALID_CREDENTIALS -> Res.string.nearby_auth_invalid_credentials
     NearbyShellError.UNAUTHORIZED -> Res.string.nearby_servers_auth_required
     NearbyShellError.FORBIDDEN -> Res.string.nearby_servers_access_denied
     NearbyShellError.CONFLICT -> Res.string.nearby_shell_conflict

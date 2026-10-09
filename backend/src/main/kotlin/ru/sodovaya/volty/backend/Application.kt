@@ -27,6 +27,7 @@ import io.ktor.server.request.path
 import io.ktor.server.request.httpMethod
 import io.ktor.server.response.header
 import io.ktor.server.response.respond
+import io.ktor.server.response.respondText
 import io.ktor.server.auth.principal
 import io.ktor.server.routing.delete
 import io.ktor.server.routing.get
@@ -106,10 +107,12 @@ class AppDependencies(
     val nearbyPushDevices: ru.sodovaya.volty.backend.nearby.PushDeviceEndpointPort? = null,
     val nearbyPushDelivery: ru.sodovaya.volty.backend.nearby.PushDeliveryTick? = null,
     val nearbyPushTransport: AutoCloseable? = null,
+    val passwordResetDelivery: PasswordResetDelivery = UnavailablePasswordResetDelivery,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
     val rateLimiter = RateLimiter(maxRequests = 120, windowSeconds = 60)
+    internal val passwordRecoveryLimiter = PasswordRecoveryLimiter()
     val navigationSearchLimiter = RateLimiter(maxRequests = 20, windowSeconds = 60)
     val navigationRouteLimiter = RateLimiter(maxRequests = 10, windowSeconds = 60)
     val navigationSearchCache = NavigationTtlCache<List<NavigationPlaceDto>>(maxEntries = 256, ttlMillis = 60_000L)
@@ -121,10 +124,11 @@ class AppDependencies(
             config.nearby.validate(config)
             config.fcm.validate(config.nearby.mode)
             val pushAccount = config.fcm.load()
+            val passwordResetDelivery = SmtpPasswordResetDelivery.fromEnvironment()
             val dataSource = createDataSource(config)
             try {
                 prepareBackendSchema(dataSource, config.nearby.mode)
-                return fromPreparedDatabase(config, dataSource, pushAccount)
+                return fromPreparedDatabase(config, dataSource, pushAccount, passwordResetDelivery)
             } catch (failure: Throwable) {
                 try { dataSource.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
                 throw failure
@@ -133,7 +137,8 @@ class AppDependencies(
 
         /** Borrowed source, already bootstrapped. Assembly itself performs no database/network I/O. */
         internal fun fromPreparedDatabase(config: AppConfig, dataSource: DataSource,
-            pushAccount: ru.sodovaya.volty.backend.nearby.FcmServiceAccount? = null): AppDependencies {
+            pushAccount: ru.sodovaya.volty.backend.nearby.FcmServiceAccount? = null,
+            passwordResetDelivery: PasswordResetDelivery = UnavailablePasswordResetDelivery): AppDependencies {
             config.nearby.validate(config)
             config.fcm.validate(config.nearby.mode)
             require(config.fcm.configured == (pushAccount != null) &&
@@ -143,7 +148,7 @@ class AppDependencies(
             val json = backendJson()
             val store = JdbcStore(dataSource, json)
             if (config.nearby.mode == ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY) {
-                return AppDependencies(config, store, json = json)
+                return AppDependencies(config, store, json = json, passwordResetDelivery = passwordResetDelivery)
             }
             val media = checkNotNull(config.liveKitConfigOrNull())
             val sfu = ru.sodovaya.volty.backend.nearby.HttpSfuLeaseClient(
@@ -161,7 +166,7 @@ class AppDependencies(
                 nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
                 nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
                 nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph, nearbyPushDevices = graph.pushDevices,
-                nearbyPushDelivery = push?.tick, nearbyPushTransport = push)
+                nearbyPushDelivery = push?.tick, nearbyPushTransport = push, passwordResetDelivery = passwordResetDelivery)
             } catch (failure: Throwable) { push?.close(); throw failure }
         }
 
@@ -328,6 +333,14 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
     }
 
     routing {
+        get("/reset-password") {
+            val nonce = java.util.Base64.getEncoder().encodeToString(java.security.SecureRandom().generateSeed(24))
+            val page = checkNotNull(PasswordResetDelivery::class.java.getResourceAsStream("/password-reset.html"))
+                .bufferedReader(Charsets.UTF_8).use { it.readText() }.replace("__CSP_NONCE__", nonce)
+            call.response.header(HttpHeaders.CacheControl, "no-store")
+            call.response.header("Content-Security-Policy", "default-src 'none'; script-src 'nonce-$nonce'; style-src 'nonce-$nonce'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            call.respondText(page, ContentType.Text.Html)
+        }
         installNearbySessionRoutes(dependencies)
         installNearbyRosterRoutes(dependencies)
         installNearbyMediaWebhookRoutes(dependencies)
@@ -395,8 +408,21 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
             post("/auth/password-reset/request") {
                 val body = call.receive<PasswordResetRequest>()
                 val email = Validation.email(body.email).orBadRequest()
+                if (!dependencies.passwordResetDelivery.available) throw ApiException(HttpStatusCode.ServiceUnavailable,
+                    "email_unavailable", "Email recovery is temporarily unavailable")
+                if (!dependencies.passwordRecoveryLimiter.allow(email)) {
+                    call.response.header(HttpHeaders.RetryAfter, "60")
+                    throw ApiException(HttpStatusCode.TooManyRequests, "rate_limited", "Please wait before requesting another recovery email")
+                }
                 dependencies.store.findUserByEmail(email)?.let { user ->
-                    issueOneTimeToken(dependencies, user.id, "PASSWORD_RESET")
+                    val token = issueOneTimeToken(dependencies, user.id, "PASSWORD_RESET")
+                    try {
+                        dependencies.passwordResetDelivery.send(email, token)
+                    } catch (cancelled: kotlinx.coroutines.CancellationException) {
+                        throw cancelled
+                    } catch (_: Exception) {
+                        throw ApiException(HttpStatusCode.ServiceUnavailable, "email_unavailable", "Email recovery is temporarily unavailable")
+                    }
                 }
                 call.respond(HttpStatusCode.Accepted, mapOf("accepted" to true))
             }
@@ -404,14 +430,16 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
                 val body = call.receive<PasswordResetConfirmRequest>()
                 val password = Validation.password(body.newPassword).orBadRequest()
                 val userId = dependencies.store.consumeOneTimeToken("PASSWORD_RESET", sha256(body.token), nowMillis()) ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_token", "Reset token is invalid or expired")
-                dependencies.store.updatePassword(userId, BCrypt.hashpw(password, BCrypt.gensalt(12)), nowMillis())
+                if (dependencies.store.updatePassword(userId, BCrypt.hashpw(password, BCrypt.gensalt(12)), nowMillis()) != 1)
+                    throw ApiException(HttpStatusCode.BadRequest, "invalid_token", "Reset token is invalid or expired")
                 call.respond(mapOf("reset" to true))
             }
             post("/auth/password-reset/confirm") {
                 val body = call.receive<PasswordResetConfirmRequest>()
                 val password = Validation.password(body.newPassword).orBadRequest()
                 val userId = dependencies.store.consumeOneTimeToken("PASSWORD_RESET", sha256(body.token), nowMillis()) ?: throw ApiException(HttpStatusCode.BadRequest, "invalid_token", "Reset token is invalid or expired")
-                dependencies.store.updatePassword(userId, BCrypt.hashpw(password, BCrypt.gensalt(12)), nowMillis())
+                if (dependencies.store.updatePassword(userId, BCrypt.hashpw(password, BCrypt.gensalt(12)), nowMillis()) != 1)
+                    throw ApiException(HttpStatusCode.BadRequest, "invalid_token", "Reset token is invalid or expired")
                 call.respond(mapOf("reset" to true))
             }
 

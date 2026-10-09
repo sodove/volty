@@ -27,7 +27,7 @@ Run the complete stack with `docker compose up -d --build`.
 
 Migrations run automatically on app startup. They are tracked in `schema_migrations`; the service keeps only current live sharing rows and never stores route history or BLE identifiers.
 
-For a development account, register through the API. Verification and password-reset tokens are logged by the backend because no mail provider is configured in this MVP:
+For a development account, register through the API. Registration does not require email verification:
 
 ```powershell
 curl.exe -X POST https://volty.sodove.ru/v1/auth/register `
@@ -35,7 +35,11 @@ curl.exe -X POST https://volty.sodove.ru/v1/auth/register `
   -d '{"email":"rider@example.com","password":"correct horse battery staple","displayName":"Rider"}'
 ```
 
-For production, provide a mailer implementation at the one-time-token log boundary before enabling user-facing email delivery. Tokens are stored only as SHA-256 hashes.
+Retraction: an earlier README claimed recovery tokens were logged; the request route actually discarded them and sent no email. Recovery now sends a one-time link valid for one hour through authenticated SMTP. Tokens are stored only as SHA-256 hashes and are never logged.
+
+Set `VOLTY_SMTP_SECRET_FILE` to a protected JSON file mounted read-only and readable by the backend UID. Its fields are `host`, `port` (587 with required STARTTLS, or 465 with TLS), `username`, `password`, and `from`. Keep this file outside Git and image build inputs. TLS certificates and server identity are verified. Without this setting recovery returns 503; successful requests return the same 202 receipt for known and unknown accounts. Each mailbox is limited to one request per minute.
+
+The email opens `https://volty.sodove.ru/reset-password#token=…`. The page removes the fragment from browser history and posts the token with the new password; a token is consumed once. `smtpTest` is an explicit integration check that sends one recovery message to the configured SMTP account's own mailbox and verifies it through IMAPS, without changing a production account.
 
 ## Verification
 

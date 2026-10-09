@@ -11,7 +11,7 @@ import ru.sodovaya.volty.domain.nearby.community.invitationDraftId
 
 enum class NearbyAuthMode { LOGIN, REGISTER }
 enum class NearbyShellSection { SERVERS, FRIENDS, PROFILE }
-enum class NearbyShellError { INVALID_FORM, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE }
+enum class NearbyShellError { INVALID_FORM, INVALID_CREDENTIALS, UNAUTHORIZED, FORBIDDEN, CONFLICT, RATE_LIMITED, UNAVAILABLE }
 data class NearbyAuthDraft(val mode: NearbyAuthMode=NearbyAuthMode.LOGIN,
     val email: String="",val password: String="",val displayName: String="",val recoveryRequested: Boolean=false) {
     override fun toString()="NearbyAuthDraft(mode=$mode, email=$email, password=<redacted>, displayName=$displayName)"
@@ -88,11 +88,12 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
     fun submitAuth() {
         if(!enabled() || form.value.busy || repository.session.value!=SocialSession.LoggedOut) return
         val draft=form.value.auth
-        if(draft.email.isBlank() || draft.password.isBlank() ||
+        if(!Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(draft.email.trim()) || draft.password.isBlank() ||
             (draft.mode==NearbyAuthMode.REGISTER && (draft.password.length !in 12..128 || draft.displayName.trim().length !in 2..80))) {
             form.update {it.copy(error=NearbyShellError.INVALID_FORM)};return
         }
-        command(null) {
+        command(null,errorMap={if(draft.mode==NearbyAuthMode.LOGIN && it==SocialFailure.Unauthorized)
+            NearbyShellError.INVALID_CREDENTIALS else it.shellError()}) {
             if(draft.mode==NearbyAuthMode.LOGIN) repository.login(LoginRequest(draft.email.trim(),draft.password))
             else repository.register(RegistrationRequest(draft.email.trim(),draft.password,draft.displayName.trim()))
         }
@@ -101,7 +102,7 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
         if(!enabled() || form.value.busy || repository.session.value!=SocialSession.LoggedOut ||
             repository.authenticatedAccount.value!=null) return
         val email=form.value.auth.email.trim()
-        if(email.isBlank()) {form.update {it.copy(error=NearbyShellError.INVALID_FORM)};return}
+        if(!Regex("^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$").matches(email)) {form.update {it.copy(error=NearbyShellError.INVALID_FORM)};return}
         form.update {it.copy(auth=it.auth.copy(recoveryRequested=false))}
         command(null,onSuccess={
             if(repository.session.value==SocialSession.LoggedOut && repository.authenticatedAccount.value==null)
@@ -111,7 +112,8 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
         }
     }
 
-    private fun command(account: SocialAuthenticatedAccount?,onSuccess: ()->Unit={},work: suspend ()->SocialResult<Unit>) {
+    private fun command(account: SocialAuthenticatedAccount?,onSuccess: ()->Unit={},
+        errorMap: (SocialFailure)->NearbyShellError={it.shellError()},work: suspend ()->SocialResult<Unit>) {
         if(!enabled() || form.value.busy || (account!=null && !friends.current(account))) return
         val token=++operation
         form.update {it.copy(busy=true,error=null)}
@@ -121,7 +123,7 @@ class DefaultVoiceSpacesNearbyComponent(componentContext: ComponentContext,paren
                 if(account==null && (repository.session.value!=SocialSession.LoggedOut || repository.authenticatedAccount.value!=null)) return@launch
                 val result=work()
                 if(enabled() && token==operation && (account==null || friends.current(account))) {
-                    form.update {it.copy(error=(result as? SocialResult.Failure)?.error?.shellError())}
+                    form.update {it.copy(error=(result as? SocialResult.Failure)?.error?.let(errorMap))}
                     if(result is SocialResult.Success) onSuccess()
                 }
             } catch(cancelled: CancellationException) {throw cancelled}

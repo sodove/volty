@@ -33,6 +33,7 @@ dependencies {
     implementation("com.zaxxer:HikariCP:6.3.0")
     implementation("org.postgresql:postgresql:42.7.7")
     implementation("org.mindrot:jbcrypt:0.4")
+    implementation("org.eclipse.angus:jakarta.mail:2.0.5")
     implementation("ch.qos.logback:logback-classic:$logbackVersion")
 
     testImplementation("io.ktor:ktor-server-test-host:$ktorVersion")
@@ -52,7 +53,14 @@ application {
 }
 
 tasks.test {
-    useJUnitPlatform { excludeTags("postgres", "sfu") }
+    useJUnitPlatform { excludeTags("postgres", "sfu", "smtp") }
+}
+
+tasks.register<Test>("smtpTest") {
+    description = "Opt-in real recovery delivery to the configured SMTP account's own mailbox"
+    testClassesDirs = sourceSets["test"].output.classesDirs
+    classpath = sourceSets["test"].runtimeClasspath
+    useJUnitPlatform { includeTags("smtp") }
 }
 
 tasks.register<Test>("postgresTest") {

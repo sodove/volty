@@ -22,6 +22,7 @@ class VoiceSpacesNearbyComponentTest {
     private val pending=FriendSummary(FriendshipId("pending"),SocialUserId("30000000-0000-0000-0000-000000000003"),"Waiting",FriendshipState.REQUEST_RECEIVED)
     private inner class Transport:SocialTransport by UnavailableSocialTransport() {
         var ordinal=0;val issued=mutableListOf<String>()
+        var loginFailure: SocialFailure?=null
         var friends: suspend (String)->SocialResult<List<FriendSummary>> = {SocialResult.Success(listOf(accepted,pending))}
         var search: suspend (String)->SocialResult<List<UserSearchResult>> = {SocialResult.Success(emptyList())}
         var respond: suspend ()->SocialResult<Unit> = {SocialResult.Success(Unit)}
@@ -38,6 +39,7 @@ class VoiceSpacesNearbyComponentTest {
         }
         override suspend fun login(request: LoginRequest):SocialResult<SessionCredentials> {
             issued+="login:${request.email}"
+            loginFailure?.let {return SocialResult.Failure(it)}
             return SocialResult.Success(SessionCredentials("token-${++ordinal}","refresh-$ordinal",Long.MAX_VALUE))
         }
         override suspend fun register(request: RegistrationRequest):SocialResult<SessionCredentials> {
@@ -74,6 +76,9 @@ class VoiceSpacesNearbyComponentTest {
         f.transport.recovery={release.await();SocialResult.Success(Unit)}
         try {
             runCurrent();f.component.requestRecovery();runCurrent()
+            assertEquals(NearbyShellError.INVALID_FORM,f.component.state.value.error)
+            assertTrue(f.transport.issued.isEmpty())
+            f.component.setEmail("Rider");f.component.requestRecovery();runCurrent()
             assertEquals(NearbyShellError.INVALID_FORM,f.component.state.value.error)
             assertTrue(f.transport.issued.isEmpty())
             f.component.setEmail("  rider@example.test  ");f.component.requestRecovery();f.component.requestRecovery();runCurrent()
@@ -338,6 +343,29 @@ class VoiceSpacesNearbyComponentTest {
     private class Drafts(override val actorId: String):InvitationDraftStore {
         override suspend fun read(invitationId: String):InvitationCreationDraft?=null
         override suspend fun retain(draft: InvitationCreationDraft)=draft
+    }
+
+    @Test fun login_rejects_display_name_before_issuing_transport_request()=runTest {
+        val f=Fixture(this)
+        try {
+            runCurrent();f.component.setEmail("Rider");f.component.setPassword("password")
+            f.component.submitAuth();runCurrent()
+            assertFalse(f.transport.issued.any {it.startsWith("login:")})
+            assertEquals(NearbyShellError.INVALID_FORM,f.component.state.value.error)
+            assertEquals(SocialSession.LoggedOut,f.component.state.value.session)
+        } finally {f.close();runCurrent()}
+    }
+
+    @Test fun wrong_login_credentials_are_not_presented_as_expired_authenticated_session()=runTest {
+        val f=Fixture(this);f.transport.loginFailure=SocialFailure.Unauthorized
+        try {
+            runCurrent();f.component.setEmail("rider@example.test");f.component.setPassword("wrong")
+            f.component.submitAuth();runCurrent()
+            assertEquals(listOf("login:rider@example.test"),f.transport.issued)
+            assertEquals("INVALID_CREDENTIALS",f.component.state.value.error?.name)
+            assertEquals(SocialSession.LoggedOut,f.component.state.value.session)
+            assertFalse(f.component.state.value.busy)
+        } finally {f.close();runCurrent()}
     }
     private class Credentials:SocialCredentialStore {
         var value:SocialCredentials?=null

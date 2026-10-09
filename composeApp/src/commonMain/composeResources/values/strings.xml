@@ -876,7 +876,12 @@
     <string name="nearby_panel_switch_text">Joining %1$s will end your current voice connection and position sharing. You will remain a server member.</string>
     <string name="nearby_panel_switch_confirm">End trip and continue</string>
     <string name="nearby_shell_profile_saved">Profile saved</string>
-    <string name="nearby_shell_recovery_requested">If an account exists, check your email for recovery instructions.</string>
+    <string name="nearby_shell_recovery_requested">If an account exists with this email, we have sent a password reset link. Check your inbox and spam folder. The link is valid for one hour.</string>
+    <string name="nearby_auth_email">Email address</string>
+    <string name="nearby_auth_email_hint">Use the email address you registered with, rather than your display name.</string>
+    <string name="nearby_auth_login_invalid">Enter a valid email address and your password.</string>
+    <string name="nearby_auth_invalid_credentials">Incorrect email or password. Check both fields and try again.</string>
+    <string name="nearby_auth_email_taken">This email address is already registered. Switch to Log in.</string>
     <string name="nearby_channels_create">Create voice channel</string>
     <string name="nearby_channels_name">Channel name</string>
     <string name="nearby_channels_invalid_input">Enter a channel name of 1–80 characters.</string>

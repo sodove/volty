@@ -23,7 +23,7 @@ deployed. It never silently substitutes a third-party provider or a car/bicycle 
 | POST | `/auth/refresh` | `{refreshToken}` -> rotated `SessionCredentials` |
 | POST | `/auth/logout` | bearer -> `{loggedOut:true}`; revokes all sessions |
 | GET/POST | `/auth/verify` | legacy compatibility endpoint; query `token` or `{token}` -> `{verified:true}`; registration/login do not depend on it |
-| POST | `/auth/password-reset/request` | `{email}` -> `202`; never reveals account existence |
+| POST | `/auth/password-reset/request` | `{email}` -> `202` for known/unknown accounts; known accounts receive a one-hour email link. `429` for repeated mailbox requests; `503` if email delivery is unavailable |
 | POST | `/auth/password-reset` | `{token,newPassword}` -> `{reset:true}` |
 | GET | `/profile` | bearer -> authenticated profile |
 | PATCH | `/profile` | `{displayName}` -> authenticated profile |

@@ -874,7 +874,12 @@
     <string name="nearby_panel_switch_text">Подключение к %1$s завершит текущее голосовое соединение и передачу позиции. Членство на сервере сохранится.</string>
     <string name="nearby_panel_switch_confirm">Завершить поездку и продолжить</string>
     <string name="nearby_shell_profile_saved">Профиль сохранён</string>
-    <string name="nearby_shell_recovery_requested">Если аккаунт существует, проверьте почту — там будут инструкции для восстановления.</string>
+    <string name="nearby_shell_recovery_requested">Если аккаунт с этой почтой существует, мы отправили ссылку для смены пароля. Проверьте входящие и спам. Ссылка действует один час.</string>
+    <string name="nearby_auth_email">Электронная почта</string>
+    <string name="nearby_auth_email_hint">Введите почту, указанную при регистрации, а не имя в приложении.</string>
+    <string name="nearby_auth_login_invalid">Введите корректную почту и пароль.</string>
+    <string name="nearby_auth_invalid_credentials">Неверная почта или пароль. Проверьте оба поля и попробуйте снова.</string>
+    <string name="nearby_auth_email_taken">Эта почта уже зарегистрирована. Переключитесь на «Войти».</string>
     <string name="nearby_channels_create">Создать голосовой канал</string>
     <string name="nearby_channels_name">Название канала</string>
     <string name="nearby_channels_invalid_input">Введите название канала длиной от 1 до 80 символов.</string>
