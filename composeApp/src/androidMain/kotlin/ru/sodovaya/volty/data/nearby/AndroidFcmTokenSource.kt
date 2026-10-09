@@ -16,7 +16,16 @@ internal class AndroidFcmTokenSource(context: Context) : PushTokenSource {
     private fun messaging(): FirebaseMessaging? = if (FirebaseApp.getApps(context).any {it.name == FirebaseApp.DEFAULT_APP_NAME})
         FirebaseMessaging.getInstance() else null
     override fun setActive(active: Boolean) {messaging()?.isAutoInitEnabled = active}
-    override suspend fun current(): String? = messaging()?.token?.privateAwait()
+    override suspend fun current(): String? = try {
+        val token = messaging()?.token?.privateAwait()
+        AndroidCallPushDiagnostics.record(if (token == null) CallPushDiagnosticEvent.TOKEN_UNAVAILABLE
+            else CallPushDiagnosticEvent.TOKEN_AVAILABLE)
+        token
+    } catch (failure: Exception) {
+        AndroidCallPushDiagnostics.record(if (failure is CancellationException) CallPushDiagnosticEvent.CANCELLED
+            else CallPushDiagnosticEvent.TOKEN_UNAVAILABLE)
+        throw failure
+    }
     override suspend fun renew(): String? {
         val messaging = messaging() ?: return null
         messaging.deleteToken().privateAwait()

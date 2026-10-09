@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.app.NotificationManager
 import android.content.Context
 import android.content.Intent
@@ -21,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.data.voice.INCOMING_CALL_NOTIFICATION_CHANNEL
+import ru.sodovaya.volty.data.nearby.AndroidCallPushDiagnostics
 import volty.composeapp.generated.resources.*
 
 private enum class NotificationSettingsState { ALLOWED, APP_BLOCKED, CHANNEL_BLOCKED, UNKNOWN }
@@ -43,6 +46,7 @@ internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var availability by remember(context) { mutableStateOf(notificationSettings(context)) }
     var launchFailed by remember(context) { mutableStateOf(false) }
+    var diagnosticCopied by remember(context) { mutableStateOf(false) }
     DisposableEffect(context, lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) availability = notificationSettings(context)
@@ -76,6 +80,17 @@ internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
             }) { Text(stringResource(Res.string.nearby_notifications_settings)) }
             if (launchFailed) Text(stringResource(Res.string.nearby_notifications_launch_failed),
                 color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = {
+                availability = notificationSettings(context)
+                val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName
+                val report = "volty=$version; android=${Build.VERSION.SDK_INT}; notification_settings=$availability\n" +
+                    AndroidCallPushDiagnostics.export()
+                context.getSystemService(ClipboardManager::class.java)
+                    .setPrimaryClip(ClipData.newPlainText("Volty call diagnostics", report))
+                diagnosticCopied = true
+            }) { Text(stringResource(Res.string.nearby_notifications_copy_diagnostics)) }
+            if (diagnosticCopied) Text(stringResource(Res.string.nearby_notifications_diagnostics_copied),
+                style = MaterialTheme.typography.bodySmall)
         }
     }
 }

@@ -30,7 +30,12 @@ class IncomingCallPushGateTest {
         val store = Store(); val ledger = PushInstallationLedger(store, Ids())
         var issued = 0; var verification: suspend () -> Boolean = {true}
         var publicationFence: (suspend () -> Boolean)? = null
-        val gate = IncomingCallPushGate({current.value}, ledger) {bound, id, fence ->
+        val events = mutableListOf<CallPushDiagnosticEvent>()
+        var diagnosticFails = false
+        val gate = IncomingCallPushGate({current.value}, ledger, {event ->
+            if (diagnosticFails) error("Controlled diagnostic failure")
+            events += event
+        }) {bound, id, fence ->
             publicationFence = fence
             assertSame(account, bound); assertEquals(call, id); issued++; verification()
         }
@@ -42,6 +47,31 @@ class IncomingCallPushGateTest {
             binding: String = snapshot.intent.bindingId): IncomingCallPushHint = assertNotNull(IncomingCallPushHint.decode(mapOf(
                 "type" to "nearby_call", "callId" to call, "revision" to "1", "generation" to generation.toString(), "bindingId" to binding)))
         fun close() {store.release?.complete(Unit); root.cancel()}
+    }
+    @Test fun rejectedBindingRecordsReasonWithoutIssuingBackendVerification() = runTest {
+        val f = Fixture(this)
+        try {
+            val snapshot = f.bind()
+            assertFalse(f.gate.receive(f.hint(snapshot, generation = snapshot.intent.generation + 1)))
+            assertEquals(0, f.issued)
+            assertEquals(listOf(CallPushDiagnosticEvent.BINDING_REJECTED), f.events)
+        } finally {f.close()}
+    }
+    @Test fun backendDenialHasDifferentDiagnosticFromRejectedBinding() = runTest {
+        val f = Fixture(this)
+        try {
+            val snapshot = f.bind(); f.verification = {false}
+            assertFalse(f.gate.receive(f.hint(snapshot))); assertEquals(1, f.issued)
+            assertEquals(listOf(CallPushDiagnosticEvent.VERIFICATION_STARTED,
+                CallPushDiagnosticEvent.VERIFICATION_REJECTED), f.events)
+        } finally {f.close()}
+    }
+    @Test fun failedDiagnosticSinkCannotRejectAnActuallyVerifiedCall() = runTest {
+        val f = Fixture(this)
+        try {
+            val snapshot = f.bind(); f.diagnosticFails = true
+            assertTrue(f.gate.receive(f.hint(snapshot))); assertEquals(1, f.issued)
+        } finally {f.close()}
     }
     @Test fun publicationFenceRejectsChangedBindingAndAccountBeforeTheVerifierPublishes() = runTest {
         val f = Fixture(this)

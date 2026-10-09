@@ -13,6 +13,8 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import ru.sodovaya.volty.R
 import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
+import ru.sodovaya.volty.data.nearby.AndroidCallPushDiagnostics
+import ru.sodovaya.volty.data.nearby.CallPushDiagnosticEvent
 
 internal const val INCOMING_CALL_NOTIFICATION_CHANNEL = "nearby_voice_incoming"
 
@@ -33,11 +35,14 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
         mainOwner()
         require(remainingMillis in 1..45_000)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(application,
-                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
-        if (!NotificationManagerCompat.from(application).areNotificationsEnabled()) return false
+                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_PERMISSION_BLOCKED)
+        if (!NotificationManagerCompat.from(application).areNotificationsEnabled())
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_APP_BLOCKED)
         manager.createNotificationChannel(NotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL,
             application.getString(R.string.nearby_incoming_notification_channel), NotificationManager.IMPORTANCE_HIGH))
-        if (manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return false
+        if (manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE)
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_CHANNEL_BLOCKED)
         if (tickets.containsKey(ticket.id)) return false
         // Record before the native call so a partially failed submission remains cancellable.
         tickets[ticket.id] = ticket
@@ -50,9 +55,12 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
         if (tickets[ticket.id] !== ticket || incomingCallDisplayName(callerName) == null) return false
         require(remainingMillis in 1..45_000)
         if (Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(application,
-                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false
-        if (!NotificationManagerCompat.from(application).areNotificationsEnabled()) return false
-        if (manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) return false
+                Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED)
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_PERMISSION_BLOCKED)
+        if (!NotificationManagerCompat.from(application).areNotificationsEnabled())
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_APP_BLOCKED)
+        if (manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE)
+            return blocked(CallPushDiagnosticEvent.NOTIFICATION_CHANNEL_BLOCKED)
         post(ticket, remainingMillis, callerName)
         return true
     }
@@ -71,8 +79,19 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
             .addAction(android.R.drawable.ic_menu_call, application.getString(R.string.nearby_incoming_notification_accept), accept)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, application.getString(R.string.nearby_incoming_notification_decline), decline)
             .build()
-        manager.notify(ticket.id, NOTIFICATION, notification)
+        if ((manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance ?: NotificationManager.IMPORTANCE_HIGH)
+            < NotificationManager.IMPORTANCE_HIGH)
+            AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_QUIET_CHANNEL)
+        try {
+            manager.notify(ticket.id, NOTIFICATION, notification)
+            AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_SUBMITTED)
+        } catch (failure: Exception) {
+            AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_FAILED)
+            throw failure
+        }
     }
+
+    private fun blocked(event: CallPushDiagnosticEvent): Boolean {AndroidCallPushDiagnostics.record(event); return false}
 
     override fun cancel(ticket: IncomingCallNotificationTicket) {
         mainOwner()

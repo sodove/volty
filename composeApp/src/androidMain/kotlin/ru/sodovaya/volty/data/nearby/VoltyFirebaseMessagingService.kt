@@ -21,7 +21,10 @@ class VoltyFirebaseMessagingService : FirebaseMessagingService() {
         GlobalContext.getOrNull()?.get<AndroidPushStartup>()?.tokenHint()
     }
     override fun onMessageReceived(message: RemoteMessage) {
-        val hint = IncomingCallPushHint.decode(message.data) ?: return
+        AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.FCM_RECEIVED)
+        val hint = IncomingCallPushHint.decode(message.data) ?: run {
+            AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.PAYLOAD_REJECTED); return
+        }
         val data = Data.Builder().apply {message.data.forEach {(key, value) -> putString(key, value)}}.build()
         val request = OneTimeWorkRequestBuilder<IncomingCallPushWorker>().setInputData(data)
             .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
@@ -32,5 +35,6 @@ class VoltyFirebaseMessagingService : FirebaseMessagingService() {
             request.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(
             "nearby-call:${hint.bindingId}:${hint.generation}:${hint.callId}:${hint.revision}", ExistingWorkPolicy.KEEP, request.build())
+        AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.WORK_QUEUED)
     }
 }

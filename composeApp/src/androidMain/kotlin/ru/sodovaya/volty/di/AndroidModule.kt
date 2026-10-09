@@ -247,7 +247,8 @@ val androidModule = module {
     single {
         val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
         val hints = get<ru.sodovaya.volty.data.voice.IncomingCallHintDispatch>()
-        ru.sodovaya.volty.data.nearby.IncomingCallPushGate({repository.authenticatedAccount.value}, get()) {account, call, beforePublish ->
+        ru.sodovaya.volty.data.nearby.IncomingCallPushGate({repository.authenticatedAccount.value}, get(),
+            ru.sodovaya.volty.data.nearby.AndroidCallPushDiagnostics::record) {account, call, beforePublish ->
             hints.submit(account, call, beforePublish)?.await() == true
         }
     }
@@ -260,7 +261,8 @@ val androidModule = module {
         ru.sodovaya.volty.data.nearby.PushRegistrationOwner(repository.authenticatedAccount, repository.applicationScope(),
             Dispatchers.Main, flow {while (true) {delay(30_000); emit(Unit)}},
             get<ru.sodovaya.volty.data.nearby.AndroidPushEvents>().tokens, get(), get(),
-            {account -> ru.sodovaya.volty.data.nearby.AccountPushRegistration(account, client, NEARBY_API_BASE_URL)}) {account ->
+            {account -> ru.sodovaya.volty.data.nearby.AndroidObservedPushRegistration(
+                ru.sodovaya.volty.data.nearby.AccountPushRegistration(account, client, NEARBY_API_BASE_URL))}) {account ->
             val binding = ledger.current()
             val runtime = coordinator.acquireBound(account, audio.createPrepared()).voice
             if (binding != null && binding.acknowledged && binding.intent.token != null &&
