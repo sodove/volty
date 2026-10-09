@@ -109,6 +109,13 @@ transfer integrity verified. Neither copy is APK input. No private contents were
 printed or committed. Container mount/settings and actual OAuth/message delivery
 are still pending; the running production process was not changed.
 
+Later verification on the server used the final immutable compiled production
+loader/provider with this real key and the fixed Google OAuth endpoint. Google
+accepted authorization; a second provider call reused the exact cached bearer.
+No bearer/key material was printed. Retraction of "actual OAuth pending": OAuth
+is now observed. This proves neither FCM send permission/API enablement nor phone
+delivery. No FCM message was sent and production runtime remains unchanged.
+
 The account-owned client HTTP registration boundary is now implemented: fixed
 HTTPS PUT, explicit null token retirement, bounded10s request and8KiB response,
 typed stale-binding/token-conflict outcomes, repository-owned bearer refresh,

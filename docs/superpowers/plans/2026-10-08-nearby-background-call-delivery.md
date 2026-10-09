@@ -252,3 +252,36 @@ Firebase credential/provisioning and native receive/register remain pending.
 Sources checked2026-10-09:
 [Service-account OAuth protocol](https://developers.google.com/identity/protocols/oauth2/service-account),
 [Firebase HTTPv1](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
+
+## Step4 installation persistence boundary2026-10-09
+
+Account-owned HTTP registration and the singleton durable installation ledger
+are implemented locally. Installation identity/capability survive account/token
+changes; changed intent increments generation and changes binding before request
+publication. Exact replay preserves acknowledgement. Logout records a null token
+under its retiring actor; receiver wiring must still require the currently live
+account and an acknowledged, non-null-token binding. Old A→B→A receipts cannot
+acknowledge the new state. Failed writes retain the last durable state; generation
+exhaustion fails instead of wrapping or replacing an existing installation.
+
+The Android store encrypts the whole versioned snapshot using its separate
+Keystore AES-GCM key. AtomicFile has process-level mutual exclusion, explicit
+fd.sync, finishWrite and read-back verification. It lives in noBackupFilesDir;
+corrupt/foreign/missing snapshots never yield a partial old identity. New identity
+creation belongs to the ledger. Transient I/O/key failures are generic failures,
+not partial restoration. Encoding is bounded16KiB/strict UTF-8/all eight fields.
+The generator uses SecureRandom32-byte capabilities and UUIDs. These classes are
+compiled, not yet assembled into the application lifecycle. Physical Keystore,
+power-loss/process-death and OEM behavior remain unverified on phones.
+
+Native receive/token ownership/startup restoration and server container mount
+remain next. Repository logout retires the exact account before HTTP logout;
+registration must not bypass its fence using a raw old bearer. On local logout,
+persist the null-token state and suppress hints immediately; backend account
+revocation independently suppresses old targets after successful server logout.
+Cold-process receiving must arrange repository-owned session restoration, since
+an app-only poller cannot assume an Activity has already restored credentials.
+
+Platform references checked2026-10-09:
+[AtomicFile](https://developer.android.com/reference/android/util/AtomicFile),
+[noBackupFilesDir](https://developer.android.com/reference/android/content/Context#getNoBackupFilesDir()).
