@@ -393,6 +393,8 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         ModalBottomSheet(
             onDismissRequest = { conversationDetailsVisible = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = MaterialTheme.colorScheme.surface,
+            tonalElevation = 0.dp,
         ) {
             NearbyConversationPanelScreen(
                 nearby.voice, nearby.sharing, expanded=true, actions=component.nearby.actions,
