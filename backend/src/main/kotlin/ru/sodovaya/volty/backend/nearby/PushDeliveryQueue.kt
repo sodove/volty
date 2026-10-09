@@ -125,10 +125,27 @@ private fun FcmSendResult.Retry.minimumDelayMillis(): Long = maxOf(afterMillis, 
 })
 
 internal fun interface CallPushAttempt { fun send(claim: PushDeliveryClaim, ttlSeconds: Int): FcmSendResult }
-internal class PushDeliveryWorker(private val queue: JdbcPushDeliveryQueue, private val attempt: CallPushAttempt,
+internal sealed interface PreparedCallPush {
+    class Ready(val attempt: CallPushAttempt) : PreparedCallPush
+    data class Retry(val result: FcmSendResult.Retry) : PreparedCallPush
+}
+internal fun interface CallPushPreparation { fun prepare(): PreparedCallPush }
+internal class PushDeliveryWorker(private val queue: JdbcPushDeliveryQueue, private val preparation: CallPushPreparation,
                                   private val now: () -> Long, private val ticket: () -> String) {
+    constructor(queue: JdbcPushDeliveryQueue, attempt: CallPushAttempt, now: () -> Long, ticket: () -> String) :
+        this(queue, CallPushPreparation { PreparedCallPush.Ready(attempt) }, now, ticket)
+
     fun tick(): Boolean {
         val claim = queue.claim(now(), ticket()) ?: return false
+        val prepared = try { preparation.prepare() }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (interrupted: InterruptedException) { Thread.currentThread().interrupt(); throw interrupted }
+        catch (_: Exception) { PreparedCallPush.Retry(FcmSendResult.Retry(FcmRetryReason.TRANSPORT)) }
+        if (Thread.currentThread().isInterrupted) throw InterruptedException("Push worker interrupted")
+        if (prepared is PreparedCallPush.Retry) {
+            queue.complete(claim, prepared.result, now()); return true
+        }
+        val attempt = (prepared as PreparedCallPush.Ready).attempt
         val dispatchAt = now()
         if (!queue.ready(claim, dispatchAt)) return true
         val ttl = minOf(30L, (claim.expiresMillis - dispatchAt) / 1000).toInt()

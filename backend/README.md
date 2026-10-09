@@ -124,3 +124,21 @@ The optional private package service verifies and acquires signed Valhalla, FTS4
 and PMTiles regional releases from the release pipeline. Ktor exposes the existing
 `/offline/catalog.json` contract plus coverage lookup and acquisition status.
 See [OFFLINE.md](OFFLINE.md) for setup and lifecycle details.
+
+
+## Nearby incoming-call push
+
+In voice_spaces mode, set both VOLTY_FCM_PROJECT_ID and
+VOLTY_FCM_SERVICE_ACCOUNT_FILE to enable the optional FCM delivery transport.
+The file path must be absolute inside the backend container and point to a
+read-only private service-account JSON mount readable by the backend user.
+Keep the key outside the checkout/APK/image. Android google-services.json is
+separate and cannot authorize the backend. Both settings absent disables push;
+partial/invalid settings or an invalid key fail startup before database access.
+
+The application owns one separate interruptible delivery worker and HTTP client.
+OAuth and sends have bounded deadlines and responses; a SQL lease never spans
+network I/O. PostgreSQL persists hint/device retry state; late receipts cannot
+retire a newer binding. API acceptance is not proof of handset notification.
+See [provisioning](../docs/superpowers/specs/2026-10-08-nearby-firebase-provisioning.md)
+for current native/device acceptance status. This wiring is local until deployed.

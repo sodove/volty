@@ -105,6 +105,7 @@ class AppDependencies(
     val nearbyMembers: ru.sodovaya.volty.backend.nearby.CommunityMembersEndpointPort? = null,
     val nearbyPushDevices: ru.sodovaya.volty.backend.nearby.PushDeviceEndpointPort? = null,
     val nearbyPushDelivery: ru.sodovaya.volty.backend.nearby.PushDeliveryTick? = null,
+    val nearbyPushTransport: AutoCloseable? = null,
 ) {
     val tokenService = TokenService(config)
     val refreshTokenService = RefreshTokenService(config.jwtSecret.toByteArray(), config.accessTtlSeconds, config.refreshTtlSeconds)
@@ -118,10 +119,12 @@ class AppDependencies(
     companion object {
         fun create(config: AppConfig = AppConfig.fromEnvironment()): AppDependencies {
             config.nearby.validate(config)
+            config.fcm.validate(config.nearby.mode)
+            val pushAccount = config.fcm.load()
             val dataSource = createDataSource(config)
             try {
                 prepareBackendSchema(dataSource, config.nearby.mode)
-                return fromPreparedDatabase(config, dataSource)
+                return fromPreparedDatabase(config, dataSource, pushAccount)
             } catch (failure: Throwable) {
                 try { dataSource.close() } catch (cleanup: Throwable) { failure.addSuppressed(cleanup) }
                 throw failure
@@ -129,8 +132,14 @@ class AppDependencies(
         }
 
         /** Borrowed source, already bootstrapped. Assembly itself performs no database/network I/O. */
-        internal fun fromPreparedDatabase(config: AppConfig, dataSource: DataSource): AppDependencies {
+        internal fun fromPreparedDatabase(config: AppConfig, dataSource: DataSource,
+            pushAccount: ru.sodovaya.volty.backend.nearby.FcmServiceAccount? = null): AppDependencies {
             config.nearby.validate(config)
+            config.fcm.validate(config.nearby.mode)
+            require(config.fcm.configured == (pushAccount != null) &&
+                (pushAccount == null || pushAccount.project == config.fcm.project)) {
+                "Preloaded FCM credential does not match configuration"
+            }
             val json = backendJson()
             val store = JdbcStore(dataSource, json)
             if (config.nearby.mode == ru.sodovaya.volty.backend.nearby.NearbyCompatibility.LEGACY) {
@@ -144,13 +153,16 @@ class AppDependencies(
                 ru.sodovaya.volty.backend.nearby.JwtSessionCredentialIssuer(media.serverUrl, media.apiKey, media.apiSecret),
                 ru.sodovaya.volty.backend.nearby.MediaWebhookVerifier(media.apiKey, media.apiSecret),
                 ::nowMillis, config.nearby.singletonOrigin)
-            return AppDependencies(config, store, json = json,
+            val push = pushAccount?.let { ru.sodovaya.volty.backend.nearby.FcmPushRuntime.create(dataSource, it, ::nowMillis) }
+            return try { AppDependencies(config, store, json = json,
                 nearbySessions = graph.sessions, nearbyRoster = graph.roster, nearbyMediaWebhook = graph.mediaWebhook,
                 nearbyCommunities = graph.communities, nearbyCommunityRemoval = graph.removal,
                 nearbyMembers = graph.members,
                 nearbyChannelCommands = graph.channels, nearbyInvitations = graph.invitations,
                 nearbyCalls = graph.calls, nearbyChannelSharing = graph.sharing, nearbySharingPackets = graph.packets,
-                nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph, nearbyPushDevices = graph.pushDevices)
+                nearbyCompatibility = config.nearby.mode, nearbyMaintenance = graph, nearbyPushDevices = graph.pushDevices,
+                nearbyPushDelivery = push?.tick, nearbyPushTransport = push)
+            } catch (failure: Throwable) { push?.close(); throw failure }
         }
 
         fun forTests() = AppDependencies(AppConfig.forTests(), object : BackendStore {}, testMode = true)
@@ -504,7 +516,10 @@ fun Application.module(dependencies: AppDependencies = AppDependencies.create())
             }
         }
     }
-    monitor.subscribe(io.ktor.server.application.ApplicationStopping) { scope.cancel() }
+    monitor.subscribe(io.ktor.server.application.ApplicationStopping) {
+        scope.cancel()
+        dependencies.nearbyPushTransport?.close()
+    }
 }
 
 /** V1 has no original SID/generation; it cannot safely address a v2 trip. */

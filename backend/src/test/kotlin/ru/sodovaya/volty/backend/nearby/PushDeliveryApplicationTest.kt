@@ -12,7 +12,7 @@ import kotlin.test.*
 class PushDeliveryApplicationTest {
     @Test fun blockedPushDoesNotStarveSfuMaintenanceAndApplicationStopInterruptsIt() = runBlocking {
         val entered = CompletableDeferred<Unit>(); val interrupted = CompletableDeferred<Unit>()
-        val maintenance = Channel<Unit>(4); val calls = AtomicInteger()
+        val maintenance = Channel<Unit>(4); val calls = AtomicInteger(); val closes = AtomicInteger()
         val dependencies = AppDependencies(AppConfig.forTests(), object : BackendStore {},
             nearbyMaintenance = object : NearbyMaintenancePort {
                 override fun reconcileSession(): Boolean { maintenance.trySend(Unit); return false }
@@ -22,7 +22,7 @@ class PushDeliveryApplicationTest {
                 try { CountDownLatch(1).await(5, TimeUnit.SECONDS) }
                 catch (failure: InterruptedException) { interrupted.complete(Unit); throw failure }
                 false
-            })
+            }, nearbyPushTransport = AutoCloseable { closes.incrementAndGet() })
         try {
             testApplication {
                 application { module(dependencies) }; startApplication()
@@ -34,6 +34,7 @@ class PushDeliveryApplicationTest {
             }
             withTimeout(2000) { interrupted.await() }
             assertEquals(1, calls.get())
+            assertEquals(1, closes.get())
         } finally { maintenance.close() }
     }
 }

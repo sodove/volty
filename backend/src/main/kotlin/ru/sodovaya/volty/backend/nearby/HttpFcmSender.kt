@@ -7,8 +7,6 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Clock
 import java.time.Duration
-import java.time.ZonedDateTime
-import java.time.format.DateTimeFormatter
 import java.util.concurrent.ExecutionException
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
@@ -84,19 +82,7 @@ internal class HttpFcmSender private constructor(
         return retry(FcmRetryReason.INVALID_RESPONSE)
     }
 
-    private fun retryDelay(headers: HttpHeaders, minimum: Long): Long {
-        val raw = headers.firstValue("Retry-After").orElse("").trim()
-        val seconds = if (raw.isNotEmpty() && raw.all { it in '0'..'9' }) raw.toLongOrNull() ?: Long.MAX_VALUE else null
-        // Excessive server delays expire short-lived hints rather than retrying early.
-        val delay = if (seconds != null) {
-            if (seconds > Long.MAX_VALUE / 1000) Long.MAX_VALUE else seconds * 1000
-        }
-        else runCatching {
-            val deadline = ZonedDateTime.parse(raw, DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli()
-            Math.subtractExact(deadline, clock.millis())
-        }.getOrDefault(minimum)
-        return maxOf(minimum, delay)
-    }
+    private fun retryDelay(headers: HttpHeaders, minimum: Long) = fcmRetryDelay(headers, clock, minimum)
     private fun printable(value: String, maximum: Int) = value.length in 1..maximum && value.all { it.code in 33..126 }
     private fun retry(reason: FcmRetryReason) = FcmSendResult.Retry(reason)
 

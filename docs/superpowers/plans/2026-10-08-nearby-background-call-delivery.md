@@ -219,3 +219,36 @@ otherwise ignored field reject the file. Actual6-test run failed only that case
 under replacement decoding, then full250backendtests42freshXML passed after
 REPORT decoding. Fresh3407Androidtests336XML passed; this backend-only review fix
 changes no Android sources. No OAuth request/startup enablement yet.
+
+
+## Step3 server wiring implemented2026-10-09
+
+Earlier sections describe their stage's partial boundary; retraction of current
+"OAuth/worker factory pending" status: the local server now assembles the full
+optional credential-backed delivery lane. Key validation precedes DB startup;
+prepared graph assembly takes the preloaded key and performs no file/DB/network
+I/O. App root cancellation precedes owned HTTP shutdown; borrowed database stays
+outside push-runtime ownership. Missing configuration disables only this lane;
+partial/mismatched settings fail explicitly. No production deployment yet.
+
+Google Auth Library owns typed key parsing and RSA signing; JWT claims and fixed
+OAuth request use the documented service-account protocol. One serial worker
+caller owns the monotonic cache with60s margin, validated61..3600s lifetime and
+network-time credit; oversized responses do not hide429/5xx Retry-After. Bounded
+body/deadline/interruption mirror the sender. A401/configuration receipt evicts
+only its exact cached bearer; late old invalidation cannot evict a newer token.
+Credential preparation happens between claim and final call/binding preflight;
+no SQL lock spans it. OAuth failure persists retry without issuing a media/send
+request. Call ending or binding rotation during credential acquisition suppresses
+the old send, with a positive next-revision/binding attempt proven separately.
+
+Actual tests verify ephemeral-key JWT signature/claims/form, cache refresh/count,
+short/expired/oversized token responses, quota/redirect/deadline/interruption,
+exact-bearer invalidation and real loopback OAuth→401→reauthorize→accepted send.
+PostgreSQL full373 tests passed after worker preparation changes. Production
+assembly/unit shutdown tests cover wiring and owned resource cleanup. Real
+Firebase credential/provisioning and native receive/register remain pending.
+
+Sources checked2026-10-09:
+[Service-account OAuth protocol](https://developers.google.com/identity/protocols/oauth2/service-account),
+[Firebase HTTPv1](https://firebase.google.com/docs/cloud-messaging/send/v1-api).

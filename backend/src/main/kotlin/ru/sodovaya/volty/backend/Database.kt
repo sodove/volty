@@ -31,6 +31,7 @@ data class AppConfig(
     val offlineFilesRoot: String? = null,
     val offlineManagerUrl: String? = null,
     val nearby: ru.sodovaya.volty.backend.nearby.NearbyBackendConfiguration = ru.sodovaya.volty.backend.nearby.NearbyBackendConfiguration(),
+    val fcm: ru.sodovaya.volty.backend.nearby.FcmConfiguration = ru.sodovaya.volty.backend.nearby.FcmConfiguration(),
 ) {
     fun liveKitConfigOrNull(): LiveKitConfig? = if (voiceProvider == "livekit") {
         LiveKitConfig(
@@ -50,7 +51,7 @@ data class AppConfig(
         "maxShareTtlMillis=$maxShareTtlMillis, corsOrigins=$corsOrigins, " +
         "voiceProvider=$voiceProvider, voiceConfigured=${liveKitConfigOrNull() != null}, " +
         "navigationProvider=$navigationProvider, " +
-        "navigationEnabled=$navigationEnabled, nearby=$nearby)"
+        "navigationEnabled=$navigationEnabled, nearby=$nearby, fcm=$fcm)"
 
     companion object {
         fun fromEnvironment(env: Map<String, String> = System.getenv()): AppConfig {
@@ -93,6 +94,7 @@ data class AppConfig(
                 navigationProvider = navigationProvider,
                 navigationEnabled = navigationEnabled,
                 nearby = ru.sodovaya.volty.backend.nearby.NearbyBackendConfiguration.fromEnvironment(env),
+                fcm = ru.sodovaya.volty.backend.nearby.FcmConfiguration.fromEnvironment(env),
                 offlineFilesRoot = env["VOLTY_OFFLINE_ROOT"]?.trim()?.takeIf(String::isNotEmpty),
                 offlineManagerUrl = env["VOLTY_OFFLINE_MANAGER_URL"]?.trim()?.takeIf(String::isNotEmpty)?.also { value ->
                     val uri = java.net.URI(value)
@@ -119,6 +121,7 @@ data class AppConfig(
             }
 
             config.nearby.validate(config)
+            config.fcm.validate(config.nearby.mode)
             return config
         }
 

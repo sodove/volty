@@ -67,3 +67,32 @@ Official references read2026-10-08:
 [HTTPv1 authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
 Direct resource configuration:
 [Firebase multiple-project initialization](https://firebase.google.com/docs/projects/multiprojects).
+
+
+## Server consumer implemented2026-10-09
+
+Retraction of the earlier pending-consumer/worker statements above: the local
+backend now loads a strictly validated service-account key, acquires bounded
+OAuth credentials with an early-refresh monotonic cache, and wires the durable
+queue/HTTPv1 sender into the separate application-owned worker. This has not
+been deployed or tested with a real Google key/message.
+
+Configure the existing voice_spaces backend with both settings:
+
+```text
+VOLTY_FCM_PROJECT_ID=<the Firebase project ID>
+VOLTY_FCM_SERVICE_ACCOUNT_FILE=/run/secrets/volty-firebase-service-account.json
+```
+
+Mount the matching service-account JSON read-only at that container path, with
+read permission for the backend user; store the host file outside the checkout.
+Obtain it from Firebase project settings → Service accounts → Generate new
+private key. It is separate from the Android JSON already supplied. The key
+consumer accepts only the matching project, Google OAuth endpoint/default
+universe and messaging scope; missing/invalid configured credentials fail before
+DB startup. Both variables absent intentionally keeps transport disabled.
+
+Real service-account provisioning is pending the user's file path. Native
+registration/FCM service and deferred phone acceptance remain next. Fixtures used
+only ephemeral RSA keys, loopback OAuth/send servers and the existing owned
+scratch PostgreSQL; none authorized a Google message or changed production.

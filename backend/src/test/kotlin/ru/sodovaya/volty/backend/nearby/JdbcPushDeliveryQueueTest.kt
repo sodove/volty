@@ -238,6 +238,42 @@ class JdbcPushDeliveryQueueTest {
         assertEquals(101, deliveryCount())
     }
 
+    @Test fun rotationDuringCredentialPreparationIsRecheckedBeforeAnyHttpAttempt() {
+        var sends = 0; var preparations = 0
+        val newer = id()
+        val attempt = CallPushAttempt { prepared, _ -> sends++; assertEquals(newer, prepared.target.bindingId); FcmSendResult.Accepted }
+        val worker = PushDeliveryWorker(queue, CallPushPreparation {
+            if (++preparations == 1) assertEquals(PushDeviceDecision.APPLIED, devices.apply(registration(2, newer, "new-token"), base + 10000))
+            PreparedCallPush.Ready(attempt)
+        }, { base + 10000 }, ::id)
+        assertTrue(worker.tick()); assertEquals(0, sends); assertEquals(1, preparations)
+        assertTrue(worker.tick()); assertEquals(1, sends); assertEquals(2, preparations)
+    }
+
+    @Test fun callEndingDuringCredentialPreparationSuppressesOldRingSend() {
+        var sends = 0; var preparations = 0
+        val attempt = CallPushAttempt { prepared, _ -> sends++; assertEquals(1L, prepared.hint.revision); FcmSendResult.Accepted }
+        val worker = PushDeliveryWorker(queue, CallPushPreparation {
+            if (++preparations == 1) assertNotNull(rings.decline(callee, call, { base + 10000 }).call)
+            PreparedCallPush.Ready(attempt)
+        }, { base + 10000 }, ::id)
+        assertTrue(worker.tick()); assertEquals(0, sends)
+        assertTrue(worker.tick()); assertEquals(1, sends)
+    }
+
+    @Test fun failedCredentialPreparationPausesProviderWithoutIssuingHttpSend() {
+        var sends = 0; var preparations = 0
+        val unexpected = CallPushAttempt { _, _ -> sends++; FcmSendResult.Accepted }
+        val worker = PushDeliveryWorker(queue, CallPushPreparation {
+            preparations++
+            if (preparations == 1) PreparedCallPush.Retry(FcmSendResult.Retry(FcmRetryReason.THROTTLED, 0)) else PreparedCallPush.Ready(unexpected)
+        }, { base + 10000 }, ::id)
+        assertTrue(worker.tick()); assertEquals(1, preparations); assertEquals(0, sends)
+        assertEquals("device-token", devices.targets(callee).single().token)
+        assertNotNull(rings.decline(callee, call, { base + 11000 }).call)
+        assertNull(queue.claim(base + 11001, id()))
+    }
+
     private fun registration(generation: Long = 1, bindingId: String = binding, token: String = "device-token",
                              device: String = installation, actor: String = callee) =
         PushDeviceRegistration(actor, 10, device, key, generation, bindingId, token)
