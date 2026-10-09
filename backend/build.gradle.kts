@@ -29,6 +29,7 @@ dependencies {
     implementation("io.ktor:ktor-server-call-id:$ktorVersion")
     implementation("io.livekit:livekit-server:0.15.0")
     implementation("com.auth0:java-jwt:4.5.0")
+    implementation("com.google.auth:google-auth-library-oauth2-http:1.54.0")
     implementation("com.zaxxer:HikariCP:6.3.0")
     implementation("org.postgresql:postgresql:42.7.7")
     implementation("org.mindrot:jbcrypt:0.4")

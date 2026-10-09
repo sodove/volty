@@ -193,3 +193,29 @@ Use a typed service-account credential, validate its project and Google token
 endpoint before loading it; do not accept arbitrary external credential kinds or
 follow credential-supplied URLs. OAuth acquisition must be bounded and precede
 final queue preflight. A server key is separate from Android google-services.json.
+
+
+Service-account loading boundary (2026-10-09): Google Auth Library1.54.0 typed
+ServiceAccountCredentials loaded from an explicitly supplied local regular file,
+no symlink/ADC lookup/network access. Read bound64KiB, exact project/type/token
+endpoint and account-email domain; alternate universe rejected. Validated JSON
+is normalized before SDK decoding; scope restricted to firebase.messaging.
+Filesystem/JSON/SDK errors lose their private cause/suppressed chain and expose
+one generic message. Wrapper toString redacted; cancellation/interruption kept.
+Tests use an ephemeral RSA key and assert successful SDK decoding as well as
+rejection. Exact count matters: the initial positive test accidentally returned
+PrivateKey and was not discovered byJUnit; fixed toUnit, reran actual baseline
+5tests/5failures and final full249backendtests42XML zero bad.
+
+This is a local key loader only. OAuth HTTP acquisition/cache, preparation before
+queue preflight, environment/mount configuration, production worker factory and
+native account lifecycle are still pending; no real key or Google send tested.
+Sources checked2026-10-09:
+[Google typed credentials](https://docs.cloud.google.com/java/docs/reference/google-auth-library/latest/com.google.auth.oauth2.ServiceAccountCredentials),
+[Firebase server authorization](https://firebase.google.com/docs/cloud-messaging/send/v1-api).
+
+Final loader review added strict UTF-8 decoding: malformed bytes even in an
+otherwise ignored field reject the file. Actual6-test run failed only that case
+under replacement decoding, then full250backendtests42freshXML passed after
+REPORT decoding. Fresh3407Androidtests336XML passed; this backend-only review fix
+changes no Android sources. No OAuth request/startup enablement yet.
