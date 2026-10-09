@@ -978,4 +978,8 @@
     <string name="nearby_channels_delete_failed">Could not confirm deletion. Refresh the server; if the channel is still listed, try deleting it again.</string>
     <string name="nearby_panel_connected_count">In voice: %1$d</string>
     <string name="nearby_channels_deleted">Channel deleted</string>
+    <string name="nearby_calls_full_screen_title">Incoming call screen</string>
+    <string name="nearby_calls_full_screen_allowed">Allowed over the lock screen.</string>
+    <string name="nearby_calls_full_screen_blocked">Off. Incoming calls still appear as notifications; allow the call screen to answer without opening Volty.</string>
+    <string name="nearby_calls_full_screen_settings">Allow incoming call screen</string>
 </resources>

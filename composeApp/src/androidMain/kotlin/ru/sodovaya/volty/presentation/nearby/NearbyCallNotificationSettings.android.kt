@@ -28,6 +28,10 @@ import volty.composeapp.generated.resources.*
 
 private enum class NotificationSettingsState { ALLOWED, APP_BLOCKED, CHANNEL_BLOCKED, UNKNOWN }
 
+private fun fullScreenAllowed(context: Context): Boolean? = try {
+    Build.VERSION.SDK_INT < 34 || context.getSystemService(NotificationManager::class.java).canUseFullScreenIntent()
+} catch (_: Exception) {null}
+
 /** Android eligibility is not evidence of notification delivery or background process lifetime. */
 private fun notificationSettings(context: Context): NotificationSettingsState = try {
     when {
@@ -45,11 +49,15 @@ internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var availability by remember(context) { mutableStateOf(notificationSettings(context)) }
+    var fullScreen by remember(context) { mutableStateOf(fullScreenAllowed(context)) }
     var launchFailed by remember(context) { mutableStateOf(false) }
     var diagnosticCopied by remember(context) { mutableStateOf(false) }
     DisposableEffect(context, lifecycle) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) availability = notificationSettings(context)
+            if (event == Lifecycle.Event.ON_RESUME) {
+                availability = notificationSettings(context)
+                fullScreen = fullScreenAllowed(context)
+            }
         }
         lifecycle.addObserver(observer)
         availability = notificationSettings(context)
@@ -80,10 +88,27 @@ internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
             }) { Text(stringResource(Res.string.nearby_notifications_settings)) }
             if (launchFailed) Text(stringResource(Res.string.nearby_notifications_launch_failed),
                 color = MaterialTheme.colorScheme.error)
+            if (Build.VERSION.SDK_INT >= 34) {
+                HorizontalDivider()
+                Text(stringResource(Res.string.nearby_calls_full_screen_title), style = MaterialTheme.typography.titleSmall)
+                Text(stringResource(when (fullScreen) {
+                    true -> Res.string.nearby_calls_full_screen_allowed
+                    false -> Res.string.nearby_calls_full_screen_blocked
+                    null -> Res.string.nearby_notifications_unknown
+                }), style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = {
+                    launchFailed = try {
+                        context.startActivity(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,
+                            Uri.parse("package:" + context.packageName)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        false
+                    } catch (_: Exception) {true}
+                }) {Text(stringResource(Res.string.nearby_calls_full_screen_settings))}
+            }
             TextButton(onClick = {
                 availability = notificationSettings(context)
                 val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName
-                val report = "volty=$version; android=${Build.VERSION.SDK_INT}; notification_settings=$availability\n" +
+                fullScreen = fullScreenAllowed(context)
+                val report = "volty=$version; android=${Build.VERSION.SDK_INT}; notification_settings=$availability; full_screen=$fullScreen\n" +
                     AndroidCallPushDiagnostics.export()
                 context.getSystemService(ClipboardManager::class.java)
                     .setPrimaryClip(ClipData.newPlainText("Volty call diagnostics", report))

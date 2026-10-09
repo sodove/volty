@@ -2527,6 +2527,62 @@ class VoiceConversationStartupTest {
         } finally {registry.close(); notifications.close(); f.close()}
     }
 
+    @Test fun displayingNativeTicketDoesNotConsumeItOrIssueBackendOrMediaWork() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, owner)
+            owner.hint(channel); runCurrent(); val ticket = assertNotNull(owner.state.value.ticket)
+            val address = assertNotNull(IncomingCallActionAddress.parse("volty://incoming-call/${binding.id}/${ticket.id}/open"))
+            val issued = f.paths.size
+            assertSame(owner.offer.value, registry.displayTicket(address))
+            assertSame(owner.offer.value, registry.displayTicket(address))
+            assertSame(ticket, owner.state.value.ticket); assertEquals(issued, f.paths.size)
+            assertTrue(port.cancelled.isEmpty()); assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+            assertNotNull(registry.accept(binding.id, ticket.id))
+            assertNull(registry.displayTicket(address)); assertEquals(issued + 1, f.paths.size)
+        } finally {registry.close(); owner.close(); f.close()}
+    }
+
+    @Test fun displayRejectsWrongActionBindingAndTicketWithoutAffectingOriginal() = runTest {
+        val f = Fixture(this); val port = Notifications()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, owner)
+            owner.hint(channel); runCurrent(); val ticket = assertNotNull(owner.state.value.ticket)
+            val original = assertNotNull(IncomingCallActionAddress.parse("volty://incoming-call/${binding.id}/${ticket.id}/open"))
+            assertNotNull(registry.displayTicket(original))
+            assertNull(registry.displayTicket(original.copy(bindingId = channel)))
+            assertNull(registry.displayTicket(original.copy(ticketId = channel)))
+            assertNull(registry.displayTicket(original.copy(kind = IncomingCallActionKind.ACCEPT)))
+            assertNull(registry.displayTicket(original.copy(kind = IncomingCallActionKind.DECLINE)))
+            assertSame(ticket, owner.state.value.ticket); assertEquals(1, f.paths.size)
+            registry.detach(binding)
+            assertNull(registry.displayTicket(original)); assertEquals(1, f.paths.size)
+        } finally {registry.close(); owner.close(); f.close()}
+    }
+
+    @Test fun expiredIncomingTicketCannotKeepDisplayScreenAlive() = runTest {
+        val f = Fixture(this); val port = Notifications(); val pulses = MutableSharedFlow<Unit>()
+        val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, pulses, {f.time}, port, {f.key})
+        val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}
+        try {
+            val binding = registry.bind(account, owner)
+            owner.hint(channel); runCurrent(); val ticket = assertNotNull(owner.state.value.ticket)
+            val address = IncomingCallActionAddress(binding.id, ticket.id, IncomingCallActionKind.OPEN)
+            assertNotNull(registry.displayTicket(address)); assertEquals(1, f.paths.size)
+            f.time += 45_001; pulses.emit(Unit); runCurrent()
+            assertNull(registry.displayTicket(address)); assertNull(owner.offer.value)
+            assertTrue(port.cancelled.any {it === ticket}); assertEquals(1, f.paths.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {registry.close(); owner.close(); f.close()}
+    }
+
     @Test fun actionRegistryResolvesOnlyOriginalBindingAndTicketBeforeExplicitStartup() = runTest {
         val f = Fixture(this); val port = Notifications()
         val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
@@ -2562,6 +2618,8 @@ class VoiceConversationStartupTest {
             val issued = f.paths.size
             assertNull(registry.accept(oldBinding.id, oldTicket.id))
             assertNull(registry.decline(oldBinding.id, oldTicket.id, first))
+            assertNull(registry.displayTicket(IncomingCallActionAddress(oldBinding.id, oldTicket.id, IncomingCallActionKind.OPEN)))
+            assertNotNull(registry.displayTicket(IncomingCallActionAddress(binding.id, ticket.id, IncomingCallActionKind.OPEN)))
             assertFalse(registry.detach(oldBinding)); assertSame(ticket, owner.state.value.ticket)
             assertEquals(issued, f.paths.size)
             assertNotNull(registry.accept(binding.id, ticket.id)); assertEquals(issued + 1, f.paths.size)

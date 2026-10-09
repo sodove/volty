@@ -77,6 +77,13 @@ internal class IncomingCallActionRegistry(private val queuedDispatcher: Coroutin
         findOffer(bindingId, offerId)?.second?.callerName
     }
 
+    /** Display-only lookup: never consumes the ticket, verifies HTTP or admits microphone work. */
+    suspend fun displayTicket(address: IncomingCallActionAddress): IncomingCallOffer? = withContext(queuedDispatcher) {
+        if (address.kind != IncomingCallActionKind.OPEN) return@withContext null
+        val (entry, ticket) = find(address.bindingId, address.ticketId) ?: return@withContext null
+        entry.owner.offer.value?.takeIf {it.ticket === ticket}
+    }
+
     suspend fun acceptOffer(bindingId: String, offerId: String): DirectCallSnapshot? = withContext(queuedDispatcher) {
         val (entry, original) = findOffer(bindingId, offerId) ?: return@withContext null
         val call = entry.owner.acceptOffer(original)

@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Looper
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.app.Person
 import androidx.core.content.ContextCompat
 import ru.sodovaya.volty.R
 import ru.sodovaya.volty.data.nearby.DirectCallSnapshot
@@ -20,6 +21,7 @@ internal const val INCOMING_CALL_NOTIFICATION_CHANNEL = "nearby_voice_incoming"
 
 /** Acceptance must open an Activity directly; decline resolves the original nonexported ticket. */
 internal interface IncomingCallNotificationPendingIntents {
+    fun open(ticket: IncomingCallNotificationTicket): PendingIntent
     fun accept(ticket: IncomingCallNotificationTicket): PendingIntent
     fun decline(ticket: IncomingCallNotificationTicket): PendingIntent
 }
@@ -68,17 +70,25 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
     private fun post(ticket: IncomingCallNotificationTicket, remainingMillis: Long, callerName: String?) {
         val accept = actions.accept(ticket)
         val decline = actions.decline(ticket)
-        val notification = NotificationCompat.Builder(application, INCOMING_CALL_NOTIFICATION_CHANNEL)
+        val open = actions.open(ticket)
+        val caller = Person.Builder()
+            .setName(callerName ?: application.getString(R.string.nearby_incoming_notification_title))
+            .setImportant(true).build()
+        val builder = NotificationCompat.Builder(application, INCOMING_CALL_NOTIFICATION_CHANNEL)
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentTitle(application.getString(R.string.nearby_incoming_notification_title))
             .setContentText(if (callerName == null) application.getString(R.string.nearby_incoming_notification_body)
                 else application.getString(R.string.nearby_incoming_notification_named_body, callerName))
             .setOnlyAlertOnce(true)
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setContentIntent(accept).setAutoCancel(false).setTimeoutAfter(remainingMillis)
-            .addAction(android.R.drawable.ic_menu_call, application.getString(R.string.nearby_incoming_notification_accept), accept)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, application.getString(R.string.nearby_incoming_notification_decline), decline)
-            .build()
+            .setContentIntent(open).setAutoCancel(false).setTimeoutAfter(remainingMillis)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, accept))
+        // Android 14 can deny full-screen access independently of notification permission.
+        // Heads-up/actions remain available; opening is always display-only.
+        if (Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent())
+            builder.setFullScreenIntent(open, true)
+        val notification = builder.build()
         if ((manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance ?: NotificationManager.IMPORTANCE_HIGH)
             < NotificationManager.IMPORTANCE_HIGH)
             AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_QUIET_CHANNEL)

@@ -9,6 +9,12 @@ import ru.sodovaya.volty.MainActivity
 internal class AndroidIncomingCallPendingIntents(context: Context,
     private val registry: IncomingCallActionRegistry) : IncomingCallNotificationPendingIntents {
     private val application = context.applicationContext
+    override fun open(ticket: IncomingCallNotificationTicket): PendingIntent {
+        val address = address(ticket, IncomingCallActionKind.OPEN)
+        return PendingIntent.getActivity(application, REQUEST,
+            Intent(application, IncomingCallActivity::class.java).setAction(OPEN).setData(Uri.parse(address.uri))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP), FLAGS)
+    }
     override fun accept(ticket: IncomingCallNotificationTicket): PendingIntent {
         val address = address(ticket, IncomingCallActionKind.ACCEPT)
         return PendingIntent.getActivity(application, REQUEST,
@@ -25,6 +31,7 @@ internal class AndroidIncomingCallPendingIntents(context: Context,
         return IncomingCallActionAddress(binding.id, ticket.id, kind)
     }
     companion object {
+        const val OPEN = "ru.sodovaya.volty.nearby.call.OPEN"
         const val ACCEPT = "ru.sodovaya.volty.nearby.call.ACCEPT"
         const val DECLINE = "ru.sodovaya.volty.nearby.call.DECLINE"
         private const val REQUEST = 1043

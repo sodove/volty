@@ -5,4 +5,6 @@
     <string name="nearby_incoming_notification_accept">Принять</string>
     <string name="nearby_incoming_notification_decline">Отклонить</string>
     <string name="nearby_incoming_notification_named_body">Звонит %1$s</string>
+    <string name="nearby_incoming_screen_brand">Volty · голосовой вызов</string>
+    <string name="nearby_incoming_screen_launch_failed">Не удалось открыть вызов. Попробуйте ответить ещё раз.</string>
 </resources>

@@ -15,6 +15,12 @@ SQLDelight, kotlinx-coroutines, kotlin.test + Turbine.
 
 Windows + PowerShell. `minSdk 26` — which rules out SQLite features newer than 3.19; see below.
 
+Gradle CPU limit: keep `org.gradle.workers.max=4` and JVM
+`-XX:ActiveProcessorCount=4`; the user experiences severe freezes during R8
+minification with unrestricted parallelism. Any command-line override of
+`org.gradle.jvmargs` must retain `-XX:ActiveProcessorCount=4`. Do not increase
+workers or remove the processor cap without a new explicit user request.
+
 ---
 
 ## The rider's hardware — every design decision traces to one of these

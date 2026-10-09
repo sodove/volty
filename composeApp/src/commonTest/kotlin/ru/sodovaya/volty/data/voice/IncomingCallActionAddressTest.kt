@@ -6,6 +6,13 @@ class IncomingCallActionAddressTest {
     private val binding = "10000000-0000-0000-0000-000000000001"
     private val ticket = "20000000-0000-0000-0000-000000000002"
 
+    @Test fun openingIncomingScreenIsDistinctFromAnsweringOrDeclining() {
+        val open = assertNotNull(IncomingCallActionAddress.parse("volty://incoming-call/$binding/$ticket/open"))
+        assertEquals("OPEN", open.kind.name)
+        assertNotEquals(IncomingCallActionAddress(binding, ticket, IncomingCallActionKind.ACCEPT).uri, open.uri)
+        assertNotEquals(IncomingCallActionAddress(binding, ticket, IncomingCallActionKind.DECLINE).uri, open.uri)
+    }
+
     @Test fun canonicalRoundTripKeepsBothOriginalIdentitiesAndAction() {
         for (kind in IncomingCallActionKind.entries) {
             val address = IncomingCallActionAddress(binding, ticket, kind)

@@ -246,13 +246,18 @@ class OsmNavigationRepositoryTest {
     @Test
     fun routes_fall_back_to_osrm_demo_after_primary_transport_failure() = runTest {
         val requests = mutableListOf<HttpRequestData>()
-        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
-            requests += request
-            if (request.url.host == "routing.openstreetmap.de") {
-                throw IllegalStateException("primary TLS handshake failed")
+        val repository = OsmNavigationRepository(HttpClient(MockEngine) { engine {
+            // Earlier handlers ran on Default and wrote concurrently into this mutable list.
+            // Keep issued-request evidence on the test scheduler; retain both endpoint assertions.
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
+                requests += request
+                if (request.url.host == "routing.openstreetmap.de") {
+                    throw IllegalStateException("primary TLS handshake failed")
+                }
+                respond(osrmResponseWithRoutes(), headers = jsonHeaders())
             }
-            respond(osrmResponseWithRoutes(), headers = jsonHeaders())
-        }))
+        } })
 
         val result = repository.routes(testRequest())
 

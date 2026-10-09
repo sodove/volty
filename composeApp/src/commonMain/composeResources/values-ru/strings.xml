@@ -976,4 +976,8 @@
     <string name="nearby_channels_delete_failed">Не удалось подтвердить удаление. Обновите сервер; если канал остался в списке, повторите удаление.</string>
     <string name="nearby_panel_connected_count">В голосе: %1$d</string>
     <string name="nearby_channels_deleted">Канал удалён</string>
+    <string name="nearby_calls_full_screen_title">Экран входящего вызова</string>
+    <string name="nearby_calls_full_screen_allowed">Разрешён поверх экрана блокировки.</string>
+    <string name="nearby_calls_full_screen_blocked">Выключен. Вызовы по-прежнему приходят в уведомлениях; разрешите экран вызова, чтобы отвечать без открытия Volty.</string>
+    <string name="nearby_calls_full_screen_settings">Разрешить экран входящего вызова</string>
 </resources>

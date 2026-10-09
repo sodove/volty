@@ -23,6 +23,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- The audible alarm's haptic half (F §4). Normal permission, granted at
          install; without it Vibrator.vibrate silently does nothing. -->
     <uses-permission android:name="android.permission.VIBRATE" />
@@ -76,6 +77,10 @@
         <service android:name=".data.voice.NearbyVoiceService"
             android:foregroundServiceType="microphone" android:exported="false" />
         <receiver android:name=".data.voice.IncomingCallDeclineReceiver" android:exported="false" />
+        <activity android:name=".data.voice.IncomingCallActivity"
+            android:exported="false" android:launchMode="singleTop"
+            android:taskAffinity="ru.sodovaya.volty.incoming"
+            android:excludeFromRecents="true" />
         <service android:name=".data.voice.NearbyChannelLocationService"
             android:foregroundServiceType="location" android:exported="false" />
 
