@@ -9,8 +9,9 @@ internal class IncomingCallHintDispatch(private val queuedDispatcher: CoroutineD
     private val currentAccount: () -> SocialAuthenticatedAccount?,
     private val notifications: IncomingCallAccountCoordinator,
     private val acquireRuntime: suspend (SocialAuthenticatedAccount) -> AuthenticatedVoiceRuntime) {
-    /** True means queued for verification, never a delivery or media acknowledgement. */
-    suspend fun submit(account: SocialAuthenticatedAccount, callId: String): Deferred<Boolean>? = withContext(queuedDispatcher) {
+    /** Without a fence true means queued. With a fence, await verified offer publication; never media admission. */
+    suspend fun submit(account: SocialAuthenticatedAccount, callId: String,
+        beforePublish: (suspend () -> Boolean)? = null): Deferred<Boolean>? = withContext(queuedDispatcher) {
         currentCoroutineContext().ensureActive()
         try {invitationDraftId(callId)} catch (_: IllegalArgumentException) {return@withContext null}
         if (!live(account)) return@withContext null
@@ -23,7 +24,8 @@ internal class IncomingCallHintDispatch(private val queuedDispatcher: CoroutineD
                 if (!live(account) || !runtime.belongsTo(account) || runtime.retired.value) return@async false
                 val attachment = notifications.acquire(account, runtime)
                 if (!live(account) || runtime.retired.value) return@async false
-                attachment.owner.hint(callId)
+                if (beforePublish == null) attachment.owner.hint(callId)
+                else attachment.owner.verifiedHint(callId, beforePublish)
             } catch (cancelled: CancellationException) {
                 if (!currentCoroutineContext().isActive) throw cancelled
                 false

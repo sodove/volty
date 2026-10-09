@@ -2250,6 +2250,70 @@ class VoiceConversationStartupTest {
         } finally {owner.close();f.close()}
     }
 
+    @Test fun backgroundHintWaitsForActuallyIssuedVerificationBeforeCompleting() = runTest {
+        val f = Fixture(this); val account = f.login(); val port = Notifications(); var checks = 0
+        f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"; f.statusRelease = CompletableDeferred()
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            val pending = async {owner.verifiedHint(channel) {checks++; true}}
+            runCurrent(); assertTrue(f.statusEntered.isCompleted); assertEquals(1, f.paths.size)
+            assertFalse(pending.isCompleted); assertEquals(0, checks); assertTrue(port.shown.isEmpty())
+            f.statusRelease!!.complete(Unit); runCurrent()
+            assertTrue(pending.await()); assertEquals(1, checks); assertEquals(1, port.shown.size)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {f.statusRelease?.complete(Unit); owner.close(); f.close()}
+    }
+
+    @Test fun backgroundHintRechecksBindingAfterReturnedVerificationBeforeNotification() = runTest {
+        val f = Fixture(this); val account = f.login(); val port = Notifications(); var current = true; var checks = 0
+        f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"; f.statusRelease = CompletableDeferred()
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            val pending = async {owner.verifiedHint(channel) {checks++; current}}
+            runCurrent(); assertTrue(f.statusEntered.isCompleted); assertEquals(1, f.paths.size)
+            current = false; f.statusRelease!!.complete(Unit); runCurrent()
+            assertFalse(pending.await()); assertEquals(1, checks); assertTrue(port.shown.isEmpty()); assertNull(owner.offer.value)
+            current = true
+            assertTrue(owner.verifiedHint(channel) {checks++; current})
+            assertEquals(2, f.paths.size); assertEquals(2, checks); assertEquals(1, port.shown.size)
+        } finally {f.statusRelease?.complete(Unit); owner.close(); f.close()}
+    }
+
+    @Test fun closingNotificationOwnerCompletesBackgroundWaiterWithoutJoiningHeldRead() = runTest {
+        val f = Fixture(this); val account = f.login(); val port = Notifications()
+        f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"; f.statusRelease = CompletableDeferred()
+        val owner = IncomingCallNotificationOwner(account, f.acquire(account), f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+        try {
+            val pending = async {owner.verifiedHint(channel) {true}}
+            runCurrent(); assertTrue(f.statusEntered.isCompleted); assertEquals(1, f.paths.size)
+            owner.close(); runCurrent(); assertFalse(pending.await()); assertTrue(account.job.isActive)
+            f.statusRelease!!.complete(Unit); runCurrent(); assertTrue(port.shown.isEmpty())
+        } finally {f.statusRelease?.complete(Unit); owner.close(); f.close()}
+    }
+
+    @Test fun guardedBackgroundDispatchWaitsForBackendAndSuppressesObsoleteBinding() = runTest {
+        val f = Fixture(this); val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; val port = Notifications()
+        var current = true; var checks = 0
+        val notifications = IncomingCallAccountCoordinator(f.dispatcher, registry, IncomingCallNotificationFactory {account, runtime ->
+            val owner = IncomingCallNotificationOwner(account, runtime, f.dispatcher, MutableSharedFlow(), {f.time}, port, {f.key})
+            IncomingCallNotificationAttachment(owner, registry.bind(account, owner))
+        })
+        val dispatch = IncomingCallHintDispatch(f.dispatcher, {f.repository.authenticatedAccount.value}, notifications, f::acquire)
+        try {
+            val account = f.login(); f.callMode = true; f.incomingMode = true; f.statusPhase = "RINGING"
+            f.statusRelease = CompletableDeferred()
+            val submitted = assertNotNull(dispatch.submit(account, channel) {checks++; current})
+            runCurrent(); assertTrue(f.statusEntered.isCompleted); assertEquals(1, f.paths.size)
+            assertFalse(submitted.isCompleted); assertTrue(port.shown.isEmpty()); assertEquals(0, checks)
+            current = false; f.statusRelease!!.complete(Unit); runCurrent()
+            assertFalse(submitted.await()); assertTrue(port.shown.isEmpty()); assertEquals(1, checks)
+            current = true
+            assertTrue(assertNotNull(dispatch.submit(account, channel) {checks++; current}).await())
+            assertEquals(2, f.paths.size); assertEquals(1, port.shown.size); assertEquals(2, checks)
+            assertEquals(0, f.launches); assertTrue(f.allocated.isEmpty())
+        } finally {f.statusRelease?.complete(Unit); notifications.retireAll(); registry.close(); f.close()}
+    }
+
     @Test fun incomingHintSubmissionSurvivesWaiterCancellationAndUsesOneActualOwner() = runTest {
         val f = Fixture(this); val release = CompletableDeferred<Unit>(); val entered = CompletableDeferred<Unit>()
         val registry = IncomingCallActionRegistry(f.dispatcher) {f.peer}; val port = Notifications()

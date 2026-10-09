@@ -142,3 +142,15 @@ network I/O. PostgreSQL persists hint/device retry state; late receipts cannot
 retire a newer binding. API acceptance is not proof of handset notification.
 See [provisioning](../docs/superpowers/specs/2026-10-08-nearby-firebase-provisioning.md)
 for current native/device acceptance status. This wiring is local until deployed.
+
+The optional `docker-compose.fcm.yml` override adds these settings and a read-only
+bind mount. Set `VOLTY_FCM_PROJECT_ID` and the absolute
+`VOLTY_FCM_SERVICE_ACCOUNT_HOST_FILE` in the private deployment environment, then
+include this override after `docker-compose.yml` and before any immutable release
+override. Both inputs are required; a missing host file is not created as a directory.
+Compose also accepts relative host paths and resolves them against the first Compose
+file; the override enforces presence, not absoluteness. Use an absolute path in the
+deployment environment to avoid ambiguous private-key resolution.
+The image runs as UID10001, so a host key readable only by UID1000 needs a separate
+private UID10001-owned copy or a narrowly scoped read ACL. Keep mode600; do not
+make the key world-readable. Omitting the override preserves disabled transport.

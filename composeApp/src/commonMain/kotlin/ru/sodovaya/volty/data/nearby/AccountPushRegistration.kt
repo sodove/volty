@@ -16,12 +16,16 @@ internal class PushRegistrationIntent(val installationId: String, val installati
     override fun toString() = "PushRegistrationIntent(<redacted>)"
 }
 internal enum class PushRegistrationResult { APPLIED, STALE, TOKEN_CONFLICT, ACCESS_DENIED, INVALID, UNAVAILABLE, INVALID_RESPONSE }
+internal interface PushRegistrationClient {
+    suspend fun submit(intent: PushRegistrationIntent): PushRegistrationResult
+    fun retire()
+}
 /** Borrows repository authentication; owns only its HTTP child and response publication fence. */
-internal class AccountPushRegistration(private val account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String) {
+internal class AccountPushRegistration(private val account: SocialAuthenticatedAccount, client: HttpClient, baseUrl: String) : PushRegistrationClient {
     private val base = nearbyHttpsApiBaseUrl(baseUrl)
     private val http = client.config {followRedirects = false; expectSuccess = false}
     private val retired = MutableStateFlow(false)
-    suspend fun submit(intent: PushRegistrationIntent): PushRegistrationResult {
+    override suspend fun submit(intent: PushRegistrationIntent): PushRegistrationResult {
         ensureLive()
         if (!validPushRegistrationIntent(intent)) return PushRegistrationResult.INVALID
         val body = buildJsonObject {
@@ -64,7 +68,7 @@ internal class AccountPushRegistration(private val account: SocialAuthenticatedA
         ensureLive()
         return result
     }
-    fun retire() {retired.value = true; http.close()}
+    override fun retire() {retired.value = true; http.close()}
     private suspend fun ensureLive() {
         currentCoroutineContext().ensureActive()
         if (retired.value || !account.job.isActive) throw CancellationException("Push account retired")

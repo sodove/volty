@@ -285,3 +285,45 @@ an app-only poller cannot assume an Activity has already restored credentials.
 Platform references checked2026-10-09:
 [AtomicFile](https://developer.android.com/reference/android/util/AtomicFile),
 [noBackupFilesDir](https://developer.android.com/reference/android/content/Context#getNoBackupFilesDir()).
+
+## Step4 application lifecycle and receiving implemented2026-10-09
+
+Retraction of the preceding pending-native-wiring status: the application now
+assembles the singleton encrypted ledger and an account-owned registration lane.
+Firebase auto-init follows the current account; callback values are hints to query
+the current SDK token, never applied as late raw tokens. Account replacement
+retires the old child HTTP client without joining held work. Initial null account
+preserves restoration state; actual logout writes a conditionally fenced durable
+null-token generation. Stale registration rotates the generation; a conflicting
+installation token triggers SDK renewal. Only exact accepted intent is acknowledged.
+
+Retraction of the assumption that restoration needs an Activity: source inspection
+confirmed DefaultSocialRepository.init already restores credentials within its
+generation-owned application scope. Cold receiving reuses this restoration.
+The exported-false Firebase service decodes exactly five bounded canonical fields
+and schedules one network-constrained WorkManager2.12.0 task. API31+ high-priority
+messages use expedited work; older Android and quota fallback use ordinary work.
+One retry has explicit10s linear backoff rather than the default30s. Platform
+scheduling can still consume the entire backend30s ringing window.
+
+Receipt requires the exact live account plus its acknowledged non-null-token
+binding/generation. The worker waits up to15s through restoration and actual
+backend verification, not merely hint queue submission. The existing notification
+owner now exposes a borrowed verification waiter and a final suspendable binding
+fence before publication; it rechecks its exact marker after that fence. Replacement,
+withdrawal and close release waiters without joining held reads. Ordinary discovery
+retains its existing queue-only semantics. No push path starts media/location
+capture; prepared audio construction remains lazy. Admission still requires the
+existing visible Activity permission/foreground-service flow.
+
+Common tests drive held actually-issued HTTP/storage operations, stale account and
+binding returns, private SDK setter failures, malformed payloads, durable acknowledgement
+and real guarded-dispatch publication. Native service/WorkManager/Keystore are
+compiled only. Two-phone delivery, process death/Doze/force-stop and Xiaomi audio
+acceptance remain deferred; Google OAuth acceptance alone does not prove FCM send
+permission or handset delivery. Server container settings/mount are still pending.
+
+References checked2026-10-09:
+[Firebase priority and callback lifetime](https://firebase.google.com/docs/cloud-messaging/android-message-priority),
+[WorkManager expedited compatibility and backoff](https://developer.android.com/develop/background-work/background-tasks/persistent/getting-started/define-work),
+[WorkManager2.12.0 release](https://developer.android.com/jetpack/androidx/releases/work#2.12.0).

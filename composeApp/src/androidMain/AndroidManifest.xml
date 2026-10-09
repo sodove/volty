@@ -40,8 +40,11 @@
         android:networkSecurityConfig="@xml/network_security_config"
         android:supportsRtl="true"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
-        <!-- The account-owned push lifecycle will explicitly enable registration. -->
+        <!-- Account-owned push startup enables auto-init only after authentication. -->
         <meta-data android:name="firebase_messaging_auto_init_enabled" android:value="false" />
+        <service android:name=".data.nearby.VoltyFirebaseMessagingService" android:exported="false">
+            <intent-filter><action android:name="com.google.firebase.MESSAGING_EVENT" /></intent-filter>
+        </service>
         <meta-data
             android:name="ru.sodovaya.volty.offline.catalog_url"
             android:value="${voltyOfflineCatalogUrl}" />

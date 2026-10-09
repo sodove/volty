@@ -231,6 +231,44 @@ val androidModule = module {
         }
     }
     single<VoiceRoomEngine> { AndroidLiveKitVoiceRoomEngine(androidContext(), get()) }
+    single<ru.sodovaya.volty.data.nearby.PushInstallationStore> {ru.sodovaya.volty.data.nearby.AndroidPushInstallationStore(androidContext())}
+    single<ru.sodovaya.volty.data.nearby.PushInstallationIdentityGenerator> {ru.sodovaya.volty.data.nearby.AndroidPushInstallationIdentityGenerator()}
+    single {ru.sodovaya.volty.data.nearby.PushInstallationLedger(get(), get())}
+    single<ru.sodovaya.volty.data.nearby.PushTokenSource> {ru.sodovaya.volty.data.nearby.AndroidFcmTokenSource(androidContext())}
+    single {ru.sodovaya.volty.data.nearby.AndroidPushEvents()}
+    single {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        val coordinator = get<VoiceAccountCoordinator>()
+        val audio = get<AndroidVoiceAudioFactory>()
+        ru.sodovaya.volty.data.voice.IncomingCallHintDispatch(Dispatchers.Main, {repository.authenticatedAccount.value}, get()) {account ->
+            coordinator.acquireBound(account, audio.createPrepared()).voice
+        }
+    }
+    single {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        val hints = get<ru.sodovaya.volty.data.voice.IncomingCallHintDispatch>()
+        ru.sodovaya.volty.data.nearby.IncomingCallPushGate({repository.authenticatedAccount.value}, get()) {account, call, beforePublish ->
+            hints.submit(account, call, beforePublish)?.await() == true
+        }
+    }
+    single {
+        val repository = get<ru.sodovaya.volty.data.social.DefaultSocialRepository>()
+        val hints = get<ru.sodovaya.volty.data.voice.IncomingCallHintDispatch>()
+        val coordinator = get<VoiceAccountCoordinator>(); val audio = get<AndroidVoiceAudioFactory>()
+        val client = get<HttpClient>(named(NEARBY_HTTP_CLIENT))
+        ru.sodovaya.volty.data.nearby.PushRegistrationOwner(repository.authenticatedAccount, repository.applicationScope(),
+            Dispatchers.Main, flow {while (true) {delay(30_000); emit(Unit)}},
+            get<ru.sodovaya.volty.data.nearby.AndroidPushEvents>().tokens, get(), get(),
+            {account -> ru.sodovaya.volty.data.nearby.AccountPushRegistration(account, client, NEARBY_API_BASE_URL)}) {account ->
+            val runtime = coordinator.acquireBound(account, audio.createPrepared()).voice
+            if (repository.authenticatedAccount.value === account && account.job.isActive && !runtime.retired.value) {
+                val reply = runtime.incomingCalls(limit = 1)
+                if (reply is ru.sodovaya.volty.data.nearby.IncomingCallReply.Ready)
+                    reply.calls.firstOrNull()?.let {hints.submit(account, it.callId)?.await()}
+            }
+        }
+    }
+    single {ru.sodovaya.volty.data.nearby.AndroidPushStartup(get(), get(), get(), get())}
     single { AndroidOfflineRoutingPackageManager(androidContext()) }
     single { AndroidOfflineNavigationConfig.from(androidContext()) }
     single(named(APP_VERSION_CODE)) { currentAppVersionCode(androidContext()) }

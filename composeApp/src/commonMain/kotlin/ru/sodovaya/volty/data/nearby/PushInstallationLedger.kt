@@ -41,6 +41,18 @@ internal class PushInstallationLedger(private val store: PushInstallationStore, 
         true
     }
     suspend fun current(): PushInstallationSnapshot? = mutex.withLock {store.read()}
+    /** Check logout authority inside the same serial mutation as the durable tombstone. */
+    suspend fun retireIf(noAccount: () -> Boolean): PushInstallationSnapshot? = mutex.withLock {
+        val current = store.read() ?: return@withLock null
+        if (!noAccount()) return@withLock null
+        if (current.intent.token == null) return@withLock current
+        check(current.intent.generation != Long.MAX_VALUE) {"Push installation generation exhausted"}
+        val binding = generator.uuid()
+        require(binding != current.intent.bindingId) {"Push binding identity repeated"}
+        val intent = PushRegistrationIntent(current.intent.installationId, current.intent.installationKey,
+            current.intent.generation + 1, binding, null)
+        PushInstallationSnapshot(current.actorId, intent, false).also {store.write(it)}
+    }
     private fun sameBinding(a: PushInstallationSnapshot, b: PushInstallationSnapshot) = a.actorId == b.actorId &&
         a.intent.installationId == b.intent.installationId && a.intent.installationKey == b.intent.installationKey &&
         a.intent.generation == b.intent.generation && a.intent.bindingId == b.intent.bindingId && a.intent.token == b.intent.token

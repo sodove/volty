@@ -1,0 +1,14 @@
+# Optional: docker compose -f docker-compose.yml -f docker-compose.fcm.yml ...
+# The host file must be private and readable by the backend's container UID.
+services:
+  app:
+    environment:
+      VOLTY_FCM_PROJECT_ID: ${VOLTY_FCM_PROJECT_ID:?set the matching Firebase project ID}
+      VOLTY_FCM_SERVICE_ACCOUNT_FILE: /run/secrets/volty-firebase-service-account.json
+    volumes:
+      - type: bind
+        source: ${VOLTY_FCM_SERVICE_ACCOUNT_HOST_FILE:?set the absolute private service-account file path}
+        target: /run/secrets/volty-firebase-service-account.json
+        read_only: true
+        bind:
+          create_host_path: false

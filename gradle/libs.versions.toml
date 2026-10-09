@@ -21,8 +21,10 @@ valhalla-models = "0.5.2"
 valhalla-models-config = "0.5.2"
 bouncycastle = "1.84"
 firebase-bom = "35.0.0"
+workmanager = "2.12.0"
 
 [libraries]
+workmanager-runtime = { module = "androidx.work:work-runtime-ktx", version.ref = "workmanager" }
 decompose-core = { module = "com.arkivanov.decompose:decompose", version.ref = "decompose" }
 decompose-compose = { module = "com.arkivanov.decompose:extensions-compose", version.ref = "decompose" }
 koin-core = { module = "io.insert-koin:koin-core", version.ref = "koin" }

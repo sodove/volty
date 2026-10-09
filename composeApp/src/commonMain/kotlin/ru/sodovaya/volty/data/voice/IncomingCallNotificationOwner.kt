@@ -54,7 +54,10 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     val readInFlight = reads.asStateFlow()
     private val cancellationFailed = MutableStateFlow(false)
     val cleanupFailed = cancellationFailed.asStateFlow()
-    private class Hint(val callId: String, val consumed: Boolean = false)
+    private class Hint(val callId: String, val consumed: Boolean = false,
+        val beforePublish: (suspend () -> Boolean)? = null) {
+        val completed = CompletableDeferred<Boolean>()
+    }
     private var pending: Hint? = null
     private var latest: Hint? = null
     private var running: Hint? = null
@@ -87,15 +90,27 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     }
 
     suspend fun hint(callId: String): Boolean = withContext(queuedDispatcher) {
+        enqueueHint(callId, null) != null
+    }
+
+    private fun enqueueHint(callId: String, beforePublish: (suspend () -> Boolean)?): Hint? {
         invitationDraftId(callId)
-        if (tick() == null) return@withContext false
-        if (pending?.callId == callId || (pending == null && running?.callId == callId)) return@withContext false
+        if (tick() == null) return null
+        if (beforePublish == null && (pending?.callId == callId || (pending == null && running?.callId == callId))) return null
         withdraw()
-        if (!lifetime.isActive) return@withContext false
-        val hint = Hint(callId)
+        if (!lifetime.isActive) return null
+        latest?.completed?.complete(false)
+        val hint = Hint(callId, beforePublish = beforePublish)
         latest = hint; pending = hint
         if (readerJob == null) startReader()
-        true
+        return hint
+    }
+
+    /** A background caller must wait for verification and its final publication fence. */
+    suspend fun verifiedHint(callId: String, beforePublish: suspend () -> Boolean): Boolean {
+        val hint = withContext(queuedDispatcher) {enqueueHint(callId, beforePublish)} ?: return false
+        // The worker borrows this waiter; account-owned verification outlives waiter cancellation.
+        return hint.completed.await()
     }
 
     /** Polling retries failed verification, but never replaces an earned or consumed offer. */
@@ -109,7 +124,7 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
     suspend fun close() = withContext(NonCancellable) {withContext(queuedDispatcher) {closeOwned()}}
     /** A successful discovery response withdrew this exact call, including a held hint read. */
     suspend fun withdrawCall(callId: String) = withContext(queuedDispatcher) {
-        if (latest?.callId == callId) latest = null
+        if (latest?.callId == callId) {latest?.completed?.complete(false); latest = null}
         if (pending?.callId == callId) pending = null
         if (offerOutput.value?.call?.callId == callId) withdraw()
     }
@@ -172,7 +187,19 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
                         IncomingCallHintReply.Failed(DirectCallFailure.UNAVAILABLE)
                     } catch (_: Exception) {IncomingCallHintReply.Failed(DirectCallFailure.UNAVAILABLE)}
                     finally {running = null; reads.update {it - 1}}
-                    if (lifetime.isActive && latest === hint) publish(reply)
+                    try {
+                        if (lifetime.isActive && latest === hint) {
+                            val allowed = try {hint.beforePublish?.invoke() ?: true}
+                                catch (cancelled: CancellationException) {
+                                    currentCoroutineContext().ensureActive(); false
+                                } catch (_: Exception) {false}
+                            // The fence may suspend for durable storage; recheck the exact queued marker.
+                            if (allowed && lifetime.isActive && latest === hint) {
+                                publish(reply)
+                                hint.completed.complete(offerOutput.value?.call?.callId == hint.callId)
+                            }
+                        }
+                    } finally {hint.completed.complete(false)}
                 }
             } catch (_: CancellationException) {
                 // An obsolete read has no notification permission, even if HTTP returns late.
@@ -249,7 +276,8 @@ internal class IncomingCallNotificationOwner(private val account: SocialAuthenti
         }
     }
     private fun closeOwned() {
-        withdraw(); pending = null; latest = null
+        withdraw(); latest?.completed?.complete(false); pending?.completed?.complete(false)
+        pending = null; latest = null
         output.value = IncomingCallNotificationState(retired = true)
         lifetime.cancel()
         if (!namesClosed) {

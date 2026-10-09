@@ -123,3 +123,45 @@ and live-account checks before request and before response publication. Actual
 issued-response cancellation and borrowed-resource ownership are tested. Fresh
 Android3414 tests337 suites passed. Persisted installation state, token owner,
 FCM receive service and physical acceptance remain pending.
+
+## Native wiring implemented2026-10-09
+
+Retraction of the previous pending-installation/owner/service status: durable
+encrypted installation state, account-owned SDK token registration, Firebase
+messaging service and bounded WorkManager receiving are assembled in the app.
+Cold startup reuses the repository's existing application-owned session restore.
+Hints require an acknowledged current actor/binding/generation and fresh backend
+verification; the worker waits through verification, and notification publication
+rechecks the binding. No microphone, media connection or GPS capture starts from
+push. Logout/replacement suppress old work without cancelling borrowed roots.
+
+API31+ high-priority messages request expedited scheduling. Older Android/quota
+fallback are ordinary work; one retry is explicitly10s rather than the default30s.
+Neither route guarantees completion within the backend30s ring window. Native
+callbacks, WorkManager timing, killed-process/OEM behavior and actual FCM delivery
+remain deferred phone acceptance. No Google message was sent by this stage.
+Production backend container credential mount/settings are still pending.
+
+## Native build and private mount readiness2026-10-09
+
+The signed0.7.14/code37 candidate contains the native push lane. Fresh3450 Android
+unit tests/342XML suites passed; release and unchanged SQLDelight migration check
+both executed successfully. APKv2 signature matches the preceding candidate; R8
+preserves the Firebase service and reflected Worker constructor class. This proves
+packaging/compilation, not device delivery or Xiaomi audibility.
+
+An optional docker-compose.fcm.yml override now supplies required project and
+host-key inputs, a fixed absolute container path and a read-only bind with
+create_host_path:false. Docker Compose fixtures verified disabled base, enabled
+configuration and rejection of each missing input; no service was started by the
+config check. Compose accepts relative local host paths, so absolute host paths
+remain deployment guidance, not a YAML-enforced claim.
+
+The original private user-owned server key is retained. A separate identical copy
+at /home/sodovaya/.config/volty/backend-secrets/firebase-service-account.json is
+UID10001:10001/file600 inside a700directory. An ephemeral network-none/read-only
+container using the current immutable backend image actually read this mounted
+file as UID10001 and could not write it. App/SFU container identities and start
+stamps stayed unchanged. No helper container or temporary plaintext copy remains.
+The actual production credential mount/settings and new server release remain
+pending. Neither provisioned key nor contents are committed or APK inputs.

@@ -51,8 +51,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 36
-val appVersionName = "0.7.13"
+val appVersionCode = 37
+val appVersionName = "0.7.14"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -113,6 +113,7 @@ kotlin {
         androidMain.dependencies {
             implementation(project.dependencies.platform(libs.firebase.bom))
             implementation(libs.firebase.messaging)
+            implementation(libs.workmanager.runtime)
             implementation(libs.activity.compose)
             implementation(libs.koin.android)
             implementation(libs.coroutines.android)
