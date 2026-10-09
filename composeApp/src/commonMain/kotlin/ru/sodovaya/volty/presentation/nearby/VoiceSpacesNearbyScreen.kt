@@ -5,8 +5,14 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -21,13 +27,18 @@ import volty.composeapp.generated.resources.*
 fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier=Modifier) {
     val state by component.state.collectAsState()
     val servers by component.servers.collectAsState()
+    val profileDescription=stringResource(Res.string.nearby_profile_title)
     Column(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface).statusBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick=component::back) {Text(stringResource(Res.string.nearby_back))}
-            Text((state.session as? SocialSession.Authenticated)?.displayName ?: stringResource(Res.string.nearby_title),
-                modifier=Modifier.weight(1f).padding(vertical=16.dp),maxLines=1,overflow=TextOverflow.Ellipsis)
-            if(state.session is SocialSession.Authenticated) TextButton(onClick=component::logout,enabled=!state.busy) {
-                Text(stringResource(Res.string.nearby_logout))
+        Row(Modifier.fillMaxWidth().padding(horizontal=8.dp,vertical=4.dp),verticalAlignment=Alignment.CenterVertically) {
+            IconButton(onClick={if(state.section==NearbyShellSection.PROFILE) component.openServers() else component.back()}) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack,contentDescription=stringResource(Res.string.nearby_back))
+            }
+            Text(stringResource(if(state.section==NearbyShellSection.PROFILE) Res.string.nearby_profile_title else Res.string.nearby_title),
+                modifier=Modifier.weight(1f),style=MaterialTheme.typography.titleLarge,maxLines=1,overflow=TextOverflow.Ellipsis)
+            val account=state.session as? SocialSession.Authenticated
+            if(account!=null) FilledTonalIconButton(onClick=component::openProfile,enabled=!state.busy,shape=CircleShape) {
+                Text(account.displayName.trim().take(1).uppercase().ifEmpty { "•" },
+                    modifier=Modifier.semantics {contentDescription=profileDescription},style=MaterialTheme.typography.titleSmall)
             }
         }
         state.error?.let {Text(stringResource(it.shellMessage()),Modifier.padding(horizontal=16.dp),color=MaterialTheme.colorScheme.error)}
@@ -35,13 +46,11 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
         if(state.session !is SocialSession.Authenticated) {
             NearbyAuthForm(state,component,Modifier.weight(1f))
         } else {
-            TabRow(selectedTabIndex=state.section.ordinal) {
+            if(state.section!=NearbyShellSection.PROFILE) TabRow(selectedTabIndex=if(state.section==NearbyShellSection.FRIENDS) 1 else 0) {
                 Tab(selected=state.section==NearbyShellSection.SERVERS,onClick=component::openServers,
                     text={Text(stringResource(Res.string.nearby_shell_servers))})
                 Tab(selected=state.section==NearbyShellSection.FRIENDS,onClick=component::openFriends,
                     text={Text(stringResource(Res.string.nearby_friends_tab))})
-                Tab(selected=state.section==NearbyShellSection.PROFILE,onClick=component::openProfile,enabled=!state.busy,
-                    text={Text(stringResource(Res.string.nearby_profile_title))})
             }
             when(state.section) {
                 NearbyShellSection.PROFILE -> NearbyProfileForm(state,component,Modifier.weight(1f))
@@ -73,6 +82,9 @@ private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVo
         }}
         if(state.profile.saved) item {Text(stringResource(Res.string.nearby_shell_profile_saved))}
         item {NearbyCallNotificationSettings(Modifier.widthIn(max=520.dp).fillMaxWidth())}
+        item {TextButton(onClick=component::logout,enabled=!state.busy) {
+            Text(stringResource(Res.string.nearby_logout),color=MaterialTheme.colorScheme.error)
+        }}
     }
 }
 

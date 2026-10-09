@@ -4,6 +4,13 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.Alignment
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
@@ -19,31 +26,26 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
     val state by presenter.state.collectAsState()
     val enabled = !state.commands.busy && state.actorId != null
     val mutationEnabled = enabled && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking
-    Scaffold(modifier = modifier, topBar = {
-        TopAppBar(title = {
-            Text(when(state.section) {
-                ServerWorkspaceSection.MY_SERVERS -> stringResource(Res.string.nearby_servers_mine)
-                ServerWorkspaceSection.CATALOG -> stringResource(Res.string.nearby_servers_catalog)
-                ServerWorkspaceSection.CREATE -> stringResource(Res.string.nearby_servers_create)
-                ServerWorkspaceSection.SERVER -> state.browser.detail?.community?.name ?: stringResource(Res.string.nearby_server_title)
-            },maxLines=1,overflow=TextOverflow.Ellipsis)
-        },navigationIcon = {
-            if(state.section != ServerWorkspaceSection.MY_SERVERS) TextButton(onClick=presenter::back,enabled=enabled) {
-                Text(stringResource(Res.string.nearby_back))
-            }
-        })
-    }) { insets ->
-        Column(Modifier.fillMaxSize().padding(insets).padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
-            FlowRow(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                TextButton(onClick=presenter::openMine,enabled=enabled) {Text(stringResource(Res.string.nearby_servers_mine))}
-                TextButton(onClick=presenter::openCatalog,enabled=enabled) {Text(stringResource(Res.string.nearby_servers_find))}
-                TextButton(onClick=presenter::openInvitationAcceptance,enabled=mutationEnabled) {Text(stringResource(Res.string.nearby_invitations_join))}
-                if(state.section != ServerWorkspaceSection.CREATE) TextButton(onClick=presenter::openCreate,enabled=mutationEnabled) {
-                    Text(stringResource(Res.string.nearby_create))
+        Column(modifier.fillMaxSize().padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            if(state.section==ServerWorkspaceSection.MY_SERVERS) {
+                Row(Modifier.fillMaxWidth().padding(top=12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=Alignment.CenterVertically) {
+                    OutlinedButton(onClick=presenter::openCatalog,enabled=enabled,modifier=Modifier.weight(1f),shape=RoundedCornerShape(12.dp)) {
+                        Icon(Icons.Default.Search,contentDescription=null,modifier=Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(stringResource(Res.string.nearby_servers_find))
+                    }
+                    FilledTonalIconButton(onClick=presenter::openCreate,enabled=mutationEnabled) {
+                        Icon(Icons.Default.Add,contentDescription=stringResource(Res.string.nearby_create))
+                    }
+                }
+            } else {
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+                    TextButton(onClick={if(state.section==ServerWorkspaceSection.CATALOG) presenter.openMine() else presenter.back()},enabled=enabled) {
+                        Text(stringResource(Res.string.nearby_back))
+                    }
+                    if(state.section!=ServerWorkspaceSection.SERVER) Text(stringResource(
+                        if(state.section==ServerWorkspaceSection.CREATE) Res.string.nearby_servers_create else Res.string.nearby_servers_catalog),
+                        style=MaterialTheme.typography.titleMedium,maxLines=1,overflow=TextOverflow.Ellipsis)
                 }
             }
             state.commands.error?.let { Text(stringResource(it.workspaceMessage()),color=MaterialTheme.colorScheme.error) }
@@ -60,7 +62,6 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
                     else -> ServerListPane(state,presenter,state.section==ServerWorkspaceSection.CATALOG,Modifier.fillMaxWidth())
                 }
             }
-        }
     }
     val confirmation=state.commands.confirmation
     val target=state.browser.detail?.takeIf {it.community.id==confirmation?.community}
@@ -89,27 +90,43 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
 private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter,catalog: Boolean,modifier: Modifier) {
     val page=if(catalog) state.browser.catalog else state.browser.memberships
     val enabled=!state.commands.busy && state.actorId!=null
-    LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+    LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(4.dp),contentPadding=PaddingValues(bottom=12.dp)) {
         if(catalog) item {
             OutlinedTextField(value=state.query,onValueChange=presenter::setQuery,enabled=enabled,singleLine=true,
                 label={Text(stringResource(Res.string.nearby_servers_search))},modifier=Modifier.fillMaxWidth())
         }
-        item {TextButton(onClick={presenter.refreshList(catalog)},enabled=enabled && !page.loading) {Text(stringResource(Res.string.nearby_refresh))}}
+        item {Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically) {
+            Text(stringResource(if(catalog) Res.string.nearby_servers_catalog else Res.string.nearby_servers_mine),
+                Modifier.weight(1f),style=MaterialTheme.typography.labelLarge,color=MaterialTheme.colorScheme.onSurfaceVariant)
+            if(!catalog) TextButton(onClick=presenter::openInvitationAcceptance,
+                enabled=enabled && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking) {
+                Text(stringResource(Res.string.nearby_invitations_join),style=MaterialTheme.typography.labelMedium)
+            }
+            IconButton(onClick={presenter.refreshList(catalog)},enabled=enabled && !page.loading) {
+                Icon(Icons.Default.Refresh,contentDescription=stringResource(Res.string.nearby_refresh))
+            }
+        }}
         if(page.error!=null) item {Text(stringResource(Res.string.nearby_servers_read_failed),color=MaterialTheme.colorScheme.error)}
         if(page.loading) item {LinearProgressIndicator(Modifier.fillMaxWidth())}
         if(page.items?.isEmpty()==true && !page.loading) item {
             Text(stringResource(if(catalog) Res.string.nearby_servers_catalog_empty else Res.string.nearby_servers_empty))
         }
         items(page.items.orEmpty(),key={it.id}) {server ->
-            OutlinedCard(Modifier.fillMaxWidth()) {
-                Column(Modifier.padding(16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
+            Surface(onClick={if(catalog) presenter.joinPublic(server.id) else presenter.openServer(server.id)},
+                enabled=enabled && (!catalog || (!state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking)),
+                modifier=Modifier.fillMaxWidth(),shape=RoundedCornerShape(12.dp)) {
+                Row(Modifier.padding(vertical=12.dp,horizontal=4.dp),horizontalArrangement=Arrangement.spacedBy(12.dp),verticalAlignment=Alignment.CenterVertically) {
+                    Surface(color=MaterialTheme.colorScheme.secondaryContainer,shape=RoundedCornerShape(12.dp),modifier=Modifier.size(44.dp)) {
+                        Box(contentAlignment=Alignment.Center) {Text(server.name.trim().take(1).uppercase(),style=MaterialTheme.typography.titleMedium)}
+                    }
+                    Column(Modifier.weight(1f),verticalArrangement=Arrangement.spacedBy(3.dp)) {
                     Text(server.name,style=MaterialTheme.typography.titleMedium,maxLines=2,overflow=TextOverflow.Ellipsis)
                     Text(stringResource(if(server.visibility==CommunityVisibility.PUBLIC) Res.string.nearby_servers_public else Res.string.nearby_servers_private),
                         style=MaterialTheme.typography.labelMedium)
-                    if(server.description.isNotBlank()) Text(server.description,maxLines=3,overflow=TextOverflow.Ellipsis)
-                    TextButton(onClick={if(catalog) presenter.joinPublic(server.id) else presenter.openServer(server.id)},enabled=enabled && (!catalog || (!state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking))) {
-                        Text(stringResource(if(catalog) Res.string.nearby_servers_join else Res.string.nearby_servers_open))
+                    if(server.description.isNotBlank()) Text(server.description,maxLines=1,overflow=TextOverflow.Ellipsis,style=MaterialTheme.typography.bodySmall)
                     }
+                    Text(stringResource(if(catalog) Res.string.nearby_servers_join else Res.string.nearby_servers_open),
+                        style=MaterialTheme.typography.labelMedium,color=MaterialTheme.colorScheme.primary)
                 }
             }
         }
@@ -121,6 +138,7 @@ private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorksp
 private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter,modifier: Modifier) {
     val browser=state.browser
     val enabled=!state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking && state.actorId!=null
+    var menuExpanded by remember(browser.selectedCommunity) {mutableStateOf(false)}
     LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         if(browser.detailLoading) item {LinearProgressIndicator(Modifier.fillMaxWidth())}
         if(browser.detailError!=null) item {
@@ -130,8 +148,45 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
         val detail=browser.detail?.takeIf {it.community.id==browser.selectedCommunity}
         if(detail!=null) {
             item {
-                Text(detail.community.name,style=MaterialTheme.typography.headlineSmall)
-                if(detail.community.description.isNotBlank()) Text(detail.community.description)
+                Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(12.dp)) {
+                    Surface(color=MaterialTheme.colorScheme.secondaryContainer,shape=RoundedCornerShape(12.dp),modifier=Modifier.size(48.dp)) {
+                        Box(contentAlignment=Alignment.Center) {Text(detail.community.name.trim().take(1).uppercase(),style=MaterialTheme.typography.titleLarge)}
+                    }
+                    Column(Modifier.weight(1f)) {
+                        Text(detail.community.name,style=MaterialTheme.typography.titleLarge,maxLines=2,overflow=TextOverflow.Ellipsis)
+                        Text(stringResource(if(detail.community.visibility==CommunityVisibility.PUBLIC) Res.string.nearby_servers_public else Res.string.nearby_servers_private),
+                            style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Box {
+                        IconButton(onClick={menuExpanded=true},enabled=state.actorId!=null) {
+                            Icon(Icons.Default.MoreVert,contentDescription=stringResource(Res.string.nearby_panel_more_controls))
+                        }
+                        DropdownMenu(expanded=menuExpanded,onDismissRequest={menuExpanded=false}) {
+                            DropdownMenuItem(text={Text(stringResource(Res.string.nearby_refresh))},enabled=enabled,
+                                onClick={menuExpanded=false;presenter.refresh()})
+                            if(detail.ownerId==state.actorId) {
+                                DropdownMenuItem(text={Text(stringResource(Res.string.nearby_invitations_manage))},
+                                    enabled=!state.commands.busy && state.actorId!=null && !browser.detailLoading && browser.detailError==null,
+                                    onClick={menuExpanded=false;presenter.openInvitationManagement()})
+                                DropdownMenuItem(text={Text(stringResource(Res.string.nearby_invitations_create))},
+                                    enabled=enabled && !browser.detailLoading && browser.detailError==null,
+                                    onClick={menuExpanded=false;presenter.openInvitationCreation()})
+                                DropdownMenuItem(text={Text(stringResource(Res.string.nearby_channels_create))},
+                                    enabled=enabled && !browser.detailLoading && browser.detailError==null,
+                                    onClick={menuExpanded=false;presenter.openChannelCreation()})
+                            }
+                            HorizontalDivider()
+                            DropdownMenuItem(text={Text(stringResource(Res.string.nearby_servers_leave))},enabled=enabled,
+                                onClick={menuExpanded=false;presenter.requestLeave()})
+                            if(detail.ownerId==state.actorId) DropdownMenuItem(
+                                text={Text(stringResource(Res.string.nearby_servers_delete),color=MaterialTheme.colorScheme.error)},enabled=enabled,
+                                onClick={menuExpanded=false;presenter.requestDelete()})
+                        }
+                    }
+                }
+                if(detail.community.description.isNotBlank()) Text(detail.community.description,Modifier.padding(top=8.dp),style=MaterialTheme.typography.bodyMedium)
+            }
+            item {
                 Text(stringResource(Res.string.nearby_servers_channels),style=MaterialTheme.typography.titleMedium)
                 Text(stringResource(Res.string.nearby_servers_voice_only),style=MaterialTheme.typography.bodySmall)
             }
@@ -144,22 +199,6 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
                             Text(stringResource(Res.string.nearby_servers_connect))
                         }
                     }
-                }
-            }
-            item {
-                if(detail.ownerId==state.actorId) TextButton(onClick=presenter::openInvitationManagement,
-                    enabled=!state.commands.busy && state.actorId!=null && !browser.detailLoading && browser.detailError==null) {
-                    Text(stringResource(Res.string.nearby_invitations_manage))
-                }
-                if(detail.ownerId==state.actorId) TextButton(onClick=presenter::openInvitationCreation,enabled=enabled && !browser.detailLoading && browser.detailError==null) {
-                    Text(stringResource(Res.string.nearby_invitations_create))
-                }
-                if(detail.ownerId==state.actorId) TextButton(onClick=presenter::openChannelCreation,enabled=enabled && !browser.detailLoading && browser.detailError==null) {
-                    Text(stringResource(Res.string.nearby_channels_create))
-                }
-                TextButton(onClick=presenter::requestLeave,enabled=enabled) {Text(stringResource(Res.string.nearby_servers_leave))}
-                if(detail.ownerId==state.actorId) TextButton(onClick=presenter::requestDelete,enabled=enabled) {
-                    Text(stringResource(Res.string.nearby_servers_delete),color=MaterialTheme.colorScheme.error)
                 }
             }
         }

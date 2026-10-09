@@ -1,5 +1,15 @@
 # Nearby UI assembly implementation plan
 
+## Presentation follow-up — 2026-10-09
+
+User approved the compact three-screen preview after emulator inspection. Its
+implementation and actual phone/320dp/expanded visual checks are recorded in
+`../specs/2026-10-09-nearby-compact-ui.md`. Signed candidate0.7.17/code40 retains
+account/voice/sharing authority, simplifies shell/server/friend navigation and
+keeps Disconnect plus active-position Hide reachable in the compact dock.
+Fresh3458 common tests and both release variants/migration verification pass.
+Remote direct-call completion and physical audio acceptance remain open.
+
 > Execute inline with superpowers:executing-plans. No additional Astra invocation or quota-exhausted subagents.
 
 **Goal:** Replace the legacy group UI with servers, channels, friend calls and a root-owned conversation panel.
