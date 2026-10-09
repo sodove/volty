@@ -96,3 +96,23 @@ Real service-account provisioning is pending the user's file path. Native
 registration/FCM service and deferred phone acceptance remain next. Fixtures used
 only ephemeral RSA keys, loopback OAuth/send servers and the existing owned
 scratch PostgreSQL; none authorized a Google message or changed production.
+
+## Private key provisioned2026-10-09
+
+Retraction of the pending-file statement: the user supplied a directory containing
+one service-account JSON and authorized copying it. The project matches Android
+configuration. The actual production typed loader accepted the private copy
+without network access. Local `backend/.secrets/firebase-service-account.json`
+is ignored by Git and restricted to the current user/System. Server copy is
+`/home/sodovaya/.config/volty/firebase-service-account.json`, directory700/file600;
+transfer integrity verified. Neither copy is APK input. No private contents were
+printed or committed. Container mount/settings and actual OAuth/message delivery
+are still pending; the running production process was not changed.
+
+The account-owned client HTTP registration boundary is now implemented: fixed
+HTTPS PUT, explicit null token retirement, bounded10s request and8KiB response,
+typed stale-binding/token-conflict outcomes, repository-owned bearer refresh,
+and live-account checks before request and before response publication. Actual
+issued-response cancellation and borrowed-resource ownership are tested. Fresh
+Android3414 tests337 suites passed. Persisted installation state, token owner,
+FCM receive service and physical acceptance remain pending.

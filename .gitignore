@@ -43,6 +43,8 @@ __pycache__/
 
 # Firebase project configuration is provisioned locally.
 /composeApp/google-services.json
+# Private backend service-account provisioning; never include in APK or Git.
+/backend/.secrets/
 
 # Kotlin compiler daemon error dumps — build noise, never source.
 .kotlin/
