@@ -47,6 +47,7 @@ internal class AndroidVoiceSdkSession(
     @Volatile private var closing = false
     @Volatile private var deafened = false
     @Volatile private var outputAvailable = preferences.output == VoiceOutputPreference.AUTO
+    @Volatile private var routingTransition = false
     private val remoteEvidence = VoiceRemoteAudioEvidence(tag)
     private val publicationRecovery = VoicePublicationRecovery(scope, object : VoicePublicationRecoveryPort {
         override suspend fun restoreClosed(): Boolean = withContext(Dispatchers.Main.immediate) {
@@ -57,7 +58,7 @@ internal class AndroidVoiceSdkSession(
                 val ownedAudio = audio ?: return@withLock false
                 // SDK full reconnect skips its saved muted publication. Reuse
                 // the same track, always closed; the driver alone applies intent.
-                ownedAudio.module.setMicrophoneMute(true)
+                ownedAudio.muteMicrophone(true)
                 track.enabled = false
                 val existing = ownedPublication(ownedRoom)
                 if (existing != null) {
@@ -100,16 +101,17 @@ internal class AndroidVoiceSdkSession(
         val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
         val ownedKeeper = VoiceCommunicationKeeper(diagnostics).also { keeper = it }
         val ownedAudio = OwnedVoiceAudio(context, tag, diagnostics, ::event, ownedKeeper).also { audio = it }
-        ownedAudio.module.setMicrophoneMute(true) // Initial intent installed before any native capture.
-        ownedAudio.module.setSpeakerMute(deafened || !outputAvailable)
+        check(ownedAudio.configurePlayback(preferences) == VoiceAudioChangeResult.REQUESTED)
+        ownedAudio.muteMicrophone(true) // Initial intent installed before any native capture.
+        ownedAudio.mutePlayback(deafened || !outputAvailable)
         ownedAudio.applyInput(manager, preferences.input)
         val ownedRoutes = VoiceAudioRouteMonitor(context, manager, preferences, diagnostics, ownedKeeper, { ownedAudio.preferredInputId },
             outputAllowed = { allowed ->
                 outputAvailable = allowed
-                if (!closing) ownedAudio.module.setSpeakerMute(deafened || !allowed)
+                if (!closing) ownedAudio.mutePlayback(deafened || !allowed || routingTransition)
             }, inputLost = {
                 if (!closing) {
-                    ownedAudio.module.setMicrophoneMute(true)
+                    ownedAudio.muteMicrophone(true)
                     record(VoiceDiagnosticCode.INPUT_UNAVAILABLE)
                     event(VoiceSessionEvent.EngineFailed(tag))
                 }
@@ -126,7 +128,7 @@ internal class AndroidVoiceSdkSession(
         val (ownedRoom, track) = resources.withLock {
             check(!closing)
             val ownedRoom = checkNotNull(room)
-            checkNotNull(audio).module.setMicrophoneMute(muted)
+            checkNotNull(audio).muteMicrophone(muted)
             val track = ownedRoom.localParticipant.createAudioTrack().also { localTrack = it }
             track.enabled = !muted
             ownedRoom to track
@@ -154,7 +156,7 @@ internal class AndroidVoiceSdkSession(
             // Main dispatch and closed-republish resource locking may suspend.
             // Recheck intent/lease after both, with no await before native writes.
             if (!current()) return@withLock VoiceMuteApplyResult.SUPERSEDED
-            checkNotNull(audio).module.setMicrophoneMute(muted)
+            checkNotNull(audio).muteMicrophone(muted)
             publication.muted = muted
             VoiceMuteApplyResult.APPLIED
         }
@@ -162,7 +164,7 @@ internal class AndroidVoiceSdkSession(
 
     override fun setDeafened(deafened: Boolean) {
         this.deafened = deafened
-        if (!closing) audio?.module?.setSpeakerMute(deafened || !outputAvailable)
+        if (!closing) audio?.mutePlayback(deafened || !outputAvailable || routingTransition)
     }
 
     override suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult = resources.withLock {
@@ -170,17 +172,42 @@ internal class AndroidVoiceSdkSession(
         if (closing) return@withLock VoiceAudioChangeResult.STALE
         val ownedAudio = audio ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
         val ownedRoutes = routes ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
-        if (preferences.input == VoiceInputPreference.AUTO && ownedAudio.preferredInputId != null)
-            return@withLock VoiceAudioChangeResult.REQUIRES_RECONNECT
+        if (!ownedAudio.playbackAvailable(preferences)) return@withLock VoiceAudioChangeResult.UNAVAILABLE
         val request = currentCoroutineContext()[Job]
         val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val result = ownedRoutes.configureOutputAndInput(preferences.output,
-            requestInput = { ownedAudio.requestInput(manager, preferences.input) },
+        routingTransition = true
+        ownedAudio.mutePlayback(true)
+        var applied = false
+        try {
+        val result = ownedRoutes.configureOutputAndInput(preferences.output, preferences.input == VoiceInputPreference.PHONE,
+            requestInput = {
+                val playbackResult = ownedAudio.configurePlayback(preferences)
+                if (playbackResult == VoiceAudioChangeResult.REQUESTED) ownedAudio.requestInput(manager, preferences.input)
+                else playbackResult
+            },
             currentRequest = { !closing && request?.isActive == true })
         currentCoroutineContext().ensureActive()
         if (closing) VoiceAudioChangeResult.STALE else {
-            if (result == VoiceAudioChangeResult.REQUESTED) diagnostics.update { it.copy(preferences = preferences) }
+            if (result == VoiceAudioChangeResult.REQUESTED) {
+                applied = true
+                diagnostics.update { it.copy(preferences = preferences) }
+            } else {
+                ownedAudio.muteMicrophone(true)
+                ownedAudio.mutePlayback(true)
+                event(VoiceSessionEvent.EngineFailed(tag))
+            }
             result
+        }
+        } finally {
+            routingTransition = false
+            if (!closing) {
+                if (applied) ownedAudio.mutePlayback(deafened || !outputAvailable)
+                else {
+                    ownedAudio.muteMicrophone(true)
+                    ownedAudio.mutePlayback(true)
+                    event(VoiceSessionEvent.EngineFailed(tag))
+                }
+            }
         }
     }
 
@@ -192,6 +219,7 @@ internal class AndroidVoiceSdkSession(
         // Each reference clears only after successful release, preserving failed cleanup for retry.
         resources.withLock {
         var failed = false
+        try { audio?.stopNative() } catch (_: Exception) { failed = true }
         try { room?.release(); room = null } catch (_: Exception) { failed = true }
         try { localTrack?.dispose(); localTrack = null } catch (_: Exception) { failed = true }
         try { routes?.close(); routes = null } catch (_: Exception) { failed = true }
@@ -213,7 +241,7 @@ internal class AndroidVoiceSdkSession(
             is RoomEvent.Reconnecting -> {
                 // Close native capture across the gap without changing SDK's
                 // saved publication.muted, which selects its republish path.
-                audio?.module?.setMicrophoneMute(true)
+                audio?.muteMicrophone(true)
                 publicationRecovery.reconnecting()
                 remoteEvidence.reconnecting()
                 val announce = {
@@ -247,7 +275,7 @@ internal class AndroidVoiceSdkSession(
             }
             is RoomEvent.TrackUnpublished -> if (event.participant == ownedRoom.localParticipant &&
                 event.publication.kind == Track.Kind.AUDIO && ownedPublication(ownedRoom) == null) {
-                audio?.module?.setMicrophoneMute(true)
+                audio?.muteMicrophone(true)
                 this.event(VoiceSessionEvent.Unpublished(tag))
                 publicationRecovery.unpublished(event.publication.muted)
             }
@@ -263,6 +291,9 @@ internal class AndroidVoiceSdkSession(
 
     private fun reconcileRemoteAudio(ownedRoom: Room) {
         if (closing) return
+        audio?.remoteTracks(ownedRoom.remoteParticipants.values.flatMap { participant ->
+            participant.trackPublications.values.mapNotNull { it.track as? io.livekit.android.room.track.RemoteAudioTrack }
+        })
         val observations = ownedRoom.remoteParticipants.values.flatMap { participant ->
             participant.trackPublications.values.map { publication ->
                 VoiceRemoteAudioObservation(participant.sid.toString(),

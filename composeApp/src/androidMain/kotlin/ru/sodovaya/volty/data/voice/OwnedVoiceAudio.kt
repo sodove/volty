@@ -2,10 +2,8 @@ package ru.sodovaya.volty.data.voice
 
 import android.content.Context
 import android.media.AudioAttributes
-import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.MediaRecorder
-import android.os.Build
 import android.os.SystemClock
 import livekit.org.webrtc.audio.JavaAudioDeviceModule
 import ru.sodovaya.volty.domain.voice.*
@@ -21,30 +19,40 @@ internal class OwnedVoiceAudio(
     private var released = false
     private val evidenceLock = Any()
     private val mediaEvidence = VoiceNativeAudioEvidence(tag)
-    var preferredInputId: Int? = null
+    private val capture = OwnedVoiceCapture(diagnostics, ::captureState, ::fail)
+    val preferredInputId: Int? get() = capture.preferredInputId
+    @Volatile var phoneCapture = false
         private set
+    @Volatile private var playbackMuted = false
+    @Volatile private var sdkRendering = false
+    private val playback = PhoneVoicePlayback(context.applicationContext, context.getSystemService(Context.AUDIO_SERVICE) as AudioManager,
+        diagnostics, ::renderState, { fail(VoiceDiagnosticCode.TRACK_RUNTIME_ERROR) })
     val module: JavaAudioDeviceModule = JavaAudioDeviceModule.builder(context)
+        .setInputSampleRate(48000)
         .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-        .setUseHardwareAcousticEchoCanceler(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-        .setUseHardwareNoiseSuppressor(Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
-        .setSamplesReadyCallback { samples -> diagnostics.addCaptureBytes(samples.data.size) }
-        .setPlaybackSamplesReadyCallback { samples -> diagnostics.addRenderBytes(samples.data.size) }
+        // SDK has no AudioRecord to install hardware effects on; retain WebRTC software processing.
+        .setUseHardwareAcousticEchoCanceler(false)
+        .setUseHardwareNoiseSuppressor(false)
+        .setAudioBufferCallback { buffer, format, channels, rate, _, _ -> capture.fill(buffer, format, channels, rate) }
+        .setPlaybackSamplesReadyCallback { samples -> if (!phoneCapture) diagnostics.addRenderBytes(samples.data.size) }
         .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
             override fun onWebRtcAudioRecordStart() {
-                captureState(true)
+                // Internal SDK recording is disabled; only our AudioRecord proves capture.
             }
             override fun onWebRtcAudioRecordStop() {
-                captureState(false)
+                capture.stop()
             }
         })
         .setAudioTrackStateCallback(object : JavaAudioDeviceModule.AudioTrackStateCallback {
             override fun onWebRtcAudioTrackStart() {
-                renderState(true)
+                sdkRendering = true
+                if (!phoneCapture) renderState(true)
             }
             override fun onWebRtcAudioTrackStop() {
-                renderState(false)
+                sdkRendering = false
+                if (!phoneCapture) renderState(false)
             }
         })
         .setAudioRecordErrorCallback(object : JavaAudioDeviceModule.AudioRecordErrorCallback {
@@ -57,7 +65,33 @@ internal class OwnedVoiceAudio(
             override fun onWebRtcAudioTrackStartError(errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode?, errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_START_ERROR)
             override fun onWebRtcAudioTrackError(errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_RUNTIME_ERROR)
         })
-        .createAudioDeviceModule()
+        .createAudioDeviceModule().also { it.setAudioRecordEnabled(false) }
+
+    fun muteMicrophone(value: Boolean) { capture.mute(value); module.setMicrophoneMute(value) }
+    fun mutePlayback(value: Boolean) { playbackMuted = value; playback.mute(value); module.setSpeakerMute(phoneCapture || value) }
+    fun remoteTracks(tracks: List<io.livekit.android.room.track.RemoteAudioTrack>) = playback.reconcile(tracks)
+    fun playbackAvailable(preference: VoiceAudioPreferences): Boolean =
+        playback.available(preference.input == VoiceInputPreference.PHONE, preference.output)
+
+    fun configurePlayback(preference: VoiceAudioPreferences): VoiceAudioChangeResult {
+        val phone = preference.input == VoiceInputPreference.PHONE
+        // Fence SDK playback before an owned sink can start rendering PHONE PCM.
+        module.setSpeakerMute(true)
+        try {
+            val result = playback.configure(phone, preference.output)
+            if (result == VoiceAudioChangeResult.REQUESTED) {
+                val changed = phone != phoneCapture
+                phoneCapture = phone
+                if (changed && !phone) renderState(sdkRendering)
+            }
+            return result
+        } finally {
+            module.setSpeakerMute(phoneCapture || playbackMuted)
+        }
+    }
+
+    /** Stop owned callbacks before SDK release waits for its capture/RTC threads. */
+    fun stopNative() { capture.close(); playback.close() }
 
     /** Reset and enqueue under the same boundary as native start/stop callbacks. */
     fun reconnecting(announce: () -> Unit) = synchronized(evidenceLock) {
@@ -105,23 +139,10 @@ internal class OwnedVoiceAudio(
         }
     }
 
-    /** A void ADM preference request cannot prove actual capture routing. No null public setter. */
+    /** Request on the owned AudioRecord. Actual routedDevice is checked on every PCM frame. */
     @Synchronized fun requestInput(manager: AudioManager, preference: VoiceInputPreference): VoiceAudioChangeResult {
         if (released) return VoiceAudioChangeResult.STALE
-        if (preference == VoiceInputPreference.AUTO) return if (preferredInputId == null)
-            VoiceAudioChangeResult.REQUESTED else VoiceAudioChangeResult.REQUIRES_RECONNECT
-        val device = manager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
-            when (preference) {
-                VoiceInputPreference.PHONE -> it.type == AudioDeviceInfo.TYPE_BUILTIN_MIC
-                VoiceInputPreference.HEADSET -> isHeadsetInput(it.type)
-                VoiceInputPreference.AUTO -> false
-            }
-        } ?: return VoiceAudioChangeResult.UNAVAILABLE
-        return try {
-            module.setPreferredInputDevice(device)
-            preferredInputId = device.id
-            VoiceAudioChangeResult.REQUESTED
-        } catch (_: Exception) { VoiceAudioChangeResult.FAILED }
+        return try { capture.request(manager, preference) } catch (_: Exception) { VoiceAudioChangeResult.FAILED }
     }
 
     @Synchronized fun close() {
@@ -129,13 +150,10 @@ internal class OwnedVoiceAudio(
         // Never hold evidenceLock through release: native release can join a
         // callback thread which must acquire that lock before it can retire.
         synchronized(evidenceLock) { mediaEvidence.close() }
+        stopNative()
         module.release()
         released = true
     }
     private fun record(code: VoiceDiagnosticCode) = diagnostics.record(SystemClock.elapsedRealtime(), code)
     private fun fail(code: VoiceDiagnosticCode) { record(code); emit(VoiceSessionEvent.EngineFailed(tag)) }
-    private fun isHeadsetInput(type: Int): Boolean = type == AudioDeviceInfo.TYPE_WIRED_HEADSET ||
-        type == AudioDeviceInfo.TYPE_USB_HEADSET ||
-        type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
-        (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && type == AudioDeviceInfo.TYPE_BLE_HEADSET)
 }

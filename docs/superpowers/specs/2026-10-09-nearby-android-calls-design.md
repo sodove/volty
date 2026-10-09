@@ -65,3 +65,6 @@ A controlled call with the receiver minimized must distinguish: no FCM callback,
 - [AudioManager communication device input/output coupling](https://developer.android.com/reference/android/media/AudioManager#setCommunicationDevice(android.media.AudioDeviceInfo))
 - [Self-managed ConnectionService requirements](https://developer.android.com/reference/android/telecom/ConnectionService)
 - [AOSP input routing policy](https://android.googlesource.com/platform/frameworks/av/+/4a2c5fe8ff4bf5d612a0726c992570eafadeea81/services/audiopolicy/enginedefault/src/Engine.cpp)
+
+## Retraction: independent audio takes priority
+On 2026-10-09 the rider clarified that audio need not be presented as a system call and may be separated to preserve quality. The earlier mandatory Telecom routing design is superseded for this implementation. Retain incoming Volty notifications and explicit answer/reject; Phone capture uses an owned AudioRecord and separate media AudioTracks via public remote-track sinks. A2DP output is selected independently, with actual owned-stream routing evidence; Bluetooth audibility and latency still require physical acceptance.

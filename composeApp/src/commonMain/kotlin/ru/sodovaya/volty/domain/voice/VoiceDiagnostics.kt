@@ -55,6 +55,8 @@ data class VoiceDiagnosticSnapshot(
     // These are hints with explicitly separate provenance, not stream observations.
     val communicationDeviceType: Int? = null,
     val recordingDeviceTypes: List<Int> = emptyList(),
+    val ownedCaptureDeviceType: Int? = null,
+    val ownedPlaybackDeviceTypes: List<Int> = emptyList(),
     val audioMode: Int? = null,
     val audioFocus: Int? = null,
     val captureRunning: Boolean? = null,
@@ -84,7 +86,8 @@ fun VoiceDiagnosticSnapshot.formatVoiceDiagnostics(): String = buildString {
     appendLine("generation=${generation.value}")
     appendLine("desired_input=${preferences.input} desired_output=${preferences.output}")
     appendLine("selected_output=$selectedOutput provenance=AUDIO_SWITCH_SELECTION")
-    appendLine("actual_input=UNKNOWN actual_output=UNKNOWN")
+    appendLine("actual_input=${ownedCaptureDeviceType ?: "UNKNOWN"} provenance=OWNED_AUDIO_RECORD actual_output=UNKNOWN")
+    appendLine("owned_playback_device_types=${ownedPlaybackDeviceTypes.joinToString(",")} provenance=OWNED_AUDIO_TRACK")
     appendLine("communication_device_type=${communicationDeviceType ?: "UNKNOWN"} provenance=COMMUNICATION_DEVICE")
     appendLine("recording_device_types=${recordingDeviceTypes.joinToString(",")} provenance=UNCORRELATED_RECORDING_CONFIGURATION")
     appendLine("audio_mode=${audioMode ?: "UNKNOWN"} audio_focus=${audioFocus ?: "UNKNOWN"}")
