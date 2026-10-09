@@ -21,6 +21,9 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -64,6 +67,7 @@ import ru.sodovaya.volty.presentation.settings.SettingsScreen
 import ru.sodovaya.volty.presentation.settings.OfflineRegionDisplayNamePolicy
 import ru.sodovaya.volty.presentation.nearby.VoiceSpacesNearbyScreen
 import ru.sodovaya.volty.presentation.root.nearby.NearbyConversationPanelScreen
+import ru.sodovaya.volty.presentation.root.nearby.nearbyConversationPanelVisible
 import ru.sodovaya.volty.presentation.root.nearby.NearbyIncomingCallScreen
 import ru.sodovaya.volty.presentation.root.nearby.nearbyChannelMarkers
 import ru.sodovaya.volty.presentation.map.PlatformRideMapLayer
@@ -103,6 +107,7 @@ import volty.composeapp.generated.resources.settings_offline_metered_title
 import kotlinx.coroutines.launch
 import org.koin.compose.koinInject
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}) {
     val focusManager = LocalFocusManager.current
@@ -116,6 +121,11 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val active = stackState.active.instance
     val darkTheme = LocalVoltyDarkTheme.current
     val nearby by component.nearby.state.collectAsState()
+    var conversationDetailsVisible by remember { mutableStateOf(false) }
+    val conversationVisible = nearbyConversationPanelVisible(nearby.voice, nearby.sharing)
+    LaunchedEffect(conversationVisible) {
+        if (!conversationVisible) conversationDetailsVisible = false
+    }
     val channelMap = nearby.voice.channelMap
     val markerLabel = stringResource(volty.composeapp.generated.resources.Res.string.nearby_map_participant)
     val channelMarkers = nearbyChannelMarkers(channelMap,markerLabel)
@@ -144,6 +154,10 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     val rideMapVisible = active is RootComponent.Child.Ride &&
         rideAvailable &&
         activeRideState?.style == DashboardStyle.LIGHT
+    LaunchedEffect(rideMapVisible, nearby.voice.pending) {
+        if (rideMapVisible && nearby.voice.pending?.let { it.confirmationRequired && !it.confirmed }==true)
+            conversationDetailsVisible = true
+    }
     val ownFix = (locationState.status as? RideLocationStatus.Available)?.fix
     val freshGpsSpeedKmh = ownFix
         ?.takeIf { navigationState.locationStatus == ru.sodovaya.volty.presentation.navigation.LocationUiStatus.FRESH }
@@ -262,6 +276,7 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
     BoxWithConstraints(Modifier.fillMaxSize()) {
     // Reserve space for the destination and tab bar even on short landscape windows.
     val panelMaximumHeight = maxHeight / 2
+    val detailsMaximumHeight = maxHeight * 0.8f
     Column(modifier = Modifier.fillMaxSize()) {
         Box(modifier = Modifier.weight(1f)) {
             if (mapHost.mounted) {
@@ -308,6 +323,9 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
                         },
                         gpsSpeedKmh = freshGpsSpeedKmh,
                         nearbyMap = channelMap,
+                        nearbyVoice = nearby.voice,
+                        nearbySharing = nearby.sharing,
+                        onOpenConversation = { conversationDetailsVisible = true },
                         navigationState = navigationState,
                         navigationCallbacks = LightNavigationCallbacks(
                             onOpenPlanner = {
@@ -350,7 +368,12 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         }
         Column(Modifier.fillMaxWidth().heightIn(max=panelMaximumHeight).verticalScroll(rememberScrollState())) {
             NearbyIncomingCallScreen(nearby.incoming,component.nearby.incomingActions)
-            NearbyConversationPanelScreen(nearby.voice,nearby.sharing,expanded=false,actions=component.nearby.actions,maxHeight=panelMaximumHeight)
+            // The Light ride already owns a glass pill over its map. An earlier
+            // revision added a second dock that resized the HUD on expansion.
+            if (!rideMapVisible) NearbyConversationPanelScreen(
+                nearby.voice, nearby.sharing, expanded=false, actions=component.nearby.actions,
+                maxHeight=panelMaximumHeight, onOpenDetails={ conversationDetailsVisible = true },
+            )
         }
         // Persistent bottom tab bar — only for main destinations
         BottomTabBar(
@@ -366,6 +389,17 @@ fun RootScreen(component: RootComponent, onOpenLocationSettings: () -> Unit = {}
         )
     }
 
+    if (conversationDetailsVisible && conversationVisible) {
+        ModalBottomSheet(
+            onDismissRequest = { conversationDetailsVisible = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            NearbyConversationPanelScreen(
+                nearby.voice, nearby.sharing, expanded=true, actions=component.nearby.actions,
+                maxHeight=detailsMaximumHeight,
+            )
+        }
+    }
     }
     visibleMeteredApproval?.let { region ->
         AlertDialog(

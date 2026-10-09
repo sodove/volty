@@ -850,7 +850,7 @@
     <string name="nearby_shell_conflict">Данные изменились. Обновите экран и повторите попытку.</string>
     <string name="nearby_shell_rate_limited">Слишком много запросов. Попробуйте позже.</string>
     <string name="nearby_shell_unavailable">Не удалось загрузить данные. Проверьте соединение и повторите попытку.</string>
-    <string name="nearby_panel_transport_connected">Голосовое соединение установлено</string>
+    <string name="nearby_panel_transport_connected">Подключено</string>
     <string name="nearby_panel_reconnecting">Восстанавливаем голосовое соединение…</string>
     <string name="nearby_panel_stopping">Отключаемся…</string>
     <string name="nearby_panel_disconnect">Отключиться</string>
@@ -960,4 +960,18 @@
     <string name="nearby_notifications_hint">Если уведомления отключены, входящие звонки остаются видны в открытом приложении.</string>
     <string name="nearby_notifications_settings">Настройки уведомлений</string>
     <string name="nearby_notifications_launch_failed">Не удалось открыть настройки. Откройте настройки уведомлений Volty в Android.</string>
+    <string name="nearby_panel_participants">Участники</string>
+    <string name="nearby_panel_share_position">Показывать позицию</string>
+    <string name="nearby_panel_duration">Время передачи</string>
+    <string name="nearby_panel_duration_half_hour">30 минут</string>
+    <string name="nearby_panel_duration_two_hours">2 часа</string>
+    <string name="nearby_panel_duration_eight_hours">8 часов</string>
+    <string name="nearby_channels_delete">Удалить канал</string>
+    <string name="nearby_channels_delete_title">Удалить канал «%1$s»?</string>
+    <string name="nearby_channels_delete_warning">Канал будет удалён безвозвратно. Все подключённые участники будут отключены.</string>
+    <string name="nearby_channels_delete_denied">Больше нет прав на удаление этого канала. Обновите сервер.</string>
+    <string name="nearby_channels_delete_conflict">Канал изменился. Обновите сервер и повторите попытку.</string>
+    <string name="nearby_channels_delete_failed">Не удалось подтвердить удаление. Обновите сервер; если канал остался в списке, повторите удаление.</string>
+    <string name="nearby_panel_connected_count">В голосе: %1$d</string>
+    <string name="nearby_channels_deleted">Канал удалён</string>
 </resources>

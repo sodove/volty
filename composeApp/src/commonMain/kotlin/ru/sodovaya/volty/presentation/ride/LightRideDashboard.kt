@@ -1,5 +1,13 @@
 package ru.sodovaya.volty.presentation.ride
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.text.style.TextOverflow
+import ru.sodovaya.volty.presentation.root.nearby.*
+
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -79,6 +87,7 @@ import ru.sodovaya.volty.presentation.navigation.LightNavigationUiMapper
 import volty.composeapp.generated.resources.nearby_channel_active
 import volty.composeapp.generated.resources.nearby_map_positions
 import volty.composeapp.generated.resources.nearby_map_loading
+import volty.composeapp.generated.resources.nearby_panel_connected_count
 import volty.composeapp.generated.resources.nearby_map_open
 import volty.composeapp.generated.resources.Res
 import volty.composeapp.generated.resources.dashboard_light_battery
@@ -175,6 +184,9 @@ internal fun LightRideDashboard(
     rideMaxDutyPercent: Float = 0f,
     gpsSpeedKmh: Float? = null,
     nearbyMap: ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState = ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState(),
+    nearbyVoice: NearbyVoiceView = NearbyVoiceView(),
+    nearbySharing: NearbySharingView = NearbySharingView(),
+    onOpenConversation: () -> Unit = {},
     navigationState: LightNavigationState? = null,
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
@@ -200,6 +212,10 @@ internal fun LightRideDashboard(
     }
     val readouts = LightDashboardMapper.map(displayedTelemetry, state.units)
     val channelRide = lightChannelRideUiState(nearbyMap)
+    val conversationVisible = nearbyConversationPanelVisible(nearbyVoice, nearbySharing)
+    val conversation = nearbyConversationPanel(nearbyVoice, nearbySharing)
+    val conversationRoster = nearbyChannelRosterPanel(nearbyVoice)
+    val conversationStatus = nearbyConversationStatusText(nearbyVoice, nearbySharing)
     val navigationSurface = navigationState?.let { currentState ->
         LightNavigationSurfacePolicy.forPhase(
             LightNavigationUiMapper.map(currentState, state.units).phase,
@@ -207,15 +223,17 @@ internal fun LightRideDashboard(
     } ?: LightNavigationSurface.HIDDEN
     val nearbyPlacement = LightNearbyPlacementPolicy.forSurface(
         navigationSurface = navigationSurface,
-        nearbyActive = channelRide != null,
+        nearbyActive = channelRide != null || conversationVisible,
     )
     val navigationPanelPlacement = LightNavigationPanelPolicy.forSurface(navigationSurface)
-    val navigationNearby = channelRide?.takeIf {
+    val navigationNearby = (channelRide != null || conversationVisible).takeIf { it && (
         nearbyPlacement == LightNearbyPlacement.PLANNER_ROW ||
-            nearbyPlacement == LightNearbyPlacement.GUIDANCE_DOCK
-    }?.let { liveGroup ->
+            nearbyPlacement == LightNearbyPlacement.GUIDANCE_DOCK)
+    }?.let {
         LightNavigationNearby(
-            positionCount = liveGroup.positionCount,
+            positionCount = channelRide?.positionCount,
+            label = nearbyVoice.label.takeIf { it.isNotBlank() },
+            status = conversationStatus.takeIf { conversationVisible },
         )
     }
     val motorTemperatures = remember(state.vehicle?.id) { mutableStateListOf<Float>() }
@@ -327,7 +345,7 @@ internal fun LightRideDashboard(
                         callbacks = navigationCallbacks,
                         units = state.units,
                         nearby = navigationNearby,
-                        onOpenNearby = onOpenNearby,
+                        onOpenNearby = onOpenConversation,
                         modifier = Modifier
                             .fillMaxWidth()
                             .padding(bottom = LightNavigationDockPolicy.guidanceHudGap().dp)
@@ -338,11 +356,19 @@ internal fun LightRideDashboard(
                 Spacer(Modifier.weight(lightDashboardMiddleSpacerWeight()))
             }
 
-            if (nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD) channelRide?.let { liveGroup ->
+            AnimatedVisibility(
+                visible = nearbyPlacement == LightNearbyPlacement.DASHBOARD_CARD,
+                enter = fadeIn() + expandVertically(),
+                exit = fadeOut() + shrinkVertically(),
+            ) {
                 LightChannelRideCard(
-                    state = liveGroup,
-                    mapAvailable = mapLayer != null,
-                    onOpenMap = onOpenGroupMap,
+                    label = nearbyVoice.label.takeIf { it.isNotBlank() }
+                        ?: nearbyVoice.starting?.label ?: nearbyVoice.pending?.label,
+                    status = if (conversationVisible) conversationStatus else
+                        channelRide?.positionCount?.let { stringResource(Res.string.nearby_map_positions, it) }
+                            ?: stringResource(Res.string.nearby_map_loading),
+                    connected = conversationRoster.connected,
+                    onOpenConversation = onOpenConversation,
                 )
             }
 
@@ -389,7 +415,7 @@ internal fun LightRideDashboard(
                     callbacks = navigationCallbacks,
                     units = state.units,
                     nearby = navigationNearby,
-                    onOpenNearby = onOpenNearby,
+                    onOpenNearby = onOpenConversation,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -443,9 +469,10 @@ internal fun LightRideDashboard(
 
 @Composable
 private fun LightChannelRideCard(
-    state: LightChannelRideUiState,
-    mapAvailable: Boolean,
-    onOpenMap: () -> Unit,
+    label: String?,
+    status: String,
+    connected: Int?,
+    onOpenConversation: () -> Unit,
 ) {
     val palette = LocalLightHudPalette.current
     val shape = RoundedCornerShape(18.dp)
@@ -455,7 +482,7 @@ private fun LightChannelRideCard(
             .clip(shape)
             .background(palette.surfaceStrong)
             .border(1.dp, palette.green.copy(alpha = 0.35f), shape)
-            .clickable(onClick = onOpenMap)
+            .clickable(onClick = onOpenConversation)
             .minimumInteractiveComponentSize()
             .padding(horizontal = 10.dp, vertical = 7.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -480,24 +507,23 @@ private fun LightChannelRideCard(
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             Text(
-                text = stringResource(Res.string.nearby_channel_active),
+                text = label ?: stringResource(Res.string.nearby_channel_active),
                 color = palette.text,
-                fontSize = 11.sp,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             Text(
-                text = if (mapAvailable) {
-                    state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading)
-                } else {
-                    stringResource(Res.string.nearby_map_open)
-                },
+                text = status,
                 color = palette.muted,
-                fontSize = 8.sp,
+                fontSize = 12.sp,
                 maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
         }
         Column(horizontalAlignment = Alignment.End) {
+            connected?.let { Text(stringResource(Res.string.nearby_panel_connected_count, it), color = palette.green, fontSize = 12.sp) }
             Text("›", color = palette.muted, fontSize = 20.sp, lineHeight = 18.sp)
         }
     }

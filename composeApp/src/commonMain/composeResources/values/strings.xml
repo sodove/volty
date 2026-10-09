@@ -852,7 +852,7 @@
     <string name="nearby_shell_conflict">The data changed. Refresh and try again.</string>
     <string name="nearby_shell_rate_limited">Too many requests. Try again later.</string>
     <string name="nearby_shell_unavailable">Could not load the data. Check your connection and try again.</string>
-    <string name="nearby_panel_transport_connected">Voice connection established</string>
+    <string name="nearby_panel_transport_connected">Connected</string>
     <string name="nearby_panel_reconnecting">Reconnecting voice…</string>
     <string name="nearby_panel_stopping">Disconnecting…</string>
     <string name="nearby_panel_disconnect">Disconnect</string>
@@ -962,4 +962,18 @@
     <string name="nearby_notifications_hint">When notifications are disabled, incoming calls remain visible in the open app.</string>
     <string name="nearby_notifications_settings">Notification settings</string>
     <string name="nearby_notifications_launch_failed">Could not open settings. Open Volty notification settings in Android.</string>
+    <string name="nearby_panel_participants">Participants</string>
+    <string name="nearby_panel_share_position">Share position</string>
+    <string name="nearby_panel_duration">Duration</string>
+    <string name="nearby_panel_duration_half_hour">30 minutes</string>
+    <string name="nearby_panel_duration_two_hours">2 hours</string>
+    <string name="nearby_panel_duration_eight_hours">8 hours</string>
+    <string name="nearby_channels_delete">Delete channel</string>
+    <string name="nearby_channels_delete_title">Delete channel “%1$s”?</string>
+    <string name="nearby_channels_delete_warning">The channel will be permanently deleted. Everyone connected to it will be disconnected.</string>
+    <string name="nearby_channels_delete_denied">You no longer have permission to delete this channel. Refresh the server.</string>
+    <string name="nearby_channels_delete_conflict">The channel changed. Refresh the server and try again.</string>
+    <string name="nearby_channels_delete_failed">Could not confirm deletion. Refresh the server; if the channel is still listed, try deleting it again.</string>
+    <string name="nearby_panel_connected_count">In voice: %1$d</string>
+    <string name="nearby_channels_deleted">Channel deleted</string>
 </resources>

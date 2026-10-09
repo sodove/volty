@@ -32,6 +32,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                 if (account == null || !current(account)) return@collectLatest
                 var consumer: NearbyCommunityAccount? = null
                 var presenter: ServerWorkspacePresenter? = null
+                var deletion: ChannelDeletionWorkspace? = null
                 var creation: ChannelCreationWorkspace? = null
                 var invitations: InvitationCreationWorkspace? = null
                 var acceptance:InvitationAcceptanceWorkspace?=null
@@ -44,13 +45,13 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     if (!current(account)) return@collectLatest
                     val workspace = consumer.workspace(scope, nextId)
                     creation = consumer.channelCreation(scope, workspace, nextId)
+                    deletion = consumer.channelDeletion(scope, workspace, nextId)
                     invitations = consumer.invitationCreation(scope, workspace, nextId)
                     acceptance=consumer.invitationAcceptance(scope,workspace,nextId)
                     management=consumer.invitationManagement(scope,workspace)
                     departure=consumer.ownerDeparture(scope,workspace)
-                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value, creation, invitations, acceptance,management,departure) { channel ->
-                        if (current(account) && selected?.account === account) connect(account, channel)
-                    }
+                    presenter = ServerWorkspacePresenter(scope, workspace, account.userId.value, creation, invitations, acceptance,management,departure,
+                        connectChannel={ channel -> if (current(account) && selected?.account === account) connect(account, channel) }, deletion=deletion)
                     binding = Binding(account, consumer, presenter)
                     selected = binding
                     output.value = ServerWorkspaceBindingState(presenter)
@@ -75,6 +76,7 @@ internal class ServerWorkspaceAccountBinding(parent: CoroutineScope,
                     }
                     withContext(NonCancellable) {
                         presenter?.close()
+                        deletion?.close()
                         creation?.close()
                         invitations?.close()
                         acceptance?.close()

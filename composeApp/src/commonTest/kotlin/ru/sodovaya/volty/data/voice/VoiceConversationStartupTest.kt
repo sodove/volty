@@ -1361,6 +1361,26 @@ class VoiceConversationStartupTest {
         }.filterNotNull().first()
     }
 
+    @Test fun rootSharingActionPreservesChosenDurationUntilLocationPermission() = runTest {
+        for (ttl in ChannelSharingTtl.entries) {
+            val f=Fixture(this);f.useBoundRuntime=true;val trip=SharingFixture(f)
+            val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
+            val voice=voiceController(f,guard);val sharing=sharingController(f,trip,guard)
+            val ui=SupervisorJob(backgroundScope.coroutineContext[Job]);val boundary=launchBoundary(f,ui)
+            val root=NearbyRootPresenter(CoroutineScope(backgroundScope.coroutineContext+ui),voice,sharing)
+            try {
+                val account=f.login();root.connectChannel(account,channel,"Channel");runCurrent()
+                val request=assertNotNull(voice.state.value.pending).id
+                voice.begin(request,true,boundary);runCurrent()
+                val (tag,emit)=f.emitters.single();emit(VoiceSessionEvent.Published(tag));runCurrent()
+                root.actions.startTrip(VoiceOperationId(request),ttl);runCurrent()
+                val issued=assertNotNull(sharing.state.value.pending)
+                assertEquals(VoiceOperationId(request),issued.operation);assertEquals(ttl,issued.ttl)
+                assertTrue(trip.source.issued.isEmpty(),"Location capture must still wait for its separate permission")
+            } finally {root.close();boundary.close();ui.cancel();sharing.close();voice.close();f.close()}
+        }
+    }
+
     @Test fun rootPresentationDisposalRejectsOldActionsAndPreservesProcessConversation() = runTest {
         val f=Fixture(this,withAudience=true,withChannelRoster=true);f.useBoundRuntime=true;f.channelRosterName="Саша";val trip=SharingFixture(f)
         val guard=NearbySharingSwitchGuard(f.repository,f.owner,f.dispatcher)
@@ -1390,7 +1410,7 @@ class VoiceConversationStartupTest {
             assertEquals(chosen,nearbyConversationPanel(root.state.value.voice).audio?.pending)
             val mutesBefore=f.mutes.toList();val locationBefore=trip.source.issued.toList()
             val old=root.actions;root.close();runCurrent();assertEquals(NearbyRootView(),root.state.value)
-            old.disconnect(operation);old.mute(operation,true);old.startTrip(operation)
+            old.disconnect(operation);old.mute(operation,true);old.startTrip(operation,ChannelSharingTtl.TWO_HOURS)
             old.configureAudio(originalAudio,chosen.copy(input=VoiceInputPreference.HEADSET));runCurrent()
             assertEquals(listOf(chosen),f.audioPairs)
             audioRelease.complete(Unit);runCurrent()

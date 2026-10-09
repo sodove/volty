@@ -15,6 +15,10 @@ class ServerWorkspacePresenterTest {
     private inner class Fixture(test: TestScope) {
         val account=SupervisorJob(test.coroutineContext[Job]);val screen=SupervisorJob(test.coroutineContext[Job])
         val scope=CoroutineScope(test.coroutineContext+screen)
+        val deletedChannels=mutableListOf<Triple<String,String,String>>()
+        var channelDeletionReply:suspend (String,String,String)->ChannelDeletionCommandResult={community,child,op ->
+            ChannelDeletionCommandResult.Deleted(ChannelDeletionReceipt(op,community,child,2,false))
+        }
         val issued=mutableListOf<String>();val connected=mutableListOf<String>()
         val catalogAfter=mutableListOf<String?>()
         val inviteRequests=mutableListOf<InvitationCreationDraft>()
@@ -58,7 +62,9 @@ class ServerWorkspacePresenterTest {
             override suspend fun create(community: String,channel: String,name: String): ChannelCreationCommandResult {
                 issued+="channel:$community:$channel:$name";return channelReply(community,channel,name)
             }
-            override suspend fun delete(community: String,channel: String,operation: String): ChannelDeletionCommandResult = error("unexpected channel deletion")
+            override suspend fun delete(community: String,channel: String,operation: String): ChannelDeletionCommandResult {
+                deletedChannels+=Triple(community,channel,operation);return channelDeletionReply(community,channel,operation)
+            }
             override suspend fun memberships(after: String?,limit: Int): CommunityResult<List<CommunitySummary>> {issued+="mine";return CommunityResult.Ready(listOf(summary))}
             override suspend fun catalog(query: String,after: String?,limit: Int): CommunityResult<List<CommunitySummary>> {
                 issued+="catalog:$query";catalogAfter+=after;return CommunityResult.Ready(catalogPage)
@@ -87,7 +93,8 @@ class ServerWorkspacePresenterTest {
             }
         }
         val departure=OwnerDepartureWorkspace(scope,account,server,workspace,members)
-        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,management,departure,connected::add)
+        val deletion=ChannelDeletionWorkspace(scope,account,server,workspace,ports) {"00000000-0000-0000-0000-000000000006"}
+        val presenter=ServerWorkspacePresenter(scope,workspace,server,creation,invites,acceptance,management,departure,connected::add,deletion)
         suspend fun close() {presenter.close();screen.cancel();account.cancel()}
     }
     @Test fun ownerLeaveChoosesActualNamedMemberThenConfirmsDepartureWithoutVoice()=runTest {
@@ -523,4 +530,39 @@ class ServerWorkspacePresenterTest {
             assertFalse(f.presenter.state.value.browser.catalog.hasMore)
         } finally {f.close();runCurrent()}
     }
+    @Test fun channelDeletionRequiresNamedConfirmationAndIssuesExactOriginalTarget()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent()
+            f.presenter.requestChannelDeletion(channel);runCurrent()
+            val target=assertNotNull(f.presenter.state.value.channelRemoval)
+            assertEquals(server,target.community);assertEquals(channel,target.channel);assertEquals("Общий",target.name)
+            assertTrue(f.deletedChannels.isEmpty())
+            f.presenter.confirmChannelDeletion();runCurrent()
+            assertEquals(listOf(Triple(server,channel,"00000000-0000-0000-0000-000000000006")),f.deletedChannels)
+            assertEquals(channel,f.presenter.state.value.channelDeletion.deleted?.channelId)
+            assertNull(f.presenter.state.value.channelRemoval);assertTrue(f.connected.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun dismissedChannelConfirmationCannotIssueAlreadyQueuedDeletion()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent();f.presenter.requestChannelDeletion(channel);runCurrent()
+            f.presenter.confirmChannelDeletion();f.presenter.dismissChannelDeletion();runCurrent()
+            assertNull(f.presenter.state.value.channelRemoval);assertTrue(f.deletedChannels.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+    @Test fun channelDeletionRejectsMissingChannelAndOwnershipLossBeforeConfirmation()=runTest {
+        val f=Fixture(this)
+        try {
+            f.presenter.openServer(server);runCurrent()
+            f.presenter.requestChannelDeletion("00000000-0000-0000-0000-000000000099");runCurrent()
+            assertNull(f.presenter.state.value.channelRemoval)
+            f.presenter.requestChannelDeletion(channel);runCurrent();assertNotNull(f.presenter.state.value.channelRemoval)
+            f.reply={CommunityResult.Ready(details.copy(ownerId=channel))}
+            f.presenter.refresh();runCurrent();f.presenter.confirmChannelDeletion();runCurrent()
+            assertNull(f.presenter.state.value.channelRemoval);assertTrue(f.deletedChannels.isEmpty())
+        } finally {f.close();runCurrent()}
+    }
+
 }

@@ -169,6 +169,8 @@ data class LightNavigationCallbacks(
 
 data class LightNavigationNearby(
     val positionCount: Int?,
+    val label: String? = null,
+    val status: String? = null,
 )
 
 private data class LightNavigationGlass(
@@ -878,15 +880,15 @@ private fun NavigationNearbyDock(state: LightNavigationNearby, onOpenNearby: () 
     ) {
         Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan, modifier = Modifier.size(17.dp))
         Column(Modifier.weight(1f)) {
-            Text(stringResource(Res.string.nearby_channel_active), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1)
+            Text(state.label ?: stringResource(Res.string.nearby_channel_active), fontSize = 11.sp, fontWeight = FontWeight.SemiBold, maxLines = 1,
+                overflow = TextOverflow.Ellipsis)
             Text(
-                state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
+                state.status ?: state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 fontSize = 11.sp,
                 maxLines = 1,
             )
         }
-        Text(state.positionCount?.toString().orEmpty(), color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 11.sp)
         Text("›", color = MaterialTheme.colorScheme.onSurfaceVariant, fontSize = 20.sp, lineHeight = 18.sp)
     }
 }
@@ -905,7 +907,7 @@ private fun NavigationNearbySummary(state: LightNavigationNearby, onOpenNearby: 
     ) {
         Icon(Icons.Default.Groups, contentDescription = null, tint = palette.cyan)
         Text(
-            state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
+            state.label ?: state.positionCount?.let {stringResource(Res.string.nearby_map_positions,it)} ?: stringResource(Res.string.nearby_map_loading),
             color = palette.cyan,
             fontSize = 11.sp,
             fontWeight = FontWeight.SemiBold,

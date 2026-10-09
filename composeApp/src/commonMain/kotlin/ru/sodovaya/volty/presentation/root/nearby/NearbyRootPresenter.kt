@@ -42,7 +42,7 @@ internal class NearbyRootPresenter(parent: CoroutineScope, private val voice: Ne
         mute = { operation, value -> if (enabled()) voice.setMuted(operation,value) },
         deafen = { operation, value -> if (enabled()) voice.setDeafened(operation,value) },
         configureAudio = { original, preferences -> if(enabled()) voice.configureAudio(original,preferences) },
-        startTrip = { if (enabled()) sharing.request(it,ChannelSharingMode.LOCATION,ChannelSharingTtl.HALF_HOUR) },
+        startTrip = { operation, ttl -> if (enabled()) sharing.request(operation,ChannelSharingMode.LOCATION,ttl) },
         hideTrip = { if (enabled()) sharing.hide(it.operation,it.generation) },
         retryTripCleanup = { if (enabled()) sharing.retryCleanup(it.operation,it.generation) },
         confirmSwitch = { if (enabled()) voice.confirmSwitch(it) },

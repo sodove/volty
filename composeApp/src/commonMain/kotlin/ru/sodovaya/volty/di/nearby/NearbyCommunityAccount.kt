@@ -101,6 +101,10 @@ class NearbyCommunityAccount private constructor(
                         nextId: () -> String) =
         ru.sodovaya.volty.presentation.nearby.ChannelCreationWorkspace(screen, workspaceLifetime, actorId, workspace, api.channels, nextId)
 
+    fun channelDeletion(screen: CoroutineScope, workspace: ru.sodovaya.volty.presentation.nearby.CommunityWorkspace,
+                        nextId: () -> String) =
+        ru.sodovaya.volty.presentation.nearby.ChannelDeletionWorkspace(screen, workspaceLifetime, actorId, workspace, api.channels, nextId)
+
     fun invitationCreation(screen: CoroutineScope, workspace: ru.sodovaya.volty.presentation.nearby.CommunityWorkspace,
                            nextId: () -> String) =
         ru.sodovaya.volty.presentation.nearby.InvitationCreationWorkspace(screen, workspaceLifetime, actorId, workspace, invitations, nextId)

@@ -135,6 +135,9 @@ fun RideDashboardScreen(
     onRecenterMap: () -> Unit = {},
     gpsSpeedKmh: Float? = null,
     nearbyMap: ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState = ru.sodovaya.volty.presentation.root.nearby.NearbyChannelMapState(),
+    nearbyVoice: ru.sodovaya.volty.presentation.root.nearby.NearbyVoiceView = ru.sodovaya.volty.presentation.root.nearby.NearbyVoiceView(),
+    nearbySharing: ru.sodovaya.volty.presentation.root.nearby.NearbySharingView = ru.sodovaya.volty.presentation.root.nearby.NearbySharingView(),
+    onOpenConversation: () -> Unit = {},
     navigationState: LightNavigationState? = null,
     navigationCallbacks: LightNavigationCallbacks? = null,
 ) {
@@ -323,6 +326,9 @@ fun RideDashboardScreen(
                     rideMaxDutyPercent = sessionMaxDutyPercent,
                     gpsSpeedKmh = gpsSpeedKmh,
                     nearbyMap = nearbyMap,
+                    nearbyVoice = nearbyVoice,
+                    nearbySharing = nearbySharing,
+                    onOpenConversation = onOpenConversation,
                     navigationState = navigationState,
                     navigationCallbacks = navigationCallbacks,
                 )

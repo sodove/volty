@@ -4,6 +4,14 @@ import ru.sodovaya.volty.domain.voice.VoiceOperationId
 import ru.sodovaya.volty.domain.voice.VoicePhase
 
 enum class NearbyPanelConnection { HIDDEN, CONNECTING, CONNECTED, RECONNECTING, STOPPING, FAILED }
+
+/** Keep cancellation, permission errors and cleanup reachable even before/after media exists. */
+internal fun nearbyConversationPanelVisible(voice: NearbyVoiceView, sharing: NearbySharingView): Boolean {
+    val panel = nearbyConversationPanel(voice, sharing)
+    return panel.connection != NearbyPanelConnection.HIDDEN || voice.starting != null || voice.pending != null ||
+        sharing.pending != null || panel.localCleanupPending || panel.serverConfirmationPending ||
+        voice.error != null || sharing.error != null
+}
 data class NearbyTripAction(val operation: VoiceOperationId, val generation: String)
 data class NearbyConversationPanelView(
     val connection: NearbyPanelConnection = NearbyPanelConnection.HIDDEN,

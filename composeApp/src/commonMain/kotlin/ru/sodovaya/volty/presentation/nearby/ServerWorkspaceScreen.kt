@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
@@ -24,7 +25,7 @@ import volty.composeapp.generated.resources.*
 @Composable
 fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifier = Modifier) {
     val state by presenter.state.collectAsState()
-    val enabled = !state.commands.busy && state.actorId != null
+    val enabled = !state.commands.busy && !state.channelDeletion.busy && state.actorId != null
     val mutationEnabled = enabled && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking
         Column(modifier.fillMaxSize().padding(horizontal=16.dp),verticalArrangement=Arrangement.spacedBy(8.dp)) {
             if(state.section==ServerWorkspaceSection.MY_SERVERS) {
@@ -50,19 +51,33 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
             }
             state.commands.error?.let { Text(stringResource(it.workspaceMessage()),color=MaterialTheme.colorScheme.error) }
             if(state.commands.cleanupPending) Text(stringResource(Res.string.nearby_servers_cleanup_pending))
-            if(state.commands.busy || state.channelCreation.busy || state.invitations.busy || state.acceptance.busy || state.invitationManagement.revoking) LinearProgressIndicator(Modifier.fillMaxWidth())
+            if(state.commands.busy || state.channelDeletion.busy || state.channelCreation.busy || state.invitations.busy || state.acceptance.busy || state.invitationManagement.revoking) LinearProgressIndicator(Modifier.fillMaxWidth())
             BoxWithConstraints(Modifier.weight(1f).fillMaxWidth()) {
+                Crossfade(state.section, label="serverSection") { section ->
                 when {
-                    state.section == ServerWorkspaceSection.CREATE -> ServerCreationForm(state,presenter)
-                    state.section == ServerWorkspaceSection.SERVER && maxWidth>=720.dp -> Row(horizontalArrangement=Arrangement.spacedBy(20.dp)) {
+                    section == ServerWorkspaceSection.CREATE -> ServerCreationForm(state,presenter)
+                    section == ServerWorkspaceSection.SERVER && maxWidth>=720.dp -> Row(horizontalArrangement=Arrangement.spacedBy(20.dp)) {
                         ServerListPane(state,presenter,state.origin==ServerWorkspaceSection.CATALOG,Modifier.width(260.dp))
                         ServerDetailsPane(state,presenter,Modifier.weight(1f))
                     }
-                    state.section == ServerWorkspaceSection.SERVER -> ServerDetailsPane(state,presenter,Modifier.fillMaxWidth())
-                    else -> ServerListPane(state,presenter,state.section==ServerWorkspaceSection.CATALOG,Modifier.fillMaxWidth())
+                    section == ServerWorkspaceSection.SERVER -> ServerDetailsPane(state,presenter,Modifier.fillMaxWidth())
+                    else -> ServerListPane(state,presenter,section==ServerWorkspaceSection.CATALOG,Modifier.fillMaxWidth())
+                }
                 }
             }
     }
+    val channelRemoval=state.channelRemoval
+    if(channelRemoval!=null) AlertDialog(
+        onDismissRequest=presenter::dismissChannelDeletion,
+        title={Text(stringResource(Res.string.nearby_channels_delete_title,channelRemoval.name))},
+        text={Text(stringResource(Res.string.nearby_channels_delete_warning))},
+        confirmButton={TextButton(onClick=presenter::confirmChannelDeletion,enabled=mutationEnabled) {
+            Text(stringResource(Res.string.nearby_channels_delete),color=MaterialTheme.colorScheme.error)
+        }},
+        dismissButton={TextButton(onClick=presenter::dismissChannelDeletion,enabled=!state.channelDeletion.busy) {
+            Text(stringResource(Res.string.nearby_cancel))
+        }},
+    )
     val confirmation=state.commands.confirmation
     val target=state.browser.detail?.takeIf {it.community.id==confirmation?.community}
     if(confirmation!=null && target!=null && state.ownerDepartureCommunity==null) AlertDialog(
@@ -89,7 +104,7 @@ fun ServerWorkspaceScreen(presenter: ServerWorkspacePresenter, modifier: Modifie
 @Composable
 private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter,catalog: Boolean,modifier: Modifier) {
     val page=if(catalog) state.browser.catalog else state.browser.memberships
-    val enabled=!state.commands.busy && state.actorId!=null
+    val enabled=!state.commands.busy && !state.channelDeletion.busy && state.actorId!=null
     LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(4.dp),contentPadding=PaddingValues(bottom=12.dp)) {
         if(catalog) item {
             OutlinedTextField(value=state.query,onValueChange=presenter::setQuery,enabled=enabled,singleLine=true,
@@ -137,9 +152,18 @@ private fun ServerListPane(state: ServerWorkspaceUiState,presenter: ServerWorksp
 @Composable
 private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWorkspacePresenter,modifier: Modifier) {
     val browser=state.browser
-    val enabled=!state.commands.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking && state.actorId!=null
+    val enabled=!state.commands.busy && !state.channelDeletion.busy && !state.channelCreation.busy && !state.invitations.busy && !state.acceptance.busy && !state.invitationManagement.revoking && state.actorId!=null
     var menuExpanded by remember(browser.selectedCommunity) {mutableStateOf(false)}
     LazyColumn(modifier.fillMaxHeight(),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+        if(state.channelDeletion.community==browser.selectedCommunity) {
+            state.channelDeletion.error?.let { failure -> item {
+                Text(stringResource(failure.channelDeletionMessage()),color=MaterialTheme.colorScheme.error)
+            } }
+            if(state.channelDeletion.deleted?.cleanupPending==true) item {
+                // The deletion receipt proves deletion; cleanupPending was a snapshot, not live status.
+                Text(stringResource(Res.string.nearby_channels_deleted),style=MaterialTheme.typography.bodySmall)
+            }
+        }
         if(browser.detailLoading) item {LinearProgressIndicator(Modifier.fillMaxWidth())}
         if(browser.detailError!=null) item {
             Text(stringResource(Res.string.nearby_servers_read_failed),color=MaterialTheme.colorScheme.error)
@@ -166,7 +190,7 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
                                 onClick={menuExpanded=false;presenter.refresh()})
                             if(detail.ownerId==state.actorId) {
                                 DropdownMenuItem(text={Text(stringResource(Res.string.nearby_invitations_manage))},
-                                    enabled=!state.commands.busy && state.actorId!=null && !browser.detailLoading && browser.detailError==null,
+                                    enabled=!state.commands.busy && !state.channelDeletion.busy && state.actorId!=null && !browser.detailLoading && browser.detailError==null,
                                     onClick={menuExpanded=false;presenter.openInvitationManagement()})
                                 DropdownMenuItem(text={Text(stringResource(Res.string.nearby_invitations_create))},
                                     enabled=enabled && !browser.detailLoading && browser.detailError==null,
@@ -194,13 +218,29 @@ private fun ServerDetailsPane(state: ServerWorkspaceUiState,presenter: ServerWor
             items(detail.channels,key={it.id}) {channel ->
                 OutlinedCard(Modifier.fillMaxWidth()) {
                     Row(Modifier.padding(12.dp),horizontalArrangement=Arrangement.spacedBy(8.dp),verticalAlignment=androidx.compose.ui.Alignment.CenterVertically) {
+                        var channelMenu by remember(channel.id) { mutableStateOf(false) }
                         Text(channel.name,Modifier.weight(1f),maxLines=2,overflow=TextOverflow.Ellipsis)
                         OutlinedButton(onClick={presenter.connect(channel.id)},enabled=enabled && !browser.detailLoading) {
                             Text(stringResource(Res.string.nearby_servers_connect))
+                        }
+                        if(detail.ownerId==state.actorId) Box {
+                            IconButton(onClick={channelMenu=true},enabled=enabled && !browser.detailLoading && browser.detailError==null) {
+                                Icon(Icons.Default.MoreVert,contentDescription=stringResource(Res.string.nearby_panel_more_controls))
+                            }
+                            DropdownMenu(expanded=channelMenu,onDismissRequest={channelMenu=false}) {
+                                DropdownMenuItem(text={Text(stringResource(Res.string.nearby_channels_delete),color=MaterialTheme.colorScheme.error)},
+                                    onClick={channelMenu=false;presenter.requestChannelDeletion(channel.id)},enabled=enabled)
+                            }
                         }
                     }
                 }
             }
         }
     }
+}
+
+private fun ChannelCommandFailure.channelDeletionMessage() = when(this) {
+    ChannelCommandFailure.ACCESS_DENIED, ChannelCommandFailure.UNAUTHORIZED -> Res.string.nearby_channels_delete_denied
+    ChannelCommandFailure.CONFLICT -> Res.string.nearby_channels_delete_conflict
+    else -> Res.string.nearby_channels_delete_failed
 }

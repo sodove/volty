@@ -329,7 +329,10 @@ class OsmNavigationRepositoryTest {
     @Test
     fun routes_aggregate_primary_and_fallback_routes_in_primary_first_order() = runTest {
         val requests = mutableListOf<HttpRequestData>()
-        val repository = OsmNavigationRepository(HttpClient(MockEngine { request ->
+        val repository = OsmNavigationRepository(HttpClient(MockEngine) { engine {
+            // The earlier default dispatcher let virtual timeout win before HTTP handlers ran.
+            dispatcher = StandardTestDispatcher(testScheduler)
+            addHandler { request ->
             requests += request
             val response = if (request.url.host == "routing.openstreetmap.de") {
                 osrmResponse(osrmRoute(1200.0, 321.0, 60.61, 56.81, "primary"))
@@ -340,7 +343,8 @@ class OsmNavigationRepositoryTest {
                 )
             }
             respond(response, headers = jsonHeaders())
-        }))
+            }
+        } })
 
         val result = repository.routes(testRequest())
 

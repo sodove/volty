@@ -5,16 +5,18 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emptyFlow
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.test.StandardTestDispatcher
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
-import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.domain.social.FriendRequest
 import ru.sodovaya.volty.domain.social.FriendSummary
@@ -241,14 +243,20 @@ class DefaultSocialRepositoryTest {
             refreshedCredentials = SessionCredentials("fresh", "fresh-refresh", Long.MAX_VALUE),
         )
         val credentials = FakeCredentials(SocialCredentials("stale", "refresh", Long.MAX_VALUE))
-        val repository = DefaultSocialRepository(transport, credentials)
+        val repositoryJob = SupervisorJob()
+        val repositoryScope = CoroutineScope(StandardTestDispatcher(testScheduler) + repositoryJob)
+        val repository = DefaultSocialRepository(transport, credentials, repositoryScope)
 
-        withTimeout(2_000L) {
-            while (repository.session.value !is SocialSession.Authenticated) delay(10L)
+        try {
+            runCurrent()
+
+            assertTrue(repository.session.value is SocialSession.Authenticated)
+            assertEquals(1, transport.refreshCalls)
+            assertEquals(SocialCredentials("fresh", "fresh-refresh", Long.MAX_VALUE), credentials.value)
+            assertEquals(listOf("stale", "fresh"), transport.profileTokens)
+        } finally {
+            repositoryJob.cancel()
         }
-
-        assertEquals(SocialCredentials("fresh", "fresh-refresh", Long.MAX_VALUE), credentials.value)
-        assertEquals(listOf("stale", "fresh"), transport.profileTokens)
     }
 
     @Test

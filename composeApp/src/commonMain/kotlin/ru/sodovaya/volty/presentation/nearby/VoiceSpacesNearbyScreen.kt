@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.presentation.nearby
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
@@ -54,13 +56,14 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                 Tab(selected=state.section==NearbyShellSection.FRIENDS,onClick=component::openFriends,
                     text={Text(stringResource(Res.string.nearby_friends_tab))})
             }
-            when(state.section) {
-                NearbyShellSection.PROFILE -> NearbyProfileForm(state,component,Modifier.weight(1f))
-                NearbyShellSection.FRIENDS -> NearbyFriendsView(state,component,Modifier.weight(1f))
+            Crossfade(state.section, modifier=Modifier.weight(1f), animationSpec=tween(220), label="nearbyPage") { section ->
+            when(section) {
+                NearbyShellSection.PROFILE -> NearbyProfileForm(state,component,Modifier.fillMaxSize())
+                NearbyShellSection.FRIENDS -> NearbyFriendsView(state,component,Modifier.fillMaxSize())
                 NearbyShellSection.SERVERS -> {
                     val presenter=servers.presenter
                     when {
-                        presenter!=null -> ServerWorkspaceScreen(presenter,Modifier.weight(1f))
+                        presenter!=null -> ServerWorkspaceScreen(presenter,Modifier.fillMaxSize())
                         servers.failed -> Column(Modifier.padding(16.dp)) {
                             Text(stringResource(Res.string.nearby_shell_unavailable))
                             Button(onClick=component::retryServers) {Text(stringResource(Res.string.nearby_retry))}
@@ -68,6 +71,7 @@ fun VoiceSpacesNearbyScreen(component: DefaultVoiceSpacesNearbyComponent,modifie
                         else -> LinearProgressIndicator(Modifier.fillMaxWidth())
                     }
                 }
+            }
             }
         }
     }

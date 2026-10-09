@@ -7,6 +7,8 @@ import ru.sodovaya.volty.domain.nearby.community.*
 enum class ServerWorkspaceSection { MY_SERVERS, CATALOG, CREATE, SERVER }
 data class ServerCreationDraft(val name: String = "", val description: String = "",
     val visibility: CommunityVisibility = CommunityVisibility.PRIVATE)
+data class ChannelRemovalTarget(val community: String, val channel: String, val name: String, val version: Long)
+
 data class ChannelCreationForm(val visible: Boolean = false, val community: String? = null, val name: String = "")
 data class InvitationCreationForm(val visible:Boolean=false,val community:String?=null,val ttlMillis:Long=86_400_000L,
     val maxUses:String="10",val submitted:Boolean=false)
@@ -28,6 +30,8 @@ data class ServerWorkspaceUiState(
     val invitationManagement:InvitationManagementState=InvitationManagementState(),
     val ownerDepartureCommunity:String?=null,
     val ownerDeparture:OwnerDepartureState=OwnerDepartureState(),
+    val channelDeletion: ChannelDeletionState = ChannelDeletionState(),
+    val channelRemoval: ChannelRemovalTarget? = null,
 )
 
 /** Screen projection/commands; connecting is delegated to the root conversation owner. */
@@ -36,7 +40,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
     private val invitations: InvitationCreationWorkspace, private val acceptance:InvitationAcceptanceWorkspace,
     private val management:InvitationManagementWorkspace,
     private val departure:OwnerDepartureWorkspace,
-    private val connectChannel: (String) -> Unit) {
+    private val connectChannel: (String) -> Unit,
+    private val deletion: ChannelDeletionWorkspace? = null) {
     init { invitationDraftId(actorId);require(parent.coroutineContext[Job]?.isActive == true && workspace.active) }
     private val lifetime = SupervisorJob(parent.coroutineContext[Job])
     private val scope = CoroutineScope(parent.coroutineContext + lifetime)
@@ -45,7 +50,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         val query: String = "", val draft: ServerCreationDraft = ServerCreationDraft(),
         val channel: ChannelCreationForm = ChannelCreationForm(),val invitation:InvitationCreationForm=InvitationCreationForm(),
         val acceptance:InvitationAcceptanceForm=InvitationAcceptanceForm(),val managementCommunity:String?=null,
-        val departureCommunity:String?=null)
+        val departureCommunity:String?=null, val channelRemoval:ChannelRemovalTarget?=null)
+    private var channelRemovalVersion=0L
     private var managementVersion=0L
     private var departureVersion=0L
     private val form = MutableStateFlow(Form())
@@ -64,6 +70,8 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
                 val lostAcceptance=form.value.acceptance.visible && form.value.acceptance.originCommunity!=selected
                 form.update { current ->
                     val next = current.copy(
+                        channelRemoval=current.channelRemoval?.takeIf { it.community==selected && owner &&
+                            workspace.browser.state.value.detail?.channels?.any { channel -> channel.id==it.channel }==true },
                         channel=if(current.channel.community!=selected || !owner) ChannelCreationForm() else current.channel,
                         invitation=if(current.invitation.community!=selected || !owner) InvitationCreationForm() else current.invitation,
                         acceptance=if(lostAcceptance) InvitationAcceptanceForm() else current.acceptance,
@@ -80,13 +88,15 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
             combine(form, workspace.browser.state, workspace.state, creation.state, invitations.state) { form, browser, commands, channel, invite ->
                 ServerWorkspaceUiState(actorId,form.section,form.query,form.draft,browser,commands,form.returnTo,form.channel,channel,form.invitation,
                     invite.copy(created=invite.created.takeIf {form.invitation.visible && form.invitation.submitted}),form.acceptance,
-                    invitationManagementCommunity=form.managementCommunity,ownerDepartureCommunity=form.departureCommunity)
+                    invitationManagementCommunity=form.managementCommunity,ownerDepartureCommunity=form.departureCommunity,channelRemoval=form.channelRemoval)
             }.combine(acceptance.state) { ui, result ->
                 ui.copy(acceptance=result.copy(accepted=result.accepted.takeIf {ui.acceptanceForm.visible && ui.acceptanceForm.submitted}))
             }.combine(management.state) {ui,result ->
                 ui.copy(invitationManagement=result)
             }.combine(departure.state) {ui,result ->
                 ui.copy(ownerDeparture=result)
+            }.combine(deletion?.state ?: MutableStateFlow(ChannelDeletionState())) {ui,result ->
+                ui.copy(channelDeletion=result)
             }.collect { if(lifetime.isActive) output.value=it }
         }
         scope.launch {
@@ -107,6 +117,30 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
                     workspace.browser.clearSelection()
                     acceptance.clearPresentation()
                 }
+            }
+        }
+    }
+    fun requestChannelDeletion(channel: String) {
+        if (!enabled() || form.value.section!=ServerWorkspaceSection.SERVER || deletion==null) return
+        val detail=ownedDetail() ?: return
+        val original=detail.channels.firstOrNull {it.id==channel} ?: return
+        dismissOwnerDeparture();dismissInvitationManagement()
+        form.update {it.copy(channelRemoval=ChannelRemovalTarget(detail.community.id,original.id,original.name,++channelRemovalVersion),
+            channel=ChannelCreationForm(),invitation=InvitationCreationForm(),acceptance=InvitationAcceptanceForm())}
+    }
+    fun dismissChannelDeletion() {
+        if (deletion?.state?.value?.busy==true) return
+        form.update {it.copy(channelRemoval=null)}
+    }
+    fun confirmChannelDeletion() {
+        val original=form.value.channelRemoval ?: return
+        val commands=deletion ?: return
+        action {
+            val detail=ownedDetail() ?: return@action
+            if (form.value.channelRemoval!=original || detail.community.id!=original.community ||
+                detail.channels.none {it.id==original.channel}) return@action
+            if (commands.delete(original.community,original.channel)) {
+                form.update {if(it.channelRemoval==original) it.copy(channelRemoval=null) else it}
             }
         }
     }
@@ -201,7 +235,7 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         departure.clearPresentation()
     }
     private fun enabled(allowCreation: Boolean = false) = lifetime.isActive && workspace.active &&
-        !workspace.state.value.busy && (allowCreation || (!creation.state.value.busy && !invitations.state.value.busy && !acceptance.state.value.busy && !management.state.value.revoking))
+        !workspace.state.value.busy && deletion?.state?.value?.busy!=true && (allowCreation || (!creation.state.value.busy && !invitations.state.value.busy && !acceptance.state.value.busy && !management.state.value.revoking))
     private fun ownedDetail():CommunityDetails? {
         if(!lifetime.isActive || !workspace.active) return null
         val browser=workspace.browser.state.value
@@ -361,6 +395,6 @@ class ServerWorkspacePresenter(parent: CoroutineScope, private val workspace: Co
         if(!browser.detailLoading && detail.community.id==browser.selectedCommunity && detail.channels.any {it.id==channel}) connectChannel(channel)
     }
     suspend fun close(): Unit = withContext(NonCancellable) {
-        lifetime.cancel();departure.close();management.close();acceptance.close();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
+        lifetime.cancel();deletion?.close();departure.close();management.close();acceptance.close();invitations.close();creation.close();workspace.close();form.value=Form();output.value=ServerWorkspaceUiState()
     }
 }
