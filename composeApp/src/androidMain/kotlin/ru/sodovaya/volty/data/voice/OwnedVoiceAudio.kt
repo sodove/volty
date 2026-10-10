@@ -3,9 +3,15 @@ package ru.sodovaya.volty.data.voice
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioManager
+import android.media.AudioDeviceInfo
+import android.media.AudioFormat
 import android.media.MediaRecorder
+import android.os.Build
+import android.os.Process
 import android.os.SystemClock
+import java.nio.ByteBuffer
 import livekit.org.webrtc.audio.JavaAudioDeviceModule
+import livekit.org.webrtc.audio.resetVoltyPreferredInput
 import ru.sodovaya.volty.domain.voice.*
 
 /** Owns the injected ADM; LiveKit explicitly does not release injected modules. */
@@ -20,7 +26,14 @@ internal class OwnedVoiceAudio(
     private val evidenceLock = Any()
     private val mediaEvidence = VoiceNativeAudioEvidence(tag)
     private val capture = OwnedVoiceCapture(diagnostics, ::captureState, ::fail)
-    val preferredInputId: Int? get() = capture.preferredInputId
+    private val captureLock = Any()
+    private var sdkInput: AudioDeviceInfo? = null
+    val preferredInputId: Int? get() = synchronized(captureLock) { if (phoneCapture) capture.preferredInputId else sdkInput?.id }
+    private val captureHandoff = VoiceCaptureHandoff()
+    private var callbackMaxMicros = 0L
+    private var nextCaptureSample = 0L
+    private var levelBytes = ByteArray(0)
+    private var nativeStopped = false
     @Volatile var phoneCapture = false
         private set
     @Volatile private var playbackMuted = false
@@ -32,17 +45,54 @@ internal class OwnedVoiceAudio(
         .setAudioSource(MediaRecorder.AudioSource.VOICE_COMMUNICATION)
         .setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
-        // SDK has no AudioRecord to install hardware effects on; retain WebRTC software processing.
+        // Retraction: earlier revisions replaced capture in every mode. Only PHONE
+        // needs a separate recorder; ordinary calls retain SDK pacing and shared render.
+        // Software WebRTC processing remains enabled for both paths.
         .setUseHardwareAcousticEchoCanceler(false)
         .setUseHardwareNoiseSuppressor(false)
-        .setAudioBufferCallback { buffer, format, channels, rate, _, _ -> capture.fill(buffer, format, channels, rate) }
+        .setAudioBufferCallback { buffer, format, channels, rate, bytesRead, timestamp ->
+            synchronized(captureLock) {
+                val started = System.nanoTime()
+                val result = when {
+                    nativeStopped -> {
+                        silence(buffer)
+                        if (bytesRead != buffer.capacity()) SystemClock.sleep(10)
+                        timestamp
+                    }
+                    !captureHandoff.permitsFrame() -> {
+                        // One callback may finish an in-flight SDK read. The next SDK
+                        // loop releases its AudioRecord before our recorder may start.
+                        silence(buffer)
+                        SystemClock.sleep(10)
+                        started
+                    }
+                    phoneCapture -> capture.fill(buffer, format, channels, rate)
+                    else -> {
+                        // bytesRead is the SDK's actual native read result, unlike buffer
+                        // capacity (the disabled SDK also supplies a full zero buffer).
+                        if (bytesRead == buffer.capacity()) {
+                            diagnostics.addCaptureBytes(bytesRead)
+                            if (diagnostics.state.value.captureRunning != true) captureState(true)
+                        } else {
+                            // An SDK init/start failure can leave its callback alive with
+                            // AudioRecord disabled until session cleanup catches up.
+                            silence(buffer)
+                            SystemClock.sleep(10)
+                        }
+                        timestamp
+                    }
+                }
+                sampleCapture(buffer, format, started)
+                result
+            }
+        }
         .setPlaybackSamplesReadyCallback { samples -> if (!phoneCapture) diagnostics.addRenderBytes(samples.data.size) }
         .setAudioRecordStateCallback(object : JavaAudioDeviceModule.AudioRecordStateCallback {
             override fun onWebRtcAudioRecordStart() {
-                // Internal SDK recording is disabled; only our AudioRecord proves capture.
+                // Native reads in the buffer callback also cover dynamic SDK re-enable.
             }
             override fun onWebRtcAudioRecordStop() {
-                capture.stop()
+                synchronized(captureLock) { capture.stop(); captureState(false) }
             }
         })
         .setAudioTrackStateCallback(object : JavaAudioDeviceModule.AudioTrackStateCallback {
@@ -65,11 +115,19 @@ internal class OwnedVoiceAudio(
             override fun onWebRtcAudioTrackStartError(errorCode: JavaAudioDeviceModule.AudioTrackStartErrorCode?, errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_START_ERROR)
             override fun onWebRtcAudioTrackError(errorMessage: String?) = fail(VoiceDiagnosticCode.TRACK_RUNTIME_ERROR)
         })
-        .createAudioDeviceModule().also { it.setAudioRecordEnabled(false) }
+        .createAudioDeviceModule()
 
-    fun muteMicrophone(value: Boolean) { capture.mute(value); module.setMicrophoneMute(value) }
-    fun mutePlayback(value: Boolean) { playbackMuted = value; playback.mute(value); module.setSpeakerMute(phoneCapture || value) }
-    fun remoteTracks(tracks: List<io.livekit.android.room.track.RemoteAudioTrack>) = playback.reconcile(tracks)
+    fun muteMicrophone(value: Boolean) {
+        capture.mute(value); module.setMicrophoneMute(value)
+        diagnostics.update { it.copy(microphoneMuted = value) }
+    }
+    fun mutePlayback(value: Boolean) {
+        playbackMuted = value; playback.mute(value); module.setSpeakerMute(phoneCapture || value)
+        diagnostics.update { it.copy(playbackMuted = value) }
+    }
+    fun remoteTracks(tracks: List<io.livekit.android.room.track.RemoteAudioTrack>) =
+        playback.reconcile(if (phoneCapture) tracks else emptyList())
+    fun samplePlayback() = playback.sampleDiagnostics()
     fun playbackAvailable(preference: VoiceAudioPreferences): Boolean =
         playback.available(preference.input == VoiceInputPreference.PHONE, preference.output)
 
@@ -81,7 +139,20 @@ internal class OwnedVoiceAudio(
             val result = playback.configure(phone, preference.output)
             if (result == VoiceAudioChangeResult.REQUESTED) {
                 val changed = phone != phoneCapture
-                phoneCapture = phone
+                synchronized(captureLock) {
+                    if (changed) {
+                        capture.stop()
+                        captureState(false)
+                        nextCaptureSample = 0L
+                    }
+                    // Do not enable native capture until requestInput applies the
+                    // new preference. Gate also discards a possible in-flight read.
+                    module.setAudioRecordEnabled(false)
+                    captureHandoff.request(voiceAudioCapturePath(preference.input))
+                    phoneCapture = phone
+                    diagnostics.update { it.copy(capturePath = voiceAudioCapturePath(preference.input),
+                        ownedCaptureDeviceType = null, captureRms = null, capturePeak = null) }
+                }
                 if (changed && !phone) renderState(sdkRendering)
             }
             return result
@@ -91,7 +162,11 @@ internal class OwnedVoiceAudio(
     }
 
     /** Stop owned callbacks before SDK release waits for its capture/RTC threads. */
-    fun stopNative() { capture.close(); playback.close() }
+    fun stopNative() {
+        synchronized(captureLock) { nativeStopped = true; capture.close() }
+        playback.close()
+        playback.sampleDiagnostics()
+    }
 
     /** Reset and enqueue under the same boundary as native start/stop callbacks. */
     fun reconnecting(announce: () -> Unit) = synchronized(evidenceLock) {
@@ -139,10 +214,50 @@ internal class OwnedVoiceAudio(
         }
     }
 
-    /** Request on the owned AudioRecord. Actual routedDevice is checked on every PCM frame. */
+    /** PHONE checks its owned routedDevice every frame; stock SDK input remains a request. */
     @Synchronized fun requestInput(manager: AudioManager, preference: VoiceInputPreference): VoiceAudioChangeResult {
         if (released) return VoiceAudioChangeResult.STALE
-        return try { capture.request(manager, preference) } catch (_: Exception) { VoiceAudioChangeResult.FAILED }
+        return try {
+            synchronized(captureLock) {
+                if (preference == VoiceInputPreference.PHONE) {
+                    val result = capture.request(manager, preference)
+                    if (result == VoiceAudioChangeResult.REQUESTED) captureHandoff.applied()
+                    return@synchronized result
+                }
+                val selected = if (preference == VoiceInputPreference.AUTO) null else
+                    manager.getDevices(AudioManager.GET_DEVICES_INPUTS).firstOrNull {
+                        it.type == AudioDeviceInfo.TYPE_WIRED_HEADSET || it.type == AudioDeviceInfo.TYPE_USB_HEADSET ||
+                            it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && it.type == AudioDeviceInfo.TYPE_BLE_HEADSET)
+                    }
+                if (preference != VoiceInputPreference.AUTO && selected == null) return@synchronized VoiceAudioChangeResult.UNAVAILABLE
+                if (selected == null) module.resetVoltyPreferredInput() else module.setPreferredInputDevice(selected)
+                sdkInput = selected
+                captureHandoff.applied()
+                module.setAudioRecordEnabled(true)
+                VoiceAudioChangeResult.REQUESTED
+            }
+        } catch (_: Exception) { VoiceAudioChangeResult.FAILED }
+    }
+
+    /** One numeric PCM sample per second; no PCM retention, file I/O or routing queries here. */
+    private fun sampleCapture(buffer: ByteBuffer, format: Int, started: Long) {
+        callbackMaxMicros = maxOf(callbackMaxMicros, (System.nanoTime() - started) / 1000)
+        if (started < nextCaptureSample || nativeStopped) return
+        nextCaptureSample = started + 1_000_000_000L
+        val level = if (format == AudioFormat.ENCODING_PCM_16BIT && buffer.capacity() % 2 == 0) {
+            if (levelBytes.size != buffer.capacity()) levelBytes = ByteArray(buffer.capacity())
+            buffer.duplicate().apply { clear() }.get(levelBytes)
+            voicePcm16Level(levelBytes).also { levelBytes.fill(0) }
+        } else null
+        diagnostics.update { it.copy(captureThreadPriority = Process.getThreadPriority(Process.myTid()),
+            captureCallbackMaxMicros = callbackMaxMicros, captureRms = level?.rms, capturePeak = level?.peak) }
+    }
+
+    private fun silence(buffer: ByteBuffer) {
+        buffer.clear()
+        while (buffer.hasRemaining()) buffer.put(0.toByte())
+        buffer.rewind()
     }
 
     @Synchronized fun close() {

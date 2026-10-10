@@ -234,11 +234,20 @@ internal class VoiceAudioRouteMonitor(
 
     private fun observe() {
         try {
+        val recordings = manager.activeRecordingConfigurations
+        val previous = diagnostics.state.value
         diagnostics.update { it.copy(audioMode = manager.mode,
             communicationDeviceType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) manager.communicationDevice?.type else null,
-            recordingDeviceTypes = manager.activeRecordingConfigurations.mapNotNull { config -> config.audioDevice?.type }.distinct()) }
+            recordingDeviceTypes = recordings.mapNotNull { config -> config.audioDevice?.type }.distinct(),
+            recordingSources = recordings.map { config -> config.clientAudioSource }.distinct(),
+            recordingClientSilenced = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && recordings.isNotEmpty())
+                recordings.any { config -> config.isClientSilenced } else null) }
+        val current = diagnostics.state.value
+        if (previous.recordingDeviceTypes != current.recordingDeviceTypes || previous.recordingSources != current.recordingSources ||
+            previous.recordingClientSilenced != current.recordingClientSilenced) record(VoiceDiagnosticCode.RECORDING_CONFIG_CHANGED)
         } catch (_: Exception) {
-            diagnostics.update { it.copy(audioMode = null, communicationDeviceType = null, recordingDeviceTypes = emptyList()) }
+            diagnostics.update { it.copy(audioMode = null, communicationDeviceType = null, recordingDeviceTypes = emptyList(),
+                recordingSources = emptyList(), recordingClientSilenced = null) }
             record(VoiceDiagnosticCode.ROUTE_OBSERVATION_ERROR)
         }
     }

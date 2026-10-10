@@ -38,13 +38,13 @@ fun sumCompleteVoiceCounters(counters: List<Long?>): Long? {
 }
 
 enum class VoiceDiagnosticCode {
-    CONNECTING, CONNECTED, RECONNECTING, RECONNECTED, DISCONNECTED,
+    CONNECTING, CONNECTED, RECONNECTING, RECONNECTED, DISCONNECTED, CONNECT_FAILED, CONNECT_CANCELLED,
     CAPTURE_STARTED, CAPTURE_STOPPED, RENDER_STARTED, RENDER_STOPPED,
     RECORD_INIT_ERROR, RECORD_START_ERROR, RECORD_RUNTIME_ERROR,
     TRACK_INIT_ERROR, TRACK_START_ERROR, TRACK_RUNTIME_ERROR,
     INPUT_UNAVAILABLE, OUTPUT_UNAVAILABLE, ROUTE_CHANGED, ROUTE_OBSERVATION_ERROR, AUDIO_FOCUS,
     KEEPALIVE_STARTED, KEEPALIVE_STOPPED, KEEPALIVE_ERROR,
-    PUBLISHED, SUBSCRIBED, UNSUBSCRIBED, STATS, CLOSED, CLEANUP_ERROR,
+    PUBLISHED, PUBLICATION_FAILED, SUBSCRIBED, UNSUBSCRIBED, STATS, CLOSED, CLEANUP_ERROR, RECORDING_CONFIG_CHANGED,
 }
 
 data class VoiceDiagnosticEntry(val elapsedMillis: Long, val code: VoiceDiagnosticCode)
@@ -59,6 +59,22 @@ data class VoiceDiagnosticSnapshot(
     val ownedPlaybackDeviceTypes: List<Int> = emptyList(),
     val audioMode: Int? = null,
     val audioFocus: Int? = null,
+    val capturePath: VoiceAudioCapturePath? = null,
+    val recordingClientSilenced: Boolean? = null,
+    val recordingSources: List<Int> = emptyList(),
+    val captureThreadPriority: Int? = null,
+    val captureCallbackMaxMicros: Long? = null,
+    val captureRms: Int? = null,
+    val capturePeak: Int? = null,
+    val playbackUnderruns: Long? = null,
+    val playbackWriteMaxMicros: Long? = null,
+    val inboundPacketsLost: Long? = null,
+    val inboundJitterMaxMillis: Long? = null,
+    val jitterBufferDelayMeanMillis: Long? = null,
+    val remoteAudioTracks: Int? = null,
+    val sdkDisconnectReason: VoiceDisconnectCause = VoiceDisconnectCause.UNKNOWN,
+    val microphoneMuted: Boolean? = null,
+    val playbackMuted: Boolean? = null,
     val captureRunning: Boolean? = null,
     val renderRunning: Boolean? = null,
     val captureBytes: Long = 0,
@@ -91,6 +107,13 @@ fun VoiceDiagnosticSnapshot.formatVoiceDiagnostics(): String = buildString {
     appendLine("communication_device_type=${communicationDeviceType ?: "UNKNOWN"} provenance=COMMUNICATION_DEVICE")
     appendLine("recording_device_types=${recordingDeviceTypes.joinToString(",")} provenance=UNCORRELATED_RECORDING_CONFIGURATION")
     appendLine("audio_mode=${audioMode ?: "UNKNOWN"} audio_focus=${audioFocus ?: "UNKNOWN"}")
+    appendLine("capture_path=${capturePath ?: "UNKNOWN"} microphone_muted=${microphoneMuted ?: "UNKNOWN"} playback_muted=${playbackMuted ?: "UNKNOWN"}")
+    appendLine("recording_client_silenced=${recordingClientSilenced ?: "UNKNOWN"} recording_sources=${recordingSources.joinToString(",")} provenance=UNCORRELATED_RECORDING_CONFIGURATION")
+    appendLine("capture_thread_priority=${captureThreadPriority ?: "UNKNOWN"} capture_callback_max_us=${captureCallbackMaxMicros ?: "UNKNOWN"}")
+    appendLine("capture_rms=${captureRms ?: "UNKNOWN"} capture_peak=${capturePeak ?: "UNKNOWN"} level_scope=POST_MUTE_CALLBACK_SAMPLE")
+    appendLine("playback_underruns=${playbackUnderruns ?: "UNKNOWN"} playback_write_max_us=${playbackWriteMaxMicros ?: "UNKNOWN"} provenance=OWNED_AUDIO_TRACK")
+    appendLine("inbound_packets_lost=${inboundPacketsLost ?: "UNKNOWN"} inbound_jitter_max_ms=${inboundJitterMaxMillis ?: "UNKNOWN"} jitter_buffer_delay_mean_ms=${jitterBufferDelayMeanMillis ?: "UNKNOWN"}")
+    appendLine("remote_audio_tracks=${remoteAudioTracks ?: "UNKNOWN"} disconnect_reason=$sdkDisconnectReason")
     appendLine("capture_running=${captureRunning ?: "UNKNOWN"} render_running=${renderRunning ?: "UNKNOWN"}")
     appendLine("capture_bytes=$captureBytes render_bytes=$renderBytes")
     appendLine("outbound_packets=${outboundPackets ?: "UNKNOWN"} inbound_packets=${inboundPackets ?: "UNKNOWN"}")

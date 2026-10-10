@@ -24,8 +24,9 @@ class AndroidVoiceSdkSessionFactory(
     private val diagnostics: VoiceDiagnostics,
 ) : VoiceSdkSessionFactory {
     private val application = context.applicationContext
-    override fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession =
-        AndroidVoiceSdkSession(application, tag, preferences, diagnostics, emit)
+    override fun create(tag: VoiceSessionTag, emit: (VoiceSessionEvent) -> Unit): VoiceSdkSession {
+        return AndroidVoiceSdkSession(application, tag, preferences, diagnostics, emit)
+    }
 }
 
 /** One allocation per tag. SDK alone owns reconnect; no app-level redial loop. */
@@ -36,6 +37,7 @@ internal class AndroidVoiceSdkSession(
     private val diagnostics: VoiceDiagnostics,
     private val emit: (VoiceSessionEvent) -> Unit,
 ) : VoiceSdkSession {
+    init { AndroidVoiceDiagnosticStore.attach(context, diagnostics) }
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val closeMutex = Mutex()
     private val resources = Mutex()
@@ -88,7 +90,9 @@ internal class AndroidVoiceSdkSession(
     override suspend fun connect(credentials: VoiceConnectionCredentials) {
         val ownedRoom = resources.withLock { allocateRoom() }
         record(VoiceDiagnosticCode.CONNECTING)
-        ownedRoom.connect(credentials.serverUrl, credentials.token)
+        try { ownedRoom.connect(credentials.serverUrl, credentials.token) }
+        catch (cancelled: CancellationException) { record(VoiceDiagnosticCode.CONNECT_CANCELLED); throw cancelled }
+        catch (error: Exception) { record(VoiceDiagnosticCode.CONNECT_FAILED); throw error }
         currentCoroutineContext().ensureActive()
         check(!closing)
         scope.launch { pollStats(ownedRoom) }
@@ -133,7 +137,8 @@ internal class AndroidVoiceSdkSession(
             track.enabled = !muted
             ownedRoom to track
         }
-        val published = ownedRoom.localParticipant.publishAudioTrack(track)
+        val published = try { ownedRoom.localParticipant.publishAudioTrack(track) }
+        catch (error: Exception) { record(VoiceDiagnosticCode.PUBLICATION_FAILED); throw error }
         currentCoroutineContext().ensureActive()
         check(!closing)
         if (published) {
@@ -142,6 +147,7 @@ internal class AndroidVoiceSdkSession(
             publication.muted = muted
             record(VoiceDiagnosticCode.PUBLISHED); event(VoiceSessionEvent.Published(tag))
         }
+        if (!published) record(VoiceDiagnosticCode.PUBLICATION_FAILED)
         return published
     }
 
@@ -220,9 +226,14 @@ internal class AndroidVoiceSdkSession(
         try { routes?.close(); routes = null } catch (_: Exception) { failed = true }
         try { keeper?.close(); keeper = null } catch (_: Exception) { failed = true }
         try { audio?.close(); audio = null } catch (_: Exception) { failed = true }
-        if (failed) throw VoiceEngineException(VoiceEngineError.CLEANUP)
+        if (failed) {
+            record(VoiceDiagnosticCode.CLEANUP_ERROR)
+            AndroidVoiceDiagnosticStore.saveFinal(diagnostics)
+            throw VoiceEngineException(VoiceEngineError.CLEANUP)
+        }
         scope.cancel()
         record(VoiceDiagnosticCode.CLOSED)
+        AndroidVoiceDiagnosticStore.saveFinal(diagnostics)
         }
     }
 
@@ -258,10 +269,14 @@ internal class AndroidVoiceSdkSession(
                 reconcileRemoteAudio(ownedRoom)
             }
             is RoomEvent.Disconnected -> {
+                diagnostics.update { it.copy(sdkDisconnectReason = voiceDisconnectCause(event.reason.name)) }
                 record(VoiceDiagnosticCode.DISCONNECTED)
                 this.event(voiceDisconnectionEvent(tag, event.reason))
             }
-            is RoomEvent.FailedToConnect -> event(VoiceSessionEvent.EngineFailed(tag))
+            is RoomEvent.FailedToConnect -> {
+                record(VoiceDiagnosticCode.CONNECT_FAILED)
+                event(VoiceSessionEvent.EngineFailed(tag))
+            }
             is RoomEvent.TrackPublished -> if (event.participant == ownedRoom.localParticipant &&
                 event.publication.kind == Track.Kind.AUDIO && event.publication.track === localTrack &&
                 ownedPublication(ownedRoom) === event.publication && publicationRecovery.sdkPublished()) {
@@ -309,6 +324,7 @@ internal class AndroidVoiceSdkSession(
             // Actual ADM samples/current SDK tracks remain evidence even if
             // an unrelated RTC statistics request fails. No new polling loop.
             audio?.refreshMediaEvidence()
+            audio?.samplePlayback()
             reconcileRemoteAudio(ownedRoom)
             try {
                 // Earlier draft assumed whole-PC reports; RTCEngine actually calls
@@ -320,13 +336,26 @@ internal class AndroidVoiceSdkSession(
                 val reports = remote.mapNotNull { it.getRTCStats() }
                 val inboundRows = reports.flatMap { it.statsMap.values }.distinctBy { it.id }
                     .filter { it.type == "inbound-rtp" && (it.members["kind"] == "audio" || it.members["mediaType"] == "audio") }
-                val inbound = if (reports.size == remote.size && reports.all { it.audioPackets("inbound-rtp", "packetsReceived") != null })
+                val complete = reports.size == remote.size && reports.all { it.audioPackets("inbound-rtp", "packetsReceived") != null }
+                val inbound = if (complete)
                     sumCompleteVoiceCounters(inboundRows.map { (it.members["packetsReceived"] as? Number)?.toLong() }) else null
-                diagnostics.update { it.copy(outboundPackets = outbound, inboundPackets = inbound) }
+                val lost = if (complete) sumCompleteVoiceCounters(inboundRows.map { (it.members["packetsLost"] as? Number)?.toLong() }) else null
+                val jitters = inboundRows.map { (it.members["jitter"] as? Number)?.toDouble()?.takeIf { value -> value.isFinite() && value >= 0 } }
+                val jitter = if (complete && jitters.isNotEmpty() && jitters.all { it != null })
+                    (jitters.filterNotNull().max() * 1000).toLong() else null
+                val delays = inboundRows.map { (it.members["jitterBufferDelay"] as? Number)?.toDouble()?.takeIf { value -> value.isFinite() && value >= 0 } }
+                val counts = inboundRows.map { (it.members["jitterBufferEmittedCount"] as? Number)?.toLong() }
+                val emitted = sumCompleteVoiceCounters(counts)
+                val meanDelay = if (complete && emitted != null && emitted > 0 && delays.all { it != null })
+                    (delays.filterNotNull().sum() * 1000 / emitted).toLong() else null
+                diagnostics.update { it.copy(outboundPackets = outbound, inboundPackets = inbound,
+                    inboundPacketsLost = lost, inboundJitterMaxMillis = jitter, jitterBufferDelayMeanMillis = meanDelay,
+                    remoteAudioTracks = remote.size) }
                 record(VoiceDiagnosticCode.STATS)
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Missing stats remains unknown, never invent zero. */
-                diagnostics.update { it.copy(outboundPackets = null, inboundPackets = null) }
+                diagnostics.update { it.copy(outboundPackets = null, inboundPackets = null,
+                    inboundPacketsLost = null, inboundJitterMaxMillis = null, jitterBufferDelayMeanMillis = null) }
             }
         }
     }

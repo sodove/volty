@@ -20,7 +20,7 @@ class VoiceDiagnosticExporter(private val context: Context) {
                 "model=${safeMetadata(Build.MANUFACTURER)} ${safeMetadata(Build.MODEL)}\n" +
                 "android=${Build.VERSION.SDK_INT} build=${safeMetadata(Build.DISPLAY)}\n" +
                 "base_apk_sha256=${apkHash()}\n" +
-                "LiveKit=2.25.3 WebRTC=144.7559.05\n"
+                "LiveKit=2.28.0 WebRTC=144.7559.09\n"
             val dir = File(context.cacheDir, "logs").apply { check(mkdirs() || isDirectory) }
             File(dir, "volty-voice-diagnostics.txt").apply { writeText(header + snapshot.formatVoiceDiagnostics()) }
         }

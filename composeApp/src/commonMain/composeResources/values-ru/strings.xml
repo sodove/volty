@@ -954,7 +954,7 @@
     <string name="nearby_audio_failed">Не удалось изменить устройство. Попробуйте ещё раз.</string>
     <string name="nearby_audio_stale">Подключение изменилось. Выберите устройство ещё раз.</string>
     <string name="nearby_notifications_title">Уведомления о звонках</string>
-    <string name="nearby_notifications_copy_diagnostics">Скопировать диагностику звонков</string>
+    <string name="nearby_notifications_copy_diagnostics">Скопировать диагностику звонков и аудио</string>
     <string name="nearby_notifications_diagnostics_copied">Диагностика скопирована. Перед копированием повторите пропущенный вызов; история сбрасывается при перезапуске процесса приложения.</string>
     <string name="nearby_notifications_allowed">Android разрешает уведомления о звонках.</string>
     <string name="nearby_notifications_blocked">Уведомления о звонках отключены в Android.</string>

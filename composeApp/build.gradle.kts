@@ -51,8 +51,8 @@ abstract class VerifyProductionReleaseTask : DefaultTask() {
     }
 }
 
-val appVersionCode = 48
-val appVersionName = "0.7.25"
+val appVersionCode = 49
+val appVersionName = "0.7.26"
 val productionReleaseGate = providers.gradleProperty("voltyProductionRelease").orNull?.let { value ->
     value.toBooleanStrictOrNull()
         ?: error("voltyProductionRelease must be true or false")
@@ -128,7 +128,7 @@ kotlin {
             implementation(libs.ktor.client.cio)
             implementation(libs.ktor.client.okhttp)
             implementation("org.maplibre.gl:android-sdk:13.0.2")
-            implementation("io.livekit:livekit-android:2.25.3") {
+            implementation("io.livekit:livekit-android:2.28.0") {
                 exclude(group = "com.github.davidliu", module = "audioswitch")
             }
             implementation(files("libs/audioswitch-039a35aefab7747c557242fa216c9ea11743b604.aar"))

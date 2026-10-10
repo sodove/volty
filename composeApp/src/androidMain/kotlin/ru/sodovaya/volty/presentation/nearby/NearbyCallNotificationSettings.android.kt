@@ -23,6 +23,7 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import org.jetbrains.compose.resources.stringResource
 import ru.sodovaya.volty.data.voice.INCOMING_CALL_NOTIFICATION_CHANNEL
+import ru.sodovaya.volty.data.voice.AndroidVoiceDiagnosticStore
 import ru.sodovaya.volty.data.nearby.AndroidCallPushDiagnostics
 import volty.composeapp.generated.resources.*
 
@@ -43,6 +44,12 @@ private fun notificationSettings(context: Context): NotificationSettingsState = 
         else -> NotificationSettingsState.ALLOWED
     }
 } catch (_: Exception) { NotificationSettingsState.UNKNOWN }
+
+private fun diagnosticDevicePart(value: String): String = value
+    .filter { it.isLetterOrDigit() || it in "._- " }
+    .take(64)
+    .trim()
+    .ifEmpty { "unknown" }
 
 @Composable
 internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
@@ -108,8 +115,10 @@ internal actual fun NearbyCallNotificationSettings(modifier: Modifier) {
                 availability = notificationSettings(context)
                 val version = context.packageManager.getPackageInfo(context.packageName, 0).versionName
                 fullScreen = fullScreenAllowed(context)
-                val report = "volty=$version; android=${Build.VERSION.SDK_INT}; notification_settings=$availability; full_screen=$fullScreen\n" +
-                    AndroidCallPushDiagnostics.export()
+                val device = "${diagnosticDevicePart(Build.MANUFACTURER)} ${diagnosticDevicePart(Build.MODEL)}"
+                val report = "volty=$version; android=${Build.VERSION.SDK_INT}; device=$device; notification_settings=$availability; full_screen=$fullScreen\n" +
+                    AndroidCallPushDiagnostics.export() +
+                    "\n\n--- Voice/audio diagnostics ---\n" + AndroidVoiceDiagnosticStore.export(context)
                 context.getSystemService(ClipboardManager::class.java)
                     .setPrimaryClip(ClipData.newPlainText("Volty call diagnostics", report))
                 diagnosticCopied = true

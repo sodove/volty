@@ -1,0 +1,53 @@
+# Open-source Android audio options for Volty
+
+Research date: 2026-10-10. Scope: replace or narrow the custom Android voice path in a Kotlin Multiplatform Android app (minSdk 26, Compose, LiveKit Android 2.25.3) while retaining the existing LiveKit SFU and session/backend design.
+
+## Recommendation
+
+The strongest first experiment is the LiveKit-supported stock Android audio path for AUTO and HEADSET: use the SDK’s default WebRTC JavaAudioDeviceModule capture and shared render/mixer with its default AudioSwitchHandler. Keep the separate phone-microphone/A2DP path as an explicitly isolated mode only if device testing proves it is needed. In the current implementation, the custom AudioBufferCallback disables AudioRecord inside the ADM for every route mode, while PHONE creates an AudioTrack per remote track. That makes a stock-path A/B unusually informative: it removes two custom media paths at once without changing LiveKit rooms, signalling, or backend behavior.
+
+No maintained drop-in library found in this review offers LiveKit rooms with guaranteed builtin-phone microphone capture and independent A2DP output while retaining normal Bluetooth headset full duplex. Android exposes lower-level per-record/per-track routing, but route preferences are not guarantees and device behavior must be measured. Do not infer that Xiaomi’s failure, third-peer freezes, or delays are caused by the custom path; current evidence does not establish a cause.
+
+## Candidates
+
+### 1. LiveKit Android SDK’s stock ADM, AudioSwitchHandler, and track APIs — recommended baseline
+
+LiveKit Android is Apache-2.0 and is the only candidate already in Volty’s media stack. Its documented AudioOptions lets an app override the ADM and handler, and the SDK defaults to AudioSwitchHandler. In the local 2.25.3 AAR, AudioOptions also exposes JavaAudioDeviceModule builder customization and LocalAudioTrackOptions exposes noise suppression, echo cancellation, and AGC. So Volty can restore native WebRTC capture/render for default modes without replacing LiveKit or the SFU. Current official docs are for 2.29.0; check the local 2.25.3 AAR before copying newer API examples. [AudioOptions](https://docs.livekit.io/reference/client-sdk-android/livekit-android-sdk/io.livekit.android/-audio-options/), [AudioSwitchHandler](https://docs.livekit.io/reference/client-sdk-android/livekit-android-sdk/io.livekit.android.audio/-audio-switch-handler/index.html), [LocalAudioTrackOptions](https://docs.livekit.io/reference/client-sdk-android/livekit-android-sdk/io.livekit.android.room.track/-local-audio-track-options/), [repository/license](https://github.com/livekit/client-sdk-android).
+
+This baseline can remove custom capture callback injection for AUTO/HEADSET, the per-remote-track PhoneVoicePlayback sinks for those modes, and custom stream/ring-buffer pacing there. Retain LiveKit mute and per-track controls: RemoteAudioTrack.setVolume supports 0 to 10, with 0 as mute and 1 as normal, so deafen/participant volume need not require a bespoke AudioTrack mixer. [API](https://docs.livekit.io/reference/client-sdk-android/livekit-android-sdk/io.livekit.android.room.track/-remote-audio-track/set-volume.html).
+
+Version matters: 2.26.1 fixed a stale AudioSwitchHandler after disconnect/reconnect on a reused Room, and 2.28.0 records a fix for a silent-mic race between Room.connect audio publishing and setMicrophoneEnabled. Volty uses 2.25.3 and creates a room per session, so the first fix is not a proven match; the second merits a separate controlled SDK-version test, not mixing with the stock-path A/B. The latest GitHub release visible on the research date is 2.29.0 (20 Sep 2026). [Release history and fixes](https://github.com/livekit/client-sdk-android/releases).
+
+Split phone mic + A2DP output is not promised by this stock setup. Its default communication routing selects a communication device; validate the phone’s actual capture and output separately. LiveKit’s default path is the clearest candidate for ordinary VoIP full duplex and shared multi-peer rendering, not a turnkey solution to the split-route requirement.
+
+### 2. Twilio AudioSwitch — routing helper, not an audio engine
+
+Twilio AudioSwitch is Apache-2.0 and manages audio focus, connected devices, and selecting a communication route. Its own README describes selecting one route/device; it does not capture microphone PCM, mix remote tracks, or provide independent input/output routing. LiveKit already wraps AudioSwitch in AudioSwitchHandler. Volty currently excludes the transitive audioswitch artifact and ships a pinned local forked AAR, so replacing or updating that artifact should be a separate compatibility check, not the first experiment. [README and license](https://github.com/twilio/audioswitch), [changelog](https://github.com/twilio/audioswitch/blob/master/CHANGELOG.md).
+
+The latest stable release documented there is 1.2.5 dated 2025-01-09; later 1.2.3/1.2.4 entries are labelled test releases. That is evidence of a real maintained upstream and a sparse release cadence, not evidence of a recent stable release as of 2026-10-10. The changelog includes a routing-reliability improvement for switching away from and back to Bluetooth, but says nothing about phone-mic+A2DP split routing. It can improve device enumeration/selection; it cannot replace OwnedVoiceCapture or PhoneVoicePlayback, nor guarantee Xiaomi behavior.
+
+### 3. Android AudioRecord/AudioTrack routing APIs — only for a narrowly retained split mode
+
+Android’s platform APIs are the supported lower-level mechanism if a tested PHONE mode must choose builtin mic and Bluetooth output independently. AudioRecord.setPreferredDevice and AudioTrack.setPreferredDevice accept per-object preferences (available well before minSdk 26). Android explicitly distinguishes the preferred device from the actual routed device; inspect AudioRecord.getRoutedDevice while recording and AudioTrack.getRoutedDevice while playing. On Android 12/API 31+, AudioManager.setCommunicationDevice is for communication routing and automatically selects a matching input; it does not express a separate media sink plus builtin mic. [AudioRecord](https://developer.android.com/reference/android/media/AudioRecord), [AudioRouting](https://developer.android.com/reference/android/media/AudioRouting), [AudioManager.setCommunicationDevice](https://developer.android.com/reference/android/media/AudioManager#setCommunicationDevice(android.media.AudioDeviceInfo)).
+
+This is not a drop-in open-source library and does not remove the need to handle device changes, focus, errors, buffer pacing, multi-peer mixing, and route verification. Android defines A2DP as high-quality Bluetooth playback and Headset/Hands-Free as the headset profile; normal two-way headset audio is a different use case from A2DP playback. The API documentation does not promise that every OEM/device will honor simultaneous builtin-mic capture and A2DP playback. Prove it on the target phone while another app plays music; separately measure call delay, music ducking, and interruptions. [Bluetooth profiles](https://developer.android.com/develop/connectivity/bluetooth/profiles).
+
+### 4. Jitsi Meet Android audio routing — reference code only
+
+Jitsi Meet is Apache-2.0 and has a substantial Android conferencing codebase. Its AudioModeModule demonstrates serialized device changes, selected-device policy, communication-mode transitions, and choosing the volume-control stream. It routes a call to one communication output (speaker, earpiece, wired, or Bluetooth headset); it is not a library that can be plugged into Volty’s LiveKit room, and it does not establish the phone-mic+A2DP split requirement. Use it as a bounded code reference if a later routing rewrite needs comparison, not as a reason to migrate RTC stacks. [Jitsi source](https://github.com/jitsi/jitsi-meet/blob/master/android/sdk/src/main/java/org/jitsi/meet/sdk/AudioModeModule.java), [license/repository](https://github.com/jitsi/jitsi-meet).
+
+## Loudness and diagnostics
+
+The current PHONE sink uses AudioAttributes USAGE_MEDIA while LiveKit’s ordinary audio uses communication usage. Android audio attributes and the active playback use affect routing/focus and which volume control is relevant; the volume rocker does not represent one universal app volume. Expose an in-call volume affordance and verify it on-device rather than assuming the current hardware keys change the remote-call level. [Android output and volume guidance](https://developer.android.com/media/platform/output).
+
+For mic level, VOICE_COMMUNICATION is documented as a VoIP-tuned source that may use echo cancellation or automatic gain control when available; VOICE_RECOGNITION is tuned for recognition. This makes capture source and the SDK’s AEC/NS/AGC settings material, but it does not establish that either source is quieter on a particular phone. Measure PCM RMS/peak and confirm nonzero capture before considering software gain. The current custom ADM disables hardware AEC/NS (software WebRTC processing is retained), while the source differs by route mode; record actual effective settings during the experiment. [AudioSource reference](https://developer.android.com/reference/android/media/MediaRecorder.AudioSource).
+
+A “connected” UI state and push-registration diagnostic do not verify media. For each A/B, capture: AudioRecord initialized/started state, active-recording configuration and actual routed input, bytes and RMS/peak, outgoing/incoming RTP audio counters, actual playback route, track mute/volume state, and disconnect/reconnect reason. Include two- and three-peer rooms, ordinary Bluetooth-headset full duplex, PHONE mic + A2DP output with independent music, and the Xiaomi 17T/Android 36 case. This separates local capture/output failures from server/session or network failures without claiming a cause in advance.
+
+## Suggested experiment order
+
+1. On LiveKit 2.25.3, run AUTO and HEADSET with the SDK’s stock ADM capture/shared render and default AudioSwitchHandler. Compare two versus three peers and Bluetooth-headset full duplex, using the media evidence above.
+2. In a separate trial, preserve the PHONE split route and test only whether the platform’s actual mic route is builtin while the output is A2DP, with music playing. Measure user-perceived latency and verify no unexpected route change.
+3. Only after those results, test a current LiveKit release such as 2.29.0 as its own variable. Its release history includes audio-path-related fixes since 2.25.3; changing SDK and custom media architecture together would make results hard to attribute.
+
+No test or implementation was performed for this report.

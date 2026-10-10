@@ -33,6 +33,9 @@ internal class PhoneVoicePlayback(
     private var reported = false
     private val blockedDevices = mutableSetOf<Int>()
     private var receiverRegistered = false
+    private var retiredUnderruns = 0L
+    private var writeMaxMicros = 0L
+    private var observedTrack = false
     private val noisy = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action != AudioManager.ACTION_AUDIO_BECOMING_NOISY) return
@@ -103,6 +106,19 @@ internal class PhoneVoicePlayback(
         detach(removed)
     }
 
+    /** Native counters are sampled by the existing one-second session poll, not every frame. */
+    fun sampleDiagnostics() = synchronized(lock) {
+        val underruns = if (observedTrack) retiredUnderruns + streams.values.sumOf { it.track?.underrunCount?.toLong() ?: 0L } else null
+        diagnostics.update { it.copy(playbackUnderruns = underruns,
+            playbackWriteMaxMicros = if (observedTrack) writeMaxMicros else null) }
+    }
+
+    private fun write(track: AudioTrack, bytes: ByteArray, count: Int): Int {
+        val started = System.nanoTime()
+        return try { track.write(bytes, 0, count, AudioTrack.WRITE_NON_BLOCKING) }
+        finally { writeMaxMicros = maxOf(writeMaxMicros, (System.nanoTime() - started) / 1000) }
+    }
+
     private fun detach(list: List<Stream>) {
         list.forEach { stream ->
             stream.remote.removeSink(stream)
@@ -158,6 +174,7 @@ internal class PhoneVoicePlayback(
                             .setBufferSizeInBytes(maxOf(minimum, sampleRate * channelCount * 2 * 80 / 1000))
                             .setTransferMode(AudioTrack.MODE_STREAM).build().also {
                                 track = it
+                                observedTrack = true
                                 check(it.state == AudioTrack.STATE_INITIALIZED)
                                 check(it.setPreferredDevice(selected))
                                 rate = sampleRate; channels = channelCount
@@ -168,7 +185,7 @@ internal class PhoneVoicePlayback(
                     if (!primed) {
                         // Start with a small native reserve instead of playing an empty buffer.
                         val silence = ByteArray(sampleRate * channelCount * 2 * 40 / 1000)
-                        check(owned.write(silence, 0, silence.size, AudioTrack.WRITE_NON_BLOCKING) >= 0)
+                        check(write(owned, silence, silence.size) >= 0)
                         primed = true
                     }
                     if (owned.playState != AudioTrack.PLAYSTATE_PLAYING) owned.play()
@@ -183,7 +200,7 @@ internal class PhoneVoicePlayback(
                     // A nonblocking AudioTrack write may accept only a prefix or zero bytes.
                     // Keep the tail for later callbacks; cap delay instead of growing forever.
                     do {
-                        val written = backlog.drain { values, count -> owned.write(values, 0, count, AudioTrack.WRITE_NON_BLOCKING) }
+                        val written = backlog.drain { values, count -> write(owned, values, count) }
                         if (permitted) diagnostics.addRenderBytes(written)
                     } while (written > 0 && backlog.size > 0)
                     report()
@@ -194,6 +211,9 @@ internal class PhoneVoicePlayback(
             buffered?.clear(); primed = false
             track?.let { it.pause(); it.flush() }
         }
-        fun release() { track?.release(); track = null; buffered = null; primed = false; fault = false }
+        fun release() {
+            track?.let { retiredUnderruns += it.underrunCount; it.release() }
+            track = null; buffered = null; primed = false; fault = false
+        }
     }
 }
