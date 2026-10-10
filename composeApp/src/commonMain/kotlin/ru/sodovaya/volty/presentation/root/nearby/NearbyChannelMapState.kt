@@ -10,7 +10,8 @@ import ru.sodovaya.volty.domain.voice.VoiceSessionTag
 import ru.sodovaya.volty.domain.social.PresenceStatus
 import ru.sodovaya.volty.presentation.nearby.ParticipantMarker
 
-data class NearbyChannelMapPoint(val actorId: String, val latitude: Double, val longitude: Double, val accuracyMeters: Double, val displayName: String? = null)
+data class NearbyChannelMapPoint(val actorId: String, val latitude: Double, val longitude: Double, val accuracyMeters: Double, val displayName: String? = null,
+    val stale: Boolean = false)
 data class NearbyChannelMapState(val operation: VoiceOperationId? = null, val channelId: String? = null,
     val session: VoiceSessionTag? = null, val observed: Boolean = false,
     val points: List<NearbyChannelMapPoint> = emptyList())
@@ -18,7 +19,7 @@ data class NearbyChannelMapState(val operation: VoiceOperationId? = null, val ch
 internal fun nearbyChannelMarkers(state: NearbyChannelMapState, fallbackLabel: String): List<ParticipantMarker> {
     if (!state.observed || state.operation == null || state.channelId == null || state.session == null) return emptyList()
     return state.points.map {point -> ParticipantMarker(point.actorId,channelSharingPeerDisplayName(point.displayName) ?: fallbackLabel,point.latitude,point.longitude,
-        point.accuracyMeters,PresenceStatus.ONLINE,false)}
+        point.accuracyMeters,if(point.stale) PresenceStatus.STALE else PresenceStatus.ONLINE,point.stale)}
 }
 
 internal fun nearbyChannelMapState(source: VoiceConversationState, operation: VoiceOperationId?): NearbyChannelMapState {
@@ -31,6 +32,6 @@ internal fun nearbyChannelMapState(source: VoiceConversationState, operation: Vo
     val audience = source.sharingAudience?.takeIf { it.observed }
     return NearbyChannelMapState(operation, channel.destinationId, VoiceSessionTag(session, voice.generation),
         observed = audience != null, points = audience?.peers?.mapNotNull { peer ->
-            peer.packet.location?.let { NearbyChannelMapPoint(peer.actorId, it.latitude, it.longitude, it.accuracyMeters, channelSharingPeerDisplayName(peer.displayName)) }
+            peer.packet.location?.let { NearbyChannelMapPoint(peer.actorId, it.latitude, it.longitude, it.accuracyMeters, channelSharingPeerDisplayName(peer.displayName), peer.stale) }
         }.orEmpty())
 }

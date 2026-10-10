@@ -24,6 +24,7 @@ internal class ChannelSharingAudienceOwner private constructor(private val accou
     private var pending: Deferred<Boolean>?=null
     private var lastClock: Long?=null
     private var ordinal=-1L
+    private var serverEpoch=-1L
     // Retain the original packet deadline after its visible entry expires.
     private val remembered=linkedMapOf<String,ObservedChannelSharingPeer>()
     private var accountGuardian: Job?=null
@@ -66,7 +67,9 @@ internal class ChannelSharingAudienceOwner private constructor(private val accou
             retire();return@withContext
         }
         lastClock=now
-        mutableState.value=mutableState.value.copy(peers=mutableState.value.peers.filter {it.deadlineMillis>now && control.canObserve(it)})
+        mutableState.value=mutableState.value.copy(peers=mutableState.value.peers.mapNotNull {
+            if (control.canObserve(it)) channelSharingPeerAtTime(it,now) else null
+        })
     }
     suspend fun close() = withContext(NonCancellable+queued) {retire()}
     private fun apply(reply: ChannelSharingPacketReply.Audience,now: Long): Boolean {
@@ -78,7 +81,15 @@ internal class ChannelSharingAudienceOwner private constructor(private val accou
             val safe=if(old==null) peer
             else when {
                 peer.packet.sequence<old.packet.sequence || peer.packet.capturedAtEpochMillis<old.packet.capturedAtEpochMillis -> null
-                peer.packet.sequence==old.packet.sequence && peer.packet!=old.packet -> null
+                peer.packet.sequence==old.packet.sequence && peer.packet!=old.packet &&
+                    !(peer.stale && peer.packet.copy(telemetry=old.packet.telemetry)==old.packet) -> null
+                peer.packet.sequence==old.packet.sequence && peer.sampleDeadlineMillis != null && old.sampleDeadlineMillis != null &&
+                    reply.serverTimeEpochMillis>serverEpoch -> {
+                    // Current server consent/lease can renew authority, never the original capture bound.
+                    val bound=minOf(peer.sampleDeadlineMillis,old.sampleDeadlineMillis)
+                    peer.copy(deadlineMillis=minOf(peer.deadlineMillis,bound),sampleDeadlineMillis=bound,
+                        freshUntilMillis=listOfNotNull(peer.freshUntilMillis,old.freshUntilMillis).minOrNull())
+                }
                 peer.packet.sequence==old.packet.sequence -> peer.copy(deadlineMillis=minOf(peer.deadlineMillis,old.deadlineMillis))
                 else -> peer
             }
@@ -86,9 +97,10 @@ internal class ChannelSharingAudienceOwner private constructor(private val accou
                 remembered.remove(peer.actorId);remembered[peer.actorId]=safe
                 while(remembered.size>512) remembered.remove(remembered.keys.first())
             }
-            safe?.takeIf {it.deadlineMillis>now}
+            safe?.let {channelSharingPeerAtTime(it,now)}
         }
-        ordinal=reply.requestOrdinal;mutableState.value=ChannelSharingAudienceView(true,next);return true
+        ordinal=reply.requestOrdinal;serverEpoch=maxOf(serverEpoch,reply.serverTimeEpochMillis)
+        mutableState.value=ChannelSharingAudienceView(true,next);return true
     }
     private fun retire() {
         if(!mutableRetired.compareAndSet(false,true)) return

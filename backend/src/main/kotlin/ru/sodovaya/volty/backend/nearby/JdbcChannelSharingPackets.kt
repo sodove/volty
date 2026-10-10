@@ -38,15 +38,16 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
     }
 
     /** One audience query; peer rows are never reconciled while holding the viewer actor lock. */
-    fun snapshot(actor: String, session: String, now: () -> Long): ChannelSharingAudience? {
+    fun snapshot(actor: String, session: String, now: () -> Long, retainLastKnown: Boolean = false): ChannelSharingAudience? {
         validate(actor, session)
         return sessions.withChannelSharingActor(actor) {c ->
             val at = time(now)
             val viewer = sessions.activeChannelSharingSession(c, actor, session, at) ?: return@withChannelSharingActor null
             val channel = checkNotNull(viewer.operation.destinationId)
+            val packetLimit = if (retainLastKnown) "p.captured_at+$CHANNEL_MAP_RETENTION_MILLIS" else "p.deadline_epoch_millis"
             val peers = c.prepareStatement("""
                 SELECT p.actor_id,p.session_id,p.generation_id,p.payload_json,p.sequence,p.captured_at,s.mode,s.started_at,u.display_name,
-                    LEAST(o.deadline_epoch_millis,s.deadline_epoch_millis,p.deadline_epoch_millis,?) AS peer_deadline
+                    LEAST(o.deadline_epoch_millis,s.deadline_epoch_millis,$packetLimit,?) AS peer_deadline
                 FROM nearby_channel_sharing_packets p
                 JOIN nearby_channel_sharing_consent s ON s.actor_id=p.actor_id AND s.session_id=p.session_id AND s.generation_id=p.generation_id
                 JOIN nearby_session_operations o ON o.actor_id=p.actor_id AND o.session_id=p.session_id
@@ -59,7 +60,7 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
                 WHERE o.destination_kind='CHANNEL' AND o.destination_id=?::uuid AND o.phase='ACTIVE'
                     AND o.room_epoch=? AND o.deadline_epoch_millis>?
                     AND s.phase='ACTIVE' AND s.started_at IS NOT NULL AND s.deadline_epoch_millis>?
-                    AND p.deadline_epoch_millis>? AND p.captured_at<=?
+                    AND $packetLimit>? AND p.captured_at<=?
                     AND NOT EXISTS (SELECT 1 FROM nearby_community_bans b WHERE b.community_id=g.id AND b.user_id=o.actor_id)
                 ORDER BY p.actor_id,p.session_id,p.generation_id
             """.trimIndent()).use {
@@ -72,11 +73,15 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
                         val packet = try {
                             val decoded = json.decodeFromString<ChannelSharingPacket>(rows.getString("payload_json"))
                             require(decoded.sequence == rows.getLong("sequence") && decoded.capturedAtEpochMillis == rows.getLong("captured_at"))
-                            normalize(decoded, ChannelSharingMode.valueOf(rows.getString("mode")), rows.getLong("started_at"), at)
+                            normalize(decoded, ChannelSharingMode.valueOf(rows.getString("mode")), rows.getLong("started_at"), at, retainLastKnown)
                         } catch (_: IllegalArgumentException) {continue}
-                        val deadline = minOf(rows.getLong("peer_deadline"), sampleDeadline(packet))
+                        val mapLocation = packet.location.takeIf { retainLastKnown }
+                        val deadline = minOf(rows.getLong("peer_deadline"), mapLocation?.let { it.capturedAtEpochMillis + CHANNEL_MAP_RETENTION_MILLIS } ?: sampleDeadline(packet))
+                        val stale = mapLocation?.let { at >= it.staleAfterEpochMillis } == true
+                        // Last-known coordinates never carry old telemetry as if it were live.
+                        val mode = if (stale) ChannelSharingMode.LOCATION else ChannelSharingMode.valueOf(rows.getString("mode"))
                         if (deadline > at) add(ChannelSharingAudiencePeer(rows.getString("actor_id"), rows.getString("session_id"),
-                            rows.getString("generation_id"), ChannelSharingMode.valueOf(rows.getString("mode")), packet, deadline, rows.getString("display_name")))
+                            rows.getString("generation_id"), mode, if (stale) packet.copy(telemetry = null) else packet, deadline, rows.getString("display_name")))
                     }
                 }}
             }
@@ -84,15 +89,17 @@ internal class JdbcChannelSharingPackets(private val sessions: JdbcSessionReposi
         }
     }
 
-    private fun normalize(packet: ChannelSharingPacket, mode: ChannelSharingMode, started: Long, at: Long): ChannelSharingPacket {
+    private fun normalize(packet: ChannelSharingPacket, mode: ChannelSharingMode, started: Long, at: Long, retainLastKnown: Boolean = false): ChannelSharingPacket {
         require(started >= 0 && packet.sequence >= 0 && packet.capturedAtEpochMillis in started..at)
-        require(packet.capturedAtEpochMillis <= Long.MAX_VALUE - LIVE_LOCATION_FRESHNESS_MILLIS)
-        require(at - packet.capturedAtEpochMillis < LIVE_LOCATION_FRESHNESS_MILLIS)
+        val window = if (retainLastKnown && packet.location != null) CHANNEL_MAP_RETENTION_MILLIS else LIVE_LOCATION_FRESHNESS_MILLIS
+        require(packet.capturedAtEpochMillis <= Long.MAX_VALUE - window)
+        require(at - packet.capturedAtEpochMillis < window)
         packet.location?.let {
             require(it.latitude.isFinite() && it.latitude in -90.0..90.0 && it.longitude.isFinite() && it.longitude in -180.0..180.0)
             require(it.accuracyMeters.isFinite() && it.accuracyMeters >= 0)
             require(it.capturedAtEpochMillis in started..packet.capturedAtEpochMillis)
-            require(it.staleAfterEpochMillis > at && it.staleAfterEpochMillis > it.capturedAtEpochMillis)
+            require((retainLastKnown || it.staleAfterEpochMillis > at) && it.staleAfterEpochMillis > it.capturedAtEpochMillis)
+            if (retainLastKnown) require(it.capturedAtEpochMillis <= Long.MAX_VALUE - window && at - it.capturedAtEpochMillis < window)
             require(it.staleAfterEpochMillis - it.capturedAtEpochMillis <= LIVE_LOCATION_FRESHNESS_MILLIS)
         }
         return packet.copy(telemetry = ChannelSharingTelemetryPolicy.sanitize(mode, packet.telemetry))

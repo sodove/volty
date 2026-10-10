@@ -13,4 +13,5 @@ internal class JdbcChannelSharingPacketEndpoint(private val packets: JdbcChannel
         return ChannelSharingPacketAcknowledgement(session, generation, stored.packet.sequence, remaining)
     }
     override fun audience(actor: String, session: String) = packets.snapshot(actor, session, now)
+    override fun mapAudience(actor: String, session: String) = packets.snapshot(actor, session, now, retainLastKnown = true)
 }

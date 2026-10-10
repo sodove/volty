@@ -9,6 +9,37 @@ import kotlin.test.*
 
 @Tag("postgres")
 class JdbcChannelSharingPacketsTest {
+    @Test fun lastKnownMapRetainsStaleCoordinatesOnlyUnderLiveConsentAndNeverRenewsCapture() {
+        join(); consent(); join(viewer, viewerOperation, viewerSession)
+        val original = packet(); assertNotNull(publish(original))
+        now += 16_000
+        val endpoint = JdbcChannelSharingPacketEndpoint(packets) { now }
+        assertTrue(endpoint.audience(viewer, viewerSession)!!.peers.isEmpty())
+        val peers = assertNotNull(endpoint.mapAudience(viewer, viewerSession)).peers
+        assertEquals(1, peers.size)
+        val stale = peers.single()
+        assertEquals(original.location, stale.packet.location)
+        assertTrue(stale.packet.location!!.staleAfterEpochMillis < now)
+        assertTrue(stale.deadlineEpochMillis <= original.capturedAtEpochMillis + 90_000)
+        assertEquals(stale, assertNotNull(endpoint.mapAudience(viewer, viewerSession)).peers.single())
+        shares.revoke(actor, session, generation, { now })
+        assertTrue(assertNotNull(endpoint.mapAudience(viewer, viewerSession)).peers.isEmpty())
+    }
+    @Test fun lastKnownMapHasCaptureBoundAndStripsStaleTelemetryWithLiveLeases() {
+        join(); consent(mode = ChannelSharingMode.RIDE); join(viewer, viewerOperation, viewerSession)
+        val original = packet().copy(telemetry = SharedTelemetryDto(profile="RIDE",powerW=TelemetryNumberDto(true,true,4200.0)))
+        assertNotNull(publish(original))
+        source.connection.use {c -> c.createStatement().use {
+            it.execute("UPDATE nearby_session_operations SET deadline_epoch_millis=${now+120_000} WHERE actor_id IN ('$actor','$viewer')")
+        }}
+        val endpoint = JdbcChannelSharingPacketEndpoint(packets) { now }
+        now += 16_000
+        val stale = assertNotNull(endpoint.mapAudience(viewer,viewerSession)).peers.single()
+        assertEquals(ChannelSharingMode.LOCATION,stale.mode);assertNull(stale.packet.telemetry)
+        assertEquals(original.capturedAtEpochMillis+90_000,stale.deadlineEpochMillis)
+        now = original.capturedAtEpochMillis+90_000
+        assertTrue(assertNotNull(endpoint.mapAudience(viewer,viewerSession)).peers.isEmpty())
+    }
     private fun id() = UUID.randomUUID().toString()
     private val actor = id(); private val viewer = id(); private val member = id(); private val community = id()
     private val channel = id(); private val otherChannel = id(); private val operation = id(); private val session = id(); private val generation = id()

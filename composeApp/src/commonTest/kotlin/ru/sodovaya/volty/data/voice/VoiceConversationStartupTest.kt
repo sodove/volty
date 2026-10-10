@@ -1701,6 +1701,41 @@ class VoiceConversationStartupTest {
         } finally {f.sharingPositiveRelease?.complete(Unit);runCurrent();audience?.close();f.close()}
     }
 
+    @Test fun lastKnownMapRenewsConfirmedAuthorityWithoutRenewingSampleOrFreshness() = runTest {
+        val f=Fixture(this);var sharing:ChannelSharingAccountControl?=null;var audience:ChannelSharingAudienceOwner?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingAudienceOwner.create(account,runtime,original,control,f.dispatcher,{f.time});audience=owner
+            f.sharingAudienceBody="""{"channelId":"$channel","serverTimeEpochMillis":1100,"peers":[{"actorId":"${f.peer}","sessionId":"${f.peer}","generation":"${f.key}","mode":"LOCATION","packet":{"sequence":7,"capturedAtEpochMillis":1000,"location":{"latitude":55.0,"longitude":60.0,"accuracyMeters":4.0,"capturedAtEpochMillis":1000,"staleAfterEpochMillis":2100}},"remainingMillis":1000}]}"""
+            assertTrue(owner.refresh().await());val first=owner.state.value.peers.single()
+            f.time=500;f.sharingAudienceBody=f.sharingAudienceBody!!.replace("serverTimeEpochMillis\":1100","serverTimeEpochMillis\":1500")
+            assertTrue(owner.refresh().await());val renewed=owner.state.value.peers.single()
+            assertEquals(1500,renewed.deadlineMillis);assertTrue(renewed.sampleDeadlineMillis!!<=first.sampleDeadlineMillis!!)
+            assertEquals(first.freshUntilMillis,renewed.freshUntilMillis)
+            f.time=1100;owner.tick();assertTrue(owner.state.value.peers.single().stale)
+            f.time=1500;owner.tick();assertTrue(owner.state.value.peers.isEmpty())
+            assertTrue(runtime.state.value.wanted)
+        } finally {audience?.close();sharing?.close();f.close()}
+    }
+    @Test fun staleServerProjectionCanRemoveTelemetryWithoutDroppingSameCoordinate() = runTest {
+        val f=Fixture(this);var sharing:ChannelSharingAccountControl?=null;var audience:ChannelSharingAudienceOwner?=null
+        try {
+            val account=f.login();f.owner.start(account,channel,first,readPreferences={phone},launch=f::launch);runCurrent()
+            val runtime=assertNotNull(f.runtime);val state=runtime.state.value;val original=VoiceSessionTag(assertNotNull(state.sessionId),state.generation)
+            val control=ChannelSharingAccountControl.create(account,runtime,original,f.client,"https://example.test/v2/nearby",f.dispatcher,{f.time});sharing=control
+            val owner=ChannelSharingAudienceOwner.create(account,runtime,original,control,f.dispatcher,{f.time});audience=owner
+            val location="""{"latitude":55.0,"longitude":60.0,"accuracyMeters":4.0,"capturedAtEpochMillis":1000,"staleAfterEpochMillis":16000}"""
+            fun response(at:Long,mode:String,telemetry:String)="""{"channelId":"$channel","serverTimeEpochMillis":$at,"peers":[{"actorId":"${f.peer}","sessionId":"${f.peer}","generation":"${f.key}","mode":"$mode","packet":{"sequence":7,"capturedAtEpochMillis":1000,"location":$location,"telemetry":$telemetry},"remainingMillis":5000}]}"""
+            f.sharingAudienceBody=response(1100,"RIDE","""{"profile":"RIDE","powerW":{"supported":true,"known":true,"value":4200}}""")
+            assertTrue(owner.refresh().await());assertNotNull(owner.state.value.peers.single().packet.telemetry)
+            f.time=1000;f.sharingAudienceBody=response(17000,"LOCATION","null")
+            assertTrue(owner.refresh().await());val stale=owner.state.value.peers.single()
+            assertTrue(stale.stale);assertNull(stale.packet.telemetry);assertEquals(55.0,stale.packet.location!!.latitude)
+            assertEquals(ChannelSharingMode.LOCATION,stale.mode);assertTrue(runtime.state.value.wanted)
+        } finally {audience?.close();sharing?.close();f.close()}
+    }
     @Test fun rootSharingAudienceCoalescesReadsAndSurvivesCancelledUiWaiterThenExpiresWithoutHttp() = runTest {
         val f=Fixture(this);var sharing: ChannelSharingAccountControl?=null;var audience: ChannelSharingAudienceOwner?=null
         try {

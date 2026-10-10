@@ -11,6 +11,8 @@ import kotlinx.serialization.Serializable
 import ru.sodovaya.volty.backend.*
 import java.util.UUID
 
+internal const val CHANNEL_MAP_RETENTION_MILLIS = 90_000L
+
 @Serializable
 data class ChannelSharingPacketResponse(val sessionId: String, val generation: String, val sequence: Long, val remainingMillis: Long)
 @Serializable
@@ -39,14 +41,17 @@ fun Route.installNearbySharingPacketRoutes(dependencies: AppDependencies) {
             val actor = call.nearbyActor(dependencies)
             val session = communityCanonicalId(call.parameters["sessionId"] ?: "")
             val port = dependencies.nearbySharingPackets ?: unavailablePackets()
-            val snapshot = withContext(Dispatchers.IO) {port.audience(actor, session)} ?: missingPackets()
-            val response = try { safeAudience(snapshot) } catch (_: IllegalArgumentException) {unavailablePackets()}
+            val lastKnown = call.request.queryParameters["lastKnown"] == "true"
+            val snapshot = withContext(Dispatchers.IO) {
+                if (lastKnown) port.mapAudience(actor, session) else port.audience(actor, session)
+            } ?: missingPackets()
+            val response = try { safeAudience(snapshot, lastKnown) } catch (_: IllegalArgumentException) {unavailablePackets()}
             call.respond(response)
         }
     }
 }
 
-private fun safeAudience(value: ChannelSharingAudience): ChannelSharingAudienceResponse {
+private fun safeAudience(value: ChannelSharingAudience, lastKnown: Boolean): ChannelSharingAudienceResponse {
     canonical(value.channelId); require(value.serverTimeEpochMillis >= 0)
     val actors = mutableSetOf<String>(); val sessions = mutableSetOf<String>()
     val peers = value.peers.map {peer ->
@@ -54,11 +59,17 @@ private fun safeAudience(value: ChannelSharingAudience): ChannelSharingAudienceR
         require(actors.add(peer.actorId) && sessions.add(peer.sessionId))
         validatePacketCapture(peer.packet)
         val captured = peer.packet.capturedAtEpochMillis
-        require(captured <= value.serverTimeEpochMillis && value.serverTimeEpochMillis - captured < LIVE_LOCATION_FRESHNESS_MILLIS)
-        require(peer.deadlineEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= captured + LIVE_LOCATION_FRESHNESS_MILLIS)
-        peer.packet.location?.let { require(it.staleAfterEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= it.staleAfterEpochMillis) }
-        val safe = peer.packet.copy(telemetry = ChannelSharingTelemetryPolicy.sanitize(peer.mode, peer.packet.telemetry))
-        ChannelSharingPeerResponse(peer.actorId, peer.sessionId, peer.generation, peer.mode.name, safe, peer.deadlineEpochMillis - value.serverTimeEpochMillis,
+        val window = if (lastKnown && peer.packet.location != null) CHANNEL_MAP_RETENTION_MILLIS else LIVE_LOCATION_FRESHNESS_MILLIS
+        require(captured <= Long.MAX_VALUE - window && captured <= value.serverTimeEpochMillis && value.serverTimeEpochMillis - captured < window)
+        require(peer.deadlineEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= captured + window)
+        peer.packet.location?.let {
+            if (lastKnown) require(it.capturedAtEpochMillis <= Long.MAX_VALUE - window && peer.deadlineEpochMillis <= it.capturedAtEpochMillis + window)
+            else require(it.staleAfterEpochMillis > value.serverTimeEpochMillis && peer.deadlineEpochMillis <= it.staleAfterEpochMillis)
+        }
+        val stale = lastKnown && peer.packet.location?.let { value.serverTimeEpochMillis >= it.staleAfterEpochMillis } == true
+        val mode = if (stale) ChannelSharingMode.LOCATION else peer.mode
+        val safe = peer.packet.copy(telemetry = if (stale) null else ChannelSharingTelemetryPolicy.sanitize(mode, peer.packet.telemetry))
+        ChannelSharingPeerResponse(peer.actorId, peer.sessionId, peer.generation, mode.name, safe, peer.deadlineEpochMillis - value.serverTimeEpochMillis,
             peer.displayName?.takeIf {it.length in 2..80 && it.isNotBlank() && it.none(Char::isISOControl)})
     }
     return ChannelSharingAudienceResponse(value.channelId, value.serverTimeEpochMillis, peers)

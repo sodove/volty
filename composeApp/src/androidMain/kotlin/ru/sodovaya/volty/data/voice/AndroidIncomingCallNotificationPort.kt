@@ -83,11 +83,17 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
             .setCategory(NotificationCompat.CATEGORY_CALL).setPriority(NotificationCompat.PRIORITY_HIGH)
             .setContentIntent(open).setAutoCancel(false).setTimeoutAfter(remainingMillis)
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
-            .setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, accept))
         // Android 14 can deny full-screen access independently of notification permission.
         // Heads-up/actions remain available; opening is always display-only.
-        if (Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent())
+        if (Build.VERSION.SDK_INT < 34 || manager.canUseFullScreenIntent()) {
             builder.setFullScreenIntent(open, true)
+            builder.setStyle(NotificationCompat.CallStyle.forIncomingCall(caller, decline, accept))
+        } else {
+            // Retraction: CallStyle without FSI/FGS/UIJ is rejected by NotificationManager.
+            // A normal heads-up notification keeps answer/decline usable without special access.
+            builder.addAction(0, application.getString(R.string.nearby_incoming_notification_decline), decline)
+                .addAction(0, application.getString(R.string.nearby_incoming_notification_accept), accept)
+        }
         val notification = builder.build()
         if ((manager.getNotificationChannel(INCOMING_CALL_NOTIFICATION_CHANNEL)?.importance ?: NotificationManager.IMPORTANCE_HIGH)
             < NotificationManager.IMPORTANCE_HIGH)
@@ -96,6 +102,11 @@ internal class AndroidIncomingCallNotificationPort(context: Context,
             manager.notify(ticket.id, NOTIFICATION, notification)
             AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_SUBMITTED)
         } catch (failure: Exception) {
+            AndroidCallPushDiagnostics.record(when (failure) {
+                is SecurityException -> CallPushDiagnosticEvent.NOTIFICATION_SECURITY_ERROR
+                is IllegalArgumentException -> CallPushDiagnosticEvent.NOTIFICATION_INVALID_REQUEST
+                else -> CallPushDiagnosticEvent.NOTIFICATION_PLATFORM_ERROR
+            })
             AndroidCallPushDiagnostics.record(CallPushDiagnosticEvent.NOTIFICATION_FAILED)
             throw failure
         }

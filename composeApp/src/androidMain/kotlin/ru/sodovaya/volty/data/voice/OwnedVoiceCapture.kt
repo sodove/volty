@@ -18,6 +18,7 @@ internal class OwnedVoiceCapture(
 ) {
     private val lock = Any()
     private val gate = VoiceCaptureFrameGate()
+    private val cadence = VoiceCaptureCadence()
     private var record: AudioRecord? = null
     private var device: AudioDeviceInfo? = null
     private var preference = VoiceInputPreference.AUTO
@@ -55,7 +56,9 @@ internal class OwnedVoiceCapture(
 
     fun fill(buffer: ByteBuffer, format: Int, count: Int, rate: Int): Long {
         val startedAt = System.nanoTime()
-        val deadline = startedAt + FRAME_NANOS
+        // Retraction: sleeping ten ms from each callback accumulates scheduler oversleep.
+        // Pace against the original sample clock, resetting after a long native stall.
+        val deadline = synchronized(lock) { cadence.deadline(startedAt) }
         val revision = synchronized(lock) { gate.beginRead() }
         var bytes = 0
         try {
@@ -141,6 +144,7 @@ internal class OwnedVoiceCapture(
     fun stop() = synchronized(lock) { stopLocked() }
     fun close() = synchronized(lock) { closed = true; gate.close(); stopLocked() }
     private fun stopLocked() {
+        cadence.reset()
         val owned = record ?: return
         if (owned.recordingState == AudioRecord.RECORDSTATE_RECORDING) owned.stop()
         owned.release()
@@ -149,5 +153,4 @@ internal class OwnedVoiceCapture(
         state(false)
     }
 
-    private companion object { const val FRAME_NANOS = 10_000_000L }
 }

@@ -167,45 +167,40 @@ internal class AndroidVoiceSdkSession(
         if (!closing) audio?.mutePlayback(deafened || !outputAvailable || routingTransition)
     }
 
-    override suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult = resources.withLock {
+    override suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult =
+        configureAudioIfCurrent(preferences) { true }
+
+    override suspend fun configureAudioIfCurrent(preferences: VoiceAudioPreferences, current: () -> Boolean): VoiceAudioChangeResult = resources.withLock {
         currentCoroutineContext().ensureActive()
-        if (closing) return@withLock VoiceAudioChangeResult.STALE
+        if (closing || !current()) return@withLock VoiceAudioChangeResult.STALE
         val ownedAudio = audio ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
         val ownedRoutes = routes ?: return@withLock VoiceAudioChangeResult.UNAVAILABLE
         if (!ownedAudio.playbackAvailable(preferences)) return@withLock VoiceAudioChangeResult.UNAVAILABLE
-        val request = currentCoroutineContext()[Job]
         val manager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val previous = diagnostics.state.value.preferences
         routingTransition = true
         ownedAudio.mutePlayback(true)
-        var applied = false
+        var safe = false
         try {
-        val result = ownedRoutes.configureOutputAndInput(preferences.output, preferences.input == VoiceInputPreference.PHONE,
-            requestInput = {
-                val playbackResult = ownedAudio.configurePlayback(preferences)
-                if (playbackResult == VoiceAudioChangeResult.REQUESTED) ownedAudio.requestInput(manager, preferences.input)
-                else playbackResult
-            },
-            currentRequest = { !closing && request?.isActive == true })
-        currentCoroutineContext().ensureActive()
-        if (closing) VoiceAudioChangeResult.STALE else {
-            if (result == VoiceAudioChangeResult.REQUESTED) {
-                applied = true
-                diagnostics.update { it.copy(preferences = preferences) }
-            } else {
-                ownedAudio.muteMicrophone(true)
-                ownedAudio.mutePlayback(true)
-                event(VoiceSessionEvent.EngineFailed(tag))
+            voiceAudioRouteTransaction(preferences, previous, { !closing && current() }, { pair, admitted ->
+                ownedRoutes.configureOutputAndInput(pair.output, pair.input == VoiceInputPreference.PHONE,
+                    requestInput = {
+                        val playback = ownedAudio.configurePlayback(pair)
+                        if (playback == VoiceAudioChangeResult.REQUESTED) ownedAudio.requestInput(manager, pair.input)
+                        else playback
+                    }, currentRequest = admitted)
+            }, { safe = it }).also { result ->
+                if (result == VoiceAudioChangeResult.REQUESTED && !closing && current())
+                    diagnostics.update { it.copy(preferences = preferences) }
             }
-            result
-        }
         } finally {
             routingTransition = false
             if (!closing) {
-                if (applied) ownedAudio.mutePlayback(deafened || !outputAvailable)
+                if (safe && current()) ownedAudio.mutePlayback(deafened || !outputAvailable)
                 else {
                     ownedAudio.muteMicrophone(true)
                     ownedAudio.mutePlayback(true)
-                    event(VoiceSessionEvent.EngineFailed(tag))
+                    if (current()) event(VoiceSessionEvent.EngineFailed(tag))
                 }
             }
         }

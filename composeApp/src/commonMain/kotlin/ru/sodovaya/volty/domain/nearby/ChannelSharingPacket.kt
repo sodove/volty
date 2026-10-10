@@ -11,6 +11,7 @@ data class ChannelSharingPacket(val sequence: Long, val capturedAtEpochMillis: L
     val location: LocationSnapshot?, val telemetry: SharedTelemetry? = null)
 
 internal const val CHANNEL_SHARING_SAMPLE_MILLIS = 15_000L
+internal const val CHANNEL_MAP_RETENTION_MILLIS = 90_000L
 internal fun ChannelSharingPacket.validateCapture() {
     require(sequence >= 0 && capturedAtEpochMillis in 0..Long.MAX_VALUE - CHANNEL_SHARING_SAMPLE_MILLIS)
     location?.let {
@@ -44,7 +45,8 @@ internal fun ChannelSharingPacket.sanitized(mode: ChannelSharingMode): ChannelSh
 }
 
 data class ObservedChannelSharingPeer(val actorId: String, val tag: ChannelSharingTag,
-    val mode: ChannelSharingMode, val packet: ChannelSharingPacket, val deadlineMillis: Long, val displayName: String? = null)
+    val mode: ChannelSharingMode, val packet: ChannelSharingPacket, val deadlineMillis: Long, val displayName: String? = null,
+    val freshUntilMillis: Long? = null, val stale: Boolean = false, val sampleDeadlineMillis: Long? = null)
 
 sealed interface ChannelSharingPacketReply {
     data class Published(val tag: ChannelSharingTag, val sequence: Long, val requestOrdinal: Long,

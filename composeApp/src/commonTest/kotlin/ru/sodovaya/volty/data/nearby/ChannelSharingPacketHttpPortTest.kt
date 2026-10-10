@@ -10,6 +10,7 @@ import kotlinx.coroutines.test.*
 import ru.sodovaya.volty.domain.nearby.*
 import ru.sodovaya.volty.domain.social.*
 import kotlin.test.*
+import kotlinx.serialization.json.Json
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChannelSharingPacketHttpPortTest {
@@ -40,6 +41,20 @@ class ChannelSharingPacketHttpPortTest {
             val result=assertIs<ChannelSharingPacketReply.Audience>(port.audience(channel,sid))
             assertEquals(1,result.requestOrdinal); assertEquals(1100,result.peers.single().deadlineMillis)
             assertEquals(listOf("/v2/nearby/sharing/$sid/$gen/packet","/v2/nearby/channel-sessions/$sid/sharing/audience"),paths)
+        } finally {port.close();http.close()}
+    }
+    @Test fun lastKnownPositionHasBoundedDisplayCreditButNeverEarnsFreshness() = runTest {
+        val stalePacket = packet.copy(capturedAtEpochMillis=1000,
+            location=LocationSnapshot(55.0,60.0,4.0,1000,16000))
+        val response = """{"channelId":"$channel","serverTimeEpochMillis":21000,"peers":[{"actorId":"$actor","sessionId":"$sid","generation":"$gen","mode":"LOCATION","packet":${Json.encodeToString(ChannelSharingPacket.serializer(),stalePacket)},"remainingMillis":5000}]}"""
+        var issued = 0
+        val http=client { issued++; assertEquals("true",it.url.parameters["lastKnown"]);respond(response) }
+        val port=ChannelSharingPacketHttpPort(http,"https://api.test/v2/nearby",{"token"},{100})
+        try {
+            val peer=assertIs<ChannelSharingPacketReply.Audience>(port.audience(channel,sid)).peers.single()
+            assertEquals(5100,peer.deadlineMillis)
+            assertEquals(100,peer.freshUntilMillis)
+            assertEquals(stalePacket,peer.packet);assertEquals(1,issued)
         } finally {port.close();http.close()}
     }
     @Test fun audienceReadsOptionalNameWithoutChangingPacketOrCredit()=runTest {

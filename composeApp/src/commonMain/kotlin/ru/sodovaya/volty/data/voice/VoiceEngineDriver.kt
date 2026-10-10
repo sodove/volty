@@ -220,7 +220,7 @@ class VoiceEngineDriver(
                 request.handle.controlMutex.withLock {
                     currentCoroutineContext().ensureActive()
                     if (!mutex.withLock { ownsAudioChange(request) }) return@withLock VoiceAudioChangeResult.STALE
-                    val result = request.handle.session.configureAudio(preferences)
+                    val result = request.handle.session.configureAudioIfCurrent(preferences) { isAuthorized(tag) }
                     currentCoroutineContext().ensureActive()
                     mutex.withLock { if (ownsAudioChange(request)) result else VoiceAudioChangeResult.STALE }
                 }

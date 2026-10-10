@@ -26,7 +26,21 @@ class ChannelSharingPacketRoutesTest {
         override fun publish(actor: String, session: String, generation: String, packet: ChannelSharingPacket): ChannelSharingPacketAcknowledgement? {
             calls += "publish:$actor:$session:$generation:${packet.sequence}"; return acknowledgement
         }
+        override fun mapAudience(actor:String,session:String):ChannelSharingAudience? {calls += "map:$actor:$session";return snapshot}
         override fun audience(actor: String, session: String): ChannelSharingAudience? {calls += "audience:$actor:$session"; return snapshot}
+    }
+    @Test fun optInMapUsesCurrentAuthorityAndDowngradesExpiredSampleToLocationOnly() = testApplication {
+        val port=Port();val deps=deps(port);application {module(deps)};val token=deps.tokenService.issueAccessToken(actor)
+        val location=LocationDto(55.0,60.0,4.0,1000,16000)
+        val stale=packet.copy(location=location,telemetry=SharedTelemetryDto(profile="RIDE",powerW=TelemetryNumberDto(true,true,4200.0)))
+        port.snapshot=ChannelSharingAudience(channel,21000,listOf(ChannelSharingAudiencePeer(actor,session,generation,ChannelSharingMode.RIDE,stale,26000)))
+        val response=client.get(audience+"?lastKnown=true") {bearerAuth(token)}
+        assertEquals(HttpStatusCode.OK,response.status)
+        val body=response.bodyAsText();assertTrue(body.contains("LOCATION"));assertFalse(body.contains("4200"));assertTrue(body.contains("55.0"))
+        assertEquals(listOf("map:$actor:$session"),port.calls)
+        assertEquals(HttpStatusCode.ServiceUnavailable,client.get(audience) {bearerAuth(token)}.status)
+        port.snapshot=port.snapshot!!.copy(peers=port.snapshot!!.peers.map {it.copy(deadlineEpochMillis=91001)})
+        assertEquals(HttpStatusCode.ServiceUnavailable,client.get(audience+"?lastKnown=true") {bearerAuth(token)}.status)
     }
     @Test fun authenticationAndDisabledPorts() = testApplication {
         val deps = deps(); application {module(deps)}

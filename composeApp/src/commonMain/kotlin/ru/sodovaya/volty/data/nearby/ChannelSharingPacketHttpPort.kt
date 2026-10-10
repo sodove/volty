@@ -38,7 +38,7 @@ internal class ChannelSharingPacketHttpPort(client: HttpClient, baseUrl: String,
 
     suspend fun audience(channelId: String, sessionId: String): ChannelSharingPacketReply = try {
         invitationDraftId(channelId); invitationDraftId(sessionId)
-        request("/channel-sessions/$sessionId/sharing/audience") {root,id,start,receipt ->
+        request("/channel-sessions/$sessionId/sharing/audience?lastKnown=true") {root,id,start,receipt ->
             require(root.keys.none {it in PRIVATE_FIELDS}); require(root.string("channelId")==channelId)
             val at=root.number("serverTimeEpochMillis"); require(at>=0)
             val actors=mutableSetOf<String>(); val sessions=mutableSetOf<String>()
@@ -55,13 +55,24 @@ internal class ChannelSharingPacketHttpPort(client: HttpClient, baseUrl: String,
                 require(payload.keys.none {it in PRIVATE_FIELDS})
                 payload.number("sequence"); payload.number("capturedAtEpochMillis")
                 val packet=json.decodeFromJsonElement<ChannelSharingPacket>(payload).sanitized(mode)
-                require(packet.capturedAtEpochMillis<=at && at-packet.capturedAtEpochMillis<CHANNEL_SHARING_SAMPLE_MILLIS)
+                val window = if (packet.location != null) CHANNEL_MAP_RETENTION_MILLIS else CHANNEL_SHARING_SAMPLE_MILLIS
+                require(packet.capturedAtEpochMillis<=at && at-packet.capturedAtEpochMillis<window)
                 val credit=peer.number("remainingMillis")
-                require(credit<=packet.capturedAtEpochMillis+CHANNEL_SHARING_SAMPLE_MILLIS-at)
-                packet.location?.let {require(it.staleAfterEpochMillis>at && credit<=it.staleAfterEpochMillis-at)}
-                val deadline=deadline(credit,start)
-                if(deadline<=receipt) null else ObservedChannelSharingPeer(actor,tag,mode,packet,deadline,
-                    channelSharingPeerDisplayName((peer["displayName"] as? JsonPrimitive)?.takeIf {it.isString}?.content))
+                require(packet.capturedAtEpochMillis<=Long.MAX_VALUE-window && credit<=packet.capturedAtEpochMillis+window-at)
+                packet.location?.let {require(it.capturedAtEpochMillis<=Long.MAX_VALUE-window && credit<=it.capturedAtEpochMillis+window-at)}
+                val deadline=deadline(credit,start,window)
+                val capture=packet.location?.capturedAtEpochMillis ?: packet.capturedAtEpochMillis
+                val retention=deadline(capture+window-at,start,window)
+                val freshCredit=maxOf(0, minOf(packet.capturedAtEpochMillis+CHANNEL_SHARING_SAMPLE_MILLIS-at,
+                    packet.location?.staleAfterEpochMillis?.minus(at) ?: Long.MAX_VALUE))
+                require(start<=Long.MAX_VALUE-freshCredit)
+                val freshUntil=start+freshCredit
+                // A retained location is never a source of current telemetry.
+                val safe=if(receipt>=freshUntil) packet.copy(telemetry=null) else packet
+                if(deadline<=receipt) null else ObservedChannelSharingPeer(actor,tag,
+                    if(receipt>=freshUntil) ChannelSharingMode.LOCATION else mode,safe,deadline,
+                    channelSharingPeerDisplayName((peer["displayName"] as? JsonPrimitive)?.takeIf {it.isString}?.content),
+                    freshUntil,receipt>=freshUntil,retention.takeIf {packet.location != null})
             }
             ChannelSharingPacketReply.Audience(channelId,at,id,start,receipt,peers)
         }
@@ -107,8 +118,8 @@ internal class ChannelSharingPacketHttpPort(client: HttpClient, baseUrl: String,
       catch(_: IllegalArgumentException) {failed(ChannelSharingFailure.INVALID_RESPONSE)}
       catch(_: Exception) {failed(if(closed.value) ChannelSharingFailure.RETIRED else ChannelSharingFailure.UNAVAILABLE)}
 
-    private fun deadline(credit: Long, start: Long): Long {
-        require(credit in 1..CHANNEL_SHARING_SAMPLE_MILLIS && start<=Long.MAX_VALUE-credit)
+    private fun deadline(credit: Long, start: Long, window: Long = CHANNEL_SHARING_SAMPLE_MILLIS): Long {
+        require(credit in 1..window && start<=Long.MAX_VALUE-credit)
         return start+credit
     }
     private fun JsonObject.string(key: String)=(get(key) as? JsonPrimitive)?.takeIf {it.isString}?.content ?: throw IllegalArgumentException("Invalid sharing field")

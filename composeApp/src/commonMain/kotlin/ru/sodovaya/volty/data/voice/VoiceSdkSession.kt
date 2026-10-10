@@ -23,6 +23,8 @@ interface VoiceSdkSession {
         else if (setMuted(muted)) VoiceMuteApplyResult.APPLIED else VoiceMuteApplyResult.REJECTED
     fun setDeafened(deafened: Boolean)
     suspend fun configureAudio(preferences: VoiceAudioPreferences): VoiceAudioChangeResult = VoiceAudioChangeResult.REQUIRES_RECONNECT
+    suspend fun configureAudioIfCurrent(preferences: VoiceAudioPreferences, current: () -> Boolean): VoiceAudioChangeResult =
+        if (current()) configureAudio(preferences) else VoiceAudioChangeResult.STALE
     suspend fun close()
 }
 

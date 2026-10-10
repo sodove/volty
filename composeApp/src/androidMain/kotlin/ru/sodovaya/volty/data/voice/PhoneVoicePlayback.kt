@@ -65,7 +65,7 @@ internal class PhoneVoicePlayback(
 
     fun mute(value: Boolean) = synchronized(lock) {
         muted = value
-        if (value) streams.values.forEach { it.track?.let { track -> track.pause(); track.flush() } }
+        if (value) streams.values.forEach { it.clearBufferedAudio() }
         report()
     }
 
@@ -133,6 +133,8 @@ internal class PhoneVoicePlayback(
         private var rate = 0
         private var channels = 0
         private var fault = false
+        private var buffered: VoicePlaybackBuffer? = null
+        private var primed = false
         override fun onData(data: java.nio.ByteBuffer, bits: Int, sampleRate: Int, channelCount: Int, frames: Int, timestamp: Long) {
             synchronized(lock) {
                 if (closed || retired || !enabled || fault) return
@@ -153,27 +155,45 @@ internal class PhoneVoicePlayback(
                             .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH).build())
                             .setAudioFormat(AudioFormat.Builder().setSampleRate(sampleRate).setChannelMask(mask)
                                 .setEncoding(AudioFormat.ENCODING_PCM_16BIT).build())
-                            .setBufferSizeInBytes(maxOf(minimum, bytes * 2)).setTransferMode(AudioTrack.MODE_STREAM).build().also {
+                            .setBufferSizeInBytes(maxOf(minimum, sampleRate * channelCount * 2 * 80 / 1000))
+                            .setTransferMode(AudioTrack.MODE_STREAM).build().also {
                                 track = it
                                 check(it.state == AudioTrack.STATE_INITIALIZED)
                                 check(it.setPreferredDevice(selected))
                                 rate = sampleRate; channels = channelCount
+                                buffered = VoicePlaybackBuffer(sampleRate * channelCount * 2 * 120 / 1000, channelCount * 2)
                             }
                     }
                     if (muted) return
+                    if (!primed) {
+                        // Start with a small native reserve instead of playing an empty buffer.
+                        val silence = ByteArray(sampleRate * channelCount * 2 * 40 / 1000)
+                        check(owned.write(silence, 0, silence.size, AudioTrack.WRITE_NON_BLOCKING) >= 0)
+                        primed = true
+                    }
                     if (owned.playState != AudioTrack.PLAYSTATE_PLAYING) owned.play()
                     val actual = owned.routedDevice
                     val permitted = voicePlaybackFrameAllowed(output, selected?.id, actual?.id)
                     // Prime an unconfirmed route with silence. Never leak headset-only voice to the speaker.
-                    val pcm = if (permitted) data.duplicate().apply { limit(position() + bytes) }
-                        else java.nio.ByteBuffer.allocateDirect(bytes)
-                    val written = owned.write(pcm, bytes, AudioTrack.WRITE_NON_BLOCKING)
-                    check(written >= 0)
-                    if (permitted) diagnostics.addRenderBytes(written)
+                    val backlog = checkNotNull(buffered)
+                    if (!permitted) backlog.clear()
+                    val pcm = ByteArray(bytes)
+                    if (permitted) data.duplicate().get(pcm)
+                    backlog.append(pcm)
+                    // A nonblocking AudioTrack write may accept only a prefix or zero bytes.
+                    // Keep the tail for later callbacks; cap delay instead of growing forever.
+                    do {
+                        val written = backlog.drain { values, count -> owned.write(values, 0, count, AudioTrack.WRITE_NON_BLOCKING) }
+                        if (permitted) diagnostics.addRenderBytes(written)
+                    } while (written > 0 && backlog.size > 0)
                     report()
                 } catch (_: Exception) { fault = true; failed() }
             }
         }
-        fun release() { track?.release(); track = null; fault = false }
+        fun clearBufferedAudio() {
+            buffered?.clear(); primed = false
+            track?.let { it.pause(); it.flush() }
+        }
+        fun release() { track?.release(); track = null; buffered = null; primed = false; fault = false }
     }
 }

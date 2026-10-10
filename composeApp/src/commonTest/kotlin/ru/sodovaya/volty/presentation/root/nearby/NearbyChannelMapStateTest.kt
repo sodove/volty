@@ -7,6 +7,13 @@ import ru.sodovaya.volty.domain.social.LocationSnapshot
 import ru.sodovaya.volty.domain.voice.*
 
 class NearbyChannelMapStateTest {
+    @Test fun lastKnownCoordinatesStayVisibleWithStalePresentation() {
+        val view = source().copy(sharingAudience = ChannelSharingAudienceView(true, listOf(point.copy(stale = true))))
+        val markers = nearbyChannelMarkers(nearbyChannelMapState(view, operation), "Participant")
+        assertEquals(1, markers.size)
+        assertTrue(markers.single().stale)
+        assertEquals(ru.sodovaya.volty.domain.social.PresenceStatus.STALE, markers.single().presence)
+    }
     private val operation = VoiceOperationId("original")
     private val tag = VoiceSessionTag(VoiceSessionId("session"), VoiceGeneration(3))
     private val point = ObservedChannelSharingPeer("actor", ChannelSharingTag(
