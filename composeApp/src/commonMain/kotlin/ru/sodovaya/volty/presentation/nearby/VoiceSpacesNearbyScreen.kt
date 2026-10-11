@@ -17,6 +17,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import org.jetbrains.compose.resources.StringResource
@@ -97,7 +99,14 @@ private fun NearbyProfileForm(state: VoiceSpacesNearbyState,component: DefaultVo
 @Composable
 private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoiceSpacesNearbyComponent,modifier: Modifier) {
     val enabled=!state.busy && state.session!=SocialSession.Authenticating
-    LazyColumn(modifier.fillMaxWidth(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
+    // Keep the IME's selection/composition synchronously. The component's combined
+    // StateFlow is an asynchronous text echo, not the editor's source of truth.
+    // Form-scoped state also survives lazy-item disposal and login/register changes;
+    // leaving authentication discards it, including the password.
+    var email by remember(component) {mutableStateOf(TextFieldValue(state.auth.email,TextRange(state.auth.email.length)))}
+    var password by remember(component) {mutableStateOf(TextFieldValue(state.auth.password,TextRange(state.auth.password.length)))}
+    var displayName by remember(component) {mutableStateOf(TextFieldValue(state.auth.displayName,TextRange(state.auth.displayName.length)))}
+    LazyColumn(modifier.fillMaxWidth().imePadding().navigationBarsPadding(),contentPadding=PaddingValues(16.dp),verticalArrangement=Arrangement.spacedBy(12.dp)) {
         item {Text(stringResource(Res.string.nearby_shell_description))}
         item {TabRow(selectedTabIndex=state.auth.mode.ordinal) {
             Tab(selected=state.auth.mode==NearbyAuthMode.LOGIN,onClick={component.setAuthMode(NearbyAuthMode.LOGIN)},enabled=enabled,
@@ -107,15 +116,21 @@ private fun NearbyAuthForm(state: VoiceSpacesNearbyState,component: DefaultVoice
         }}
         item {Text(stringResource(Res.string.nearby_auth_email_hint),style=MaterialTheme.typography.bodySmall,
             color=MaterialTheme.colorScheme.onSurfaceVariant)}
-        item {OutlinedTextField(state.auth.email,component::setEmail,Modifier.widthIn(max=520.dp).fillMaxWidth(),
+        item(key="email") {OutlinedTextField(email,{value -> if(enabled && value.text.length<=254) {
+            val changed=value.text!=email.text; email=value; if(changed) component.setEmail(value.text)
+        }},Modifier.widthIn(max=520.dp).fillMaxWidth(),
             label={Text(stringResource(Res.string.nearby_auth_email))},placeholder={Text("name@example.com")},
             keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Email),singleLine=true,enabled=enabled)}
-        item {OutlinedTextField(state.auth.password,component::setPassword,Modifier.widthIn(max=520.dp).fillMaxWidth(),
+        item(key="password") {OutlinedTextField(password,{value -> if(enabled && value.text.length<=128) {
+            val changed=value.text!=password.text; password=value; if(changed) component.setPassword(value.text)
+        }},Modifier.widthIn(max=520.dp).fillMaxWidth(),
             label={Text(stringResource(Res.string.nearby_password))},visualTransformation=PasswordVisualTransformation(),
             keyboardOptions=KeyboardOptions(keyboardType=KeyboardType.Password),singleLine=true,enabled=enabled)}
         if(state.auth.mode==NearbyAuthMode.REGISTER) {
             item {Text(stringResource(Res.string.nearby_password_hint))}
-            item {OutlinedTextField(state.auth.displayName,component::setDisplayName,Modifier.widthIn(max=520.dp).fillMaxWidth(),
+            item(key="displayName") {OutlinedTextField(displayName,{value -> if(enabled && value.text.length<=80) {
+                val changed=value.text!=displayName.text; displayName=value; if(changed) component.setDisplayName(value.text)
+            }},Modifier.widthIn(max=520.dp).fillMaxWidth(),
                 label={Text(stringResource(Res.string.nearby_name))},singleLine=true,enabled=enabled)}
         }
         state.error?.let {error ->item {Text(stringResource(when {
