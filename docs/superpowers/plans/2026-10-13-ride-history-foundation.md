@@ -112,6 +112,7 @@ data class HistoryPage<T>(val items: List<T>, val next: HistoryCursor?, val trun
 data class HistoryStats(val minimum: Double?, val maximum: Double?, val energyWh: Double?, val complete: Boolean)
 interface HistoryStore {
   suspend fun begin(ride: HistoryRide, sources: List<HistorySource>)
+  suspend fun ride(rideId: String): HistoryRide?
   suspend fun append(batch: HistoryBatch)
   suspend fun finish(rideId: String, ended: HistoryTick, status: HistoryRideStatus)
   suspend fun recoverInterrupted(): Int
@@ -156,7 +157,7 @@ data class RecordingIntent(val ride: HistoryRide? = null, val connectionGenerati
 sealed interface RecordingInput {
   data class Connected(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
   data class LinkLost(val generation: Long, val tick: HistoryTick) : RecordingInput
-  data class Stop(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
+  data class Stop(val tick: HistoryTick, val generation: Long? = null, val rideId: String? = null) : RecordingInput
   data class ExplicitDisconnect(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
   data class Start(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
 }
@@ -178,8 +179,15 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: 
   separates retained ride participation from admission of BLE telemetry.
   Source-owned terminal events carry generation; null is reserved for deliberate
   global UI intent. A stale source Stop/ExplicitDisconnect cannot finish a new ride.
+  A recording-owned Stop also carries rideId: two recordings can share the same
+  BLE generation, so connection generation alone is insufficient for that command.
   Clock continuity additionally rejects wall/monotonic delta skew above1000ms,
   including forward jumps; elapsed time governs integration, not wall time.
+  Chart/range coordinates use `historyAxisEpochMillis(ride.started, capturedTick)`:
+  start epoch anchored to elapsed progression. Original epoch remains available
+  for calendar/export. Different monotonic origins are rejected and require a
+  new interrupted/recovered ride. Store range filters convert axis coordinates
+  to elapsed within ride.started.clockGeneration; do not sort charts by raw epoch.
   ```kotlin
   @Test fun backwardsClockIsBoundary() {
     assertTrue(clockBoundary(HistoryTick(2000, 100, 1), HistoryTick(1000, 200, 1)))
@@ -342,9 +350,10 @@ modify `presentation/graph/GraphComponent.kt`; tests `HistoryReadRepositoryTest.
 **Consumes:** HistoryStore and projection; old graph compatibility.
 **Produces:**
 ```kotlin
-data class HistorySeries(val key: HistorySeriesKey, val samples: List<HistorySample>, val markers: List<HistoryMarker>, val truncated: Boolean)
+data class HistorySeries(val key: HistorySeriesKey, val samples: List<HistorySample>, val markers: List<HistoryMarker>, val truncated: Boolean, val origin: HistoryTick? = null)
 interface HistoryReadRepository {
   suspend fun rides(before: HistoryCursor? = null): HistoryPage<HistoryRide>
+  suspend fun ride(rideId: String): HistoryRide?
   suspend fun sources(rideId: String): List<HistorySource>
   suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int = 600): HistorySeries
   suspend fun gps(rideId: String, range: HistoryRange): HistoryPage<HistoryGpsFix>

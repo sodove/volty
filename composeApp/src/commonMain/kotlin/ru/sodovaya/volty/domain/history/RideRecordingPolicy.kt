@@ -5,7 +5,7 @@ data class RecordingIntent(val ride: HistoryRide? = null, val connectionGenerati
 sealed interface RecordingInput {
     data class Connected(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
     data class LinkLost(val generation: Long, val tick: HistoryTick) : RecordingInput
-    data class Stop(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
+    data class Stop(val tick: HistoryTick, val generation: Long? = null, val rideId: String? = null) : RecordingInput
     data class ExplicitDisconnect(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
     data class Start(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
 }
@@ -51,7 +51,8 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: 
                 listOf(HistoryMarker(input.tick, HistoryMarkerKind.BLE_GAP)), null, null)
         }
         is RecordingInput.Stop -> {
-            if (input.generation != null && input.generation != current.connectionGeneration) unchanged()
+            if ((input.generation != null && input.generation != current.connectionGeneration) ||
+                (input.rideId != null && input.rideId != current.ride?.id)) unchanged()
             else stopped(input.tick, manual = true)
         }
         is RecordingInput.ExplicitDisconnect -> {
@@ -65,6 +66,5 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: 
 fun acceptsRecordingTick(intent: RecordingIntent, generation: Long, tick: HistoryTick): Boolean {
     val ride = intent.ride ?: return false
     if (!intent.linkConnected || generation != intent.connectionGeneration) return false
-    if (tick.clockGeneration < ride.started.clockGeneration) return false
-    return tick.clockGeneration > ride.started.clockGeneration || tick.elapsedMillis >= ride.started.elapsedMillis
+    return tick.clockGeneration == ride.started.clockGeneration && tick.elapsedMillis >= ride.started.elapsedMillis
 }

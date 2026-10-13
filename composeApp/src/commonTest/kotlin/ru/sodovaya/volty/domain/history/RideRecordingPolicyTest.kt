@@ -74,6 +74,18 @@ class RideRecordingPolicyTest {
         assertNull(disconnect.finish)
     }
 
+    @Test fun lateStopForPreviousRideCannotEndNewRideOnSameConnection() {
+        val stopped = recordingTransition(connected().intent, RecordingInput.Stop(tick(100))) { error("stop allocation") }
+        val started = recordingTransition(stopped.intent, RecordingInput.Start("bike", 1, tick(200))) { "second" }
+        val retiredStop = recordingTransition(started.intent,
+            RecordingInput.Stop(tick(300), generation = 1, rideId = "ride")) { error("retired stop") }
+        assertEquals(started.intent, retiredStop.intent)
+        assertNull(retiredStop.finish)
+        val currentStop = recordingTransition(started.intent,
+            RecordingInput.Stop(tick(310), generation = 1, rideId = "second")) { error("current stop") }
+        assertEquals("second", currentStop.finish?.id)
+    }
+
     @Test fun explicitDisconnectAllowsNextConnectionAndFinishesOnlyOnce() {
         val ended = recordingTransition(connected().intent, RecordingInput.ExplicitDisconnect(tick(100))) { error("disconnect allocation") }
         assertEquals("ride", ended.finish?.id)
@@ -85,11 +97,13 @@ class RideRecordingPolicyTest {
         assertEquals("next", next.begin?.id)
     }
 
-    @Test fun oldSamplesBeforeStartAreRejectedWithoutRejectingClockChanges() {
+    @Test fun oldSamplesBeforeStartAndAnotherMonotonicOriginAreRejected() {
         val active = recordingTransition(RecordingIntent(), RecordingInput.Start("bike", 1, tick(100))) { "new" }
         assertFalse(acceptsRecordingTick(active.intent, 1, tick(99)))
         assertTrue(acceptsRecordingTick(active.intent, 1, HistoryTick(1, 110, 1)))
-        assertTrue(acceptsRecordingTick(active.intent, 1, HistoryTick(1, 0, 2)))
+        // A new monotonic origin is interrupted/recovered as a NEW ride, not a
+        // source of comparable timestamps inside the retained ride.
+        assertFalse(acceptsRecordingTick(active.intent, 1, HistoryTick(1, 0, 2)))
         assertFalse(acceptsRecordingTick(active.intent, 1, HistoryTick(99999, 999, 0)))
     }
 }
