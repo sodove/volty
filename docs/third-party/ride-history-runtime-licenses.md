@@ -1,6 +1,6 @@
 # Resolved runtime POM license declarations
 
-Evidence: actual debugRuntimeClasspath from fresh h7 Gradle run. Includes resolved transitive modules, not a legal compatibility conclusion.
+Evidence: actual debugRuntimeClasspath from fresh h29 Gradle run (SQLDelight 2.3.2). Includes resolved transitive modules, not a legal compatibility conclusion.
 Local AAR/JAR and native bundled subcomponents require separate source/archive evidence. Missing POM declarations are marked unresolved, never presumed permissive.
 
 | Resolved module | POM license declaration | Cached evidence |
@@ -124,10 +124,10 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `androidx.savedstate:savedstate-compose:1.4.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.savedstate/savedstate-compose/1.4.0/b0ce5214af89bb9571ba3ccc8b64dedb89af566d/savedstate-compose-1.4.0.pom` |
 | `androidx.savedstate:savedstate-compose-android:1.4.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.savedstate/savedstate-compose-android/1.4.0/37c9e45b7200b299d8596c75401217aa0050fe8d/savedstate-compose-android-1.4.0.pom` |
 | `androidx.savedstate:savedstate-ktx:1.4.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.savedstate/savedstate-ktx/1.4.0/2e8cafe70ca40cea7135eb54fd9d0ec5007b05ab/savedstate-ktx-1.4.0.pom` |
-| `androidx.sqlite:sqlite:2.5.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite/2.5.2/ffd8fe6b6c3a8d45cb068acfc46cf48d4a395dc2/sqlite-2.5.2.pom` |
-| `androidx.sqlite:sqlite-android:2.5.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-android/2.5.2/b9ced1fd024f67fde0d6fc1eb3e5a3178dbdd9da/sqlite-android-2.5.2.pom` |
-| `androidx.sqlite:sqlite-framework:2.5.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-framework/2.5.2/371b85ce42487e60ca7888a32537e91675e9c451/sqlite-framework-2.5.2.pom` |
-| `androidx.sqlite:sqlite-framework-android:2.5.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-framework-android/2.5.2/383dcf6491c3df3d9666cf69e9f6267a4a144949/sqlite-framework-android-2.5.2.pom` |
+| `androidx.sqlite:sqlite:2.6.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite/2.6.2/bea49be7484c9382592195683311d8668ae6fe6c/sqlite-2.6.2.pom` |
+| `androidx.sqlite:sqlite-android:2.6.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-android/2.6.2/a96e6560455ff488d80a3235922cd74c9ea1188d/sqlite-android-2.6.2.pom` |
+| `androidx.sqlite:sqlite-framework:2.6.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-framework/2.6.2/c2b807196c7ff96ff01cac71de13cd2cdf7d8f07/sqlite-framework-2.6.2.pom` |
+| `androidx.sqlite:sqlite-framework-android:2.6.2` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.sqlite/sqlite-framework-android/2.6.2/85a22c5c097c1bf86d1491b0160b3408f04d8a56/sqlite-framework-android-2.6.2.pom` |
 | `androidx.startup:startup-runtime:1.2.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.startup/startup-runtime/1.2.0/ed85b9b15605b02577ad71db431cedc5e2542585/startup-runtime-1.2.0.pom` |
 | `androidx.tracing:tracing:1.3.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.tracing/tracing/1.3.0/4a1dc684f27e8241bb591c0c72a79ffbe0cf4bb5/tracing-1.3.0.pom` |
 | `androidx.tracing:tracing-android:1.3.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.tracing/tracing-android/1.3.0/eddb20ae55a55b923f1792980e811fd2434c826c/tracing-android-1.3.0.pom` |
@@ -142,13 +142,13 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `androidx.window:window-core-android:1.5.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.window/window-core-android/1.5.0/e6ba2f8560bf4a846c31dfb671f0d7315760aa01/window-core-android-1.5.0.pom` |
 | `androidx.work:work-runtime:2.12.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.work/work-runtime/2.12.0/23b775c9e73e1375d409d56424216cf782d395e8/work-runtime-2.12.0.pom` |
 | `androidx.work:work-runtime-ktx:2.12.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `androidx.work/work-runtime-ktx/2.12.0/b9ae008da94f9f9ffd2e8149461ee2f97d0af5b0/work-runtime-ktx-2.12.0.pom` |
-| `app.cash.sqldelight:android-driver:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/android-driver/2.2.1/d524481003b72026b2184636e4059fc1dd7052ed/android-driver-2.2.1.pom` |
-| `app.cash.sqldelight:async-extensions:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/async-extensions/2.2.1/9ff5e29f0b615ff97f04a317d58f95a3956b191f/async-extensions-2.2.1.pom` |
-| `app.cash.sqldelight:async-extensions-jvm:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/async-extensions-jvm/2.2.1/1f9affa4762d5e223419957f37a3cfb1e8544d02/async-extensions-jvm-2.2.1.pom` |
-| `app.cash.sqldelight:coroutines-extensions:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/coroutines-extensions/2.2.1/613cbf3b247d3d9319e1b5db3e5cf72c44a9f32f/coroutines-extensions-2.2.1.pom` |
-| `app.cash.sqldelight:coroutines-extensions-jvm:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/coroutines-extensions-jvm/2.2.1/dcfd8df655bb054fcd250281317dd04f41dad5c7/coroutines-extensions-jvm-2.2.1.pom` |
-| `app.cash.sqldelight:runtime:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/runtime/2.2.1/20f718a6317637b39739a34b08f8e21013d5009d/runtime-2.2.1.pom` |
-| `app.cash.sqldelight:runtime-jvm:2.2.1` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/runtime-jvm/2.2.1/c9342e8192abf46d3b6945cc79180555c2bb1146/runtime-jvm-2.2.1.pom` |
+| `app.cash.sqldelight:android-driver:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/android-driver/2.3.2/8ba15282eb012ac26ae9a3a02110bb4fc9a8d073/android-driver-2.3.2.pom` |
+| `app.cash.sqldelight:async-extensions:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/async-extensions/2.3.2/7d513243b3d919717046cf9a2cd3f7fc1bcd21cf/async-extensions-2.3.2.pom` |
+| `app.cash.sqldelight:async-extensions-jvm:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/async-extensions-jvm/2.3.2/93c518a549f03e080a8f1fa0fbe3571ce97c25f/async-extensions-jvm-2.3.2.pom` |
+| `app.cash.sqldelight:coroutines-extensions:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/coroutines-extensions/2.3.2/8af7fc46ffcb25117943402ee8ca89c36a6e657e/coroutines-extensions-2.3.2.pom` |
+| `app.cash.sqldelight:coroutines-extensions-jvm:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/coroutines-extensions-jvm/2.3.2/e41db0b6c441afc51cbd240f241cea2bd219230b/coroutines-extensions-jvm-2.3.2.pom` |
+| `app.cash.sqldelight:runtime:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/runtime/2.3.2/cd9791af0440441968855a960bee02d999961df6/runtime-2.3.2.pom` |
+| `app.cash.sqldelight:runtime-jvm:2.3.2` | Apache-2.0 — https://www.apache.org/licenses/LICENSE-2.0.txt | `app.cash.sqldelight/runtime-jvm/2.3.2/c023fa18bc2dd93d01534d40c847a6efe1ab5613/runtime-jvm-2.3.2.pom` |
 | `co.touchlab:stately-concurrency:2.1.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `co.touchlab/stately-concurrency/2.1.0/64fb051aada04a85e7672645c7a521f6c1f4e207/stately-concurrency-2.1.0.pom` |
 | `co.touchlab:stately-concurrency-jvm:2.1.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `co.touchlab/stately-concurrency-jvm/2.1.0/7e3395c7ffc2877e36e5bc97d9d8096e3abd9219/stately-concurrency-jvm-2.1.0.pom` |
 | `co.touchlab:stately-concurrent-collections:2.1.0` | The Apache Software License, Version 2.0 — http://www.apache.org/licenses/LICENSE-2.0.txt | `co.touchlab/stately-concurrent-collections/2.1.0/33780782e3f7bb738cb981e56460d0d526ec54c/stately-concurrent-collections-2.1.0.pom` |
@@ -319,3 +319,4 @@ Local AAR/JAR and native bundled subcomponents require separate source/archive e
 | `org.slf4j:slf4j-api:2.0.17` | MIT — https://opensource.org/license/mit | `org.slf4j/slf4j-api/2.0.17/570964f8e6716b09c354c6e334ba1a092464d85/slf4j-api-2.0.17.pom -> org.slf4j/slf4j-parent/2.0.17/641edf481a624909e4da7d07343055d46aba0b77/slf4j-parent-2.0.17.pom -> org.slf4j/slf4j-bom/2.0.17/abbc25a81a3bc8ccacdbd9150224250e4a66542a/slf4j-bom-2.0.17.pom` |
 
 Resolved modules: 312. Modules missing license evidence: 0.
+

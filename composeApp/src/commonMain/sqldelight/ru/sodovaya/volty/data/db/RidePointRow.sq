@@ -22,3 +22,12 @@ VALUES (:rideId, :metricKey, :timestamp, :cellIndex, :value, :isKnown);
 
 deleteByRide:
 DELETE FROM RidePointRow WHERE rideId = :rideId;
+
+selectBoundedHistory:
+SELECT * FROM RidePointRow WHERE rideId = :rideId
+ORDER BY CAST(strftime('%s', timestamp) AS INTEGER),
+         CAST(substr(strftime('%f', timestamp), 4, 3) AS INTEGER), timestamp, metricKey, cellIndex
+LIMIT :pageSize;
+
+selectHistoryMetricKeys:
+SELECT DISTINCT metricKey FROM RidePointRow WHERE rideId = :rideId ORDER BY metricKey;

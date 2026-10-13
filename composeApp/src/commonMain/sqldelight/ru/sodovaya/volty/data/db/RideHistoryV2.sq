@@ -1,0 +1,42 @@
+CREATE TABLE HistoryRideV2 (
+  id TEXT NOT NULL PRIMARY KEY,
+  vehicleId TEXT NOT NULL,
+  startedEpochMillis INTEGER NOT NULL,
+  startedElapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  endedEpochMillis INTEGER,
+  endedElapsedMillis INTEGER,
+  endedClockGeneration INTEGER,
+  status TEXT NOT NULL,
+  nextSequence INTEGER NOT NULL DEFAULT 0,
+  lastEpochMillis INTEGER,
+  lastElapsedMillis INTEGER
+);
+CREATE INDEX HistoryRideV2_started ON HistoryRideV2(startedEpochMillis DESC, id DESC);
+
+getRide:
+SELECT * FROM HistoryRideV2 WHERE id = :rideId;
+
+insertRide:
+INSERT INTO HistoryRideV2(id, vehicleId, startedEpochMillis, startedElapsedMillis, clockGeneration, status)
+VALUES (:id, :vehicleId, :startedEpochMillis, :startedElapsedMillis, :clockGeneration, :status);
+
+pageRides:
+SELECT * FROM HistoryRideV2
+WHERE :beforeEpoch IS NULL OR startedEpochMillis < :beforeEpoch
+OR (startedEpochMillis = :beforeEpoch AND id < :beforeId)
+ORDER BY startedEpochMillis DESC, id DESC LIMIT :pageSize;
+
+finishRide:
+UPDATE HistoryRideV2 SET endedEpochMillis = :endedEpochMillis, endedElapsedMillis = :endedElapsedMillis,
+endedClockGeneration = :endedClockGeneration, status = :status WHERE id = :rideId;
+
+advanceSequence:
+UPDATE HistoryRideV2 SET nextSequence = :nextSequence, lastEpochMillis = :lastEpochMillis,
+lastElapsedMillis = :lastElapsedMillis WHERE id = :rideId;
+
+openRides:
+SELECT * FROM HistoryRideV2 WHERE status = 'RECORDING';
+
+deleteRide:
+DELETE FROM HistoryRideV2 WHERE id = :rideId;

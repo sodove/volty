@@ -1,0 +1,32 @@
+CREATE TABLE HistorySampleV2 (
+  rideId TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  sourceId TEXT NOT NULL,
+  metricId TEXT NOT NULL,
+  cellIndex INTEGER NOT NULL DEFAULT -1 CHECK(cellIndex >= -1),
+  epochMillis INTEGER NOT NULL,
+  elapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  reading REAL,
+  unknownReason TEXT,
+  PRIMARY KEY(rideId, sequence),
+  FOREIGN KEY(rideId, sourceId) REFERENCES HistorySourceV2(rideId, id) ON DELETE CASCADE,
+  CHECK((reading IS NULL AND unknownReason IS NOT NULL) OR (reading IS NOT NULL AND unknownReason IS NULL))
+);
+CREATE INDEX HistorySampleV2_series_elapsed ON HistorySampleV2(rideId, sourceId, metricId, cellIndex, elapsedMillis, sequence);
+
+insertSample:
+INSERT INTO HistorySampleV2(rideId, sequence, sourceId, metricId, cellIndex, epochMillis, elapsedMillis,
+clockGeneration, reading, unknownReason)
+VALUES (:rideId, :sequence, :sourceId, :metricId, :cellIndex, :epochMillis, :elapsedMillis,
+:clockGeneration, :reading, :unknownReason);
+
+pageSamples:
+SELECT * FROM HistorySampleV2
+WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
+AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+AND (:afterElapsed IS NULL OR elapsedMillis > :afterElapsed OR (elapsedMillis = :afterElapsed AND sequence > :afterSequence))
+ORDER BY elapsedMillis, sequence LIMIT :pageSize;
+
+deleteSamples:
+DELETE FROM HistorySampleV2 WHERE rideId = :rideId;

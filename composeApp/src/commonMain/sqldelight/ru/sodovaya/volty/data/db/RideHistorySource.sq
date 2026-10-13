@@ -1,0 +1,17 @@
+CREATE TABLE HistorySourceV2 (
+  rideId TEXT NOT NULL,
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  PRIMARY KEY(rideId, id),
+  FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
+);
+
+insertSource:
+INSERT INTO HistorySourceV2(rideId, id, kind, label) VALUES (:rideId, :id, :kind, :label);
+
+sourcesForRide:
+SELECT * FROM HistorySourceV2 WHERE rideId = :rideId ORDER BY id;
+
+deleteSources:
+DELETE FROM HistorySourceV2 WHERE rideId = :rideId;

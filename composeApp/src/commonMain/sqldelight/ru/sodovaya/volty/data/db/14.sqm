@@ -1,0 +1,84 @@
+CREATE TABLE HistoryRideV2 (
+  id TEXT NOT NULL PRIMARY KEY,
+  vehicleId TEXT NOT NULL,
+  startedEpochMillis INTEGER NOT NULL,
+  startedElapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  endedEpochMillis INTEGER,
+  endedElapsedMillis INTEGER,
+  endedClockGeneration INTEGER,
+  status TEXT NOT NULL,
+  nextSequence INTEGER NOT NULL DEFAULT 0,
+  lastEpochMillis INTEGER,
+  lastElapsedMillis INTEGER
+);
+CREATE INDEX HistoryRideV2_started ON HistoryRideV2(startedEpochMillis DESC, id DESC);
+
+CREATE TABLE HistorySourceV2 (
+  rideId TEXT NOT NULL,
+  id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  PRIMARY KEY(rideId, id),
+  FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
+);
+
+CREATE TABLE HistorySampleV2 (
+  rideId TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  sourceId TEXT NOT NULL,
+  metricId TEXT NOT NULL,
+  cellIndex INTEGER NOT NULL DEFAULT -1 CHECK(cellIndex >= -1),
+  epochMillis INTEGER NOT NULL,
+  elapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  reading REAL,
+  unknownReason TEXT,
+  PRIMARY KEY(rideId, sequence),
+  FOREIGN KEY(rideId, sourceId) REFERENCES HistorySourceV2(rideId, id) ON DELETE CASCADE,
+  CHECK((reading IS NULL AND unknownReason IS NOT NULL) OR (reading IS NOT NULL AND unknownReason IS NULL))
+);
+CREATE INDEX HistorySampleV2_series_elapsed ON HistorySampleV2(rideId, sourceId, metricId, cellIndex, elapsedMillis, sequence);
+
+CREATE TABLE HistoryGpsV2 (
+  rideId TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  epochMillis INTEGER NOT NULL,
+  elapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  latitude REAL NOT NULL,
+  longitude REAL NOT NULL,
+  accuracyMeters REAL NOT NULL,
+  headingDegrees REAL,
+  PRIMARY KEY(rideId, sequence),
+  FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
+);
+CREATE INDEX HistoryGpsV2_ride_elapsed ON HistoryGpsV2(rideId, elapsedMillis, sequence);
+
+CREATE TABLE HistoryMarkerV2 (
+  rideId TEXT NOT NULL,
+  sequence INTEGER NOT NULL,
+  epochMillis INTEGER NOT NULL,
+  elapsedMillis INTEGER NOT NULL,
+  clockGeneration INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  PRIMARY KEY(rideId, sequence),
+  FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
+);
+CREATE INDEX HistoryMarkerV2_ride_elapsed ON HistoryMarkerV2(rideId, elapsedMillis, sequence);
+
+CREATE TABLE HistoryBucketV2 (
+  rideId TEXT NOT NULL,
+  sourceId TEXT NOT NULL,
+  metricId TEXT NOT NULL,
+  cellIndex INTEGER NOT NULL DEFAULT -1,
+  startElapsedMillis INTEGER NOT NULL,
+  endElapsedMillis INTEGER NOT NULL,
+  minimum REAL,
+  maximum REAL,
+  energyWh REAL,
+  sampleCount INTEGER NOT NULL,
+  complete INTEGER NOT NULL,
+  PRIMARY KEY(rideId, sourceId, metricId, cellIndex, startElapsedMillis),
+  FOREIGN KEY(rideId, sourceId) REFERENCES HistorySourceV2(rideId, id) ON DELETE CASCADE
+);

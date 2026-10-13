@@ -1,0 +1,197 @@
+package ru.sodovaya.volty.data.history
+
+import app.cash.sqldelight.driver.jdbc.sqlite.JdbcSqliteDriver
+import kotlinx.coroutines.test.runTest
+import ru.sodovaya.volty.data.db.VoltyDatabase
+import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
+import ru.sodovaya.volty.domain.history.*
+import kotlin.test.*
+
+class SqlDelightHistoryStoreTest {
+    private val drivers = mutableListOf<JdbcSqliteDriver>()
+    private val origin = HistoryTick(10000, 100, 1)
+    private val range = HistoryRange(10000, 11000)
+    private val key = HistorySeriesKey("pack", "current_a")
+    private fun tick(delta: Long) = HistoryTick(10000 + delta, 100 + delta, 1)
+    private fun fixture(): Pair<JdbcSqliteDriver, SqlDelightHistoryStore> {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        drivers += driver
+        driver.execute(null, "PRAGMA foreign_keys=ON", 0)
+        VoltyDatabase.Schema.create(driver)
+        return driver to SqlDelightHistoryStore(VoltyDatabaseProvider(driver))
+    }
+    private suspend fun begin(store: SqlDelightHistoryStore, id: String = "ride") {
+        store.begin(HistoryRide(id, "bike", origin, null, HistoryRideStatus.RECORDING),
+            listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Battery A")))
+    }
+    @AfterTest fun closeDrivers() { drivers.forEach { it.close() } }
+
+    @Test fun rideAndSourceRoundTripWithoutDependingOnCurrentVehicle() = runTest {
+        val (_, store) = fixture()
+        begin(store)
+        assertEquals("bike", assertNotNull(store.ride("ride")).vehicleId)
+        assertEquals(origin, store.ride("ride")?.started)
+        assertEquals(listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Battery A")), store.sources("ride"))
+        store.finish("ride", tick(50), HistoryRideStatus.COMPLETED)
+        assertEquals(tick(50), store.ride("ride")?.ended)
+        assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)
+    }
+
+    @Test fun measuredZeroAndTypedUnknownRemainDifferentAfterRead() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val known = HistorySample(tick(10), key, 0.0)
+        val unknown = HistorySample(tick(20), key, null, HistoryUnknownReason.UNAVAILABLE)
+        store.append(HistoryBatch("ride", listOf(known, unknown), emptyList(), emptyList()))
+        assertEquals(listOf(known, unknown), store.samples("ride", key, range, null).items)
+    }
+
+    @Test fun equalTimePageCursorDoesNotLoseOrRepeatRows() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val samples = listOf(HistorySample(tick(10), key, 1.0), HistorySample(tick(10), key, 2.0), HistorySample(tick(20), key, 3.0))
+        store.append(HistoryBatch("ride", samples, emptyList(), emptyList()))
+        val first = store.samples("ride", key, range, null, 1)
+        assertEquals(listOf(samples[0]), first.items)
+        assertTrue(first.truncated)
+        val second = store.samples("ride", key, range, assertNotNull(first.next), 1)
+        assertEquals(listOf(samples[1]), second.items)
+        val third = store.samples("ride", key, range, assertNotNull(second.next), 1)
+        assertEquals(listOf(samples[2]), third.items)
+        assertNull(third.next)
+        assertFalse(third.truncated)
+    }
+
+    @Test fun packetFromOtherMonotonicOriginCannotEnterRide() = runTest {
+        val (_, store) = fixture(); begin(store)
+        try {
+            store.append(HistoryBatch("ride", listOf(HistorySample(HistoryTick(10020, 120, 2), key, 13.0)), emptyList(), emptyList()))
+            fail("Other origin was admitted")
+        } catch (_: IllegalArgumentException) { }
+        assertTrue(store.samples("ride", key, range, null).items.isEmpty())
+    }
+
+    @Test fun rangeUsesMonotonicAxisInsteadOfJumpedWallClock() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val changed = HistorySample(HistoryTick(70000, 120, 1), key, 12.0)
+        store.append(HistoryBatch("ride", listOf(changed), emptyList(), emptyList()))
+        assertEquals(listOf(changed), store.samples("ride", key, HistoryRange(10015, 10025), null).items)
+        assertTrue(store.samples("ride", key, HistoryRange(69990, 70010), null).items.isEmpty())
+    }
+
+    @Test fun interruptedRecoveryEndsAtLastCommittedFactOnly() = runTest {
+        val (_, store) = fixture(); begin(store)
+        store.append(HistoryBatch("ride", listOf(HistorySample(tick(30), key, 3.0)), emptyList(), emptyList()))
+        assertEquals(1, store.recoverInterrupted())
+        val recovered = assertNotNull(store.ride("ride"))
+        assertEquals(HistoryRideStatus.INTERRUPTED, recovered.status)
+        assertEquals(tick(30), recovered.ended)
+        assertEquals(0, store.recoverInterrupted())
+    }
+
+    @Test fun completedRideRejectsFurtherWritesAndDeletingItDoesNotDeleteAnother() = runTest {
+        val (_, store) = fixture(); begin(store); begin(store, "other")
+        store.finish("ride", tick(20), HistoryRideStatus.COMPLETED)
+        try {
+            store.append(HistoryBatch("ride", listOf(HistorySample(tick(30), key, 3.0)), emptyList(), emptyList()))
+            fail("Completed ride accepted a write")
+        } catch (_: IllegalStateException) { }
+        store.delete("ride")
+        assertNull(store.ride("ride"))
+        assertNotNull(store.ride("other"))
+    }
+
+    @Test fun sameTimeRideListPagesHaveStableTieBreaker() = runTest {
+        val (_, store) = fixture()
+        (0..20).forEach { begin(store, "ride-${it.toString().padStart(2, '0')}") }
+        val first = store.rides(null)
+        assertEquals(20, first.items.size)
+        val second = store.rides(assertNotNull(first.next))
+        assertEquals(1, second.items.size)
+        assertTrue(first.items.none { a -> second.items.any { it.id == a.id } })
+        assertNull(second.next)
+    }
+
+    @Test fun sqliteFailureRollsBackEarlierRowsAndSequence() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        driver.execute(null, """CREATE TRIGGER reject_history BEFORE INSERT ON HistorySampleV2
+            WHEN NEW.reading = 13 BEGIN SELECT RAISE(ABORT, 'injected failure'); END""", 0)
+        assertFails { store.append(HistoryBatch("ride", listOf(
+            HistorySample(tick(10), key, 10.0), HistorySample(tick(20), key, 13.0)), emptyList(), emptyList())) }
+        assertTrue(store.samples("ride", key, range, null).items.isEmpty())
+        store.append(HistoryBatch("ride", listOf(HistorySample(tick(30), key, 30.0),
+            HistorySample(tick(40), key, 40.0)), emptyList(), emptyList()))
+        assertEquals("0", store.samples("ride", key, range, null, 1).next?.stableId)
+    }
+
+    @Test fun delayedGpsDoesNotMoveRecoveryBackAndGapMarkersRemainOrdered() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val fixes = listOf(HistoryGpsFix(tick(10), 56.0, 60.0, 3.0, null),
+            HistoryGpsFix(tick(10), 57.0, 61.0, 4.0, 90.0))
+        val gap = HistoryMarker(tick(20), HistoryMarkerKind.GPS_GAP)
+        store.append(HistoryBatch("ride", listOf(HistorySample(tick(80), key, 8.0)), emptyList(), emptyList()))
+        store.append(HistoryBatch("ride", emptyList(), fixes, listOf(gap)))
+        val first = store.gps("ride", range, null, 1)
+        assertEquals(listOf(fixes.first()), first.items)
+        assertEquals(listOf(fixes.last()), store.gps("ride", range, first.next, 1).items)
+        assertEquals(listOf(gap), store.markers("ride", range))
+        assertTrue(store.markers("ride", HistoryRange(10030, 10050)).isEmpty())
+        store.recoverInterrupted()
+        assertEquals(tick(80), store.ride("ride")?.ended)
+        assertEquals(HistoryMarkerKind.INTERRUPTED, store.markers("ride", range).last().kind)
+    }
+
+    @Test fun unknownSourceIsRejectedEvenWithoutForeignKeys() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        driver.execute(null, "PRAGMA foreign_keys=OFF", 0)
+        val foreign = key.copy(sourceId = "other-pack")
+        assertFailsWith<IllegalArgumentException> {
+            store.append(HistoryBatch("ride", listOf(HistorySample(tick(10), foreign, 1.0)), emptyList(), emptyList()))
+        }
+        assertTrue(store.samples("ride", foreign, range, null).items.isEmpty())
+    }
+
+    @Test fun deletionRemovesChildrenWithForeignKeysDisabled() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        driver.execute(null, "PRAGMA foreign_keys=OFF", 0)
+        store.append(HistoryBatch("ride", listOf(HistorySample(tick(10), key, 10.0)),
+            listOf(HistoryGpsFix(tick(10), 56.0, 60.0, 5.0, null)),
+            listOf(HistoryMarker(tick(10), HistoryMarkerKind.CONNECTED))))
+        store.delete("ride")
+        // Reuse the ID: any orphan source/sequence would collide or reappear.
+        begin(store)
+        assertTrue(store.samples("ride", key, range, null).items.isEmpty())
+        assertTrue(store.gps("ride", range, null).items.isEmpty())
+        assertTrue(store.markers("ride", range).isEmpty())
+    }
+
+    @Test fun identicalFinishIsIdempotentButConflictingFinishCannotOverwrite() = runTest {
+        val (_, store) = fixture(); begin(store)
+        store.finish("ride", tick(10), HistoryRideStatus.COMPLETED)
+        store.finish("ride", tick(10), HistoryRideStatus.COMPLETED)
+        assertFailsWith<IllegalStateException> { store.finish("ride", tick(20), HistoryRideStatus.INTERRUPTED) }
+        assertEquals(tick(10), store.ride("ride")?.ended)
+    }
+
+    @Test fun readLimitsAndMalformedCursorsAreRejected() = runTest {
+        val (_, store) = fixture(); begin(store)
+        assertFailsWith<IllegalArgumentException> { store.rides(null, 0) }
+        assertFailsWith<IllegalArgumentException> { store.rides(null, 21) }
+        assertFailsWith<IllegalArgumentException> { store.samples("ride", key, range, null, 20001) }
+        assertFailsWith<IllegalArgumentException> { store.gps("ride", range, null, 0) }
+        assertFailsWith<IllegalArgumentException> { store.samples("ride", key, range, HistoryCursor(10010, "oops")) }
+        assertTrue(store.samples("ride", key, HistoryRange(Long.MIN_VALUE, 9999), null).items.isEmpty())
+    }
+
+    @Test fun sourceAndCellKeysAreIsolatedAndNoSummaryIsInventedFromDetail() = runTest {
+        val (_, store) = fixture()
+        store.begin(HistoryRide("ride", "bike", origin, null, HistoryRideStatus.RECORDING), listOf(
+            HistorySource("pack", HistorySourceKind.BATTERY, "A"),
+            HistorySource("other", HistorySourceKind.BATTERY, "B")))
+        val a = HistorySeriesKey("pack", "cell_v", 0)
+        val b = a.copy(sourceId = "other")
+        val c = a.copy(cellIndex = 1)
+        val rows = listOf(HistorySample(tick(10), a, 3.5), HistorySample(tick(10), b, 3.8), HistorySample(tick(10), c, 3.9))
+        store.append(HistoryBatch("ride", rows, emptyList(), emptyList()))
+        rows.forEach { assertEquals(listOf(it), store.samples("ride", it.key, range, null).items) }
+        assertEquals(HistoryStats(null, null, null, false), store.stats("ride", a, range))
+    }
+}
