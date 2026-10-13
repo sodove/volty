@@ -30,6 +30,56 @@ class HistoryWriterTest {
         } finally { writer.close() }
     }
 
+    @Test fun recordingModeCommitsSummaryFromRawStreamAndThinsOnlyDetail() = runTest {
+        val store = Store()
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow(), projectRecording = true)
+        try {
+            writer.begin(7, ride, sources)
+            val raw = batch(500).samples.mapIndexed { index, sample -> sample.copy(
+                tick = tick.copy(epochMillis = tick.epochMillis + index, elapsedMillis = tick.elapsedMillis + index),
+                value = if (index == 221) -9999.0 else -100.0, key = sample.key.copy(metricId = "power_w")) }
+            writer.offer(7, batch(0).copy(samples = raw))
+            writer.finish(7, raw.last().tick, HistoryRideStatus.COMPLETED)
+            val committed = store.batches.single()
+            assertEquals(500, committed.buckets.single().sampleCount)
+            assertEquals(-9999.0, committed.buckets.single().minimum?.value)
+            assertTrue(committed.samples.size <= 4)
+            assertEquals(raw.last(), committed.samples.last())
+        } finally { writer.close() }
+    }
+
+    @Test fun projectedRetryKeepsExactPreparedPayloadAfterCommitAckLost() = runTest {
+        val store = Store(); store.failAfterCommit = true
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow(), projectRecording = true)
+        try {
+            writer.begin(7, ride, sources)
+            writer.offer(7, batch(2))
+            assertFails { writer.flush() }
+            writer.flush()
+            assertEquals(2, store.batches.single().buckets.single().sampleCount)
+            assertEquals(2, store.attempts.size)
+            assertEquals(store.attempts.first(), store.attempts.last())
+        } finally { writer.close() }
+    }
+
+    @Test fun flushCommitsAdmittedPrefixAndDoesNotFollowNewPacketsForever() = runTest {
+        val store = Store(); val gate = CompletableDeferred<Unit>(); store.gate = gate
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
+        try {
+            writer.begin(7, ride, sources)
+            writer.offer(7, batch())
+            val flush = async { writer.flush() }
+            runCurrent()
+            assertEquals(listOf("begin", "append-start"), store.calls)
+            assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, batch()))
+            gate.complete(Unit)
+            flush.await()
+            assertEquals(1, store.batches.size)
+            writer.close()
+            assertEquals(2, store.batches.size)
+        } finally { gate.complete(Unit); writer.close() }
+    }
+
     @Test fun summaryPacketsCannotBypassQueueCapacityOrLoseOverflowEvidence() = runTest {
         val store = Store()
         val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
@@ -179,10 +229,12 @@ class HistoryWriterTest {
         val calls = mutableListOf<String>()
         val batches = mutableListOf<HistoryBatch>()
         val appendTokens = mutableListOf<String?>()
+        val attempts = mutableListOf<HistoryBatch>()
         var gate: CompletableDeferred<Unit>? = null
         var failAfterCommit = false
         override suspend fun begin(ride: HistoryRide, sources: List<HistorySource>) { calls += "begin" }
         override suspend fun append(batch: HistoryBatch) {
+            attempts += batch
             calls += "append-start"; appendTokens += batch.receiptId
             gate?.await()
             if (batches.none { it.receiptId == batch.receiptId }) batches += batch

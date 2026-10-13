@@ -22,6 +22,7 @@ class BufferedHistoryWriter(
     private val store: HistoryStore,
     dispatcher: CoroutineDispatcher,
     ticks: Flow<Unit> = historyFlushTicks(),
+    private val projectRecording: Boolean = false,
 ) : HistoryWriter {
     private data class Session(val generation: Long, val ride: HistoryRide)
     private data class Packet(val batch: HistoryBatch, val events: Long, val bytes: Long)
@@ -53,6 +54,9 @@ class BufferedHistoryWriter(
     private val controls = Channel<Command>(Channel.UNLIMITED)
     private val wake = Channel<Unit>(Channel.CONFLATED)
     private val controlLock = Mutex()
+    // Accessed only by the persistence actor. A lost ACK retains both exact payload and candidate state.
+    private var projection: HistoryRecordingProjection? = null
+    private var prepared: PreparedHistoryProjection? = null
     override val diagnostics: StateFlow<HistoryWriterDiagnostics> = state.map {
         HistoryWriterDiagnostics(it.events, it.bytes, it.committed, it.dropped, it.failure, it.accepting, it.closed)
     }.stateIn(scope, SharingStarted.Eagerly, HistoryWriterDiagnostics())
@@ -140,6 +144,7 @@ class BufferedHistoryWriter(
             when (command) {
                 is Command.Begin -> {
                     store.begin(command.ride, command.sources)
+                    projection = if (projectRecording) HistoryRecordingProjection(command.ride, command.sources) else null
                     state.update { it.copy(session = Session(command.generation, command.ride), accepting = true, failure = null) }
                 }
                 is Command.Flush -> drain()
@@ -147,10 +152,12 @@ class BufferedHistoryWriter(
                     drain()
                     val session = checkNotNull(state.value.session)
                     store.finish(session.ride.id, command.tick, command.status)
+                    projection = null
                     state.update { it.copy(session = null, accepting = false) }
                 }
                 is Command.Close -> {
                     drain()
+                    projection = null
                     state.update { it.copy(closed = true, accepting = false) }
                 }
                 is Command.Delete -> {
@@ -158,6 +165,7 @@ class BufferedHistoryWriter(
                     if (active) drain()
                     store.delete(command.rideId)
                     if (active) state.update { it.copy(session = null, accepting = false) }
+                    if (active) projection = null
                 }
             }
             command.receipt.complete(Unit)
@@ -168,23 +176,34 @@ class BufferedHistoryWriter(
     }
 
     private suspend fun drain() {
+        // Bound each pass to its admitted prefix. New offers must not starve controls indefinitely.
+        val count = state.value.pending.size
+        repeat(count) { index -> commitFirst(flushDetail = index == count - 1) }
+        // Reserved metadata lane: a full telemetry queue must still record its loss boundary.
         while (true) {
             val current = state.value
-            val packet = current.pending.firstOrNull()
-            if (packet != null) {
-                store.append(packet.batch)
-                state.update { it.copy(pending = it.pending.drop(1), events = it.events - packet.events,
-                    bytes = it.bytes - packet.bytes, committed = it.committed + packet.events, failure = null) }
-                continue
-            }
             val loss = current.loss ?: break
             val session = checkNotNull(current.session)
-            // Reserved metadata lane: a full telemetry queue must still record its loss boundary.
             val gap = Packet(HistoryBatch(session.ride.id, emptyList(), emptyList(), listOf(loss),
                 token(session, current.nextToken)), 0, 0)
-            if (state.compareAndSet(current, current.copy(pending = listOf(gap), loss = null, nextToken = current.nextToken + 1))) continue
+            if (state.compareAndSet(current, current.copy(pending = listOf(gap) + current.pending,
+                    loss = null, nextToken = current.nextToken + 1))) {
+                commitFirst(flushDetail = true)
+                break
+            }
         }
         state.update { it.copy(failure = null) }
+    }
+
+    private suspend fun commitFirst(flushDetail: Boolean) {
+        val packet = checkNotNull(state.value.pending.firstOrNull())
+        val candidate = prepared ?: projection?.prepare(packet.batch, flushDetail)?.also { prepared = it }
+        store.append(candidate?.batch ?: packet.batch)
+        // Install only after ACK. A failure above leaves the original packet and prepared receipt unchanged.
+        if (candidate != null) projection = candidate.next
+        prepared = null
+        state.update { it.copy(pending = it.pending.drop(1), events = it.events - packet.events,
+            bytes = it.bytes - packet.bytes, committed = it.committed + packet.events, failure = null) }
     }
     private fun failed(error: Exception) {
         state.update { it.copy(accepting = false, failure = error.message ?: "Persistence failed") }

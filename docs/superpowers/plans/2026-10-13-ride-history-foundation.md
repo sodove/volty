@@ -277,7 +277,7 @@ fun historyOverview(samples: List<HistorySample>, markers: List<HistoryMarker>, 
 fun nearestHistorySample(samples: List<HistorySample>, tick: HistoryTick, maxAgeMillis: Long): HistorySample?
 ```
 
-- [ ] RED for narrow peak and outage; sample/tick/key helpers use Task2 constructors:
+- [x] RED for narrow peak and outage; sample/tick/key helpers use Task2 constructors:
   ```kotlin
   @Test fun overviewKeepsSpike() {
     val key = HistorySeriesKey("battery", "power_w")
@@ -297,16 +297,17 @@ fun nearestHistorySample(samples: List<HistorySample>, tick: HistoryTick, maxAge
   time, legitimate regen, unequal cadence, cell count change, last point and limit.
   Persist summary buckets transactionally with accepted recording batches. Reads
   aggregate buckets and boundary detail rather than recalculating from overview.
-- [ ] GREEN/full suite, commit summary/projection.
+- [x] GREEN/full suite, commit summary/projection (3620 tests, actor + real SQLite ACK-loss verification).
 
 Task6 checkpoint (2026-10-13): pure statistics/continuity/overview and streaming
 minute summaries plus the 500 ms detail envelope are implemented. Summary snapshots,
 detail and immutable payload receipts share one transaction; migration16.sqm and
 snapshot17.db preserve legacy data. Source/clock/slot admission, clipped-range reads,
 summary-only recovery and mutable bucket retry identity have real SQLite tests.
-The writer bounds and copies summary packets as well as detail. The recording
-projection still needs connecting to the actor before runtime activation in Task7;
-this checkpoint does not mark Task6 or the Vescape source/screen transfer complete.
+The writer bounds and copies summary packets as well as detail. The recording projection is connected to the actor behind explicit projectRecording
+opt-in. Forked state is installed only after ACK; retries retain exact prepared payload.
+Captured-prefix draining keeps controls responsive under new arrivals. Runtime
+activation remains Task7; no Vescape source/screen transfer has been completed.
 ## Task7 — recording owner, full-stream adapter and GPS service demand
 
 **Files:** Create `data/history/RideRecordingController.kt`, `HistoryTelemetryAdapter.kt`,
