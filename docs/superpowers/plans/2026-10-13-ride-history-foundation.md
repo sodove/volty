@@ -152,15 +152,15 @@ test `domain/history/RideRecordingPolicyTest.kt` and `RecordingClockPolicyTest.k
 **Consumes:** Task2 HistoryTick/HistoryRide; connection identity from Task7 adapter.
 **Produces:**
 ```kotlin
-data class RecordingIntent(val ride: HistoryRide?, val connectionGeneration: Long?, val manuallyStopped: Boolean)
+data class RecordingIntent(val ride: HistoryRide? = null, val connectionGeneration: Long? = null, val manuallyStopped: Boolean = false, val linkConnected: Boolean = false)
 sealed interface RecordingInput {
   data class Connected(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
   data class LinkLost(val generation: Long, val tick: HistoryTick) : RecordingInput
-  data class Stop(val tick: HistoryTick) : RecordingInput
-  data class ExplicitDisconnect(val tick: HistoryTick) : RecordingInput
+  data class Stop(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
+  data class ExplicitDisconnect(val tick: HistoryTick, val generation: Long? = null) : RecordingInput
   data class Start(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
 }
-data class RecordingTransition(val intent: RecordingIntent, val markers: List<HistoryMarker>, val finish: HistoryRide?, val begin: HistoryRide?)
+data class RecordingTransition(val intent: RecordingIntent, val markers: List<HistoryMarker>, val finish: HistoryRide?, val begin: HistoryRide?, val finishedMarkers: List<HistoryMarker> = emptyList())
 fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: () -> String): RecordingTransition
 ```
 
@@ -171,6 +171,15 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: 
 - [ ] Implement reducer and clock mapping with independent record IDs and monotonic
   event order. `clockBoundary(previous: HistoryTick, next: HistoryTick): Boolean`
   returns true for generation change/backward epoch; integration cannot cross it.
+  Ruling during implementation: connection generations increase across sessions;
+  a finished connection remains a tombstone against late Connected events.
+  `markers` belong to the active/new ride and `finishedMarkers` to `finish`, so
+  VEHICLE_SWITCH cannot be accidentally appended to the new ride. linkConnected
+  separates retained ride participation from admission of BLE telemetry.
+  Source-owned terminal events carry generation; null is reserved for deliberate
+  global UI intent. A stale source Stop/ExplicitDisconnect cannot finish a new ride.
+  Clock continuity additionally rejects wall/monotonic delta skew above1000ms,
+  including forward jumps; elapsed time governs integration, not wall time.
   ```kotlin
   @Test fun backwardsClockIsBoundary() {
     assertTrue(clockBoundary(HistoryTick(2000, 100, 1), HistoryTick(1000, 200, 1)))
