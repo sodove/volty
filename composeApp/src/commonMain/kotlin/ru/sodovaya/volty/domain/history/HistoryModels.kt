@@ -105,9 +105,12 @@ data class HistoryBatch(
     val samples: List<HistorySample>,
     val gps: List<HistoryGpsFix>,
     val markers: List<HistoryMarker>,
+    /** Stable across retry of this exact immutable batch; null is a one-shot append. */
+    val receiptId: String? = null,
 ) {
     init {
         require(rideId.isNotBlank())
+        require(receiptId == null || receiptId.isNotBlank())
     }
 }
 

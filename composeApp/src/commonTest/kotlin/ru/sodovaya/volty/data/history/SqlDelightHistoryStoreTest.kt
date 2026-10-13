@@ -194,4 +194,42 @@ class SqlDelightHistoryStoreTest {
         rows.forEach { assertEquals(listOf(it), store.samples("ride", it.key, range, null).items) }
         assertEquals(HistoryStats(null, null, null, false), store.stats("ride", a, range))
     }
+
+    @Test fun retriedCommittedBatchDoesNotDuplicateAndCanBeAcknowledgedAfterFinish() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val sample = HistorySample(tick(10), key, 10.0)
+        val fix = HistoryGpsFix(tick(10), 56.0, 60.0, 5.0, null)
+        val marker = HistoryMarker(tick(10), HistoryMarkerKind.CONNECTED)
+        val batch = HistoryBatch("ride", listOf(sample), listOf(fix), listOf(marker), "receipt-1")
+        store.append(batch)
+        store.append(batch)
+        store.finish("ride", tick(20), HistoryRideStatus.COMPLETED)
+        store.append(batch)
+        assertEquals(listOf(sample), store.samples("ride", key, range, null).items)
+        assertEquals(listOf(fix), store.gps("ride", range, null).items)
+        assertEquals(listOf(marker), store.markers("ride", range))
+    }
+
+    @Test fun reusingReceiptForDifferentPayloadCannotSilentlyDiscardNewData() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val batch = HistoryBatch("ride", listOf(HistorySample(tick(10), key, 10.0)), emptyList(), emptyList(), "receipt-1")
+        store.append(batch)
+        assertFailsWith<IllegalArgumentException> {
+            store.append(batch.copy(samples = listOf(HistorySample(tick(10), key, 20.0))))
+        }
+        assertEquals(batch.samples, store.samples("ride", key, range, null).items)
+    }
+
+    @Test fun failedSqlTransactionDoesNotPublishReceipt() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        driver.execute(null, """CREATE TRIGGER reject_receipt BEFORE INSERT ON HistorySampleV2
+            WHEN NEW.reading = 13 BEGIN SELECT RAISE(ABORT, 'injected failure'); END""", 0)
+        val batch = HistoryBatch("ride", listOf(HistorySample(tick(10), key, 10.0),
+            HistorySample(tick(20), key, 13.0)), emptyList(), emptyList(), "receipt-1")
+        assertFails { store.append(batch) }
+        driver.execute(null, "DROP TRIGGER reject_receipt", 0)
+        store.append(batch)
+        store.append(batch)
+        assertEquals(batch.samples, store.samples("ride", key, range, null).items)
+    }
 }

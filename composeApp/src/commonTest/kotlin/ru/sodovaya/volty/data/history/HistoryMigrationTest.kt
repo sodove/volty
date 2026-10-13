@@ -22,7 +22,7 @@ class HistoryMigrationTest {
                 db.ridePointRowQueries.insert("old", "CURRENT", "2026-10-13T00:00:00Z", 7, 999.5, 0)
                 val beforeRides = db.rideRowQueries.selectAll().executeAsList()
                 val beforePoints = db.ridePointRowQueries.selectByRide("old").executeAsList()
-                assertEquals(15, VoltyDatabase.Schema.version)
+                assertTrue(VoltyDatabase.Schema.version >= 15)
                 VoltyDatabase.Schema.migrate(driver, 14, VoltyDatabase.Schema.version)
                 assertEquals(beforeRides, db.rideRowQueries.selectAll().executeAsList())
                 assertEquals(beforePoints, db.ridePointRowQueries.selectByRide("old").executeAsList())

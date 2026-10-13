@@ -25,3 +25,6 @@ ORDER BY elapsedMillis, sequence LIMIT :pageSize;
 
 deleteGps:
 DELETE FROM HistoryGpsV2 WHERE rideId = :rideId;
+
+gpsForReceipt:
+SELECT * FROM HistoryGpsV2 WHERE rideId = :rideId AND sequence >= :firstSequence AND sequence < :nextSequence ORDER BY sequence;

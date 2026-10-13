@@ -30,3 +30,6 @@ ORDER BY elapsedMillis, sequence LIMIT :pageSize;
 
 deleteSamples:
 DELETE FROM HistorySampleV2 WHERE rideId = :rideId;
+
+samplesForReceipt:
+SELECT * FROM HistorySampleV2 WHERE rideId = :rideId AND sequence >= :firstSequence AND sequence < :nextSequence ORDER BY sequence;

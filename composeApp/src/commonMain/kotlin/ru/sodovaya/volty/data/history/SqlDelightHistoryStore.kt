@@ -19,6 +19,7 @@ class SqlDelightHistoryStore(
     private val gpsQueries = database.rideHistoryGpsQueries
     private val markerQueries = database.rideHistoryMarkerQueries
     private val reader = HistoryStoreReader(database)
+    private val receipts = HistoryBatchReceipts(database)
 
     override suspend fun begin(ride: HistoryRide, sources: List<HistorySource>) = withContext(dispatcher) {
         require(ride.status == HistoryRideStatus.RECORDING && ride.ended == null)
@@ -36,6 +37,7 @@ class SqlDelightHistoryStore(
 
     override suspend fun append(batch: HistoryBatch) = withContext(dispatcher) {
         database.transaction {
+            if (receipts.verifyCommitted(batch)) return@transaction
             val row = checkNotNull(rides.getRide(batch.rideId).executeAsOneOrNull()) { "Ride not found" }
             check(row.status == HistoryRideStatus.RECORDING.name) { "Ride is closed" }
             val origin = row.toHistoryRide().started
@@ -67,6 +69,7 @@ class SqlDelightHistoryStore(
                     t.elapsedMillis, t.clockGeneration, marker.kind.name)
             }
             rides.advanceSequence(sequence, last.epochMillis, last.elapsedMillis, batch.rideId)
+            receipts.record(batch, row.nextSequence, sequence)
         }
     }
 
@@ -126,6 +129,7 @@ class SqlDelightHistoryStore(
             gpsQueries.deleteGps(rideId)
             markerQueries.deleteMarkers(rideId)
             database.rideHistoryBucketQueries.deleteBuckets(rideId)
+            database.rideHistoryReceiptQueries.deleteReceipts(rideId)
             sourceQueries.deleteSources(rideId)
             rides.deleteRide(rideId)
         }

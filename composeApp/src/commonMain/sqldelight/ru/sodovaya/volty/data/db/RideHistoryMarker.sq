@@ -20,3 +20,6 @@ SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND elapsedMillis >= :fromE
 deleteMarkers:
 DELETE FROM HistoryMarkerV2 WHERE rideId = :rideId;
 
+
+markersForReceipt:
+SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND sequence >= :firstSequence AND sequence < :nextSequence ORDER BY sequence;

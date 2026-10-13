@@ -1,0 +1,8 @@
+CREATE TABLE HistoryBatchReceiptV2 (
+  rideId TEXT NOT NULL,
+  receiptId TEXT NOT NULL,
+  firstSequence INTEGER NOT NULL,
+  nextSequence INTEGER NOT NULL,
+  PRIMARY KEY(rideId, receiptId),
+  FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
+);
