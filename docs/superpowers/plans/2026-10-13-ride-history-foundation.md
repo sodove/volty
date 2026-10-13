@@ -245,7 +245,8 @@ interface HistoryIngress { fun offer(generation: Long, batch: HistoryBatch): His
 interface HistoryWriter : HistoryIngress {
   suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>)
   suspend fun flush()
-  suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus)
+  suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String? = null)
+  suspend fun delete(rideId: String)
   suspend fun close()
 }
 ```

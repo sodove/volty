@@ -232,4 +232,14 @@ class SqlDelightHistoryStoreTest {
         store.append(batch)
         assertEquals(batch.samples, store.samples("ride", key, range, null).items)
     }
+
+    @Test fun sqliteNormalizationOfNegativeZeroDoesNotInvalidateReceipt() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val batch = HistoryBatch("ride", listOf(HistorySample(tick(10), key, -0.0)),
+            listOf(HistoryGpsFix(tick(10), -0.0, -0.0, -0.0, -0.0)), emptyList(), "zero-receipt")
+        store.append(batch)
+        store.append(batch)
+        assertEquals(1, store.samples("ride", key, range, null).items.size)
+        assertNull(store.samples("ride", key, range, null).items.single().unknown)
+    }
 }
