@@ -1,0 +1,8 @@
+ALTER TABLE HistoryBucketV2 ADD COLUMN firstEpochMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN firstElapsedMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN lastEpochMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN minEpochMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN minElapsedMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN maxEpochMillis INTEGER;
+ALTER TABLE HistoryBucketV2 ADD COLUMN maxElapsedMillis INTEGER;
+ALTER TABLE HistoryBatchReceiptV2 ADD COLUMN fingerprint TEXT;

@@ -3,6 +3,7 @@ CREATE TABLE HistoryBatchReceiptV2 (
   receiptId TEXT NOT NULL,
   firstSequence INTEGER NOT NULL,
   nextSequence INTEGER NOT NULL,
+  fingerprint TEXT,
   PRIMARY KEY(rideId, receiptId),
   FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
 );
@@ -11,8 +12,8 @@ getReceipt:
 SELECT * FROM HistoryBatchReceiptV2 WHERE rideId = :rideId AND receiptId = :receiptId;
 
 insertReceipt:
-INSERT INTO HistoryBatchReceiptV2(rideId, receiptId, firstSequence, nextSequence)
-VALUES (:rideId, :receiptId, :firstSequence, :nextSequence);
+INSERT INTO HistoryBatchReceiptV2(rideId, receiptId, firstSequence, nextSequence, fingerprint)
+VALUES (:rideId, :receiptId, :firstSequence, :nextSequence, :fingerprint);
 
 deleteReceipts:
 DELETE FROM HistoryBatchReceiptV2 WHERE rideId = :rideId;

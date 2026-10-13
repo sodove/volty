@@ -20,6 +20,7 @@ class SqlDelightHistoryStore(
     private val markerQueries = database.rideHistoryMarkerQueries
     private val reader = HistoryStoreReader(database)
     private val receipts = HistoryBatchReceipts(database)
+    private val bucketStorage = HistoryBucketStorage(database)
 
     override suspend fun begin(ride: HistoryRide, sources: List<HistorySource>) = withContext(dispatcher) {
         require(ride.status == HistoryRideStatus.RECORDING && ride.ended == null)
@@ -67,6 +68,9 @@ class SqlDelightHistoryStore(
                 val t = marker.tick
                 markerQueries.insertMarker(batch.rideId, admit(t), t.epochMillis,
                     t.elapsedMillis, t.clockGeneration, marker.kind.name)
+            }
+            bucketStorage.append(batch, origin, sources)?.let {
+                if (it.elapsedMillis >= last.elapsedMillis) last = it
             }
             rides.advanceSequence(sequence, last.epochMillis, last.elapsedMillis, batch.rideId)
             receipts.record(batch, row.nextSequence, sequence)
@@ -119,8 +123,12 @@ class SqlDelightHistoryStore(
     override suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker> = withContext(dispatcher) {
         reader.markers(rideId, range)
     }
-    // Exact summaries require full-stream buckets, not extrema reconstructed from thinned detail.
-    override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats = HistoryStats(null, null, null, false)
+    override suspend fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryBucket> = withContext(dispatcher) {
+        reader.buckets(rideId, key, range, after, limit)
+    }
+    override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats = withContext(dispatcher) {
+        database.transactionWithResult { reader.stats(rideId, key, range) }
+    }
 
     override suspend fun delete(rideId: String) = withContext(dispatcher) {
         database.transaction {

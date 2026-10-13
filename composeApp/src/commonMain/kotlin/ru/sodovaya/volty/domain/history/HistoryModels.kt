@@ -107,6 +107,7 @@ data class HistoryBatch(
     val markers: List<HistoryMarker>,
     /** Stable across retry of this exact immutable batch; null is a one-shot append. */
     val receiptId: String? = null,
+    val buckets: List<HistoryBucket> = emptyList(),
 ) {
     init {
         require(rideId.isNotBlank())

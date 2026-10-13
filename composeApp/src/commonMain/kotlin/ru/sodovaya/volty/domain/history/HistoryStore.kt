@@ -15,5 +15,7 @@ interface HistoryStore {
         after: HistoryCursor?, limit: Int = 20000): HistoryPage<HistoryGpsFix>
     suspend fun markers(rideId: String, range: HistoryRange): List<HistoryMarker>
     suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats
+    suspend fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange,
+        after: HistoryCursor?, limit: Int = 20000): HistoryPage<HistoryBucket>
     suspend fun delete(rideId: String)
 }

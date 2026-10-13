@@ -242,4 +242,115 @@ class SqlDelightHistoryStoreTest {
         assertEquals(1, store.samples("ride", key, range, null).items.size)
         assertNull(store.samples("ride", key, range, null).items.single().unknown)
     }
+
+    @Test fun fullStreamSummaryIsSavedAtomicallyAndNotRecomputedFromThinnedDetail() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w")
+        val raw = listOf(HistorySample(tick(0), power, 10.0), HistorySample(tick(100), power, 4200.0), HistorySample(tick(400), power, 20.0))
+        val accumulator = HistoryBucketAccumulator(origin, power)
+        raw.forEach { accumulator.offer(it) }
+        val bucket = assertNotNull(accumulator.snapshot())
+        store.append(HistoryBatch("ride", listOf(raw.first(), raw.last()), emptyList(), emptyList(), "summary-1", listOf(bucket)))
+        assertEquals(bucket.stats, store.stats("ride", power, range))
+        assertEquals(listOf(bucket), store.buckets("ride", power, range, null).items)
+        assertEquals(listOf(10.0, 20.0), store.samples("ride", power, range, null).items.map { it.value })
+    }
+
+    @Test fun earlierReceiptStillAcknowledgesAfterBucketHasAdvancedButConflictingSummaryIsRejected() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w"); val accumulator = HistoryBucketAccumulator(origin, power)
+        accumulator.offer(HistorySample(tick(10), power, -100.0))
+        val first = HistoryBatch("ride", emptyList(), emptyList(), emptyList(), "summary-1", listOf(assertNotNull(accumulator.snapshot())))
+        store.append(first)
+        accumulator.offer(HistorySample(tick(20), power, -200.0))
+        val advanced = assertNotNull(accumulator.snapshot())
+        store.append(first.copy(receiptId = "summary-2", buckets = listOf(advanced)))
+        store.append(first)
+        assertEquals(advanced.stats, store.stats("ride", power, range))
+        assertFailsWith<IllegalArgumentException> { store.append(first.copy(buckets = listOf(advanced))) }
+    }
+
+    @Test fun summaryFailureRollsBackDetailAndReceiptTogether() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w"); val accumulator = HistoryBucketAccumulator(origin, power)
+        val point = HistorySample(tick(10), power, -100.0); accumulator.offer(point)
+        driver.execute(null, "CREATE TRIGGER reject_bucket BEFORE INSERT ON HistoryBucketV2 BEGIN SELECT RAISE(ABORT, 'bucket failure'); END", 0)
+        val batch = HistoryBatch("ride", listOf(point), emptyList(), emptyList(), "summary-1", listOf(assertNotNull(accumulator.snapshot())))
+        assertFails { store.append(batch) }
+        assertTrue(store.samples("ride", power, range, null).items.isEmpty())
+        driver.execute(null, "DROP TRIGGER reject_bucket", 0)
+        store.append(batch); store.append(batch)
+        assertEquals(listOf(point), store.samples("ride", power, range, null).items)
+    }
+
+    @Test fun partialBucketRangeDoesNotClaimWholeBucketEnergyOrPeaksOutsideSelection() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w"); val accumulator = HistoryBucketAccumulator(origin, power)
+        val raw = listOf(HistorySample(tick(10), power, 100.0), HistorySample(tick(20), power, 10.0))
+        raw.forEach { accumulator.offer(it) }
+        store.append(HistoryBatch("ride", raw, emptyList(), emptyList(), "summary-1", listOf(assertNotNull(accumulator.snapshot()))))
+        val clipped = store.stats("ride", power, HistoryRange(10015, 10025))
+        assertEquals(10.0, clipped.minimum); assertEquals(10.0, clipped.maximum)
+        assertNull(clipped.energyWh); assertFalse(clipped.complete)
+    }
+
+    @Test fun bucketPagesUseAlignedSlotAndRecoveryUsesSummaryOnlyLastFact() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val power = key.copy(metricId = "power_w"); val accumulator = HistoryBucketAccumulator(origin, power)
+        accumulator.offer(HistorySample(tick(59900), power, -100.0))
+        val updated = accumulator.offer(HistorySample(tick(60100), power, -100.0))
+        store.append(HistoryBatch("ride", emptyList(), emptyList(), emptyList(), "summary-1", updated))
+        val span = HistoryRange(10000, 80000)
+        val first = store.buckets("ride", power, span, null, 1)
+        assertEquals(0, first.items.single().slot)
+        val second = store.buckets("ride", power, span, assertNotNull(first.next), 1)
+        assertEquals(1, second.items.single().slot); assertFalse(second.truncated)
+        store.recoverInterrupted()
+        assertEquals(tick(60100), store.ride("ride")?.ended)
+        assertFalse(store.stats("ride", power, span).complete)
+    }
+
+    @Test fun summaryValidatesSourceClockSlotAndMonotonicSnapshotEvenWithForeignKeysOff() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        driver.execute(null, "PRAGMA foreign_keys=OFF", 0)
+        val power = key.copy(metricId = "power_w")
+        val sample = HistorySample(tick(10), power, -100.0)
+        val bucket = HistoryBucket(power, 0, sample.tick, sample.tick, sample, sample, null, 1, true)
+        val batch = HistoryBatch("ride", emptyList(), emptyList(), emptyList(), "summary", listOf(bucket))
+        fun keyed(source: String) = bucket.copy(key = power.copy(sourceId = source),
+            minimum = sample.copy(key = power.copy(sourceId = source)), maximum = sample.copy(key = power.copy(sourceId = source)))
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(buckets = listOf(keyed("missing")))) }
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(buckets = listOf(bucket.copy(slot = Long.MAX_VALUE)))) }
+        val otherClock = sample.copy(tick = sample.tick.copy(clockGeneration = 2))
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(buckets = listOf(bucket.copy(
+            first = otherClock.tick, last = otherClock.tick, minimum = otherClock, maximum = otherClock)))) }
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(receiptId = null)) }
+        store.append(batch.copy(buckets = listOf(bucket.copy(sampleCount = 2))))
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(receiptId = "regressed")) }
+        assertEquals(2, store.buckets("ride", power, range, null).items.single().sampleCount)
+    }
+
+    @Test fun legacyNullFingerprintReceiptStillVerifiesRowsButCannotCertifySummaries() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        val sample = HistorySample(tick(10), key, -0.0)
+        val batch = HistoryBatch("ride", listOf(sample), emptyList(), emptyList(), "old")
+        store.append(batch)
+        driver.execute(null, "UPDATE HistoryBatchReceiptV2 SET fingerprint = NULL", 0)
+        store.append(batch)
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(samples = listOf(sample.copy(value = 1.0)))) }
+        val bucket = HistoryBucket(key, 0, sample.tick, sample.tick, sample, sample, null, 1, true)
+        assertFailsWith<IllegalArgumentException> { store.append(batch.copy(buckets = listOf(bucket))) }
+        assertEquals(1, store.samples("ride", key, range, null).items.size)
+    }
+
+    @Test fun summaryReceiptCanonicalizesZeroAndGpsGapDoesNotInvalidateTelemetry() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val sample = HistorySample(tick(10), key, -0.0)
+        val bucket = HistoryBucket(key, 0, sample.tick, sample.tick, sample, sample, null, 1, true)
+        val batch = HistoryBatch("ride", emptyList(), emptyList(),
+            listOf(HistoryMarker(tick(10), HistoryMarkerKind.GPS_GAP)), "zero", listOf(bucket))
+        store.append(batch)
+        store.append(batch.copy(buckets = listOf(bucket.copy(minimum = sample.copy(value = 0.0), maximum = sample.copy(value = 0.0)))))
+        assertEquals(HistoryStats(0.0, 0.0, null, true), store.stats("ride", key, range))
+    }
 }

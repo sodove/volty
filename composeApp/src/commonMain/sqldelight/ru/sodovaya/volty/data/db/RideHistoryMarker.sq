@@ -23,3 +23,8 @@ DELETE FROM HistoryMarkerV2 WHERE rideId = :rideId;
 
 markersForReceipt:
 SELECT * FROM HistoryMarkerV2 WHERE rideId = :rideId AND sequence >= :firstSequence AND sequence < :nextSequence ORDER BY sequence;
+
+hasEvidenceGap:
+SELECT EXISTS(SELECT 1 FROM HistoryMarkerV2 WHERE rideId = :rideId
+AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed
+AND kind IN ('BLE_GAP', 'CLOCK_CHANGE', 'OVERFLOW', 'INTERRUPTED')) AS hasGap;

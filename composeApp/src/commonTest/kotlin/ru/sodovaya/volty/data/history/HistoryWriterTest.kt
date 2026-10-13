@@ -15,6 +15,35 @@ class HistoryWriterTest {
     private fun batch(count: Int = 1, source: String = "pack") = HistoryBatch("ride",
         List(count) { HistorySample(tick, HistorySeriesKey(source, "current_a"), it.toDouble()) }, emptyList(), emptyList())
 
+    @Test fun summaryOnlyPacketsAreCopiedAndCommitted() = runTest {
+        val store = Store()
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
+        try {
+            writer.begin(7, ride, sources)
+            val sample = batch().samples.single()
+            val bucket = HistoryBucket(sample.key, 0, tick, tick, sample, sample, null, 1, true)
+            val mutable = mutableListOf(bucket)
+            assertEquals(HistoryOffer.ACCEPTED, writer.offer(7, batch(0).copy(buckets = mutable)))
+            mutable.clear()
+            writer.flush()
+            assertEquals(listOf(bucket), store.batches.single().buckets)
+        } finally { writer.close() }
+    }
+
+    @Test fun summaryPacketsCannotBypassQueueCapacityOrLoseOverflowEvidence() = runTest {
+        val store = Store()
+        val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
+        try {
+            writer.begin(7, ride, sources)
+            val sample = batch().samples.single()
+            val bucket = HistoryBucket(sample.key, 0, tick, tick, sample, sample, null, 1, true)
+            assertEquals(HistoryOffer.OVERFLOW,
+                writer.offer(7, batch(0).copy(buckets = List(2049) { bucket })))
+            writer.flush()
+            assertEquals(HistoryMarkerKind.OVERFLOW, store.batches.single().markers.single().kind)
+        } finally { writer.close() }
+    }
+
     @Test fun finishFencesIngressAndWaitsForActualAppendCommit() = runTest {
         val store = Store(); val gate = CompletableDeferred<Unit>(); store.gate = gate
         val writer = BufferedHistoryWriter(store, StandardTestDispatcher(testScheduler), emptyFlow())
@@ -169,6 +198,7 @@ class HistoryWriterTest {
         override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?, limit: Int) = HistoryPage<HistoryGpsFix>(emptyList(), null, false)
         override suspend fun markers(rideId: String, range: HistoryRange) = emptyList<HistoryMarker>()
         override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange) = HistoryStats(null, null, null, false)
+        override suspend fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int) = HistoryPage<HistoryBucket>(emptyList(), null, false)
         override suspend fun delete(rideId: String) { calls += "delete"; batches.removeAll { it.rideId == rideId } }
     }
 }

@@ -299,6 +299,14 @@ fun nearestHistorySample(samples: List<HistorySample>, tick: HistoryTick, maxAge
   aggregate buckets and boundary detail rather than recalculating from overview.
 - [ ] GREEN/full suite, commit summary/projection.
 
+Task6 checkpoint (2026-10-13): pure statistics/continuity/overview and streaming
+minute summaries plus the 500 ms detail envelope are implemented. Summary snapshots,
+detail and immutable payload receipts share one transaction; migration16.sqm and
+snapshot17.db preserve legacy data. Source/clock/slot admission, clipped-range reads,
+summary-only recovery and mutable bucket retry identity have real SQLite tests.
+The writer bounds and copies summary packets as well as detail. The recording
+projection still needs connecting to the actor before runtime activation in Task7;
+this checkpoint does not mark Task6 or the Vescape source/screen transfer complete.
 ## Task7 — recording owner, full-stream adapter and GPS service demand
 
 **Files:** Create `data/history/RideRecordingController.kt`, `HistoryTelemetryAdapter.kt`,

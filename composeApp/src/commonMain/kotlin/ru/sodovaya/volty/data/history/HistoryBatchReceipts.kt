@@ -3,12 +3,17 @@ package ru.sodovaya.volty.data.history
 import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.domain.history.*
 
-/** Called inside append's transaction. Receipts reference original rows, avoiding duplicate payload storage. */
+/** Called inside append's transaction. Old receipts reference rows; new ones certify the full payload. */
 internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
     fun verifyCommitted(batch: HistoryBatch): Boolean {
         val token = batch.receiptId ?: return false
         val receipt = database.rideHistoryReceiptQueries.getReceipt(batch.rideId, token).executeAsOneOrNull()
             ?: return false
+        receipt.fingerprint?.let {
+            require(it == historyBatchFingerprint(batch)) { "Receipt reused with a different payload" }
+            return true
+        }
+        require(batch.buckets.isEmpty()) { "Legacy receipt cannot certify a bucket payload" }
         val samples = database.rideHistorySampleQueries.samplesForReceipt(batch.rideId,
             receipt.firstSequence, receipt.nextSequence).executeAsList().map {
             HistorySample(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration),
@@ -36,7 +41,8 @@ internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
 
     fun record(batch: HistoryBatch, firstSequence: Long, nextSequence: Long) {
         batch.receiptId?.let {
-            database.rideHistoryReceiptQueries.insertReceipt(batch.rideId, it, firstSequence, nextSequence)
+            database.rideHistoryReceiptQueries.insertReceipt(batch.rideId, it, firstSequence, nextSequence,
+                historyBatchFingerprint(batch))
         }
     }
 

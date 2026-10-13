@@ -1,9 +1,50 @@
 package ru.sodovaya.volty.data.history
 
 import ru.sodovaya.volty.data.db.VoltyDatabase
+import ru.sodovaya.volty.data.db.HistoryBucketV2
 import ru.sodovaya.volty.domain.history.*
 
 internal class HistoryStoreReader(private val database: VoltyDatabase) {
+    fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryBucket> {
+        require(limit in 1..20000)
+        val origin = origin(rideId) ?: return emptyPage()
+        val bounds = bounds(origin, range) ?: return emptyPage()
+        val anchor = after?.let {
+            require(it.epochMillis >= origin.epochMillis)
+            val slot = it.stableId.toLongOrNull()
+            require(slot != null && slot >= 0 && slot <= (Long.MAX_VALUE - origin.elapsedMillis) / HISTORY_SUMMARY_BUCKET_MILLIS)
+            val start = origin.elapsedMillis + slot * HISTORY_SUMMARY_BUCKET_MILLIS
+            require(elapsed(origin, it.epochMillis) == start)
+            start
+        }
+        val rows = database.rideHistoryBucketQueries.pageBuckets(rideId, key.sourceId, key.metricId,
+            key.cellIndex?.toLong() ?: -1, bounds.first, bounds.last, anchor, limit.toLong() + 1,
+            ::HistoryBucketV2).executeAsList()
+        return page(rows, limit, { it.toHistoryBucket(origin) }, {
+            HistoryCursor(checkNotNull(historyAxisEpochMillis(origin,
+                HistoryTick(origin.epochMillis, it.startElapsedMillis, origin.clockGeneration))),
+                ((it.startElapsedMillis - origin.elapsedMillis) / HISTORY_SUMMARY_BUCKET_MILLIS).toString())
+        })
+    }
+
+    fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+        val unknown = HistoryStats(null, null, null, false)
+        val origin = origin(rideId) ?: return unknown
+        val bounds = bounds(origin, range) ?: return unknown
+        val summary = database.rideHistoryBucketQueries.rangeStats(bounds.first, bounds.last,
+            rideId, key.sourceId, key.metricId, key.cellIndex?.toLong() ?: -1).executeAsOne()
+        if (summary.bucketCount == 0L) return unknown
+        val detail = samples(rideId, key, range, null, 20000)
+        val values = detail.items.mapNotNull { it.value }
+        val minimum = listOfNotNull(summary.minimum, values.minOrNull()).minOrNull()
+        val maximum = listOfNotNull(summary.maximum, values.maxOrNull()).maxOrNull()
+        val energy = summary.energyWh?.takeIf { it.isFinite() }
+        val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last).executeAsOne()
+        return HistoryStats(minimum, maximum, energy, summary.complete == 1L && !gap &&
+            !detail.truncated && detail.items.none { it.value == null } &&
+            (summary.energyWh == null || energy != null))
+    }
+
     fun rides(before: HistoryCursor?, limit: Int): HistoryPage<HistoryRide> {
         require(limit in 1..20)
         val rows = database.rideHistoryV2Queries.pageRides(before?.epochMillis,

@@ -10,9 +10,47 @@ CREATE TABLE HistoryBucketV2 (
   energyWh REAL,
   sampleCount INTEGER NOT NULL,
   complete INTEGER NOT NULL,
+  firstEpochMillis INTEGER,
+  firstElapsedMillis INTEGER,
+  lastEpochMillis INTEGER,
+  minEpochMillis INTEGER,
+  minElapsedMillis INTEGER,
+  maxEpochMillis INTEGER,
+  maxElapsedMillis INTEGER,
   PRIMARY KEY(rideId, sourceId, metricId, cellIndex, startElapsedMillis),
   FOREIGN KEY(rideId, sourceId) REFERENCES HistorySourceV2(rideId, id) ON DELETE CASCADE
 );
 
 deleteBuckets:
 DELETE FROM HistoryBucketV2 WHERE rideId = :rideId;
+
+
+getBucket:
+SELECT * FROM HistoryBucketV2 WHERE rideId = :rideId AND sourceId = :sourceId
+AND metricId = :metricId AND cellIndex = :cellIndex AND startElapsedMillis = :startElapsed;
+
+putBucket:
+INSERT OR REPLACE INTO HistoryBucketV2(rideId, sourceId, metricId, cellIndex, startElapsedMillis,
+endElapsedMillis, minimum, maximum, energyWh, sampleCount, complete, firstEpochMillis,
+firstElapsedMillis, lastEpochMillis, minEpochMillis, minElapsedMillis, maxEpochMillis, maxElapsedMillis)
+VALUES (:rideId, :sourceId, :metricId, :cellIndex, :startElapsed, :endElapsed, :minimum, :maximum,
+:energyWh, :sampleCount, :complete, :firstEpoch, :firstElapsed, :lastEpoch, :minEpoch, :minElapsed, :maxEpoch, :maxElapsed);
+
+pageBuckets:
+SELECT * FROM HistoryBucketV2 WHERE rideId = :rideId AND sourceId = :sourceId
+AND metricId = :metricId AND cellIndex = :cellIndex
+AND firstElapsedMillis IS NOT NULL AND firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
+AND endElapsedMillis >= :fromElapsed AND firstElapsedMillis <= :toElapsed
+AND (:afterStart IS NULL OR startElapsedMillis > :afterStart)
+ORDER BY startElapsedMillis LIMIT :pageSize;
+
+rangeStats:
+SELECT
+MIN(CASE WHEN minElapsedMillis >= :fromElapsed AND minElapsedMillis <= :toElapsed THEN minimum END) AS minimum,
+MAX(CASE WHEN maxElapsedMillis >= :fromElapsed AND maxElapsedMillis <= :toElapsed THEN maximum END) AS maximum,
+SUM(CASE WHEN firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN energyWh END) AS energyWh,
+MIN(CASE WHEN firstEpochMillis IS NOT NULL AND lastEpochMillis IS NOT NULL
+AND firstElapsedMillis >= :fromElapsed AND endElapsedMillis <= :toElapsed THEN complete ELSE 0 END) AS complete,
+COUNT(*) AS bucketCount
+FROM HistoryBucketV2 WHERE rideId = :rideId AND sourceId = :sourceId AND metricId = :metricId AND cellIndex = :cellIndex
+AND endElapsedMillis >= :fromElapsed AND COALESCE(firstElapsedMillis, startElapsedMillis) <= :toElapsed;

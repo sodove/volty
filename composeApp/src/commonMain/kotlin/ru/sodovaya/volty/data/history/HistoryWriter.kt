@@ -90,14 +90,14 @@ class BufferedHistoryWriter(
             if (events == 0L) return HistoryOffer.ACCEPTED
             if (events > MAX_EVENTS - old.events || bytes > MAX_BYTES - old.bytes) {
                 val first = sequenceOf(batch.samples.asSequence().map { it.tick }, batch.gps.asSequence().map { it.tick },
-                    batch.markers.asSequence().map { it.tick }).flatten().minByOrNull { it.elapsedMillis }
+                    batch.markers.asSequence().map { it.tick }, batch.buckets.asSequence().map { it.first }).flatten().minByOrNull { it.elapsedMillis }
                 val updated = old.copy(dropped = old.dropped + events,
                     loss = old.loss ?: first?.let { HistoryMarker(it, HistoryMarkerKind.OVERFLOW) })
                 if (state.compareAndSet(old, updated)) { wake.trySend(Unit); return HistoryOffer.OVERFLOW }
                 continue
             }
             val copied = batch.copy(samples = batch.samples.toList(), gps = batch.gps.toList(), markers = batch.markers.toList(),
-                receiptId = token(session, old.nextToken))
+                buckets = batch.buckets.toList(), receiptId = token(session, old.nextToken))
             val updated = old.copy(pending = old.pending + Packet(copied, events, bytes), events = old.events + events,
                 bytes = old.bytes + bytes, nextToken = old.nextToken + 1)
             if (state.compareAndSet(old, updated)) { wake.trySend(Unit); return HistoryOffer.ACCEPTED }
