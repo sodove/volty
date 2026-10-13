@@ -19,6 +19,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.isActive
 import kotlin.time.Duration
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -86,6 +87,9 @@ class DefaultGraphComponent(
     override val state: StateFlow<GraphComponent.State> = _state.asStateFlow()
 
     private var sampleJob: Job? = null
+    private var historicalLoadJob: Job? = null
+    private var historicalReadGeneration = 0L
+    private var historicalSeries: Map<GraphMetric, GraphSeries> = emptyMap()
     private var latestSamples: List<BmsData> = emptyList()
     private var latestMotion: List<ControllerData> = emptyList()
     private var latestRideSamples: List<BmsData> = emptyList()
@@ -238,7 +242,7 @@ class DefaultGraphComponent(
             if (current.selectedRideId == null) {
                 computeStats(updated, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
             } else {
-                computeDerivedStats(updated, updated.series, used = null)
+                computeDerivedStats(updated, historicalVisibleSeries(metrics), used = null)
             }
         }
         // The repository flows are hot and continue to emit; this merely keeps
@@ -252,7 +256,7 @@ class DefaultGraphComponent(
             else {
                 val updated = current.copy(visibleMetrics = current.visibleMetrics + metric)
                 if (current.selectedRideId == null) computeStats(updated, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
-                else computeDerivedStats(updated, updated.series + (metric to GraphSeries(metric, emptyList())))
+                else computeDerivedStats(updated, historicalVisibleSeries(updated.visibleMetrics), used = null)
             }
         }
     }
@@ -288,7 +292,7 @@ class DefaultGraphComponent(
             val withSeries = if (current.selectedRideId == null) {
                 computeStats(expanded, latestSamples, latestMotion, latestRideSamples, latestRideMotion)
             } else {
-                computeDerivedStats(expanded, expanded.series)
+                computeDerivedStats(expanded, historicalVisibleSeries(metrics), used = null)
             }
             val xSeries = withSeries.series[x]?.points.orEmpty()
             val ySeries = withSeries.series[y]?.points.orEmpty()
@@ -316,8 +320,12 @@ class DefaultGraphComponent(
     }
 
     override fun onRideSelected(rideId: String?) {
-        scope.launch {
+        val generation = ++historicalReadGeneration
+        historicalLoadJob?.cancel()
+        historicalLoadJob = scope.launch {
+            if (generation != historicalReadGeneration) return@launch
             if (rideId == null) {
+                historicalSeries = emptyMap()
                 _state.update { current ->
                     current.copy(
                         selectedRideId = null,
@@ -330,6 +338,7 @@ class DefaultGraphComponent(
                 return@launch
             }
             val stored = rideHistoryRepository.loadRide(rideId) ?: return@launch
+            if (!isActive || generation != historicalReadGeneration) return@launch
             val loaded = stored.points.mapNotNull { point ->
                 val metric = runCatching { GraphMetric.valueOf(point.metricKey) }.getOrNull() ?: return@mapNotNull null
                 if (!point.isKnown) return@mapNotNull null
@@ -337,6 +346,7 @@ class DefaultGraphComponent(
             }.groupBy({ it.first }, { it.second })
                 .mapValues { (metric, points) -> GraphSeries(metric, points.sortedBy { it.timestamp }) }
             sampleJob?.cancel()
+            historicalSeries = loaded
             _state.update { current ->
                 val series = current.visibleMetrics.associateWith { metric -> loaded[metric] ?: GraphSeries(metric, emptyList()) }
                 computeDerivedStats(
@@ -348,6 +358,9 @@ class DefaultGraphComponent(
             }
         }
     }
+
+    private fun historicalVisibleSeries(metrics: List<GraphMetric>): Map<GraphMetric, GraphSeries> =
+        metrics.associateWith { historicalSeries[it] ?: GraphSeries(it, emptyList()) }
 
     override fun onHistoryRequested() {
         scope.launch { loadHistory() }

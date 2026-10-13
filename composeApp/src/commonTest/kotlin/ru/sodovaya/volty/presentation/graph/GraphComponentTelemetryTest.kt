@@ -2,7 +2,11 @@ package ru.sodovaya.volty.presentation.graph
 
 import com.arkivanov.decompose.DefaultComponentContext
 import com.arkivanov.essenty.lifecycle.LifecycleRegistry
+import com.arkivanov.essenty.lifecycle.destroy
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,6 +15,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.setMain
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
@@ -82,6 +87,82 @@ class GraphComponentTelemetryTest {
         bmsRepository = repo,
         onBackRequested = {}
     )
+
+    @Test
+    fun `adding a metric after opening history uses the recorded series`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val start = Instant.fromEpochSeconds(100)
+        val lifecycle = LifecycleRegistry()
+        val history = FakeHistory(StoredRide(RideSummary("ride", "vehicle", start, start + 30.seconds),
+            listOf(RidePoint(GraphMetric.VOLTAGE.name, start, 63f),
+                RidePoint(GraphMetric.VOLTAGE.name, start + 1.seconds, 62f))))
+        val component = DefaultGraphComponent(DefaultComponentContext(lifecycle), FakeRepo(), {}, history)
+        try {
+            component.onRideSelected("ride")
+            runCurrent()
+            component.onMetricAdded(GraphMetric.VOLTAGE)
+            assertEquals(listOf(63f, 62f), component.state.value.series[GraphMetric.VOLTAGE]?.points?.map { it.value })
+        } finally { lifecycle.destroy() }
+    }
+
+    @Test
+    fun `late historical read cannot replace a newer selected ride`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val start = Instant.fromEpochSeconds(100)
+        val a = StoredRide(RideSummary("a", "vehicle", start, start + 30.seconds),
+            listOf(RidePoint(GraphMetric.VOLTAGE.name, start, 63f)))
+        val b = StoredRide(a.summary.copy(id = "b"), listOf(RidePoint(GraphMetric.VOLTAGE.name, start, 72f)))
+        val entered = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val history = object : RideHistoryRepository by FakeHistory(a) {
+            override suspend fun loadRide(rideId: String): StoredRide? {
+                if (rideId == "a") return withContext(NonCancellable) {
+                    entered.complete(Unit); release.await(); a
+                }
+                return b
+            }
+        }
+        val lifecycle = LifecycleRegistry()
+        val component = DefaultGraphComponent(DefaultComponentContext(lifecycle), FakeRepo(), {}, history)
+        try {
+            component.onMetricSelected(GraphMetric.VOLTAGE)
+            component.onRideSelected("a"); runCurrent()
+            assertTrue(entered.isCompleted)
+            component.onRideSelected("b"); runCurrent()
+            assertEquals("b", component.state.value.selectedRideId)
+            release.complete(Unit); runCurrent()
+            assertEquals("b", component.state.value.selectedRideId)
+            assertEquals(listOf(72f), component.state.value.values)
+        } finally { release.complete(Unit); lifecycle.destroy(); runCurrent() }
+    }
+
+    @Test
+    fun `returning to live retires an in flight historical read`() = runTest {
+        Dispatchers.setMain(StandardTestDispatcher(testScheduler))
+        val start = Instant.fromEpochSeconds(100)
+        val stored = StoredRide(RideSummary("old", "vehicle", start, start + 30.seconds),
+            listOf(RidePoint(GraphMetric.VOLTAGE.name, start, 63f)))
+        val release = CompletableDeferred<Unit>()
+        val entered = CompletableDeferred<Unit>()
+        val history = object : RideHistoryRepository by FakeHistory(stored) {
+            override suspend fun loadRide(rideId: String): StoredRide? = withContext(NonCancellable) {
+                entered.complete(Unit); release.await(); stored
+            }
+        }
+        val lifecycle = LifecycleRegistry()
+        val repo = FakeRepo()
+        repo.batteries.value = listOf(BmsData(voltage = 80f, timestamp = start))
+        val component = DefaultGraphComponent(DefaultComponentContext(lifecycle), repo, {}, history)
+        try {
+            component.onMetricSelected(GraphMetric.VOLTAGE)
+            component.onRideSelected("old"); runCurrent()
+            assertTrue(entered.isCompleted)
+            component.onRideSelected(null); runCurrent()
+            release.complete(Unit); runCurrent()
+            assertEquals(null, component.state.value.selectedRideId)
+            assertEquals(listOf(80f), component.state.value.values)
+        } finally { release.complete(Unit); lifecycle.destroy(); runCurrent() }
+    }
 
     @AfterTest
     fun tearDown() = Dispatchers.resetMain()
