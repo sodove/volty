@@ -29,7 +29,8 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
 
     fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
         val unknown = HistoryStats(null, null, null, false)
-        val origin = origin(rideId) ?: return unknown
+        val ride = database.rideHistoryV2Queries.getRide(rideId).executeAsOneOrNull()?.toHistoryRide() ?: return unknown
+        val origin = ride.started
         val bounds = bounds(origin, range) ?: return unknown
         val summary = database.rideHistoryBucketQueries.rangeStats(bounds.first, bounds.last,
             rideId, key.sourceId, key.metricId, key.cellIndex?.toLong() ?: -1).executeAsOne()
@@ -40,7 +41,7 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
         val maximum = listOfNotNull(summary.maximum, values.maxOrNull()).maxOrNull()
         val energy = summary.energyWh?.takeIf { it.isFinite() }
         val gap = database.rideHistoryMarkerQueries.hasEvidenceGap(rideId, bounds.first, bounds.last).executeAsOne()
-        return HistoryStats(minimum, maximum, energy, summary.complete == 1L && !gap &&
+        return HistoryStats(minimum, maximum, energy, ride.status != HistoryRideStatus.INTERRUPTED && summary.complete == 1L && !gap &&
             !detail.truncated && detail.items.none { it.value == null } &&
             (summary.energyWh == null || energy != null))
     }

@@ -353,4 +353,15 @@ class SqlDelightHistoryStoreTest {
         store.append(batch.copy(buckets = listOf(bucket.copy(minimum = sample.copy(value = 0.0), maximum = sample.copy(value = 0.0)))))
         assertEquals(HistoryStats(0.0, 0.0, null, true), store.stats("ride", key, range))
     }
+
+    @Test fun explicitlyInterruptedRideCannotExposeCompleteSummaryWithoutRecoveryMarker() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val point = HistorySample(tick(10), key, 100.0)
+        val bucket = HistoryBucket(key, 0, point.tick, point.tick, point, point, null, 1, true)
+        store.append(HistoryBatch("ride", listOf(point), emptyList(), emptyList(), "summary", listOf(bucket)))
+        store.finish("ride", tick(20), HistoryRideStatus.INTERRUPTED)
+        val summary = store.stats("ride", key, range)
+        assertEquals(100.0, summary.maximum)
+        assertFalse(summary.complete)
+    }
 }

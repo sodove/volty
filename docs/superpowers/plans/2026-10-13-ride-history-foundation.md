@@ -352,6 +352,17 @@ RideLocationRepository.setDemand/history consumer, app-owned lifecycle.
   Task8 adapter works. No parallel unbounded shadow writer.
 - [ ] GREEN/full suite/native service demand check, commit integration.
 
+Task7 checkpoint (2026-10-14): the app-independent controller and pure GPS
+admission helper are implemented. Controller state carries RecordingIntent plus
+an observable demand failure; execute accepts typed start/stop/link events. Writer
+recording generation remains stable across BLE reconnects. A per-admission gate
+closes intake and waits for all reserved sends before durable finish; stale ride,
+BLE generation, source and clock inputs are rejected. Delayed controls end no
+earlier than the latest reserved point or lifecycle marker. GPS can participate
+while BLE is absent. Request-demand errors leave telemetry ownership intact.
+Real SQLite integration checks reconnect, GPS participation and durable stop.
+Native GPS observer/service ownership, contributor field freshness/source capture,
+production DI activation and retirement of the old recorder are still pending.
 ## Task8 — bounded read facade and repair historical graph admission
 
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;

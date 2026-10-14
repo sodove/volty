@@ -13,6 +13,42 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryRecordingWriterIntegrationTest {
+    @Test fun controllerRetainsOneRideAcrossReconnectAndGpsGapThenDurablyStopsAtLastFact() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        VoltyDatabase.Schema.create(driver)
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), dispatcher)
+        val writer = BufferedHistoryWriter(store, dispatcher, emptyFlow(), projectRecording = true)
+        val demands = mutableListOf<Boolean>()
+        val controller = RideRecordingController(writer, HistoryRecordingDemand { demands += it }, { "ride" }, { store.recoverInterrupted() })
+        fun tick(delta: Long) = HistoryTick(10000 + delta, 100 + delta, 1)
+        val key = HistorySeriesKey("pack", "power_w")
+        fun batch(delta: Long, watts: Double) = HistoryBatch("ride", listOf(HistorySample(tick(delta), key, watts)), emptyList(), emptyList())
+        val sources = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "A"))
+        try {
+            controller.execute(RecordingInput.Connected("bike", 7, tick(0)), sources)
+            assertEquals(HistoryOffer.ACCEPTED, controller.offerTelemetry(7, batch(10, -100.0)))
+            controller.execute(RecordingInput.LinkLost(7, tick(30)))
+            assertEquals(HistoryOffer.RETIRED, controller.offerTelemetry(7, batch(31, -9999.0)))
+            val gps = HistoryGpsFix(tick(35), 56.0, 60.0, 5.0, null)
+            assertEquals(HistoryOffer.ACCEPTED, controller.offerGps("ride", gps))
+            controller.execute(RecordingInput.Connected("bike", 8, tick(40)), sources)
+            assertEquals(HistoryOffer.RETIRED, controller.offerTelemetry(7, batch(45, -9999.0)))
+            assertEquals(HistoryOffer.ACCEPTED, controller.offerTelemetry(8, batch(50, -200.0)))
+            controller.execute(RecordingInput.Stop(tick(49), 8, "ride"))
+            val range = HistoryRange(10000, 10100)
+            assertEquals(listOf("ride"), store.rides(null).items.map { it.id })
+            assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)
+            assertEquals(tick(50), store.ride("ride")?.ended)
+            assertEquals(listOf(gps), store.gps("ride", range, null).items)
+            assertEquals(listOf(-100.0, -200.0), store.samples("ride", key, range, null).items.map { it.value })
+            assertEquals(2, store.buckets("ride", key, range, null).items.single().sampleCount)
+            assertFalse(store.stats("ride", key, range).complete)
+            assertNull(store.stats("ride", key, range).energyWh)
+            assertEquals(listOf(true, false), demands)
+        } finally { writer.close(); driver.close() }
+    }
+
     @Test fun fullStreamSummaryAndThinnedDetailSurviveRealCommitWithLostAcknowledgement() = runTest {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         driver.execute(null, "PRAGMA foreign_keys=ON", 0)
