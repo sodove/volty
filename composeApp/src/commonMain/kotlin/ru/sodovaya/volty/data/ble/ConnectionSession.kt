@@ -82,9 +82,12 @@ internal class ConnectionSession(
      * compile unchanged.
      */
     private val onMotionSample: (controllerIndex: Int, data: ControllerData) -> Unit = { _, _ -> },
+    /** Optional receipt capture; source/recording ownership is supplied by the repository. */
+    private val telemetryCapture: SessionTelemetryCapture? = null,
     /** Callback when a link drop is detected (state event or watchdog). */
     private val onDropDetected: suspend (reason: String) -> Unit
 ) {
+    init { telemetryCapture?.requireProtocol(protocol) }
 
     private val cancelMutex = Mutex()
     private var torn: Boolean = false
@@ -248,12 +251,11 @@ internal class ConnectionSession(
                         }
                     }
                 ).collect { data ->
-                    onNotification(data)
                     // This is deliberately at the accumulator boundary, before
                     // decoding. A VESC can notify a valid transport frame that
                     // answers neither opcode we know; redialling that healthy
                     // GATT link cannot make the frame understandable.
-                    processObservedSessionNotification(protocol, data, noSampleEverActivity)
+                    processObservedSessionNotification(protocol, data, noSampleEverActivity, telemetryCapture) { onNotification(data) }
                     val routed = routeObservedSessionSamples(
                         protocol = protocol,
                         packGate = sampleGate,
@@ -420,6 +422,7 @@ internal class ConnectionSession(
         cancelMutex.withLock {
             if (torn) return@withLock
             torn = true
+            telemetryCapture?.close()
             pollingJob?.cancelAndJoin(); pollingJob = null
             observeJob?.cancelAndJoin(); observeJob = null
             stateJob?.cancelAndJoin(); stateJob = null
@@ -506,10 +509,17 @@ internal fun evaluateStaleSessionActivity(
 internal fun processObservedSessionNotification(
     protocol: BmsProtocol,
     data: ByteArray,
-    activity: NoSampleEverWatchdogActivity
+    activity: NoSampleEverWatchdogActivity,
+    telemetryCapture: SessionTelemetryCapture? = null,
+    beforeDecode: () -> Unit = {},
 ) {
     activity.recordNotificationArrival()
-    protocol.onNotification(data)
+    telemetryCapture?.requireProtocol(protocol)
+    if (telemetryCapture != null) telemetryCapture.processNotification(data, beforeDecode)
+    else {
+        beforeDecode()
+        protocol.onNotification(data)
+    }
 }
 
 /** What the current notification proved independently of protocol caches. */

@@ -206,3 +206,34 @@ The ET Max fixture tests 76 battery observations (38 telemetry, 38 pages), both
 branches, initial boot-current absence, later current availability, physical
 indices 0..39 and recorded cell values, alongside the 114 controller observations.
 This validates the stored stationary capture, not new phone/background acceptance.
+
+## Connection receipt boundary
+
+`SessionTelemetryCapture` optionally wraps the exact incoming-notification boundary
+used by ConnectionSession. It reads an injected receipt clock once before trace
+callbacks and decoding, then attaches one immutable session ID/notification ordinal/
+wall-and-monotonic time to all observations that this notification completes.
+Fragments acquire the completion receipt; coalesced frames cannot invent distinct
+measurement times. A receipt is arrival evidence, not a hardware acquisition clock.
+
+Entry, post-clock and post-prefix ownership checks reject superseded/closed attempts.
+Callbacks also check ownership and scope; closing during one fact suppresses later
+facts without aborting already-running live decoding. The observer is restored in
+finally only if it is still ours, and an expired scope cannot retain its receipt.
+Clock failures consume an ordinal and increment a saturating diagnostic counter:
+live decode continues inside a scope that emits no unstamped recording facts.
+Recording callback exceptions remain contained/countable by BmsProtocol. Real decoder
+exceptions retain the previous observer before propagating to existing BLE recovery.
+
+Connection teardown closes capture before cancel/reset. This lifetime belongs to
+the BLE attempt, not a recording: stopping a ride while a dashboard still owns BLE
+must not close its decoder capture. One fresh protocol and incoming collector per
+attempt is the existing repository construction contract; concurrent/reentrant
+shared-protocol decoding is not supported by this helper or the decoder.
+
+The optional constructor defaults to null; production repository binding is pending.
+Stable source/role attribution, recording-generation capture, receipt diagnostics
+as loss markers and the final queued-packet session fence remain mandatory. The helper
+does not claim to reject already-queued old records by itself. Its real ET Max test
+captures 190 facts (114 controller/76 battery) across original BLE fragment boundaries,
+with one clock read per notification and the first completed frame on receipt 2.

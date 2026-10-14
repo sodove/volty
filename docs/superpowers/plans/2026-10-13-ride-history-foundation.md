@@ -393,6 +393,13 @@ existing accepted-frame gates/calibration/latches. The real ET Max fixture cover
 cross-frame voltage/current product remain open. These are decoder milestones,
 not activation or new phone acceptance.
 
+Receipt-boundary checkpoint (2026-10-14): optional native capture now stamps every
+decoded observation with one immutable session/notification/time receipt, preserves
+completion/coalesced timing, checks attempt ownership and closes before teardown.
+Clock/callback failures preserve live decoding. The production repository still
+passes the null default: source/role and recording-generation binding plus the
+queued-packet session fence are the next integration work, not completed by this seam.
+
 ## Task8 — bounded read facade and repair historical graph admission
 
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;
