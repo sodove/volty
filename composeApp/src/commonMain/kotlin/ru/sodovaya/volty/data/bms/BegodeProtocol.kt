@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.SpeedSource
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import kotlin.math.abs
 
 /**
@@ -1485,6 +1486,9 @@ class BegodeProtocol(
 
         rebuild(branch, bmsnum shr 1)
         observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1) { observedBegodeBranch(frame, isBootPlaceholder) }
+        observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1, TelemetryRole.ASSEMBLY, section) {
+            observedBegodeAssembly(frame, isBootPlaceholder, TEMP_SANITY)
+        }
     }
 
     /**

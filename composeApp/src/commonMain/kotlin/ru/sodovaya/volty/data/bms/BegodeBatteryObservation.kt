@@ -4,6 +4,29 @@ import ru.sodovaya.volty.domain.model.TelemetryMetric
 import ru.sodovaya.volty.domain.model.TelemetryReading
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
 
+/** Only this accepted reply's assembly fields, never cached cells or another assembly's sensors. */
+internal fun observedBegodeAssembly(frame: ByteArray, bootPlaceholder: Boolean,
+    temperatureRange: IntRange): List<TelemetryReading> {
+    val temperatures = listOf(frame.i16BE(10), frame.i16BE(12))
+    val temperature = when {
+        bootPlaceholder -> TelemetryReading(TelemetryMetric.BATTERY_TEMPERATURE, null, TelemetryUnknown.UNAVAILABLE)
+        temperatures.any { it !in temperatureRange } ->
+            TelemetryReading(TelemetryMetric.BATTERY_TEMPERATURE, null, TelemetryUnknown.PARTIAL_SOURCE)
+        else -> TelemetryReading.measured(TelemetryMetric.BATTERY_TEMPERATURE, temperatures.max().toDouble())
+    }
+    // Retraction: the first version withheld this with the whole-branch ADC
+    // calibration gate. The independent section field at 14 is already 0.1 V
+    // per signed unit (WheelLog + ET Max section/cell-sum capture). It must not
+    // borrow the whole-branch field at 6 or the 0x00 nominal-voltage scale.
+    val rawVoltage = frame.i16BE(14)
+    val voltage = when {
+        bootPlaceholder -> TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.UNAVAILABLE)
+        rawVoltage < 0 -> TelemetryReading(TelemetryMetric.VOLTAGE, null, TelemetryUnknown.INVALID_VALUE)
+        else -> TelemetryReading.measured(TelemetryMetric.VOLTAGE, rawVoltage / 10.0)
+    }
+    return listOf(voltage, temperature)
+}
+
 internal fun observedBegodeBranch(frame: ByteArray, bootPlaceholder: Boolean): List<TelemetryReading> = listOf(
     TelemetryReading.measured(TelemetryMetric.CURRENT, -(frame.i16BE(8) * 0.1).toDouble(), !bootPlaceholder),
     // The dashboard can substitute cached cell sums for nominal frame voltage. Neither certifies a fresh calibrated branch voltage here.

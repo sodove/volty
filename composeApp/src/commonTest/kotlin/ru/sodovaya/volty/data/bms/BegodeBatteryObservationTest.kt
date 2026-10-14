@@ -17,7 +17,9 @@ class BegodeBatteryObservationTest {
     private fun cells(branch: Int, page: Int, values: List<Int>) = frame(2 + branch, page) {
         require(values.size == 8); values.forEachIndexed { index, value -> word(it, 2 + index * 2, value) }
     }
-    private fun capture(protocol: BegodeProtocol) = mutableListOf<TelemetryObservation>().also { events -> protocol.telemetryObserver = { events += it } }
+    private fun capture(protocol: BegodeProtocol) = mutableListOf<TelemetryObservation>().also { events ->
+        protocol.telemetryObserver = { if (it.role == TelemetryRole.CONTRIBUTOR) events += it }
+    }
     private fun TelemetryObservation.read(metric: TelemetryMetric) = readings.single { it.metric == metric }
 
     @Test fun branchCurrentsAreFreshChargePositiveAndNeverReuseCellDerivedVoltage() {
@@ -99,7 +101,7 @@ class BegodeBatteryObservationTest {
     @Test fun observerFailuresCannotBreakSmartBatteryDecode() {
         val protocol = BegodeProtocol(); protocol.telemetryObserver = { error("injected observer failure") }
         protocol.onNotification(telemetry(0) + cells(0, 0, List(8) { 4000 }))
-        assertNotNull(protocol.latestData(0)); assertEquals(2, protocol.telemetryObserverFailures)
+        assertNotNull(protocol.latestData(0)); assertEquals(3, protocol.telemetryObserverFailures)
     }
 
     @Test fun realStationaryCaptureSeparatesBootRepliesAndPhysicalBatteryPages() {

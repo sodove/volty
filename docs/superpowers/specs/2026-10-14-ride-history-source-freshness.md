@@ -511,3 +511,37 @@ already passed. A real capture-to-writer test keeps physical, assembly and deriv
 zero measurements in three source IDs. This checkpoint does not activate producers.
 
 Final h134 fresh verification: 3759 tests/384 XML, all newer than UTC start, zero failures/errors/skips, 100 seconds/all 36 tasks executed. Narrow readonly review found no concrete role/kind/metric-admission defect. No schema, producer activation or phone/UI acceptance is implied.
+
+## Begode accepted per-assembly facts
+
+Each accepted smart-BMS 0x01 frame now emits a separate ASSEMBLY observation with
+the branch local index and the frame's assembly parity. Its temperature is the
+maximum of only that frame's two signed sensors. Boot-shaped replies invalidate
+the previous temperature; real winter zero is preserved. Any active sensor outside
+the decoder's existing sanity range leaves the maximum partial, never a falsely
+low maximum selected from the remaining sensor. Whole-branch temperature remains
+partial until its own receipt-qualified aggregation exists.
+
+Retraction: the first assembly helper incorrectly inherited the whole-branch
+voltage calibration gate. The signed section field at byte 14 is independently
+reported in 0.1 V units. The ET Max capture's section/cell-sum comparison and
+[WheelLog GotwayAdapter at f44e39e](https://github.com/Wheellog/Wheellog.Android/blob/f44e39e5388e500a5d2f315d1dcf32f167607bf8/app/src/main/java/com/cooper/wheellog/utils/GotwayAdapter.java)
+confirm this; it does not use byte 6's biased whole-branch voltage or 0x00's
+nominal-wheel scale. Assembly voltage now records its own field, including zero
+on a live non-boot frame. Boot zero is unavailable and a negative voltage invalid.
+This does not release the separate whole-branch calibration/voltage-current join gate.
+
+The real stationary capture now yields 228 observations: 114 controller, 76
+physical battery and 38 assembly. Receipt tests still prove completion timing,
+one clock per notification and shared receipt identity for coalesced observations.
+Six assembly tests cover addresses, peaks, cold zero, invalid sensors, independent
+voltage fields, boot, fragments, tail/address rejection, reset and the real capture.
+Begode commands/polling and live fields remain unchanged; FFE1 is never written.
+
+h135 failed six of 22 selected tests before the producer. h136 full ran 3764
+tests with one old fixture-count expectation failure (190 vs the new 228); it was
+not a passing run. h137 failed three of 46 selected voltage regressions before
+the field correction, with the receipt/count checks passing. Final h138 fresh:
+3765 tests/385 reports, zero failures/errors/skips, 102 seconds/all 36 tasks
+executed. Narrow readonly re-review found no concrete remaining defect. DI/source
+planning, alias admission and other runtime activation gates remain open.

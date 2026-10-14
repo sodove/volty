@@ -152,11 +152,12 @@ class SessionTelemetryCaptureTest {
         val chunks = BegodeDumpFixture.chunks()
         chunks.forEach { capture.processNotification(it) }
         assertEquals(chunks.size.toLong(), clocks)
-        assertEquals(190, events.size)
+        assertEquals(228, events.size)
         assertEquals(2L, events.first().receipt.notificationOrdinal) // the first chunk has no complete frame yet.
         assertTrue(events.all { it.receipt.time == TelemetryReceiptTime(1000 + it.receipt.notificationOrdinal, it.receipt.notificationOrdinal) })
         assertEquals(114, events.count { it.observation.origin == TelemetryOrigin.CONTROLLER })
-        assertEquals(76, events.count { it.observation.origin == TelemetryOrigin.BATTERY })
+        assertEquals(76, events.count { it.observation.origin == TelemetryOrigin.BATTERY && it.observation.role == TelemetryRole.CONTRIBUTOR })
+        assertEquals(38, events.count { it.observation.role == TelemetryRole.ASSEMBLY })
         assertTrue(events.zipWithNext().all { (a, b) -> b.receipt.notificationOrdinal >= a.receipt.notificationOrdinal })
         for (group in events.groupBy { it.receipt.notificationOrdinal }.values) assertTrue(group.all { it.receipt === group.first().receipt })
         assertNull(protocol.telemetryObserver); assertEquals(0, capture.receiptFailures)
