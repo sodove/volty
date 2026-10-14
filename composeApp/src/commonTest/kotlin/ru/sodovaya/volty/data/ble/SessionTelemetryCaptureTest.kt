@@ -61,6 +61,38 @@ class SessionTelemetryCaptureTest {
         assertEquals(1, protocol.decodes)
     }
 
+    @Test fun exhaustedOrdinalStillRefreshesReceiptContextForEachActualDecodedLoss() {
+        val protocol = Emitter(); var owner = "a"; var capturedOwner = "none"; var clocks = 0
+        val stamped = mutableListOf<ReceivedTelemetry>(); val lostOwners = mutableListOf<String>()
+        val capture = SessionTelemetryCapture(protocol, "attempt", {
+            clocks++; capturedOwner = owner; TelemetryReceiptTime(clocks.toLong(), clocks.toLong())
+        }, { true }, { stamped += it }, { lostOwners += capturedOwner }, initialNotificationOrdinal = Long.MAX_VALUE - 1)
+        capture.processNotification(byteArrayOf(1))
+        assertEquals(Long.MAX_VALUE, stamped.single().receipt.notificationOrdinal)
+        owner = "b"
+        capture.processNotification(byteArrayOf(2))
+        owner = "c"
+        capture.processNotification(byteArrayOf(3))
+        assertEquals(3, clocks, "receipt/context clock must run once even when no ordinal remains")
+        assertEquals(listOf("b", "c"), lostOwners)
+        assertEquals(1, stamped.size)
+        assertEquals(2L, capture.receiptFailures)
+        assertEquals(3, protocol.decodes)
+        assertEquals(0L, protocol.telemetryObserverFailures)
+    }
+
+    @Test fun clockFailureReportsOnlyActuallyDecodedObservationsWithoutInventedReceipt() {
+        val protocol = Emitter(); val lost = mutableListOf<TelemetryObservation>()
+        val capture = SessionTelemetryCapture(protocol, "attempt", { error("clock failed") }, { true },
+            { error("no stamped event permitted") }, { lost += it })
+        capture.processNotification(byteArrayOf(1, 99, 0))
+        assertEquals(1, protocol.decodes)
+        assertEquals(1L, capture.receiptFailures)
+        assertEquals(listOf(1.0, 99.0, 0.0), lost.map { it.readings.single().value })
+        assertEquals(0L, protocol.telemetryObserverFailures)
+        assertNull(protocol.telemetryObserver)
+    }
+
     @Test fun clockFailureKeepsLiveDecodeAndIsCountedWithoutInventingReceipt() {
         val protocol = Emitter(); val events = mutableListOf<ReceivedTelemetry>(); var fail = true
         val capture = SessionTelemetryCapture(protocol, "a", { if (fail) error("clock unavailable"); TelemetryReceiptTime(2, 2) }, { true }, { events += it })

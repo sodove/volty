@@ -16,11 +16,13 @@ internal class SessionTelemetryCapture(
     private val readTime: () -> TelemetryReceiptTime,
     private val ownsSession: () -> Boolean,
     private val onObservation: (ReceivedTelemetry) -> Unit,
+    private val onUnreceiptedObservation: (TelemetryObservation) -> Unit = {},
+    initialNotificationOrdinal: Long = 0,
 ) {
-    init { require(sessionId.isNotBlank()) }
+    init { require(sessionId.isNotBlank()); require(initialNotificationOrdinal >= 0) }
     @Volatile private var closed = false
     private var decoding = false
-    private var ordinal = 0L
+    private var ordinal = initialNotificationOrdinal
     var receiptFailures: Long = 0
         private set
     fun requireProtocol(candidate: BmsProtocol) { require(candidate === protocol) }
@@ -32,9 +34,13 @@ internal class SessionTelemetryCapture(
         decoding = true
         try {
             val receipt = try {
-                check(ordinal < Long.MAX_VALUE)
-                ordinal++
-                TelemetryReceipt(sessionId, ordinal, readTime())
+                val hasOrdinal = ordinal < Long.MAX_VALUE
+                if (hasOrdinal) ordinal++
+                // Refresh per-notification context even after ordinal exhaustion;
+                // decoded loss must never reuse a previous recording owner.
+                val time = readTime()
+                check(hasOrdinal)
+                TelemetryReceipt(sessionId, ordinal, time)
             } catch (_: Exception) {
                 if (receiptFailures < Long.MAX_VALUE) receiptFailures++
                 null
@@ -44,8 +50,10 @@ internal class SessionTelemetryCapture(
             var scopeOpen = true
             lateinit var observer: (TelemetryObservation) -> Unit
             observer = { observation ->
-                if (scopeOpen && receipt != null && active() && protocol.telemetryObserver === observer)
-                    onObservation(ReceivedTelemetry(receipt, observation))
+                if (scopeOpen && active() && protocol.telemetryObserver === observer) {
+                    if (receipt != null) onObservation(ReceivedTelemetry(receipt, observation))
+                    else onUnreceiptedObservation(observation)
+                }
             }
             // Even a failed clock gets a scope: suppress unstamped history while keeping the live decoder alive.
             protocol.telemetryObserver = observer

@@ -29,12 +29,13 @@ class HistorySessionTelemetryCaptureTest {
     private class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val samples = mutableListOf<HistoryBatch>()
+        val statuses = mutableListOf<HistoryRideStatus>()
         override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) {}
         override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer {
             if (batch.samples.isNotEmpty()) samples += batch
             return HistoryOffer.ACCEPTED
         }
-        override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) {}
+        override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) { statuses += status }
         override suspend fun flush() {}
         override suspend fun delete(rideId: String) {}
         override suspend fun close() {}
@@ -42,6 +43,53 @@ class HistorySessionTelemetryCaptureTest {
     private fun controller(writer: Writer): RideRecordingController {
         var n = 0
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
+    }
+
+    @Test fun lostReceiptMarksOnlyActualMappedObservationsAndKeepsLiveDecoderUsable() = runTest {
+        val writer = Writer(); val c = controller(writer); val protocol = Emitter()
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        var failing = true
+        val events = mutableListOf<CapturedHistoryTelemetry>()
+        val capture = historySessionTelemetryCapture(protocol, "attempt", c,
+            { if (failing) error("clock failed"); tick(3) }, { true }, mapOf(key to source), { events += it })
+        capture.processNotification(byteArrayOf())
+        assertEquals(1, protocol.decodes)
+        assertEquals(1L, capture.receiptFailures)
+        assertNull(c.telemetryFailure.value, "no decoded observation means no earned telemetry loss verdict")
+        capture.processNotification(byteArrayOf(5))
+        assertEquals(2, protocol.decodes)
+        assertTrue(events.isEmpty())
+        assertEquals("ride-1", assertNotNull(c.telemetryFailure.value).rideId)
+        failing = false
+        capture.processNotification(byteArrayOf(6))
+        assertEquals(HistoryOffer.ACCEPTED, events.single().offer(c) { true })
+        c.execute(RecordingInput.Stop(tick(4), 7, "ride-1"))
+        assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
+    }
+
+    @Test fun missingReceiptForUnmappedSourceDoesNotPoisonRecording() = runTest {
+        val writer = Writer(); val c = controller(writer); val protocol = Emitter()
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val capture = historySessionTelemetryCapture(protocol, "attempt", c, { error("clock failed") }, { true }, emptyMap(), {})
+        capture.processNotification(byteArrayOf(5))
+        assertEquals(1, protocol.decodes); assertEquals(1L, capture.receiptFailures)
+        assertNull(c.telemetryFailure.value)
+    }
+
+    @Test fun missingReceiptKeepsOriginalRecordingOwnerAcrossPrefixStopStart() = runTest {
+        val writer = Writer(); val c = controller(writer); val protocol = Emitter()
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val capture = historySessionTelemetryCapture(protocol, "attempt", c, { error("clock failed") }, { true }, mapOf(key to source), {})
+        capture.processNotification(byteArrayOf(5)) {
+            runBlocking {
+                c.execute(RecordingInput.Stop(tick(2), 7, "ride-1"))
+                c.execute(RecordingInput.Start("bike", 7, tick(3)), listOf(source))
+            }
+        }
+        assertEquals(1, protocol.decodes); assertEquals(1L, capture.receiptFailures)
+        assertNull(c.telemetryFailure.value)
+        c.execute(RecordingInput.Stop(tick(4), 7, "ride-2"))
+        assertEquals(listOf(HistoryRideStatus.COMPLETED, HistoryRideStatus.COMPLETED), writer.statuses)
     }
 
     @Test fun oneReceiptKeepsCoalescedPeaksAndFrozenSourceAttribution() = runTest {

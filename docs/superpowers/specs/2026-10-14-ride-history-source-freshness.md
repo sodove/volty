@@ -362,3 +362,33 @@ Final fresh h117: 3731 tests/382 reports, all newer than UTC start, zero failure
 errors/skips, 116 seconds and all 36 Gradle tasks executed. The native API-only stub
 failed four tests; the repository hookup stub failed the integration; inert startup
 seal and unqualified ingress loss failed two more checks before implementation.
+
+
+## Receipt failure qualifies actual decoded loss
+
+Native capture now has an optional unreceipted-observation callback using the same
+scope, observer identity and BLE ownership gates as normal receipts. A failed clock
+still leaves live decoding running; only an actually decoded observation can report
+loss. Fragments/control replies with no observations cannot qualify telemetry loss.
+The history factory keeps the original recording context before clock acquisition,
+resolves only mapped sources, and reserves that exact owner's existing valid bound
+to latch ReceiptLoss. It does not invent a receipt tick, append numeric rows without
+time, or borrow a new recording's owner after prefix callbacks.
+
+A clock failure followed by a valid receipt still admits new facts, but its ride
+finishes INTERRUPTED. Unmapped sources and retired context across stop/start cannot
+poison current recording. Observer restoration and decoder failure behavior remain
+unchanged. The earlier receipt-failure qualification gate is implemented for decoded,
+attributed losses; setup failures still require lifecycle-owner qualification.
+
+Retraction: ordinal exhaustion formerly failed before reading time/context, allowing
+loss callbacks to see the prior receipt's owner. Capture now refreshes once even
+when no ordinal remains, discards the unusable receipt and reports actual decoded
+loss against the refreshed scope. A boundary-injected initial ordinal tests the last
+valid MAX value and two exhausted notifications with changing owners; production
+attempts continue starting at zero with fresh session identity.
+
+Fresh final h121: 3736 tests/382 XML reports, all newer than UTC start, no failures,
+errors/skips, 113 seconds/all 36 tasks executed. h118 failed two of 19 selected tests
+before clock-loss implementation; h120 failed the ordinal-boundary regression before
+context refresh. No activation or phone/UI acceptance is inferred from these tests.

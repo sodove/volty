@@ -103,15 +103,25 @@ class RideRecordingController(
     }
 
     /** Loss verdict without invented numeric readings or writer IO on the BLE callback. */
-    internal fun reportTelemetryIngressLoss(context: CapturedHistoryRecording, tick: HistoryTick, sourceId: String): Boolean {
+    internal fun reportTelemetryIngressLoss(context: CapturedHistoryRecording, tick: HistoryTick, sourceId: String): Boolean =
+        reportCapturedTelemetryLoss(context, tick, sourceId, "IngressLoss")
+
+    internal fun reportTelemetryReceiptLoss(context: CapturedHistoryRecording, sourceId: String): Boolean =
+        reportCapturedTelemetryLoss(context, null, sourceId, "ReceiptLoss")
+
+    private fun reportCapturedTelemetryLoss(context: CapturedHistoryRecording, receiptTick: HistoryTick?,
+        sourceId: String, reason: String): Boolean {
         val owner = admission.value ?: return false
         val ride = owner.intent.ride ?: return false
+        // A failed receipt clock cannot create a new tick. Reuse only this
+        // validated owner's existing admission bound for the failure verdict.
+        val tick = receiptTick ?: owner.last
         if (context.gate !== owner.gate || context.generation != owner.generation ||
             context.rideId != ride.id || sourceId !in owner.sources ||
             !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
             historyAxisEpochMillis(ride.started, tick) == null) return false
         if (!owner.gate.reserve(tick)) return false
-        try { recordTelemetryFailure(owner, "IngressLoss"); return true }
+        try { recordTelemetryFailure(owner, reason); return true }
         finally { owner.gate.release() }
     }
 

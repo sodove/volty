@@ -52,22 +52,28 @@ internal fun historySessionTelemetryCapture(
         require(source.kind == kind) { "A decoder source must name a physical contributor" }
     }
     require(binding.values.map { it.id }.distinct().size == binding.size)
-    var captured: Pair<CapturedHistoryRecording?, HistoryTick>? = null
+    var captured: Pair<CapturedHistoryRecording?, HistoryTick?>? = null
     return SessionTelemetryCapture(protocol, sessionId, {
         captured = null
         // Snapshot BEFORE trace/decoder callbacks. Retired gates cannot be reused
         // even if a later ride or controller has matching IDs/generation numbers.
         val recording = controller.captureTelemetryRecording()
+        captured = recording to null
         val tick = readTick()
         captured = recording to tick
         TelemetryReceiptTime(tick.epochMillis, tick.elapsedMillis)
     }, ownsSession, { received ->
         val snapshot = captured
         val recording = snapshot?.first
-        if (snapshot != null && recording != null) {
+        val tick = snapshot?.second
+        if (recording != null && tick != null) {
             val observation = received.observation
             val source = binding[HistoryTelemetrySource(observation.origin, observation.localIndex)]
-            if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, snapshot.second, received))
+            if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, tick, received))
         }
+    }, onUnreceiptedObservation = { observation ->
+        val recording = captured?.first
+        val source = binding[HistoryTelemetrySource(observation.origin, observation.localIndex)]
+        if (recording != null && source != null) controller.reportTelemetryReceiptLoss(recording, source.id)
     })
 }
