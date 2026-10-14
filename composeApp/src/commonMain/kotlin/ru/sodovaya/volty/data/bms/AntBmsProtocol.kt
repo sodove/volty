@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
 
 /**
  * ANT BMS protocol.
@@ -31,6 +32,7 @@ class AntBmsProtocol : BmsProtocol() {
 
     private val buffer = ByteArrayAccumulator()
     private var lastData: BmsData? = null
+    private var observedCellCount = 0
 
     override fun handshakeCommands(): List<ByteArray> = listOf(
         buildCommand(FUNC_STATUS, 0x0000, 0xBE)
@@ -52,6 +54,7 @@ class AntBmsProtocol : BmsProtocol() {
     override fun reset() {
         buffer.reset()
         lastData = null
+        observedCellCount = 0
     }
 
     // --- Protocol implementation ---
@@ -138,6 +141,8 @@ class AntBmsProtocol : BmsProtocol() {
 
         val numTemp = buf.u8(8)
         val numCells = buf.u8(9)
+        val previousCellCount = observedCellCount
+        observedCellCount = numCells
 
         // Cell voltages start at offset 34, 2 bytes each (LE, millivolts)
         val cells = mutableListOf<Float>()
@@ -243,6 +248,7 @@ class AntBmsProtocol : BmsProtocol() {
             bmsFaults = faults,
             isConnected = true
         )
+        observeTelemetry(TelemetryOrigin.BATTERY, 0) { observedAntStatus(buf, frameLen, previousCellCount) }
     }
 
     /** Charge MOS status enum (21 values). null = state is uninteresting (Off/On). */

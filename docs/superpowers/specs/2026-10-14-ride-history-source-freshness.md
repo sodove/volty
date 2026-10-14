@@ -15,7 +15,8 @@ No BLE command, polling cadence or Begode FFE1 write is added.
   scalar fields. Observer integration for Daly is pending.
 - ANT emits a whole status snapshot, but missing payload guards can leave scalar
   defaults marked available. History qualification must use actual field coverage,
-  not those defaults. Observer integration for ANT is pending.
+  not those defaults. ANT now emits qualified per-status observations; production
+  consumer integration is still pending.
 - Begode, JK, plain VESC and the VESC gateway still need qualified observations.
   Gateway overlays and derived contributors require explicit freshness evidence.
 
@@ -45,3 +46,34 @@ retirement must also be handled by the attributed runtime source state.
 
 JBD observer exceptions are contained and counted without logging payloads.
 The new observer is not connected to production DI or the BLE consumer yet.
+
+Retraction: an even JBD cell reply proves its returned pairs, not completeness of
+the physical pack. Basic-info payload offset 21 declares the expected cell count.
+Whole-pack summaries now require that declaration and exact, even payload coverage.
+A shorter reply invalidates absent declared indices on every occurrence; only a new
+successful basic-info declaration can certify a smaller layout. Zero/missing count
+and reset remove that evidence without suppressing raw cell readings.
+
+## ANT qualification
+
+Checked [`ant.py` at the same pinned batmon-ha revision](https://github.com/fl4p/batmon-ha/blob/76317567a51fcfbf9df9e65315fcb2d5af125237/bmslib/models/ant.py)
+and [ESPHome's ANT decoder](https://github.com/syssi/esphome-ant-bms/blob/main/components/ant_bms_ble/ant_bms_ble.cpp)
+on 2026-10-14. Declared cell and NTC counts determine later field offsets; NTC/MOS
+temperature words are signed, and -40 is an explicit absent-sensor sentinel.
+The local `nyxdash/firmware/components/vesc_express/src/ant_bms.c` was also read:
+it says its layout matches the Kotlin parser, so it is corroboration rather than
+independent proof. Its unsigned temperature handling is not copied.
+
+Only CRC-valid status replies accepted by the existing decoder emit observations.
+Coverage ends before CRC/trailer, even when another frame follows in the accumulator.
+Raw cell positions and zero readings survive dashboard filtering. Missing declared
+pairs produce partial values; pack summaries require all declared pairs. A new
+smaller declaration retires older series. Reset clears that decoder history.
+Voltage, current and SOC each require their own payload bytes; calculated power
+requires both voltage and current. Current retains the domain's charge-positive
+sign. Hottest battery temperature follows the existing dashboard's NTC+MOS scope,
+excluding balancer: absent sensors are excluded, but truncated or invalid declared
+measurements make the maximum partial. No command, cadence or live dashboard
+decoding behavior was changed. Exceptions remain contained by the common observer.
+
+These are decoder tests, not field verification and not production activation.

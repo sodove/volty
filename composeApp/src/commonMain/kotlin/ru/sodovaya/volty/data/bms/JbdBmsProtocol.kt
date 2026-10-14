@@ -50,6 +50,7 @@ class JbdBmsProtocol : BmsProtocol() {
     private var hasMainData = false
     private var hasCellData = false
     private var observedCellCount = 0
+    private var declaredCellCount: Int? = null
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
@@ -73,6 +74,7 @@ class JbdBmsProtocol : BmsProtocol() {
         hasMainData = false
         hasCellData = false
         observedCellCount = 0
+        declaredCellCount = null
     }
 
     // --- Protocol implementation ---
@@ -157,7 +159,7 @@ class JbdBmsProtocol : BmsProtocol() {
         if (frame[2].toInt() != 0) {
             // A failed response is absence, not a new numeric snapshot. See the pinned source audit.
             if (cmd == 0x03 || cmd == 0x04) observeTelemetry(TelemetryOrigin.BATTERY, 0) {
-                observedJbdFailure(cmd, observedCellCount)
+                observedJbdFailure(cmd, maxOf(observedCellCount, declaredCellCount ?: 0))
             }
             return
         }
@@ -171,6 +173,10 @@ class JbdBmsProtocol : BmsProtocol() {
     private fun parseMainData(frame: ByteArray) {
         if (frame.size < 27) return
         val d = 4 // Data starts at byte 4
+        // Layout evidence must come from the payload, never the checksum or a short cell reply.
+        declaredCellCount = if ((frame[3].toInt() and 255) >= 22) {
+            (frame[d + 21].toInt() and 255).takeIf { it > 0 }
+        } else null
 
         // Voltage: u16 BE / 100 (volts)
         mainVoltage = frame.u16BE(d) / 100f
@@ -233,7 +239,7 @@ class JbdBmsProtocol : BmsProtocol() {
         if (frame.size < 6) return
         val dataLen = frame[3].toInt() and 0xFF
         val numCells = dataLen / 2
-        val previousCellCount = observedCellCount
+        val previousCellCount = maxOf(observedCellCount, declaredCellCount ?: 0)
         observedCellCount = numCells
         val cells = mutableListOf<Float>()
         for (i in 0 until numCells) {
@@ -247,7 +253,7 @@ class JbdBmsProtocol : BmsProtocol() {
         cellVoltages = cells
         hasCellData = true
         mergeAndUpdate()
-        observeTelemetry(TelemetryOrigin.BATTERY, 0) { observedJbdCells(frame, previousCellCount) }
+        observeTelemetry(TelemetryOrigin.BATTERY, 0) { observedJbdCells(frame, previousCellCount, declaredCellCount) }
     }
 
     private fun mergeAndUpdate() {

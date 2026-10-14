@@ -10,10 +10,10 @@ class JbdTelemetryObservationTest {
         return byteArrayOf(0xdd.toByte(), command.toByte()) + body +
             byteArrayOf((checksum shr 8).toByte(), checksum.toByte(), 0x77)
     }
-    private fun main(current: Int = -200, temperatures: List<Int> = listOf(2981), declaredTemps: Int = temperatures.size): ByteArray {
+    private fun main(current: Int = -200, temperatures: List<Int> = listOf(2981), declaredTemps: Int = temperatures.size, declaredCells: Int = 2): ByteArray {
         val data = ByteArray(23 + temperatures.size * 2)
         fun word(offset: Int, value: Int) { data[offset] = (value shr 8).toByte(); data[offset + 1] = value.toByte() }
-        word(0, 5000); word(2, current); data[19] = 80; data[22] = declaredTemps.toByte()
+        word(0, 5000); word(2, current); data[19] = 80; data[21] = declaredCells.toByte(); data[22] = declaredTemps.toByte()
         temperatures.forEachIndexed { index, value -> word(23 + index * 2, value) }
         return frame(3, data)
     }
@@ -40,6 +40,7 @@ class JbdTelemetryObservationTest {
 
     @Test fun rawCellValuesKeepPhysicalIndicesEvenWhenDashboardWouldFilterThem() {
         val protocol = JbdBmsProtocol(); val observed = capture(protocol)
+        protocol.onNotification(main(declaredCells = 4)); observed.clear()
         protocol.onNotification(cells(4000, 0, 6000, 3900))
         val readings = observed.single().readings
         val indexed = readings.filter { it.metric == TelemetryMetric.CELL }
@@ -117,5 +118,42 @@ class JbdTelemetryObservationTest {
         assertEquals(listOf(0, 1, 2), indexed.map { it.cellIndex })
         assertEquals(listOf(4.0, null, null), indexed.map { it.value })
         assertTrue(indexed.drop(1).all { it.unknown == TelemetryUnknown.UNAVAILABLE })
+    }
+
+    @Test fun wholePackSummariesRequireDeclaredLayoutAndExactCoverage() {
+        val protocol = JbdBmsProtocol(); val observed = capture(protocol)
+        fun summaries() = observed.last().readings.filter { !it.metric.indexed }
+        protocol.onNotification(cells(4000, 3900))
+        assertTrue(summaries().all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        protocol.onNotification(main(declaredCells = 3))
+        protocol.onNotification(cells(4000, 3900))
+        val declaredOnlyMissing = observed.last().readings.filter { it.metric.indexed }
+        assertEquals(listOf(0, 1, 2), declaredOnlyMissing.map { it.cellIndex })
+        assertNull(declaredOnlyMissing.last().value)
+        assertEquals(TelemetryUnknown.UNAVAILABLE, declaredOnlyMissing.last().unknown)
+        assertTrue(summaries().all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        protocol.onNotification(cells(4000, 3900, 3800))
+        assertEquals(3.8, summaries().single { it.metric == TelemetryMetric.CELL_MIN }.value)
+        protocol.onNotification(cells(4000))
+        assertTrue(summaries().all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        protocol.onNotification(cells(4000))
+        assertEquals(listOf(0, 1, 2), observed.last().readings.filter { it.metric.indexed }.map { it.cellIndex })
+        assertTrue(summaries().all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+        protocol.onNotification(main(declaredCells = 1))
+        protocol.onNotification(cells(4000))
+        assertEquals(4.0, summaries().single { it.metric == TelemetryMetric.CELL_MIN }.value)
+        protocol.onNotification(cells(4000, 3900))
+        assertTrue(summaries().all { it.unknown == TelemetryUnknown.PARTIAL_SOURCE })
+    }
+
+    @Test fun resetAndZeroDeclarationRemoveLayoutEvidenceButKeepRawCells() {
+        val protocol = JbdBmsProtocol(); val observed = capture(protocol)
+        protocol.onNotification(main(declaredCells = 1)); protocol.onNotification(cells(0))
+        assertEquals(0.0, observed.last().readings.single { it.metric == TelemetryMetric.CELL_MIN }.value)
+        protocol.reset(); protocol.onNotification(cells(0))
+        assertEquals(0.0, observed.last().readings.single { it.metric == TelemetryMetric.CELL }.value)
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, observed.last().readings.single { it.metric == TelemetryMetric.CELL_MIN }.unknown)
+        protocol.onNotification(main(declaredCells = 0)); protocol.onNotification(cells(0))
+        assertEquals(TelemetryUnknown.PARTIAL_SOURCE, observed.last().readings.single { it.metric == TelemetryMetric.CELL_MIN }.unknown)
     }
 }

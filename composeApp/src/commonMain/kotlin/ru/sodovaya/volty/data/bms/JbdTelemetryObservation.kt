@@ -21,7 +21,7 @@ internal fun observedJbdTemperature(frame: ByteArray): TelemetryReading {
     else TelemetryReading(TelemetryMetric.BATTERY_TEMPERATURE, null, TelemetryUnknown.PARTIAL_SOURCE)
 }
 
-internal fun observedJbdCells(frame: ByteArray, previousCellCount: Int = 0): List<TelemetryReading> {
+internal fun observedJbdCells(frame: ByteArray, previousCellCount: Int = 0, declaredCellCount: Int? = null): List<TelemetryReading> {
     val length = frame[3].toInt() and 255
     val cells = (0 until length / 2).map { index ->
         val millivolts = frame.u16BE(4 + index * 2)
@@ -30,7 +30,9 @@ internal fun observedJbdCells(frame: ByteArray, previousCellCount: Int = 0): Lis
         TelemetryReading.measured(TelemetryMetric.CELL, millivolts / 1000.0, cellIndex = index)
     }
     val known = cells.mapNotNull { it.value }
-    val complete = cells.isNotEmpty() && known.size == cells.size && length % 2 == 0
+    // Retraction: an even reply body proves only the returned pairs, not whole-pack coverage.
+    // Basic-info payload offset 21 declares the layout (pinned batmon-ha source audit).
+    val complete = cells.isNotEmpty() && cells.size == declaredCellCount && length % 2 == 0
     val reason = if (cells.isEmpty() && length == 0) TelemetryUnknown.UNAVAILABLE else TelemetryUnknown.PARTIAL_SOURCE
     val minimum = known.minOrNull()
     val maximum = known.maxOrNull()
