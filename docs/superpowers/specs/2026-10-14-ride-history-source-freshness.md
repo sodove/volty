@@ -298,3 +298,31 @@ Final fresh h108: 3721 tests/381 reports, no failures/errors/skips, every XML ne
 than recorded UTC start, 107 seconds, all 36 tasks executed. New controller guards
 failed three genuine RED tests; native envelope helper failed four tests before
 implementation. One no-recording test already passed with the inert emission stub.
+
+
+## Raw observations in the shared consumer
+
+HistoryTelemetrySample now carries an attributed envelope, its recording controller
+and a mandatory BLE-attempt ownership binding in the existing Sample channel. The
+single consumer checks both active pipeline and attempt under sessionLock, then
+calls the envelope/context admission path. It does not submit a mixed-age battery
+or motion snapshot or publish historical readings onto the dashboard. Three queue
+regressions cover all coalesced peaks, queued retired attempts and stop/start while
+an old recording envelope waits behind a live publication transaction.
+
+Recording writer exceptions are latched on the admitted ride before releasing its
+send reservation. Finish therefore cannot miss the failure; the ride ends INTERRUPTED.
+Copies of its owner preserve health across reconnects, while a new ride gets fresh
+health and clears the observable telemetryFailure. The raw consumer contains these
+exceptions so live packets keep draining. It checks actual coroutine cancellation
+with ensureActive rather than treating every writer CancellationException as a BLE
+consumer cancellation. The failure regression tests live continuation, reconnect,
+interrupted finish, fresh ride recording and completed finish.
+
+This implements the raw consumer path, superseding its wholly-pending status above.
+The production notification producer/factory still does not construct these samples;
+DI activation, ownership/source planning and bounded-ingress loss reporting remain
+required. No production recording mode or Vescape screens are activated by this seam.
+Final fresh h112: 3725 tests/382 XML reports, all newer than UTC start, no failure,
+error or skip, 119 seconds, all 36 tasks executed. Raw queue no-op RED failed 3/3;
+writer-failure RED failed the fourth queue regression before exception containment.

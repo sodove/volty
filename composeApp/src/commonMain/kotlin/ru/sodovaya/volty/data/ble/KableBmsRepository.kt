@@ -1,5 +1,8 @@
 package ru.sodovaya.volty.data.ble
 
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+
 import com.juul.kable.Peripheral
 import com.juul.kable.Scanner
 import ru.sodovaya.volty.data.bms.AntBmsProtocol
@@ -1593,6 +1596,16 @@ class KableBmsRepository private constructor(
                     // again here, after queueing, under the teardown/install lock.
                     if (sample.sessionOwnership?.isCurrent() == false) return@transaction
                     when (sample) {
+                    is HistoryTelemetrySample -> {
+                        try {
+                            sample.telemetry.offer(sample.controller, sample.sessionOwnership::isCurrent)
+                        } catch (_: Exception) {
+                            // The controller recorded failure before releasing
+                            // its writer reservation. Recording must not kill
+                            // live telemetry; actual consumer cancellation wins.
+                            currentCoroutineContext().ensureActive()
+                        }
+                    }
                     is PackSample -> {
                         // The aggregate is a true identity for a single pack
                         // (cell voltages included), so every vehicle routes
@@ -3741,4 +3754,12 @@ internal data class MotionSample(
     val globalControllerIndex: Int,
     val data: ControllerData,
     override val sessionOwnership: SampleSessionOwnership? = null
+) : Sample
+
+
+/** Fresh attributed observations travel beside, never through, dashboard aggregates. */
+internal data class HistoryTelemetrySample(
+    val telemetry: ru.sodovaya.volty.data.history.CapturedHistoryTelemetry,
+    val controller: ru.sodovaya.volty.data.history.RideRecordingController,
+    override val sessionOwnership: SampleSessionOwnership,
 ) : Sample

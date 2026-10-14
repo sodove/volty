@@ -9,6 +9,8 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.domain.history.*
 
+data class HistoryRecordingFailure(val rideId: String, val failureType: String)
+
 fun interface HistoryRecordingDemand { suspend fun setEnabled(enabled: Boolean) }
 data class HistoryRecordingRuntimeState(val intent: RecordingIntent = RecordingIntent(), val demandFailure: String? = null)
 
@@ -28,10 +30,13 @@ class RideRecordingController(
     private val recoverInterrupted: suspend () -> Int,
 ) {
     private data class Owner(val generation: Long, val intent: RecordingIntent, val sources: Set<String>,
-        val last: HistoryTick, val gate: HistoryAdmissionGate = HistoryAdmissionGate(last))
+        val last: HistoryTick, val gate: HistoryAdmissionGate = HistoryAdmissionGate(last),
+        val failure: MutableStateFlow<String?> = MutableStateFlow(null))
     private val mutableState = MutableStateFlow(HistoryRecordingRuntimeState())
     val state: StateFlow<HistoryRecordingRuntimeState> = mutableState
     private val admission = MutableStateFlow<Owner?>(null)
+    private val mutableTelemetryFailure = MutableStateFlow<HistoryRecordingFailure?>(null)
+    val telemetryFailure: StateFlow<HistoryRecordingFailure?> = mutableTelemetryFailure
     private val controls = Mutex()
     private var owned: Owner? = null
     private var nextGeneration = 0L
@@ -56,7 +61,7 @@ class RideRecordingController(
             transition.finish?.let { finished ->
                 val owner = checkNotNull(owned)
                 offerMarkers(owner, transition.finishedMarkers)
-                val status = if (writer.diagnostics.value.failure != null) HistoryRideStatus.INTERRUPTED else finished.status
+                val status = if (writer.diagnostics.value.failure != null || owner.failure.value != null) HistoryRideStatus.INTERRUPTED else finished.status
                 writer.finish(owner.generation, checkNotNull(finished.ended), status, finished.id)
                 owned = null
                 mutableState.value = mutableState.value.copy(intent = previous.copy(ride = null, linkConnected = false))
@@ -67,6 +72,7 @@ class RideRecordingController(
                 val generation = ++nextGeneration
                 writer.begin(generation, ride, sources)
                 owned = Owner(generation, transition.intent, sources.map { it.id }.toSet(), ride.started)
+                mutableTelemetryFailure.value = null
             }
             val owner = owned?.let {
                 val markerTick = transition.markers.maxByOrNull { marker -> marker.tick.elapsedMillis }?.tick
@@ -113,6 +119,14 @@ class RideRecordingController(
         if (!owner.gate.reserve(latest)) return HistoryOffer.RETIRED
         // Earlier CAS-only reservation could be overtaken by finish before this send returned.
         try { return writer.offer(owner.generation, batch) }
+        catch (error: Exception) {
+            // Record failure BEFORE releasing the reservation: finish cannot
+            // outrun this verdict. Owner copies keep it across BLE reconnects.
+            val type = error::class.simpleName ?: "TelemetryFailure"
+            if (owner.failure.compareAndSet(null, type))
+                mutableTelemetryFailure.value = HistoryRecordingFailure(ride.id, type)
+            throw error
+        }
         finally { owner.gate.release() }
     }
 
