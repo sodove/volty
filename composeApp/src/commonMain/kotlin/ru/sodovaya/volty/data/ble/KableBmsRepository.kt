@@ -148,6 +148,32 @@ class KableBmsRepository private constructor(
 ) : BmsRepository, CanDiscovery, ControllerConfigSource, BleDiagnosticsRepository {
 
     private val diagnosticBuffer = BleDiagnosticBuffer()
+
+    @Volatile
+    private var historyTelemetryIngress: HistoryTelemetryIngress? = null
+
+    // Guarded by sessionLock, sealed before any initial connection preparation.
+    private var historyTelemetryConfigurationSealed = false
+
+    private suspend fun sealHistoryTelemetryConfiguration() = sessionLock.withLock {
+        historyTelemetryConfigurationSealed = true
+    }
+
+    internal suspend fun sealHistoryTelemetryConfigurationForTest() = sealHistoryTelemetryConfiguration()
+
+    /** Startup opt-in only; active attempts retain their immutable recording binding. */
+    internal suspend fun configureHistoryTelemetryIngress(ingress: HistoryTelemetryIngress?) = sessionLock.withLock {
+        check(!historyTelemetryConfigurationSealed && links.isEmpty() && vehicleConnection == null) { "Configure recording ingress before connecting" }
+        historyTelemetryIngress = ingress
+    }
+
+    private fun makeHistoryTelemetryCapture(protocol: BmsProtocol, link: PackLink,
+        ownership: SampleSessionOwnership, channel: Channel<Sample>): SessionTelemetryCapture? =
+        historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel)
+
+    internal fun historyTelemetryCaptureForTest(protocol: BmsProtocol, address: String,
+        ownership: SampleSessionOwnership): SessionTelemetryCapture? = makeHistoryTelemetryCapture(
+            protocol, checkNotNull(links.find { it.spec.address == address }), ownership, checkNotNull(sampleChannel))
     private val protocolDiagnosticsByAddress = mutableMapOf<String, ProtocolDiagnosticValues>()
     private val diagnosticBatteriesByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticBatterySample>>()
     private val diagnosticControllersByAddress = mutableMapOf<String, MutableMap<Int, BleDiagnosticControllerSample>>()
@@ -955,6 +981,7 @@ class KableBmsRepository private constructor(
         doConnect(address, type, vehicle = buildGuestVehicle(address, type))
 
     override suspend fun connectDemo(profile: DemoProfile): Result<Unit> {
+        sealHistoryTelemetryConfiguration()
         println("[VOLTY-BLE] connectDemo: starting simulated session (profile=$profile)")
         val demoVehicle = demoVehicleFor(profile)
         return try {
@@ -2264,6 +2291,7 @@ class KableBmsRepository private constructor(
     // ----- Connect: one vehicle, N links -----
 
     private suspend fun doConnect(address: String, type: BmsType?, vehicle: Vehicle?): Result<Unit> {
+        sealHistoryTelemetryConfiguration()
         val unavailableReason = bleUnavailableReason(
             bleAvailability(bleAdapterStateProvider.isBluetoothEnabled())
         )
@@ -2553,6 +2581,7 @@ class KableBmsRepository private constructor(
                         retainDiagnosticController(link, localIndex, globalIndex, data)
                     }
                 ),
+                telemetryCapture = makeHistoryTelemetryCapture(protocol, link, sessionOwnership, channel),
                 onDropDetected = { reason ->
                     // Retire ingress immediately: teardown is deferred to avoid
                     // joining the state/watchdog job from its own callback.

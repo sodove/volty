@@ -102,6 +102,24 @@ class RideRecordingController(
         return offerTelemetry(owner, context.connectionGeneration, batch)
     }
 
+    /** Loss verdict without invented numeric readings or writer IO on the BLE callback. */
+    internal fun reportTelemetryIngressLoss(context: CapturedHistoryRecording, tick: HistoryTick, sourceId: String): Boolean {
+        val owner = admission.value ?: return false
+        val ride = owner.intent.ride ?: return false
+        if (context.gate !== owner.gate || context.generation != owner.generation ||
+            context.rideId != ride.id || sourceId !in owner.sources ||
+            !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
+            historyAxisEpochMillis(ride.started, tick) == null) return false
+        if (!owner.gate.reserve(tick)) return false
+        try { recordTelemetryFailure(owner, "IngressLoss"); return true }
+        finally { owner.gate.release() }
+    }
+
+    private fun recordTelemetryFailure(owner: Owner, type: String) {
+        if (owner.failure.compareAndSet(null, type))
+            mutableTelemetryFailure.value = HistoryRecordingFailure(checkNotNull(owner.intent.ride).id, type)
+    }
+
     /** Called from accepted decoded telemetry, never from a conflated UI snapshot. No IO or suspension. */
     fun offerTelemetry(connectionGeneration: Long, batch: HistoryBatch): HistoryOffer {
         val owner = admission.value ?: return HistoryOffer.RETIRED
@@ -123,8 +141,7 @@ class RideRecordingController(
             // Record failure BEFORE releasing the reservation: finish cannot
             // outrun this verdict. Owner copies keep it across BLE reconnects.
             val type = error::class.simpleName ?: "TelemetryFailure"
-            if (owner.failure.compareAndSet(null, type))
-                mutableTelemetryFailure.value = HistoryRecordingFailure(ride.id, type)
+            recordTelemetryFailure(owner, type)
             throw error
         }
         finally { owner.gate.release() }

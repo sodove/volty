@@ -326,3 +326,39 @@ required. No production recording mode or Vescape screens are activated by this 
 Final fresh h112: 3725 tests/382 XML reports, all newer than UTC start, no failure,
 error or skip, 119 seconds, all 36 tasks executed. Raw queue no-op RED failed 3/3;
 writer-failure RED failed the fourth queue regression before exception containment.
+
+
+## Native attempt producer and qualified bounded-ingress loss
+
+HistoryTelemetryIngress builds the native capture from an attempt's LinkSpec and
+vehicle, resolves/copies its contributor map once, and sends mandatory-owned raw
+envelopes to the same bounded channel with trySend. Saturating atomic diagnostics
+distinguish FULL, CLOSED and SETUP; no raw packet, location or token is retained.
+Setup failure returns null so the ordinary live decoder remains available.
+
+Kable now passes the optional capture into its production ConnectionSession.
+Configuration is sealed under sessionLock before the first doConnect or connectDemo
+preparation and cannot change thereafter, including after disconnect or failed
+connection. The earlier links-empty-only guard had a preparation race; it was
+replaced by this explicit startup seal. Each attempt has fresh receipt identity
+and immutable binding, and the existing session closes capture at teardown.
+
+Failed sends additionally qualify loss on the captured recording owner. Exact gate,
+writer/BLE generation, ride, allowed source and receipt tick are checked before a
+reservation; the verdict is latched before release so finish waits for it. No numeric
+writer offer or IO bypasses the shared consumer. The ride finishes INTERRUPTED,
+which conservatively makes its statistics partial. This deliberately qualifies the
+whole ride rather than inventing a precise missing interval or placing out-of-order
+markers ahead of queued facts. A stale recording's failed send still increments
+transport diagnostics but cannot poison the next ride.
+
+The constructor seam is now wired, superseding earlier producer-hook-pending text.
+DI does not configure it yet. Actual source planning, ambiguous synthetic/assembly
+roles, setup/receipt-clock failure qualification, calibrated joins, missing JK/gateway
+observers, GPS/service ownership and legacy recorder retirement still gate activation.
+No new recording mode, screen import, APK or device acceptance is claimed.
+
+Final fresh h117: 3731 tests/382 reports, all newer than UTC start, zero failures,
+errors/skips, 116 seconds and all 36 Gradle tasks executed. The native API-only stub
+failed four tests; the repository hookup stub failed the integration; inert startup
+seal and unqualified ingress loss failed two more checks before implementation.

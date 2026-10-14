@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.ble
 
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -21,11 +22,13 @@ class KableBmsRepositoryHistoryFunnelTest {
         topology = PackTopology.PARALLEL, chemistry = Chemistry.LI_ION_NMC, createdAt = Instant.fromEpochSeconds(0))
     private class Emitter : BmsProtocol() {
         override val uuids = BmsUuids("s", "n", "w")
+        var decodes = 0
         override fun handshakeCommands() = emptyList<ByteArray>()
         override fun pollCommands() = emptyList<ByteArray>()
         override fun latestData(packIndex: Int): BmsData? = null
         override fun reset() {}
         override fun onNotification(data: ByteArray) {
+            decodes++
             data.forEach { value -> observeTelemetry(TelemetryOrigin.BATTERY, 0) {
                 listOf(TelemetryReading.measured(TelemetryMetric.CURRENT, value.toDouble()))
             } }
@@ -50,6 +53,111 @@ class KableBmsRepositoryHistoryFunnelTest {
     private fun controller(writer: Writer): RideRecordingController {
         var n = 0
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
+    }
+
+    @Test fun startupIngressCannotChangeAfterConnectionPreparationStarts() = bleRepositoryTest { repo ->
+        val ingress = HistoryTelemetryIngress(controller(Writer()), { tick() }, { _, _ -> emptyMap() })
+        repo.configureHistoryTelemetryIngress(ingress)
+        repo.sealHistoryTelemetryConfigurationForTest()
+        assertFailsWith<IllegalStateException> { repo.configureHistoryTelemetryIngress(null) }
+    }
+
+    @Test fun ingressLossFromRetiredRecordingCannotPoisonNewRide() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { _, _ ->
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        })
+        val channel = Channel<Sample>(0)
+        val capture = assertNotNull(ingress.capture(Emitter(), "attempt", LinkSpec("address", ProtocolKind.JK), null,
+            SampleSessionOwnership { true }, channel))
+        capture.processNotification(byteArrayOf(5)) {
+            runBlocking {
+                c.execute(RecordingInput.Stop(tick(2), 7, "ride-1"))
+                c.execute(RecordingInput.Start("bike", 7, tick(3)), listOf(source))
+            }
+        }
+        assertEquals(1L, ingress.diagnostics.value.droppedObservations, "driver must reach failed send")
+        assertNull(c.telemetryFailure.value)
+        c.execute(RecordingInput.Stop(tick(4), 7, "ride-2"))
+        assertEquals(listOf(HistoryRideStatus.COMPLETED, HistoryRideStatus.COMPLETED), writer.statuses)
+        channel.close()
+    }
+
+    @Test fun nativeIngressFreezesAttemptSourcePlanAndEnqueuesOwnedEnvelopes() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val v = vehicle(); val spec = LinkSpec(v.packs.single().bmsAddress, ProtocolKind.JK, listOf(OwnedSource(0)))
+        val map = mutableMapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        var planned = 0
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { receivedSpec, receivedVehicle ->
+            assertSame(spec, receivedSpec); assertSame(v, receivedVehicle); planned++; map
+        })
+        val owner = SampleSessionOwnership { true }; val channel = Channel<Sample>(4)
+        val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, v, owner, channel))
+        map.clear()
+        capture.processNotification(byteArrayOf(1, 99, 0))
+        assertEquals(1, planned)
+        val packets = (0..2).map { assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull()) }
+        assertTrue(packets.all { it.sessionOwnership === owner && it.controller === c && it.telemetry.source == source })
+        packets.forEach { assertEquals(HistoryOffer.ACCEPTED, it.telemetry.offer(c, owner::isCurrent)) }
+        assertEquals(listOf(1.0, 99.0, 0.0), writer.samples.flatMap { it.samples }.map { it.value })
+        assertEquals(0L, ingress.diagnostics.value.droppedObservations)
+        channel.close()
+    }
+
+    @Test fun nativeIngressReportsFullAndClosedQueueWithoutBlockingDecoder() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { _, _ ->
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        })
+        val protocol = Emitter(); val channel = Channel<Sample>(1)
+        val capture = assertNotNull(ingress.capture(protocol, "attempt", LinkSpec("address", ProtocolKind.JK),
+            null, SampleSessionOwnership { true }, channel))
+        capture.processNotification(byteArrayOf(1, 2))
+        assertEquals(1L, ingress.diagnostics.value.droppedObservations)
+        assertEquals(HistoryTelemetryIngressFailure.FULL, ingress.diagnostics.value.lastFailure)
+        channel.close()
+        capture.processNotification(byteArrayOf(3))
+        assertEquals(2L, ingress.diagnostics.value.droppedObservations)
+        assertEquals(HistoryTelemetryIngressFailure.CLOSED, ingress.diagnostics.value.lastFailure)
+        assertEquals(2, protocol.decodes)
+        assertEquals(1.0, assertIs<HistoryTelemetrySample>(channel.tryReceive().getOrNull()).telemetry.received.observation.readings.single().value)
+        assertTrue(writer.samples.isEmpty(), "producer must enqueue, never bypass the consumer")
+        assertEquals("ride-1", assertNotNull(c.telemetryFailure.value).rideId)
+        c.execute(RecordingInput.Stop(tick(2), 7, "ride-1"))
+        assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
+    }
+
+    @Test fun nativeIngressSetupFailureIsVisibleAndLeavesDefaultLiveDecodeUsable() {
+        val ingress = HistoryTelemetryIngress(controller(Writer()), { tick() }, { _, _ -> error("injected plan failure") })
+        val protocol = Emitter(); val channel = Channel<Sample>(1)
+        val capture = ingress.capture(protocol, "attempt", LinkSpec("address", ProtocolKind.JK), null,
+            SampleSessionOwnership { true }, channel)
+        assertNull(capture)
+        assertEquals(1L, ingress.diagnostics.value.setupFailures)
+        assertEquals(HistoryTelemetryIngressFailure.SETUP, ingress.diagnostics.value.lastFailure)
+        processObservedSessionNotification(protocol, byteArrayOf(1), NoSampleEverWatchdogActivity(protocol), capture)
+        assertEquals(1, protocol.decodes)
+        channel.close()
+    }
+
+    @Test fun nativeIngressRetiredAttemptDoesNotReadReceiptOrEnqueue() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        var reads = 0
+        val ingress = HistoryTelemetryIngress(c, { reads++; tick(1) }, { _, _ ->
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        })
+        val owner = SampleSessionOwnership { true }; val channel = Channel<Sample>(1); val protocol = Emitter()
+        val capture = assertNotNull(ingress.capture(protocol, "attempt", LinkSpec("address", ProtocolKind.JK), null, owner, channel))
+        owner.retire()
+        assertFalse(capture.processNotification(byteArrayOf(1)))
+        assertEquals(0, reads); assertEquals(0, protocol.decodes)
+        assertTrue(channel.tryReceive().isFailure)
+        assertEquals(0L, ingress.diagnostics.value.droppedObservations)
+        channel.close()
     }
 
     @Test fun recordingFailureKeepsLiveConsumerAndRemainsInterruptedAcrossReconnect() = bleRepositoryTest { repo ->
@@ -85,20 +193,23 @@ class KableBmsRepositoryHistoryFunnelTest {
     }
 
     @Test fun rawHistoryQueueKeepsEveryPeakWithoutPublishingDashboardSnapshots() = bleRepositoryTest { repo ->
-        val v = vehicle(); repo.installLinksForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS)
-        val channel = assertNotNull(repo.sampleFunnelChannelForTest())
         val writer = Writer(); val c = controller(writer)
         c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
-        val owner = SampleSessionOwnership { true }; val protocol = Emitter(); var queued = 0
+        var planned = 0
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { _, _ ->
+            planned++
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        })
+        repo.configureHistoryTelemetryIngress(ingress)
+        val v = vehicle(); repo.installLinksForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS)
+        val owner = SampleSessionOwnership { true }; val protocol = Emitter()
         val dashboard = repo.activeData.value
-        val capture = historySessionTelemetryCapture(protocol, "attempt", c, { tick(1) }, owner::isCurrent,
-            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source), {
-                if (channel.trySend(HistoryTelemetrySample(it, c, owner)).isSuccess) queued++
-            })
+        val capture = assertNotNull(repo.historyTelemetryCaptureForTest(protocol, v.packs.single().bmsAddress, owner))
         capture.processNotification(byteArrayOf(1, 99, 0))
         advanceUntilIdle()
-        assertEquals(3, queued)
+        assertEquals(1, planned)
         assertEquals(0L, protocol.telemetryObserverFailures)
+        assertEquals(0L, ingress.diagnostics.value.droppedObservations)
         assertEquals(listOf(1.0, 99.0, 0.0), writer.samples.flatMap { it.samples }.map { it.value })
         assertSame(dashboard, repo.activeData.value)
     }
