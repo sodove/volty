@@ -11,6 +11,7 @@ import ru.sodovaya.volty.data.bms.vesc.VescValues
 import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
 
 /**
  * VESC-based controllers (incl. uBox) over the Nordic UART Service.
@@ -66,6 +67,8 @@ class VescProtocol(
      * trip instead of subtracting from it, and the delta can never go negative.
      */
     @Volatile private var tripBaselineKm: Float? = null
+    /** History's metre-counter baseline cannot be seeded by GET_VALUES' undecoded rotor counts. */
+    @Volatile private var observedTripBaselineKm: Float? = null
 
     /**
      * The one outstanding [scanCanBus], armed while its `PING_CAN` is on the
@@ -209,6 +212,12 @@ class VescProtocol(
                 val withSessionTrip = decoded.copy(tripKm = (decoded.odometerKm - baseline).coerceAtLeast(0f))
                 motion = withSessionTrip
                 if (deriveBattery) battery = derivedBatteryFrom(withSessionTrip)
+                val setup = payload[0].toInt() == VescValues.OPCODE_GET_VALUES_SETUP
+                val observedTrip = if (setup && decoded.hasDistance) {
+                    val observedBaseline = observedTripBaselineKm ?: decoded.odometerKm.also { observedTripBaselineKm = it }
+                    (decoded.odometerKm - observedBaseline).coerceAtLeast(0f)
+                } else null
+                observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedVescController(decoded, setup, observedTrip) }
             }
         }
     }
@@ -233,6 +242,7 @@ class VescProtocol(
         selectedValuesOpcode = if (useSetupFrame) null else VescValues.OPCODE_GET_VALUES
         valueOpcodeProbePolls = 0
         tripBaselineKm = null
+        observedTripBaselineKm = null
         // Answered with null — silence — rather than dropped: a scan on a
         // session being torn down can never be answered, and
         // [CanBusScanner.REPLY_TIMEOUT_MS] is a long time to make a rider watch

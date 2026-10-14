@@ -373,6 +373,16 @@ old live snapshot and emit unavailable fields. The observer remains unbound in
 production; other protocol observers and the owned-session BLE funnel remain open.
 Qualification and the zero-cell retraction are recorded in
 `docs/superpowers/specs/2026-10-14-ride-history-source-freshness.md`.
+
+Further Task7 checkpoint (2026-10-14): JBD summaries now require the declared
+whole-pack layout, and ANT status observations qualify individual payload fields
+without borrowing CRC/trailer bytes. Plain VESC emits fresh local fields per frame;
+SETUP CAN-summed currents/power still require separate aggregate-source attribution.
+GET_VALUES rotor counts cannot earn kilometres or seed history's distance baseline.
+These decoder milestones do not activate recording. Remaining protocols, accepted
+source/session binding, derived/aggregate scope, GPS, foreground ownership, DI and
+legacy recorder retirement keep Task7 open.
+
 ## Task8 — bounded read facade and repair historical graph admission
 
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;

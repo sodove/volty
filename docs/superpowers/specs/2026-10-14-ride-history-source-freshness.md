@@ -17,7 +17,8 @@ No BLE command, polling cadence or Begode FFE1 write is added.
   defaults marked available. History qualification must use actual field coverage,
   not those defaults. ANT now emits qualified per-status observations; production
   consumer integration is still pending.
-- Begode, JK, plain VESC and the VESC gateway still need qualified observations.
+- Begode, JK and the VESC gateway still need qualified observations. Plain VESC
+  now emits local-field observations; SETUP aggregate attribution remains pending.
   Gateway overlays and derived contributors require explicit freshness evidence.
 
 The generic observation vocabulary carries physical contributor kind/local index,
@@ -77,3 +78,34 @@ measurements make the maximum partial. No command, cadence or live dashboard
 decoding behavior was changed. Exceptions remain contained by the common observer.
 
 These are decoder tests, not field verification and not production activation.
+
+## Plain VESC: local fields versus SETUP totals
+
+Read the rider's local VESC firmware `bldc/comm/commands.c` (GET_VALUES and
+GET_VALUES_SETUP), `bldc/motor/mc_interface.c` (`mc_interface_get_setup_values`),
+and reference client's `vesc_tool-master/commands.cpp` on 2026-10-14.
+Read-file SHA-256 receipts, respectively:
+`7647827A16CF9163699F40C82C4D96B0BA38D0B89652E9831727F983AE70EA80`,
+`8D8FBE43F75A1572030A4B55221E28F318DE7E201A7A586DD44C7C623261FBA9`,
+`A8A33F0B6BC2AA48B5A2CD414FE8BA87054B99E485E1ACD8E4FC2F1B2DF7F5AA`.
+Plain GET_VALUES supplies local currents; SETUP uses `current_tot` and
+`current_in_tot`, including live CAN neighbors. The SETUP trailer's `num_vescs`
+counts status-1 entries while input current is summed from independently aged
+status-4 entries, so `num_vescs == 1` alone cannot certify local input-current scope.
+
+Every decoded values frame now produces one physical-controller observation, retaining
+intermediate peaks when several frames share a notification. Local voltage, speed,
+duty, eRPM and temperatures keep decoder availability and canonical units/signs.
+SETUP's summed motor/input current and derived power are explicitly partial in this
+physical-controller scope. Separate attributed system-sum observations are still
+required before runtime activation; this does not claim their usable data was captured.
+No duplicate derived-battery observation is emitted: binding the derived source and
+avoiding aggregate double-counting belongs to the accepted source runtime.
+
+Plain GET_VALUES rotor counts have not been converted into a distance, regardless of
+the old `hasDistance` default. Only SETUP's decoded metre counter earns kilometre
+observations. A separate history baseline starts on the first such counter, survives
+intervening plain replies, and resets with the BLE decoder session. The old dashboard
+trip baseline is unchanged, including its previously possible plain-zero seeding.
+Malformed/unknown frames do not restamp cached fields; observer failures do not break
+motion or derived-battery updates. Polling, commands and opcode election are unchanged.
