@@ -1,6 +1,7 @@
 package ru.sodovaya.volty.data.ble
 
 import app.cash.turbine.test
+import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.BmsType
 import ru.sodovaya.volty.domain.model.Chemistry
 import ru.sodovaya.volty.domain.model.Controller
@@ -76,6 +77,49 @@ class KableBmsRepositoryMotionTest {
         chemistry = Chemistry.LI_ION_NMC,
         createdAt = Instant.fromEpochSeconds(0L)
     )
+
+    @Test
+    fun `queued motion from retired attempt cannot overwrite healthy sibling`() = repoTest { repo ->
+        val v = motionVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
+        val channel = assertNotNull(repo.sampleFunnelChannelForTest())
+        val oldAttempt = SampleSessionOwnership { true }
+        var queued = false
+        repo.beforeVehicleDataPublishForTest = {
+            repo.beforeVehicleDataPublishForTest = null
+            assertTrue(oldAttempt.isCurrent())
+            assertTrue(channel.trySend(MotionSample(0, motionSample().copy(speedKmh = 30f), SampleSessionOwnership { true })).isSuccess)
+            assertTrue(channel.trySend(MotionSample(0, motionSample().copy(speedKmh = 99f), oldAttempt)).isSuccess)
+            queued = true
+            oldAttempt.retire()
+        }
+        assertTrue(channel.trySend(MotionSample(0, motionSample())).isSuccess)
+        advanceUntilIdle()
+        assertTrue(queued, "driver must reach publication and buffer the old-attempt packet")
+        assertEquals(30f, repo.activeMotion.value.speedKmh)
+    }
+
+    @Test
+    fun `queued battery from retired attempt cannot overwrite healthy sibling`() = repoTest { repo ->
+        val v = motionVehicle()
+        repo.installLinksForTest(v, v.primaryAddress, v.packs.first().bmsType)
+        val channel = assertNotNull(repo.sampleFunnelChannelForTest())
+        val oldAttempt = SampleSessionOwnership { true }
+        var queued = false
+        fun battery(currentA: Float) = BmsData(current = currentA, isConnected = true)
+        repo.beforeVehicleDataPublishForTest = {
+            repo.beforeVehicleDataPublishForTest = null
+            assertTrue(oldAttempt.isCurrent())
+            assertTrue(channel.trySend(PackSample(0, battery(3f), emptyList(), SampleSessionOwnership { true })).isSuccess)
+            assertTrue(channel.trySend(PackSample(0, battery(99f), emptyList(), oldAttempt)).isSuccess)
+            queued = true
+            oldAttempt.retire()
+        }
+        assertTrue(channel.trySend(PackSample(0, battery(1f), emptyList())).isSuccess)
+        advanceUntilIdle()
+        assertTrue(queued, "driver must reach publication and buffer the old-attempt packet")
+        assertEquals(3f, repo.activeData.value.current)
+    }
 
     private fun motionSample() = ControllerData(
         speedKmh = 25f,

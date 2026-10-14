@@ -90,7 +90,10 @@ internal class ConnectionSession(
     init { telemetryCapture?.requireProtocol(protocol) }
 
     private val cancelMutex = Mutex()
+    @Volatile
     private var torn: Boolean = false
+
+    internal fun ownsProtocol(candidate: BmsProtocol): Boolean = !torn && protocol === candidate
 
     private var observeJob: Job? = null
     private var pollingJob: Job? = null

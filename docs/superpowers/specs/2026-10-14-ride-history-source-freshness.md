@@ -237,3 +237,32 @@ as loss markers and the final queued-packet session fence remain mandatory. The 
 does not claim to reject already-queued old records by itself. Its real ET Max test
 captures 190 facts (114 controller/76 battery) across original BLE fragment boundaries,
 with one clock read per notification and the first completed frame on receipt 2.
+
+
+## Queued live-sample attempt ownership
+
+Battery and motion envelopes in the existing shared BLE funnel now retain an
+immutable binding to the exact link and fresh protocol for their connection
+attempt. The consumer checks that binding under sessionLock before submitting
+or publishing, in addition to the existing whole-pipeline ownership check.
+A reconnection at the same address/index cannot make an older envelope current;
+other attempts keep their own ownership. Demo/test envelopes may omit the binding.
+
+Drop detection retires the binding immediately, before suspending into repository
+recovery. Teardown remains deferred because joining the calling state/watchdog
+job there would deadlock. A volatile retirement flag closes the drop-to-teardown
+window even while the old session remains installed. An already accepted consumer
+transaction may finish; later queued samples from that attempt are rejected.
+
+Earlier this audit listed the final queue fence as wholly pending. The existing
+live battery/motion queue now has that fence. Raw History observation envelopes
+still need their production source/recording-context binding and corresponding
+consumer checks; this change does not activate the recording controller or turn
+merged dashboard snapshots into fresh historical observations.
+
+Regression tests enqueue packets while their attempt is current inside an accepted
+publication transaction, retire it before draining, and assert that stale battery
+and motion values cannot overwrite valid packets. Both failed before the consumer
+check and again with an inert retirement method. Final fresh h104 full run:
+3713 tests across 380 XML reports, zero failures/errors/skips, all reports newer
+than the recorded UTC start; 105 seconds, all 36 Gradle tasks executed.

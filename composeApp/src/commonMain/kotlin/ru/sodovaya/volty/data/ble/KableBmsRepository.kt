@@ -1452,7 +1452,8 @@ class KableBmsRepository private constructor(
         socVehicle: Vehicle?,
         channel: Channel<Sample>,
         localToGlobal: (localIndex: Int) -> Int,
-        onDiagnosticSample: (localIndex: Int, globalIndex: Int, data: BmsData) -> Unit = { _, _, _ -> }
+        onDiagnosticSample: (localIndex: Int, globalIndex: Int, data: BmsData) -> Unit = { _, _, _ -> },
+        sessionOwnership: SampleSessionOwnership? = null
     ): (Int, BmsData, List<SectionState>) -> Unit =
         { localIndex, sample, sections ->
             // Translate to the vehicle-global index FIRST: the scaler and the
@@ -1487,7 +1488,7 @@ class KableBmsRepository private constructor(
             // trySend, not send — onSample is not suspending, and the buffer
             // is sized so a drop can only mean a closed (torn-down) funnel
             // or a stopped consumer; either way it must be visible.
-            val sent = channel.trySend(PackSample(packIndex, enriched, sections))
+            val sent = channel.trySend(PackSample(packIndex, enriched, sections, sessionOwnership))
             if (sent.isFailure) {
                 println("[VOLTY-BLE] sample funnel: dropped sample for pack=$packIndex (channel closed or full)")
             } else onDiagnosticSample(localIndex, packIndex, enriched)
@@ -1529,13 +1530,14 @@ class KableBmsRepository private constructor(
     private fun makeLinkOnMotionSample(
         spec: LinkSpec,
         channel: Channel<Sample>,
-        onDiagnosticSample: (localIndex: Int, globalIndex: Int?, data: ControllerData) -> Unit = { _, _, _ -> }
+        onDiagnosticSample: (localIndex: Int, globalIndex: Int?, data: ControllerData) -> Unit = { _, _, _ -> },
+        sessionOwnership: SampleSessionOwnership? = null
     ): (controllerIndex: Int, data: ControllerData) -> Unit {
         var warnedUnowned = false
         return { localCtrlIndex, data ->
             val owned = spec.ownedControllers.getOrNull(localCtrlIndex)
             if (owned != null) {
-                val sent = channel.trySend(MotionSample(owned.globalIndex, data))
+                val sent = channel.trySend(MotionSample(owned.globalIndex, data, sessionOwnership))
                 if (sent.isFailure) {
                     println("[VOLTY-BLE] motion funnel: dropped sample for controller=$localCtrlIndex (channel closed or full)")
                 } else onDiagnosticSample(localCtrlIndex, owned.globalIndex, data)
@@ -1587,6 +1589,9 @@ class KableBmsRepository private constructor(
                     // own orchestrator and link plan before a rebuild can clear
                     // and replace them.
                     if (!ownsActivePipeline(orchestrator)) return@transaction
+                    // Same pipeline can outlive one of its BLE attempts. Check
+                    // again here, after queueing, under the teardown/install lock.
+                    if (sample.sessionOwnership?.isCurrent() == false) return@transaction
                     when (sample) {
                     is PackSample -> {
                         // The aggregate is a true identity for a single pack
@@ -2467,7 +2472,11 @@ class KableBmsRepository private constructor(
                 sampleChannel
                     ?: return Result.failure(IllegalStateException("No sample funnel"))
             }
+            val sessionOwnership = SampleSessionOwnership {
+                links.any { it === link } && link.session?.ownsProtocol(protocol) == true
+            }
             val onSample = makeLinkOnSample(
+                sessionOwnership = sessionOwnership,
                 protocol = protocol,
                 socVehicle = socVehicleFor(vehicle, address, type),
                 channel = channel,
@@ -2526,11 +2535,15 @@ class KableBmsRepository private constructor(
                 onMotionSample = makeLinkOnMotionSample(
                     link.spec,
                     channel,
+                    sessionOwnership = sessionOwnership,
                     onDiagnosticSample = { localIndex, globalIndex, data ->
                         retainDiagnosticController(link, localIndex, globalIndex, data)
                     }
                 ),
                 onDropDetected = { reason ->
+                    // Retire ingress immediately: teardown is deferred to avoid
+                    // joining the state/watchdog job from its own callback.
+                    sessionOwnership.retire()
                     // The session detected a drop. Schedule THIS link's
                     // reconnect — unless the user disconnected in the meantime.
                     onLinkDrop(link, reason)
@@ -3679,13 +3692,30 @@ class KableBmsRepository private constructor(
 }
 
 /**
+ * Immutable binding to one connection attempt. The repository predicate checks
+ * both the exact link and its fresh protocol; equal addresses/indices do not
+ * make an older attempt current. Null ownership is reserved for demo/test input.
+ */
+internal class SampleSessionOwnership(private val ownsSession: () -> Boolean) {
+    @Volatile
+    private var retired = false
+
+    fun isCurrent(): Boolean = !retired && ownsSession()
+
+    fun retire() { retired = true }
+}
+
+/**
  * One enriched sample crossing the serialisation barrier between a link's
  * session coroutine and the single consumer that owns the shared state. The
  * funnel carries battery OR motion: a link's battery stream and its controller
  * stream enter the SAME single-consumer channel, so the consumer serialises
  * every mutation of [VehicleConnection] regardless of which side produced it.
  */
-internal sealed interface Sample
+
+internal sealed interface Sample {
+    val sessionOwnership: SampleSessionOwnership?
+}
 
 /**
  * A battery sample. By the time it enters the channel its enrichment (Begode
@@ -3696,7 +3726,8 @@ internal sealed interface Sample
 internal data class PackSample(
     val globalPackIndex: Int,
     val data: BmsData,
-    val sections: List<SectionState>
+    val sections: List<SectionState>,
+    override val sessionOwnership: SampleSessionOwnership? = null
 ) : Sample
 
 /**
@@ -3708,5 +3739,6 @@ internal data class PackSample(
  */
 internal data class MotionSample(
     val globalControllerIndex: Int,
-    val data: ControllerData
+    val data: ControllerData,
+    override val sessionOwnership: SampleSessionOwnership? = null
 ) : Sample
