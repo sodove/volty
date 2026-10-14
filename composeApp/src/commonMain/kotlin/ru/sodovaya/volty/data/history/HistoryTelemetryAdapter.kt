@@ -4,10 +4,14 @@ import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryUnknown
+import ru.sodovaya.volty.domain.model.TelemetryRole
 
 /** Receives attributed decoder observations, never a mixed-age dashboard aggregate. */
 internal fun historyTelemetrySamples(source: HistorySource, tick: HistoryTick,
     observation: TelemetryObservation): List<HistorySample> {
+    require(observation.role == TelemetryRole.CONTRIBUTOR) {
+        "A physical contributor cannot borrow assembly or virtual-battery measurements"
+    }
     val kind = when (observation.origin) {
         TelemetryOrigin.BATTERY -> HistorySourceKind.BATTERY
         TelemetryOrigin.CONTROLLER -> HistorySourceKind.CONTROLLER

@@ -3,6 +3,17 @@ package ru.sodovaya.volty.domain.model
 import kotlin.test.*
 
 class TelemetryObservationTest {
+    @Test fun rolesCannotInventAssemblyAddressesOrControllerBatterySections() {
+        val rows = listOf(TelemetryReading.measured(TelemetryMetric.CURRENT, 0.0))
+        val section = TelemetryObservation(TelemetryOrigin.BATTERY, 0, rows, TelemetryRole.ASSEMBLY, 1)
+        assertEquals(1, section.assemblyIndex)
+        assertEquals(TelemetryRole.ASSEMBLY, section.role)
+        assertFailsWith<IllegalArgumentException> { TelemetryObservation(TelemetryOrigin.BATTERY, 0, rows, TelemetryRole.ASSEMBLY) }
+        assertFailsWith<IllegalArgumentException> { TelemetryObservation(TelemetryOrigin.BATTERY, 0, rows, TelemetryRole.ASSEMBLY, -1) }
+        assertFailsWith<IllegalArgumentException> { TelemetryObservation(TelemetryOrigin.BATTERY, 0, rows, assemblyIndex = 0) }
+        assertFailsWith<IllegalArgumentException> { TelemetryObservation(TelemetryOrigin.CONTROLLER, 0, emptyList(), TelemetryRole.ASSEMBLY, 0) }
+        assertFailsWith<IllegalArgumentException> { TelemetryObservation(TelemetryOrigin.CONTROLLER, 0, emptyList(), TelemetryRole.DERIVED) }
+    }
     @Test fun absenceAndInvalidNumbersCannotTurnIntoEarnedZero() {
         assertEquals(TelemetryReading(TelemetryMetric.POWER, null, TelemetryUnknown.UNAVAILABLE),
             TelemetryReading.measured(TelemetryMetric.POWER, 4200.0, known = false))

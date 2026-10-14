@@ -4,10 +4,16 @@ import ru.sodovaya.volty.data.ble.*
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
+import ru.sodovaya.volty.domain.model.TelemetryObservation
+import ru.sodovaya.volty.domain.model.requireTelemetryAddress
 
-internal data class HistoryTelemetrySource(val origin: TelemetryOrigin, val localIndex: Int) {
-    init { require(localIndex >= 0) }
+internal data class HistoryTelemetrySource(val origin: TelemetryOrigin, val localIndex: Int,
+    val role: TelemetryRole = TelemetryRole.CONTRIBUTOR, val assemblyIndex: Int? = null) {
+    init { requireTelemetryAddress(origin, localIndex, role, assemblyIndex) }
 }
+
+private fun TelemetryObservation.historySourceKey() = HistoryTelemetrySource(origin, localIndex, role, assemblyIndex)
 
 internal data class CapturedHistoryTelemetry(
     val recording: CapturedHistoryRecording,
@@ -45,6 +51,9 @@ internal fun historySessionTelemetryCapture(
     // A caller can rebuild or mutate its map later; one attempt keeps its own plan.
     val binding = sources.toMap()
     binding.forEach { (key, source) ->
+        require(key.role == TelemetryRole.CONTRIBUTOR) {
+            "Assembly and derived roles need explicit durable source qualification"
+        }
         val kind = when (key.origin) {
             TelemetryOrigin.BATTERY -> HistorySourceKind.BATTERY
             TelemetryOrigin.CONTROLLER -> HistorySourceKind.CONTROLLER
@@ -68,12 +77,12 @@ internal fun historySessionTelemetryCapture(
         val tick = snapshot?.second
         if (recording != null && tick != null) {
             val observation = received.observation
-            val source = binding[HistoryTelemetrySource(observation.origin, observation.localIndex)]
+            val source = binding[observation.historySourceKey()]
             if (source != null) onTelemetry(CapturedHistoryTelemetry(recording, source, tick, received))
         }
     }, onUnreceiptedObservation = { observation ->
         val recording = captured?.first
-        val source = binding[HistoryTelemetrySource(observation.origin, observation.localIndex)]
+        val source = binding[observation.historySourceKey()]
         if (recording != null && source != null) controller.reportTelemetryReceiptLoss(recording, source.id)
     })
 }

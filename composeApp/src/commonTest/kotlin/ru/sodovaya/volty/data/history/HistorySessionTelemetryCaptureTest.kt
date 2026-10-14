@@ -15,13 +15,15 @@ class HistorySessionTelemetryCaptureTest {
     private class Emitter : BmsProtocol() {
         override val uuids = BmsUuids("s", "n", "w")
         var decodes = 0
+        var role = TelemetryRole.CONTRIBUTOR
         override fun handshakeCommands() = emptyList<ByteArray>()
         override fun pollCommands() = emptyList<ByteArray>()
         override fun latestData(packIndex: Int): BmsData? = null
         override fun reset() {}
         override fun onNotification(data: ByteArray) {
             decodes++
-            data.forEach { value -> observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+            data.forEach { value -> observeTelemetry(TelemetryOrigin.BATTERY, 0, role,
+                if (role == TelemetryRole.ASSEMBLY) 0 else null) {
                 listOf(TelemetryReading.measured(TelemetryMetric.CURRENT, value.toDouble()))
             } }
         }
@@ -43,6 +45,33 @@ class HistorySessionTelemetryCaptureTest {
     private fun controller(writer: Writer): RideRecordingController {
         var n = 0
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
+    }
+
+    @Test fun unsupportedRoleBindingsCannotAliasPhysicalContributorIds() {
+        val c = controller(Writer())
+        for (role in listOf(TelemetryRole.ASSEMBLY, TelemetryRole.DERIVED)) {
+            val roleKey = key.copy(role = role, assemblyIndex = if (role == TelemetryRole.ASSEMBLY) 0 else null)
+            assertFailsWith<IllegalArgumentException> {
+                historySessionTelemetryCapture(Emitter(), "attempt", c, { tick() }, { true }, mapOf(roleKey to source), {})
+            }
+        }
+        assertFailsWith<IllegalArgumentException> { key.copy(assemblyIndex = 0) }
+    }
+
+    @Test fun unmappedRolesCannotBorrowContributorBindingsOrQualifyContributorClockLoss() = runTest {
+        val c = controller(Writer()); c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val p = Emitter(); val events = mutableListOf<CapturedHistoryTelemetry>(); var fail = false
+        val capture = historySessionTelemetryCapture(p, "attempt", c,
+            { if (fail) error("clock"); tick() }, { true }, mapOf(key to source), { events += it })
+        for (role in listOf(TelemetryRole.ASSEMBLY, TelemetryRole.DERIVED)) {
+            p.role = role; fail = false; capture.processNotification(byteArrayOf(42))
+            assertTrue(events.isEmpty())
+            fail = true; capture.processNotification(byteArrayOf(43))
+            assertNull(c.telemetryFailure.value)
+        }
+        p.role = TelemetryRole.CONTRIBUTOR; fail = false; capture.processNotification(byteArrayOf(0))
+        assertEquals(0.0, events.single().received.observation.readings.single().value)
+        assertEquals(5, p.decodes)
     }
 
     @Test fun lostReceiptMarksOnlyActualMappedObservationsAndKeepsLiveDecoderUsable() = runTest {

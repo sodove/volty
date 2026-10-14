@@ -5,6 +5,14 @@ import ru.sodovaya.volty.domain.model.*
 import kotlin.test.*
 
 class HistoryTelemetryAdapterTest {
+    @Test fun assemblyAndDerivedRolesCannotMasqueradeAsPhysicalBatteryContributors() {
+        for (role in listOf(TelemetryRole.ASSEMBLY, TelemetryRole.DERIVED)) {
+            val observation = TelemetryObservation(TelemetryOrigin.BATTERY, 0,
+                listOf(TelemetryReading.measured(TelemetryMetric.VOLTAGE, 42.0)), role,
+                if (role == TelemetryRole.ASSEMBLY) 0 else null)
+            assertFailsWith<IllegalArgumentException> { historyTelemetrySamples(source, tick, observation) }
+        }
+    }
     private val tick = HistoryTick(10000, 100, 1)
     private val source = HistorySource("pack-a", HistorySourceKind.BATTERY, "A")
     private fun battery(vararg readings: TelemetryReading) = TelemetryObservation(TelemetryOrigin.BATTERY, 0, readings.toList())

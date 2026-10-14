@@ -468,3 +468,22 @@ failures/errors/skips, 242 seconds/all 36 tasks executed. h127 failed all three
 new gateway tests before the hook; h129 failed the mixed-native regression before
 its identity qualification fix. Narrow readonly review found no remaining defect
 in this controller scope. Runtime activation and phone acceptance remain pending.
+
+## Native role/address admission fence
+
+Observations and capture-map keys now include a CONTRIBUTOR, ASSEMBLY or DERIVED
+role. Existing producers default to CONTRIBUTOR. ASSEMBLY requires a nonnegative
+assembly index; other roles cannot carry one. Auxiliary assemblies and virtual
+derived batteries are battery addresses, not controller addresses. Canonical unit
+or geometry conversion of a controller field does not change its contributor role.
+
+Receipt and unreceipted-loss attribution use the complete role/address key. An
+unmapped assembly or virtual battery cannot borrow a contributor's identical
+origin/local index, append its values or qualify a physical recording's clock loss.
+Direct adaptation and binding currently reject non-contributor roles until their
+durable source kinds and metric permissions are explicit. No auxiliary producer,
+durable schema or runtime activation changes in this checkpoint.
+
+h131: four new regressions failed among 80 selected tests before admission fences.
+h132: full fresh 3754 tests/384 reports, zero failures/errors/skips, 101 seconds/all
+36 tasks executed. Narrow readonly review found no concrete defect in this scope.

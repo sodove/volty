@@ -5,6 +5,7 @@ import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.TelemetryObservation
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.TelemetryRole
 
 abstract class BmsProtocol {
     /** Optional full-decode observer. History failure must not tear down the live BLE stream. */
@@ -13,10 +14,11 @@ abstract class BmsProtocol {
         private set
 
     protected fun observeTelemetry(origin: TelemetryOrigin, localIndex: Int,
+        role: TelemetryRole = TelemetryRole.CONTRIBUTOR, assemblyIndex: Int? = null,
         readings: () -> List<TelemetryReading>) {
         val observer = telemetryObserver ?: return
         try {
-            observer(TelemetryObservation(origin, localIndex, readings()))
+            observer(TelemetryObservation(origin, localIndex, readings(), role, assemblyIndex))
         } catch (error: Exception) {
             // Keep decode/alerts alive and make a failed recorder callback observable without logging payloads.
             if (telemetryObserverFailures < Long.MAX_VALUE) telemetryObserverFailures++

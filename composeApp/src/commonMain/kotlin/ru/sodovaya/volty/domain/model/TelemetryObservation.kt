@@ -1,6 +1,16 @@
 package ru.sodovaya.volty.domain.model
 
 enum class TelemetryOrigin { BATTERY, CONTROLLER }
+/** DERIVED names a virtual battery, not canonical unit/geometry conversion of a physical controller field. */
+enum class TelemetryRole { CONTRIBUTOR, ASSEMBLY, DERIVED }
+
+internal fun requireTelemetryAddress(origin: TelemetryOrigin, localIndex: Int,
+    role: TelemetryRole, assemblyIndex: Int?) {
+    require(localIndex >= 0)
+    require((role == TelemetryRole.ASSEMBLY) == (assemblyIndex != null))
+    require(assemblyIndex == null || assemblyIndex >= 0)
+    require(role == TelemetryRole.CONTRIBUTOR || origin == TelemetryOrigin.BATTERY)
+}
 enum class TelemetryUnknown { UNAVAILABLE, INVALID_VALUE, PARTIAL_SOURCE }
 
 /** Canonical measurement vocabulary; omitted fields were not observed in this decode. */
@@ -44,10 +54,11 @@ data class TelemetryReading(val metric: TelemetryMetric, val value: Double?,
     }
 }
 
-class TelemetryObservation(val origin: TelemetryOrigin, val localIndex: Int, readings: List<TelemetryReading>) {
+class TelemetryObservation(val origin: TelemetryOrigin, val localIndex: Int, readings: List<TelemetryReading>,
+    val role: TelemetryRole = TelemetryRole.CONTRIBUTOR, val assemblyIndex: Int? = null) {
     val readings: List<TelemetryReading> = readings.toList()
     init {
-        require(localIndex >= 0)
+        requireTelemetryAddress(origin, localIndex, role, assemblyIndex)
         require(this.readings.all { it.metric.origin == origin })
         require(this.readings.map { it.metric to it.cellIndex }.distinct().size == this.readings.size)
     }
