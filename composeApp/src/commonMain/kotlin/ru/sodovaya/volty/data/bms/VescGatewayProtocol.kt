@@ -18,6 +18,9 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryReading
+import ru.sodovaya.volty.domain.model.TelemetryUnknown
 
 /**
  * One source behind a gateway link, as the multiplexer needs to address it.
@@ -802,6 +805,7 @@ class VescGatewayProtocol(
      * the worst kind of wrong.
      */
     @Volatile private var tripBaselineKm: Map<Int, Float> = emptyMap()
+    private var historyTripBaselineKm: Map<Int, Float> = emptyMap()
 
     // ---- the request plan, built once ---------------------------------
 
@@ -962,7 +966,10 @@ class VescGatewayProtocol(
         frame = frameFor(c.canId, byteArrayOf(VescValues.OPCODE_GET_VALUES_SETUP.toByte())),
         expectedOpcode = VescValues.OPCODE_GET_VALUES_SETUP,
         consume = { payload ->
-            VescValues.decodeSetupValues(payload)?.let { applySetup(c.globalIndex, it) }
+            VescValues.decodeSetupValues(payload)?.let {
+                observeControllerReply(c, payload, it, setup = true)
+                applySetup(c.globalIndex, it)
+            }
         },
         // A speed this controller is no longer reporting must not stay on the
         // dashboard. Only ITS entry goes: a head unit that never answers
@@ -997,7 +1004,10 @@ class VescGatewayProtocol(
         frame = frameFor(c.canId, byteArrayOf(VescValues.OPCODE_GET_VALUES.toByte())),
         expectedOpcode = VescValues.OPCODE_GET_VALUES,
         consume = { payload ->
-            VescValues.decodeValues(payload, c.motor)?.let { applyValues(c.globalIndex, it) }
+            VescValues.decodeValues(payload, c.motor)?.let {
+                observeControllerReply(c, payload, it, setup = false)
+                applyValues(c.globalIndex, it)
+            }
         },
         // Drop the cached per-unit decode AND what was published from it: with
         // both gone nothing can republish this unit's frozen duty/current next
@@ -1026,6 +1036,34 @@ class VescGatewayProtocol(
         },
         suppression = SilentPair(c.globalIndex, VescValues.OPCODE_GET_VALUES)
     )
+
+    private fun observeControllerReply(source: GatewaySource, payload: ByteArray,
+        decoded: ControllerData, setup: Boolean) {
+        // commands.c: SETUP emits controller_id after its 55-byte mandatory
+        // body. VALUES emits it after the 53-byte body and optional 4-byte
+        // position. Bare forwarded replies have no transaction/source wrapper:
+        // pending request alone cannot attribute a very late CAN reply.
+        val identityOffset = if (setup) 56 else 58
+        // Retraction: a null target formerly bypassed identity checking even
+        // on a mixed link. A late forwarded reply can also land in its local
+        // request slot. Without an explicitly known native ID, only a link
+        // with no forwarded controller replies can certify native facts.
+        val attributed = if (source.canId == null) controllers.none { it.canId != null }
+            else source.canId in 0..254 &&
+                payload.getOrNull(identityOffset)?.let { it.toInt() and 255 } == source.canId
+        val trip = if (attributed && setup && decoded.hasDistance) {
+            val baseline = historyTripBaselineKm[source.globalIndex] ?: decoded.odometerKm.also {
+                historyTripBaselineKm = historyTripBaselineKm + (source.globalIndex to it)
+            }
+            (decoded.odometerKm - baseline).coerceAtLeast(0f)
+        } else null
+        observeTelemetry(TelemetryOrigin.CONTROLLER, controllers.indexOf(source)) {
+            val readings = observedVescController(decoded, setup, trip)
+            if (attributed) readings else readings.map {
+                TelemetryReading(it.metric, null, TelemetryUnknown.PARTIAL_SOURCE, it.cellIndex)
+            }
+        }
+    }
 
     private fun bmsRequest(p: GatewaySource) = Request(
         frame = frameFor(p.canId, byteArrayOf(VescBmsValues.OPCODE_BMS_GET_VALUES.toByte())),
@@ -1630,6 +1668,7 @@ class VescGatewayProtocol(
         // ever read together.
         overlays = emptyMap()
         tripBaselineKm = emptyMap()
+        historyTripBaselineKm = emptyMap()
         // "Re-probe on reconnect, always." A node's refusal is evidence about
         // the session it was collected in and nothing more: the next connection
         // may be a different vehicle, or the same one with the uBox now awake,

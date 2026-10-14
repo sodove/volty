@@ -434,3 +434,37 @@ cannot independently refresh all physical pack facts. Its ANT current projection
 also carries an explicitly documented field-tested sign policy; do not generalize
 that one gateway's convention to arbitrary stock VESC BMS producers. Gateway
 observers, role policy and calibrated joins remain open; no new polling is proposed.
+
+### Subsequent controller implementation checkpoint
+
+Gateway controller replies now emit optional observations directly from the decoded
+reply, before any live SETUP overlay or cached per-unit projection. Source indices
+follow the link-owned controller order. SETUP CAN-summed currents/power remain
+partial; VALUES cannot borrow cached distance or speed facts. History distance uses
+a separate qualified SETUP baseline, cleared on reset.
+
+Forwarded controller observations require a matching identity trailer at the audited
+offset, including the optional VALUES position preceding that ID. Missing/mismatched
+identity emits typed partial fields and cannot advance the baseline. Retraction: the
+first hook bypassed identity for every native/null target. A late CAN reply can land
+in a native request slot too. Until an explicit native identity is available, native
+facts on a mixed local/CAN controller link remain partial. A link with no forwarded
+controllers retains normal native observations without requiring a CAN trailer.
+
+The bounded real-poll-loop tests assert issued commands before checking observations,
+exercise local-vs-global indices, genuine zero, SETUP/VALUES separation, identity
+failures, mixed-source late replies, distance baseline and reset. These observations
+do not alter live projection, request cadence or serial timeout behavior. Hosted BMS
+cache freshness, synthetic/aggregate roles and runtime activation remain open.
+
+Local wire sources read on 2026-10-15, SHA-256:
+- `C:/Users/sodovaya/Desktop/Software/vesc_tool_free_windows/bldc/comm/commands.c`:
+  `7647827a16cf9163699f40c82c4d96b0ba38d0b89652e9831727f983ae70ea80`.
+- `E:/sodovaya/nyxdash/firmware/components/vesc_express/src/bms.c`:
+  `4e293ba2f8c93b0903e05ded3d5d5aec0b35ad492b55c7964ccedfccb11b8165`.
+
+Final fresh h130: 3750 tests/384 XML reports, all newer than UTC start, zero
+failures/errors/skips, 242 seconds/all 36 tasks executed. h127 failed all three
+new gateway tests before the hook; h129 failed the mixed-native regression before
+its identity qualification fix. Narrow readonly review found no remaining defect
+in this controller scope. Runtime activation and phone acceptance remain pending.

@@ -402,6 +402,17 @@ queued-packet session fence are the next integration work, not completed by this
 
 ## Task8 — bounded read facade and repair historical graph admission
 
+Task7 checkpoint (2026-10-15): native capture is now optionally wired through the
+attempt-owned shared queue and recording capability, with bounded ingress and
+decoded receipt-loss qualification. Startup configuration seals before connection
+preparation. JK frame-local observations qualify metadata, indices and temperature
+coverage; gateway controller observations validate forwarded identity and separate
+fresh replies from live overlays. Unknown native identity on mixed local/CAN links
+stays partial. DI/source planning still leaves the runtime hook unconfigured; hosted
+BMS age, setup-failure owner qualification, calibrated aggregate/auxiliary/synthetic
+roles, GPS/foreground ownership and legacy retirement keep Task7 open. These
+checkpoints do not enable new recording or new screens.
+
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;
 modify `presentation/graph/GraphComponent.kt`; tests `HistoryReadRepositoryTest.kt`,
 `presentation/graph/GraphComponentTelemetryTest.kt`.
