@@ -89,6 +89,7 @@ class BegodeProtocol(
 
     private val buffer = ByteArrayAccumulator()
     private val branches = Array(2) { BranchState() }
+    private val observedCellPositions = Array(2) { mutableSetOf<Int>() }
 
     // Wheel-level telemetry from the live 0x00 frame. The raw voltage is on
     // Begode's 67.2 V scale and needs a nominal-voltage multiplier this
@@ -1032,6 +1033,7 @@ class BegodeProtocol(
     override fun reset() {
         buffer.reset()
         branches.forEach { it.reset() }
+        observedCellPositions.forEach { it.clear() }
         liveVoltageRaw = 0
         phaseCurrentA = 0f
         boardTempC = 0f
@@ -1482,6 +1484,7 @@ class BegodeProtocol(
         }
 
         rebuild(branch, bmsnum shr 1)
+        observeTelemetry(TelemetryOrigin.BATTERY, bmsnum shr 1) { observedBegodeBranch(frame, isBootPlaceholder) }
     }
 
     /**
@@ -1502,6 +1505,13 @@ class BegodeProtocol(
             }
         }
         rebuild(state, branch)
+        val expectedCount = (derivedCellCountValue ?: cellCount)?.takeIf { it > 0 }
+        val seen = observedCellPositions[branch]
+        observeTelemetry(TelemetryOrigin.BATTERY, branch) { observedBegodeCells(frame, expectedCount, seen) }
+        for (offset in 0 until 8) {
+            val index = packetIndex * 8 + offset
+            if ((expectedCount == null || index < expectedCount) && frame.u16BE(2 + offset * 2) > 0) seen += index
+        }
     }
 
     /**

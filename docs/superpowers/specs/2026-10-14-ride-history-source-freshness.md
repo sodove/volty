@@ -18,7 +18,8 @@ No BLE command, polling cadence or Begode FFE1 write is added.
   defaults marked available. History qualification must use actual field coverage,
   not those defaults. ANT now emits qualified per-status observations; production
   consumer integration is still pending.
-- Begode smart branches, JK and the VESC gateway still need qualified observations.
+- Begode smart branches now emit fresh current/cell groups; branch aggregates and
+  assembly sensor attribution remain open. JK and the VESC gateway still need qualified observations.
   Begode controller observations now separate frame families. Plain VESC
   now emits local-field observations; SETUP aggregate attribution remains pending.
   Gateway overlays and derived contributors require explicit freshness evidence.
@@ -174,3 +175,34 @@ values and boundaries, not moving-wheel accuracy or phone/background behavior.
 Synthetic cases cover nonzero peaks, reset/boot gates and unknown-to-earned-zero
 sensor transitions. FFE1 stays read-only: handshake and polling lists remain empty.
 Smart-branch and synthetic-battery source observations still require implementation.
+
+## Begode smart branches: partial summaries are explicit
+
+Further checkpoint: accepted 0x01 replies now emit per-branch charge-positive
+current; boot-shaped section replies mark it unavailable rather than earning
+their placeholder zero. A genuine zero with live section evidence remains known.
+Cell pages 0x02/0x03 preserve branch identity and physical `page * 8 + offset`
+positions, including pages arriving before telemetry or out of order.
+
+Configured/proven cell topology removes slots outside the real pack. Within a
+nonzero page, declared cell zero and raw reported values survive dashboard
+filtering. Without topology, nonzero words establish reported positions; zeros
+are ambiguous padding. Previously observed positions become unavailable when
+those slots turn zero; unseen zero padding creates no series. All-zero pages
+are ambiguous boot/fault data and invalidate known positions rather than minting
+eight confident zero measurements. Reset clears this history independently per branch.
+
+Ruling: this prototype does not use the merged branch's cached cell sum as a fresh
+voltage, nominal 0x01 voltage as a calibrated value, or one assembly's two sensors
+as a whole-branch maximum. Voltage/power/whole-branch temperature remain partial;
+SOC remains unavailable because the frame has no gauge. Complete extrema are
+earned only when one non-boot page contains the whole configured/proven pack.
+Multi-page summaries need receipt/acquisition qualification. Cost: these aggregate
+and derived values remain activation gates; assembly sensor/voltage facts still
+need an attributed scope before they can be captured fully. No live decoder field,
+cell filter, source cadence or BLE command changed in this checkpoint.
+
+The ET Max fixture tests 76 battery observations (38 telemetry, 38 pages), both
+branches, initial boot-current absence, later current availability, physical
+indices 0..39 and recorded cell values, alongside the 114 controller observations.
+This validates the stored stationary capture, not new phone/background acceptance.

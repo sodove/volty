@@ -101,9 +101,11 @@ class BegodeTelemetryObservationTest {
         assertTrue(events.single().readings.none { it.metric == TelemetryMetric.ESC_TEMPERATURE || it.metric == TelemetryMetric.MOTOR_CURRENT })
     }
 
-    @Test fun realStationaryCaptureProducesOnlyControllerGroupsAndKeepsBegodeReadOnly() {
+    @Test fun realStationaryCaptureRetainsControllerGroupsAndKeepsBegodeReadOnly() {
         val protocol = BegodeProtocol(); val events = capture(protocol)
         BegodeDumpFixture.chunks().forEach { protocol.onNotification(it) }
+        assertTrue(events.any { it.origin == TelemetryOrigin.BATTERY })
+        events.removeAll { it.origin != TelemetryOrigin.CONTROLLER }
         assertEquals(114, events.size)
         assertTrue(events.all { it.origin == TelemetryOrigin.CONTROLLER && it.readings.none { reading -> reading.metric == TelemetryMetric.ERPM } })
         assertEquals(38, events.count { event -> event.readings.any { it.metric == TelemetryMetric.SPEED } })
