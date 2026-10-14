@@ -392,3 +392,45 @@ Fresh final h121: 3736 tests/382 XML reports, all newer than UTC start, no failu
 errors/skips, 113 seconds/all 36 tasks executed. h118 failed two of 19 selected tests
 before clock-loss implementation; h120 failed the ordinal-boundary regression before
 context refresh. No activation or phone/UI acceptance is inferred from these tests.
+
+## JK native status observations
+
+JK now emits optional frame-local battery observations from each complete status
+reply, including coalesced replies. Cell indices retain their physical positions;
+active measured zero and high voltages survive the legacy UI's filtering. Settings
+use the full u32 cell-count declaration for history. An enabled-cell mask with
+missing positions cannot certify whole-pack cell extrema. Neither the constructor's
+24-cell default nor a shortened settings word is a physical declaration.
+
+Device-info metadata qualifies the 24S/32S scalar offsets. Before that declaration,
+only positive voltage words in the shared 24-word prefix are usable; scalar values
+and whole-pack summaries remain partial. Metadata changes invalidate summaries
+without restamping cached numbers. Retraction: the first implementation invalidated
+only summaries on a layout downgrade; it now also invalidates tracked positions
+24–31 immediately, even when no subsequent status arrives. This means unobservable,
+not physical removal. Metadata and seen-state update even without an observer.
+
+Temperature observations respect absence bits, -2000 sentinels and invalid active
+sensors. A corrupt active sensor leaves the maximum partial. On 32S, MOS temperature
+is at 144; 166 is a fault word. The legacy live decoder, commands and polling are
+unchanged; this optional recording path does not silently alter the dashboard.
+
+Field references read: [batmon-ha jikong.py at 76317567](https://github.com/fl4p/batmon-ha/blob/76317567a51fcfbf9df9e65315fcb2d5af125237/bmslib/models/jikong.py),
+[ESPHome JK decoder at 25822a8](https://github.com/syssi/esphome-jk-bms/blob/25822a8f9ab784fa89ccdd1f3002f8e4a2e06916/components/jk_bms_ble/jk_bms_ble.cpp).
+Only field facts were used; no source/assets imported from these projects.
+
+## Gateway audit boundary (implementation pending)
+
+The local VESC firmware's commands.c emits controller identity after the mandatory
+SETUP body (payload offset 56), and after GET_VALUES' optional position field
+(payload offset 58). The existing live decoders ignore those trailers. Serial
+request attribution alone cannot certify a CAN controller after a very late reply;
+history must require matching identity for forwarded replies, or emit uncertainty.
+SETUP currents remain CAN sums, not per-controller measured currents.
+
+The rider's nyxdash bms.c serializes cached m_values for opcode 96, including cached
+cell/sensor arrays, but no per-field acquisition time or age. Receiving that reply
+cannot independently refresh all physical pack facts. Its ANT current projection
+also carries an explicitly documented field-tested sign policy; do not generalize
+that one gateway's convention to arbitrary stock VESC BMS producers. Gateway
+observers, role policy and calibrated joins remain open; no new polling is proposed.
