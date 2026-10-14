@@ -8,6 +8,13 @@ import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 class HistoryMetricRegistryTest {
+    @Test fun auxiliaryAndVirtualSourcesOnlyOfferTheirQualifiedMetricFamilies() {
+        assertEquals(setOf("voltage_v", "battery_temperature_c"),
+            HistoryMetricRegistry.forSource(HistorySourceKind.BATTERY_ASSEMBLY).map { it.id }.toSet())
+        assertEquals(setOf("voltage_v", "current_a", "power_w", "soc_percent"),
+            HistoryMetricRegistry.forSource(HistorySourceKind.DERIVED_BATTERY).map { it.id }.toSet())
+        assertFalse(HistoryMetricRegistry.forSource(HistorySourceKind.DERIVED_BATTERY).any { it.indexedByCell })
+    }
     @Test fun incoherentUnknownsAndNonfiniteValuesNeverBecomeZero() {
         assertNull(historyValue(4200.0, false))
         assertNull(historyValue(Double.NaN, true))

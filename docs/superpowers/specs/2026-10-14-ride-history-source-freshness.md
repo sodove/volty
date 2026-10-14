@@ -487,3 +487,27 @@ durable schema or runtime activation changes in this checkpoint.
 h131: four new regressions failed among 80 selected tests before admission fences.
 h132: full fresh 3754 tests/384 reports, zero failures/errors/skips, 101 seconds/all
 36 tasks executed. Narrow readonly review found no concrete defect in this scope.
+
+## Subsequent durable role qualification
+
+The admission fence now has explicit durable BATTERY_ASSEMBLY and DERIVED_BATTERY
+source kinds. Their names round-trip through the existing source registry TEXT
+column; no schema or SQL migration changes. An assembly offers voltage/temperature
+only. A virtual battery offers voltage/current/power/SOC only, retaining canonical
+signs; it cannot offer physical cells or battery-temperature sensors. Geometry/unit
+conversion of physical controller telemetry still remains a controller contributor.
+
+Both adapter and capture mapping require the kind corresponding to the complete
+role/address. Distinct role keys cannot reuse a source ID. The earlier temporary
+rejection of every non-contributor is superseded by this explicit kind and metric
+qualification; the rejection of roles masquerading as physical BATTERY remains.
+Unmapped-role receipt/loss behavior is unchanged. Producer freshness/calibration,
+source-plan activation and hierarchy metadata remain separate work; labels are
+snapshots, not evidence from which to infer a parent or assembly index.
+
+h133: 53 selected tests, three new positive-admission/registry regressions failed
+before implementation; forbidden-metric and real SQLite kind round-trip cases
+already passed. A real capture-to-writer test keeps physical, assembly and derived
+zero measurements in three source IDs. This checkpoint does not activate producers.
+
+Final h134 fresh verification: 3759 tests/384 XML, all newer than UTC start, zero failures/errors/skips, 100 seconds/all 36 tasks executed. Narrow readonly review found no concrete role/kind/metric-admission defect. No schema, producer activation or phone/UI acceptance is implied.

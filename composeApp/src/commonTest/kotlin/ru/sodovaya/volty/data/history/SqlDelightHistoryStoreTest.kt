@@ -26,6 +26,19 @@ class SqlDelightHistoryStoreTest {
     }
     @AfterTest fun closeDrivers() { drivers.forEach { it.close() } }
 
+    @Test fun auxiliaryAndVirtualSourceKindsSurviveDurableReadWithoutMergingWithPack() = runTest {
+        val (_, store) = fixture()
+        val sources = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Battery"),
+            HistorySource("section", HistorySourceKind.BATTERY_ASSEMBLY, "Section"),
+            HistorySource("virtual", HistorySourceKind.DERIVED_BATTERY, "Derived"))
+        store.begin(HistoryRide("ride", "bike", origin, null, HistoryRideStatus.RECORDING), sources)
+        val points = sources.map { HistorySample(tick(10), HistorySeriesKey(it.id, "voltage_v"), 0.0) }
+        store.append(HistoryBatch("ride", points, emptyList(), emptyList()))
+        store.finish("ride", tick(20), HistoryRideStatus.COMPLETED)
+        assertEquals(sources, store.sources("ride"))
+        for (point in points) assertEquals(listOf(point), store.samples("ride", point.key, range, null).items)
+    }
+
     @Test fun rideAndSourceRoundTripWithoutDependingOnCurrentVehicle() = runTest {
         val (_, store) = fixture()
         begin(store)

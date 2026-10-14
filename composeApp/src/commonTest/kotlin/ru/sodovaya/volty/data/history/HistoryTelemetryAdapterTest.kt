@@ -13,6 +13,34 @@ class HistoryTelemetryAdapterTest {
             assertFailsWith<IllegalArgumentException> { historyTelemetrySamples(source, tick, observation) }
         }
     }
+
+    @Test fun explicitAssemblyAndVirtualSourcesRetainCanonicalValuesWithoutPhysicalSensorClaims() {
+        val assembly = TelemetryObservation(TelemetryOrigin.BATTERY, 0,
+            listOf(TelemetryReading.measured(TelemetryMetric.BATTERY_TEMPERATURE, 0.0)), TelemetryRole.ASSEMBLY, 1)
+        val sectionSource = source.copy(id = "section-a", kind = HistorySourceKind.BATTERY_ASSEMBLY)
+        assertEquals(0.0, historyTelemetrySamples(sectionSource, tick, assembly).single().value)
+        val virtual = TelemetryObservation(TelemetryOrigin.BATTERY, 0,
+            listOf(TelemetryReading.measured(TelemetryMetric.POWER, -100.0)), TelemetryRole.DERIVED)
+        val virtualSource = source.copy(id = "virtual-a", kind = HistorySourceKind.DERIVED_BATTERY)
+        assertEquals(-100.0, historyTelemetrySamples(virtualSource, tick, virtual).single().value)
+        assertFailsWith<IllegalArgumentException> { historyTelemetrySamples(virtualSource, tick, assembly) }
+        assertFailsWith<IllegalArgumentException> { historyTelemetrySamples(sectionSource, tick, virtual) }
+    }
+
+    @Test fun assemblyCurrentAndVirtualSensorsCannotBeRecordedAsEarnedFacts() {
+        val assembly = TelemetryObservation(TelemetryOrigin.BATTERY, 0,
+            listOf(TelemetryReading.measured(TelemetryMetric.CURRENT, 42.0)), TelemetryRole.ASSEMBLY, 0)
+        assertFailsWith<IllegalArgumentException> {
+            historyTelemetrySamples(source.copy(kind = HistorySourceKind.BATTERY_ASSEMBLY), tick, assembly)
+        }
+        for (metric in listOf(TelemetryMetric.BATTERY_TEMPERATURE, TelemetryMetric.CELL_MIN, TelemetryMetric.CELL)) {
+            val virtual = TelemetryObservation(TelemetryOrigin.BATTERY, 0,
+                listOf(TelemetryReading.measured(metric, 42.0, cellIndex = if (metric.indexed) 0 else null)), TelemetryRole.DERIVED)
+            assertFailsWith<IllegalArgumentException> {
+                historyTelemetrySamples(source.copy(kind = HistorySourceKind.DERIVED_BATTERY), tick, virtual)
+            }
+        }
+    }
     private val tick = HistoryTick(10000, 100, 1)
     private val source = HistorySource("pack-a", HistorySourceKind.BATTERY, "A")
     private fun battery(vararg readings: TelemetryReading) = TelemetryObservation(TelemetryOrigin.BATTERY, 0, readings.toList())

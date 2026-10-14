@@ -24,7 +24,8 @@ class HistorySessionTelemetryCaptureTest {
             decodes++
             data.forEach { value -> observeTelemetry(TelemetryOrigin.BATTERY, 0, role,
                 if (role == TelemetryRole.ASSEMBLY) 0 else null) {
-                listOf(TelemetryReading.measured(TelemetryMetric.CURRENT, value.toDouble()))
+                listOf(TelemetryReading.measured(if (role == TelemetryRole.ASSEMBLY)
+                    TelemetryMetric.BATTERY_TEMPERATURE else TelemetryMetric.CURRENT, value.toDouble()))
             } }
         }
     }
@@ -56,6 +57,26 @@ class HistorySessionTelemetryCaptureTest {
             }
         }
         assertFailsWith<IllegalArgumentException> { key.copy(assemblyIndex = 0) }
+    }
+
+    @Test fun qualifiedRolesKeepDistinctSourceIdsAcrossReceiptAndWriterAdmission() = runTest {
+        val writer = Writer(); val c = controller(writer); val p = Emitter()
+        val assembly = source.copy(id = "section-a", kind = HistorySourceKind.BATTERY_ASSEMBLY)
+        val virtual = source.copy(id = "virtual-a", kind = HistorySourceKind.DERIVED_BATTERY)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source, assembly, virtual))
+        val bindings = mapOf(key to source,
+            key.copy(role = TelemetryRole.ASSEMBLY, assemblyIndex = 0) to assembly,
+            key.copy(role = TelemetryRole.DERIVED) to virtual)
+        val received = mutableListOf<CapturedHistoryTelemetry>()
+        val capture = historySessionTelemetryCapture(p, "attempt", c, { tick() }, { true }, bindings) { received += it }
+        for (role in TelemetryRole.entries) {
+            p.role = role; capture.processNotification(byteArrayOf(0))
+            assertEquals(HistoryOffer.ACCEPTED, received.last().offer(c) { true })
+        }
+        assertEquals(listOf("pack-a", "section-a", "virtual-a"), writer.samples.map { it.samples.single().key.sourceId })
+        assertEquals(listOf("current_a", "battery_temperature_c", "current_a"), writer.samples.map { it.samples.single().key.metricId })
+        assertTrue(writer.samples.all { it.samples.single().value == 0.0 })
+        assertEquals(3, p.decodes)
     }
 
     @Test fun unmappedRolesCannotBorrowContributorBindingsOrQualifyContributorClockLoss() = runTest {

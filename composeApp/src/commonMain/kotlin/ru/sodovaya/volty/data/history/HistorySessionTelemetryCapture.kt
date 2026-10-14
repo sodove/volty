@@ -36,8 +36,9 @@ internal data class CapturedHistoryTelemetry(
 
 /**
  * BLE-attempt lifetime, independent of recording start/stop. Only sources with
- * unambiguous origin/local-index identity may use this map; synthetic/assembly
- * roles need explicit attribution before they can be activated here.
+ * unambiguous full role/address identity may use this map. Auxiliary and derived
+ * sources require their distinct durable kinds and IDs; producer freshness and
+ * calibration remain separate obligations of the source plan.
  */
 internal fun historySessionTelemetryCapture(
     protocol: BmsProtocol,
@@ -51,14 +52,8 @@ internal fun historySessionTelemetryCapture(
     // A caller can rebuild or mutate its map later; one attempt keeps its own plan.
     val binding = sources.toMap()
     binding.forEach { (key, source) ->
-        require(key.role == TelemetryRole.CONTRIBUTOR) {
-            "Assembly and derived roles need explicit durable source qualification"
-        }
-        val kind = when (key.origin) {
-            TelemetryOrigin.BATTERY -> HistorySourceKind.BATTERY
-            TelemetryOrigin.CONTROLLER -> HistorySourceKind.CONTROLLER
-        }
-        require(source.kind == kind) { "A decoder source must name a physical contributor" }
+        val kind = historySourceKindForTelemetry(key.origin, key.role)
+        require(source.kind == kind) { "A decoder source must preserve its qualified role" }
     }
     require(binding.values.map { it.id }.distinct().size == binding.size)
     var captured: Pair<CapturedHistoryRecording?, HistoryTick?>? = null

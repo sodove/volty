@@ -11,15 +11,18 @@ object HistoryMetricRegistry {
     private val batterySources = setOf(HistorySourceKind.BATTERY, HistorySourceKind.VEHICLE_BATTERY)
     private val motionSources = setOf(HistorySourceKind.CONTROLLER, HistorySourceKind.VEHICLE_MOTION)
     private val individualBattery = setOf(HistorySourceKind.BATTERY)
+    private val virtualBattery = batterySources + HistorySourceKind.DERIVED_BATTERY
+    private val assemblyTemperature = batterySources + HistorySourceKind.BATTERY_ASSEMBLY
+    private val batteryVoltage = virtualBattery + HistorySourceKind.BATTERY_ASSEMBLY
 
     // Keys and canonical units are storage contracts, independent of translated UI labels.
     val descriptors: List<HistoryMetricDescriptor> = listOf(
-        HistoryMetricDescriptor("soc_percent", HistoryUnit.PERCENT, HistoryMetricGroup.BATTERY, batterySources),
-        HistoryMetricDescriptor("power_w", HistoryUnit.WATT, HistoryMetricGroup.BATTERY, batterySources,
+        HistoryMetricDescriptor("soc_percent", HistoryUnit.PERCENT, HistoryMetricGroup.BATTERY, virtualBattery),
+        HistoryMetricDescriptor("power_w", HistoryUnit.WATT, HistoryMetricGroup.BATTERY, virtualBattery,
             displayMultiplier = -1.0, consumptionMultiplier = -1.0),
-        HistoryMetricDescriptor("current_a", HistoryUnit.AMP, HistoryMetricGroup.BATTERY, batterySources, displayMultiplier = -1.0),
-        HistoryMetricDescriptor("voltage_v", HistoryUnit.VOLT, HistoryMetricGroup.BATTERY, batterySources),
-        HistoryMetricDescriptor("battery_temperature_c", HistoryUnit.CELSIUS, HistoryMetricGroup.BATTERY, batterySources),
+        HistoryMetricDescriptor("current_a", HistoryUnit.AMP, HistoryMetricGroup.BATTERY, virtualBattery, displayMultiplier = -1.0),
+        HistoryMetricDescriptor("voltage_v", HistoryUnit.VOLT, HistoryMetricGroup.BATTERY, batteryVoltage),
+        HistoryMetricDescriptor("battery_temperature_c", HistoryUnit.CELSIUS, HistoryMetricGroup.BATTERY, assemblyTemperature),
         HistoryMetricDescriptor("cell_min_v", HistoryUnit.VOLT, HistoryMetricGroup.CELL, batterySources),
         HistoryMetricDescriptor("cell_max_v", HistoryUnit.VOLT, HistoryMetricGroup.CELL, batterySources),
         HistoryMetricDescriptor("cell_delta_mv", HistoryUnit.MILLIVOLT, HistoryMetricGroup.CELL, batterySources),
