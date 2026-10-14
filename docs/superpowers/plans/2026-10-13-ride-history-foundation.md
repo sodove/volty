@@ -383,6 +383,16 @@ These decoder milestones do not activate recording. Remaining protocols, accepte
 source/session binding, derived/aggregate scope, GPS, foreground ownership, DI and
 legacy recorder retirement keep Task7 open.
 
+Latest Task7 decoder checkpoint (2026-10-14): Daly now separates UART numeric
+groups, verifies history header/declarations, preserves physical cell positions,
+and fixes the live/domain current polarity. Multi-fragment extrema need poll-round
+provenance; the unchanged polling still does not request the 0x94 declaration.
+Begode controller observations separate live/odometer/motion families and use the
+existing accepted-frame gates/calibration/latches. The real ET Max fixture covers
+114 controller observations. Smart branches, synthetic pack binding and a qualified
+cross-frame voltage/current product remain open. These are decoder milestones,
+not activation or new phone acceptance.
+
 ## Task8 — bounded read facade and repair historical graph admission
 
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;

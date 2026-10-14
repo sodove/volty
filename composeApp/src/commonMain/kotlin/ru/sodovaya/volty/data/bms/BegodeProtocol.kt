@@ -4,6 +4,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.SectionState
 import ru.sodovaya.volty.domain.model.SpeedSource
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
 import kotlin.math.abs
 
 /**
@@ -1262,6 +1263,7 @@ class BegodeProtocol(
             // synthetic pack below is built inside its own `liveVoltageRaw > 0`
             // test); this puts motion on equal footing. Spec D §7.1.
             rebuildMotion()
+            observeControllerFrame(0x00)
         }
         // While no smart-BMS frame has arrived, this frame IS the battery
         // telemetry: synthesise pack 0 from it so a wheel without a smart BMS
@@ -1359,6 +1361,7 @@ class BegodeProtocol(
         // [sessionTripKm].
         if (tripBaselineMeters == null) tripBaselineMeters = odometerMetersValue
         rebuildMotion()
+        observeControllerFrame(0x04)
     }
 
     /**
@@ -1422,6 +1425,12 @@ class BegodeProtocol(
         // pinned by a test.
         rebuildMotion()
         rebuildLiveData()
+        observeControllerFrame(0x07)
+    }
+
+    private fun observeControllerFrame(type: Int) {
+        val decoded = motion ?: return
+        observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedBegodeController(type, decoded) }
     }
 
     /**

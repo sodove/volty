@@ -18,7 +18,8 @@ No BLE command, polling cadence or Begode FFE1 write is added.
   defaults marked available. History qualification must use actual field coverage,
   not those defaults. ANT now emits qualified per-status observations; production
   consumer integration is still pending.
-- Begode, JK and the VESC gateway still need qualified observations. Plain VESC
+- Begode smart branches, JK and the VESC gateway still need qualified observations.
+  Begode controller observations now separate frame families. Plain VESC
   now emits local-field observations; SETUP aggregate attribution remains pending.
   Gateway overlays and derived contributors require explicit freshness evidence.
 
@@ -143,3 +144,33 @@ Polling remains unchanged, notably it still does not request the 0x94 declaratio
 Profile/declaration binding and multi-fragment aggregate provenance remain activation
 gates. The live dashboard's fragment accumulation/header filtering is not repaired
 by the observation path; the polarity correction is the live change in this checkpoint.
+
+## Begode controller frame families
+
+Read [WheelLog's GotwayAdapter](https://github.com/Wheellog/Wheellog.Android/blob/master/app/src/main/java/com/cooper/wheellog/utils/GotwayAdapter.java)
+on 2026-10-14 and the existing Volty decoder's checked field reports. No new wire
+decoder/scaling or commands are introduced: the observer projects only fields
+refreshed by an accepted frame, after the existing boot-placeholder gates.
+
+Live 0x00 publishes speed magnitude, phase motor current, ESC temperature and
+calibrated input voltage. Calibration requires the existing configured/proven
+series count; the 67.2V reference is not recorded as the actual rail when unknown.
+Odometer 0x04 publishes only odometer and session trip; 0x07 publishes only battery
+current, motor temperature and duty, preserving the decoder's evidence latches.
+No unsupported eRPM zero, cached temperature, cached speed or battery duplicate is
+minted. Controller-current sign remains discharge-positive, distinct from the pack
+domain. Multiple frames in a notification each publish their own fresh fields.
+
+Ruling: computed power remains partial in this prototype even when the merged
+motion object contains a nonzero product. Voltage and battery current belong to
+different frame families; phase current cannot substitute for battery current.
+The accepted source runtime must join qualified same-session receipts under an
+explicit age limit before certifying a product. Cost: power/energy recording for
+this controller remains an activation gate rather than silently using stale fields.
+
+The real ET Max stationary fixture exercises 114 controller observations (38 of
+each family), interleaved with smart-BMS/cell frames. It proves existing captured
+values and boundaries, not moving-wheel accuracy or phone/background behavior.
+Synthetic cases cover nonzero peaks, reset/boot gates and unknown-to-earned-zero
+sensor transitions. FFE1 stays read-only: handshake and polling lists remain empty.
+Smart-branch and synthetic-battery source observations still require implementation.
