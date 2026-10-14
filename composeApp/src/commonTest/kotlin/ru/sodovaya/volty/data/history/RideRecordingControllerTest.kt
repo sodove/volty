@@ -24,6 +24,44 @@ class RideRecordingControllerTest {
         }, { "ride-${++nextId}" }, { recoveries++; 2 })
     }
 
+    @Test fun capturedRecordingCannotBeReattributedToNewRide() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val old = assertNotNull(c.captureTelemetryRecording())
+        c.execute(RecordingInput.Stop(tick(2), 7, "ride-1"))
+        c.execute(RecordingInput.Start("bike", 7, tick(3)), sources)
+        val fresh = assertNotNull(c.captureTelemetryRecording())
+        val count = f.writer.offers.size
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(old, batch("ride-2", 4)))
+        assertEquals(count, f.writer.offers.size)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(fresh, batch("ride-2", 4)))
+    }
+
+    @Test fun reconnectOnSameConnectionNumberRetiresCapturedAdmissionSegment() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val old = assertNotNull(c.captureTelemetryRecording())
+        c.execute(RecordingInput.LinkLost(7, tick(2)))
+        assertNull(c.captureTelemetryRecording())
+        c.execute(RecordingInput.Connected("bike", 7, tick(3)), sources)
+        val fresh = assertNotNull(c.captureTelemetryRecording())
+        val count = f.writer.offers.size
+        assertEquals(old.rideId, fresh.rideId)
+        assertEquals(old.connectionGeneration, fresh.connectionGeneration)
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(old, batch(delta = 4)))
+        assertEquals(count, f.writer.offers.size)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(fresh, batch(delta = 4)))
+    }
+
+    @Test fun capturedRecordingFromAnotherControllerCannotUseMatchingRideAndGeneration() = runTest {
+        val a = Fixture(); val b = Fixture()
+        a.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        b.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val foreign = assertNotNull(a.controller.captureTelemetryRecording())
+        assertEquals(HistoryOffer.RETIRED, b.controller.offerTelemetry(foreign, batch()))
+        assertTrue(b.writer.offers.all { it.second.samples.isEmpty() })
+    }
+
     @Test fun reconnectKeepsRideButChangesBleAdmissionWithoutChangingWriterGeneration() = runTest {
         val f = Fixture(); val c = f.controller
         c.execute(RecordingInput.Connected("bike", 7, tick()), sources)

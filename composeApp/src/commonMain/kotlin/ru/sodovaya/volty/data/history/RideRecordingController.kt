@@ -12,6 +12,14 @@ import ru.sodovaya.volty.domain.history.*
 fun interface HistoryRecordingDemand { suspend fun setEnabled(enabled: Boolean) }
 data class HistoryRecordingRuntimeState(val intent: RecordingIntent = RecordingIntent(), val demandFailure: String? = null)
 
+/** Immutable capability for one controller admission segment, captured at native receipt. */
+internal class CapturedHistoryRecording internal constructor(
+    val rideId: String,
+    val connectionGeneration: Long,
+    internal val generation: Long,
+    internal val gate: HistoryAdmissionGate,
+)
+
 /** Recording lifetime is independent of screens, BLE reconnects and GPS availability. */
 class RideRecordingController(
     private val writer: HistoryWriter,
@@ -73,9 +81,28 @@ class RideRecordingController(
         }
     }
 
+    internal fun captureTelemetryRecording(): CapturedHistoryRecording? {
+        val owner = admission.value ?: return null
+        val ride = owner.intent.ride ?: return null
+        if (!owner.intent.linkConnected) return null
+        val connectionGeneration = owner.intent.connectionGeneration ?: return null
+        return CapturedHistoryRecording(ride.id, connectionGeneration, owner.generation, owner.gate)
+    }
+
+    internal fun offerTelemetry(context: CapturedHistoryRecording, batch: HistoryBatch): HistoryOffer {
+        val owner = admission.value ?: return HistoryOffer.RETIRED
+        if (context.gate !== owner.gate || context.generation != owner.generation ||
+            context.rideId != batch.rideId) return HistoryOffer.RETIRED
+        return offerTelemetry(owner, context.connectionGeneration, batch)
+    }
+
     /** Called from accepted decoded telemetry, never from a conflated UI snapshot. No IO or suspension. */
     fun offerTelemetry(connectionGeneration: Long, batch: HistoryBatch): HistoryOffer {
         val owner = admission.value ?: return HistoryOffer.RETIRED
+        return offerTelemetry(owner, connectionGeneration, batch)
+    }
+
+    private fun offerTelemetry(owner: Owner, connectionGeneration: Long, batch: HistoryBatch): HistoryOffer {
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (batch.rideId != ride.id || batch.gps.isNotEmpty() || batch.markers.isNotEmpty() || batch.buckets.isNotEmpty()) return HistoryOffer.RETIRED
         if (batch.samples.any { it.key.sourceId !in owner.sources ||

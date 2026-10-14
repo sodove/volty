@@ -266,3 +266,35 @@ and motion values cannot overwrite valid packets. Both failed before the consume
 check and again with an inert retirement method. Final fresh h104 full run:
 3713 tests across 380 XML reports, zero failures/errors/skips, all reports newer
 than the recorded UTC start; 105 seconds, all 36 Gradle tasks executed.
+
+
+## Captured recording admission and attributed receipt envelopes
+
+An internal CapturedHistoryRecording binds one immutable ride ID, writer generation,
+BLE generation and exact controller admission gate. The controller's context-aware
+offer reads its owner once, verifies this capability and reserves that same owner's
+gate. A stopped ride, a reconnect with an identical connection number, or another
+controller with identical string IDs cannot reattribute an old packet. The gate
+still fences concurrent controls; rejection occurs before writer offer.
+
+HistorySessionTelemetryCapture composes the native receipt boundary with this
+capability and an immutable copy of the attempt's physical contributor map. It
+captures recording admission before reading the receipt tick and before prefix/
+decode callbacks, then creates immutable source/tick/received-observation envelopes.
+The full clock generation comes from the injected receipt tick, never from a later
+ride. A single notification preserves every decoded observation/peak with shared
+arrival time. No recording or absent ownership mapping emits no historical envelope,
+while live decoding continues. Wrong-kind and aggregate maps fail at construction.
+
+Envelope offer additionally checks BLE attempt ownership and must run in the shared
+serialized consumer under its session lock. Source maps here only support unambiguous
+origin/local-index roles; synthetic and assembly roles must gain explicit attribution
+before activation. Raw queue wiring, overflow-to-loss diagnostics, native source
+factory and GPS/service/DI activation remain pending. Earlier text calling the
+recording snapshot wholly pending is superseded by this implemented helper; it does
+not mean the opt-in helpers are already wired into production Kable connections.
+
+Final fresh h108: 3721 tests/381 reports, no failures/errors/skips, every XML newer
+than recorded UTC start, 107 seconds, all 36 tasks executed. New controller guards
+failed three genuine RED tests; native envelope helper failed four tests before
+implementation. One no-recording test already passed with the inert emission stub.
