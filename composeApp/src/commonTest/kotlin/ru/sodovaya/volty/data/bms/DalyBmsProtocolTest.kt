@@ -154,12 +154,13 @@ class DalyBmsProtocolTest {
         assertNotNull(data)
         // 5000 / 10 = 500.0 V
         assertEquals(500.0f, data.voltage, 0.001f)
-        // (31230 - 30000) / 10 = 12.3 A
-        assertEquals(12.3f, data.current, 0.001f)
+        // Retraction: the old assertion copied the discharge-positive wire sign into a charge-positive domain.
+        // Raw 30123 is +12.3 A of discharge on the wire, hence -12.3 A in BmsData.
+        assertEquals(-12.3f, data.current, 0.001f)
         // 875 / 10 = 87.5 %
         assertEquals(87.5f, data.soc, 0.01f)
         // power = voltage * current
-        assertEquals(500.0f * 12.3f, data.power, 0.1f)
+        assertEquals(500.0f * -12.3f, data.power, 0.1f)
         assertTrue(data.isConnected)
     }
 

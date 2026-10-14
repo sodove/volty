@@ -12,7 +12,8 @@ No BLE command, polling cadence or Begode FFE1 write is added.
   separately, including multiple replies in one BLE notification.
 - Daly replies update different accumulator groups. Cell/temperature fragments
   immediately publish mixed-age snapshots; a fault reply can also restamp cached
-  scalar fields. Observer integration for Daly is pending.
+  scalar fields. Daly now emits separate numeric groups; multi-fragment summary
+  certification and production consumer integration remain pending.
 - ANT emits a whole status snapshot, but missing payload guards can leave scalar
   defaults marked available. History qualification must use actual field coverage,
   not those defaults. ANT now emits qualified per-status observations; production
@@ -109,3 +110,36 @@ intervening plain replies, and resets with the BLE decoder session. The old dash
 trip baseline is unchanged, including its previously possible plain-zero seeding.
 Malformed/unknown frames do not restamp cached fields; observer failures do not break
 motion or derived-battery updates. Polling, commands and opcode election are unchanged.
+
+## Daly: declared fragments and current polarity
+
+Read [`daly.py` at the pinned batmon-ha revision](https://github.com/fl4p/batmon-ha/blob/76317567a51fcfbf9df9e65315fcb2d5af125237/bmslib/models/daly.py)
+and [ESPHome's UART decoder](https://github.com/esphome/esphome/blob/dev/esphome/components/daly_bms/daly_bms.cpp)
+on 2026-10-14. Cell triplets and temperature groups have one-based fragment
+numbers; declared counts separate actual sensors from fixed-frame padding.
+
+Retraction: the old live decoder/test copied the discharge-positive UART current
+directly into the charge-positive BmsData domain. Raw current above 30000 means
+discharge. Live decoding and new observations now negate that wire convention;
+power follows it. Existing legacy rows are not rewritten: their stored values do
+not carry enough protocol provenance to infer a safe correction.
+Cross-checked against [dbus-serialbattery's Daly implementation](https://github.com/mr-manuel/venus-os_dbus-serialbattery/blob/master/dbus-serialbattery/bms/daly.py),
+which divides the offset-subtracted current by -10 for its battery convention.
+
+Only normal board-1 responses with eight payload bytes qualify for history.
+Basic replies emit their four fresh scalar metrics. Status/alarm replies emit
+none of the cached numeric groups. A separate reset-cleared declaration tracks
+cell/temperature counts even without an attached observer. Count changes invalidate
+summaries and retire excess cell series; duplicate declarations do not restamp data.
+Known cell count preserves physical fragment indices and raw zero/over-dashboard-range
+values, excluding padding. Unknown count cannot prove physical presence. A declared
+raw temperature zero is -40C; it is not discarded as padding.
+
+Ruling: do not certify multi-fragment pack extrema/max-temperature from fragment
+numbers alone. They identify positions, not a unique poll round; delayed parts could
+combine old and new values. Individual cell facts remain fresh, while those summaries
+are partial. A whole declared cell/temperature group fitting one reply can qualify.
+Polling remains unchanged, notably it still does not request the 0x94 declaration.
+Profile/declaration binding and multi-fragment aggregate provenance remain activation
+gates. The live dashboard's fragment accumulation/header filtering is not repaired
+by the observation path; the polarity correction is the live change in this checkpoint.

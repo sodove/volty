@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryReading
 
 /**
  * Daly BMS protocol.
@@ -56,6 +59,9 @@ class DalyBmsProtocol : BmsProtocol() {
     private var temperatures: MutableList<Float> = mutableListOf()
     private var faults: List<String> = emptyList()
     private var hasBasicData = false
+    // Independent from the dashboard accumulators, whose numeric fields survive reset.
+    private var observedDeclaredCells: Int? = null
+    private var observedDeclaredTemperatures: Int? = null
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
@@ -86,6 +92,8 @@ class DalyBmsProtocol : BmsProtocol() {
         cellVoltages.clear()
         temperatures.clear()
         faults = emptyList()
+        observedDeclaredCells = null
+        observedDeclaredTemperatures = null
     }
 
     // --- Protocol implementation ---
@@ -207,7 +215,9 @@ class DalyBmsProtocol : BmsProtocol() {
                 voltage = frame.u16BE(d) / 10f
                 // Current: u16 BE at d+4, (value - 30000) / 10
                 val rawCurrent = frame.u16BE(d + 4)
-                current = (rawCurrent - 30000) / 10f
+                // Retraction: the prior decoder copied the discharge-positive wire sign into BmsData.
+                // Daly's raw >30000 means discharge; our canonical domain sign is positive for charge.
+                current = (30000 - rawCurrent) / 10f
                 // SOC: u16 BE at d+6, / 10
                 soc = frame.u16BE(d + 6) / 10f
                 hasBasicData = true
@@ -255,6 +265,37 @@ class DalyBmsProtocol : BmsProtocol() {
                 }
                 mergeAndUpdate()
             }
+        }
+        observeResponse(cmd, frame)
+    }
+
+    private fun observeResponse(command: Int, frame: ByteArray) {
+        // This protocol manages one BLE pack (board 1); outbound echoes and other-board frames are not its source.
+        // Keep the historic live parser separate, but do not certify malformed length/address as measurement evidence.
+        if (frame.u8(1) != 1 || frame.u8(3) != 8) return
+        when (command) {
+            0x90 -> observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+                listOf(
+                    TelemetryReading.measured(TelemetryMetric.VOLTAGE, voltage.toDouble()),
+                    TelemetryReading.measured(TelemetryMetric.CURRENT, current.toDouble()),
+                    TelemetryReading.measured(TelemetryMetric.POWER, (voltage * current).toDouble()),
+                    TelemetryReading.measured(TelemetryMetric.SOC, soc.toDouble()),
+                )
+            }
+            0x94 -> {
+                val previousCells = observedDeclaredCells
+                val previousTemperatures = observedDeclaredTemperatures
+                val cells = frame.u8(4)
+                val temperatures = frame.u8(5)
+                observedDeclaredCells = cells
+                observedDeclaredTemperatures = temperatures
+                if (previousCells != cells || previousTemperatures != temperatures) observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+                    observedDalyLayout(previousCells, cells, previousTemperatures, temperatures)
+                }
+            }
+            0x95 -> observeTelemetry(TelemetryOrigin.BATTERY, 0) { observedDalyCells(frame, observedDeclaredCells) }
+            0x96 -> observeTelemetry(TelemetryOrigin.BATTERY, 0) { listOf(observedDalyTemperature(frame, observedDeclaredTemperatures)) }
+            // Status and BLE alarm frames contain none of the history's numeric metric groups.
         }
     }
 
