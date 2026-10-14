@@ -9,10 +9,52 @@ import kotlinx.coroutines.test.runCurrent
 import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.data.bms.JbdBmsProtocol
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryRecordingWriterIntegrationTest {
+    @Test fun coalescedJbdFramesKeepEarnedPeakWithoutInventingMeasurementIntervals() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        VoltyDatabase.Schema.create(driver)
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), dispatcher)
+        val writer = BufferedHistoryWriter(store, dispatcher, emptyFlow(), projectRecording = true)
+        val controller = RideRecordingController(writer, HistoryRecordingDemand {}, { "ride" }, { store.recoverInterrupted() })
+        val source = HistorySource("pack", HistorySourceKind.BATTERY, "A")
+        val origin = HistoryTick(10000, 100, 1)
+        val receipt = HistoryTick(10001, 101, 1)
+        fun frame(current: Int): ByteArray {
+            val data = ByteArray(23)
+            data[0] = (5000 shr 8).toByte(); data[1] = 5000.toByte()
+            data[2] = (current shr 8).toByte(); data[3] = current.toByte(); data[19] = 80
+            val body = byteArrayOf(0, data.size.toByte()) + data
+            val checksum = (0x10000 - body.sumOf { it.toInt() and 255 }) and 65535
+            return byteArrayOf(0xdd.toByte(), 3) + body + byteArrayOf((checksum shr 8).toByte(), checksum.toByte(), 0x77)
+        }
+        try {
+            controller.execute(RecordingInput.Connected("bike", 7, origin), listOf(source))
+            val protocol = JbdBmsProtocol()
+            var accepted = 0
+            protocol.telemetryObserver = { observation ->
+                val points = historyTelemetrySamples(source, receipt, observation)
+                if (controller.offerTelemetry(7, HistoryBatch("ride", points, emptyList(), emptyList())) == HistoryOffer.ACCEPTED) accepted++
+            }
+            protocol.onNotification(frame(-400) + frame(-200) + frame(-200))
+            assertEquals(3, accepted)
+            controller.execute(RecordingInput.Stop(HistoryTick(10010, 110, 1), 7, "ride"))
+            val key = HistorySeriesKey("pack", "power_w")
+            val range = HistoryRange(10000, 10020)
+            val summary = store.stats("ride", key, range)
+            assertEquals(-200.0, summary.minimum)
+            assertEquals(-100.0, summary.maximum)
+            assertNull(summary.energyWh, "One receipt time cannot prove intervals between coalesced frames")
+            assertEquals(3, store.buckets("ride", key, range, null).items.single().sampleCount)
+            assertEquals(listOf(-200.0, -100.0), store.samples("ride", key, range, null).items.map { it.value })
+            assertEquals(0, protocol.telemetryObserverFailures)
+        } finally { writer.close(); driver.close() }
+    }
+
     @Test fun controllerRetainsOneRideAcrossReconnectAndGpsGapThenDurablyStopsAtLastFact() = runTest {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         VoltyDatabase.Schema.create(driver)

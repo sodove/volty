@@ -1,6 +1,9 @@
 package ru.sodovaya.volty.data.bms
 
 import ru.sodovaya.volty.domain.model.BmsData
+import ru.sodovaya.volty.domain.model.TelemetryMetric
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryReading
 
 /**
  * JBD / Xiaoxiang BMS protocol.
@@ -46,6 +49,7 @@ class JbdBmsProtocol : BmsProtocol() {
     private var cellVoltages: List<Float> = emptyList()
     private var hasMainData = false
     private var hasCellData = false
+    private var observedCellCount = 0
 
     override fun handshakeCommands(): List<ByteArray> = emptyList()
 
@@ -68,6 +72,7 @@ class JbdBmsProtocol : BmsProtocol() {
         lastData = null
         hasMainData = false
         hasCellData = false
+        observedCellCount = 0
     }
 
     // --- Protocol implementation ---
@@ -149,6 +154,13 @@ class JbdBmsProtocol : BmsProtocol() {
         if (frame.size < 7) return
         val dataLen = frame[3].toInt() and 0xFF
         if (frame.size < 4 + dataLen + 3) return // Incomplete
+        if (frame[2].toInt() != 0) {
+            // A failed response is absence, not a new numeric snapshot. See the pinned source audit.
+            if (cmd == 0x03 || cmd == 0x04) observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+                observedJbdFailure(cmd, observedCellCount)
+            }
+            return
+        }
 
         when (cmd) {
             0x03 -> parseMainData(frame)
@@ -206,12 +218,23 @@ class JbdBmsProtocol : BmsProtocol() {
 
         hasMainData = true
         mergeAndUpdate()
+        observeTelemetry(TelemetryOrigin.BATTERY, 0) {
+            listOf(
+                TelemetryReading.measured(TelemetryMetric.VOLTAGE, mainVoltage.toDouble()),
+                TelemetryReading.measured(TelemetryMetric.CURRENT, mainCurrent.toDouble()),
+                TelemetryReading.measured(TelemetryMetric.POWER, (mainVoltage * mainCurrent).toDouble()),
+                TelemetryReading.measured(TelemetryMetric.SOC, mainSoc.toDouble()),
+                observedJbdTemperature(frame),
+            )
+        }
     }
 
     private fun parseCellVoltages(frame: ByteArray) {
         if (frame.size < 6) return
         val dataLen = frame[3].toInt() and 0xFF
         val numCells = dataLen / 2
+        val previousCellCount = observedCellCount
+        observedCellCount = numCells
         val cells = mutableListOf<Float>()
         for (i in 0 until numCells) {
             val off = 4 + i * 2
@@ -224,6 +247,7 @@ class JbdBmsProtocol : BmsProtocol() {
         cellVoltages = cells
         hasCellData = true
         mergeAndUpdate()
+        observeTelemetry(TelemetryOrigin.BATTERY, 0) { observedJbdCells(frame, previousCellCount) }
     }
 
     private fun mergeAndUpdate() {

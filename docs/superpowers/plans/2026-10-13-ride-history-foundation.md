@@ -363,6 +363,16 @@ while BLE is absent. Request-demand errors leave telemetry ownership intact.
 Real SQLite integration checks reconnect, GPS participation and durable stop.
 Native GPS observer/service ownership, contributor field freshness/source capture,
 production DI activation and retirement of the old recorder are still pending.
+Task7 source-observation checkpoint (2026-10-14): canonical typed observations and
+an attributed contributor adapter are implemented. JBD emits every decoded frame
+with only its fresh field group; shared receipt time preserves peaks/counts without
+inventing intervals. Raw cell indices/values, typed errors, sensor payload boundaries
+and disappearing indices are tested through the real writer/store. Optional decoder
+observer failures are counted and contained. JBD error-status replies preserve the
+old live snapshot and emit unavailable fields. The observer remains unbound in
+production; other protocol observers and the owned-session BLE funnel remain open.
+Qualification and the zero-cell retraction are recorded in
+`docs/superpowers/specs/2026-10-14-ride-history-source-freshness.md`.
 ## Task8 — bounded read facade and repair historical graph admission
 
 **Files:** Create `domain/history/HistoryReadRepository.kt`, `data/history/DefaultHistoryReadRepository.kt`;
