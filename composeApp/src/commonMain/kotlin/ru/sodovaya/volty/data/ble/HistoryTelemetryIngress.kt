@@ -1,5 +1,6 @@
 package ru.sodovaya.volty.data.ble
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.SendChannel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -21,6 +22,7 @@ internal class HistoryTelemetryIngress(
     private val controller: RideRecordingController,
     private val readTick: () -> HistoryTick,
     private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource> = ::nativeHistorySourcesForLink,
+    private val prepareRecording: (suspend (LinkSpec, Vehicle?, List<HistorySource>) -> Unit)? = null,
 ) {
     private val mutableDiagnostics = MutableStateFlow(HistoryTelemetryIngressDiagnostics())
     val diagnostics: StateFlow<HistoryTelemetryIngressDiagnostics> = mutableDiagnostics
@@ -30,8 +32,18 @@ internal class HistoryTelemetryIngress(
         // Capture before the planner: control may replace this ride while setup runs.
         val recording = controller.captureTelemetryRecording()
         return try {
+            val binding = sources(spec, vehicle).toMap()
+            val preparation = prepareRecording?.let { start -> suspend {
+                try { start(spec, vehicle, binding.values.toList()) }
+                catch (cancel: CancellationException) { throw cancel }
+                catch (error: Exception) {
+                    mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
+                        lastFailure = HistoryTelemetryIngressFailure.SETUP) }
+                    throw error
+                }
+            } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, ownership::isCurrent,
-                sources(spec, vehicle)) { telemetry ->
+                binding, preparation) { telemetry ->
                 val sent = channel.trySend(HistoryTelemetrySample(telemetry, controller, ownership))
                 if (sent.isFailure) {
                     // A counter alone cannot qualify a completed ride as partial.

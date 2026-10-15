@@ -42,13 +42,17 @@ class HistoryRecordingWriterIntegrationTest {
         var clockReads = 0
         val offered = mutableListOf<CapturedHistoryTelemetry>()
         try {
-            controller.execute(RecordingInput.Connected("bike", 7, origin), listOf(physical, virtual))
             val protocol = VescProtocol(deriveBattery = true)
             val capture = historySessionTelemetryCapture(protocol, "attempt", controller,
-                { clockReads++; receipt }, { true }, plan) { event ->
+                { clockReads++; receipt }, { true }, plan, prepareRecording = {
+                    controller.execute(RecordingInput.Connected("bike", 7, origin), listOf(physical, virtual))
+                }) { event ->
                 offered += event
                 assertEquals(HistoryOffer.ACCEPTED, event.offer(controller) { true })
             }
+            assertNull(controller.captureTelemetryRecording())
+            assertTrue(capture.prepareForObservation())
+            assertNotNull(controller.captureTelemetryRecording())
             fun frame(current: Int) = VescPacket.frame(VescTestFrames.valuesPayload(currentInRaw = current, vInRaw = 500))
             capture.processNotification(frame(1000) + frame(4000) + frame(1000))
             assertEquals(1, clockReads)

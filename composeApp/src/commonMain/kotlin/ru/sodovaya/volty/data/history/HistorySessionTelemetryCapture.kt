@@ -48,6 +48,18 @@ internal fun historySessionTelemetryCapture(
     ownsSession: () -> Boolean,
     sources: Map<HistoryTelemetrySource, HistorySource>,
     onTelemetry: (CapturedHistoryTelemetry) -> Unit,
+): SessionTelemetryCapture = historySessionTelemetryCapture(protocol, sessionId, controller, readTick,
+    ownsSession, sources, null, onTelemetry)
+
+internal fun historySessionTelemetryCapture(
+    protocol: BmsProtocol,
+    sessionId: String,
+    controller: RideRecordingController,
+    readTick: () -> HistoryTick,
+    ownsSession: () -> Boolean,
+    sources: Map<HistoryTelemetrySource, HistorySource>,
+    prepareRecording: (suspend () -> Unit)?,
+    onTelemetry: (CapturedHistoryTelemetry) -> Unit,
 ): SessionTelemetryCapture {
     // A caller can rebuild or mutate its map later; one attempt keeps its own plan.
     val binding = sources.toMap()
@@ -79,5 +91,5 @@ internal fun historySessionTelemetryCapture(
         val recording = captured?.first
         val source = binding[observation.historySourceKey()]
         if (recording != null && source != null) controller.reportTelemetryReceiptLoss(recording, source.id)
-    })
+    }, onPrepare = prepareRecording)
 }

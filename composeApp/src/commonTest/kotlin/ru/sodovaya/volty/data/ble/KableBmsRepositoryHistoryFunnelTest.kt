@@ -3,7 +3,9 @@ package ru.sodovaya.volty.data.ble
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import ru.sodovaya.volty.data.bms.*
 import ru.sodovaya.volty.data.history.*
@@ -34,7 +36,7 @@ class KableBmsRepositoryHistoryFunnelTest {
             } }
         }
     }
-    private class Writer : HistoryWriter {
+    private open class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val samples = mutableListOf<HistoryBatch>()
         val statuses = mutableListOf<HistoryRideStatus>()
@@ -53,6 +55,54 @@ class KableBmsRepositoryHistoryFunnelTest {
     private fun controller(writer: Writer): RideRecordingController {
         var n = 0
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
+    }
+
+    @Test fun preparationAdmitsFirstNativeFactOnlyAfterWriterBeginAck() = kotlinx.coroutines.test.runTest {
+        val entered = kotlinx.coroutines.CompletableDeferred<Unit>(); val ack = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val writer = object : Writer() {
+            override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) {
+                entered.complete(Unit); ack.await()
+            }
+        }
+        val c = controller(writer); val v = vehicle(); val spec = LinkSpec(v.packs.single().bmsAddress, ProtocolKind.JK, listOf(OwnedSource(0)))
+        val binding = mutableMapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { _, _ -> binding }, prepareRecording = { receivedSpec, receivedVehicle, sources ->
+            assertSame(spec, receivedSpec); assertSame(v, receivedVehicle); assertEquals(listOf(source), sources)
+            c.execute(RecordingInput.Connected(v.id, 7, tick()), sources)
+        })
+        val channel = Channel<Sample>(4)
+        val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, v, SampleSessionOwnership { true }, channel))
+        binding.clear()
+        val pending = backgroundScope.async { capture.prepareForObservation() }
+        try {
+            runCurrent(); assertTrue(entered.isCompleted)
+            assertNull(c.captureTelemetryRecording()); assertFalse(pending.isCompleted)
+            ack.complete(Unit); runCurrent(); assertTrue(pending.await())
+            capture.processNotification(byteArrayOf(17))
+            val sample = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+            assertEquals(HistoryOffer.ACCEPTED, sample.telemetry.offer(c) { true })
+            assertEquals(17.0, writer.samples.single().samples.single().value)
+            assertEquals(1L, sample.telemetry.received.receipt.notificationOrdinal)
+        } finally { ack.complete(Unit); capture.close(); channel.close(); runCurrent() }
+    }
+
+    @Test fun preparationFailureQualifiesActualLostFactsWithoutBreakingLiveDecode() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); val p = Emitter()
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val ingress = HistoryTelemetryIngress(c, { tick(1) }, { _, _ ->
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        }, prepareRecording = { _, _, _ -> error("Preparation failed") })
+        val channel = Channel<Sample>(4)
+        try {
+            val capture = assertNotNull(ingress.capture(p, "attempt", LinkSpec("address", ProtocolKind.JK), vehicle(), SampleSessionOwnership { true }, channel))
+            assertFalse(capture.prepareForObservation()); capture.processNotification(byteArrayOf(6))
+            assertEquals(1L, ingress.diagnostics.value.setupFailures)
+            assertEquals(HistoryTelemetryIngressFailure.SETUP, ingress.diagnostics.value.lastFailure)
+            assertEquals(1, p.decodes); assertTrue(channel.tryReceive().isFailure); assertTrue(writer.samples.isEmpty())
+            assertNotNull(c.telemetryFailure.value)
+            c.execute(RecordingInput.Stop(tick(2), 7, "ride-1"))
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
+        } finally { channel.close() }
     }
 
     @Test fun defaultNativePlanFeedsTheExistingOwnedFunnel() = kotlinx.coroutines.test.runTest {

@@ -1024,3 +1024,44 @@ motor/cell-count changes, explicit virtual rails and unsupported/malformed plans
 No native command, polling or BLE write behavior changed. Whole-vehicle startup
 readiness, alias/gateway acquisition/admission, calibrated aggregates, native
 location/service ownership and final DI/legacy retirement remain open.
+
+
+### Native observation preparation (2026-10-16)
+
+Optional recording preparation is now represented on the attempt-owned capture.
+ConnectionSession awaits it after physical connect/transport configuration and
+before launching notification observation or handshake. Preparation is once per
+attempt, serialized by a mutex; an acknowledged callback can establish the
+recording owner before its first receipt. Existing externally prepared callers
+remain ready by default. The ingress supplies the immutable attempted source
+plan to the callback. Whole-vehicle source merging/lifecycle remains the caller's
+responsibility and is not activated in DI here.
+
+A failed preparation disables recorded delivery for that attempt but leaves
+ordinary protocol decode available. Readiness is frozen at notification entry;
+receipt context is still refreshed so actual unrecorded observations use the
+existing exact-owner/source loss qualification rather than replaying stale
+context. Preparation failures and unprepared notifications have separate bounded
+counters; ingress setup diagnostics count ordinary preparation failures without
+raw exception text. Actual missing facts mark an active ride incomplete. Inactive
+recording intent is not itself a loss or an automatic start trigger.
+
+Concurrent preparation callers share one ACK. Retirement/close while waiting
+cannot publish readiness. Cancellation after a callback that ignores cancellation
+must still propagate. Tests use actual deferred writer.begin ACK, issued native
+envelopes and accepted sample values, not elapsed waiting alone. Every test gate
+is unconditionally released in finally. This does not claim physical BLE/CCCD,
+background service or phone acceptance: whole-vehicle lifecycle, bounded startup
+policy, native clock/service/location binding and final activation remain open.
+
+The real generated-plan VESC/SQLite fixture also establishes its owner through
+preparation, proving that the first six coalesced facts enter the acknowledged
+ride without an earlier manual begin. A self-cancelled READY waiter regression
+reproduced success publication without suspension; explicit cancellation checks
+now fence the ready fast path without poisoning healthy shared readiness.
+
+Retraction: ConnectionSession.connect previously claimed to await notification
+subscription. Source inspection shows it launches observeJob and returns while
+CCCD/handshake continue asynchronously. Its comment now records that correction.
+The new preparation seam is before that launch; it does not turn connection
+success into proof that a live notification/decode arrived.

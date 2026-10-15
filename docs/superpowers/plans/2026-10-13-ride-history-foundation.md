@@ -559,3 +559,15 @@ Gateway/alias/unqualified shapes require their own reviewed plan and are rejecte
 by this default, rather than pretending coverage. No runtime recorder activation
 or wire/cadence change. Whole-vehicle startup/readiness, gateway/alias admission,
 aggregates and native location/service/DI/legacy retirement still keep Task7 open.
+
+
+Task7 preparation checkpoint (2026-10-16): optional ingress preparation receives
+its immutable source plan, and ConnectionSession awaits it after physical connect
+before observation/handshake launch. Attempt readiness is once-only and fenced
+against close, retirement and cancellation. Ordinary failure preserves live decode
+and routes actual lost facts through receipt-loss qualification. Existing callers
+without a preparation hook retain prior behavior. This is the startup seam only:
+whole-vehicle lifecycle/registry coordination, bounded startup policy, native
+clock/location/service binding, aliases/gateway/aggregates and final DI/legacy
+retirement still keep Task7 and product activation open. Real CCCD/phone behavior
+must be verified natively; common tests do not claim that acceptance.

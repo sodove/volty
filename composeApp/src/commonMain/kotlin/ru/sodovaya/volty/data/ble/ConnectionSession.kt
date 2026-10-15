@@ -162,9 +162,11 @@ internal class ConnectionSession(
      * Attempt to bring the peripheral up. Throws on hard failure; the repo
      * decides whether to retry.
      *
-     * Returns once the link is established AND notifications are subscribed.
-     * Polling, state-watch and the watchdog continue running in the
-     * background under [parentScope].
+     * Returns after physical transport setup and optional recording preparation.
+     * Retraction: an earlier revision claimed this awaited notification
+     * subscription. It launches observeJob; CCCD subscription and the handshake
+     * run asynchronously under [parentScope], as do polling/state/watchdog jobs.
+     * Success alone is not evidence that a notification or decode has arrived.
      */
     suspend fun connect(): Result<Unit> = try {
         doConnect()
@@ -211,6 +213,13 @@ internal class ConnectionSession(
         // Published for [scanCanBus]; every write below still uses the local,
         // so the poll path is byte-for-byte what it was.
         this.writeChar = writeChar
+
+        // The physical link is confirmed, but no notifications/handshake can race
+        // the recorder's begin ACK. Ordinary recorder failure leaves live decode
+        // available; the capture reports any actual unrecorded observations.
+        if (torn) return Result.failure(IllegalStateException("Session retired before observation"))
+        telemetryCapture?.prepareForObservation()
+        if (torn) return Result.failure(IllegalStateException("Session retired during recording preparation"))
 
         observeJob = parentScope.launch {
             try {

@@ -1,5 +1,10 @@
 package ru.sodovaya.volty.data.ble
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import ru.sodovaya.volty.data.bms.BmsProtocol
 import ru.sodovaya.volty.domain.model.TelemetryObservation
 
@@ -9,7 +14,9 @@ internal data class TelemetryReceiptTime(val epochMillis: Long, val elapsedMilli
 internal data class TelemetryReceipt(val sessionId: String, val notificationOrdinal: Long, val time: TelemetryReceiptTime)
 internal data class ReceivedTelemetry(val receipt: TelemetryReceipt, val observation: TelemetryObservation)
 
-/** One incoming collector and one fresh protocol per connection attempt; no source attribution or I/O here. */
+/** One fresh protocol/collector per attempt. Preparation precedes native observation;
+ * the per-notification path contains no recording I/O or source attribution.
+ */
 internal class SessionTelemetryCapture(
     private val protocol: BmsProtocol,
     private val sessionId: String,
@@ -18,6 +25,7 @@ internal class SessionTelemetryCapture(
     private val onObservation: (ReceivedTelemetry) -> Unit,
     private val onUnreceiptedObservation: (TelemetryObservation) -> Unit = {},
     initialNotificationOrdinal: Long = 0,
+    private val onPrepare: (suspend () -> Unit)? = null,
 ) {
     init { require(sessionId.isNotBlank()); require(initialNotificationOrdinal >= 0) }
     @Volatile private var closed = false
@@ -25,6 +33,40 @@ internal class SessionTelemetryCapture(
     private var ordinal = initialNotificationOrdinal
     var receiptFailures: Long = 0
         private set
+    private enum class Preparation { PENDING, READY, FAILED }
+    private val preparationLock = Mutex()
+    @Volatile private var preparation = if (onPrepare == null) Preparation.READY else Preparation.PENDING
+    val isPreparedForObservation: Boolean get() = preparation == Preparation.READY && active()
+    var preparationFailures: Long = 0
+        private set
+    var unpreparedNotifications: Long = 0
+        private set
+    /** Native caller awaits this after connect and before notification subscription. */
+    suspend fun prepareForObservation(): Boolean {
+        currentCoroutineContext().ensureActive()
+        if (!active()) return false
+        return preparationLock.withLock {
+            currentCoroutineContext().ensureActive()
+            if (!active()) return@withLock false
+            when (preparation) {
+                Preparation.READY -> true
+                Preparation.FAILED -> false
+                Preparation.PENDING -> try {
+                    onPrepare?.invoke()
+                    currentCoroutineContext().ensureActive()
+                    preparation = if (active()) Preparation.READY else Preparation.FAILED
+                    preparation == Preparation.READY
+                } catch (cancel: CancellationException) {
+                    preparation = Preparation.FAILED
+                    throw cancel
+                } catch (_: Exception) {
+                    preparation = Preparation.FAILED
+                    if (preparationFailures < Long.MAX_VALUE) preparationFailures++
+                    false
+                }
+            }
+        }
+    }
     fun requireProtocol(candidate: BmsProtocol) { require(candidate === protocol) }
     fun close() { closed = true }
     private fun active() = !closed && ownsSession()
@@ -32,6 +74,9 @@ internal class SessionTelemetryCapture(
         if (!active()) return false
         check(!decoding) { "A protocol has one incoming collector; receipt capture cannot be reentered" }
         decoding = true
+        // Freeze readiness before the clock/trace callbacks, just like receipt ownership.
+        val prepared = preparation == Preparation.READY
+        if (!prepared && unpreparedNotifications < Long.MAX_VALUE) unpreparedNotifications++
         try {
             val receipt = try {
                 val hasOrdinal = ordinal < Long.MAX_VALUE
@@ -40,7 +85,7 @@ internal class SessionTelemetryCapture(
                 // decoded loss must never reuse a previous recording owner.
                 val time = readTime()
                 check(hasOrdinal)
-                TelemetryReceipt(sessionId, ordinal, time)
+                TelemetryReceipt(sessionId, ordinal, time).takeIf { prepared }
             } catch (_: Exception) {
                 if (receiptFailures < Long.MAX_VALUE) receiptFailures++
                 null
