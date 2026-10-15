@@ -928,3 +928,62 @@ immutable append receipt. Production correctly rejected the incomplete fixture;
 the fixture now supplies that receipt. No production validation was relaxed.
 Verification counts are recorded in the execution ledger. This is a read-contract
 extension, not runtime recorder or screen activation.
+
+
+### Read-only detail ownership (2026-10-15)
+
+HistoryDetailComponent prepares the foundation's component read path without
+activating a product route. It owns one ride's recorded sources, selected keys,
+viewport/cursor and per-key series/stats. It does not subscribe to BmsRepository,
+preload catalog/routes or resample live state. New ride selection clears the
+previous detail immediately. Child jobs inherit the supplied UI scope and retire
+on parent cancellation or Decompose destruction. Ride/range generations and
+per-key capabilities fence late completions, including remove/readd of the same
+key while an old stats read is pending. Series and stats publish atomically per
+key; one failed metric does not erase other successful keys. Errors are typed,
+without exposing database exception text.
+
+Known descriptor/source-kind/index admission rejects foreign keys. Duplicate
+adds and identical ranges issue no extra reads. Range/reorder/remove operations
+retain a cursor only inside the selected viewport. Empty/unavailable series and
+zero-width ranges remain usable. Completed v2 viewports use the monotonic plot
+axis, including when the saved wall clock moved backwards; legacy retains its
+wall-only axis. An initial revision seeded unfinished viewports from injected wall time; that
+choice was retracted during review (see below). No viewport endpoint is a
+recorded end or sample.
+
+The lifecycle regression initially destroyed an INITIALIZED test registry and
+did not verify the transition. It now starts RESUMED and asserts DESTROYED before
+releasing the late read; production lifecycle handling was unchanged. Fresh
+focused/full evidence is in the ledger. This does not complete catalog/route
+ownership, screen transfer, recorder activation or native acceptance.
+
+Recorded-source expansion now explicitly loads/caches only key metadata for the
+selected ride. Sparse cell keys and truncation remain visible. Source metadata
+jobs belong to the ride, separately from viewport-owned numeric jobs: changing a
+range does not restart or discard an expanded group's pending metadata. A new
+ride or close retires those jobs, including a late response for an identically
+named source ID on another ride. Source read failures are typed and independently
+retryable; no numeric series is fetched by group expansion.
+
+Retraction: raw current wall time is insufficient even for an unfinished v2
+viewport. A backwards clock change can hide already recorded rows on the stable
+monotonic plot axis. The detail clock contract now supplies HistoryTick, including
+actual elapsed time and generation. The fix derives v2 bounds with
+historyAxisEpochMillis; legacy remains explicitly wall-only. Incomparable clocks
+must fail rather than manufacture an endpoint. Runtime integration must supply
+the same process clock and reconcile interrupted recordings before activation.
+
+A synchronous StateFlow observer can itself change ride/key selection before a
+command returns. Three real unconfined-observer fixtures reproduced old ride
+requests borrowing a new generation, removed metric reads still starting, and
+retired group metadata still issuing IO. The owner now reserves identities before
+publication, rechecks them after publication and installs lazy jobs before start.
+A selected-key guard prevents a removed metric from dispatching. These tests
+assert actual issued repository reads as well as final state, not timing alone.
+
+A fourth observer regression changes viewport synchronously during metric add.
+It reproduced two actual reads for the same new-range key. Dispatch now retains
+the generation reserved before publication and suppresses an already reserved or
+completed read in that range. Range replacement explicitly clears numeric cache
+before reloading; it cannot reuse a different range's old graph data.

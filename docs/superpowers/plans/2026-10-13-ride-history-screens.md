@@ -303,3 +303,19 @@ progress ledger and version only after complete acceptance.
   No BLE writes introduced; compare a capture's accepted samples with stored facts.
 - [ ] Record unverified device cases separately. Ship signed APK and commit/push
   only authorized integration with matching source revision and provenance.
+
+
+## Read-owner preparation checkpoint (2026-10-15)
+
+Foundation Task8 now provides presentation/history/HistoryDetailComponent for
+one ride's sources, selected metrics, range/cursor and canonical series/stats.
+It also owns explicit source key expansion via recordedKeys. Reuse this owner
+when assembling the history screen component; do not recreate its request/cache
+lifetime logic. Parent/lifecycle retirement, late A/B reads, per-key/source retry,
+sparse metadata, monotonic/legacy viewport bounds and synchronous StateFlow
+observer transitions have focused regressions. No product route is activated.
+
+Task1 remains open for catalog pagination, route read ownership, shared cursor
+sample policy, back/fullscreen restoration and final screen composition. The
+foundation acceptance prerequisite remains in force. No Vescape source/assets
+or complete screen port are claimed by this preparation checkpoint.

@@ -529,3 +529,22 @@ SQL cap; duplicate detail/summary keys consume one slot. Legacy exposes only
 recognized scalar keys, with exclusive v2 ownership retained. This enables the
 source-aware drawer without numeric trace preloading or current-vehicle guesses.
 No new recorder, screen or DI route is activated by this checkpoint.
+
+
+Task8 detail-owner ruling (2026-10-15): implement the read-only
+presentation/history/HistoryDetailComponent against the stabilized repository,
+without activating a route or starting the screen transfer. It owns one selected
+ride, recorded sources, selected keys, viewport range/cursor and per-key stored
+series/stats. Parent scope and Decompose destruction retire reads. Ride/range
+replacement and key removal fence even reads that ignore cancellation. Duplicate
+adds and unchanged ranges do not reread; failures are typed and isolated per key.
+Catalog, route paging, metric drawer rendering and native acceptance remain open.
+This factors the planned component read ownership out of screen work; the full
+foundation acceptance prerequisite still applies to screen/native activation.
+
+The detail owner also exposes explicit source expansion through recordedKeys,
+with ride-owned metadata jobs independent of viewport-owned numeric jobs.
+Changing a viewport preserves an expanded source's pending key read; switching
+rides retires it. Sparse keys, read truncation and source-specific retry errors
+remain explicit. The injected HistoryTick must share the recording clock for an
+unfinished v2 ride; wall-only time cannot determine its monotonic viewport end.
