@@ -96,18 +96,34 @@ class SqlDelightHistoryStore(
         }
     }
 
-    override suspend fun recoverInterrupted(): Int = withContext(dispatcher) {
+    /** Bootstrap only: the caller exclusively owns the new recorder and has not started a writer.
+     * All persisted facts use their ride origin's generation. Unused generations need no row:
+     * retry before begin can reuse one, but any surviving previous ride forces a different clock.
+     */
+    internal suspend fun prepareRecordingClock(): Long = withContext(dispatcher) {
         database.transactionWithResult {
-            val open = rides.openRides().executeAsList()
-            open.forEach { row ->
-                val epoch = row.lastEpochMillis ?: row.startedEpochMillis
-                val elapsed = row.lastElapsedMillis ?: row.startedElapsedMillis
-                markerQueries.insertMarker(row.id, row.nextSequence, epoch, elapsed,
-                    row.clockGeneration, HistoryMarkerKind.INTERRUPTED.name)
-                rides.finishRide(epoch, elapsed, row.clockGeneration, HistoryRideStatus.INTERRUPTED.name, row.id)
-            }
-            open.size
+            val previous = rides.latestClockGeneration { it ?: 0L }.executeAsOne()
+            check(previous >= 0L && previous < Long.MAX_VALUE) { "Recording clock generation exhausted or invalid" }
+            recoverInterruptedRows()
+            previous + 1L
         }
+    }
+
+    override suspend fun recoverInterrupted(): Int = withContext(dispatcher) {
+        database.transactionWithResult { recoverInterruptedRows() }
+    }
+
+    /** Must run inside the caller's database transaction. */
+    private fun recoverInterruptedRows(): Int {
+        val open = rides.openRides().executeAsList()
+        open.forEach { row ->
+            val epoch = row.lastEpochMillis ?: row.startedEpochMillis
+            val elapsed = row.lastElapsedMillis ?: row.startedElapsedMillis
+            markerQueries.insertMarker(row.id, row.nextSequence, epoch, elapsed,
+                row.clockGeneration, HistoryMarkerKind.INTERRUPTED.name)
+            rides.finishRide(epoch, elapsed, row.clockGeneration, HistoryRideStatus.INTERRUPTED.name, row.id)
+        }
+        return open.size
     }
 
     override suspend fun rides(before: HistoryCursor?, limit: Int): HistoryPage<HistoryRide> = withContext(dispatcher) {

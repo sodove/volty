@@ -40,3 +40,6 @@ SELECT * FROM HistoryRideV2 WHERE status = 'RECORDING';
 
 deleteRide:
 DELETE FROM HistoryRideV2 WHERE id = :rideId;
+
+latestClockGeneration:
+SELECT MAX(clockGeneration) FROM HistoryRideV2;

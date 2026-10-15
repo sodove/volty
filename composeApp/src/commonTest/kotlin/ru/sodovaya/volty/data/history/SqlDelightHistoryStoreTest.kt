@@ -26,6 +26,60 @@ class SqlDelightHistoryStoreTest {
     }
     @AfterTest fun closeDrivers() { drivers.forEach { it.close() } }
 
+    @Test fun applicationHistoryBindingsShareOneStoreWithoutDispatcherRegistration() = runTest {
+        val (driver, _) = fixture()
+        val app = org.koin.dsl.koinApplication {
+            modules(ru.sodovaya.volty.di.appModule, org.koin.dsl.module {
+                single { VoltyDatabaseProvider(driver) }
+            })
+        }
+        try {
+            val store = app.koin.get<SqlDelightHistoryStore>()
+            assertSame(store, app.koin.get<HistoryStore>())
+            assertEquals(1L, store.prepareRecordingClock())
+        } finally { app.close() }
+    }
+
+    @Test fun processClockPreparationRecoversAtLastCommitAndUsesGreatestGeneration() = runTest {
+        val (_, store) = fixture()
+        begin(store)
+        store.append(HistoryBatch("ride", listOf(HistorySample(tick(25), key, 7.0)), emptyList(), emptyList()))
+        val later = HistoryTick(5000, 50, 9)
+        store.begin(HistoryRide("closed", "bike", later, null, HistoryRideStatus.RECORDING), emptyList())
+        store.finish("closed", later, HistoryRideStatus.COMPLETED)
+
+        assertEquals(10L, store.prepareRecordingClock())
+        val recovered = assertNotNull(store.ride("ride"))
+        assertEquals(HistoryRideStatus.INTERRUPTED, recovered.status)
+        assertEquals(tick(25), recovered.ended)
+        assertEquals(listOf(HistoryMarker(tick(25), HistoryMarkerKind.INTERRUPTED)),
+            store.markers("ride", range))
+        assertEquals(HistoryRideStatus.COMPLETED, store.ride("closed")?.status)
+        // A retry before any new ride writes must not append a second interruption.
+        assertEquals(10L, store.prepareRecordingClock())
+        assertEquals(1, store.markers("ride", range).size)
+        val fresh = HistoryTick(30000, 10, 10)
+        store.begin(HistoryRide("new", "bike", fresh, null, HistoryRideStatus.RECORDING), emptyList())
+        assertEquals(11L, store.prepareRecordingClock())
+        assertEquals(fresh, store.ride("new")?.ended)
+    }
+
+    @Test fun emptyDatabaseHasUsableNonnegativeProcessClock() = runTest {
+        val (_, store) = fixture()
+        assertEquals(1L, store.prepareRecordingClock())
+        assertTrue(store.rides(null, 10).items.isEmpty())
+    }
+
+    @Test fun exhaustedClockFailsBeforeChangingOpenRide() = runTest {
+        val (_, store) = fixture()
+        val start = HistoryTick(10000, 100, Long.MAX_VALUE)
+        store.begin(HistoryRide("exhausted", "bike", start, null, HistoryRideStatus.RECORDING), emptyList())
+        assertFailsWith<IllegalStateException> { store.prepareRecordingClock() }
+        assertEquals(HistoryRideStatus.RECORDING, store.ride("exhausted")?.status)
+        assertNull(store.ride("exhausted")?.ended)
+        assertTrue(store.markers("exhausted", range).isEmpty())
+    }
+
     @Test fun gpsProvidersAndUnknownSurviveEqualTimePagingAndIdempotentReplay() = runTest {
         val (_, store) = fixture(); begin(store)
         val fixes = listOf(HistoryGpsProvider.GPS, HistoryGpsProvider.NETWORK, HistoryGpsProvider.PASSIVE, null).map {

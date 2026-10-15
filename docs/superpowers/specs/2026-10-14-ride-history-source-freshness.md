@@ -1173,3 +1173,29 @@ test reservation is discarded unconditionally so a failed assertion cannot wedge
 a noncancellable finish. Native clock, service/location, per-source interruption,
 alias/gateway/aggregate admission, bounded startup, legacy retirement and UI remain
 open; product recorder/DI is still not activated.
+
+## Process clock bootstrap checkpoint (2026-10-16)
+
+`HistoryRecordingClock` is a lazy single-process owner. It refuses receipt reads
+until recovery acknowledges, serializes concurrent preparation and publishes no
+clock after a failed or cancelled preparation. The Android lazy DI binding uses
+`System.currentTimeMillis` for captured wall time and `SystemClock.elapsedRealtime`
+for elapsed time, matching location measurement elapsedRealtimeNanos / 1_000_000.
+A changed wall clock remains visible in captured facts; plotted coordinates still
+use the existing monotonic axis policy.
+
+The concrete SQLite bootstrap recovers open rides at their last committed receipt
+(or their start if empty) and reads MAX persisted ride-origin clock generation in
+one transaction. The next generation cannot match any surviving previous origin;
+exhaustion fails before modifying an open ride. No schema change is necessary.
+An unused generation can be reused before any ride writes; this is deliberately
+not a durable allocator for competing writers. All accepted children and terminal
+ticks are constrained to the persisted ride origin. One bootstrap singleton must
+prepare before the new recording runtime starts; it must never run alongside an
+active recorder. Existing controller recovery remains idempotent.
+
+The store and Android clock registrations are lazy. Resolving them does not start
+recovery, a writer, location demand or native capture. Product activation and
+legacy retirement remain pending, including bounded startup orchestration,
+foreground/location ownership, source-specific gaps, gateway/alias/aggregate
+admission, native teardown cancellation, manual UI and device performance checks.

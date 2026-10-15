@@ -612,3 +612,13 @@ now outside sessionLock after atomic detach, correcting a source-audited lock/jo
 cycle. This is common/native seam evidence; physical teardown cancellation and
 other native activation acceptance remain open. External ingress compatibility
 and production DI/default recorder are unchanged.
+
+Task7 process-clock checkpoint (2026-10-16): a lazy app-process clock uses Android
+boot elapsed time shared with native GPS measurement timestamps. Preparation
+serializes callers and awaits actual SQLite recovery before receipt reads are
+available. Recovery and the greatest persisted origin generation are read in one
+transaction; new clocks cannot match a surviving previous ride, and exhaustion
+fails before changing rows. Store/clock DI registrations are lazy and do not start
+recording. Runtime startup bounds, service/location ownership, per-source quality,
+gateway/alias/aggregate admission, native cancellation, manual UI and legacy
+retirement still gate product activation; native phone acceptance is unclaimed.

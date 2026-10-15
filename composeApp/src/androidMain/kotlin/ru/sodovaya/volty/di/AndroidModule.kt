@@ -84,6 +84,15 @@ import org.maplibre.android.offline.OfflineManager
 
 val androidModule = module {
     single { SqlDriverFactory(androidContext()) }
+    // Inert until the future recording runtime awaits prepare(); one clock for BLE/GPS/detail.
+    single {
+        val store = get<ru.sodovaya.volty.data.history.SqlDelightHistoryStore>()
+        ru.sodovaya.volty.data.history.HistoryRecordingClock(
+            prepareGeneration = store::prepareRecordingClock,
+            epochMillis = System::currentTimeMillis,
+            elapsedRealtimeMillis = SystemClock::elapsedRealtime,
+        )
+    }
     single { DataStoreFactory(androidContext()) }
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
