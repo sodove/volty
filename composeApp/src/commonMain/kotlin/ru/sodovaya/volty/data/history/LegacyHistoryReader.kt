@@ -2,6 +2,8 @@ package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
@@ -21,8 +23,61 @@ data class LegacyHistorySnapshot(
 
 @OptIn(ExperimentalTime::class)
 class LegacyHistoryReader(provider: VoltyDatabaseProvider,
-    private val dispatcher: CoroutineDispatcher = Dispatchers.Default) {
+    private val dispatcher: CoroutineDispatcher = Dispatchers.Default) : HistoryReadRepository {
     private val database = provider.database
+    override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> = withContext(dispatcher) {
+        val rows = database.rideRowQueries.pageLegacyHistory(before?.epochMillis, before?.stableId.orEmpty(), 21,
+            ::historyRide).executeAsList()
+        val selected = rows.take(20)
+        val more = rows.size > 20
+        HistoryPage(selected, if (more) selected.last().let { HistoryCursor(it.started.epochMillis, it.id) } else null, more)
+    }
+
+    override suspend fun ride(rideId: String): HistoryRide? = withContext(dispatcher) {
+        database.rideRowQueries.selectById(rideId).executeAsOneOrNull()?.let {
+            historyRide(it.id, it.vehicleId, it.startedAt, it.endedAt)
+        }
+    }
+
+    override suspend fun sources(rideId: String): List<HistorySource> = withContext(dispatcher) {
+        database.transactionWithResult {
+            if (database.rideRowQueries.selectById(rideId).executeAsOneOrNull() == null) emptyList()
+            else legacySources(database.ridePointRowQueries.selectHistoryMetricKeys(rideId).executeAsList())
+        }
+    }
+
+    override suspend fun series(rideId: String, key: HistorySeriesKey, range: HistoryRange, maxPoints: Int): HistorySeries = withContext(dispatcher) {
+        require(maxPoints in 3..600)
+        database.transactionWithResult {
+            val empty = HistorySeries(key, emptyList(), emptyList(), false)
+            if (database.rideRowQueries.selectById(rideId).executeAsOneOrNull() == null) return@transactionWithResult empty
+            val descriptor = HistoryMetricRegistry.descriptor(key.metricId) ?: return@transactionWithResult empty
+            if (descriptor.indexedByCell != (key.cellIndex != null)) return@transactionWithResult empty
+            val oldKey = database.ridePointRowQueries.selectHistoryMetricKeys(rideId).executeAsList().singleOrNull {
+                legacyMetric(it)?.let { metric -> metric.sourceId == key.sourceId && metric.id == key.metricId } == true
+            } ?: return@transactionWithResult empty
+            val metric = checkNotNull(legacyMetric(oldKey))
+            val rows = database.ridePointRowQueries.selectHistorySeries(rideId, oldKey, key.cellIndex?.toLong() ?: -1,
+                range.startEpochMillis, range.endEpochMillis, 20001).executeAsList()
+            val samples = rows.take(20000).map { row ->
+                val value = historyValue(row.value_ * metric.canonicalMultiplier, row.isKnown != 0L)
+                HistorySample(wallTick(row.timestamp), key, value, if (value == null) HistoryUnknownReason.LEGACY else null)
+            }
+            // Legacy elapsed=0 is a placeholder. Thin the wall-ordered rows;
+            // never run v2 acquisition-cadence/integration rules against them.
+            HistorySeries(key, projectHistoryOverviewRows(samples, maxPoints), emptyList(), rows.size > 20000)
+        }
+    }
+
+    override suspend fun gps(rideId: String, range: HistoryRange, after: HistoryCursor?): HistoryPage<HistoryGpsFix> {
+        currentCoroutineContext().ensureActive()
+        return HistoryPage(emptyList(), null, false)
+    }
+
+    override suspend fun stats(rideId: String, key: HistorySeriesKey, range: HistoryRange): HistoryStats {
+        currentCoroutineContext().ensureActive()
+        return HistoryStats(null, null, null, false)
+    }
     suspend fun load(rideId: String, limit: Int = 20000): LegacyHistorySnapshot? = withContext(dispatcher) {
         require(limit in 1..20000)
         database.transactionWithResult {
@@ -36,13 +91,17 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
                 val value = historyValue(row.value_ * metric.canonicalMultiplier, row.isKnown != 0L)
                 HistorySample(wallTick(row.timestamp), key, value, if (value == null) HistoryUnknownReason.LEGACY else null)
             }
-            val sources = metricKeys.mapNotNull(::legacyMetric).map { it.sourceId }.distinct().map {
-                HistorySource(it, if (it == "legacy-battery") HistorySourceKind.VEHICLE_BATTERY else HistorySourceKind.VEHICLE_MOTION, it)
-            }
+            val sources = legacySources(metricKeys)
             LegacyHistorySnapshot(HistoryRide(ride.id, ride.vehicleId, wallTick(ride.startedAt),
                 ride.endedAt?.let(::wallTick), HistoryRideStatus.LEGACY), sources, samples,
                 metricKeys.filter { legacyMetric(it) == null }.toSet(), rows.size > limit)
         }
+    }
+    private fun historyRide(id: String, vehicleId: String, startedAt: String, endedAt: String?) =
+        HistoryRide(id, vehicleId, wallTick(startedAt), endedAt?.let(::wallTick), HistoryRideStatus.LEGACY)
+
+    private fun legacySources(metricKeys: List<String>) = metricKeys.mapNotNull(::legacyMetric).map { it.sourceId }.distinct().map {
+        HistorySource(it, if (it == "legacy-battery") HistorySourceKind.VEHICLE_BATTERY else HistorySourceKind.VEHICLE_MOTION, it)
     }
     private fun wallTick(text: String) = HistoryTick(Instant.parse(text).toEpochMilliseconds(), 0, 0)
 }

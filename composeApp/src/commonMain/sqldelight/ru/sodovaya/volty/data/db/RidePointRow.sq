@@ -31,3 +31,23 @@ LIMIT :pageSize;
 
 selectHistoryMetricKeys:
 SELECT DISTINCT metricKey FROM RidePointRow WHERE rideId = :rideId ORDER BY metricKey;
+
+-- Filter the selected key before the bound: other metrics cannot consume its
+-- page. Fractions are truncated exactly as Instant.toEpochMilliseconds does;
+-- preserve Z/offset when parsing whole seconds, independent of SQLite rounding.
+selectHistorySeries:
+WITH fractions AS (
+    SELECT *, CASE WHEN substr(timestamp, 20, 1) = '.' THEN
+        max(instr(substr(timestamp, 21), 'Z'), instr(substr(timestamp, 21), '+'), instr(substr(timestamp, 21), '-'))
+        ELSE 0 END AS zoneStart
+    FROM RidePointRow WHERE rideId = :rideId AND metricKey = :metricKey AND cellIndex = :cellIndex
+), timed AS (
+    SELECT *, CAST(strftime('%s', CASE WHEN zoneStart > 0
+        THEN substr(timestamp, 1, 19) || substr(timestamp, 20 + zoneStart) ELSE timestamp END) AS INTEGER) * 1000
+        + CASE WHEN zoneStart > 0 THEN CAST(substr(substr(timestamp, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER)
+          ELSE 0 END AS capturedMillis
+    FROM fractions
+)
+SELECT rideId, metricKey, timestamp, cellIndex, value, isKnown FROM timed
+WHERE capturedMillis >= :fromEpoch AND capturedMillis <= :toEpoch
+ORDER BY capturedMillis, timestamp LIMIT :pageSize;

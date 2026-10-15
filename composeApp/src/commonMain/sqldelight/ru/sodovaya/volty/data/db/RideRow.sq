@@ -33,3 +33,24 @@ DELETE FROM RideRow
 WHERE id IN (
     SELECT id FROM RideRow ORDER BY startedAt ASC LIMIT :count
 );
+
+-- Strip the fraction before asking SQLite for whole seconds, then truncate the
+-- original fraction explicitly. SQLite date-function rounding must not move a
+-- .999999999 fix/ride into the next millisecond/second. Keep the timezone suffix.
+pageLegacyHistory:
+WITH fractions AS (
+    SELECT *, CASE WHEN substr(startedAt, 20, 1) = '.' THEN
+        max(instr(substr(startedAt, 21), 'Z'), instr(substr(startedAt, 21), '+'), instr(substr(startedAt, 21), '-'))
+        ELSE 0 END AS zoneStart
+    FROM RideRow
+), timed AS (
+    SELECT *, CAST(strftime('%s', CASE WHEN zoneStart > 0
+        THEN substr(startedAt, 1, 19) || substr(startedAt, 20 + zoneStart) ELSE startedAt END) AS INTEGER) * 1000
+        + CASE WHEN zoneStart > 0 THEN CAST(substr(substr(startedAt, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER)
+          ELSE 0 END AS capturedMillis
+    FROM fractions
+)
+SELECT id, vehicleId, startedAt, endedAt FROM timed
+WHERE :beforeEpoch IS NULL OR capturedMillis < :beforeEpoch
+OR (capturedMillis = :beforeEpoch AND id < :beforeId)
+ORDER BY capturedMillis DESC, id DESC LIMIT :pageSize;

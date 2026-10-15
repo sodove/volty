@@ -621,3 +621,39 @@ it preserves distinct values, sign, zero, BLE marker and raw wall-clock jump.
 The SQL test times were 0.219s and 0.782s including fixture setup/teardown in the
 full JVM suite. These are not isolated read benchmarks, Android latency or heap
 measurements; physical cadence and long-ride memory acceptance remain open.
+
+## 2026-10-15 — bounded legacy read interface (Task8 checkpoint)
+
+LegacyHistoryReader now implements the read interface independently of the v2
+reader. Ride metadata and recorded source keys do not load the trace. The selected
+metric/cell and wall range are filtered before a 20001-row probe; at most 20000
+rows enter its bounded overview. An unrelated metric cannot consume that budget.
+Legacy origin stays null and elapsed/generation zero remain placeholders. The
+reader does not run v2 cadence/integration rules against them or invent GPS,
+markers or certified summary stats. Existing load/sign conversion is retained.
+Parent existence is checked transactionally before source/numeric admission, even
+in a deliberately incoherent old database with orphan points.
+
+New read-only SQL queries page rides by millisecond epoch/stable ID and select
+one bounded series. They strip the fractional part before SQLite parses whole
+seconds, then truncate original fractional digits and preserve Z/offset suffixes.
+This matches Instant.toEpochMilliseconds for tested UTC and positive/negative
+ISO offsets, including .999999999 boundaries. No SQLite-version-specific rounding
+bug is claimed: an independent Python SQLite3.53 probe already truncated it.
+No DDL, schema snapshot, migration, old-row deletion or runtime activation changed.
+
+h147 genuine RED: ten selected tests, all seven new read-interface cases failed
+while three existing load tests passed (91s). h148 had one fixture mismatch:
+canonical sign multiplication produces boxed -0.0, while the new expected list
+used +0.0. The fixture was corrected without changing existing arithmetic.
+h149 then failed the new orphan regression with the other ten passing (41s).
+The parent-existence fence fixes that admission. Narrow readonly review and its
+follow-up found no remaining concrete defect.
+
+h150 full fresh: 3792 tests/389 XML, all newer than UTC start, zero failures,
+errors or skips; 100s, all 37 tasks executed including actual database migration
+verification. Fixtures cover starvation behind 20001 other-metric rows, explicit
+selected-series truncation, 45 equal-time rides over three pages, canonical sign,
+zero/unknown, exact fractional ranges/offsets and an orphan without a parent.
+Unified old/new catalog routing, component admission/loading/errors and runtime
+activation still remain; this checkpoint does not replace the existing graph UI.
