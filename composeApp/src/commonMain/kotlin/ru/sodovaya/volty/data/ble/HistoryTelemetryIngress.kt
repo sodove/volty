@@ -23,17 +23,32 @@ internal class HistoryTelemetryIngress(
     private val readTick: () -> HistoryTick,
     private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource> = ::nativeHistorySourcesForLink,
     private val prepareRecording: (suspend (LinkSpec, Vehicle?, List<HistorySource>) -> Unit)? = null,
+    manageConnections: Boolean = false,
 ) {
     private val mutableDiagnostics = MutableStateFlow(HistoryTelemetryIngressDiagnostics())
     val diagnostics: StateFlow<HistoryTelemetryIngressDiagnostics> = mutableDiagnostics
+
+    init { require(!manageConnections || prepareRecording == null) { "Choose one recording lifecycle owner" } }
+    private val nativeLifecycle = if (manageConnections) NativeHistoryRecordingLifecycle(controller, readTick, sources) {
+        mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
+            lastFailure = HistoryTelemetryIngressFailure.SETUP) }
+    } else null
+
+    suspend fun installNativePlan(vehicleId: String, specs: List<LinkSpec>, vehicle: Vehicle?, ownsPlan: () -> Boolean) {
+        nativeLifecycle?.install(vehicleId, specs, vehicle, ownsPlan)
+    }
+    suspend fun retireNativeAttempt(protocol: Any) { nativeLifecycle?.retire(protocol) }
+    suspend fun disconnectNative(ownsDisconnect: () -> Boolean) { nativeLifecycle?.disconnect(ownsDisconnect) }
 
     fun capture(protocol: BmsProtocol, sessionId: String, spec: LinkSpec, vehicle: Vehicle?,
         ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? {
         // Capture before the planner: control may replace this ride while setup runs.
         val recording = controller.captureTelemetryRecording()
         return try {
-            val binding = sources(spec, vehicle).toMap()
-            val preparation = prepareRecording?.let { start -> suspend {
+            val native = nativeLifecycle?.binding(spec, protocol, ownership::isCurrent)
+            if (nativeLifecycle != null && native == null) return null
+            val binding = native?.sources ?: sources(spec, vehicle).toMap()
+            val preparation = native?.prepare ?: prepareRecording?.let { start -> suspend {
                 try { start(spec, vehicle, binding.values.toList()) }
                 catch (cancel: CancellationException) { throw cancel }
                 catch (error: Exception) {

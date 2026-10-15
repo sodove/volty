@@ -88,6 +88,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Clock
 import kotlin.time.Duration
@@ -154,6 +155,7 @@ class KableBmsRepository private constructor(
 
     // Guarded by sessionLock, sealed before any initial connection preparation.
     private var historyTelemetryConfigurationSealed = false
+    internal var beforeHistoryDisconnectForTest: (suspend () -> Unit)? = null
 
     private suspend fun sealHistoryTelemetryConfiguration() = sessionLock.withLock {
         historyTelemetryConfigurationSealed = true
@@ -170,6 +172,18 @@ class KableBmsRepository private constructor(
     private fun makeHistoryTelemetryCapture(protocol: BmsProtocol, link: PackLink,
         ownership: SampleSessionOwnership, channel: Channel<Sample>): SessionTelemetryCapture? =
         historyTelemetryIngress?.capture(protocol, Uuid.random().toString(), link.spec, link.vehicle, ownership, channel)
+
+    private suspend fun prepareHistoryForInstalledLinks(installed: List<PackLink>, vehicleId: String, vehicle: Vehicle?) {
+        historyTelemetryIngress?.installNativePlan(vehicleId, installed.map { it.spec }, vehicle) {
+            !userInitiatedDisconnect && installed.any { planned -> links.any { it === planned } }
+        }
+    }
+
+    internal suspend fun prepareInstalledHistoryForTest() {
+        val installed = links
+        val vehicle = checkNotNull(installed.first().vehicle)
+        prepareHistoryForInstalledLinks(installed, vehicle.id, vehicle)
+    }
 
     internal fun historyTelemetryCaptureForTest(protocol: BmsProtocol, address: String,
         ownership: SampleSessionOwnership): SessionTelemetryCapture? = makeHistoryTelemetryCapture(
@@ -1038,6 +1052,9 @@ class KableBmsRepository private constructor(
             }
             publishActiveDiagnosticLinks()
             _activeVehicle.value = demoVehicle
+            historyTelemetryIngress?.installNativePlan(demoVehicle.id, emptyList(), demoVehicle) {
+                _activeVehicle.value === demoVehicle
+            }
             ringBuffer.clear()
             motionRingBuffer.clear()
             _connectionState.value = ConnectionState.Connected(demoVehicle)
@@ -2314,7 +2331,8 @@ class KableBmsRepository private constructor(
             // code could not cancel its single loop either — this method may
             // be reached from a stack the loop owns); they stop on their own
             // via the link-identity guard once the new list is installed.
-            sessionLock.withLock {
+            val outgoingHistory = sessionLock.withLock {
+                val outgoing = links.mapNotNull { it.session }
                 userInitiatedDisconnect = false
                 for (l in links) {
                     l.session?.tearDown()
@@ -2324,7 +2342,9 @@ class KableBmsRepository private constructor(
                 // Connecting to a real BMS kills any running demo simulation.
                 demoJob?.cancel()
                 demoJob = null
+                outgoing
             }
+            outgoingHistory.forEach { historyTelemetryIngress?.retireNativeAttempt(it.recordingAttempt) }
             // Connecting to a DIFFERENT device (picker switch without an explicit
             // disconnect, or a real connect right after demo) must not mix the
             // previous battery's samples into the new graph. Reconnects to the
@@ -2389,6 +2409,8 @@ class KableBmsRepository private constructor(
                 lastReRaiseAtMsByGateway = emptyMap()
                 lastConnectionTarget = ConnectionTarget(vehicle, address, type)
             }
+
+            prepareHistoryForInstalledLinks(newLinks, vehicle?.id ?: GUEST_VEHICLE_ID_PREFIX + address, vehicle)
 
             // Raise the links. A single link runs INLINE in this coroutine —
             // the exact pre-multi-link call shape, preserving its cancellation
@@ -2461,6 +2483,8 @@ class KableBmsRepository private constructor(
         link: PackLink,
         isReconnectAttempt: Boolean
     ): Result<Unit> {
+        var historyProtocol: Any? = null
+        var completed = false
         val vehicle = link.vehicle
         val address = link.spec.address
         // NOT `protocolKind.toBmsType()`: that THROWS for a controller kind by
@@ -2480,11 +2504,14 @@ class KableBmsRepository private constructor(
         return try {
             // Tear down this link's previous (dead) session under the lock,
             // as the old doConnect preamble did for the single session.
-            sessionLock.withLock {
+            val outgoingHistory = sessionLock.withLock {
                 beforeReconnectTeardownForTest?.invoke()
-                link.session?.tearDown()
+                val outgoing = link.session
+                outgoing?.tearDown()
                 link.session = null
+                outgoing
             }
+            outgoingHistory?.let { historyTelemetryIngress?.retireNativeAttempt(it.recordingAttempt) }
             setLinkState(
                 link,
                 status = if (isReconnectAttempt) LinkStatus.RECONNECTING else LinkStatus.CONNECTING,
@@ -2497,6 +2524,7 @@ class KableBmsRepository private constructor(
             // controller's own VescProtocol — a MotionSource, which is what
             // makes ConnectionSession.onMotionSample fire.
             val protocol = createProtocol(link.spec, vehicle)
+            historyProtocol = protocol
             val channel: Channel<Sample> = sessionLock.withLock {
                 if (links.none { it === link }) {
                     return Result.failure(IllegalStateException("Link superseded"))
@@ -2586,9 +2614,10 @@ class KableBmsRepository private constructor(
                     // Retire ingress immediately: teardown is deferred to avoid
                     // joining the state/watchdog job from its own callback.
                     sessionOwnership.retire()
+                    historyTelemetryIngress?.retireNativeAttempt(protocol)
                     // The session detected a drop. Schedule THIS link's
                     // reconnect — unless the user disconnected in the meantime.
-                    onLinkDrop(link, reason)
+                    onLinkDrop(link, reason) { link.session?.ownsProtocol(protocol) == true }
                 }
             )
 
@@ -2650,15 +2679,24 @@ class KableBmsRepository private constructor(
                 // Guests are transient — never write them to the saved-vehicle store.
                 if (vehicle != null && !vehicle.isGuest) vehicleRepository.touch(vehicle.id)
             }
+            completed = true
             Result.success(Unit)
         } catch (e: kotlinx.coroutines.CancellationException) {
-            // Deliberately NO cleanup here — same contract as doConnect's.
+            // Retraction/clarification: NO cleanup means native orchestrator state, as in
+            // doConnect. Exact recording-attempt retirement in finally cannot touch a successor.
             throw e
         } catch (e: Exception) {
             val reason = readableBleFailureReason(e)
             setLinkState(link, LinkStatus.FAILED, reason = reason)
             clearOrchestratorAfterFailure(installedOrchestrator)
             Result.failure(e)
+        } finally {
+            if (!completed) historyProtocol?.let { protocol ->
+                // Recording-only exact-attempt retirement cannot clobber a successor's BLE state.
+                withContext(kotlinx.coroutines.NonCancellable) {
+                    historyTelemetryIngress?.retireNativeAttempt(protocol)
+                }
+            }
         }
     }
 
@@ -2714,7 +2752,7 @@ class KableBmsRepository private constructor(
         return found
     }
 
-    private suspend fun onLinkDrop(link: PackLink, reason: String) {
+    private suspend fun onLinkDrop(link: PackLink, reason: String, ownsAttempt: () -> Boolean = { true }) {
         val recovery = sessionLock.withLock {
             if (userInitiatedDisconnect) {
                 println("[VOLTY-BLE] onLinkDrop ignored — user disconnected")
@@ -2725,7 +2763,7 @@ class KableBmsRepository private constructor(
             // owning orchestrator in the same transaction so the deferred
             // re-raise below can reject a later replacement too.
             val believedUp = synchronized(linkStateLock) {
-                links.any { it === link } &&
+                links.any { it === link } && ownsAttempt() &&
                     (link.status == LinkStatus.ONLINE || link.status == LinkStatus.CONNECTING)
             }
             if (!believedUp) return@withLock null
@@ -2837,6 +2875,17 @@ class KableBmsRepository private constructor(
         return reconnect
     }
 
+    /** Only for sessions whose native ownership was removed; caller must not hold sessionLock. */
+    private suspend fun tearDownRemovedSessionWithHistory(session: ConnectionSession?) {
+        if (session == null) return
+        try { session.tearDown() }
+        finally {
+            withContext(kotlinx.coroutines.NonCancellable) {
+                historyTelemetryIngress?.retireNativeAttempt(session.recordingAttempt)
+            }
+        }
+    }
+
     override suspend fun disconnect() {
         // Atomically: flag the intent, take every link (sessions + reconnect
         // loops) out of the shared state, clear vehicle, set Disconnected.
@@ -2870,9 +2919,18 @@ class KableBmsRepository private constructor(
             // resurrect a connection the user explicitly closed.
             lastConnectionTarget = null
         }
-        reconnectsToCancel.forEach { it.cancel() }
-        demoToCancel?.cancel()
-        sessionsToTear.forEach { it.tearDown() }
+        try {
+            beforeHistoryDisconnectForTest?.invoke()
+            reconnectsToCancel.forEach { it.cancel() }
+            demoToCancel?.cancel()
+            sessionsToTear.forEach { it.tearDown() }
+        } finally {
+            // Native disconnect intent was already accepted under sessionLock. Its recording
+            // must finish even if a screen closes while native teardown is suspended.
+            withContext(kotlinx.coroutines.NonCancellable) {
+                historyTelemetryIngress?.disconnectNative { userInitiatedDisconnect && links.isEmpty() }
+            }
+        }
         _activeData.value = BmsData()
         _activeVehicleData.value = VehicleData()
         // Reset alongside _activeVehicleData, same reason as that field's
@@ -2974,7 +3032,7 @@ class KableBmsRepository private constructor(
         }
         if (removed) {
             synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
-            sessionToTearDown?.tearDown()
+            tearDownRemovedSessionWithHistory(sessionToTearDown)
             publishActiveDiagnosticLinks()
         }
         return removed
@@ -3003,7 +3061,7 @@ class KableBmsRepository private constructor(
             is LinkRemoval.Removed -> {
                 println("[VOLTY-BLE] disconnectLink: dropping $address, ${outcome.remaining.size} link(s) remain")
                 outcome.reconnectJob?.cancel()
-                outcome.session?.tearDown()
+                tearDownRemovedSessionWithHistory(outcome.session)
                 synchronized(linkStateLock) { protocolDiagnosticsByAddress.remove(address) }
                 // Reuse the existing fold — do not hand-roll a second copy of
                 // it. Guarded by linkStateLock, same as every other fold
@@ -3116,6 +3174,7 @@ class KableBmsRepository private constructor(
                 // connection it would refuse that connection's FIRST release.
                 lastReRaiseAtMsByGateway = emptyMap()
             }
+            prepareHistoryForInstalledLinks(newLinks, target.vehicle?.id ?: GUEST_VEHICLE_ID_PREFIX + target.address, target.vehicle)
             for (l in newLinks) {
                 // Transition out of Connected before kicking each loop — the
                 // loop's "already online" guard would otherwise short-circuit
@@ -3151,7 +3210,7 @@ class KableBmsRepository private constructor(
                 link.session = null
                 s
             }
-            sessionToTear?.tearDown()
+            tearDownRemovedSessionWithHistory(sessionToTear)
             setLinkState(link, LinkStatus.RECONNECTING, attempt = 0, reason = reason)
             startLinkReconnectLoop(link, initialReason = reason)
         }
@@ -3365,7 +3424,8 @@ class KableBmsRepository private constructor(
         vehicle: Vehicle?,
         address: String,
         type: BmsType,
-        reason: String
+        reason: String,
+        ownsAttempt: () -> Boolean = { true },
     ) {
         // Mimic pre-drop state: vehicle present, one believed-online link —
         // exactly what a live single-link connection holds. The production
@@ -3378,7 +3438,7 @@ class KableBmsRepository private constructor(
         val link = PackLink(spec = effectiveLinkSpecs(vehicle, address, type).first(), vehicle = vehicle)
         link.status = LinkStatus.ONLINE
         links = listOf(link)
-        scope.launch { onLinkDrop(link, reason) }
+        scope.launch { onLinkDrop(link, reason, ownsAttempt) }
     }
 
     /** Test-only: peek at the (first) reconnect job so tests can await its termination. */

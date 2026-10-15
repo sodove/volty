@@ -1103,3 +1103,39 @@ recorder. Whole-vehicle planning must use installed immutable decoder configurat
 not a later mutable vehicle profile. Native lifecycle hooks/shared clock, source
 specific interruption quality, gateway/alias admission, service/location ownership,
 legacy retirement and phone/performance acceptance remain open.
+
+
+## Optional native lifecycle binding checkpoint (2026-10-16)
+
+Ingress can opt into one `NativeHistoryRecordingLifecycle`. It snapshots the
+whole installed native spec registry before capture, retains exact spec identity,
+and binds a fresh protocol object to one physical attempt during preparation.
+The first ready waits for durable begin; a second link preserves the same ride
+and admission. Drop/failed setup retirement identifies the exact protocol, so a
+late old callback cannot remove its replacement. Install and disconnect predicates
+are rechecked after lifecycle mutex admission. Local bookkeeping reconciles in
+the accepted noncancellable control region, followed by caller cancellation checks.
+
+Native repository hooks run outside `sessionLock`: installed initial/restored
+plans, preparation, drop, failed/cancelled attempts, replaced sessions, explicit
+disconnect, partial removals and foreground stale teardown. The opaque protocol
+identity does not expose a wire command path. External/manual ingress remains the
+default. A managed ingress and an external preparation owner cannot both be set.
+
+An unsupported whole-vehicle source plan records a setup diagnostic, retires the
+incompatible old ride/GPS using an empty unstarted selection, and disables capture
+for the new plan. It does not block ordinary live decoding or fabricate samples.
+Guest and demo selections retire real history without starting synthetic history.
+The default qualified source planner still excludes gateway/physical aliases.
+
+Review found native drop handling must additionally qualify the concrete session
+inside its lock: a wait for history retirement can outlive that session. Link
+identity alone cannot authorize reconnection of a successor. Explicit disconnect
+also needs to reconcile history after native intent acceptance if its caller is
+cancelled. These are native command lifetime checks, separate from common recorder
+capabilities; tests exercise issued reconnect work and durable recording completion.
+
+This is opt-in native wiring, not production activation or phone acceptance.
+Shared Android elapsed clock/recovery, bounded startup, foreground/location
+ownership, per-source gap/full-funnel retirement quality, gateway/alias/aggregate
+admission, manual UI commands, legacy retirement and native performance remain open.

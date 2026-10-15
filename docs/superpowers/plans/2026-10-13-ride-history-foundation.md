@@ -586,3 +586,18 @@ connected. This owner must exclusively issue lifecycle commands for its controll
 Native Kable installation/retirement callbacks, shared native clock/recovery,
 source-specific interruption quality, bounded startup, service/location ownership,
 alias/gateway admission, legacy retirement and final activation remain open.
+
+
+Task7 optional native binding checkpoint (2026-10-16): managed ingress freezes the
+complete installed spec/source registry, prepares fresh protocol attempts through
+the common connection owner and retires exact native protocol identities. Initial
+and restored plans, drop/failure, replacements, explicit disconnect and partial
+removal hooks are outside the BLE session lock. External/manual ingress remains
+default; production DI still supplies no new recorder. Unsupported/guest/demo plans
+retire old real GPS and cannot auto-start an unqualified replacement. Native drop
+callbacks additionally need a session predicate rechecked under the native drop
+lock; accepted explicit disconnect must finish history despite caller cancellation.
+Common tests and repository seams do not prove physical BLE/service acceptance.
+Native shared clock, bounded startup, foreground/location, full-funnel retirement
+and per-source gaps, aliases/gateways/aggregates, manual UI/legacy retirement and
+performance still gate activation.

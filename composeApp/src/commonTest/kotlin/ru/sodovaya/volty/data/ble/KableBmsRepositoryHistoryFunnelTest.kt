@@ -4,6 +4,8 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -39,9 +41,10 @@ class KableBmsRepositoryHistoryFunnelTest {
     private open class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val samples = mutableListOf<HistoryBatch>()
+        val begins = mutableListOf<Pair<HistoryRide, List<HistorySource>>>()
         val statuses = mutableListOf<HistoryRideStatus>()
         var failSamples = false
-        override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) {}
+        override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { begins += ride to sources.toList() }
         override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer {
             if (batch.samples.isNotEmpty() && failSamples) error("injected writer failure")
             if (batch.samples.isNotEmpty()) samples += batch
@@ -55,6 +58,137 @@ class KableBmsRepositoryHistoryFunnelTest {
     private fun controller(writer: Writer): RideRecordingController {
         var n = 0
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
+    }
+
+    @Test fun acceptedNativeDisconnectFinishesHistoryWhenItsCallerIsCancelled() = bleRepositoryTest { repo ->
+        val writer = Writer(); val c = controller(writer); val v = vehicle()
+        repo.configureHistoryTelemetryIngress(HistoryTelemetryIngress(c, { tick() }, manageConnections = true))
+        repo.installLinksForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS)
+        repo.prepareInstalledHistoryForTest()
+        val capture = assertNotNull(repo.historyTelemetryCaptureForTest(Emitter(), v.packs.single().bmsAddress, SampleSessionOwnership { true }))
+        assertTrue(capture.prepareForObservation())
+        var accepted = false
+        repo.beforeHistoryDisconnectForTest = {
+            accepted = true
+            kotlinx.coroutines.currentCoroutineContext().cancel()
+        }
+        val task = backgroundScope.launch { repo.disconnect() }
+        runCurrent(); task.join()
+        assertTrue(accepted); assertTrue(task.isCancelled)
+        assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
+        assertNull(c.captureGpsRecording()); assertNull(c.state.value.intent.ride)
+    }
+
+    @Test fun nativeDropRechecksAttemptBeforeIssuingReconnectAndStillAcceptsCurrentDrop() = bleRepositoryTest { repo ->
+        val v = vehicle(); var owns = false; var checks = 0
+        val guard = { checks++; owns }
+        repo.simulateConnectionDropForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS, "retired callback", guard)
+        runCurrent()
+        assertNull(repo.reconnectJobForTest(), "retired attempt must not issue a reconnect job")
+        assertEquals(1, checks)
+        owns = true
+        repo.simulateConnectionDropForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS, "current callback", guard)
+        runCurrent()
+        assertNotNull(repo.reconnectJobForTest(), "the same path must still recover a current drop")
+        assertEquals(2, checks)
+    }
+
+    @Test fun ownedNativePlanFreezesAllBindingsBeforeCapturesAndRetiresExactProtocol() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); var now = tick()
+        val a = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+        val b = LinkSpec("b", ProtocolKind.JK, listOf(OwnedSource(1)))
+        val bindingA = mutableMapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        val other = source.copy(id = "pack-b")
+        val bindingB = mutableMapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to other)
+        var plans = 0
+        val ingress = HistoryTelemetryIngress(c, { now }, { spec, _ -> plans++; if(spec === a) bindingA else bindingB }, manageConnections = true)
+        val channel = Channel<Sample>(8)
+        val pa = Emitter(); val pb = Emitter()
+        try {
+            ingress.installNativePlan("bike", listOf(a, b), vehicle()) { true }
+            bindingA.clear(); bindingB.clear()
+            val ca = assertNotNull(ingress.capture(pa, "a", a, vehicle(), SampleSessionOwnership { true }, channel))
+            val cb = assertNotNull(ingress.capture(pb, "b", b, vehicle(), SampleSessionOwnership { true }, channel))
+            assertNull(c.captureTelemetryRecording()); assertTrue(ca.prepareForObservation())
+            val first = assertNotNull(c.captureTelemetryRecording())
+            assertTrue(cb.prepareForObservation()); assertEquals(2, plans)
+            assertEquals(setOf(source, other), writer.begins.single().second.toSet())
+            assertSame(first.gate, assertNotNull(c.captureTelemetryRecording()).gate)
+            now = tick(1); ingress.retireNativeAttempt(pa)
+            cb.processNotification(byteArrayOf(9))
+            val event = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+            assertEquals(HistoryOffer.ACCEPTED, event.telemetry.offer(c) { true })
+            assertEquals("pack-b", writer.samples.single().samples.single().key.sourceId)
+            assertTrue(c.state.value.intent.linkConnected)
+            now = tick(2); ingress.retireNativeAttempt(pb); assertNull(c.captureTelemetryRecording())
+            now = tick(3)
+            val fresh = assertNotNull(ingress.capture(Emitter(), "next", a, vehicle(), SampleSessionOwnership { true }, channel))
+            assertTrue(fresh.prepareForObservation()); ingress.retireNativeAttempt(pa)
+            assertTrue(c.state.value.intent.linkConnected); assertEquals(1, writer.begins.size)
+            ingress.disconnectNative { true }; assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
+        } finally { channel.close() }
+    }
+
+    @Test fun staleNativeInstallAndDisconnectCannotReplaceCurrentRecording() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); var now = tick()
+        val a = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+        val b = LinkSpec("b", ProtocolKind.JK, listOf(OwnedSource(0)))
+        var ownsA = true
+        val ingress = HistoryTelemetryIngress(c, { now }, { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
+        val channel = Channel<Sample>(4); val old = Emitter()
+        try {
+            ingress.installNativePlan("bike", listOf(a), vehicle()) { ownsA }
+            val ca = assertNotNull(ingress.capture(old, "old", a, vehicle(), SampleSessionOwnership { ownsA }, channel))
+            assertTrue(ca.prepareForObservation()); ownsA = false; now = tick(1)
+            ingress.installNativePlan("wheel", listOf(b), vehicle().copy(id = "wheel")) { true }
+            assertNull(c.captureGpsRecording()); assertEquals(1, writer.statuses.size)
+            ingress.installNativePlan("bike", listOf(a), vehicle()) { false }
+            val cb = assertNotNull(ingress.capture(Emitter(), "new", b, vehicle().copy(id = "wheel"), SampleSessionOwnership { true }, channel))
+            now = tick(2); assertTrue(cb.prepareForObservation())
+            ingress.retireNativeAttempt(old); ingress.disconnectNative { false }
+            assertEquals("wheel", c.state.value.intent.ride?.vehicleId)
+            assertEquals(2, writer.begins.size); assertEquals(1, writer.statuses.size)
+            now = tick(3); ingress.disconnectNative { true }; assertEquals(2, writer.statuses.size)
+        } finally { channel.close() }
+    }
+
+    @Test fun unsupportedNewNativePlanEndsOldGpsAndKeepsLiveDecodeAvailable() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); var fail = false; var now = tick()
+        val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+        val ingress = HistoryTelemetryIngress(c, { now }, { _, _ ->
+            if (fail) error("unsupported source ownership")
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source)
+        }, manageConnections = true)
+        val channel = Channel<Sample>(2)
+        try {
+            ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
+            assertTrue(assertNotNull(ingress.capture(Emitter(), "first", spec, vehicle(), SampleSessionOwnership { true }, channel)).prepareForObservation())
+            fail = true; now = tick(1)
+            val otherSpec = spec.copy(address = "other")
+            ingress.installNativePlan("wheel", listOf(otherSpec), vehicle().copy(id = "wheel")) { true }
+            assertNull(c.captureGpsRecording()); assertNull(c.state.value.intent.ride)
+            assertEquals(1L, ingress.diagnostics.value.setupFailures)
+            val live = Emitter()
+            val capture = ingress.capture(live, "unsupported", otherSpec, vehicle(), SampleSessionOwnership { true }, channel)
+            assertNull(capture)
+            processObservedSessionNotification(live, byteArrayOf(4), NoSampleEverWatchdogActivity(live), capture)
+            assertEquals(1, live.decodes); assertEquals(1, writer.begins.size)
+        } finally { channel.close() }
+    }
+
+    @Test fun installedNativeRepositoryPlanOwnsPreparationAndExplicitDisconnect() = bleRepositoryTest { repo ->
+        val writer = Writer(); val c = controller(writer); val v = vehicle()
+        val ingress = HistoryTelemetryIngress(c, { tick() }, manageConnections = true)
+        repo.configureHistoryTelemetryIngress(ingress)
+        repo.installLinksForTest(v, v.packs.single().bmsAddress, BmsType.JK_BMS)
+        repo.prepareInstalledHistoryForTest()
+        val p = Emitter(); val owner = SampleSessionOwnership { true }
+        val capture = assertNotNull(repo.historyTelemetryCaptureForTest(p, v.packs.single().bmsAddress, owner))
+        assertTrue(capture.prepareForObservation()); assertEquals(v.id, c.state.value.intent.ride?.vehicleId)
+        capture.processNotification(byteArrayOf(5)); runCurrent()
+        assertEquals(5.0, writer.samples.single().samples.single().value)
+        repo.disconnect()
+        assertNull(c.state.value.intent.ride); assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses)
     }
 
     @Test fun preparationAdmitsFirstNativeFactOnlyAfterWriterBeginAck() = kotlinx.coroutines.test.runTest {

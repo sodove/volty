@@ -93,6 +93,9 @@ internal class ConnectionSession(
     @Volatile
     private var torn: Boolean = false
 
+    /** Opaque immutable identity for recording retirement, never a transport command target. */
+    internal val recordingAttempt: Any get() = protocol
+
     internal fun ownsProtocol(candidate: BmsProtocol): Boolean = !torn && protocol === candidate
 
     private var observeJob: Job? = null
