@@ -640,3 +640,11 @@ even when the shared provider's Available status stays unchanged. Unrelated dema
 changes do not resample fixes or reset expiry. Consumer intent remains distinct
 from native foreground acknowledgement; that admission/cleanup binding and runtime
 activation are still pending.
+
+Task7 foreground-admission checkpoint (2026-10-16): GPS now requires its own
+recording identity, acknowledged native foreground and a separate provider-acquisition
+acknowledgement. Capture revocation serializes with nonblocking writer submission;
+original native cleanup remains a separate obligation. Reopening controller intake
+retries a gap rejected while accepted telemetry drains. A foreground-only ACK cannot
+admit a point, nor can another controller with matching public ride ID/generation.
+Native service promotion, provider cleanup ownership and runtime activation remain open.

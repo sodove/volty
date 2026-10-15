@@ -2,6 +2,7 @@ package ru.sodovaya.volty.data.history
 
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -42,6 +43,9 @@ class RideRecordingController(
     private val mutableState = MutableStateFlow(HistoryRecordingRuntimeState())
     val state: StateFlow<HistoryRecordingRuntimeState> = mutableState
     private val admission = MutableStateFlow<Owner?>(null)
+    // Reopen is observable even when the ride survives a BLE control. A GPS event
+    // rejected while intake was fenced must be reconciled without a new provider fix.
+    internal val gpsAdmissionChanges = admission.map { Unit }
     private val mutableTelemetryFailure = MutableStateFlow<HistoryRecordingFailure?>(null)
     val telemetryFailure: StateFlow<HistoryRecordingFailure?> = mutableTelemetryFailure
     private val controls = Mutex()

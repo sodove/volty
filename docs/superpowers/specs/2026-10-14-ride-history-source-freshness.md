@@ -1249,3 +1249,19 @@ Consumer presence is a prerequisite, not native foreground proof. The native own
 must still admit foreground before enabling HISTORY_RECORDING and fence GPS
 admission before asynchronous native cleanup on loss. This observer change does
 not activate providers, foreground location or the new runtime by itself.
+
+## Recording-scoped foreground admission checkpoint (2026-10-16)
+
+The independent history authority binds one controller capability to an exact native
+service incarnation. It distinguishes foreground promotion from provider acquisition,
+fences capture before original cleanup, and serializes the final writer offer with
+revocation. Atomic snapshots and post-publication checks protect synchronous observer
+replacement. Finite foreground waits retire only their original ticket on timeout or
+cancellation. Reused UUID-generator output cannot replay a retired command ID.
+
+The GPS observer combines consumer, foreground/provider ACK and controller admission.
+Reopening after an accepted telemetry-prefix wait retries a previously rejected outage.
+A test revokes capture after input qualification but before writer submission; the
+serialized final guard prevents the cached decision admitting a coordinate. Common
+proof does not establish Android promotion/provider cleanup or background acceptance.
+No native foreground launch or new recorder activation is introduced here.

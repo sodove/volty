@@ -7,6 +7,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
@@ -16,12 +17,14 @@ import ru.sodovaya.volty.domain.location.RideLocationState
 import ru.sodovaya.volty.domain.location.RideLocationStatus
 
 /** App-owned recording observer; activation and native service demand are separate.
- * Own consumer demand is necessary; native foreground proof remains its owner's responsibility.
+ * Both actual native foreground and provider acquisition must be acknowledged for this recording.
+ * Capture is fenced separately from the original owner's native cleanup acknowledgement.
  */
 internal class HistoryGpsRecorder(
     scope: CoroutineScope,
     controller: RideRecordingController,
     locations: StateFlow<RideLocationState>,
+    foreground: HistoryLocationForegroundAuthority,
     readTick: () -> HistoryTick,
     maxAgeMillis: Long = 10_000L,
 ) {
@@ -39,12 +42,17 @@ internal class HistoryGpsRecorder(
                 if (gap == null && controller.offerGpsGap(ride.id, now) == HistoryOffer.ACCEPTED) gap = now
             }
 
-            locations.map { state ->
-                // Retraction: status alone let MAP/Nearby coordinates bypass history's own
-                // demand and hid its revocation while another consumer kept Available.
-                if (LocationConsumer.HISTORY_RECORDING in state.demands) state.status
-                else RideLocationStatus.NotRequested
-            }.distinctUntilChanged().collectLatest location@{ status ->
+            combine(locations, foreground.state, controller.gpsAdmissionChanges) { state, native, _ ->
+                val captured = controller.captureGpsRecording()?.takeIf { it.rideId == ride.id }
+                // Retraction: consumer intent alone cannot prove native foreground/provider ACK.
+                val status = if (captured != null && native.captureReady &&
+                    LocationConsumer.HISTORY_RECORDING in state.demands && foreground.canCapture(captured)) state.status
+                    else RideLocationStatus.NotRequested
+                // Reopening controller intake must retry an unavailable status rejected during
+                // its fence, even when the provider and foreground status did not change again.
+                HistoryGpsInput(status, captured != null)
+            }.distinctUntilChanged().collectLatest location@{ input ->
+                val status = input.status
                 val captured = controller.captureGpsRecording() ?: return@location
                 if (captured.rideId != ride.id) return@location
                 try {
@@ -68,7 +76,9 @@ internal class HistoryGpsRecorder(
                     if (openGap != null && fix.tick.elapsedMillis <= openGap.elapsedMillis) return@location
                     if (previous == null || fix.tick.elapsedMillis >= previous.tick.elapsedMillis) {
                         if (fix != previous) {
-                            if (controller.offerGps(ride.id, fix) != HistoryOffer.ACCEPTED) return@location
+                            // Input projection can be overtaken by native revocation. Serialize
+                            // the nonblocking offer with that exact recording's capture fence.
+                            if (foreground.offer(captured) { controller.offerGps(ride.id, fix) } != HistoryOffer.ACCEPTED) return@location
                             lastFix = fix
                             gap = null
                         }
@@ -99,3 +109,5 @@ internal class HistoryGpsRecorder(
 
     fun close() { job.cancel() }
 }
+
+private data class HistoryGpsInput(val status: RideLocationStatus, val admissionOpen: Boolean)

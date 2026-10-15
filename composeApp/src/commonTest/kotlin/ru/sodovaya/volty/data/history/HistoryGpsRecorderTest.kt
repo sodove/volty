@@ -10,25 +10,123 @@ import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryGpsRecorderTest {
-    private class Fixture(val test: TestScope, scopeOverride: CoroutineScope? = null) {
+    private class Fixture(val test: TestScope, scopeOverride: CoroutineScope? = null, val autoForeground: Boolean = true) {
         val writer = Writer()
         var nextId = 0
         val location = MutableStateFlow(RideLocationState())
-        val controller = RideRecordingController(writer, HistoryRecordingDemand { enabled ->
+        val foreground = HistoryLocationForegroundAuthority({ true }) { "10000000-0000-0000-0000-000000000001" }
+        val nativeService = Any()
+        var nativeTicket: HistoryLocationForegroundTicket? = null
+        val controller = RideRecordingController(writer, HistoryRecordingDemand(::demand), { "ride-${++nextId}" }, { 0 })
+        private fun demand(enabled: Boolean) {
             val state = location.value
             location.value = state.copy(demands = if (enabled) state.demands + LocationConsumer.HISTORY_RECORDING
                 else state.demands - LocationConsumer.HISTORY_RECORDING)
-        }, { "ride-${++nextId}" }, { 0 })
+            if (enabled) {
+                val ticket = foreground.request(checkNotNull(controller.captureGpsRecording())) { }
+                nativeTicket = ticket
+                if (autoForeground) {
+                    check(foreground.acknowledge(ticket, nativeService))
+                    check(foreground.admitCapture(ticket))
+                }
+            } else nativeTicket?.let(foreground::stop)
+        }
         val scope = scopeOverride ?: CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
         var beforeRead: () -> Unit = { }
         fun tick() = HistoryTick(10_000 + test.testScheduler.currentTime, 100 + test.testScheduler.currentTime, 1)
-        val recorder = HistoryGpsRecorder(scope, controller, location, { beforeRead(); tick() }, maxAgeMillis = 1_000)
+        val recorder = HistoryGpsRecorder(scope, controller, location, foreground, { beforeRead(); tick() }, maxAgeMillis = 1_000)
         suspend fun start() { controller.execute(RecordingInput.Start("bike", 7, tick()), listOf(HistorySource("p", HistorySourceKind.BATTERY, "P"))) }
         fun status(value: RideLocationStatus) { location.value = location.value.copy(status = value) }
         fun fix(elapsed: Long = tick().elapsedMillis, wall: Long = 123_456, latitude: Double = 56.0) = RideLocationFix(
             GeoCoordinate(latitude, 60.0), 5.0, null, null, tick().epochMillis, elapsed, LocationSource.GPS, wall)
         fun fixes() = writer.offers.flatMap { it.gps }
         fun gaps() = writer.offers.flatMap { it.markers }.filter { it.kind == HistoryMarkerKind.GPS_GAP }
+    }
+
+    @Test fun captureRevokedBetweenQualifiedInputAndWriterOfferCannotIssueCoordinate() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Searching); f.start(); runCurrent()
+        advanceTimeBy(1)
+        val ticket = assertNotNull(f.nativeTicket)
+        var qualifiedReadReached = false
+        f.beforeRead = {
+            f.beforeRead = { }
+            assertTrue(f.foreground.canCapture(assertNotNull(f.controller.captureGpsRecording())))
+            qualifiedReadReached = true
+            assertTrue(f.foreground.fenceCapture(ticket))
+        }
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertTrue(qualifiedReadReached, "Driver must revoke after input qualification, before offer")
+        assertTrue(f.fixes().isEmpty(), "A cached input decision bypassed foreground revocation")
+        assertTrue(f.foreground.admitCapture(ticket)); runCurrent()
+        assertEquals(1, f.fixes().size)
+    }
+
+    @Test fun requestedProviderAndNativeForegroundAloneCannotBypassCaptureAcknowledgement() = runTest {
+        val f = Fixture(this, autoForeground = false)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        assertTrue(f.fixes().isEmpty())
+        assertEquals(1, f.gaps().size)
+        val ticket = assertNotNull(f.nativeTicket)
+        assertTrue(f.foreground.acknowledge(ticket, f.nativeService)); runCurrent()
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertTrue(f.fixes().isEmpty(), "Native foreground did not prove provider acquisition")
+        assertTrue(f.foreground.admitCapture(ticket)); runCurrent()
+        assertEquals(1, f.fixes().size)
+    }
+
+    @Test fun captureRevocationOpensGapBeforeSharedProviderOrNativeServiceStops() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        advanceTimeBy(10)
+        val retained = f.location.value
+        val ticket = assertNotNull(f.nativeTicket)
+        assertTrue(f.foreground.fenceCapture(ticket)); runCurrent()
+        assertEquals(retained, f.location.value)
+        assertTrue(f.foreground.allows(ticket.recording), "Foreground must remain until original cleanup")
+        assertEquals(listOf(f.tick()), f.gaps().map { it.tick })
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(1, f.fixes().size)
+        assertTrue(f.foreground.admitCapture(ticket)); runCurrent()
+        assertEquals(2, f.fixes().size)
+    }
+
+    @Test fun foregroundAndProviderAcknowledgedForForeignRecordingCannotFeedMatchingRideId() = runTest {
+        val f = Fixture(this, autoForeground = false)
+        f.status(RideLocationStatus.Searching); f.start(); runCurrent()
+        val foreign = CapturedHistoryGpsRecording("ride-1", 1, Any())
+        val ticket = f.foreground.request(foreign) { }
+        assertTrue(f.foreground.acknowledge(ticket, f.nativeService))
+        assertTrue(f.foreground.admitCapture(ticket)); assertTrue(f.foreground.canCapture(foreign))
+        assertFalse(f.foreground.canCapture(assertNotNull(f.controller.captureGpsRecording())))
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertTrue(f.fixes().isEmpty(), "Same ride ID/generation borrowed another controller's foreground")
+        val actual = f.foreground.request(assertNotNull(f.controller.captureGpsRecording())) { }
+        assertTrue(f.foreground.acknowledge(actual, f.nativeService)); assertTrue(f.foreground.admitCapture(actual)); runCurrent()
+        assertEquals(1, f.fixes().size)
+    }
+
+    @Test fun captureRevocationWhileRecordingGateWaitsIsReconciledAfterGateReopens() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        advanceTimeBy(5)
+        val context = assertNotNull(f.controller.captureTelemetryRecording())
+        val queued = assertNotNull(f.controller.reserveQueuedTelemetry(context, f.tick(), "p"))
+        val losing = backgroundScope.async { f.controller.execute(RecordingInput.LinkLost(7, f.tick())) }
+        try {
+            runCurrent(); assertFalse(losing.isCompleted); assertNull(f.controller.captureGpsRecording())
+            assertTrue(f.foreground.fenceCapture(assertNotNull(f.nativeTicket))); runCurrent()
+            assertTrue(f.gaps().isEmpty(), "Closed controller intake cannot accept the marker yet")
+            assertEquals(HistoryOffer.ACCEPTED, queued.offer(HistoryBatch("ride-1",
+                listOf(HistorySample(f.tick(), HistorySeriesKey("p", "power_w"), 100.0)), emptyList(), emptyList())))
+            losing.await(); runCurrent()
+            assertEquals(listOf(f.tick()), f.gaps().map { it.tick })
+            assertEquals(1, f.fixes().size)
+        } finally { queued.discard(); losing.cancelAndJoin() }
     }
 
     @Test fun availableFixFromAnotherConsumerCannotEnterHistoryWithoutItsOwnDemand() = runTest {
