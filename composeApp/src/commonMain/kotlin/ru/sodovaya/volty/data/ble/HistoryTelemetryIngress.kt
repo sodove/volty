@@ -26,25 +26,38 @@ internal class HistoryTelemetryIngress(
     val diagnostics: StateFlow<HistoryTelemetryIngressDiagnostics> = mutableDiagnostics
 
     fun capture(protocol: BmsProtocol, sessionId: String, spec: LinkSpec, vehicle: Vehicle?,
-        ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? = try {
-        historySessionTelemetryCapture(protocol, sessionId, controller, readTick, ownership::isCurrent,
-            sources(spec, vehicle)) { telemetry ->
-            val sent = channel.trySend(HistoryTelemetrySample(telemetry, controller, ownership))
-            if (sent.isFailure) {
-                // A counter alone cannot qualify a completed ride as partial.
-                // Latch on the captured owner without bypassing numeric delivery.
-                controller.reportTelemetryIngressLoss(telemetry.recording, telemetry.tick, telemetry.source.id)
-                mutableDiagnostics.update {
-                    it.copy(droppedObservations = increment(it.droppedObservations),
-                        lastFailure = if (sent.isClosed) HistoryTelemetryIngressFailure.CLOSED else HistoryTelemetryIngressFailure.FULL)
+        ownership: SampleSessionOwnership, channel: SendChannel<Sample>): SessionTelemetryCapture? {
+        // Capture before the planner: control may replace this ride while setup runs.
+        val recording = controller.captureTelemetryRecording()
+        return try {
+            historySessionTelemetryCapture(protocol, sessionId, controller, readTick, ownership::isCurrent,
+                sources(spec, vehicle)) { telemetry ->
+                val sent = channel.trySend(HistoryTelemetrySample(telemetry, controller, ownership))
+                if (sent.isFailure) {
+                    // A counter alone cannot qualify a completed ride as partial.
+                    // Latch on the captured owner without bypassing numeric delivery.
+                    controller.reportTelemetryIngressLoss(telemetry.recording, telemetry.tick, telemetry.source.id)
+                    mutableDiagnostics.update {
+                        it.copy(droppedObservations = increment(it.droppedObservations),
+                            lastFailure = if (sent.isClosed) HistoryTelemetryIngressFailure.CLOSED else HistoryTelemetryIngressFailure.FULL)
+                    }
                 }
             }
+        } catch (_: Exception) {
+            // Setup has no acquired observation/source ID. Conservatively qualify
+            // only this vehicle's captured telemetry owner and current attempt.
+            if (recording != null && vehicle != null) {
+                try {
+                    if (ownership.isCurrent()) controller.reportTelemetrySetupFailure(recording, vehicle.id)
+                } catch (_: Exception) {
+                    // An ownership predicate failure cannot break ordinary live BLE.
+                }
+            }
+            // Recording setup cannot prevent the dashboard's ordinary BLE decode.
+            mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
+                lastFailure = HistoryTelemetryIngressFailure.SETUP) }
+            null
         }
-    } catch (_: Exception) {
-        // Recording setup cannot prevent the dashboard's ordinary BLE decode.
-        mutableDiagnostics.update { it.copy(setupFailures = increment(it.setupFailures),
-            lastFailure = HistoryTelemetryIngressFailure.SETUP) }
-        null
     }
 
     private fun increment(value: Long): Long = if (value < Long.MAX_VALUE) value + 1 else value

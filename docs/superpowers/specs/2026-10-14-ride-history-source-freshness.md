@@ -693,3 +693,38 @@ errors or skips; 100s, all 37 tasks executed including actual migration
 verification. No DDL/schema snapshot/old-row rewrite was introduced. Native heap/
 latency, source-aware component admission, final runtime integration and screens
 remain open; the existing live/historical graph routes remain in place.
+
+## 2026-10-15 — active recording setup-loss verdict (Task7 checkpoint)
+
+Previously, an optional ingress setup exception only incremented a diagnostic
+counter and returned no capture. During an active recording that could leave the
+ride eligible for COMPLETED despite its unavailable observer. Setup now snapshots
+the recording capability before the planner runs. Its failure can downqualify
+only that exact gate/generation/ride and current connection, with a current BLE
+attempt, matching non-null vehicle and nonempty telemetry registry. It reuses the
+existing gate reservation/failure latch without IO, a new clock read or numeric
+publication. The verdict survives reconnect and makes durable finish INTERRUPTED.
+
+A supplier that failed cannot provide qualified source IDs. The conservative rule
+therefore marks that current vehicle's telemetry recording incomplete; intentionally
+unsupported links must return an empty map instead of throwing. Until source-plan
+admission is complete, this can conservatively affect a configured noncontributor
+failure on the same vehicle; it cannot falsely certify lost data. Null/wrong
+vehicle, retired attempt, empty telemetry registry and an owner replaced inside
+the planner cannot receive the verdict. An ownership-predicate exception remains
+contained so ordinary live decoding continues.
+
+h155 genuine RED: 15 tests, two new active-owner positive cases failed; the other
+13 passed (41s). h156 fresh focused: 39 tests/3 XML, zero failures/errors/skips,
+54s. Tests cover a throwing plan and invalid role binding, reconnect finish,
+zero setup clock reads/no invented samples/live decode, four unqualified cases,
+stop/start within the failed planner and a throwing ownership predicate.
+Readonly Luna xhigh review found no concrete ownership/containment defect.
+h157 full fresh: 3803 tests/390 XML, all newer than UTC start, zero failures,
+errors or skips; 100s and all 36 tasks executed. No SQL changes in this checkpoint;
+actual migration verification last passed in h154.
+
+Initial setup failure before any recording owner exists still needs a runtime
+readiness gate. This checkpoint does not solve that case or enable DI/recording.
+Source planning/aliases, calibrated joins, GPS/service ownership and old-writer
+retirement remain open. No BLE commands, cadence or Begode FFE1 writes changed.

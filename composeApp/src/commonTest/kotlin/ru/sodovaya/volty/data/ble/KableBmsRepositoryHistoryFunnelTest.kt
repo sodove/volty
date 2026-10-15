@@ -143,6 +143,107 @@ class KableBmsRepositoryHistoryFunnelTest {
         channel.close()
     }
 
+    @Test fun currentVehiclePlanFailureInterruptsItsRecordingWithoutInventingSamples() = kotlinx.coroutines.test.runTest {
+        assertOwnedSetupFailure(invalidBinding = false)
+    }
+
+    @Test fun invalidCurrentVehicleRoleBindingAlsoInterruptsItsRecording() = kotlinx.coroutines.test.runTest {
+        assertOwnedSetupFailure(invalidBinding = true)
+    }
+
+    private suspend fun assertOwnedSetupFailure(invalidBinding: Boolean) {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        var plans = 0; var clocks = 0
+        val ingress = HistoryTelemetryIngress(c, { clocks++; tick(1) }, { _, _ ->
+            plans++
+            if (!invalidBinding) error("injected plan failure")
+            mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source.copy(kind = HistorySourceKind.CONTROLLER))
+        })
+        val v = vehicle(); val protocol = Emitter(); val channel = Channel<Sample>(1)
+        try {
+            val capture = ingress.capture(protocol, "attempt", LinkSpec(v.packs.single().bmsAddress, ProtocolKind.JK,
+                listOf(OwnedSource(0))), v, SampleSessionOwnership { true }, channel)
+            assertNull(capture)
+            assertEquals(1, plans)
+            assertEquals(1L, ingress.diagnostics.value.setupFailures)
+            assertEquals(HistoryTelemetryIngressFailure.SETUP, ingress.diagnostics.value.lastFailure)
+            assertEquals(HistoryRecordingFailure("ride-1", "SetupFailure"), c.telemetryFailure.value)
+            assertEquals(0, clocks, "setup loss must not fabricate an acquisition timestamp")
+            processObservedSessionNotification(protocol, byteArrayOf(1), NoSampleEverWatchdogActivity(protocol), capture)
+            assertEquals(1, protocol.decodes)
+            assertTrue(writer.samples.isEmpty())
+            c.execute(RecordingInput.LinkLost(7, tick(2)))
+            c.execute(RecordingInput.Connected("bike", 8, tick(3)))
+            c.execute(RecordingInput.Stop(tick(4), 8, "ride-1"))
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
+        } finally { channel.close() }
+    }
+
+    @Test fun unqualifiedSetupFailureCannotPoisonAnUnrelatedOrGpsOnlyRecording() = kotlinx.coroutines.test.runTest {
+        for (case in listOf("other-vehicle", "missing-vehicle", "retired-attempt", "no-telemetry")) {
+            val writer = Writer(); val c = controller(writer)
+            c.execute(RecordingInput.Connected("bike", 7, tick()), if (case == "no-telemetry") emptyList() else listOf(source))
+            val owner = SampleSessionOwnership { true }; var plans = 0
+            val ingress = HistoryTelemetryIngress(c, { error("setup must not read clock") }, { _, _ ->
+                plans++
+                if (case == "retired-attempt") owner.retire()
+                error("injected plan failure")
+            })
+            val v = when (case) { "other-vehicle" -> vehicle().copy(id = "other"); "missing-vehicle" -> null; else -> vehicle() }
+            val channel = Channel<Sample>(1)
+            try {
+                assertNull(ingress.capture(Emitter(), "attempt", LinkSpec("address", ProtocolKind.JK), v, owner, channel))
+                assertEquals(1, plans)
+                assertEquals(1L, ingress.diagnostics.value.setupFailures)
+                assertNull(c.telemetryFailure.value, case)
+                c.execute(RecordingInput.Stop(tick(1), 7, "ride-1"))
+                assertEquals(listOf(HistoryRideStatus.COMPLETED), writer.statuses, case)
+            } finally { channel.close() }
+        }
+    }
+
+    @Test fun failedOldSetupCannotAttachItsVerdictToANewRideStartedInsideThePlanner() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        var plans = 0
+        val ingress = HistoryTelemetryIngress(c, { error("setup must not read clock") }, { _, _ ->
+            plans++
+            runBlocking {
+                c.execute(RecordingInput.Stop(tick(1), 7, "ride-1"))
+                c.execute(RecordingInput.Start("bike", 7, tick(2)), listOf(source))
+            }
+            error("injected old plan failure")
+        })
+        val channel = Channel<Sample>(1)
+        try {
+            assertNull(ingress.capture(Emitter(), "attempt", LinkSpec("address", ProtocolKind.JK), vehicle(),
+                SampleSessionOwnership { true }, channel))
+            assertEquals(1, plans)
+            assertEquals(1L, ingress.diagnostics.value.setupFailures)
+            assertEquals("ride-2", c.state.value.intent.ride?.id)
+            assertNull(c.telemetryFailure.value)
+            c.execute(RecordingInput.Stop(tick(3), 7, "ride-2"))
+            assertEquals(listOf(HistoryRideStatus.COMPLETED, HistoryRideStatus.COMPLETED), writer.statuses)
+        } finally { channel.close() }
+    }
+
+    @Test fun setupOwnershipPredicateFailureStillLeavesLiveDecodeUsable() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer)
+        c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))
+        val ingress = HistoryTelemetryIngress(c, { tick() }, { _, _ -> error("injected plan failure") })
+        val protocol = Emitter(); val channel = Channel<Sample>(1)
+        try {
+            val capture = ingress.capture(protocol, "attempt", LinkSpec("address", ProtocolKind.JK), vehicle(),
+                SampleSessionOwnership { error("injected ownership failure") }, channel)
+            assertNull(capture)
+            assertEquals(1L, ingress.diagnostics.value.setupFailures)
+            assertNull(c.telemetryFailure.value)
+            processObservedSessionNotification(protocol, byteArrayOf(1), NoSampleEverWatchdogActivity(protocol), capture)
+            assertEquals(1, protocol.decodes)
+        } finally { channel.close() }
+    }
+
     @Test fun nativeIngressRetiredAttemptDoesNotReadReceiptOrEnqueue() = kotlinx.coroutines.test.runTest {
         val writer = Writer(); val c = controller(writer)
         c.execute(RecordingInput.Connected("bike", 7, tick()), listOf(source))

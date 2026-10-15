@@ -109,15 +109,21 @@ class RideRecordingController(
     internal fun reportTelemetryReceiptLoss(context: CapturedHistoryRecording, sourceId: String): Boolean =
         reportCapturedTelemetryLoss(context, null, sourceId, "ReceiptLoss")
 
+    /** Caller must qualify the current BLE attempt; the captured recording cannot move to a new owner. */
+    internal fun reportTelemetrySetupFailure(context: CapturedHistoryRecording, vehicleId: String): Boolean =
+        reportCapturedTelemetryLoss(context, null, null, "SetupFailure", vehicleId)
+
     private fun reportCapturedTelemetryLoss(context: CapturedHistoryRecording, receiptTick: HistoryTick?,
-        sourceId: String, reason: String): Boolean {
+        sourceId: String?, reason: String, vehicleId: String? = null): Boolean {
         val owner = admission.value ?: return false
         val ride = owner.intent.ride ?: return false
-        // A failed receipt clock cannot create a new tick. Reuse only this
+        // Receipt loss/setup failure cannot create a new acquired tick. Reuse only this
         // validated owner's existing admission bound for the failure verdict.
         val tick = receiptTick ?: owner.last
+        val targetMatches = if (sourceId != null) sourceId in owner.sources
+            else vehicleId == ride.vehicleId && owner.sources.isNotEmpty()
         if (context.gate !== owner.gate || context.generation != owner.generation ||
-            context.rideId != ride.id || sourceId !in owner.sources ||
+            context.rideId != ride.id || !targetMatches ||
             !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
             historyAxisEpochMillis(ride.started, tick) == null) return false
         if (!owner.gate.reserve(tick)) return false
