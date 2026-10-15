@@ -15,6 +15,9 @@ internal fun historyGpsFix(
     require(maxAgeMillis >= 0L) { "Maximum GPS fix age must be non-negative" }
 
     if (historyAxisEpochMillis(origin, now) == null) return null
+    // Retraction: capturedAtEpochMillis follows navigation's receipt/last-known
+    // freshness policy; on live Android callbacks it is not acquisition time.
+    val measurementEpochMillis = fix.measurementAtEpochMillis ?: return null
 
     val capturedElapsedMillis = fix.elapsedRealtimeMillis ?: return null
     if (capturedElapsedMillis < origin.elapsedMillis || capturedElapsedMillis > now.elapsedMillis) return null
@@ -30,7 +33,7 @@ internal fun historyGpsFix(
 
     return HistoryGpsFix(
         tick = HistoryTick(
-            epochMillis = fix.capturedAtEpochMillis,
+            epochMillis = measurementEpochMillis,
             elapsedMillis = capturedElapsedMillis,
             clockGeneration = origin.clockGeneration,
         ),

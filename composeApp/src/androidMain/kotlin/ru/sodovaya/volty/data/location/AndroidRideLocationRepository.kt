@@ -250,6 +250,7 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
                 .takeIf { it > 0L }
                 ?.div(1_000_000L),
             source = source,
+            measurementAtEpochMillis = location.time,
         )
         val acceptance = LocationDemandPolicy.acceptFix(policyState, generation, fix)
         if (!acceptance.accepted) return

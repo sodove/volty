@@ -545,3 +545,26 @@ the field correction, with the receipt/count checks passing. Final h138 fresh:
 3765 tests/385 reports, zero failures/errors/skips, 102 seconds/all 36 tasks
 executed. Narrow readonly re-review found no concrete remaining defect. DI/source
 planning, alias admission and other runtime activation gates remain open.
+
+## GPS measurement time versus consumer freshness time
+
+Retraction: the original GPS adapter treated RideLocationFix.capturedAtEpochMillis
+as raw acquisition wall time. Android live callbacks intentionally populate that
+field with receipt time for navigation freshness; last-known fixes follow their
+own clamping policy. The location model now retains a separate optional immutable
+measurementAtEpochMillis, supplied directly from Android Location.time. Existing
+consumer freshness, location-source and monotonic timestamp behavior is preserved.
+
+History requires the explicit measurement field and combines it with the actual
+monotonic fix time. A fresh receipt cannot invent missing acquisition metadata.
+Existing origin/generation, age, coordinate, accuracy and heading guards remain.
+Logical history range selection still uses the monotonic ride axis, independent
+of raw wall-clock jumps. GPS collection demand, source metadata persistence and
+foreground-service ownership remain separate runtime gates.
+
+h139 failed both new regressions among seven GPS tests before the adapter change.
+h140 full fresh: 3767 tests/385 XML reports, all newer than UTC start, zero
+failures/errors/skips and all 36 tasks executed. The log reports an elapsed span
+of 5h46m17s; it is not used as a performance result. Narrow readonly source review
+found no concrete defect; Android plumbing was compiled and inspected, not tested
+with a physical GPS or instrumentation.

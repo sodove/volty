@@ -14,6 +14,18 @@ class HistoryGpsAdapterTest {
     private val origin = HistoryTick(epochMillis = 50_000L, elapsedMillis = 1_000L, clockGeneration = 7L)
     private val now = HistoryTick(epochMillis = 900_000L, elapsedMillis = 3_000L, clockGeneration = 7L)
 
+    @Test fun historyUsesActualMeasurementWallTimeRatherThanNavigationReceiptPolicy() {
+        val input = fix(capturedAtEpochMillis = 899_000L).copy(measurementAtEpochMillis = 123_456L)
+        val result = assertNotNull(historyGpsFix(origin, now, input, maxAgeMillis = 5_000L))
+        assertEquals(HistoryTick(123_456L, 2_000L, 7L), result.tick)
+        assertEquals(899_000L, input.capturedAtEpochMillis)
+    }
+
+    @Test fun missingMeasurementWallTimeCannotBeInventedFromFreshReceiptTime() {
+        val input = fix(capturedAtEpochMillis = 899_000L).copy(measurementAtEpochMillis = null)
+        assertNull(historyGpsFix(origin, now, input, maxAgeMillis = 5_000L))
+    }
+
     @Test
     fun preserves_raw_wall_and_monotonic_capture_times() {
         val result = assertNotNull(
@@ -110,5 +122,6 @@ class HistoryGpsAdapterTest {
         capturedAtEpochMillis = capturedAtEpochMillis,
         elapsedRealtimeMillis = elapsedRealtimeMillis,
         source = LocationSource.GPS,
+        measurementAtEpochMillis = capturedAtEpochMillis,
     )
 }

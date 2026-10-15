@@ -20,9 +20,12 @@ data class RideLocationFix(
     val accuracyMeters: Double,
     val speedMetersPerSecond: Double?,
     val bearingDegrees: Double?,
+    /** Consumer freshness time; live Android updates may use receipt time. */
     val capturedAtEpochMillis: Long,
     val elapsedRealtimeMillis: Long?,
     val source: LocationSource,
+    /** Original platform measurement wall time; absence must not be replaced by receipt time. */
+    val measurementAtEpochMillis: Long? = null,
 ) {
     init {
         require(accuracyMeters.isFinite() && accuracyMeters >= 0.0) {
