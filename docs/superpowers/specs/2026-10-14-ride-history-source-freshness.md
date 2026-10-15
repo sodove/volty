@@ -903,3 +903,28 @@ model was invoked. Whole-branch acceptance review is not claimed here.
 Runtime source planning/readiness, alias-path admission and calibrated joins,
 gateway hosted/derived capture, native location/service binding and activation
 remain open. The new recorder/ingress remains unconfigured in production DI.
+
+
+### Recorded metric metadata (2026-10-15)
+
+The picker can ask for actual keys in one recorded source group without reading
+numeric traces. A filtered UNION of detail and summary keys preserves sparse
+cell numbering, unknown-valued recorded rows and summary-only metrics, while
+avoiding duplicate budget consumption. Invalid metric/index shapes and oversized
+stored cell indices are rejected before the 1..20000-key output budget. Results
+explicitly report a truncated tail. Historical source IDs remain distinct even
+when labels match; current connected vehicle metadata is not consulted.
+
+Legacy metadata recognizes the existing sixteen scalar names, applies their
+canonical mapping and does not invent cell series. A v2-owned ride never borrows
+legacy keys. Real SQLite fixtures cover sparse cells, summary-only keys, malformed
+row starvation, 1001 cells, legacy/v2 shadowing and actual orphan rows. Invalid
+budgets are checked before format lookup; the fixture removes the queried table
+to make an accidental lookup observably fail. The direct store orphan assertion
+exercises its own parent guard rather than relying solely on unified routing.
+
+The first integrated run exposed a fixture error: bucket writes require an
+immutable append receipt. Production correctly rejected the incomplete fixture;
+the fixture now supplies that receipt. No production validation was relaxed.
+Verification counts are recorded in the execution ledger. This is a read-contract
+extension, not runtime recorder or screen activation.

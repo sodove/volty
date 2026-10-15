@@ -11,6 +11,21 @@ class DefaultHistoryReadRepository(
 ) : HistoryReadRepository {
     init { require(maxReadPages in 1..64) }
 
+    override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
+        require(limit in 1..PAGE_SIZE)
+        val empty = HistoryRecordedKeys(emptyList(), false)
+        if (ride(rideId) == null) return empty
+        val source = read { store.sources(rideId) }.singleOrNull { it.id == sourceId } ?: return empty
+        val result = read { store.recordedKeys(rideId, sourceId, limit) }
+        check(result.keys.size <= limit && result.keys.distinct().size == result.keys.size) { "Invalid recorded key bound/duplicates" }
+        for (key in result.keys) {
+            val metric = HistoryMetricRegistry.descriptor(key.metricId)
+            check(key.sourceId == sourceId && metric != null && source.kind in metric.sourceKinds &&
+                metric.indexedByCell == (key.cellIndex != null)) { "Unqualified recorded key" }
+        }
+        return result.copy(keys = result.keys.toList())
+    }
+
     override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> = read { store.rides(before, 20) }
     override suspend fun ride(rideId: String): HistoryRide? = read { store.ride(rideId) }
     override suspend fun sources(rideId: String): List<HistorySource> =

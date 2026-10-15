@@ -1,0 +1,12 @@
+-- Key metadata only. Admit source-kind metric/index shapes BEFORE dedup and limit.
+recordedKeysForSource:
+SELECT metricId, cellIndex FROM HistorySampleV2
+WHERE rideId = :rideId AND sourceId = :sourceId
+AND ((metricId IN :scalarMetricIds AND cellIndex = -1)
+  OR (metricId IN :indexedMetricIds AND cellIndex BETWEEN 0 AND 2147483647))
+UNION
+SELECT metricId, cellIndex FROM HistoryBucketV2
+WHERE rideId = :rideId AND sourceId = :sourceId
+AND ((metricId IN :scalarMetricIds AND cellIndex = -1)
+  OR (metricId IN :indexedMetricIds AND cellIndex BETWEEN 0 AND 2147483647))
+ORDER BY metricId, cellIndex LIMIT :pageSize;

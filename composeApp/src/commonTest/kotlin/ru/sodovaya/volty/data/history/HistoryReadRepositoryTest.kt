@@ -149,6 +149,7 @@ class HistoryReadRepositoryTest {
     }
 
     private inner class Store : HistoryStore {
+        override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = TODO("Unused metadata")
         var recordedRide: HistoryRide? = ride
         var sourceRows = listOf(source)
         var markerRows = emptyList<HistoryMarker>()

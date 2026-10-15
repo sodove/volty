@@ -51,3 +51,9 @@ WITH fractions AS (
 SELECT rideId, metricKey, timestamp, cellIndex, value, isKnown FROM timed
 WHERE capturedMillis >= :fromEpoch AND capturedMillis <= :toEpoch
 ORDER BY capturedMillis, timestamp LIMIT :pageSize;
+
+
+selectRecordedHistoryMetricKeys:
+SELECT DISTINCT metricKey FROM RidePointRow
+WHERE rideId = :rideId AND cellIndex = -1 AND metricKey IN :metricKeys
+ORDER BY metricKey LIMIT :pageSize;

@@ -2,6 +2,7 @@ package ru.sodovaya.volty.domain.history
 
 /** Durable canonical data, before UI conversion and overview projection. */
 interface HistoryStore {
+    suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int = 20000): HistoryRecordedKeys
     suspend fun begin(ride: HistoryRide, sources: List<HistorySource>)
     suspend fun ride(rideId: String): HistoryRide?
     suspend fun append(batch: HistoryBatch)

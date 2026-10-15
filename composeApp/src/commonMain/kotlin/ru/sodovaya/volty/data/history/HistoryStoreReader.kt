@@ -5,6 +5,20 @@ import ru.sodovaya.volty.data.db.HistoryBucketV2
 import ru.sodovaya.volty.domain.history.*
 
 internal class HistoryStoreReader(private val database: VoltyDatabase) {
+    fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys {
+        require(limit in 1..20000)
+        val empty = HistoryRecordedKeys(emptyList(), false)
+        if (origin(rideId) == null) return empty
+        val source = database.rideHistorySourceQueries.sourceForRide(rideId, sourceId).executeAsOneOrNull() ?: return empty
+        val allowed = HistoryMetricRegistry.forSource(HistorySourceKind.valueOf(source.kind))
+        val rows = database.rideHistorySeriesQueries.recordedKeysForSource(rideId, sourceId,
+            allowed.filterNot { it.indexedByCell }.map { it.id },
+            allowed.filter { it.indexedByCell }.map { it.id }, limit.toLong() + 1).executeAsList()
+        return HistoryRecordedKeys(rows.take(limit).map {
+            HistorySeriesKey(sourceId, it.metricId, it.cellIndex.takeIf { index -> index >= 0 }?.toInt())
+        }, rows.size > limit)
+    }
+
     fun buckets(rideId: String, key: HistorySeriesKey, range: HistoryRange, after: HistoryCursor?, limit: Int): HistoryPage<HistoryBucket> {
         require(limit in 1..20000)
         val origin = origin(rideId) ?: return emptyPage()

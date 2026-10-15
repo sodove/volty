@@ -226,6 +226,7 @@ class HistoryWriterTest {
     }
 
     private class Store : HistoryStore {
+        override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = TODO("Unused metadata")
         val calls = mutableListOf<String>()
         val batches = mutableListOf<HistoryBatch>()
         val appendTokens = mutableListOf<String?>()

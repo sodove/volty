@@ -519,3 +519,13 @@ fixture preserves two source IDs and coalesced extrema without invented energy.
 No native commands/cadence or production DI activation changed. Source planning,
 startup readiness, aliases/joins, gateway capture and GPS/service ownership remain
 open; this checkpoint does not close Task7 or foundation acceptance.
+
+
+Task8 recorded-key checkpoint (2026-10-15): read/store contracts now expose
+recordedKeys(rideId, sourceId, limit) with explicit truncation. Metadata combines
+detail and summary-only series, preserves sparse cell indices and includes
+recorded unknown-valued facts. Source-kind/metric/index admission precedes the
+SQL cap; duplicate detail/summary keys consume one slot. Legacy exposes only
+recognized scalar keys, with exclusive v2 ownership retained. This enables the
+source-aware drawer without numeric trace preloading or current-vehicle guesses.
+No new recorder, screen or DI route is activated by this checkpoint.

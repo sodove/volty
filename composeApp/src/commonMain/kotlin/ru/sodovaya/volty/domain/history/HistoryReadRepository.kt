@@ -10,7 +10,11 @@ data class HistorySeries(
     val origin: HistoryTick? = null,
 )
 
+/** Recorded keys for one expanded source group, never a guessed dense cell range. */
+data class HistoryRecordedKeys(val keys: List<HistorySeriesKey>, val truncated: Boolean)
+
 interface HistoryReadRepository {
+    suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int = 20000): HistoryRecordedKeys
     suspend fun rides(before: HistoryCursor? = null): HistoryPage<HistoryRide>
     suspend fun ride(rideId: String): HistoryRide?
     suspend fun sources(rideId: String): List<HistorySource>

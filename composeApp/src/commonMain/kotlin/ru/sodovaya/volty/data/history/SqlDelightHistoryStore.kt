@@ -22,6 +22,10 @@ class SqlDelightHistoryStore(
     private val receipts = HistoryBatchReceipts(database)
     private val bucketStorage = HistoryBucketStorage(database)
 
+    override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = withContext(dispatcher) {
+        database.transactionWithResult { reader.recordedKeys(rideId, sourceId, limit) }
+    }
+
     override suspend fun begin(ride: HistoryRide, sources: List<HistorySource>) = withContext(dispatcher) {
         require(ride.status == HistoryRideStatus.RECORDING && ride.ended == null)
         require(sources.map { it.id }.distinct().size == sources.size)

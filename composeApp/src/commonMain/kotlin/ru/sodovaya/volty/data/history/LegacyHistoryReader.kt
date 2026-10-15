@@ -25,6 +25,23 @@ data class LegacyHistorySnapshot(
 class LegacyHistoryReader(provider: VoltyDatabaseProvider,
     private val dispatcher: CoroutineDispatcher = Dispatchers.Default) : HistoryReadRepository {
     private val database = provider.database
+    override suspend fun recordedKeys(rideId: String, sourceId: String, limit: Int): HistoryRecordedKeys = withContext(dispatcher) {
+        require(limit in 1..20000)
+        database.transactionWithResult {
+            val empty = HistoryRecordedKeys(emptyList(), false)
+            if (database.rideRowQueries.selectById(rideId).executeAsOneOrNull() == null) return@transactionWithResult empty
+            val allowed = legacyMetrics.filterValues { it.sourceId == sourceId }
+            if (allowed.isEmpty()) return@transactionWithResult empty
+            // There are at most16 recognized legacy scalar names. Read that fixed
+            // metadata frame, then order by canonical key before the caller's cap.
+            val keys = database.ridePointRowQueries.selectRecordedHistoryMetricKeys(rideId, allowed.keys,
+                allowed.size.toLong()).executeAsList().map { old ->
+                HistorySeriesKey(sourceId, checkNotNull(allowed[old]).id)
+            }.distinct().sortedBy { it.metricId }
+            HistoryRecordedKeys(keys.take(limit), keys.size > limit)
+        }
+    }
+
     override suspend fun rides(before: HistoryCursor?): HistoryPage<HistoryRide> = withContext(dispatcher) {
         val rows = database.rideRowQueries.pageLegacyHistory(before?.epochMillis, before?.stableId.orEmpty(), 21,
             ::historyRide).executeAsList()
@@ -109,22 +126,23 @@ class LegacyHistoryReader(provider: VoltyDatabaseProvider,
 private data class LegacyMetric(val id: String, val sourceId: String, val canonicalMultiplier: Double = 1.0)
 
 /** The retired recorder persisted GraphTelemetryMapper's display values, not wire values. */
-private fun legacyMetric(key: String): LegacyMetric? = when (key) {
-    "SOC" -> LegacyMetric("soc_percent", "legacy-battery")
-    "POWER" -> LegacyMetric("power_w", "legacy-battery", -1.0)
-    "CURRENT" -> LegacyMetric("current_a", "legacy-battery", -1.0)
-    "VOLTAGE" -> LegacyMetric("voltage_v", "legacy-battery")
-    "TEMPERATURE" -> LegacyMetric("battery_temperature_c", "legacy-battery")
-    "CELL_MIN_V" -> LegacyMetric("cell_min_v", "legacy-battery")
-    "CELL_MAX_V" -> LegacyMetric("cell_max_v", "legacy-battery")
-    "CELL_DELTA_MV" -> LegacyMetric("cell_delta_mv", "legacy-battery")
-    "SPEED" -> LegacyMetric("speed_kmh", "legacy-motion")
-    "DUTY" -> LegacyMetric("duty_percent", "legacy-motion")
-    "MOTOR_CURRENT" -> LegacyMetric("motor_current_a", "legacy-motion")
-    "INPUT_VOLTAGE" -> LegacyMetric("input_voltage_v", "legacy-motion")
-    "MOTOR_POWER" -> LegacyMetric("controller_power_w", "legacy-motion")
-    "ERPM" -> LegacyMetric("erpm", "legacy-motion")
-    "ESC_TEMPERATURE" -> LegacyMetric("esc_temperature_c", "legacy-motion")
-    "MOTOR_TEMPERATURE" -> LegacyMetric("motor_temperature_c", "legacy-motion")
-    else -> null
-}
+private fun legacyMetric(key: String): LegacyMetric? = legacyMetrics[key]
+
+private val legacyMetrics = mapOf(
+    "SOC" to LegacyMetric("soc_percent", "legacy-battery"),
+    "POWER" to LegacyMetric("power_w", "legacy-battery", -1.0),
+    "CURRENT" to LegacyMetric("current_a", "legacy-battery", -1.0),
+    "VOLTAGE" to LegacyMetric("voltage_v", "legacy-battery"),
+    "TEMPERATURE" to LegacyMetric("battery_temperature_c", "legacy-battery"),
+    "CELL_MIN_V" to LegacyMetric("cell_min_v", "legacy-battery"),
+    "CELL_MAX_V" to LegacyMetric("cell_max_v", "legacy-battery"),
+    "CELL_DELTA_MV" to LegacyMetric("cell_delta_mv", "legacy-battery"),
+    "SPEED" to LegacyMetric("speed_kmh", "legacy-motion"),
+    "DUTY" to LegacyMetric("duty_percent", "legacy-motion"),
+    "MOTOR_CURRENT" to LegacyMetric("motor_current_a", "legacy-motion"),
+    "INPUT_VOLTAGE" to LegacyMetric("input_voltage_v", "legacy-motion"),
+    "MOTOR_POWER" to LegacyMetric("controller_power_w", "legacy-motion"),
+    "ERPM" to LegacyMetric("erpm", "legacy-motion"),
+    "ESC_TEMPERATURE" to LegacyMetric("esc_temperature_c", "legacy-motion"),
+    "MOTOR_TEMPERATURE" to LegacyMetric("motor_temperature_c", "legacy-motion"),
+)

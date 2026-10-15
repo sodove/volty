@@ -15,3 +15,6 @@ SELECT * FROM HistorySourceV2 WHERE rideId = :rideId ORDER BY id;
 
 deleteSources:
 DELETE FROM HistorySourceV2 WHERE rideId = :rideId;
+
+sourceForRide:
+SELECT * FROM HistorySourceV2 WHERE rideId = :rideId AND id = :sourceId;
