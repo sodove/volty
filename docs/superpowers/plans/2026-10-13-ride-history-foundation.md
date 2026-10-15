@@ -502,3 +502,10 @@ All-unknown-provider batches keep their exact v1 fingerprint; known-provider
 batches use a distinct v2 encoding. Native source classification, request cadence,
 permissions, services and DI activation are unchanged. Source planning/calibration/
 alias readiness and runtime service/recorder ownership remain open.
+
+
+Task7 location-demand policy checkpoint (2026-10-15): HISTORY_RECORDING is an
+independent consumer and selects the existing zero-distance navigation request.
+MAP/Nearby removal preserves history ownership; removing the last history owner
+retires old callbacks. Native permission/service admission and actual recording
+runtime binding remain open. No new recorder or native location demand activated.

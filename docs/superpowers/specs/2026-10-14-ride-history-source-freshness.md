@@ -847,3 +847,22 @@ then checks exact retry after finish and rejection of invented GPS provenance.
 Recorder activation, physical/calibration/alias source planning and native GPS/
 foreground-service demand remain open. This change enables no new runtime path
 and imports no Vescape code or resources.
+
+
+### Independent history location demand (2026-10-15)
+
+LocationConsumer.HISTORY_RECORDING owns a separate demand key, so removing MAP
+and Nearby sharing demand cannot stop an active recording's registration.
+Removing the final history owner retires its callback generation. The request
+policy uses the existing 1000ms/zero-distance navigation request for history;
+ordinary MAP-only demand returns to its existing 5m distance filter. This avoids
+requiring movement before another requested GPS callback, without introducing a
+new poller or changing any existing consumer's standalone policy.
+
+h173 reproduced the stationary-history policy failure among 15 tests (77s).
+The narrowly scoped Luna worker hit its usage limit after RED; primary took over,
+reviewed the four-file delta and finished the one missing request-policy arm.
+h174 fresh focused:15 tests/2 XML, zero failures/errors/skips, 86s. Full evidence
+is recorded in the ledger. Native permission/foreground-service admission and
+runtime demand binding are still pending; adding a consumer enum does not itself
+activate location collection for new history.

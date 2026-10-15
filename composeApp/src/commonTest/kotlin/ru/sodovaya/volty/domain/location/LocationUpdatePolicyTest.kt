@@ -5,6 +5,27 @@ import kotlin.test.assertEquals
 import kotlin.test.assertNotEquals
 
 class LocationUpdatePolicyTest {
+    @Test
+    fun history_recording_requests_stationary_fixes_and_returns_map_to_ordinary_request_when_removed() {
+        val historyRequest = LocationUpdatePolicy.requestFor(
+            setOf(LocationConsumer.MAP, LocationConsumer.HISTORY_RECORDING),
+        )
+
+        assertEquals(1_000L, historyRequest.intervalMillis)
+        assertEquals(0f, historyRequest.minDistanceMeters)
+
+        val removed = LocationDemandPolicy.setDemand(
+            LocationDemandPolicyState(demands = setOf(LocationConsumer.MAP, LocationConsumer.HISTORY_RECORDING)),
+            LocationConsumer.HISTORY_RECORDING,
+            enabled = false,
+        )
+        kotlin.test.assertFalse(removed.shouldStop)
+        val mapRequest = LocationUpdatePolicy.requestFor(removed.state.demands)
+
+        assertEquals(1_000L, mapRequest.intervalMillis)
+        assertEquals(5f, mapRequest.minDistanceMeters)
+    }
+
     @Test fun nearbyChannelRequestsFreshFixesEvenWhileStationary() {
         val request=LocationUpdatePolicy.requestFor(setOf(LocationConsumer.NEARBY_CHANNEL_SHARING))
         assertEquals(1_000L,request.intervalMillis);assertEquals(0f,request.minDistanceMeters)

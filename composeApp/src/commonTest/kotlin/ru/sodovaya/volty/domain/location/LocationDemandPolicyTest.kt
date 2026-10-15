@@ -8,6 +8,54 @@ import kotlin.test.assertTrue
 
 class LocationDemandPolicyTest {
     @Test
+    fun removing_map_and_nearby_demands_preserves_history_recording_ownership() {
+        var state = LocationDemandPolicy.initialState
+        state = LocationDemandPolicy.setDemand(state, LocationConsumer.HISTORY_RECORDING, enabled = true).state
+        state = LocationDemandPolicy.setDemand(state, LocationConsumer.MAP, enabled = true).state
+        state = LocationDemandPolicy.setDemand(state, LocationConsumer.NEARBY_CHANNEL_SHARING, enabled = true).state
+
+        val withoutMap = LocationDemandPolicy.setDemand(state, LocationConsumer.MAP, enabled = false)
+        val withoutNearby = LocationDemandPolicy.setDemand(
+            withoutMap.state,
+            LocationConsumer.NEARBY_CHANNEL_SHARING,
+            enabled = false,
+        )
+
+        assertEquals(setOf(LocationConsumer.HISTORY_RECORDING), withoutNearby.state.demands)
+        assertFalse(withoutMap.shouldStop)
+        assertFalse(withoutNearby.shouldStop)
+        assertEquals(RideLocationStatus.Searching, withoutNearby.state.status)
+    }
+
+    @Test
+    fun removing_final_history_owner_stops_registration_and_rejects_old_generation_callback() {
+        val started = LocationDemandPolicy.setDemand(
+            LocationDemandPolicy.initialState,
+            LocationConsumer.HISTORY_RECORDING,
+            enabled = true,
+        )
+        val stopped = LocationDemandPolicy.setDemand(
+            started.state,
+            LocationConsumer.HISTORY_RECORDING,
+            enabled = false,
+        )
+
+        val lateFix = LocationDemandPolicy.acceptFix(
+            state = stopped.state,
+            callbackGeneration = started.state.generation,
+            fix = testFix(source = LocationSource.GPS, elapsedRealtimeMillis = 100L),
+        )
+
+        assertTrue(started.shouldStart)
+        assertTrue(stopped.shouldStop)
+        assertTrue(stopped.state.generation > started.state.generation)
+        assertEquals(emptySet(), stopped.state.demands)
+        assertEquals(RideLocationStatus.NotRequested, stopped.state.status)
+        assertFalse(lateFix.accepted)
+        assertEquals(stopped.state, lateFix.state)
+    }
+
+    @Test
     fun stopping_map_does_not_stop_navigation_or_social_sharing() {
         var state = LocationDemandPolicy.initialState
         state = LocationDemandPolicy.setDemand(state, LocationConsumer.MAP, enabled = true).state

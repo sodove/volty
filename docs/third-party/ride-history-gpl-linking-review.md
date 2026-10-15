@@ -95,3 +95,17 @@ license or assert release compliance before the concrete linkage is reviewed.
 The maintainer request remains an optional unsent draft, not a required user
 step. No external message is authorized or sent. Implementation continues with
 the original GPL-aware screen transfer plan and the original foundation work.
+
+
+### Cached archive notice follow-up
+
+Read-only inspection of the seven exact cached versions found root
+`third_party_licenses.json` and `third_party_licenses.txt` in every AAR. The JSON
+indexes bundled notice sections. No matching source JAR is cached in any of the
+seven version directories; nested `classes.jar` archives have no license-like
+entries. Base/basement/tasks share a 17-entry notice payload; cloud-messaging has
+22 entries; stats/iid-interop share 14; measurement-connector has 19. The payloads
+include named Apache/MIT/BSD notices and other third-party license texts. This is
+component notice evidence, not a blanket license grant for each artifact's own
+implementation. No dependency, archive or runtime behavior was changed by this
+inventory, and no external messages/downloads were made.

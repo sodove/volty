@@ -17,6 +17,7 @@ object LocationUpdatePolicy {
     )
 
     fun requestFor(demands: Set<LocationConsumer>): LocationUpdateRequest =
-        if (LocationConsumer.NAVIGATION in demands || LocationConsumer.NEARBY_CHANNEL_SHARING in demands)
+        if (LocationConsumer.NAVIGATION in demands || LocationConsumer.NEARBY_CHANNEL_SHARING in demands ||
+            LocationConsumer.HISTORY_RECORDING in demands)
             navigationRequest else ordinaryRequest
 }

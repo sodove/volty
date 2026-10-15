@@ -7,6 +7,7 @@ enum class LocationConsumer {
     NAVIGATION,
     SOCIAL_SHARING,
     NEARBY_CHANNEL_SHARING,
+    HISTORY_RECORDING,
 }
 
 enum class LocationSource {
