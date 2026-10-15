@@ -20,6 +20,7 @@ import ru.sodovaya.volty.domain.location.LocationDemandPolicy
 import ru.sodovaya.volty.domain.location.LocationDemandPolicyState
 import ru.sodovaya.volty.domain.location.LocationSource
 import ru.sodovaya.volty.domain.location.LocationTimestampPolicy
+import ru.sodovaya.volty.domain.location.LocationUpdateRequest
 import ru.sodovaya.volty.domain.location.LocationUpdatePolicy
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.location.RideLocationRepository
@@ -32,9 +33,19 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
     private val manager = appContext.getSystemService(Context.LOCATION_SERVICE) as LocationManager
     private val _state = MutableStateFlow(RideLocationState())
     private var policyState: LocationDemandPolicyState = LocationDemandPolicy.initialState
-    private var registeredProviders = emptyList<String>()
-    private var activeListener: LocationListener? = null
-    private var platformStarted = false
+    private data class NativeRequest(
+        val generation: Long,
+        val providers: List<String>,
+        val cadence: LocationUpdateRequest,
+    )
+
+    private val registration = OwnedLocationRegistration<NativeRequest, LocationListener>(
+        create = { listenerFor(it.generation) },
+        register = { request, listener ->
+            request.providers.forEach { requestUpdates(it, listener, request.cadence) }
+        },
+        unregister = { manager.removeUpdates(it) },
+    )
 
     override val requiredPermissions: List<String> = listOf(
         Manifest.permission.ACCESS_FINE_LOCATION,
@@ -44,63 +55,21 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
 
     override suspend fun setDemand(consumer: LocationConsumer, enabled: Boolean) =
         withContext(Dispatchers.Main.immediate) {
-            val previousRequest = LocationUpdatePolicy.requestFor(policyState.demands)
             val transition = LocationDemandPolicy.setDemand(policyState, consumer, enabled)
-            if (!transition.changed) return@withContext
-
             policyState = transition.state
-            when {
-                transition.shouldStart -> {
-                    publishState()
-                    tryStartPlatformUpdates()
-                }
-                transition.shouldStop -> {
-                    publishState()
-                    stopPlatformUpdates()
-                }
-                previousRequest != LocationUpdatePolicy.requestFor(policyState.demands) && platformStarted -> {
-                    stopPlatformUpdates()
-                    policyState = LocationDemandPolicy.restart(policyState)
-                    publishState()
-                    tryStartPlatformUpdates()
-                }
-                else -> publishState()
-            }
+            publishState()
+            // Retraction: an unchanged desired demand is not a native ACK. In particular,
+            // a second negative must retry the original listener after removeUpdates failed.
+            if (policyState.demands.isEmpty()) stopPlatformUpdates()
+            else tryStartPlatformUpdates()
         }
 
     override suspend fun refreshPermissionAndProviders() =
         withContext(Dispatchers.Main.immediate) {
             if (policyState.demands.isEmpty()) {
-                policyState = LocationDemandPolicy.setStatus(
-                    policyState,
-                    RideLocationStatus.NotRequested,
-                )
-                publishState()
-                return@withContext
-            }
-            if (!hasLocationPermission()) {
-                stopPlatformUpdates()
-                policyState = LocationDemandPolicy.setStatus(
-                    policyState,
-                    RideLocationStatus.PermissionRequired,
-                )
-                publishState()
-                return@withContext
-            }
-            val providers = enabledProviders()
-            if (providers.isEmpty()) {
-                stopPlatformUpdates()
-                policyState = LocationDemandPolicy.setStatus(
-                    policyState,
-                    RideLocationStatus.ProviderDisabled,
-                )
-                publishState()
-                return@withContext
-            }
-            if (!platformStarted) {
-                policyState = LocationDemandPolicy.restart(policyState)
-                publishState()
-                tryStartPlatformUpdates(providers, rethrow = false)
+                publishUnavailable(RideLocationStatus.NotRequested)
+            } else {
+                tryStartPlatformUpdates(rethrow = false)
             }
         }
 
@@ -111,46 +80,56 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
         try {
             startPlatformUpdates(providers)
         } catch (error: LocationPermissionRequiredException) {
-            policyState = LocationDemandPolicy.setStatus(policyState, RideLocationStatus.PermissionRequired)
-            publishState()
+            publishUnavailable(RideLocationStatus.PermissionRequired)
             if (rethrow) throw error
         } catch (error: SecurityException) {
-            policyState = LocationDemandPolicy.setStatus(policyState, RideLocationStatus.PermissionDenied)
-            publishState()
+            publishUnavailable(RideLocationStatus.PermissionDenied)
             if (rethrow) throw error
         } catch (error: NoEnabledLocationProviderException) {
-            policyState = LocationDemandPolicy.setStatus(policyState, RideLocationStatus.ProviderDisabled)
-            publishState()
+            publishUnavailable(RideLocationStatus.ProviderDisabled)
             if (rethrow) throw error
         }
+    }
+
+    private fun publishUnavailable(status: RideLocationStatus) {
+        policyState = LocationDemandPolicy.setStatus(policyState, status)
+        // Publish only after cleanup: a synchronous observer can start a replacement, which
+        // must not subsequently be stopped by the error path belonging to this old attempt.
+        try { stopPlatformUpdates() } finally { publishState() }
     }
 
     private fun startPlatformUpdates(providers: List<String>) {
         checkLocationPermission()
         if (providers.isEmpty()) throw NoEnabledLocationProviderException()
 
-        val generation = policyState.generation
-        val listener = listenerFor(generation)
-        val registered = registerProvidersTransactional(
-            providers = providers,
-            register = { provider -> requestUpdates(provider, listener) },
-            unregister = { manager.removeUpdates(listener) },
-        )
-        registeredProviders = registered
-        activeListener = listener
-        platformStarted = true
-        emitRecentLastKnownLocation(providers, generation)
+        val cadence = LocationUpdatePolicy.requestFor(policyState.demands)
+        val current = registration.key
+        if (registration.active && current?.generation == policyState.generation &&
+            current.providers == providers && current.cadence == cadence) return
+
+        // Fence the old callback generation before native removal, including failed cleanup.
+        val preparing = LocationDemandPolicy.restart(policyState)
+        policyState = preparing
+        publishState()
+        val request = NativeRequest(preparing.generation, providers.toList(), cadence)
+        // Retraction: storing only after registration orphaned partially registered listeners
+        // when rollback failed. This owner reserves before native calls and retains on failure.
+        // Retraction: delivery guards alone do not prevent an orphan native allocation.
+        // A synchronous observer may remove demand or install a successor during publication.
+        val changed = registration.reconcile(request) { policyState === preparing }
+        if (changed && policyState === preparing && registration.active && registration.key == request)
+            emitRecentLastKnownLocation(providers, request.generation)
     }
 
     private fun stopPlatformUpdates() {
-        activeListener?.let { manager.removeUpdates(it) }
-        registeredProviders = emptyList()
-        activeListener = null
-        platformStarted = false
+        registration.reconcile(null)
     }
 
-    private fun requestUpdates(provider: String, listener: LocationListener) {
-        val requestPolicy = LocationUpdatePolicy.requestFor(policyState.demands)
+    private fun requestUpdates(
+        provider: String,
+        listener: LocationListener,
+        requestPolicy: LocationUpdateRequest,
+    ) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val request = LocationRequest.Builder(requestPolicy.intervalMillis)
                 .setMinUpdateDistanceMeters(requestPolicy.minDistanceMeters)
@@ -225,7 +204,7 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
     }
 
     private fun acceptLocation(location: Location, generation: Long, capturedAtEpochMillis: Long) {
-        if (!platformStarted) return
+        if (!registration.active) return
         val accuracy = location.accuracy.toDouble()
         if (!location.hasAccuracy() || !accuracy.isFinite() || accuracy < 0.0) return
         val source = when (location.provider) {
@@ -272,24 +251,4 @@ class AndroidRideLocationRepository(context: Context) : RideLocationRepository {
     private class NoEnabledLocationProviderException : IllegalStateException(
         "No location provider is enabled",
     )
-}
-
-private fun registerProvidersTransactional(
-    providers: List<String>,
-    register: (String) -> Unit,
-    unregister: (String) -> Unit,
-): List<String> {
-    val registered = mutableListOf<String>()
-    try {
-        providers.forEach { provider ->
-            register(provider)
-            registered += provider
-        }
-        return registered
-    } catch (error: Throwable) {
-        registered.asReversed().forEach { provider ->
-            runCatching { unregister(provider) }
-        }
-        throw error
-    }
 }

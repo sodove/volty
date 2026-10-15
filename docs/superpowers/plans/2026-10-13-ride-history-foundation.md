@@ -648,3 +648,11 @@ original native cleanup remains a separate obligation. Reopening controller inta
 retries a gap rejected while accepted telemetry drains. A foreground-only ACK cannot
 admit a point, nor can another controller with matching public ride ID/generation.
 Native service promotion, provider cleanup ownership and runtime activation remain open.
+
+Task7 native registration checkpoint in progress (2026-10-16): the original
+LocationManager listener is reserved before positive calls, capture is fenced before
+removeUpdates, and failed cleanup retains exact ownership for retry. Reconciliation
+must run even when the desired consumer set is unchanged. A replacement must first
+release its predecessor. A captured policy predicate also guards native allocation
+after synchronous state publication; callback-generation filtering alone cannot
+prevent orphan native subscriptions. Physical provider behavior remains unverified.

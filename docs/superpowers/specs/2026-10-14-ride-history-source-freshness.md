@@ -1265,3 +1265,24 @@ A test revokes capture after input qualification but before writer submission; t
 serialized final guard prevents the cached decision admitting a coordinate. Common
 proof does not establish Android promotion/provider cleanup or background acceptance.
 No native foreground launch or new recorder activation is introduced here.
+
+## Native location registration ownership (2026-10-16)
+
+Source audit found two distinct orphan paths: a failed removeUpdates retained an
+old listener that a later start could overwrite, and a partial positive registration
+with failed rollback had no stored owner at all. Desired demands were already
+changed, so repeating a negative request could return without retrying native cleanup.
+
+The listener owner now separates desired requests from acknowledged registration.
+It reserves a candidate before the first positive native call; every replacement
+releases its predecessor first. Failure retains the exact original owner for retry
+and fences callback delivery. Native cadence/provider/generation are one immutable
+request. Common tests inspect actual issued register/remove actions and partial
+failure ownership; they do not establish LocationManager or foreground acceptance.
+
+A separate source review confirmed that StateFlow publication could reenter demand
+control before positive native allocation, mixing old cadence with new generation or
+registering after final demand removal. The allocation boundary must check the exact
+captured policy before touching a surviving owner and again after original cleanup.
+Permission/provider failure publication must follow cleanup, preventing an old error
+path from stopping a newer registration started synchronously by an observer.
