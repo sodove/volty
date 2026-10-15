@@ -509,3 +509,13 @@ independent consumer and selects the existing zero-distance navigation request.
 MAP/Nearby removal preserves history ownership; removing the last history owner
 retires old callbacks. Native permission/service admission and actual recording
 runtime binding remain open. No new recorder or native location demand activated.
+
+
+Task7 plain-VESC derived-source checkpoint (2026-10-15): successful decoded values
+replies now emit an optional distinct BATTERY/DERIVED source alongside controller
+facts. Canonical signs, fresh gauge, SETUP partial current/power, known zero,
+missing rail and disabled/invalid-frame guards are covered. A real writer/store
+fixture preserves two source IDs and coalesced extrema without invented energy.
+No native commands/cadence or production DI activation changed. Source planning,
+startup readiness, aliases/joins, gateway capture and GPS/service ownership remain
+open; this checkpoint does not close Task7 or foundation acceptance.

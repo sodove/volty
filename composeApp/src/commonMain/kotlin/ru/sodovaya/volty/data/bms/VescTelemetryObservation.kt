@@ -29,3 +29,24 @@ internal fun observedVescController(data: ControllerData, setup: Boolean, sessio
         value(TelemetryMetric.TRIP, sessionTripKm ?: 0f, setup && data.hasDistance && sessionTripKm != null),
     )
 }
+
+
+/** Fresh virtual rail facts; never claim physical cells or pack temperature. */
+internal fun observedVescDerivedBattery(data: ControllerData, setup: Boolean): List<TelemetryReading> {
+    fun value(metric: TelemetryMetric, number: Float, known: Boolean = true) =
+        TelemetryReading.measured(metric, number.toDouble(), known)
+    fun local(metric: TelemetryMetric, number: Float, known: Boolean) =
+        if (setup) TelemetryReading(metric, null, TelemetryUnknown.PARTIAL_SOURCE)
+        else value(metric, number, known)
+    val level = data.batteryLevelFraction
+    // Preserve the decoder's existing absence policy; a plain reply has no gauge.
+    val soc = when {
+        !setup || level == null -> TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.UNAVAILABLE)
+        !level.isFinite() || level !in 0f..1f -> TelemetryReading(TelemetryMetric.SOC, null, TelemetryUnknown.INVALID_VALUE)
+        else -> value(TelemetryMetric.SOC, level * 100f)
+    }
+    return listOf(soc,
+        value(TelemetryMetric.VOLTAGE, data.inputVoltageV, data.hasInputVoltage),
+        local(TelemetryMetric.CURRENT, -data.batteryCurrentA, data.hasBatteryCurrent),
+        local(TelemetryMetric.POWER, -data.powerW, data.hasPower && data.hasBatteryCurrent && data.hasInputVoltage))
+}

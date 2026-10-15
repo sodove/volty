@@ -866,3 +866,40 @@ h174 fresh focused:15 tests/2 XML, zero failures/errors/skips, 86s. Full evidenc
 is recorded in the ledger. Native permission/foreground-service admission and
 runtime demand binding are still pending; adding a consumer enum does not itself
 activate location collection for new history.
+
+
+### Fresh plain-VESC virtual rail observation (2026-10-15)
+
+VescProtocol previously updated its live derived battery but emitted typed
+history observations only for the physical controller. It now emits a separate
+BATTERY/DERIVED local0 event for each successfully decoded values reply when
+deriveBattery is enabled. It remains a virtual rail source, with its own durable
+kind/ID binding; it cannot claim physical cells or pack thermistors.
+
+Voltage uses the fresh input-rail known flag; current and power convert exactly
+once to the battery's charge-positive canonical sign. SETUP's bus-summed current/
+power retain PARTIAL_SOURCE qualification, matching the already audited physical
+controller observation. Plain values have no earned gauge, so they cannot reuse
+the prior SETUP battery level. SETUP uses its freshly decoded gauge under the
+existing decoder absence policy, with invalid range rejected. This checkpoint
+does not redefine the decoder's treatment of a zero/unconfigured gauge.
+
+Measured zero current/power survives; missing rail voltage remains unknown rather
+than reusing the preceding frame. Disabled virtual battery mode and rejected CRC/
+short payloads emit no virtual observations. An observer exception still leaves
+live decode intact; diagnostic counts now reflect both attempted source callbacks.
+No new command, polling, handshake or BLE write was added.
+
+h176 genuine RED:11 tests/3 new failures,43s. h177 fresh focused:42 tests/4 XML,
+zero failures/errors/skips,95s. h178 fresh focused:46 tests/5 XML, zero failures/
+errors/skips,43s. Real native-VESC→receipt→controller→buffered projection→SQLite
+integration asserts six actual accepted offers from three coalesced replies,
+one receipt clock read, separate physical/virtual IDs, opposite canonical power
+signs, exact extrema and sample count3 each, and unavailable energy rather than
+invented intervals. Full verification is recorded in the ledger. Primary reviewed
+the native delta; Luna review quota was unavailable and no alternate reviewer
+model was invoked. Whole-branch acceptance review is not claimed here.
+
+Runtime source planning/readiness, alias-path admission and calibrated joins,
+gateway hosted/derived capture, native location/service binding and activation
+remain open. The new recorder/ingress remains unconfigured in production DI.

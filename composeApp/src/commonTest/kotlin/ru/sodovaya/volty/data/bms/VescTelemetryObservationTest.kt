@@ -6,12 +6,72 @@ import ru.sodovaya.volty.domain.model.*
 import kotlin.test.*
 
 class VescTelemetryObservationTest {
-    private fun capture(protocol: VescProtocol) = mutableListOf<TelemetryObservation>().also { events ->
-        protocol.telemetryObserver = { events += it }
+    private fun capture(protocol: VescProtocol, origin: TelemetryOrigin? = TelemetryOrigin.CONTROLLER) = mutableListOf<TelemetryObservation>().also { events ->
+        protocol.telemetryObserver = { if (origin == null || it.origin == origin) events += it }
     }
     private fun TelemetryObservation.read(metric: TelemetryMetric) = readings.single { it.metric == metric }
     private fun values(current: Int = 1000) = VescPacket.frame(VescTestFrames.valuesPayload(currentInRaw = current, vInRaw = 500))
     private fun setup(distance: Int = 100_000_000) = VescPacket.frame(VescTestFrames.setupPayload(tachAbsMRaw = distance))
+
+    @Test fun derivedBatteryHasDistinctVirtualScopeAndKeepsEveryFreshPlainReplyPeak() {
+        val protocol = VescProtocol(deriveBattery = true); val all = capture(protocol, null)
+        protocol.onNotification(values(1000) + values(4000) + values(1000))
+        val controllers = all.filter { it.origin == TelemetryOrigin.CONTROLLER }
+        val batteries = all.filter { it.origin == TelemetryOrigin.BATTERY }
+        assertEquals(3, controllers.size)
+        assertEquals(3, batteries.size)
+        assertTrue(batteries.all { it.role == TelemetryRole.DERIVED && it.localIndex == 0 && it.assemblyIndex == null })
+        assertEquals(listOf(-500.0, -2000.0, -500.0), batteries.map { it.read(TelemetryMetric.POWER).value })
+        assertEquals(listOf(-10.0, -40.0, -10.0), batteries.map { it.read(TelemetryMetric.CURRENT).value })
+        assertTrue(batteries.all { it.read(TelemetryMetric.SOC).unknown == TelemetryUnknown.UNAVAILABLE })
+        assertTrue(batteries.all { b -> b.readings.map { it.metric }.toSet() == setOf(
+            TelemetryMetric.SOC, TelemetryMetric.VOLTAGE, TelemetryMetric.CURRENT, TelemetryMetric.POWER) })
+        assertEquals(listOf(500.0, 2000.0, 500.0), controllers.map { it.read(TelemetryMetric.CONTROLLER_POWER).value })
+        assertEquals(-10f, assertNotNull(protocol.latestData()).current)
+    }
+
+    @Test fun setupDerivedGaugeIsFreshButBusSummedCurrentCannotBecomeOneBatteryMeasurement() {
+        val protocol = VescProtocol(deriveBattery = true); val batteries = capture(protocol, TelemetryOrigin.BATTERY)
+        protocol.onNotification(VescPacket.frame(VescTestFrames.setupPayload(battLevelRaw = 840, currentInRaw = 20_000)))
+        val setupBattery = batteries.single()
+        assertEquals(84.0, assertNotNull(setupBattery.read(TelemetryMetric.SOC).value), 0.001)
+        assertEquals(78.2, assertNotNull(setupBattery.read(TelemetryMetric.VOLTAGE).value), 0.001)
+        for (metric in listOf(TelemetryMetric.CURRENT, TelemetryMetric.POWER)) {
+            assertNull(setupBattery.read(metric).value)
+            assertEquals(TelemetryUnknown.PARTIAL_SOURCE, setupBattery.read(metric).unknown)
+        }
+        protocol.onNotification(values())
+        assertEquals(2, batteries.size)
+        assertEquals(TelemetryUnknown.UNAVAILABLE, batteries.last().read(TelemetryMetric.SOC).unknown)
+        assertEquals(-500.0, batteries.last().read(TelemetryMetric.POWER).value)
+    }
+
+    @Test fun zeroCurrentIsMeasuredWhileAbsentRailDoesNotReuseLastVoltageOrPower() {
+        val protocol = VescProtocol(deriveBattery = true); val batteries = capture(protocol, TelemetryOrigin.BATTERY)
+        protocol.onNotification(values(0))
+        assertEquals(-0.0, batteries.single().read(TelemetryMetric.CURRENT).value)
+        assertNull(batteries.single().read(TelemetryMetric.CURRENT).unknown)
+        assertEquals(-0.0, batteries.single().read(TelemetryMetric.POWER).value)
+        protocol.onNotification(VescPacket.frame(VescTestFrames.valuesPayload(currentInRaw = 0, vInRaw = 0)))
+        assertEquals(2, batteries.size)
+        for (metric in listOf(TelemetryMetric.VOLTAGE, TelemetryMetric.POWER)) {
+            assertNull(batteries.last().read(metric).value)
+            assertEquals(TelemetryUnknown.UNAVAILABLE, batteries.last().read(metric).unknown)
+        }
+    }
+
+    @Test fun disabledDerivedBatteryAndUndecodedFramesCannotCreateVirtualObservations() {
+        val physical = VescProtocol(deriveBattery = false); val physicalEvents = capture(physical, null)
+        physical.onNotification(values()); physical.onNotification(setup())
+        assertEquals(2, physicalEvents.size)
+        assertTrue(physicalEvents.all { it.origin == TelemetryOrigin.CONTROLLER && it.role == TelemetryRole.CONTRIBUTOR })
+        assertNull(physical.latestData())
+        val virtual = VescProtocol(deriveBattery = true); val virtualEvents = capture(virtual, null)
+        virtual.onNotification(values().also { it[it.size - 2] = (it[it.size - 2].toInt() xor 1).toByte() })
+        virtual.onNotification(VescPacket.frame(byteArrayOf(4, 0, 0)))
+        virtual.reset()
+        assertTrue(virtualEvents.isEmpty())
+    }
 
     @Test fun everyPlainValuesReplyKeepsIntermediatePeaksAndPhysicalControllerScope() {
         val protocol = VescProtocol(deriveBattery = true, motor = MotorConfig(polePairs = 15, wheelDiameterMm = 254)); val events = capture(protocol)
@@ -83,8 +143,12 @@ class VescTelemetryObservationTest {
     }
 
     @Test fun observerFailureDoesNotBreakMotionOrDerivedBattery() {
-        val protocol = VescProtocol(); protocol.telemetryObserver = { error("injected observer failure") }
+        val protocol = VescProtocol()
+        val attempted = mutableListOf<Pair<TelemetryOrigin, TelemetryRole>>()
+        protocol.telemetryObserver = { attempted += it.origin to it.role; error("injected observer failure") }
         protocol.onNotification(values()); assertNotNull(protocol.latestMotion(0)); assertNotNull(protocol.latestData())
-        assertEquals(1, protocol.telemetryObserverFailures)
+        assertEquals(listOf(TelemetryOrigin.CONTROLLER to TelemetryRole.CONTRIBUTOR,
+            TelemetryOrigin.BATTERY to TelemetryRole.DERIVED), attempted)
+        assertEquals(2, protocol.telemetryObserverFailures)
     }
 }

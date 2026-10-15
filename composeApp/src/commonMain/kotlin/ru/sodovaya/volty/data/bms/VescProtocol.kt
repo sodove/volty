@@ -12,6 +12,7 @@ import ru.sodovaya.volty.domain.model.BmsData
 import ru.sodovaya.volty.domain.model.ControllerData
 import ru.sodovaya.volty.domain.model.MotorConfig
 import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 
 /**
  * VESC-based controllers (incl. uBox) over the Nordic UART Service.
@@ -218,6 +219,9 @@ class VescProtocol(
                     (decoded.odometerKm - observedBaseline).coerceAtLeast(0f)
                 } else null
                 observeTelemetry(TelemetryOrigin.CONTROLLER, 0) { observedVescController(decoded, setup, observedTrip) }
+                if (deriveBattery) observeTelemetry(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED) {
+                    observedVescDerivedBattery(decoded, setup)
+                }
             }
         }
     }

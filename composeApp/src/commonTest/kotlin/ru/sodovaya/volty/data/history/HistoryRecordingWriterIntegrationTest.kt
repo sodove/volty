@@ -10,10 +10,65 @@ import ru.sodovaya.volty.data.db.VoltyDatabase
 import ru.sodovaya.volty.data.db.VoltyDatabaseProvider
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.data.bms.JbdBmsProtocol
+import ru.sodovaya.volty.data.bms.VescProtocol
+import ru.sodovaya.volty.data.bms.vesc.VescPacket
+import ru.sodovaya.volty.data.bms.vesc.VescTestFrames
+import ru.sodovaya.volty.domain.model.TelemetryOrigin
+import ru.sodovaya.volty.domain.model.TelemetryRole
 import kotlin.test.*
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class HistoryRecordingWriterIntegrationTest {
+    @Test fun nativeVescControllerAndVirtualBatteryStayDistinctThroughReceiptProjectionAndCommit() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        VoltyDatabase.Schema.create(driver)
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), dispatcher)
+        val writer = BufferedHistoryWriter(store, dispatcher, emptyFlow(), projectRecording = true)
+        val controller = RideRecordingController(writer, HistoryRecordingDemand {}, { "ride" }, { store.recoverInterrupted() })
+        val physical = HistorySource("esc", HistorySourceKind.CONTROLLER, "Controller")
+        val virtual = HistorySource("virtual", HistorySourceKind.DERIVED_BATTERY, "Virtual rail")
+        val origin = HistoryTick(10000, 100, 1)
+        val receipt = HistoryTick(10001, 101, 1)
+        var clockReads = 0
+        val offered = mutableListOf<CapturedHistoryTelemetry>()
+        try {
+            controller.execute(RecordingInput.Connected("bike", 7, origin), listOf(physical, virtual))
+            val protocol = VescProtocol(deriveBattery = true)
+            val capture = historySessionTelemetryCapture(protocol, "attempt", controller,
+                { clockReads++; receipt }, { true }, mapOf(
+                    HistoryTelemetrySource(TelemetryOrigin.CONTROLLER, 0) to physical,
+                    HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0, TelemetryRole.DERIVED) to virtual,
+                )) { event ->
+                offered += event
+                assertEquals(HistoryOffer.ACCEPTED, event.offer(controller) { true })
+            }
+            fun frame(current: Int) = VescPacket.frame(VescTestFrames.valuesPayload(currentInRaw = current, vInRaw = 500))
+            capture.processNotification(frame(1000) + frame(4000) + frame(1000))
+            assertEquals(1, clockReads)
+            assertEquals(6, offered.size)
+            assertTrue(offered.all { it.tick == receipt && it.recording.rideId == "ride" })
+            assertSame(offered.first().received.receipt, offered.last().received.receipt)
+            controller.execute(RecordingInput.Stop(HistoryTick(10020, 120, 1), 7, "ride"))
+            val range = HistoryRange(10000, 10030)
+            val batteryPower = HistorySeriesKey("virtual", "power_w")
+            val controllerPower = HistorySeriesKey("esc", "controller_power_w")
+            val virtualStats = store.stats("ride", batteryPower, range)
+            val physicalStats = store.stats("ride", controllerPower, range)
+            assertEquals(-2000.0, virtualStats.minimum)
+            assertEquals(-500.0, virtualStats.maximum)
+            assertEquals(500.0, physicalStats.minimum)
+            assertEquals(2000.0, physicalStats.maximum)
+            assertNull(virtualStats.energyWh, "Coalesced replies cannot invent acquired intervals")
+            assertEquals(3, store.buckets("ride", batteryPower, range, null).items.single().sampleCount)
+            assertEquals(3, store.buckets("ride", controllerPower, range, null).items.single().sampleCount)
+            assertEquals(listOf(physical, virtual), store.sources("ride"))
+            assertTrue(store.samples("ride", HistorySeriesKey("virtual", "cell_v", 0), range, null).items.isEmpty())
+            assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)
+            assertEquals(0, protocol.telemetryObserverFailures)
+        } finally { writer.close(); driver.close() }
+    }
+
     @Test fun coalescedJbdFramesKeepEarnedPeakWithoutInventingMeasurementIntervals() = runTest {
         val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
         VoltyDatabase.Schema.create(driver)
