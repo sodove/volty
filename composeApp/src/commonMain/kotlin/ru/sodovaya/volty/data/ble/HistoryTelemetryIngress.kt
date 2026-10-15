@@ -20,7 +20,7 @@ internal data class HistoryTelemetryIngressDiagnostics(
 internal class HistoryTelemetryIngress(
     private val controller: RideRecordingController,
     private val readTick: () -> HistoryTick,
-    private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource>,
+    private val sources: (LinkSpec, Vehicle?) -> Map<HistoryTelemetrySource, HistorySource> = ::nativeHistorySourcesForLink,
 ) {
     private val mutableDiagnostics = MutableStateFlow(HistoryTelemetryIngressDiagnostics())
     val diagnostics: StateFlow<HistoryTelemetryIngressDiagnostics> = mutableDiagnostics

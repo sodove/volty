@@ -987,3 +987,40 @@ It reproduced two actual reads for the same new-range key. Dispatch now retains
 the generation reserved before publication and suppresses an already reserved or
 completed read in that range. Range replacement explicitly clears numeric cache
 before reloading; it cannot reuse a different range's old graph data.
+
+
+### Direct native recording registry (2026-10-15)
+
+The optional HistoryTelemetryIngress now defaults to a concrete direct-link
+source plan. It supports the already qualified JK/JBD/ANT/Daly producers, plain
+VESC and Begode. Gateway/alias and other unqualified producers are explicitly
+rejected by this default; custom reviewed planning remains injectable. This is
+not product-wide recorder activation or a claim that unsupported live BLE links
+stop working. The existing ingress contains ordinary setup exceptions.
+
+Versioned length-prefixed source IDs include normalized physical address,
+protocol, native branch, origin/role and assembly address. UI labels, list order
+and vehicle-global slot indices are excluded. Controller/virtual-source IDs also
+retain the decoder's exact motor configuration; Begode controller identity retains
+its first owned pack's voltage-calibration cell count. Native protocol creation
+and planning share the same immutable configuration lookups. A configuration
+change can therefore rotate the recorded registry without silently mixing
+calibrations, while renaming/reindexing a profile does not invent a new source.
+
+VESC's virtual rail keeps DERIVED_BATTERY identity, distinct from its physical
+controller and from physical BMS contributors. Begode reserves two native branch
+slots and each branch's two assembly slots, plus the controller. A reserved slot
+is permission to bind a future qualified observation, not proof that the source
+reported: it creates no sample or value by itself. Empty latent slots must not
+be presented as measured contributors. Controller-only/latent Begode profiles do
+not fabricate a battery cell-count calibration.
+
+Default-ingress tests exercise actual owned envelope delivery. The existing
+real VESC→receipt→controller→buffered projection→SQLite fixture now uses the
+generated plan rather than hand-written source IDs and still verifies six actual
+offers, physical/virtual extrema and no invented energy/cells. Identity tests
+cover address/protocol changes, address case, label/global-index stability,
+motor/cell-count changes, explicit virtual rails and unsupported/malformed plans.
+No native command, polling or BLE write behavior changed. Whole-vehicle startup
+readiness, alias/gateway acquisition/admission, calibrated aggregates, native
+location/service ownership and final DI/legacy retirement remain open.

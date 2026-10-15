@@ -3268,8 +3268,7 @@ class KableBmsRepository private constructor(
      * reads every controller's geometry through `motorFor`.
      */
     private fun buildProtocol(spec: LinkSpec, vehicle: Vehicle?): BmsProtocol {
-        val controller = spec.ownedControllers.firstOrNull()?.globalIndex
-            ?.let { idx -> vehicle?.controllers?.firstOrNull { it.index == idx } }
+        val controller = nativeLinkController(spec, vehicle)
         controllerMotionProtocol(
             kind = spec.protocolKind,
             // A lone controller with no battery source of its own backs a
@@ -3306,8 +3305,7 @@ class KableBmsRepository private constructor(
             // [withScaledBegodeLiveVoltage] scales the battery side by.
             // Null — a link owning no pack at all — is honest absence, and the
             // protocol publishes no voltage rather than a wrong one.
-            cellCount = spec.ownedPacks.firstOrNull()?.globalIndex
-                ?.let { idx -> vehicle?.packs?.firstOrNull { it.index == idx }?.cellCount }
+            cellCount = nativeLinkCellCount(spec, vehicle)
         )?.let { return it }
         return createProtocol(spec.protocolKind.toBmsType())
     }

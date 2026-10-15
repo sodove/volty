@@ -548,3 +548,14 @@ Changing a viewport preserves an expanded source's pending key read; switching
 rides retires it. Sparse keys, read truncation and source-specific retry errors
 remain explicit. The injected HistoryTick must share the recording clock for an
 unfinished v2 ride; wall-only time cannot determine its monotonic viewport end.
+
+
+Task7 direct-source-plan checkpoint (2026-10-15): optional native ingress now has
+a concrete default for direct non-aliased JK/JBD/ANT/Daly, plain VESC and Begode.
+Stable physical/role/branch IDs exclude labels/global slots and preserve native
+calibration. Configuration lookup is shared with actual protocol construction.
+Generated plans are exercised by owned funnel and real VESC/SQLite integration.
+Gateway/alias/unqualified shapes require their own reviewed plan and are rejected
+by this default, rather than pretending coverage. No runtime recorder activation
+or wire/cadence change. Whole-vehicle startup/readiness, gateway/alias admission,
+aggregates and native location/service/DI/legacy retirement still keep Task7 open.

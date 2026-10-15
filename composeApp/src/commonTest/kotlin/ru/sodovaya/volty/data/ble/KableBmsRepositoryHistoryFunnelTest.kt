@@ -55,6 +55,24 @@ class KableBmsRepositoryHistoryFunnelTest {
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
     }
 
+    @Test fun defaultNativePlanFeedsTheExistingOwnedFunnel() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); val v = vehicle()
+        val spec = LinkSpec(v.packs.single().bmsAddress, ProtocolKind.JK, listOf(OwnedSource(0)))
+        val plan = nativeHistorySourcesForLink(spec, v)
+        c.execute(RecordingInput.Connected(v.id, 7, tick()), plan.values.toList())
+        val channel = Channel<Sample>(4)
+        try {
+            val ingress = HistoryTelemetryIngress(c, { tick(1) })
+            val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, v, SampleSessionOwnership { true }, channel))
+            capture.processNotification(byteArrayOf(11))
+            val sample = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+            assertEquals(plan.values.single(), sample.telemetry.source)
+            assertEquals(HistoryOffer.ACCEPTED, sample.telemetry.offer(c) { true })
+            assertEquals(11.0, writer.samples.single().samples.single().value)
+            assertEquals(0L, ingress.diagnostics.value.setupFailures)
+        } finally { channel.close() }
+    }
+
     @Test fun startupIngressCannotChangeAfterConnectionPreparationStarts() = bleRepositoryTest { repo ->
         val ingress = HistoryTelemetryIngress(controller(Writer()), { tick() }, { _, _ -> emptyMap() })
         repo.configureHistoryTelemetryIngress(ingress)
