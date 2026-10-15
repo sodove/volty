@@ -187,15 +187,102 @@ class RideRecordingControllerTest {
         assertNull(c.state.value.intent.ride)
     }
 
+    @Test fun replacementSourceFinishesOldRideBeforeBeginningNewAndRetiresCapturedPackets() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val captured = assertNotNull(c.captureTelemetryRecording())
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(captured, batch(delta = 30)))
+        val replacement = listOf(HistorySource("replacement", HistorySourceKind.BATTERY, "B"))
+        // A delayed profile change cannot move the terminal boundary behind an admitted fact.
+        c.execute(RecordingInput.Connected("bike", 8, tick(10)), replacement)
+        assertEquals(listOf("begin:ride-1", "finish:ride-1", "begin:ride-2"), f.writer.calls)
+        assertEquals(tick(30), f.writer.ends.single())
+        assertEquals(tick(30), f.writer.begins.last().first.started)
+        assertEquals(replacement, f.writer.begins.last().second)
+        val terminal = f.writer.offers.map { it.second }.single { b -> b.markers.any { it.kind.name == "SOURCE_CHANGE" } }
+        assertEquals("ride-1", terminal.rideId)
+        assertEquals(tick(30), terminal.markers.single().tick)
+        val newBatch = batch("ride-2", 31).let { it.copy(samples = it.samples.map { s -> s.copy(key = HistorySeriesKey("replacement", "power_w")) }) }
+        val offered = f.writer.offers.size
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(captured, newBatch))
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(8, batch("ride-2", 31)))
+        assertEquals(offered, f.writer.offers.size)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(assertNotNull(c.captureTelemetryRecording()), newBatch))
+        assertEquals(listOf(true, false, true), f.demands)
+    }
+
+    @Test fun changedKindOnSameIdAndSameConnectionStartsDistinctRide() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val changed = sources.map { it.copy(kind = HistorySourceKind.DERIVED_BATTERY) }
+        c.execute(RecordingInput.Start("bike", 7, tick(10)), changed)
+        assertEquals(listOf("begin:ride-1", "finish:ride-1", "begin:ride-2"), f.writer.calls)
+        assertEquals(changed, f.writer.begins.last().second)
+        assertEquals(HistoryRideStatus.COMPLETED, f.writer.statuses.single())
+        assertEquals(7L, c.state.value.intent.connectionGeneration)
+    }
+
+    @Test fun sourceLabelsAndOrderingDoNotSplitRideOrRewriteItsRecordedMetadata() = runTest {
+        val f = Fixture(); val c = f.controller
+        val original = sources + HistorySource("motor", HistorySourceKind.CONTROLLER, "Rear")
+        c.execute(RecordingInput.Connected("bike", 7, tick()), original)
+        c.execute(RecordingInput.LinkLost(7, tick(1)))
+        c.execute(RecordingInput.Connected("bike", 8, tick(2)), original.reversed().map { it.copy(label = "Renamed") })
+        assertEquals("ride-1", c.state.value.intent.ride?.id)
+        assertEquals(listOf("begin:ride-1"), f.writer.calls)
+        assertEquals(original, f.writer.begins.single().second)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(8, batch(delta = 3)))
+    }
+
+    @Test fun explicitlyEmptyRegistryRotatesToGpsOnlyWhileOmittedRegistryKeepsCurrentSources() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        c.execute(RecordingInput.LinkLost(7, tick(1)))
+        c.execute(RecordingInput.Connected("bike", 8, tick(2)))
+        assertEquals("ride-1", c.state.value.intent.ride?.id)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(8, batch(delta = 3)))
+        c.execute(RecordingInput.Connected("bike", 9, tick(4)), emptyList())
+        assertEquals("ride-2", c.state.value.intent.ride?.id)
+        assertTrue(f.writer.begins.last().second.isEmpty())
+        assertEquals(HistoryOffer.RETIRED, c.offerTelemetry(9, batch("ride-2", 5)))
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGps("ride-2", HistoryGpsFix(tick(5), 56.0, 60.0, 5.0, null)))
+    }
+
+    @Test fun staleRegistryCannotRotateCurrentRideAndManualStopIsNotRearmedByNewRegistry() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val changed = listOf(HistorySource("new", HistorySourceKind.BATTERY, "B"))
+        c.execute(RecordingInput.Connected("bike", 6, tick(1)), changed)
+        assertEquals(listOf("begin:ride-1"), f.writer.calls)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(7, batch(delta = 2)))
+        c.execute(RecordingInput.Stop(tick(3), 7, "ride-1"))
+        c.execute(RecordingInput.Connected("bike", 8, tick(4)), changed)
+        assertNull(c.state.value.intent.ride)
+        c.execute(RecordingInput.Start("bike", 8, tick(5)))
+        assertTrue(f.writer.begins.last().second.isEmpty(), "Omission without an active ride must not reuse retired metadata")
+    }
+
+    @Test fun duplicateRegistryIsRejectedBeforeClosingCurrentAdmission() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val current = assertNotNull(c.captureTelemetryRecording())
+        assertFailsWith<IllegalArgumentException> {
+            c.execute(RecordingInput.Connected("bike", 8, tick(1)), sources + sources.single().copy(label = "Duplicate"))
+        }
+        assertEquals(listOf("begin:ride-1"), f.writer.calls)
+        assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(current, batch(delta = 2)))
+    }
+
     private class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val calls = mutableListOf<String>()
+        val begins = mutableListOf<Pair<HistoryRide, List<HistorySource>>>()
         val offers = mutableListOf<Pair<Long, HistoryBatch>>()
         val ends = mutableListOf<HistoryTick>()
         val statuses = mutableListOf<HistoryRideStatus>()
         var finishGate: CompletableDeferred<Unit>? = null
         var beforeOffer: ((HistoryBatch) -> Unit)? = null
-        override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { calls += "begin:${ride.id}" }
+        override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) { calls += "begin:${ride.id}"; begins += ride to sources.toList() }
         override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer { beforeOffer?.invoke(batch); offers += generation to batch; return HistoryOffer.ACCEPTED }
         override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) { calls += "finish:$rideId"; ends += tick; statuses += status; finishGate?.await() }
         override suspend fun flush() = Unit

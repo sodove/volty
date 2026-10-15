@@ -473,3 +473,12 @@ v2 data does not borrow old rows. Both old/new fractional cursor and end metadat
 are tested, including the SQLDelight UNION null-inference regression. No runtime
 activation or UI route replacement yet. Component admission/loading/errors and
 native performance/activation acceptance still keep Task8 open.
+
+
+Task7 source-registry checkpoint (2026-10-15): the recording controller rotates
+on a changed source ID/kind registry, even for the same vehicle/connection, and
+writes SOURCE_CHANGE to the finished ride. Label/order changes keep the existing
+recorded metadata. Omitted active registry and explicit empty GPS-only registry
+have distinct meanings. Retired captured packets and delayed transition bounds
+are tested. Runtime source identity/calibration planning, readiness, GPS/service
+ownership and production activation remain open; this checkpoint enables none.

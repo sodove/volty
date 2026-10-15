@@ -89,6 +89,7 @@ enum class HistoryMarkerKind {
     OVERFLOW,
     MANUAL_STOP,
     VEHICLE_SWITCH,
+    SOURCE_CHANGE,
     INTERRUPTED,
 }
 

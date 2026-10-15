@@ -24,3 +24,19 @@ The recursive file inventory under `composeApp/src/commonMain/composeResources` 
 - `values-ru/strings.xml`
 
 No font files or adjacent font license/notice files were found in that directory, so there is no bundled common Compose font to identify from this scope.
+
+## Read-only Git provenance follow-up, 2026-10-15
+
+The two SHA-256 values and archive contents above were rechecked unchanged.
+AudioSwitch's current Git blob (`152dfc89…`) is the blob added by commit
+`4d9ca242` on 2026-08-22 (95318 bytes). That change adds the local AAR dependency
+and excludes LiveKit's Maven AudioSwitch dependency. BRouter's current blob
+(`4623226f…`) appears in sibling commits `e235f3de` (2026-09-01) and `bb30b627`
+(2026-09-03), both sharing the same parent and recording the same 307438-byte
+JAR. No reproducible archive-build record was found in the narrowly searched
+repository history/build configuration. Neither archive contains native libraries.
+
+This strengthens checked-in binary identity, not binary-to-source correspondence.
+No archive was rebuilt or replaced; the earlier source-provenance limitation is
+retained. The scoped Luna xhigh inventory performed no edits, Gradle or network
+research.

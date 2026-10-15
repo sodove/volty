@@ -728,3 +728,39 @@ Initial setup failure before any recording owner exists still needs a runtime
 readiness gate. This checkpoint does not solve that case or enable DI/recording.
 Source planning/aliases, calibrated joins, GPS/service ownership and old-writer
 retirement remain open. No BLE commands, cadence or Begode FFE1 writes changed.
+
+
+### Recorded source registry changes (2026-10-15)
+
+Earlier same-vehicle reconnect handling ignored a newly supplied source registry.
+A replacement BMS could therefore leave the old registry attached to the active
+ride and reject all observations under the replacement ID without opening a new
+recording. The controller now compares source IDs and kinds through the reducer.
+A changed registry closes the prior ride before beginning the new one; its
+SOURCE_CHANGE terminal marker belongs only to the prior ride. The source change
+is intentional, like VEHICLE_SWITCH, and does not itself assert lost evidence.
+Marker kinds are stored as text, so no schema migration is involved.
+
+Labels and list order do not define identity. Renaming or reordering sources keeps
+the ride and its originally recorded display metadata. On an active same-vehicle
+connection, an omitted registry retains that snapshot; an explicit empty registry
+rotates to a GPS-only ride. A new ride with no registry starts empty and cannot
+inherit metadata from a stopped ride or another vehicle. Duplicate IDs are rejected
+before closing the current admission gate.
+
+The existing ingress fence drains the prior segment before durable finish. A
+profile-change event captured before the latest admitted sample is clamped to that
+sample, for both the old end and new start. Captured packets from the retired gate
+cannot be delivered to the replacement ride even on the same BLE generation.
+Stale-generation events and automatic connects after manual stop retain their
+previous guards.
+
+h159: genuine RED, 19 selected tests, four new failures, 42s. h160: 42 selected
+tests / 3 fresh XML reports, zero failures/errors/skips, 93s. Read-only Luna xhigh
+review found no actionable defect. Full verification is recorded in the ledger.
+
+This boundary uses the actual registry rather than an unused opaque revision ID.
+The runtime source factory still must encode physical and calibration identity in
+source IDs; equal IDs/kinds cannot distinguish a geometry change by themselves.
+This remains a runtime activation gate. No new recorder DI, GPS/service demand,
+legacy-writer retirement, UI route, BLE command or polling changes are activated.

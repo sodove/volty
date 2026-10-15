@@ -42,21 +42,30 @@ class RideRecordingController(
     private var nextGeneration = 0L
     private var recovered = false
 
-    suspend fun execute(input: RecordingInput, sources: List<HistorySource> = emptyList()) = controls.withLock {
+    /** Null retains an active same-vehicle registry; explicit empty starts a GPS-only segment.
+     * A new ride never inherits a retired registry. IDs must encode physical/calibration identity.
+     */
+    suspend fun execute(input: RecordingInput, sources: List<HistorySource>? = null) = controls.withLock {
+        val sourceSnapshot = sources?.toList()
+        val sourcePlan = if (input is RecordingInput.Connected || input is RecordingInput.Start) {
+            sourceSnapshot?.let { registry ->
+                require(registry.map { it.id }.distinct().size == registry.size)
+                registry.associate { it.id to it.kind }
+            }
+        } else null
         // Once submitted, control receipts must reconcile with ownership even if the requesting screen closes.
         withContext(NonCancellable) {
             if (!recovered) { recoverInterrupted(); recovered = true }
             val previous = mutableState.value.intent
-            val proposed = recordingTransition(previous, input, newId)
+            val proposed = recordingTransition(previous, input, sourcePlan, newId)
             if (proposed.intent == previous && proposed.markers.isEmpty() && proposed.finish == null && proposed.begin == null) return@withContext
             val tick = input.tick()
             if (previous.ride?.let { historyAxisEpochMillis(it.started, tick) == null } == true) return@withContext
-            if (proposed.begin != null) require(sources.map { it.id }.distinct().size == sources.size)
             fence()?.let { owned = it }
             val last = owned?.last
             // A queued UI command cannot end the ride before facts reserved before its ingress fence.
             val effective = if (last != null && last.elapsedMillis > tick.elapsedMillis) input.withTick(last) else input
-            val transition = if (effective == input) proposed else recordingTransition(previous, effective,
+            val transition = if (effective == input) proposed else recordingTransition(previous, effective, sourcePlan,
                 { checkNotNull(proposed.begin).id })
             transition.finish?.let { finished ->
                 val owner = checkNotNull(owned)
@@ -70,8 +79,9 @@ class RideRecordingController(
             transition.begin?.let { ride ->
                 check(nextGeneration < Long.MAX_VALUE) { "Recording generation exhausted" }
                 val generation = ++nextGeneration
-                writer.begin(generation, ride, sources)
-                owned = Owner(generation, transition.intent, sources.map { it.id }.toSet(), ride.started)
+                val recordedSources = sourceSnapshot ?: emptyList()
+                writer.begin(generation, ride, recordedSources)
+                owned = Owner(generation, transition.intent, recordedSources.map { it.id }.toSet(), ride.started)
                 mutableTelemetryFailure.value = null
             }
             val owner = owned?.let {

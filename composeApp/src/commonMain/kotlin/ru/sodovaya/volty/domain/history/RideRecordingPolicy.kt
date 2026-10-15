@@ -1,7 +1,9 @@
 package ru.sodovaya.volty.domain.history
 
 data class RecordingIntent(val ride: HistoryRide? = null, val connectionGeneration: Long? = null,
-    val manuallyStopped: Boolean = false, val linkConnected: Boolean = false)
+    val manuallyStopped: Boolean = false, val linkConnected: Boolean = false,
+    /** Recorded identities and kinds; display names/order do not define a new ride. */
+    val sourcePlan: Map<String, HistorySourceKind> = emptyMap())
 sealed interface RecordingInput {
     data class Connected(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
     data class LinkLost(val generation: Long, val tick: HistoryTick) : RecordingInput
@@ -13,11 +15,12 @@ sealed interface RecordingInput {
 data class RecordingTransition(val intent: RecordingIntent, val markers: List<HistoryMarker>,
     val finish: HistoryRide?, val begin: HistoryRide?, val finishedMarkers: List<HistoryMarker> = emptyList())
 
-fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: () -> String): RecordingTransition {
+fun recordingTransition(current: RecordingIntent, input: RecordingInput,
+    sourcePlan: Map<String, HistorySourceKind>? = null, newId: () -> String): RecordingTransition {
     fun unchanged() = RecordingTransition(current, emptyList(), null, null)
     fun stopped(tick: HistoryTick, manual: Boolean): RecordingTransition {
         val finished = current.ride?.copy(ended = tick, status = HistoryRideStatus.COMPLETED)
-        return RecordingTransition(current.copy(ride = null, manuallyStopped = manual, linkConnected = false),
+        return RecordingTransition(current.copy(ride = null, manuallyStopped = manual, linkConnected = false, sourcePlan = emptyMap()),
             emptyList(), finished, null,
             if (finished != null) listOf(HistoryMarker(tick, HistoryMarkerKind.MANUAL_STOP)) else emptyList())
     }
@@ -31,16 +34,19 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput, newId: 
         val active = current.ride
         // A retired connection is a tombstone, not a new start trigger.
         if (!explicit && active == null && previousGeneration != null && generation == previousGeneration) return unchanged()
-        if (active != null && active.vehicleId == vehicleId) {
+        if (active != null && active.vehicleId == vehicleId &&
+            (sourcePlan == null || sourcePlan == current.sourcePlan)) {
             if (current.linkConnected && generation == previousGeneration) return unchanged()
             return RecordingTransition(current.copy(connectionGeneration = generation, linkConnected = true),
                 listOf(HistoryMarker(tick, HistoryMarkerKind.CONNECTED)), null, null)
         }
         val ride = HistoryRide(newId(), vehicleId, tick, null, HistoryRideStatus.RECORDING)
         val finished = active?.copy(ended = tick, status = HistoryRideStatus.COMPLETED)
-        return RecordingTransition(RecordingIntent(ride, generation, false, true),
+        return RecordingTransition(RecordingIntent(ride, generation, false, true, sourcePlan?.toMap() ?: emptyMap()),
             listOf(HistoryMarker(tick, HistoryMarkerKind.CONNECTED)), finished, ride,
-            if (finished != null) listOf(HistoryMarker(tick, HistoryMarkerKind.VEHICLE_SWITCH)) else emptyList())
+            if (finished != null) listOf(HistoryMarker(tick,
+                if (finished.vehicleId == vehicleId) HistoryMarkerKind.SOURCE_CHANGE else HistoryMarkerKind.VEHICLE_SWITCH))
+            else emptyList())
     }
     return when (input) {
         is RecordingInput.Connected -> connect(input.vehicleId, input.generation, input.tick, explicit = false)
