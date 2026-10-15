@@ -452,3 +452,14 @@ interface HistoryReadRepository {
   cadence/foreground behaviour remains phone acceptance, not unit-test inference.
 - [ ] Update progress ledger with commits, fresh test counts, migration and APK hashes.
   Start screen plan only against these stabilized interfaces and reviewed ownership.
+
+Task8 read checkpoint (2026-10-15): bounded paged v2 overview and the v2-only
+HistoryReadRepository facade are implemented, without DI activation. Default
+reads cap raw pages at 20000 rows/eight pages and plotted output at 600, reporting
+an omitted tail separately from thinning. Recorded source/metric/index admission,
+canonical signs, independent store stats, same-time cursors, malformed pages and
+in-flight cancellation are tested. GPS accepts a continuation cursor. Real SQLite
+covers the 20000-row page edge and a synthetic two-hour multi-source fixture.
+Legacy unified reads/pagination, component admission/loading/errors and isolated
+memory/native performance acceptance still keep Task8 open. Existing Task1 graph
+cache/generation regressions were already fixed; they are not an open rework.

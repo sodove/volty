@@ -586,3 +586,38 @@ synthetic two-hour 72000-point stream in twelve pages. This does not certify a
 physical sampling cadence or end-to-end database performance. Narrow readonly
 Luna xhigh review found no concrete fidelity/bounds defect. Task8 read facade and
 legacy integration, Task7 runtime activation and all new screens remain open.
+
+## 2026-10-15 — v2 bounded read facade (Task8 checkpoint)
+
+HistoryReadRepository now exposes recorded rides, source metadata, canonical
+series, cursor-paged GPS and independently queried summary stats. The v2-only
+default implementation qualifies the recorded source kind, metric registry and
+cell-index shape before numeric reads. Unknown sources/metrics return empty data,
+never current telemetry. Each request owns its accumulator; raw pages are capped
+at 20000 rows and eight pages by default (configuration 1..64), with at most 600
+plotted points. Reaching a remaining page tail reports truncated; envelope thinning
+alone does not. Marker overflow, foreign series, non-ordered points and a stalled
+numeric sequence cursor fail explicitly. Cancellation is checked around store IO,
+including a noncooperative in-flight read. No new runtime/DI activation is included.
+
+The GPS API includes an optional continuation cursor: a timestamp range cannot
+resume between multiple fixes captured at the same time. Stats never derive from
+this overview. Legacy currently retains its separate compatibility reader; unified
+legacy pagination and component generation/loading/error admission remain open.
+
+h143 stopped at a nullable-Pair test compilation error (not a behavioral RED).
+h143b then failed all nine new tests against the unimplemented API (40s).
+h144 passed those nine (90s). h145 passed eleven including two real SQLite
+fixtures (42s). Review found no production defect and requested coverage for
+thinning versus truncation and advancing equal-time cursors; both are now pinned.
+Readonly follow-up review found no concrete fixture defect.
+
+h146 full fresh: 3784 tests/388 XML, all newer than UTC start, zero failures,
+errors or skips; 98s, all 36 tasks executed. Real SQLite verifies a 20003-row
+same-time series across a 20000-row cursor boundary, zero-width range, peaks on
+both sides and unavailable uncertified stats. A synthetic two-hour fixture has
+57608 points across two controllers, two batteries and four physical cell keys;
+it preserves distinct values, sign, zero, BLE marker and raw wall-clock jump.
+The SQL test times were 0.219s and 0.782s including fixture setup/teardown in the
+full JVM suite. These are not isolated read benchmarks, Android latency or heap
+measurements; physical cadence and long-ride memory acceptance remain open.
