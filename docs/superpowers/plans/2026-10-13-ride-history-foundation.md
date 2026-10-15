@@ -601,3 +601,14 @@ Common tests and repository seams do not prove physical BLE/service acceptance.
 Native shared clock, bounded startup, foreground/location, full-funnel retirement
 and per-source gaps, aliases/gateways/aggregates, manual UI/legacy retirement and
 performance still gate activation.
+
+
+Task7 queued-prefix checkpoint (2026-10-16): managed native envelopes hold exact
+recording admission reservations until consumed or qualified lost. Durable finish
+waits accepted queue work; no IO/suspension was added to notification callbacks.
+Consumer/funnel cancellation and ownership rejection release once and mark old
+recordings partial before finish. Initial/reconnect/demo native session joins are
+now outside sessionLock after atomic detach, correcting a source-audited lock/join
+cycle. This is common/native seam evidence; physical teardown cancellation and
+other native activation acceptance remain open. External ingress compatibility
+and production DI/default recorder are unchanged.

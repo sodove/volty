@@ -104,6 +104,29 @@ class RideRecordingController(
         }
     }
 
+    /** Nonblocking ownership transfer to the bounded native queue, before notification returns. */
+    internal fun reserveQueuedTelemetry(context: CapturedHistoryRecording, tick: HistoryTick,
+        sourceId: String): QueuedHistoryTelemetry? {
+        val owner = admission.value ?: return null
+        val ride = owner.intent.ride ?: return null
+        if (context.gate !== owner.gate || context.generation != owner.generation || context.rideId != ride.id ||
+            sourceId !in owner.sources || !acceptsRecordingTick(owner.intent, context.connectionGeneration, tick) ||
+            historyAxisEpochMillis(ride.started, tick) == null || !owner.gate.reserve(tick)) return null
+        return QueuedHistoryTelemetry(onOffer = { batch ->
+            // Admission may now be closed. This exact previously reserved prefix still belongs
+            // to the captured owner; no later owner can begin until its reservation is released.
+            if (batch.rideId != ride.id || batch.gps.isNotEmpty() || batch.markers.isNotEmpty() ||
+                batch.buckets.isNotEmpty() || batch.samples.any { it.key.sourceId != sourceId || it.tick != tick }) {
+                recordTelemetryFailure(owner, "QueuedPayloadMismatch")
+                HistoryOffer.RETIRED
+            } else try { writer.offer(owner.generation, batch) }
+            catch (error: Exception) {
+                recordTelemetryFailure(owner, error::class.simpleName ?: "QueuedTelemetryFailure")
+                throw error
+            }
+        }, onDiscard = { recordTelemetryFailure(owner, "IngressLoss") }, onRelease = owner.gate::release)
+    }
+
     internal fun captureTelemetryRecording(): CapturedHistoryRecording? {
         val owner = admission.value ?: return null
         val ride = owner.intent.ride ?: return null

@@ -1139,3 +1139,37 @@ This is opt-in native wiring, not production activation or phone acceptance.
 Shared Android elapsed clock/recovery, bounded startup, foreground/location
 ownership, per-source gap/full-funnel retirement quality, gateway/alias/aggregate
 admission, manual UI commands, legacy retirement and native performance remain open.
+
+
+## Native queue ownership checkpoint (2026-10-16)
+
+Managed ingress transfers one validated recording-gate reservation to every
+successfully enqueued attributed observation. It is bounded by the native funnel,
+contains no IO/suspension, and cannot be retargeted to another ride/source/tick.
+The serialized consumer can offer its reserved prefix even after controller
+admission closes; finish waits for terminal processing. Native ownership/pipeline
+rejection or undelivered cancellation records old-owner incompleteness before
+releasing the reservation. A duplicate consume/discard cannot send a second fact
+or qualify a later restart. Writer failures are likewise latched before release.
+
+Every native consumer iteration discards in finally, including early pipeline or
+session rejection. The channel factory supplies undelivered cleanup, and consumer
+exit cancels remaining elements. Actual retired queue drops have bounded ingress
+diagnostics. External/manual ingress stays unreserved for compatibility; the
+managed native lifecycle is the exclusive owner intended for activation.
+
+Retraction from native source review: initial/reconnect/demo teardown did join
+sessions inside sessionLock, despite nearby comments stating teardown must be
+outside it. A state/watchdog callback or queued consumer can need that lock, and
+waiting on queued recording gates makes that cycle explicit. These paths now
+detach session ownership atomically and join/reconcile outside sessionLock.
+Physical teardown/cancellation behavior still needs native acceptance; this
+checkpoint does not claim that moving the join proves every native race resolved.
+
+Tests cover a waiting durable stop, prefix delivery after the admission fence,
+old-owner loss before finish, immutable payload capabilities, writer failure,
+undelivered cancellation and duplicate retirement across restart. Every pending
+test reservation is discarded unconditionally so a failed assertion cannot wedge
+a noncancellable finish. Native clock, service/location, per-source interruption,
+alias/gateway/aggregate admission, bounded startup, legacy retirement and UI remain
+open; product recorder/DI is still not activated.

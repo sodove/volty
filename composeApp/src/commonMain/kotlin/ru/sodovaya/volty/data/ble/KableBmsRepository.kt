@@ -999,13 +999,12 @@ class KableBmsRepository private constructor(
         println("[VOLTY-BLE] connectDemo: starting simulated session (profile=$profile)")
         val demoVehicle = demoVehicleFor(profile)
         return try {
-            // Tear down every real link (session + reconnect loop) / prior demo
-            // under the lock so a concurrent disconnect or connect sees a
-            // consistent view.
-            sessionLock.withLock {
+            // Detach under the lock, then join outside: session callbacks/queued
+            // history must be able to acquire sessionLock while teardown waits.
+            val outgoingHistory = sessionLock.withLock {
+                val outgoing = links.mapNotNull { it.session }
                 userInitiatedDisconnect = false
                 for (l in links) {
-                    l.session?.tearDown()
                     l.session = null
                     l.reconnectJob?.cancel()
                     l.reconnectJob = null
@@ -1044,7 +1043,9 @@ class KableBmsRepository private constructor(
                 // No real link to resurrect on resume — there is no
                 // ConnectionSession behind a demo connection.
                 lastConnectionTarget = null
+                outgoing
             }
+            outgoingHistory.forEach { tearDownRemovedSessionWithHistory(it) }
             synchronized(linkStateLock) {
                 protocolDiagnosticsByAddress.clear()
                 diagnosticBatteriesByAddress.clear()
@@ -1292,7 +1293,7 @@ class KableBmsRepository private constructor(
         localToGlobal: (localIndex: Int) -> Int = { it }
     ): SamplePipeline {
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = sampleFunnelChannel()
         val onSample = makeLinkOnSample(
             protocol = protocol,
             socVehicle = socVehicleFor(vehicle, address, type),
@@ -1628,119 +1629,123 @@ class KableBmsRepository private constructor(
         orchestrator: VehicleConnection
     ): Job =
         scope.launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
-            for (sample in channel) {
-                sessionLock.withLock transaction@ {
-                    // Pipeline ownership, every publish, and every handoff
-                    // decision are one transaction with pipeline replacement.
-                    // A consumer accepted here therefore finishes against its
-                    // own orchestrator and link plan before a rebuild can clear
-                    // and replace them.
-                    if (!ownsActivePipeline(orchestrator)) return@transaction
-                    // Same pipeline can outlive one of its BLE attempts. Check
-                    // again here, after queueing, under the teardown/install lock.
-                    if (sample.sessionOwnership?.isCurrent() == false) return@transaction
-                    when (sample) {
-                    is HistoryTelemetrySample -> {
-                        try {
-                            sample.telemetry.offer(sample.controller, sample.sessionOwnership::isCurrent)
-                        } catch (_: Exception) {
-                            // The controller recorded failure before releasing
-                            // its writer reservation. Recording must not kill
-                            // live telemetry; actual consumer cancellation wins.
-                            currentCoroutineContext().ensureActive()
+            try {
+                for (sample in channel) {
+                    try {
+                        sessionLock.withLock transaction@ {
+                            // Pipeline ownership, every publish, and every handoff
+                            // decision are one transaction with pipeline replacement.
+                            // A consumer accepted here therefore finishes against its
+                            // own orchestrator and link plan before a rebuild can clear
+                            // and replace them.
+                            if (!ownsActivePipeline(orchestrator)) return@transaction
+                            // Same pipeline can outlive one of its BLE attempts. Check
+                            // again here, after queueing, under the teardown/install lock.
+                            if (sample.sessionOwnership?.isCurrent() == false) return@transaction
+                            when (sample) {
+                            is HistoryTelemetrySample -> {
+                                try {
+                                    sample.consume()
+                                } catch (_: Exception) {
+                                    // The controller recorded failure before releasing
+                                    // its writer reservation. Recording must not kill
+                                    // live telemetry; actual consumer cancellation wins.
+                                    currentCoroutineContext().ensureActive()
+                                }
+                            }
+                            is PackSample -> {
+                                // The aggregate is a true identity for a single pack
+                                // (cell voltages included), so every vehicle routes
+                                // through it. submit() returns the snapshot it just
+                                // emitted, so the aggregate is built once per sample.
+                                val submitted = orchestrator
+                                    .submit(sample.globalPackIndex, sample.data, sample.sections)
+                                // The owner can change while submit invokes its
+                                // callback; that callback is identity-guarded too.
+                                if (!ownsActivePipeline(orchestrator)) return@transaction
+                                beforeHandoffForTest?.invoke()
+                                // THE alias-path handoff trigger (C §5 / §9.4). It sits
+                                // HERE, after the submit that just put the hosted pack
+                                // online, and nowhere else — this is the one place the
+                                // app learns that the hosted battery is genuinely
+                                // REPORTING rather than merely that its link came up.
+                                // Releasing on "link up" instead would let a momentarily
+                                // silent hosted BMS leave the battery on no path at all.
+                                // Runs on the consumer coroutine, so its mark-offline is
+                                // serialised with every other VehicleConnection mutation
+                                // exactly like the submit above.
+                                val afterHandoff = releaseDirectLinkIfHostedReported(
+                                    orchestrator,
+                                    sample.globalPackIndex
+                                )
+                                // The handoff's other half (C §5): a head unit that is
+                                // still delivering THIS sample may have stopped
+                                // delivering the battery we released our own link for.
+                                // Checked on every sample because that is the only
+                                // clock either half of the handoff uses.
+                                val afterSilence = reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
+                                // This consumer owns a concrete orchestrator, so its
+                                // submitted snapshot is always available while the
+                                // identity guards above admit the sample.
+                                val forActive = (afterSilence ?: afterHandoff ?: submitted).aggregate
+                                // Ring buffer before activeData: the graph collector maps
+                                // over _activeData and reads the buffer, so announcing the
+                                // sample first would make every graph emit lag by one.
+                                ringBuffer.push(forActive)
+                                _activeData.value = forActive
+                            }
+                            is MotionSample -> {
+                                // Motion twin of the battery branch: route into the
+                                // orchestrator's controller state and retain it. The
+                                // orchestrator publishes the fresh motion aggregate
+                                // through onVehicleData, which sets _activeMotion — so
+                                // nothing sets it here (mirrors how _activeData rides
+                                // off the battery submit's snapshot, not a direct write).
+                                val motionSnap = orchestrator
+                                    .submitMotion(sample.globalControllerIndex, sample.data)
+                                if (!ownsActivePipeline(orchestrator)) return@transaction
+                                // The VEHICLE-LEVEL fold, not this controller's own
+                                // sample. (`submitMotion`'s snapshot used to be
+                                // discarded here; the "dropped on purpose" note below
+                                // is about `reRaiseYieldedLinksWhoseHostedWentSilent`,
+                                // which still is.)
+                                //
+                                // [motionSamples] is integrated as `power x dt`, and on
+                                // a two-controller vehicle the raw samples INTERLEAVE:
+                                // a trapezoid over front, rear, front, rear reads one
+                                // controller's power as the whole vehicle's and reports
+                                // half the energy. Buffering the same aggregate
+                                // `activeMotion` publishes makes the integral the
+                                // vehicle's, and is an identity on the one-controller
+                                // vehicles this buffer used to see.
+                                //
+                                // `isConnected` is the guard, not a null check: an
+                                // orchestrator that could not place this controller
+                                // index returns its unchanged snapshot, and with no
+                                // online controller at all that snapshot is
+                                // `ControllerData(isConnected = false)` — a fresh
+                                // timestamp over a 0 W placeholder whose `hasPower`
+                                // still defaults true, i.e. precisely the phantom zero
+                                // the integrator must never be handed. A sample the
+                                // vehicle refused to attribute contributed no distance
+                                // either, so it contributes no energy: nothing is
+                                // buffered.
+                                motionSnap.motion.takeIf { it.isConnected }
+                                    ?.let { motionRingBuffer.push(it) }
+                                // THE sample kind that matters for the silent-hosted
+                                // case: a head unit whose CAN controllers keep
+                                // reporting while the battery it hosts has gone quiet
+                                // produces exactly this and nothing else. Its return
+                                // value is dropped on purpose — the motion branch never
+                                // writes _activeData, and the mark-offline it may
+                                // perform publishes itself through onVehicleData.
+                                reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
+                            }
+                            }
                         }
-                    }
-                    is PackSample -> {
-                        // The aggregate is a true identity for a single pack
-                        // (cell voltages included), so every vehicle routes
-                        // through it. submit() returns the snapshot it just
-                        // emitted, so the aggregate is built once per sample.
-                        val submitted = orchestrator
-                            .submit(sample.globalPackIndex, sample.data, sample.sections)
-                        // The owner can change while submit invokes its
-                        // callback; that callback is identity-guarded too.
-                        if (!ownsActivePipeline(orchestrator)) return@transaction
-                        beforeHandoffForTest?.invoke()
-                        // THE alias-path handoff trigger (C §5 / §9.4). It sits
-                        // HERE, after the submit that just put the hosted pack
-                        // online, and nowhere else — this is the one place the
-                        // app learns that the hosted battery is genuinely
-                        // REPORTING rather than merely that its link came up.
-                        // Releasing on "link up" instead would let a momentarily
-                        // silent hosted BMS leave the battery on no path at all.
-                        // Runs on the consumer coroutine, so its mark-offline is
-                        // serialised with every other VehicleConnection mutation
-                        // exactly like the submit above.
-                        val afterHandoff = releaseDirectLinkIfHostedReported(
-                            orchestrator,
-                            sample.globalPackIndex
-                        )
-                        // The handoff's other half (C §5): a head unit that is
-                        // still delivering THIS sample may have stopped
-                        // delivering the battery we released our own link for.
-                        // Checked on every sample because that is the only
-                        // clock either half of the handoff uses.
-                        val afterSilence = reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
-                        // This consumer owns a concrete orchestrator, so its
-                        // submitted snapshot is always available while the
-                        // identity guards above admit the sample.
-                        val forActive = (afterSilence ?: afterHandoff ?: submitted).aggregate
-                        // Ring buffer before activeData: the graph collector maps
-                        // over _activeData and reads the buffer, so announcing the
-                        // sample first would make every graph emit lag by one.
-                        ringBuffer.push(forActive)
-                        _activeData.value = forActive
-                    }
-                    is MotionSample -> {
-                        // Motion twin of the battery branch: route into the
-                        // orchestrator's controller state and retain it. The
-                        // orchestrator publishes the fresh motion aggregate
-                        // through onVehicleData, which sets _activeMotion — so
-                        // nothing sets it here (mirrors how _activeData rides
-                        // off the battery submit's snapshot, not a direct write).
-                        val motionSnap = orchestrator
-                            .submitMotion(sample.globalControllerIndex, sample.data)
-                        if (!ownsActivePipeline(orchestrator)) return@transaction
-                        // The VEHICLE-LEVEL fold, not this controller's own
-                        // sample. (`submitMotion`'s snapshot used to be
-                        // discarded here; the "dropped on purpose" note below
-                        // is about `reRaiseYieldedLinksWhoseHostedWentSilent`,
-                        // which still is.)
-                        //
-                        // [motionSamples] is integrated as `power x dt`, and on
-                        // a two-controller vehicle the raw samples INTERLEAVE:
-                        // a trapezoid over front, rear, front, rear reads one
-                        // controller's power as the whole vehicle's and reports
-                        // half the energy. Buffering the same aggregate
-                        // `activeMotion` publishes makes the integral the
-                        // vehicle's, and is an identity on the one-controller
-                        // vehicles this buffer used to see.
-                        //
-                        // `isConnected` is the guard, not a null check: an
-                        // orchestrator that could not place this controller
-                        // index returns its unchanged snapshot, and with no
-                        // online controller at all that snapshot is
-                        // `ControllerData(isConnected = false)` — a fresh
-                        // timestamp over a 0 W placeholder whose `hasPower`
-                        // still defaults true, i.e. precisely the phantom zero
-                        // the integrator must never be handed. A sample the
-                        // vehicle refused to attribute contributed no distance
-                        // either, so it contributes no energy: nothing is
-                        // buffered.
-                        motionSnap.motion.takeIf { it.isConnected }
-                            ?.let { motionRingBuffer.push(it) }
-                        // THE sample kind that matters for the silent-hosted
-                        // case: a head unit whose CAN controllers keep
-                        // reporting while the battery it hosts has gone quiet
-                        // produces exactly this and nothing else. Its return
-                        // value is dropped on purpose — the motion branch never
-                        // writes _activeData, and the mark-offline it may
-                        // perform publishes itself through onVehicleData.
-                        reRaiseYieldedLinksWhoseHostedWentSilent(orchestrator)
-                    }
-                    }
+                    } finally { (sample as? HistoryTelemetrySample)?.discard() }
                 }
-            }
+            } finally { channel.cancel() }
         }
 
     // ----- Alias-path handoff (Part C §5) -----
@@ -2325,7 +2330,7 @@ class KableBmsRepository private constructor(
         var installedOrchestrator: VehicleConnection? = null
         return try {
             // User-initiated entry — clear the disconnect flag and tear down
-            // every existing link's session under the lock so a concurrent
+            // every existing link's ownership under the lock so a concurrent
             // disconnect() sees a consistent view. The outgoing links'
             // reconnect loops are deliberately NOT cancelled here (the old
             // code could not cancel its single loop either — this method may
@@ -2335,7 +2340,6 @@ class KableBmsRepository private constructor(
                 val outgoing = links.mapNotNull { it.session }
                 userInitiatedDisconnect = false
                 for (l in links) {
-                    l.session?.tearDown()
                     l.session = null
                 }
                 clearControllerConfigSources()
@@ -2344,7 +2348,7 @@ class KableBmsRepository private constructor(
                 demoJob = null
                 outgoing
             }
-            outgoingHistory.forEach { historyTelemetryIngress?.retireNativeAttempt(it.recordingAttempt) }
+            outgoingHistory.forEach { tearDownRemovedSessionWithHistory(it) }
             // Connecting to a DIFFERENT device (picker switch without an explicit
             // disconnect, or a real connect right after demo) must not mix the
             // previous battery's samples into the new graph. Reconnects to the
@@ -2381,7 +2385,7 @@ class KableBmsRepository private constructor(
             val newLinks = specs.map { PackLink(spec = it, vehicle = vehicle) }
             val orchestrator = buildOrchestrator(vehicle, address, type)
             installedOrchestrator = orchestrator
-            val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
+            val channel = sampleFunnelChannel()
             // Install under the lock: the failure cleanup below is an
             // identity-guarded check-then-write, and it can only be safe if
             // the competing writer — a concurrent connect / reconnect attempt
@@ -2502,16 +2506,16 @@ class KableBmsRepository private constructor(
             return Result.failure(IllegalStateException(unavailableReason))
         }
         return try {
-            // Tear down this link's previous (dead) session under the lock,
-            // as the old doConnect preamble did for the single session.
+            // Retraction: the old implementation joined the previous session under
+            // sessionLock. Its callbacks/queued facts can need that lock: detach here,
+            // then join and reconcile recording outside it.
             val outgoingHistory = sessionLock.withLock {
                 beforeReconnectTeardownForTest?.invoke()
                 val outgoing = link.session
-                outgoing?.tearDown()
                 link.session = null
                 outgoing
             }
-            outgoingHistory?.let { historyTelemetryIngress?.retireNativeAttempt(it.recordingAttempt) }
+            tearDownRemovedSessionWithHistory(outgoingHistory)
             setLinkState(
                 link,
                 status = if (isReconnectAttempt) LinkStatus.RECONNECTING else LinkStatus.CONNECTING,
@@ -2712,7 +2716,7 @@ class KableBmsRepository private constructor(
      */
     private fun rebuildPipelineLocked(vehicle: Vehicle?, address: String, type: BmsType?): VehicleConnection {
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = sampleFunnelChannel()
         // The old orchestrator's last snapshot belongs to a dead BLE session.
         // Clear it before publishing the replacement so the reconnect gap
         // takes the existing offline presentation until fresh samples arrive.
@@ -3616,7 +3620,7 @@ class KableBmsRepository private constructor(
         val newLinks = effectiveLinkSpecs(vehicle, address, type)
             .map { PackLink(spec = it, vehicle = vehicle) }
         val orchestrator = buildOrchestrator(vehicle, address, type)
-        val channel = Channel<Sample>(SAMPLE_FUNNEL_CAPACITY)
+        val channel = sampleFunnelChannel()
         vehicleConnection = orchestrator
         closeSampleFunnelLocked()
         sampleChannel = channel
@@ -3849,4 +3853,21 @@ internal data class HistoryTelemetrySample(
     val telemetry: ru.sodovaya.volty.data.history.CapturedHistoryTelemetry,
     val controller: ru.sodovaya.volty.data.history.RideRecordingController,
     override val sessionOwnership: SampleSessionOwnership,
-) : Sample
+    private val queued: ru.sodovaya.volty.data.history.QueuedHistoryTelemetry? = null,
+    private val onDiscard: () -> Unit = {},
+) : Sample {
+    fun consume(): ru.sodovaya.volty.data.history.HistoryOffer {
+        val reservation = queued ?: return telemetry.offer(controller, sessionOwnership::isCurrent)
+        try {
+            if (!sessionOwnership.isCurrent()) return ru.sodovaya.volty.data.history.HistoryOffer.RETIRED
+            return reservation.offer(ru.sodovaya.volty.domain.history.HistoryBatch(telemetry.recording.rideId,
+                ru.sodovaya.volty.data.history.historyTelemetrySamples(telemetry.source, telemetry.tick, telemetry.received.observation),
+                emptyList(), emptyList()))
+        } finally { discard() }
+    }
+    fun discard() { if (queued?.discard() == true) onDiscard() }
+}
+
+/** Every native funnel must release queued recording reservations on undelivered elements. */
+internal fun sampleFunnelChannel(capacity: Int = KableBmsRepository.SAMPLE_FUNNEL_CAPACITY): Channel<Sample> =
+    Channel(capacity, onUndeliveredElement = { (it as? HistoryTelemetrySample)?.discard() })

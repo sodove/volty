@@ -60,6 +60,48 @@ class KableBmsRepositoryHistoryFunnelTest {
         return RideRecordingController(writer, HistoryRecordingDemand {}, { "ride-${++n}" }, { 0 })
     }
 
+    @Test fun managedQueuedPrefixIsProcessedOrQualifiedBeforeNativeDisconnectReturns() = kotlinx.coroutines.test.runTest {
+        for (discard in listOf(false, true)) {
+            val writer = Writer(); val c = controller(writer); val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+            var now = tick(); var owns = true
+            val ingress = HistoryTelemetryIngress(c, { now }, { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
+            val channel = sampleFunnelChannel(4)
+            ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
+            val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, vehicle(), SampleSessionOwnership { owns }, channel))
+            assertTrue(capture.prepareForObservation()); now = tick(20); capture.processNotification(byteArrayOf(7))
+            val sample = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+            now = tick(10)
+            val finish = backgroundScope.async { ingress.disconnectNative { true } }
+            try {
+                runCurrent(); assertFalse(finish.isCompleted)
+                if (discard) owns = false
+                assertEquals(if(discard) HistoryOffer.RETIRED else HistoryOffer.ACCEPTED, sample.consume())
+                finish.await()
+                assertEquals(listOf(if(discard) HistoryRideStatus.INTERRUPTED else HistoryRideStatus.COMPLETED), writer.statuses)
+                assertEquals(if(discard) emptyList() else listOf(7.0), writer.samples.flatMap { it.samples }.map { it.value })
+            } finally { sample.discard(); channel.cancel(); finish.cancel(); runCurrent() }
+        }
+    }
+
+    @Test fun cancellingNativeQueueReleasesUndeliveredFactBeforeDurableFinish() = kotlinx.coroutines.test.runTest {
+        val writer = Writer(); val c = controller(writer); val spec = LinkSpec("a", ProtocolKind.JK, listOf(OwnedSource(0)))
+        var now = tick()
+        val ingress = HistoryTelemetryIngress(c, { now }, { _, _ -> mapOf(HistoryTelemetrySource(TelemetryOrigin.BATTERY, 0) to source) }, manageConnections = true)
+        val channel = sampleFunnelChannel(4)
+        ingress.installNativePlan("bike", listOf(spec), vehicle()) { true }
+        val capture = assertNotNull(ingress.capture(Emitter(), "attempt", spec, vehicle(), SampleSessionOwnership { true }, channel))
+        assertTrue(capture.prepareForObservation()); now = tick(20); capture.processNotification(byteArrayOf(7))
+        val backup = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
+        assertTrue(channel.trySend(backup).isSuccess)
+        val finish = backgroundScope.async { ingress.disconnectNative { true } }
+        try {
+            runCurrent(); assertFalse(finish.isCompleted)
+            channel.cancel(); finish.await()
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), writer.statuses)
+            assertTrue(writer.samples.isEmpty())
+        } finally { backup.discard(); channel.cancel(); finish.cancel(); runCurrent() }
+    }
+
     @Test fun acceptedNativeDisconnectFinishesHistoryWhenItsCallerIsCancelled() = bleRepositoryTest { repo ->
         val writer = Writer(); val c = controller(writer); val v = vehicle()
         repo.configureHistoryTelemetryIngress(HistoryTelemetryIngress(c, { tick() }, manageConnections = true))
@@ -117,7 +159,7 @@ class KableBmsRepositoryHistoryFunnelTest {
             now = tick(1); ingress.retireNativeAttempt(pa)
             cb.processNotification(byteArrayOf(9))
             val event = assertIs<HistoryTelemetrySample>(assertNotNull(channel.tryReceive().getOrNull()))
-            assertEquals(HistoryOffer.ACCEPTED, event.telemetry.offer(c) { true })
+            assertEquals(HistoryOffer.ACCEPTED, event.consume())
             assertEquals("pack-b", writer.samples.single().samples.single().key.sourceId)
             assertTrue(c.state.value.intent.linkConnected)
             now = tick(2); ingress.retireNativeAttempt(pb); assertNull(c.captureTelemetryRecording())

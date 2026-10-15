@@ -10,7 +10,7 @@ import ru.sodovaya.volty.data.history.*
 import ru.sodovaya.volty.domain.history.*
 import ru.sodovaya.volty.domain.model.Vehicle
 
-internal enum class HistoryTelemetryIngressFailure { FULL, CLOSED, SETUP }
+internal enum class HistoryTelemetryIngressFailure { FULL, CLOSED, SETUP, RETIRED }
 internal data class HistoryTelemetryIngressDiagnostics(
     val droppedObservations: Long = 0,
     val setupFailures: Long = 0,
@@ -59,11 +59,18 @@ internal class HistoryTelemetryIngress(
             } }
             historySessionTelemetryCapture(protocol, sessionId, controller, readTick, ownership::isCurrent,
                 binding, preparation) { telemetry ->
-                val sent = channel.trySend(HistoryTelemetrySample(telemetry, controller, ownership))
+                val queued = if (nativeLifecycle != null) controller.reserveQueuedTelemetry(
+                    telemetry.recording, telemetry.tick, telemetry.source.id) ?: return@historySessionTelemetryCapture else null
+                val sample = HistoryTelemetrySample(telemetry, controller, ownership, queued) {
+                    mutableDiagnostics.update { it.copy(droppedObservations = increment(it.droppedObservations),
+                        lastFailure = HistoryTelemetryIngressFailure.RETIRED) }
+                }
+                val sent = channel.trySend(sample)
                 if (sent.isFailure) {
                     // A counter alone cannot qualify a completed ride as partial.
                     // Latch on the captured owner without bypassing numeric delivery.
-                    controller.reportTelemetryIngressLoss(telemetry.recording, telemetry.tick, telemetry.source.id)
+                    if (queued != null) queued.discard()
+                    else controller.reportTelemetryIngressLoss(telemetry.recording, telemetry.tick, telemetry.source.id)
                     mutableDiagnostics.update {
                         it.copy(droppedObservations = increment(it.droppedObservations),
                             lastFailure = if (sent.isClosed) HistoryTelemetryIngressFailure.CLOSED else HistoryTelemetryIngressFailure.FULL)
