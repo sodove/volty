@@ -5,6 +5,8 @@ data class RecordingIntent(val ride: HistoryRide? = null, val connectionGenerati
     /** Recorded identities and kinds; display names/order do not define a new ride. */
     val sourcePlan: Map<String, HistorySourceKind> = emptyMap())
 sealed interface RecordingInput {
+    /** Retire an incompatible selected vehicle/registry without inventing a ready connection. */
+    data class Selected(val vehicleId: String, val tick: HistoryTick, val generation: Long? = null) : RecordingInput
     data class Connected(val vehicleId: String, val generation: Long, val tick: HistoryTick) : RecordingInput
     data class LinkLost(val generation: Long, val tick: HistoryTick) : RecordingInput
     data class Stop(val tick: HistoryTick, val generation: Long? = null, val rideId: String? = null) : RecordingInput
@@ -49,6 +51,16 @@ fun recordingTransition(current: RecordingIntent, input: RecordingInput,
             else emptyList())
     }
     return when (input) {
+        is RecordingInput.Selected -> {
+            require(input.vehicleId.isNotBlank())
+            val active = current.ride
+            if ((input.generation != null && input.generation != current.connectionGeneration) || active == null ||
+                (active.vehicleId == input.vehicleId && (sourcePlan == null || sourcePlan == current.sourcePlan))) unchanged()
+            else RecordingTransition(current.copy(ride = null, linkConnected = false, sourcePlan = emptyMap()),
+                emptyList(), active.copy(ended = input.tick, status = HistoryRideStatus.COMPLETED), null,
+                listOf(HistoryMarker(input.tick, if (active.vehicleId == input.vehicleId)
+                    HistoryMarkerKind.SOURCE_CHANGE else HistoryMarkerKind.VEHICLE_SWITCH)))
+        }
         is RecordingInput.Connected -> connect(input.vehicleId, input.generation, input.tick, explicit = false)
         is RecordingInput.Start -> connect(input.vehicleId, input.generation, input.tick, explicit = true)
         is RecordingInput.LinkLost -> {

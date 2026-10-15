@@ -1065,3 +1065,41 @@ subscription. Source inspection shows it launches observeJob and returns while
 CCCD/handshake continue asynchronously. Its comment now records that correction.
 The new preparation seam is before that launch; it does not turn connection
 success into proof that a live notification/decode arrived.
+
+
+## Whole-vehicle connection ownership checkpoint (2026-10-16)
+
+`HistoryRecordingConnections` serializes physical link intent above the real
+`RideRecordingController`. Its installed selection snapshots the entire per-link
+registry before any attempt can become ready. First-ready acknowledges durable
+begin, additional ready links leave the admission capability intact, and only the
+last ready link's loss opens the vehicle BLE gap. Reconnect retains the full
+registry and ride rather than rotating a ride when another planned device joins.
+
+Selections and native attempts use identity capabilities. Replacement retires
+old callbacks, and globally increasing selection generations fence the controller.
+An old selection cannot disconnect or stop a successor. Retraction during review: the first draft deferred terminal retirement until a
+new ready link. That leaves old GPS recording alive if the next vehicle never
+connects, contradicting the approved switch contract. An incompatible selection
+now ends the old ride immediately with its vehicle/source terminal marker and
+flush, retiring both telemetry and GPS. The next ride begins only at first ready.
+A same-vehicle/same-registry replacement remains a reconnect gap. The selection
+input carries the actual current controller generation, since a prior selection
+may never have issued a Connected input. Duplicate
+source IDs are rejected across links; physical aliases still require the separate
+native admission planner and cannot be double-bound here.
+
+Manual stop remains latched through reconnect. Explicit restart requires a ready
+link. Stop includes the expected ride ID so a delayed command cannot stop a restart
+on the same selection. Disconnect invalidates pending attempts, including when
+no new link became ready yet. The caller must use this owner as the controller's
+exclusive lifecycle command source; native sample/session ownership remains a
+separate requirement. Accepted controls reconcile link bookkeeping in the same
+noncancellable region as controller durable ACK, with cancellation checks before
+admission and after mutex acquisition. This does not bound writer startup latency.
+
+This checkpoint does not install the owner into Kable/DI or activate the new
+recorder. Whole-vehicle planning must use installed immutable decoder configuration,
+not a later mutable vehicle profile. Native lifecycle hooks/shared clock, source
+specific interruption quality, gateway/alias admission, service/location ownership,
+legacy retirement and phone/performance acceptance remain open.

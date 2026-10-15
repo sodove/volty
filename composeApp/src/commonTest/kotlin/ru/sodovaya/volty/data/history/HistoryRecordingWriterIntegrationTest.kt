@@ -42,10 +42,14 @@ class HistoryRecordingWriterIntegrationTest {
         var clockReads = 0
         val offered = mutableListOf<CapturedHistoryTelemetry>()
         try {
+            var lifecycleTick = origin
+            val connections = HistoryRecordingConnections(controller) { lifecycleTick }
+            val selection = connections.install("bike", mapOf("vesc" to plan.values.toList()))
+            val attempt = assertNotNull(connections.newAttempt(selection, "vesc"))
             val protocol = VescProtocol(deriveBattery = true)
             val capture = historySessionTelemetryCapture(protocol, "attempt", controller,
                 { clockReads++; receipt }, { true }, plan, prepareRecording = {
-                    controller.execute(RecordingInput.Connected("bike", 7, origin), listOf(physical, virtual))
+                    check(connections.ready(attempt))
                 }) { event ->
                 offered += event
                 assertEquals(HistoryOffer.ACCEPTED, event.offer(controller) { true })
@@ -59,7 +63,8 @@ class HistoryRecordingWriterIntegrationTest {
             assertEquals(6, offered.size)
             assertTrue(offered.all { it.tick == receipt && it.recording.rideId == "ride" })
             assertSame(offered.first().received.receipt, offered.last().received.receipt)
-            controller.execute(RecordingInput.Stop(HistoryTick(10020, 120, 1), 7, "ride"))
+            lifecycleTick = HistoryTick(10020, 120, 1)
+            assertTrue(connections.stop(selection, "ride"))
             val range = HistoryRange(10000, 10030)
             val batteryPower = HistorySeriesKey(virtual.id, "power_w")
             val controllerPower = HistorySeriesKey(physical.id, "controller_power_w")
@@ -76,6 +81,59 @@ class HistoryRecordingWriterIntegrationTest {
             assertTrue(store.samples("ride", HistorySeriesKey(virtual.id, "cell_v", 0), range, null).items.isEmpty())
             assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)
             assertEquals(0, protocol.telemetryObserverFailures)
+        } finally { writer.close(); driver.close() }
+    }
+
+    @Test fun multiLinkRecordingPersistsRemainingSourceAndRetiresGpsBeforeUnconnectedVehicleSwitch() = runTest {
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY)
+        VoltyDatabase.Schema.create(driver)
+        val dispatcher = StandardTestDispatcher(testScheduler)
+        val store = SqlDelightHistoryStore(VoltyDatabaseProvider(driver), dispatcher)
+        val writer = BufferedHistoryWriter(store, dispatcher, emptyFlow(), projectRecording = true)
+        val demands = mutableListOf<Boolean>()
+        val controller = RideRecordingController(writer, HistoryRecordingDemand { demands += it }, { "ride" }, { store.recoverInterrupted() })
+        fun tick(delta: Long) = HistoryTick(10000 + delta, 100 + delta, 1)
+        var now = tick(0)
+        val connections = HistoryRecordingConnections(controller) { now }
+        val pack = HistorySource("pack", HistorySourceKind.BATTERY, "Battery")
+        val motor = HistorySource("motor", HistorySourceKind.CONTROLLER, "Motor")
+        fun offer(context: CapturedHistoryRecording, source: String, metric: String, delta: Long, value: Double) =
+            controller.offerTelemetry(context, HistoryBatch("ride",
+                listOf(HistorySample(tick(delta), HistorySeriesKey(source, metric), value)), emptyList(), emptyList()))
+        try {
+            val selection = connections.install("bike", mapOf("pack-link" to listOf(pack), "motor-link" to listOf(motor)))
+            val a = assertNotNull(connections.newAttempt(selection, "pack-link"))
+            val b = assertNotNull(connections.newAttempt(selection, "motor-link"))
+            assertTrue(connections.ready(a)); assertTrue(connections.ready(b))
+            val first = assertNotNull(controller.captureTelemetryRecording())
+            assertEquals(HistoryOffer.ACCEPTED, offer(first, "pack", "power_w", 10, -100.0))
+            now = tick(20); assertTrue(connections.lost(a))
+            assertEquals(HistoryOffer.ACCEPTED, offer(first, "motor", "controller_power_w", 25, 200.0))
+            now = tick(30); assertTrue(connections.lost(b))
+            val gps = HistoryGpsFix(tick(35), 56.0, 60.0, 5.0, null)
+            assertEquals(HistoryOffer.ACCEPTED, controller.offerGps("ride", gps))
+            now = tick(40)
+            val freshAttempt = assertNotNull(connections.newAttempt(selection, "pack-link"))
+            assertTrue(connections.ready(freshAttempt))
+            val fresh = assertNotNull(controller.captureTelemetryRecording())
+            assertEquals(HistoryOffer.RETIRED, offer(first, "pack", "power_w", 45, -9999.0))
+            assertEquals(HistoryOffer.ACCEPTED, offer(fresh, "pack", "power_w", 50, -300.0))
+            now = tick(60)
+            connections.install("wheel", mapOf("pack-link" to listOf(pack)))
+            assertNull(controller.captureGpsRecording())
+            assertEquals(HistoryOffer.RETIRED, controller.offerGps("ride", gps.copy(tick = tick(61))))
+            val range = HistoryRange(10000, 10100)
+            assertEquals(HistoryRideStatus.COMPLETED, store.ride("ride")?.status)
+            assertEquals(tick(60), store.ride("ride")?.ended)
+            assertEquals(listOf(pack, motor).sortedBy { it.id }, store.sources("ride"))
+            assertEquals(listOf(-100.0, -300.0), store.samples("ride", HistorySeriesKey("pack", "power_w"), range, null).items.map { it.value })
+            assertEquals(listOf(200.0), store.samples("ride", HistorySeriesKey("motor", "controller_power_w"), range, null).items.map { it.value })
+            assertEquals(listOf(gps), store.gps("ride", range, null).items)
+            val markers = store.markers("ride", range).map { it.kind }
+            assertEquals(1, markers.count { it == HistoryMarkerKind.BLE_GAP })
+            assertEquals(1, markers.count { it == HistoryMarkerKind.VEHICLE_SWITCH })
+            assertEquals(listOf("ride"), store.rides(null).items.map { it.id })
+            assertEquals(listOf(true, false), demands)
         } finally { writer.close(); driver.close() }
     }
 

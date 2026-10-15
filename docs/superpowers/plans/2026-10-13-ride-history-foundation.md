@@ -571,3 +571,18 @@ whole-vehicle lifecycle/registry coordination, bounded startup policy, native
 clock/location/service binding, aliases/gateway/aggregates and final DI/legacy
 retirement still keep Task7 and product activation open. Real CCCD/phone behavior
 must be verified natively; common tests do not claim that acceptance.
+
+
+Task7 connection-owner checkpoint (2026-10-16): `HistoryRecordingConnections`
+coordinates the actual controller with a frozen complete vehicle registry and
+identity capabilities for selections and individual physical attempts. First
+ready awaits begin, additional ready links preserve admission, last loss opens
+the vehicle BLE gap, stale/foreign events cannot affect a successor, and manual
+stop stays latched. `RecordingInput.Selected` retires an incompatible current
+ride immediately, including GPS, without starting an unconnected replacement;
+same-plan replacement remains a reconnect. The selection action carries the
+actual controller generation, including when intermediate selections never
+connected. This owner must exclusively issue lifecycle commands for its controller.
+Native Kable installation/retirement callbacks, shared native clock/recovery,
+source-specific interruption quality, bounded startup, service/location ownership,
+alias/gateway admission, legacy retirement and final activation remain open.

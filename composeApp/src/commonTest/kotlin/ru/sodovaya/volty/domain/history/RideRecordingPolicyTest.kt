@@ -10,6 +10,39 @@ class RideRecordingPolicyTest {
     private fun tick(ms: Long) = HistoryTick(10000 + ms, ms, 1)
     private fun connected() = recordingTransition(RecordingIntent(), RecordingInput.Connected("bike", 1, tick(0))) { "ride" }
 
+    @Test fun selectedVehicleEndsOldRideWithoutStartingAnUnconnectedOne() {
+        val prior = connected().intent
+        val changed = recordingTransition(prior, RecordingInput.Selected("wheel", tick(20), 1)) { error("not connected") }
+        assertEquals("ride", changed.finish?.id)
+        assertEquals(tick(20), changed.finish?.ended)
+        assertNull(changed.begin); assertNull(changed.intent.ride)
+        assertFalse(changed.intent.linkConnected)
+        assertEquals(listOf(HistoryMarkerKind.VEHICLE_SWITCH), changed.finishedMarkers.map { it.kind })
+        assertEquals(1L, changed.intent.connectionGeneration)
+        val ready = recordingTransition(changed.intent, RecordingInput.Connected("wheel", 2, tick(30))) { "new" }
+        assertEquals("new", ready.begin?.id)
+    }
+
+    @Test fun selectedRegistryRetiresOnlyChangedPhysicalPlanAndKeepsOldGenerationGuard() {
+        val oldPlan = mapOf("pack" to HistorySourceKind.BATTERY)
+        val current = connected().intent.copy(sourcePlan = oldPlan)
+        val same = recordingTransition(current, RecordingInput.Selected("bike", tick(10), 1), oldPlan) { error("no start") }
+        assertEquals(current, same.intent); assertNull(same.finish)
+        val stale = recordingTransition(current, RecordingInput.Selected("wheel", tick(10), 0)) { error("stale") }
+        assertEquals(current, stale.intent); assertNull(stale.finish)
+        val changed = recordingTransition(current, RecordingInput.Selected("bike", tick(10), 1), emptyMap()) { error("no start") }
+        assertEquals("ride", changed.finish?.id); assertNull(changed.begin)
+        assertEquals(listOf(HistoryMarkerKind.SOURCE_CHANGE), changed.finishedMarkers.map { it.kind })
+        assertTrue(changed.intent.sourcePlan.isEmpty())
+    }
+
+    @Test fun selectionWithoutActiveRideNeverStartsOrClearsManualStop() {
+        val stopped = RecordingIntent(connectionGeneration = 7, manuallyStopped = true)
+        val changed = recordingTransition(stopped, RecordingInput.Selected("wheel", tick(10), 7)) { error("no start") }
+        assertEquals(stopped, changed.intent); assertNull(changed.begin); assertNull(changed.finish)
+        assertTrue(changed.markers.isEmpty()); assertTrue(changed.finishedMarkers.isEmpty())
+    }
+
     @Test fun firstConnectStartsOnceAndDuplicateConnectIsNoOp() {
         val first = connected()
         assertEquals("ride", first.begin?.id)

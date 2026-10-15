@@ -54,7 +54,7 @@ class RideRecordingController(
      */
     suspend fun execute(input: RecordingInput, sources: List<HistorySource>? = null) = controls.withLock {
         val sourceSnapshot = sources?.toList()
-        val sourcePlan = if (input is RecordingInput.Connected || input is RecordingInput.Start) {
+        val sourcePlan = if (input is RecordingInput.Connected || input is RecordingInput.Start || input is RecordingInput.Selected) {
             sourceSnapshot?.let { registry ->
                 require(registry.map { it.id }.distinct().size == registry.size)
                 registry.associate { it.id to it.kind }
@@ -252,6 +252,7 @@ class RideRecordingController(
 }
 
 private fun RecordingInput.tick(): HistoryTick = when (this) {
+    is RecordingInput.Selected -> tick
     is RecordingInput.Connected -> tick
     is RecordingInput.LinkLost -> tick
     is RecordingInput.Stop -> tick
@@ -260,6 +261,7 @@ private fun RecordingInput.tick(): HistoryTick = when (this) {
 }
 
 private fun RecordingInput.withTick(value: HistoryTick): RecordingInput = when (this) {
+    is RecordingInput.Selected -> copy(tick = value)
     is RecordingInput.Connected -> copy(tick = value)
     is RecordingInput.LinkLost -> copy(tick = value)
     is RecordingInput.Stop -> copy(tick = value)
