@@ -1,0 +1,30 @@
+-- Resolve storage identity before limiting the shared catalog. A v2 ride owns
+-- its ID even when a requested metric is unavailable; legacy rows stay intact.
+pageHistoryCatalog:
+WITH fractions AS (
+    SELECT *, CASE WHEN substr(startedAt, 20, 1) = '.' THEN
+        max(instr(substr(startedAt, 21), 'Z'), instr(substr(startedAt, 21), '+'), instr(substr(startedAt, 21), '-'))
+        ELSE 0 END AS zoneStart
+    FROM RideRow
+    WHERE NOT EXISTS (SELECT 1 FROM HistoryRideV2 WHERE HistoryRideV2.id = RideRow.id)
+), legacy AS (
+    SELECT *, CAST(strftime('%s', CASE WHEN zoneStart > 0
+        THEN substr(startedAt, 1, 19) || substr(startedAt, 20 + zoneStart) ELSE startedAt END) AS INTEGER) * 1000
+        + CASE WHEN zoneStart > 0 THEN CAST(substr(substr(startedAt, 21, zoneStart - 1) || '000', 1, 3) AS INTEGER)
+          ELSE 0 END AS capturedMillis
+    FROM fractions
+), catalog AS (
+    SELECT id, vehicleId, startedEpochMillis, startedElapsedMillis, clockGeneration,
+        endedEpochMillis, endedElapsedMillis, endedClockGeneration, status,
+        -- A bare NULL here makes SQLDelight infer Nothing? for the UNION
+        -- column and generate a constant null instead of reading legacy text.
+        CAST(NULL AS TEXT) AS legacyStartedAt, CAST(NULL AS TEXT) AS legacyEndedAt
+    FROM HistoryRideV2
+    UNION ALL
+    SELECT id, vehicleId, capturedMillis, 0, 0, NULL, NULL, NULL, 'LEGACY', startedAt, endedAt
+    FROM legacy
+)
+SELECT * FROM catalog
+WHERE :beforeEpoch IS NULL OR startedEpochMillis < :beforeEpoch
+OR (startedEpochMillis = :beforeEpoch AND id < :beforeId)
+ORDER BY startedEpochMillis DESC, id DESC LIMIT :pageSize;

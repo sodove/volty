@@ -463,3 +463,13 @@ covers the 20000-row page edge and a synthetic two-hour multi-source fixture.
 Legacy unified reads/pagination, component admission/loading/errors and isolated
 memory/native performance acceptance still keep Task8 open. Existing Task1 graph
 cache/generation regressions were already fixed; they are not an open rework.
+
+Task8 compatibility checkpoint (2026-10-15): the old-format read interface and
+unified SQL catalog/format router are implemented and verified on real SQLite.
+Legacy queries filter metric/range before their 20000-row budget; they preserve
+wall-only/null-origin semantics and report no invented GPS or exact summary.
+The shared catalog excludes v2-owned duplicate IDs before pagination; unavailable
+v2 data does not borrow old rows. Both old/new fractional cursor and end metadata
+are tested, including the SQLDelight UNION null-inference regression. No runtime
+activation or UI route replacement yet. Component admission/loading/errors and
+native performance/activation acceptance still keep Task8 open.

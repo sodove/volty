@@ -657,3 +657,39 @@ selected-series truncation, 45 equal-time rides over three pages, canonical sign
 zero/unknown, exact fractional ranges/offsets and an orphan without a parent.
 Unified old/new catalog routing, component admission/loading/errors and runtime
 activation still remain; this checkpoint does not replace the existing graph UI.
+
+## 2026-10-15 — unified recorded catalog (Task8 checkpoint)
+
+SqlDelightHistoryReadRepository combines v2 and old rides in one bounded SQL
+catalog, ordered by started millisecond epoch and stable ID. A v2 ID excludes an
+old row with the same ID before the 21-row probe/20-row page. Data reads choose
+one format for the request; an unavailable v2 key never falls back to old points.
+Old rows are preserved. Deliberate cross-format ID reuse shadows the old copy
+while the v2 ride exists; this rule is consistent for list/metadata/data reads.
+No migration creates such copies and no new runtime/UI wiring is activated.
+
+h151 failed all six new integration tests against the stub (91s). h152 passed
+27 of 28 selected tests, but the old catalog end date was null. Investigation of
+the generated mapper showed that bare NULL aliases in the first UNION branch
+were inferred as Nothing?: SQLDelight emitted constant nulls instead of reading
+the old timestamp columns, making the legacy mapping branch unreachable. An
+always-false warning in the new Kotlin file corroborated it. Explicit
+CAST(NULL AS TEXT) fixes the inferred type. Generated code was checked for
+String? fields and cursor.getString(9)/(10); the real non-null end-date assertion
+now passes. This retracts the initial SQL-only assessment that the mapping was
+already correct. The generated source is build output, not a handwritten patch.
+
+Fixtures now cover 45 mixed equal-time rides across 20/20/5 pages, duplicate IDs
+excluded before limiting without deleting rows, format-exclusive canonical
+series/source/GPS, missing-key isolation, configured v2 read caps, fractional
+positive/negative-offset cursors, and non-null completed v2 end epoch/elapsed/
+generation/status. The earlier two-hour SQL fixture also now asserts actual
+7201 returned raw rows for each of eight keys (57608), beyond its seed loop and
+overview shape assertions. Readonly review/follow-up found no remaining defect.
+
+h153 focused fresh: 28 tests/5 XML, zero failures/errors/skips, 95s.
+h154 full fresh: 3798 tests/390 XML, all newer than UTC start, zero failures,
+errors or skips; 100s, all 37 tasks executed including actual migration
+verification. No DDL/schema snapshot/old-row rewrite was introduced. Native heap/
+latency, source-aware component admission, final runtime integration and screens
+remain open; the existing live/historical graph routes remain in place.

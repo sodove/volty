@@ -74,7 +74,16 @@ class HistoryReadRepositorySqlTest {
         val gap = HistoryMarker(tick(3600), HistoryMarkerKind.BLE_GAP)
         store.append(HistoryBatch("ride", emptyList(), emptyList(), listOf(gap)))
         store.finish("ride", tick(7200), HistoryRideStatus.COMPLETED)
-        val repository = DefaultHistoryReadRepository(store)
+        val rawRowsRead = mutableMapOf<HistorySeriesKey, Int>()
+        val observed = object : HistoryStore by store {
+            override suspend fun samples(rideId: String, key: HistorySeriesKey, range: HistoryRange,
+                after: HistoryCursor?, limit: Int): HistoryPage<HistorySample> =
+                store.samples(rideId, key, range, after, limit).also {
+                    assertEquals(20000, limit)
+                    rawRowsRead[key] = (rawRowsRead[key] ?: 0) + it.items.size
+                }
+        }
+        val repository = DefaultHistoryReadRepository(observed)
         assertEquals(sources, repository.sources("ride"))
         keys.forEachIndexed { index, key ->
             val result = repository.series("ride", key, HistoryRange(10000, 7210000), 61)
@@ -88,6 +97,7 @@ class HistoryReadRepositorySqlTest {
             assertTrue(result.samples.any { it.unknown == HistoryUnknownReason.GAP && it.tick == gap.tick })
             assertTrue(result.samples.any { it.unknown == HistoryUnknownReason.GAP && it.tick == tick(5400) })
         }
+        assertEquals(keys.associateWith { 7201 }, rawRowsRead)
         val atJump = repository.series("ride", keys.first(), HistoryRange(5410000, 5410000))
         assertEquals(listOf(HistorySample(tick(5400), keys.first(), 10.0)), atJump.samples)
         assertTrue(repository.series("ride", keys.first(), HistoryRange(0, 9999)).samples.isEmpty())
