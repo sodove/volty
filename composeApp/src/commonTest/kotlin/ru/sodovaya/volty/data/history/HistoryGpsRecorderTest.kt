@@ -13,18 +13,62 @@ class HistoryGpsRecorderTest {
     private class Fixture(val test: TestScope, scopeOverride: CoroutineScope? = null) {
         val writer = Writer()
         var nextId = 0
-        val controller = RideRecordingController(writer, HistoryRecordingDemand { }, { "ride-${++nextId}" }, { 0 })
         val location = MutableStateFlow(RideLocationState())
+        val controller = RideRecordingController(writer, HistoryRecordingDemand { enabled ->
+            val state = location.value
+            location.value = state.copy(demands = if (enabled) state.demands + LocationConsumer.HISTORY_RECORDING
+                else state.demands - LocationConsumer.HISTORY_RECORDING)
+        }, { "ride-${++nextId}" }, { 0 })
         val scope = scopeOverride ?: CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
         var beforeRead: () -> Unit = { }
         fun tick() = HistoryTick(10_000 + test.testScheduler.currentTime, 100 + test.testScheduler.currentTime, 1)
         val recorder = HistoryGpsRecorder(scope, controller, location, { beforeRead(); tick() }, maxAgeMillis = 1_000)
         suspend fun start() { controller.execute(RecordingInput.Start("bike", 7, tick()), listOf(HistorySource("p", HistorySourceKind.BATTERY, "P"))) }
-        fun status(value: RideLocationStatus) { location.value = RideLocationState(value) }
+        fun status(value: RideLocationStatus) { location.value = location.value.copy(status = value) }
         fun fix(elapsed: Long = tick().elapsedMillis, wall: Long = 123_456, latitude: Double = 56.0) = RideLocationFix(
             GeoCoordinate(latitude, 60.0), 5.0, null, null, tick().epochMillis, elapsed, LocationSource.GPS, wall)
         fun fixes() = writer.offers.flatMap { it.gps }
         fun gaps() = writer.offers.flatMap { it.markers }.filter { it.kind == HistoryMarkerKind.GPS_GAP }
+    }
+
+    @Test fun availableFixFromAnotherConsumerCannotEnterHistoryWithoutItsOwnDemand() = runTest {
+        val f = Fixture(this)
+        f.start()
+        // A live shared provider does not prove history acquired location ownership.
+        for ((index, consumer) in LocationConsumer.entries.filter { it != LocationConsumer.HISTORY_RECORDING }.withIndex()) {
+            f.location.value = RideLocationState(RideLocationStatus.Available(f.fix(latitude = 56.0 + index)), setOf(consumer))
+            runCurrent()
+            assertTrue(f.fixes().isEmpty(), "Unowned coordinate from $consumer entered history")
+            assertEquals(1, f.gaps().size)
+        }
+        f.location.value = f.location.value.copy(demands = f.location.value.demands + LocationConsumer.HISTORY_RECORDING)
+        runCurrent()
+        assertTrue(f.fixes().isEmpty(), "A cached point at the gap cannot close it merely because demand appeared")
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(1, f.fixes().size)
+        assertEquals(1, f.gaps().size)
+    }
+
+    @Test fun removingHistoryDemandOpensGapEvenWhenSharedAvailableStatusDoesNotChange() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        advanceTimeBy(10)
+        val unchanged = f.location.value.status
+        f.location.value = f.location.value.copy(demands = setOf(LocationConsumer.MAP))
+        runCurrent()
+        assertEquals(unchanged, f.location.value.status)
+        assertEquals(listOf(f.tick()), f.gaps().map { it.tick })
+        assertEquals(1, f.fixes().size)
+        advanceTimeBy(10)
+        f.location.value = f.location.value.copy(demands = setOf(LocationConsumer.MAP, LocationConsumer.HISTORY_RECORDING))
+        runCurrent()
+        assertEquals(1, f.fixes().size, "A pre-gap cached coordinate cannot resume the route")
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(2, f.fixes().size)
+        assertEquals(1, f.gaps().size)
     }
 
     @Test fun deniedGpsProducesOneGapPerOutageWithoutDisablingTelemetryOrBleReconnect() = runTest {
@@ -90,7 +134,7 @@ class HistoryGpsRecorderTest {
         f.status(RideLocationStatus.Available(f.fix()))
         f.start(); runCurrent()
         advanceTimeBy(100)
-        f.location.value = f.location.value.copy(demands = setOf(LocationConsumer.MAP)); runCurrent()
+        f.location.value = f.location.value.copy(demands = setOf(LocationConsumer.MAP, LocationConsumer.HISTORY_RECORDING)); runCurrent()
         assertEquals(1, f.fixes().size)
         f.status(RideLocationStatus.Available(f.fix(latitude = 57.0))); runCurrent()
         assertEquals(2, f.fixes().size)

@@ -1227,3 +1227,25 @@ and must not be borrowed to revoke history when Nearby sharing changes. No locat
 type or location demand is newly enabled in this checkpoint. Physical service
 start/restart, notification actions and background GPS still need native acceptance;
 common tests check issued service requests and the extracted startup decision.
+
+## GPS consumer ownership checkpoint (2026-10-16)
+
+Retraction: the observer previously projected shared location state to status only.
+That was sufficient for provider freshness tests but discarded who requested it.
+A valid Available coordinate owned solely by MAP/Nearby entered history, and
+removing HISTORY_RECORDING with an unchanged Available status opened no GPS gap.
+Both behaviors were reproduced with issued writer facts/markers before the fix.
+
+The observer now qualifies HISTORY_RECORDING demand before status deduplication.
+Without its own consumer it observes NotRequested, records one outage and cannot
+borrow another consumer's coordinates. Removing history demand retires its expiry
+and opens a gap even if shared providers stay live. Restoring demand cannot close
+that gap with a pre-gap cached coordinate; a fresh admitted measurement resumes it.
+Unrelated consumer changes while history remains requested preserve deduplication
+and the original expiry. The fixture now models the controller's own demand, and
+status updates preserve consumer identity.
+
+Consumer presence is a prerequisite, not native foreground proof. The native owner
+must still admit foreground before enabling HISTORY_RECORDING and fence GPS
+admission before asynchronous native cleanup on loss. This observer change does
+not activate providers, foreground location or the new runtime by itself.

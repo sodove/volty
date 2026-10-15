@@ -632,3 +632,11 @@ absence. Notification disconnect no longer bypasses ownership with stopSelf.
 Telemetry explicitly promotes connectedDevice; optional native location foreground
 proof/permission and HISTORY_RECORDING provider demand are still pending. No new
 runtime activation or phone/background-location acceptance is claimed.
+
+Task7 GPS consumer qualification checkpoint (2026-10-16): the observer checks its
+own HISTORY_RECORDING consumer before deduplicating location status. MAP/Nearby
+coordinates alone cannot enter history; removing history demand opens a GPS gap
+even when the shared provider's Available status stays unchanged. Unrelated demand
+changes do not resample fixes or reset expiry. Consumer intent remains distinct
+from native foreground acknowledgement; that admission/cleanup binding and runtime
+activation are still pending.

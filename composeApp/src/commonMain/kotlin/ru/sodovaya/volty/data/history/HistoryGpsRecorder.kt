@@ -11,10 +11,13 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.domain.location.LocationConsumer
 import ru.sodovaya.volty.domain.location.RideLocationState
 import ru.sodovaya.volty.domain.location.RideLocationStatus
 
-/** App-owned recording observer; activation and native service demand are separate. */
+/** App-owned recording observer; activation and native service demand are separate.
+ * Own consumer demand is necessary; native foreground proof remains its owner's responsibility.
+ */
 internal class HistoryGpsRecorder(
     scope: CoroutineScope,
     controller: RideRecordingController,
@@ -36,7 +39,12 @@ internal class HistoryGpsRecorder(
                 if (gap == null && controller.offerGpsGap(ride.id, now) == HistoryOffer.ACCEPTED) gap = now
             }
 
-            locations.map { it.status }.distinctUntilChanged().collectLatest location@{ status ->
+            locations.map { state ->
+                // Retraction: status alone let MAP/Nearby coordinates bypass history's own
+                // demand and hid its revocation while another consumer kept Available.
+                if (LocationConsumer.HISTORY_RECORDING in state.demands) state.status
+                else RideLocationStatus.NotRequested
+            }.distinctUntilChanged().collectLatest location@{ status ->
                 val captured = controller.captureGpsRecording() ?: return@location
                 if (captured.rideId != ride.id) return@location
                 try {
