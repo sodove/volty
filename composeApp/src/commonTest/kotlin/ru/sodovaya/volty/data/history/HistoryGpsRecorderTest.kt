@@ -1,0 +1,258 @@
+package ru.sodovaya.volty.data.history
+
+import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.test.*
+import ru.sodovaya.volty.domain.history.*
+import ru.sodovaya.volty.domain.location.*
+import ru.sodovaya.volty.domain.navigation.GeoCoordinate
+import kotlin.test.*
+
+@OptIn(ExperimentalCoroutinesApi::class)
+class HistoryGpsRecorderTest {
+    private class Fixture(val test: TestScope, scopeOverride: CoroutineScope? = null) {
+        val writer = Writer()
+        var nextId = 0
+        val controller = RideRecordingController(writer, HistoryRecordingDemand { }, { "ride-${++nextId}" }, { 0 })
+        val location = MutableStateFlow(RideLocationState())
+        val scope = scopeOverride ?: CoroutineScope(test.backgroundScope.coroutineContext + Job(test.backgroundScope.coroutineContext[Job]))
+        var beforeRead: () -> Unit = { }
+        fun tick() = HistoryTick(10_000 + test.testScheduler.currentTime, 100 + test.testScheduler.currentTime, 1)
+        val recorder = HistoryGpsRecorder(scope, controller, location, { beforeRead(); tick() }, maxAgeMillis = 1_000)
+        suspend fun start() { controller.execute(RecordingInput.Start("bike", 7, tick()), listOf(HistorySource("p", HistorySourceKind.BATTERY, "P"))) }
+        fun status(value: RideLocationStatus) { location.value = RideLocationState(value) }
+        fun fix(elapsed: Long = tick().elapsedMillis, wall: Long = 123_456, latitude: Double = 56.0) = RideLocationFix(
+            GeoCoordinate(latitude, 60.0), 5.0, null, null, tick().epochMillis, elapsed, LocationSource.GPS, wall)
+        fun fixes() = writer.offers.flatMap { it.gps }
+        fun gaps() = writer.offers.flatMap { it.markers }.filter { it.kind == HistoryMarkerKind.GPS_GAP }
+    }
+
+    @Test fun deniedGpsProducesOneGapPerOutageWithoutDisablingTelemetryOrBleReconnect() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.PermissionDenied); runCurrent()
+        assertTrue(f.writer.offers.isEmpty())
+        f.start(); runCurrent()
+        assertEquals(1, f.gaps().size)
+        f.status(RideLocationStatus.PermissionRequired); runCurrent()
+        f.status(RideLocationStatus.ProviderDisabled); runCurrent()
+        assertEquals(1, f.gaps().size)
+        val sample = HistorySample(f.tick(), HistorySeriesKey("p", "power_w"), -100.0)
+        assertEquals(HistoryOffer.ACCEPTED, f.controller.offerTelemetry(7, HistoryBatch("ride-1", listOf(sample), emptyList(), emptyList())))
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(1, f.fixes().size)
+        f.controller.execute(RecordingInput.LinkLost(7, f.tick())); runCurrent()
+        advanceTimeBy(10)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(2, f.fixes().size, "GPS must continue while BLE is absent")
+        f.status(RideLocationStatus.Searching); runCurrent()
+        assertEquals(2, f.gaps().size)
+        assertEquals("ride-1", f.controller.state.value.intent.ride?.id)
+    }
+
+    @Test fun staleFixExpiresWithoutAnotherLocationEmissionAndTimerDoesNotRepeat() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix()))
+        f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        assertTrue(f.gaps().isEmpty())
+        advanceTimeBy(1_000); runCurrent()
+        assertTrue(f.gaps().isEmpty(), "Exact maximum age remains admissible")
+        advanceTimeBy(1); runCurrent()
+        assertEquals(listOf(HistoryTick(11_001, 1_101, 1)), f.gaps().map { it.tick })
+        advanceTimeBy(10_000); runCurrent()
+        assertEquals(1, f.gaps().size)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(2, f.fixes().size)
+        advanceTimeBy(1_001); runCurrent()
+        assertEquals(2, f.gaps().size)
+    }
+
+    @Test fun rawAcquisitionTimeIsPreservedAndRetainedLocationCannotBecomeNewRideRoute() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix(wall = 9_000_000)))
+        f.start(); runCurrent()
+        assertEquals(HistoryTick(9_000_000, 100, 1), f.fixes().single().tick)
+        advanceTimeBy(100)
+        f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1"))
+        f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        assertTrue(f.writer.offers.filter { it.rideId == "ride-2" }.all { it.gps.isEmpty() })
+        assertEquals(1, f.gaps().size)
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix(wall = 1))); runCurrent()
+        assertEquals(HistoryTick(1, 201, 1), f.fixes().last().tick)
+        assertEquals("ride-2", f.writer.offers.last().rideId)
+    }
+
+    @Test fun identicalFixIsNotResampledByDemandChangesAndOlderFixCannotResetExpiry() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix()))
+        f.start(); runCurrent()
+        advanceTimeBy(100)
+        f.location.value = f.location.value.copy(demands = setOf(LocationConsumer.MAP)); runCurrent()
+        assertEquals(1, f.fixes().size)
+        f.status(RideLocationStatus.Available(f.fix(latitude = 57.0))); runCurrent()
+        assertEquals(2, f.fixes().size)
+        advanceTimeBy(100)
+        f.status(RideLocationStatus.Available(f.fix(elapsed = 150, latitude = 58.0))); runCurrent()
+        assertEquals(2, f.fixes().size)
+        advanceTimeBy(901); runCurrent()
+        assertEquals(1, f.gaps().size, "Expiry belongs to the last accepted fix at elapsed 200")
+    }
+
+    @Test fun missingMeasurementMetadataAndFixAcquiredBeforeOutageCannotCloseGap() = runTest {
+        val f = Fixture(this)
+        f.start(); runCurrent()
+        assertEquals(1, f.gaps().size)
+        f.status(RideLocationStatus.Available(f.fix().copy(measurementAtEpochMillis = null))); runCurrent()
+        assertTrue(f.fixes().isEmpty())
+        advanceTimeBy(10)
+        f.status(RideLocationStatus.PermissionDenied); runCurrent()
+        f.status(RideLocationStatus.Available(f.fix(elapsed = 100))); runCurrent()
+        assertTrue(f.fixes().isEmpty(), "A fix at/before the gap cannot resume the route")
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(1, f.fixes().size)
+        assertEquals(1, f.gaps().size)
+    }
+
+    @Test fun stoppingAndClosingObserverCancelPendingExpiryAndPreventFurtherPublication() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix()))
+        f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1")); runCurrent()
+        val stoppedCount = f.writer.offers.size
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(stoppedCount, f.writer.offers.size)
+        f.start(); runCurrent()
+        f.recorder.close()
+        val closedCount = f.writer.offers.size
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        advanceTimeBy(2_000); runCurrent()
+        assertEquals(closedCount, f.writer.offers.size)
+    }
+
+    @Test fun parentScopeCancellationStopsObserverWithoutStoppingRecording() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix()))
+        f.start(); runCurrent()
+        assertEquals(1, f.fixes().size)
+        f.scope.cancel()
+        val count = f.writer.offers.size
+        advanceTimeBy(2_000)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(count, f.writer.offers.size)
+        assertEquals("ride-1", f.controller.state.value.intent.ride?.id)
+    }
+
+    @Test fun clockFailureIsContainedObserverRecoversAndAffectedRideEndsInterrupted() = runTest {
+        val escaped = mutableListOf<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, error -> escaped += error })
+        try {
+            val f = Fixture(this, scope)
+            f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+            f.beforeRead = { error("clock unavailable") }
+            f.status(RideLocationStatus.Searching); runCurrent()
+            f.beforeRead = { }
+            advanceTimeBy(1)
+            f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+            assertEquals(2, f.fixes().size, "A failed clock read must not kill the observer")
+            f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1"))
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), f.writer.statuses)
+            assertTrue(escaped.isEmpty())
+        } finally { scope.cancel() }
+    }
+
+    @Test fun throwingGpsOfferIsContainedAndRetriedOnlyOnANewFixWithInterruptedVerdict() = runTest {
+        val escaped = mutableListOf<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, error -> escaped += error })
+        try {
+            val f = Fixture(this, scope)
+            f.start(); runCurrent()
+            advanceTimeBy(1)
+            f.writer.beforeOffer = { if (it.gps.isNotEmpty()) error("offer failed") }
+            f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+            assertTrue(f.fixes().isEmpty())
+            f.writer.beforeOffer = { }
+            advanceTimeBy(1)
+            f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+            assertEquals(1, f.fixes().size, "The collector must survive an optional GPS write error")
+            f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1"))
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), f.writer.statuses)
+            assertTrue(escaped.isEmpty())
+        } finally { scope.cancel() }
+    }
+
+    @Test fun clockFailureAfterOwnerReplacementCannotPoisonTheNewRide() = runTest {
+        val escaped = mutableListOf<Throwable>()
+        val scope = CoroutineScope(SupervisorJob() + StandardTestDispatcher(testScheduler) + CoroutineExceptionHandler { _, error -> escaped += error })
+        try {
+            val f = Fixture(this, scope)
+            f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+            advanceTimeBy(1)
+            f.beforeRead = {
+                f.beforeRead = { }
+                val change = async {
+                    f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1"))
+                    f.start()
+                }
+                runCurrent()
+                assertTrue(change.isCompleted)
+                error("retired clock failure")
+            }
+            f.status(RideLocationStatus.Searching); runCurrent()
+            advanceTimeBy(1)
+            f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+            f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-2"))
+            assertEquals(listOf(HistoryRideStatus.COMPLETED, HistoryRideStatus.COMPLETED), f.writer.statuses)
+            assertTrue(f.writer.offers.any { it.rideId == "ride-2" && it.gps.isNotEmpty() })
+            assertTrue(escaped.isEmpty())
+        } finally { scope.cancel() }
+    }
+
+    @Test fun delayedStaleProviderFixCannotCreateAnOutageWhileANewerFixIsFresh() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        advanceTimeBy(5_000); runCurrent()
+        assertEquals(1, f.gaps().size)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        assertEquals(2, f.fixes().size)
+        advanceTimeBy(1)
+        f.status(RideLocationStatus.Available(f.fix(elapsed = 100, latitude = 58.0))); runCurrent()
+        assertEquals(1, f.gaps().size, "Stale out-of-order provider state must not invalidate the newer accepted fix")
+        assertEquals(2, f.fixes().size)
+        advanceTimeBy(1_000); runCurrent()
+        assertEquals(2, f.gaps().size)
+        assertEquals(HistoryTick(16_001, 6_101, 1), f.gaps().last().tick)
+    }
+
+    @Test fun clockCancellationIsNotConvertedIntoRecordingFailureOrParentScopeFailure() = runTest {
+        val f = Fixture(this)
+        f.status(RideLocationStatus.Available(f.fix())); f.start(); runCurrent()
+        f.beforeRead = { throw CancellationException("observer cancelled") }
+        f.status(RideLocationStatus.Searching); runCurrent()
+        assertTrue(f.scope.isActive)
+        f.beforeRead = { }
+        advanceTimeBy(2_000)
+        f.status(RideLocationStatus.Available(f.fix())); runCurrent()
+        // collectLatest cancels the individual action; its parent collector remains usable.
+        assertEquals(2, f.fixes().size)
+        f.controller.execute(RecordingInput.Stop(f.tick(), 7, "ride-1"))
+        assertEquals(listOf(HistoryRideStatus.COMPLETED), f.writer.statuses)
+        assertNull(f.controller.telemetryFailure.value)
+    }
+
+    private class Writer : HistoryWriter {
+        override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
+        val offers = mutableListOf<HistoryBatch>()
+        val statuses = mutableListOf<HistoryRideStatus>()
+        var beforeOffer: (HistoryBatch) -> Unit = { }
+        override suspend fun begin(generation: Long, ride: HistoryRide, sources: List<HistorySource>) = Unit
+        override fun offer(generation: Long, batch: HistoryBatch): HistoryOffer { beforeOffer(batch); offers += batch; return HistoryOffer.ACCEPTED }
+        override suspend fun finish(generation: Long, tick: HistoryTick, status: HistoryRideStatus, rideId: String?) { statuses += status }
+        override suspend fun flush() = Unit
+        override suspend fun delete(rideId: String) = Unit
+        override suspend fun close() = Unit
+    }
+}

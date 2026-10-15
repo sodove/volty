@@ -22,6 +22,13 @@ internal class CapturedHistoryRecording internal constructor(
     internal val gate: HistoryAdmissionGate,
 )
 
+/** GPS recording lifetime spans BLE admission segments, but never another recording owner. */
+internal class CapturedHistoryGpsRecording internal constructor(
+    val rideId: String,
+    internal val generation: Long,
+    internal val identity: Any,
+)
+
 /** Recording lifetime is independent of screens, BLE reconnects and GPS availability. */
 class RideRecordingController(
     private val writer: HistoryWriter,
@@ -31,7 +38,7 @@ class RideRecordingController(
 ) {
     private data class Owner(val generation: Long, val intent: RecordingIntent, val sources: Set<String>,
         val last: HistoryTick, val gate: HistoryAdmissionGate = HistoryAdmissionGate(last),
-        val failure: MutableStateFlow<String?> = MutableStateFlow(null))
+        val failure: MutableStateFlow<String?> = MutableStateFlow(null), val identity: Any = Any())
     private val mutableState = MutableStateFlow(HistoryRecordingRuntimeState())
     val state: StateFlow<HistoryRecordingRuntimeState> = mutableState
     private val admission = MutableStateFlow<Owner?>(null)
@@ -173,13 +180,46 @@ class RideRecordingController(
         finally { owner.gate.release() }
     }
 
+    internal fun captureGpsRecording(): CapturedHistoryGpsRecording? {
+        val owner = admission.value ?: return null
+        return CapturedHistoryGpsRecording(checkNotNull(owner.intent.ride).id, owner.generation, owner.identity)
+    }
+
+    /** No clock read required: qualify the captured recording identity, even across BLE reconnects. */
+    internal fun reportGpsObservationFailure(context: CapturedHistoryGpsRecording): Boolean {
+        val owner = admission.value ?: return false
+        if (context.identity !== owner.identity || context.generation != owner.generation ||
+            context.rideId != owner.intent.ride?.id) return false
+        if (!owner.gate.reserve(owner.last)) return false
+        try { recordTelemetryFailure(owner, "GpsObservationFailure"); return true }
+        finally { owner.gate.release() }
+    }
+
     /** GPS keeps participating while BLE is reconnecting; the observer stamps the ride it captured. */
     fun offerGps(rideId: String, fix: HistoryGpsFix): HistoryOffer {
         val owner = admission.value ?: return HistoryOffer.RETIRED
         val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
         if (rideId != ride.id || historyAxisEpochMillis(ride.started, fix.tick) == null) return HistoryOffer.RETIRED
-        if (!owner.gate.reserve(fix.tick)) return HistoryOffer.RETIRED
-        try { return writer.offer(owner.generation, HistoryBatch(ride.id, emptyList(), listOf(fix), emptyList())) }
+        return offerGpsBatch(owner, fix.tick, HistoryBatch(ride.id, emptyList(), listOf(fix), emptyList()))
+    }
+
+    /** GPS status/expiry boundary, independent of BLE admission. No invented coordinate. */
+    internal fun offerGpsGap(rideId: String, tick: HistoryTick): HistoryOffer {
+        val owner = admission.value ?: return HistoryOffer.RETIRED
+        val ride = owner.intent.ride ?: return HistoryOffer.RETIRED
+        if (rideId != ride.id || historyAxisEpochMillis(ride.started, tick) == null) return HistoryOffer.RETIRED
+        return offerGpsBatch(owner, tick, HistoryBatch(ride.id, emptyList(), emptyList(),
+            listOf(HistoryMarker(tick, HistoryMarkerKind.GPS_GAP))))
+    }
+
+    private fun offerGpsBatch(owner: Owner, tick: HistoryTick, batch: HistoryBatch): HistoryOffer {
+        if (!owner.gate.reserve(tick)) return HistoryOffer.RETIRED
+        try { return writer.offer(owner.generation, batch) }
+        catch (error: Exception) {
+            // The failure verdict must precede reservation release: a waiting stop owns finish.
+            recordTelemetryFailure(owner, "GpsOfferFailure")
+            throw error
+        }
         finally { owner.gate.release() }
     }
 

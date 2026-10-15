@@ -482,3 +482,14 @@ recorded metadata. Omitted active registry and explicit empty GPS-only registry
 have distinct meanings. Retired captured packets and delayed transition bounds
 are tested. Runtime source identity/calibration planning, readiness, GPS/service
 ownership and production activation remain open; this checkpoint enables none.
+
+
+Task7 GPS-observer checkpoint (2026-10-15): app-owned HistoryGpsRecorder observes
+only an owned ride and continues across BLE loss. It qualifies acquisition time,
+records fixes once, emits GPS_GAP on unavailable/expired position and uses a finite
+one-shot expiry even without another provider update. Old/stale provider callbacks,
+retired rides, cancellation and optional clock/writer failures have regressions.
+Failure qualification uses recording identity; writer failure is latched before
+reservation release. This does not activate DI/native GPS demand or foreground
+service. Provider-source persistence is also still pending: the approved design
+asks for it, but the current HistoryGpsFix/row contract has no provider field.

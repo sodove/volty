@@ -273,6 +273,66 @@ class RideRecordingControllerTest {
         assertEquals(HistoryOffer.ACCEPTED, c.offerTelemetry(current, batch(delta = 2)))
     }
 
+    @Test fun gpsGapUsesRideClockFenceAndParticipatesInDelayedStopBound() = runTest {
+        val f = Fixture(); val c = f.controller
+        c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val count = f.writer.offers.size
+        assertEquals(HistoryOffer.RETIRED, c.offerGpsGap("foreign", tick(1)))
+        assertEquals(HistoryOffer.RETIRED, c.offerGpsGap("ride-1", tick().copy(elapsedMillis = 99)))
+        assertEquals(HistoryOffer.RETIRED, c.offerGpsGap("ride-1", tick(1).copy(clockGeneration = 2)))
+        assertEquals(count, f.writer.offers.size)
+        c.execute(RecordingInput.LinkLost(7, tick(2)))
+        assertEquals(HistoryOffer.ACCEPTED, c.offerGpsGap("ride-1", tick(20)))
+        c.execute(RecordingInput.Stop(tick(10), 7, "ride-1"))
+        assertEquals(tick(20), f.writer.ends.single())
+        val stopped = f.writer.offers.size
+        assertEquals(HistoryOffer.RETIRED, c.offerGpsGap("ride-1", tick(21)))
+        assertEquals(stopped, f.writer.offers.size)
+    }
+
+    @Test fun throwingGpsOfferLatchesFailureBeforeConcurrentStopCanFinish() = runTest {
+        for (isGap in listOf(false, true)) {
+            val f = Fixture(); val c = f.controller
+            c.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+            var stop: Deferred<Unit>? = null
+            f.writer.beforeOffer = { b ->
+                if (b.gps.isNotEmpty() || b.markers.any { it.kind == HistoryMarkerKind.GPS_GAP }) {
+                    stop = async { c.execute(RecordingInput.Stop(tick(10), 7, "ride-1")) }
+                    runCurrent()
+                    assertFalse(assertNotNull(stop).isCompleted)
+                    error("GPS offer failed")
+                }
+            }
+            assertFailsWith<IllegalStateException> {
+                if (isGap) c.offerGpsGap("ride-1", tick(20))
+                else c.offerGps("ride-1", HistoryGpsFix(tick(20), 56.0, 60.0, 5.0, null))
+            }
+            assertNotNull(stop).await()
+            assertEquals(listOf(HistoryRideStatus.INTERRUPTED), f.writer.statuses)
+            assertEquals(tick(20), f.writer.ends.single())
+        }
+    }
+
+    @Test fun gpsFailureCapabilitySpansBleReconnectButCannotCrossControllerOrRideOwnership() = runTest {
+        val a = Fixture(); val b = Fixture()
+        a.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        b.controller.execute(RecordingInput.Connected("bike", 7, tick()), sources)
+        val captured = assertNotNull(a.controller.captureGpsRecording())
+        assertFalse(b.controller.reportGpsObservationFailure(captured))
+        assertNull(b.controller.telemetryFailure.value)
+        a.controller.execute(RecordingInput.LinkLost(7, tick(1)))
+        a.controller.execute(RecordingInput.Connected("bike", 8, tick(2)), sources)
+        assertTrue(a.controller.reportGpsObservationFailure(captured))
+        a.controller.execute(RecordingInput.Stop(tick(3), 8, "ride-1"))
+        a.controller.execute(RecordingInput.Start("bike", 8, tick(4)), sources)
+        assertFalse(a.controller.reportGpsObservationFailure(captured))
+        assertNull(a.controller.telemetryFailure.value)
+        a.controller.execute(RecordingInput.Stop(tick(5), 8, "ride-2"))
+        assertEquals(listOf(HistoryRideStatus.INTERRUPTED, HistoryRideStatus.COMPLETED), a.writer.statuses)
+        b.controller.execute(RecordingInput.Stop(tick(5), 7, "ride-1"))
+        assertEquals(listOf(HistoryRideStatus.COMPLETED), b.writer.statuses)
+    }
+
     private class Writer : HistoryWriter {
         override val diagnostics = MutableStateFlow(HistoryWriterDiagnostics())
         val calls = mutableListOf<String>()

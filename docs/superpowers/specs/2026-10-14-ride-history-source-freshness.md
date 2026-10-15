@@ -764,3 +764,51 @@ The runtime source factory still must encode physical and calibration identity i
 source IDs; equal IDs/kinds cannot distinguish a geometry change by themselves.
 This remains a runtime activation gate. No new recorder DI, GPS/service demand,
 legacy-writer retirement, UI route, BLE command or polling changes are activated.
+
+
+### App-owned GPS observation and expiry (2026-10-15)
+
+HistoryGpsRecorder observes an owned ride and location status in the injected
+application scope. BLE loss/reconnect does not restart this GPS lifetime. The
+existing adapter preserves actual acquisition wall/monotonic timestamps and
+rejects missing metadata, pre-origin/future/stale coordinates. The observer stores
+accepted fixes once; demand-only updates do not resample the same coordinate.
+
+Searching, unavailable permission/provider, invalid fix and expiry produce one
+GPS_GAP per outage, without an invented coordinate. Each accepted fix has a finite
+one-shot timer at maxAge+1 (default maximum age 10 seconds), so an unchanged
+Available state cannot extend the route forever. A fix at/before an open gap does
+not close it. An older provider fix cannot replace a newer admitted fix or move
+its deadline. Retraction: freshness-first handling originally marked a delayed
+stale fix as a new outage even while a newer accepted fix remained fresh; the
+adversarial regression reproduced this and the observer now orders that check
+before freshness admission.
+
+Stopping/changing rides cancels the prior observer and timer; retained pre-origin
+coordinates cannot become a new route. Explicit observer close and parent-scope
+cancellation stop observation without issuing a recording stop. Cancellation is
+rethrown, not converted to a storage failure. Retraction of a test assumption:
+CancellationException in an individual collectLatest action cancels that action;
+it need not cancel its parent collector. Subsequent status updates remain usable.
+
+Clock and writer exceptions are contained within the optional GPS observer. A
+captured GPS recording capability uses identity/generation/ride qualification and
+survives BLE admission changes, but cannot cross controllers or recording owners.
+Clock failure latches an incomplete-recording verdict without inventing a tick.
+GPS offer failure latches on its reserved owner BEFORE gate release, so a waiting
+stop cannot persist COMPLETED ahead of the failure verdict. Valid future location
+updates can resume observation. GPS gap admission validates ride/clock and
+participates in delayed finish bounds through the same reservation gate.
+
+Evidence: h162 seven initial behavioral RED failures; h163 33 selected green.
+h164 reproduced four exception/concurrent-stop defects among 31 tests. h165 53
+selected green. h166 fresh XML reproduced the stale-provider false gap and the
+incorrect cancellation fixture expectation; capability guards were green. Final
+focused/full verification and exact counts are recorded in the ledger.
+
+This observer is not activated in DI and does not yet acquire native location
+or foreground-service demand. Runtime source/calibration planning, provider-source
+persistence (the current GPS row/model has no provider field), native permission/
+service ownership, recorder activation and old-writer retirement remain open.
+Unit fixtures establish observer policy, not Android background GPS acceptance or
+an unconflated native callback stream. No BLE requests/cadence/writes changed.
