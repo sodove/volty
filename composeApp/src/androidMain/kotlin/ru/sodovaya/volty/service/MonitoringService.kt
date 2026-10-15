@@ -5,13 +5,14 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.ServiceInfo
 import android.media.AudioManager
+import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
 import ru.sodovaya.volty.data.prefs.AppPrefs
 import ru.sodovaya.volty.domain.alert.AlarmDriver
-import ru.sodovaya.volty.domain.model.ConnectionState
 import ru.sodovaya.volty.domain.repository.BmsRepository
 import ru.sodovaya.volty.domain.repository.VehicleRepository
 import ru.sodovaya.volty.notification.AudibleAlarmHolder
@@ -49,6 +50,7 @@ class MonitoringService : Service() {
     }
 
     private val bmsRepository: BmsRepository by inject()
+    private val serviceController: ServiceController by inject()
     private val vehicleRepository: VehicleRepository by inject()
     private val notifier: Notifier by inject()
     private val appPrefs: AppPrefs by inject()
@@ -72,8 +74,9 @@ class MonitoringService : Service() {
     private val disconnectReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context, intent: Intent) {
             scope.launch {
+                // Repository releases BLE demand. Recording owns its own release;
+                // an independent stopSelf here could terminate its shared service.
                 bmsRepository.disconnect()
-                stopSelf()
             }
         }
     }
@@ -104,20 +107,22 @@ class MonitoringService : Service() {
             .setContentText("Starting…")
             .setOngoing(true)
             .build()
-        startForeground(FOREGROUND_ID, seed)
+        // Explicit type keeps telemetry independent of optional location permission.
+        // Declaring another optional type later must not activate it on every BLE start.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            startForeground(FOREGROUND_ID, seed, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        else startForeground(FOREGROUND_ID, seed)
 
         // START_STICKY can resurrect the service in a FRESH process (after the
         // system killed us). There the repo singleton has no session, no target
         // and nothing will reconnect on its own — without this check the user
         // is left with a frozen "Starting…" notification forever.
-        when (bmsRepository.connectionState.value) {
-            is ConnectionState.Idle,
-            is ConnectionState.Disconnected,
-            is ConnectionState.Failed -> {
-                stopSelf()
-                return
-            }
-            else -> Unit
+        // Retraction: BLE state alone was sufficient before recording had its own
+        // service lifetime. A recording may still own GPS while BLE is absent.
+        // A stale BLE demand alone must still not keep an orphan service alive.
+        if (!serviceController.shouldKeepService(bmsRepository.connectionState.value)) {
+            stopSelf()
+            return
         }
 
         // The audible alarm (F §5). It lives here and nowhere else because this

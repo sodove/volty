@@ -1199,3 +1199,31 @@ recovery, a writer, location demand or native capture. Product activation and
 legacy retirement remain pending, including bounded startup orchestration,
 foreground/location ownership, source-specific gaps, gateway/alias/aggregate
 admission, native teardown cancellation, manual UI and device performance checks.
+
+## Shared monitoring retention checkpoint (2026-10-16)
+
+`ServiceController` now routes the existing BLE start/stop requests through one
+`HistoryServiceOwnership` and exposes a separate recording-retention request for
+the future runtime. The two desired demands are synchronized with native start/
+stop submissions. Either consumer may release first; native stop is requested
+only with neither remaining. An enable always submits native start again because
+an earlier request cannot prove the OS kept the service alive. Submission failures
+retain desired state and allow start/cleanup retry. This state does not authorize
+location acquisition and is not a native foreground acknowledgement.
+
+MonitoringService's startup policy preserves its old Idle/Disconnected/Failed
+orphan guard when only BLE is requested, while an actual recording request can
+retain service lifetime through those states. The notification disconnect receiver
+no longer calls stopSelf independently after repository disconnect; BLE/history
+owners control the shared service release. Telemetry promotion explicitly requests
+connectedDevice on API 29+, leaving optional location type/permission separate.
+
+This is retention wiring, not GPS admission or recorder activation. Android's
+[foreground service type requirements](https://developer.android.com/about/versions/14/changes/fgs-types-required)
+require location permission and limit while-in-use location service launches from
+the background. A native location foreground acknowledgement must precede the
+history location consumer. The Nearby authority singleton has one current ticket
+and must not be borrowed to revoke history when Nearby sharing changes. No location
+type or location demand is newly enabled in this checkpoint. Physical service
+start/restart, notification actions and background GPS still need native acceptance;
+common tests check issued service requests and the extracted startup decision.

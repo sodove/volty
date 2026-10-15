@@ -622,3 +622,13 @@ fails before changing rows. Store/clock DI registrations are lazy and do not sta
 recording. Runtime startup bounds, service/location ownership, per-source quality,
 gateway/alias/aggregate admission, native cancellation, manual UI and legacy
 retirement still gate product activation; native phone acceptance is unclaimed.
+
+Task7 shared-service retention checkpoint (2026-10-16): the native controller's
+BLE methods and a separate recording demand share synchronized service retention.
+Stopping one consumer cannot release the other. Repeated enables retry native
+start; submission state does not pretend to prove the service survived. Startup
+preserves the old BLE orphan guard and additionally retains a recording across BLE
+absence. Notification disconnect no longer bypasses ownership with stopSelf.
+Telemetry explicitly promotes connectedDevice; optional native location foreground
+proof/permission and HISTORY_RECORDING provider demand are still pending. No new
+runtime activation or phone/background-location acceptance is claimed.
