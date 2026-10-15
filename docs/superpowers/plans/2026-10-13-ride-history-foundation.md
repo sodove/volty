@@ -665,3 +665,20 @@ even after desired policy has removed the consumer. It clears only after origina
 cleanup acknowledgement. Repeated positive requests perform fresh native
 reconciliation. This is not foreground/provider readiness; the native runtime and
 service type binding are still pending and the new recorder remains inactive.
+
+Task7 native GPS lifetime/binding checkpoint (2026-10-16): one app-owned capture
+session launches asynchronously, awaits finite foreground ACK, then independently
+acquires HISTORY_RECORDING and admits coordinates. Service loss, parent cancellation,
+replacement and explicit close synchronously fence capture before queued original
+cleanup; failed cleanup remains retryable. New calls cannot replay completed startup
+success after retirement. Constructor reentry cannot stop a newer foreground owner.
+
+MonitoringService declares location capability but still starts explicitly with
+connectedDevice alone. The independent native bridge requires a weak RESUMED host
+and permission/enabled providers for promotion; already active location foreground
+can be reused. API29+ acknowledgement reads the actual current foreground type.
+Optional type cleanup is reserved before promotion and retained across failed native
+calls. Service stop reads current ticket/native hold live, and release also preserves
+the existing active BLE startup guard. Permission watching has no timer without an
+actual history ticket. This binds the native capability; recorder runtime/ingress DI,
+legacy retirement, other Task7 gates and phone acceptance remain open.

@@ -4,6 +4,54 @@ import kotlin.test.*
 import ru.sodovaya.volty.domain.model.ConnectionState
 
 class HistoryServiceOwnershipTest {
+    @Test fun recording_stop_cannot_release_service_while_native_location_cleanup_remains_held() {
+        val calls = mutableListOf<String>()
+        var held = false
+        val owner = HistoryServiceOwnership({ calls += "start" }, { calls += "stop" }, { held })
+        owner.setRecordingEnabled(true)
+        held = true
+        owner.setRecordingEnabled(false)
+        owner.setBleEnabled(false)
+        assertEquals(listOf("start"), calls, "Desired stop must not outrun original location cleanup ACK")
+        assertTrue(owner.required)
+        held = false
+        owner.reconcileLocationRetention()
+        assertEquals(listOf("start", "stop"), calls)
+        assertFalse(owner.required)
+    }
+
+    @Test fun live_location_retention_keeps_existing_service_without_inventing_a_native_start() {
+        val calls = mutableListOf<String>()
+        var held = true
+        val owner = HistoryServiceOwnership({ calls += "start" }, { calls += "stop" }, { held })
+        assertTrue(owner.required)
+        assertTrue(owner.shouldKeepService(ConnectionState.Idle))
+        owner.reconcileLocationRetention()
+        assertTrue(calls.isEmpty(), "Retained cleanup must never itself launch a background FGS")
+        held = false
+        assertFalse(owner.required)
+        assertFalse(owner.shouldKeepService(ConnectionState.Idle))
+    }
+
+    @Test fun location_release_rechecks_live_ack_and_preserves_any_remaining_telemetry_owner() {
+        val calls = mutableListOf<String>()
+        var held = true
+        val owner = HistoryServiceOwnership({ calls += "start" }, { calls += "stop" }, { held })
+        owner.reconcileLocationRetention()
+        assertTrue(calls.isEmpty())
+        held = false
+        owner.reconcileLocationRetention()
+        assertEquals(listOf("stop"), calls)
+        owner.setBleEnabled(true)
+        held = true
+        owner.reconcileLocationRetention()
+        held = false
+        owner.reconcileLocationRetention()
+        assertEquals(listOf("stop", "start"), calls)
+        owner.setBleEnabled(false)
+        assertEquals(listOf("stop", "start", "stop"), calls)
+    }
+
     @Test fun staleBleDemandCannotKeepOrphanServiceAfterFailedOrIdleConnection() {
         val owner = HistoryServiceOwnership({}, {})
         owner.setBleEnabled(true)

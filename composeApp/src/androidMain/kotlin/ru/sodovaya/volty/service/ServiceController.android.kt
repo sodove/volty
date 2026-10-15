@@ -6,11 +6,15 @@ import android.os.Build
 import ru.sodovaya.volty.data.history.HistoryServiceOwnership
 import ru.sodovaya.volty.domain.model.ConnectionState
 
-actual class ServiceController(private val context: Context) {
-    private val ownership = HistoryServiceOwnership(::startNative, ::stopNative)
+actual class ServiceController(
+    private val context: Context,
+    retainLocation: () -> Boolean = { false },
+) {
+    private val ownership = HistoryServiceOwnership(::startNative, ::stopNative, retainLocation)
 
     actual fun start() = ownership.setBleEnabled(true)
     actual fun stop() = ownership.setBleEnabled(false)
+    internal actual fun reconcileLocationRetention() = ownership.reconcileLocationRetention()
     internal actual fun setRecordingEnabled(enabled: Boolean) = ownership.setRecordingEnabled(enabled)
     internal actual fun shouldKeepService(connection: ConnectionState): Boolean = ownership.shouldKeepService(connection)
 

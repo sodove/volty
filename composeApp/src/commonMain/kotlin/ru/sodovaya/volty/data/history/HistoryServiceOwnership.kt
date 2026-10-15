@@ -9,11 +9,12 @@ import ru.sodovaya.volty.domain.model.ConnectionState
 internal class HistoryServiceOwnership(
     private val startService: () -> Unit,
     private val stopService: () -> Unit,
+    private val retainLocation: () -> Boolean = { false },
 ) {
     private val lock = Any()
     private var ble = false
     private var recording = false
-    val required: Boolean get() = synchronized(lock) { ble || recording }
+    val required: Boolean get() = synchronized(lock) { ble || recording || retainLocation() }
 
     fun setBleEnabled(enabled: Boolean) = synchronized(lock) {
         ble = enabled
@@ -28,15 +29,18 @@ internal class HistoryServiceOwnership(
     fun shouldKeepService(connection: ConnectionState): Boolean = synchronized(lock) {
         // Retraction: checking the union demand would retain orphan BLE-only services.
         // Only recording overrides the existing disconnected/failed startup guard.
-        recording || when (connection) {
+        recording || retainLocation() || when (connection) {
             ConnectionState.Idle, ConnectionState.Disconnected, is ConnectionState.Failed -> false
             else -> true
         }
     }
 
+    /** A retained native cleanup never itself authorizes a fresh background launch. */
+    fun reconcileLocationRetention() = synchronized(lock) { reconcile(false) }
+
     private fun reconcile(enabled: Boolean) {
         // Keep submission order under the demand lock; never join native work in these callbacks.
         if (enabled) startService()
-        else if (!ble && !recording) stopService()
+        else if (!ble && !recording && !retainLocation()) stopService()
     }
 }

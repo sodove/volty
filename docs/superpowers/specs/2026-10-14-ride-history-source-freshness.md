@@ -1302,3 +1302,37 @@ positive requests now obtain a fresh native acknowledgement. A failure retires t
 same ticket and preserves its cleanup obligation. Five common regressions and the
 three existing Nearby tests cover the issued operations and native hold lifetime.
 Actual service promotion/downshift and recording activation are separate work.
+
+## Per-recording native GPS lifetime (2026-10-16)
+
+Thirteen capture-owner tests exercise issued foreground/provider work, finite startup,
+service and parent loss after successful activation, partial native acquisition under
+cancellation, retained cleanup failure/retry, exact successor isolation, closed-start
+replay and synchronous request replacement during construction. Cleanup is queued on
+an explicit dispatcher; the native binding uses Dispatchers.Main rather than an
+immediate/unconfined dispatcher. A lifetime guardian owns release after startup's
+Deferred has completed. This does not block BLE preparation on a GPS foreground wait.
+
+Retraction: two desired service flags alone cannot retain MonitoringService while
+history GPS cleanup is still owned. A live retention predicate now includes current
+history ticket and conservative native-demand hold. No delayed Boolean copy can
+outrun a pending positive; clearing the recording flag cannot bypass cleanup. The
+post-release path also honors the actual legacy connection startup guard. Three new
+keeper tests inspect native start/stop decisions, including the absence of background
+start caused solely by retained cleanup.
+
+The Android bridge attaches a weak Lifecycle ON_RESUME host and selects exact native
+service identity. Intent submission is distinct from foreground ACK. MonitoringService
+uses explicit connectedDevice at base start, and explicitly adds location only for a
+current, allowed request. API29+ reads the [actual foregroundServiceType](https://developer.android.com/reference/android/app/Service)
+after promotion before ACK; permission and [allowed foreground launch](https://developer.android.com/develop/background-work/services/fgs/launch)
+are rechecked natively. Type cleanup is reserved before the positive call, survives
+partial failure and is retried without releasing original provider ownership early.
+The existing live notification is reused. No timer/permission polling runs for legacy
+telemetry without a history ticket. No ACCESS_BACKGROUND_LOCATION is introduced.
+
+Native compilation and common issued-action tests are not phone acceptance. Actual
+promotion/downshift on Android34+, background suspension/restart, permission changes
+and native provider teardown still require device checks. New recording runtime,
+production ingress activation, legacy recorder retirement and Vescape screens are
+not activated by these bindings alone.

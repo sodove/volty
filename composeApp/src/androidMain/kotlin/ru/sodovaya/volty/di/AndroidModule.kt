@@ -96,6 +96,22 @@ val androidModule = module {
     single { DataStoreFactory(androidContext()) }
     single<BleAdapterStateProvider> { AndroidBleAdapterStateProvider(androidContext()) }
     single<RideLocationRepository> { AndroidRideLocationRepository(androidContext()) }
+    // Independent from Nearby's coordinator/authority. Registrations are inert until requested.
+    single(named(HISTORY_LOCATION_DEMAND)) {
+        ru.sodovaya.volty.data.location.LocationDemandCoordinator(get(),
+            ru.sodovaya.volty.domain.location.LocationConsumer.HISTORY_RECORDING)
+    }
+    single {
+        val context = androidContext()
+        ru.sodovaya.volty.data.history.HistoryLocationForegroundAuthority(
+            permission = { ru.sodovaya.volty.data.history.historyLocationPermission(context) },
+            nextId = { java.util.UUID.randomUUID().toString() },
+        )
+    }
+    single {
+        ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController(androidContext(), get(),
+            get(named(HISTORY_LOCATION_DEMAND)))
+    }
     single<SocialCredentialStore> { AndroidSocialCredentialStore(androidContext()) }
     single(named(NEARBY_HTTP_CLIENT)) {
         HttpClient(OkHttp) {
@@ -405,12 +421,19 @@ val androidModule = module {
     // calls it every time the rider parks, so a captured instance would be
     // permanently, silently dead from the second ride on.
     single<AlarmPreview> { HolderAlarmPreview(get()) }
-    single { ServiceController(androidContext()) }
+    single {
+        val demand = get<ru.sodovaya.volty.data.location.LocationDemandCoordinator>(named(HISTORY_LOCATION_DEMAND))
+        val foreground = get<ru.sodovaya.volty.data.history.HistoryLocationForegroundAuthority>()
+        ServiceController(androidContext(), retainLocation = {
+            foreground.state.value.ticket != null || demand.nativeDemandHeld.value
+        })
+    }
     single { LogExporter(androidContext()) }
     single { ru.sodovaya.volty.diagnostics.VoiceDiagnosticLauncher(androidContext()) }
     single { ru.sodovaya.volty.diagnostics.voice.AndroidVoiceDiagnosticRuntime(androidContext(), get(), get()) }
 }
 
+private const val HISTORY_LOCATION_DEMAND = "history-location-demand"
 private const val OFFLINE_DOWNLOAD_SCOPE = "offline-region-downloads"
 private const val OFFLINE_FIRST_NAVIGATION = "offline-first-navigation"
 private const val APP_VERSION_CODE = "app-version-code"

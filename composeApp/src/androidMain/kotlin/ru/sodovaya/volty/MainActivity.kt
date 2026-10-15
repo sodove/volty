@@ -23,12 +23,14 @@ import org.koin.android.ext.android.getKoin
 class MainActivity : ComponentActivity() {
 
     private val bmsRepository: BmsRepository by inject()
+    private val historyLocation: ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController by inject()
     private lateinit var rootComponent: DefaultRootComponent
     private var nearbyPermissions: ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
+        historyLocation.attachHost(this)
         rootComponent = DefaultRootComponent(defaultComponentContext())
         nearbyPermissions = ru.sodovaya.volty.presentation.root.nearby.AndroidNearbyPermissionBridge(
             this,getKoin().get(),getKoin().get(),getKoin().get(),getKoin().get(),

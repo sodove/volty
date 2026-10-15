@@ -30,6 +30,7 @@ internal class LocationDemandCoordinator(
     val nativeDemandHeld=held.asStateFlow()
     // Allocate before positive work, so cancelled/partly committed native work stays revocable.
     fun newTicket()=LocationDemandTicket(authority)
+    internal fun isFor(consumer: LocationConsumer) = this.consumer == consumer
     internal fun owns(repository: RideLocationRepository)=this.repository===repository
     suspend fun acquire(ticket: LocationDemandTicket): Boolean {
         require(ticket.belongsTo(authority)) {"Location demand belongs to another coordinator"}

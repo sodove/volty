@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.service
 
 import android.app.Service
+import android.app.Notification
+import android.app.NotificationManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -24,7 +26,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.FlowPreview
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.sample
 import kotlinx.coroutines.launch
 import org.koin.android.ext.android.inject
@@ -51,6 +56,8 @@ class MonitoringService : Service() {
 
     private val bmsRepository: BmsRepository by inject()
     private val serviceController: ServiceController by inject()
+    private val historyLocation: ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController by inject()
+    private var historyLocationForeground = false
     private val vehicleRepository: VehicleRepository by inject()
     private val notifier: Notifier by inject()
     private val appPrefs: AppPrefs by inject()
@@ -101,12 +108,7 @@ class MonitoringService : Service() {
         registerNotificationAction(disconnectReceiver, ACTION_DISCONNECT)
         registerNotificationAction(silenceReceiver, ACTION_SILENCE)
 
-        val seed = NotificationCompat.Builder(this, NotificationChannels.LIVE)
-            .setSmallIcon(android.R.drawable.ic_dialog_info)
-            .setContentTitle("Volty")
-            .setContentText("Starting…")
-            .setOngoing(true)
-            .build()
+        val seed = seedNotification()
         // Explicit type keeps telemetry independent of optional location permission.
         // Declaring another optional type later must not activate it on every BLE start.
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
@@ -123,6 +125,27 @@ class MonitoringService : Service() {
         if (!serviceController.shouldKeepService(bmsRepository.connectionState.value)) {
             stopSelf()
             return
+        }
+
+        historyLocation.created(this,
+            promote = { promoteHistoryLocation() },
+            demote = { demoteHistoryLocation() },
+            isLocationForeground = {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+                    foregroundServiceType and ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION != 0
+                else historyLocationForeground
+            },
+        )
+        scope.launch(Dispatchers.Main) {
+            historyLocation.retentionChanges.collectLatest {
+                reconcileHistoryLocation()
+                // No history request means no timer or location-permission polling.
+                while (isActive && historyLocation.watchesPermissions) {
+                    delay(1_000)
+                    historyLocation.refreshPermissions(this@MonitoringService)
+                    reconcileHistoryLocation()
+                }
+            }
         }
 
         // The audible alarm (F §5). It lives here and nowhere else because this
@@ -175,7 +198,50 @@ class MonitoringService : Service() {
         }
     }
 
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController.START) {
+            historyLocation.start(this,
+                intent.getStringExtra(ru.sodovaya.volty.data.history.AndroidHistoryLocationForegroundController.TICKET))
+        }
+        return START_STICKY
+    }
+
+    private fun reconcileHistoryLocation() {
+        historyLocation.reconcile(this)
+        // Preserve the legacy active-connection guard too. An initial empty history
+        // snapshot must not stop a service whose BLE startup is already in progress.
+        if (!serviceController.shouldKeepService(bmsRepository.connectionState.value))
+            serviceController.reconcileLocationRetention()
+    }
+
+    private fun seedNotification(): Notification = NotificationCompat.Builder(this, NotificationChannels.LIVE)
+        .setSmallIcon(android.R.drawable.ic_dialog_info)
+        .setContentTitle("Volty")
+        .setContentText("Starting…")
+        .setOngoing(true)
+        .build()
+
+    private fun currentForegroundNotification(): Notification =
+        getSystemService(NotificationManager::class.java).activeNotifications
+            .firstOrNull { it.id == FOREGROUND_ID && it.tag == null }?.notification ?: seedNotification()
+
+    private fun promoteHistoryLocation() {
+        val notification = currentForegroundNotification()
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            startForeground(FOREGROUND_ID, notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE or ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION)
+        else startForeground(FOREGROUND_ID, notification)
+        historyLocationForeground = true
+    }
+
+    private fun demoteHistoryLocation() {
+        val notification = currentForegroundNotification()
+        // Explicitly remove the optional type only after original provider cleanup ACK.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q)
+            startForeground(FOREGROUND_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE)
+        else startForeground(FOREGROUND_ID, notification)
+        historyLocationForeground = false
+    }
 
     /**
      * **The alarm must not outlive the service, whatever state it was in.**
@@ -203,6 +269,8 @@ class MonitoringService : Service() {
      * from the rider's second ride onwards.
      */
     override fun onDestroy() {
+        historyLocationForeground = false
+        historyLocation.destroyed(this)
         scope.cancel()
         autoVolumeController?.stop()
         autoVolumeController = null

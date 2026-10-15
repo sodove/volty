@@ -68,7 +68,7 @@
         </activity>
         <service
             android:name=".service.MonitoringService"
-            android:foregroundServiceType="connectedDevice"
+            android:foregroundServiceType="connectedDevice|location"
             android:exported="false" />
         <activity android:name=".diagnostics.voice.VoiceDiagnosticActivity"
             android:exported="false" android:launchMode="singleTop" />
