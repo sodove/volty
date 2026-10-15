@@ -812,3 +812,38 @@ persistence (the current GPS row/model has no provider field), native permission
 service ownership, recorder activation and old-writer retirement remain open.
 Unit fixtures establish observer policy, not Android background GPS acceptance or
 an unconflated native callback stream. No BLE requests/cadence/writes changed.
+
+
+### GPS provider provenance and compatible receipts (2026-10-15)
+
+The previous checkpoint's provider-persistence gap is addressed by nullable
+HistoryGpsProvider (GPS/NETWORK/PASSIVE). The adapter preserves the existing
+RideLocationFix source classification. It does not infer GPS for network/passive
+fixes, and historical rows without this metadata remain null/unknown. No request
+policy, platform source classification or native permissions are changed here.
+
+Migration 17.sqm adds one nullable TEXT column to HistoryGpsV2. The existing17.db
+is the pre-migration snapshot; generated18.db contains the provider column.
+ADD COLUMN is compatible with the project's SQLite3.19 floor. Detail paging and
+both ordinary and receipt-verification reads preserve the field, including
+same-acquisition-time GPS rows with different providers.
+
+Known-provider batches use a distinct v2-gps-provider fingerprint encoding with
+nullable provider facts for every GPS entry. Batches whose providers are all
+unknown keep the exact previous v1 byte encoding. Existing committed v1 receipt
+fingerprints are not rewritten. Thus a post-upgrade exact retry still acknowledges
+its old payload, while adding/changing provider metadata under that receipt is a
+conflicting payload. Old row-verified receipts also compare the provider field;
+they cannot silently acknowledge a provider-only change.
+
+h169 reproduced four behavior failures among 42 selected tests. The independent
+pinned v1 fingerprint fixture already passed before implementation. h170 generated
+18.db in one executed schema task (2s); that is schema generation, not test or
+migration-verification evidence. Final focused/full/migration evidence belongs in
+the ledger. A real17 snapshot fixture seeds an old GPS row and pinned v1 receipt,
+upgrades it, verifies the provider remains unknown and the fingerprint unchanged,
+then checks exact retry after finish and rejection of invented GPS provenance.
+
+Recorder activation, physical/calibration/alias source planning and native GPS/
+foreground-service demand remain open. This change enables no new runtime path
+and imports no Vescape code or resources.

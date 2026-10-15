@@ -77,7 +77,7 @@ internal class HistoryStoreReader(private val database: VoltyDatabase) {
             cursor?.first, cursor?.second ?: 0, limit.toLong() + 1).executeAsList()
         return page(rows, limit, {
             HistoryGpsFix(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration),
-                it.latitude, it.longitude, it.accuracyMeters, it.headingDegrees)
+                it.latitude, it.longitude, it.accuracyMeters, it.headingDegrees, it.provider?.let(HistoryGpsProvider::valueOf))
         }, { HistoryCursor(checkNotNull(historyAxisEpochMillis(origin,
             HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration))), it.sequence.toString()) })
     }

@@ -23,7 +23,7 @@ internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
         val gps = database.rideHistoryGpsQueries.gpsForReceipt(batch.rideId,
             receipt.firstSequence, receipt.nextSequence).executeAsList().map {
             HistoryGpsFix(HistoryTick(it.epochMillis, it.elapsedMillis, it.clockGeneration),
-                it.latitude, it.longitude, it.accuracyMeters, it.headingDegrees)
+                it.latitude, it.longitude, it.accuracyMeters, it.headingDegrees, it.provider?.let(HistoryGpsProvider::valueOf))
         }
         val markers = database.rideHistoryMarkerQueries.markersForReceipt(batch.rideId,
             receipt.firstSequence, receipt.nextSequence).executeAsList().map {
@@ -32,7 +32,7 @@ internal class HistoryBatchReceipts(private val database: VoltyDatabase) {
         require(samples.size == batch.samples.size && samples.zip(batch.samples).all { (a, b) ->
             a.tick == b.tick && a.key == b.key && a.unknown == b.unknown && sameReading(a.value, b.value)
         } && gps.size == batch.gps.size && gps.zip(batch.gps).all { (a, b) ->
-            a.tick == b.tick && a.lat == b.lat && a.lon == b.lon && a.accuracyMeters == b.accuracyMeters && sameReading(a.heading, b.heading)
+            a.tick == b.tick && a.lat == b.lat && a.lon == b.lon && a.accuracyMeters == b.accuracyMeters && sameReading(a.heading, b.heading) && a.provider == b.provider
         } && markers == batch.markers) {
             "Receipt reused with a different payload"
         }

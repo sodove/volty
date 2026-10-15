@@ -6,6 +6,7 @@ import kotlin.test.assertFailsWith
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import ru.sodovaya.volty.domain.history.HistoryTick
+import ru.sodovaya.volty.domain.history.HistoryGpsProvider
 import ru.sodovaya.volty.domain.location.LocationSource
 import ru.sodovaya.volty.domain.location.RideLocationFix
 import ru.sodovaya.volty.domain.navigation.GeoCoordinate
@@ -13,6 +14,14 @@ import ru.sodovaya.volty.domain.navigation.GeoCoordinate
 class HistoryGpsAdapterTest {
     private val origin = HistoryTick(epochMillis = 50_000L, elapsedMillis = 1_000L, clockGeneration = 7L)
     private val now = HistoryTick(epochMillis = 900_000L, elapsedMillis = 3_000L, clockGeneration = 7L)
+
+    @Test fun actualProviderSurvivesNativeAdmissionWithoutInferringGpsForOtherSources() {
+        for ((native, expected) in listOf(LocationSource.GPS to HistoryGpsProvider.GPS,
+            LocationSource.NETWORK to HistoryGpsProvider.NETWORK, LocationSource.PASSIVE to HistoryGpsProvider.PASSIVE)) {
+            val result = assertNotNull(historyGpsFix(origin, now, fix().copy(source = native), 5_000))
+            assertEquals(expected, result.provider)
+        }
+    }
 
     @Test fun historyUsesActualMeasurementWallTimeRatherThanNavigationReceiptPolicy() {
         val input = fix(capturedAtEpochMillis = 899_000L).copy(measurementAtEpochMillis = 123_456L)

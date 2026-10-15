@@ -1,4 +1,4 @@
-# Direct history-port linking review — open release gate
+# Direct history-port linking and notice audit
 
 Checked 2026-10-15. This records a concrete compatibility question, not a legal
 conclusion that the existing Volty APK is unlawful or that every Google SDK
@@ -68,3 +68,30 @@ checks for the two local archives remain a separate gate.
 No dependency, notification behavior, application license or UI has been changed
 to resolve this question. No Vescape product source/assets have been imported.
 The original recording/read foundation can continue independently.
+
+
+## User clarification and scope correction — 2026-10-15
+
+The user reaffirmed the direct-transfer direction and correctly pointed out that
+individual modules/libraries can retain different licenses and that open-source
+applications use FCM. Keep the approved direct port; do not require an author
+request or a switch to an independent UI before continuing implementation.
+
+**Retraction/qualification:** the earlier framing made the unresolved artifact
+inventory sound like an established incompatibility or a mandatory permission
+request. POM labels alone do not establish that conclusion. Firebase's own
+[SDK LICENSE](https://github.com/firebase/firebase-android-sdk/blob/main/LICENSE)
+and messaging source are Apache-2.0; do not describe FCM itself as categorically
+GPL-incompatible. The seven transitive artifacts above remain an evidence check,
+including any component-specific open-source grant, rather than a proven ban.
+
+The [FSF FAQ on aggregation/combined works](https://www.gnu.org/licenses/gpl-faq.en.html#MereAggregation)
+and GPLv3 distinguish separate independent works from a combined program. Merely
+placing code in separate Gradle modules does not by itself settle that question;
+original MIT/Apache notices and GPL obligations for transferred material must both
+be retained as applicable. Do not automatically replace every source file's
+license or assert release compliance before the concrete linkage is reviewed.
+
+The maintainer request remains an optional unsent draft, not a required user
+step. No external message is authorized or sent. Implementation continues with
+the original GPL-aware screen transfer plan and the original foundation work.

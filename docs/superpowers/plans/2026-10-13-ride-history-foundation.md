@@ -493,3 +493,12 @@ Failure qualification uses recording identity; writer failure is latched before
 reservation release. This does not activate DI/native GPS demand or foreground
 service. Provider-source persistence is also still pending: the approved design
 asks for it, but the current HistoryGpsFix/row contract has no provider field.
+
+
+Task7 provider-provenance checkpoint (2026-10-15): nullable GPS/NETWORK/PASSIVE
+provider facts now pass through the adapter, GPS row and read/receipt paths. Old
+rows remain unknown. Migration17.sqm upgrades committed17.db to generated18.db.
+All-unknown-provider batches keep their exact v1 fingerprint; known-provider
+batches use a distinct v2 encoding. Native source classification, request cadence,
+permissions, services and DI activation are unchanged. Source planning/calibration/
+alias readiness and runtime service/recorder ownership remain open.

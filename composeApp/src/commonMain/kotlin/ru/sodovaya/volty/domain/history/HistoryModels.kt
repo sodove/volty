@@ -51,12 +51,16 @@ data class HistorySource(
     }
 }
 
+enum class HistoryGpsProvider { GPS, NETWORK, PASSIVE }
+
 data class HistoryGpsFix(
     val tick: HistoryTick,
     val lat: Double,
     val lon: Double,
     val accuracyMeters: Double,
     val heading: Double?,
+    /** Null for recorded fixes whose provider was not retained; never infer GPS. */
+    val provider: HistoryGpsProvider? = null,
 ) {
     init {
         require(lat.isFinite() && lat in -90.0..90.0)

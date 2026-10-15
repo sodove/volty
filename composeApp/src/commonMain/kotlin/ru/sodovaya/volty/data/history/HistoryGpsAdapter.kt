@@ -1,6 +1,8 @@
 package ru.sodovaya.volty.data.history
 
 import ru.sodovaya.volty.domain.history.HistoryGpsFix
+import ru.sodovaya.volty.domain.history.HistoryGpsProvider
+import ru.sodovaya.volty.domain.location.LocationSource
 import ru.sodovaya.volty.domain.history.HistoryTick
 import ru.sodovaya.volty.domain.history.historyAxisEpochMillis
 import ru.sodovaya.volty.domain.location.RideLocationFix
@@ -41,5 +43,10 @@ internal fun historyGpsFix(
         lon = longitude,
         accuracyMeters = fix.accuracyMeters,
         heading = bearing,
+        provider = when (fix.source) {
+            LocationSource.GPS -> HistoryGpsProvider.GPS
+            LocationSource.NETWORK -> HistoryGpsProvider.NETWORK
+            LocationSource.PASSIVE -> HistoryGpsProvider.PASSIVE
+        },
     )
 }

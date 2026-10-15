@@ -26,6 +26,37 @@ class SqlDelightHistoryStoreTest {
     }
     @AfterTest fun closeDrivers() { drivers.forEach { it.close() } }
 
+    @Test fun gpsProvidersAndUnknownSurviveEqualTimePagingAndIdempotentReplay() = runTest {
+        val (_, store) = fixture(); begin(store)
+        val fixes = listOf(HistoryGpsProvider.GPS, HistoryGpsProvider.NETWORK, HistoryGpsProvider.PASSIVE, null).map {
+            HistoryGpsFix(tick(10), 56.0, 60.0, 5.0, null, provider = it)
+        }
+        val batch = HistoryBatch("ride", emptyList(), fixes, emptyList(), "provider-receipt")
+        store.append(batch); store.append(batch)
+        assertFailsWith<IllegalArgumentException> {
+            store.append(batch.copy(gps = fixes.mapIndexed { index, fix ->
+                if (index == 0) fix.copy(provider = HistoryGpsProvider.NETWORK) else fix
+            }))
+        }
+        val first = store.gps("ride", range, null, 2)
+        val second = store.gps("ride", range, assertNotNull(first.next), 2)
+        assertEquals(fixes.take(2), first.items)
+        assertEquals(fixes.drop(2), second.items)
+        assertNull(second.next)
+    }
+
+    @Test fun legacyRowVerifiedReceiptCannotAcknowledgeDifferentGpsProvider() = runTest {
+        val (driver, store) = fixture(); begin(store)
+        val fix = HistoryGpsFix(tick(10), 56.0, 60.0, 5.0, null, HistoryGpsProvider.GPS)
+        val batch = HistoryBatch("ride", emptyList(), listOf(fix), emptyList(), "legacy-provider")
+        store.append(batch)
+        driver.execute(null, "UPDATE HistoryBatchReceiptV2 SET fingerprint = NULL", 0)
+        store.append(batch)
+        assertFailsWith<IllegalArgumentException> {
+            store.append(batch.copy(gps = listOf(fix.copy(provider = HistoryGpsProvider.NETWORK))))
+        }
+    }
+
     @Test fun auxiliaryAndVirtualSourceKindsSurviveDurableReadWithoutMergingWithPack() = runTest {
         val (_, store) = fixture()
         val sources = listOf(HistorySource("pack", HistorySourceKind.BATTERY, "Battery"),

@@ -8,6 +8,7 @@ CREATE TABLE HistoryGpsV2 (
   longitude REAL NOT NULL,
   accuracyMeters REAL NOT NULL,
   headingDegrees REAL,
+  provider TEXT,
   PRIMARY KEY(rideId, sequence),
   FOREIGN KEY(rideId) REFERENCES HistoryRideV2(id) ON DELETE CASCADE
 );
@@ -15,8 +16,8 @@ CREATE INDEX HistoryGpsV2_ride_elapsed ON HistoryGpsV2(rideId, elapsedMillis, se
 
 insertGps:
 INSERT INTO HistoryGpsV2(rideId, sequence, epochMillis, elapsedMillis, clockGeneration, latitude, longitude,
-accuracyMeters, headingDegrees) VALUES (:rideId, :sequence, :epochMillis, :elapsedMillis, :clockGeneration,
-:latitude, :longitude, :accuracyMeters, :headingDegrees);
+accuracyMeters, headingDegrees, provider) VALUES (:rideId, :sequence, :epochMillis, :elapsedMillis, :clockGeneration,
+:latitude, :longitude, :accuracyMeters, :headingDegrees, :provider);
 
 pageGps:
 SELECT * FROM HistoryGpsV2 WHERE rideId = :rideId AND elapsedMillis >= :fromElapsed AND elapsedMillis <= :toElapsed

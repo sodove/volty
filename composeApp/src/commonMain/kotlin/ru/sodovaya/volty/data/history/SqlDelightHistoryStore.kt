@@ -62,7 +62,7 @@ class SqlDelightHistoryStore(
             batch.gps.forEach { fix ->
                 val t = fix.tick
                 gpsQueries.insertGps(batch.rideId, admit(t), t.epochMillis, t.elapsedMillis,
-                    t.clockGeneration, fix.lat, fix.lon, fix.accuracyMeters, fix.heading)
+                    t.clockGeneration, fix.lat, fix.lon, fix.accuracyMeters, fix.heading, fix.provider?.name)
             }
             batch.markers.forEach { marker ->
                 val t = marker.tick

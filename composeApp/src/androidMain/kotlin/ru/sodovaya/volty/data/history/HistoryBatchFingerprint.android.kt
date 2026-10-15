@@ -37,7 +37,9 @@ internal actual fun historyBatchFingerprint(batch: HistoryBatch): String {
         number(value.value)
         text(value.unknown?.name.orEmpty())
     }
-    text("history-batch-v1")
+    // Existing all-unknown-provider receipts keep their exact durable v1 identity.
+    val includesGpsProvider = batch.gps.any { it.provider != null }
+    text(if (includesGpsProvider) "history-batch-v2-gps-provider" else "history-batch-v1")
     text(batch.rideId)
     out.writeInt(batch.samples.size)
     batch.samples.forEach(::sample)
@@ -48,6 +50,7 @@ internal actual fun historyBatchFingerprint(batch: HistoryBatch): String {
         number(it.lon)
         number(it.accuracyMeters)
         number(it.heading)
+        if (includesGpsProvider) text(it.provider?.name.orEmpty())
     }
     out.writeInt(batch.markers.size)
     batch.markers.forEach { tick(it.tick); text(it.kind.name) }
