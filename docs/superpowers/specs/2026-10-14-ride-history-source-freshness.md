@@ -1286,3 +1286,19 @@ registering after final demand removal. The allocation boundary must check the e
 captured policy before touching a surviving owner and again after original cleanup.
 Permission/provider failure publication must follow cleanup, preventing an old error
 path from stopping a newer registration started synchronously by an observer.
+
+## Independent native-demand retention (2026-10-16)
+
+The existing Nearby native-demand serialization is shared through an explicit-consumer
+location coordinator. Nearby keeps a dedicated wrapper and authority; history cannot
+release its tickets or consumer. A conservative hold includes every reserved/in-flight
+or failed partially applied native owner. Desired consumer removal cannot clear it:
+only the original negative acknowledgement can. Exact old cleanup cannot release a
+successor, and cancellation during positive work retains retryable cleanup ownership.
+
+Retraction: returning cached success for an already acquired ticket cannot establish
+that a shared listener survived another consumer's native reconciliation. Repeated
+positive requests now obtain a fresh native acknowledgement. A failure retires that
+same ticket and preserves its cleanup obligation. Five common regressions and the
+three existing Nearby tests cover the issued operations and native hold lifetime.
+Actual service promotion/downshift and recording activation are separate work.

@@ -656,3 +656,12 @@ must run even when the desired consumer set is unchanged. A replacement must fir
 release its predecessor. A captured policy predicate also guards native allocation
 after synchronous state publication; callback-generation filtering alone cannot
 prevent orphan native subscriptions. Physical provider behavior remains unverified.
+
+Task7 location-demand retention checkpoint (2026-10-16): an explicit-consumer
+coordinator serializes native positives/negatives with original identity tickets.
+Nearby retains its own wrapper/instance; history uses HISTORY_RECORDING separately.
+A conservative nativeDemandHeld signal covers in-flight and failed partial work,
+even after desired policy has removed the consumer. It clears only after original
+cleanup acknowledgement. Repeated positive requests perform fresh native
+reconciliation. This is not foreground/provider readiness; the native runtime and
+service type binding are still pending and the new recorder remains inactive.
