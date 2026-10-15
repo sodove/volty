@@ -568,3 +568,21 @@ failures/errors/skips and all 36 tasks executed. The log reports an elapsed span
 of 5h46m17s; it is not used as a performance result. Narrow readonly source review
 found no concrete defect; Android plumbing was compiled and inspected, not tested
 with a physical GPS or instrumentation.
+
+## 2026-10-15 — bounded paged overview for Task8
+
+Ordered v2 pages now feed a bounded overview accumulator. Continuity is checked
+against adjacent raw samples before thinning; sparse retained envelopes are never
+reinterpreted as acquisition cadence. The actual trailing unknown survives page
+compaction, so a following page cannot bridge an omitted gap. Statistics remain
+an independent durable-store query. The accumulator retains at most the point
+budget plus one raw boundary; the current page is temporary.
+
+h141 genuine RED: all six new regressions failed before implementation (94s,
+eight tasks executed). h142 full fresh: 3773 tests/386 XML, all newer than UTC
+start, zero failures/errors/skips, 98s and all 36 tasks executed. Tests cover page
+peaks, dense unknown boundaries, marker/cadence edges, immutable snapshots and a
+synthetic two-hour 72000-point stream in twelve pages. This does not certify a
+physical sampling cadence or end-to-end database performance. Narrow readonly
+Luna xhigh review found no concrete fidelity/bounds defect. Task8 read facade and
+legacy integration, Task7 runtime activation and all new screens remain open.

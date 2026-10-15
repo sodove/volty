@@ -17,6 +17,13 @@ fun historyOverview(samples: List<HistorySample>, markers: List<HistoryMarker>, 
             add(sample)
         }
     }
+    return projectHistoryOverviewRows(rows, maxPoints)
+}
+
+/** Input already contains acquisition boundaries; sparse retained points cannot imply new gaps. */
+internal fun projectHistoryOverviewRows(rows: List<HistorySample>, maxPoints: Int): List<HistorySample> {
+    require(maxPoints in 3..20000)
+    requireSingleHistoryKey(rows)
     if (rows.size <= maxPoints) return rows
     val knownIndices = rows.indices.filter { rows[it].value != null }
     val minimum = knownIndices.minByOrNull { checkNotNull(rows[it].value) }
